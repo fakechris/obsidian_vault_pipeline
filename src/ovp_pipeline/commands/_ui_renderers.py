@@ -397,6 +397,33 @@ def _render_chat_drawer_shell() -> str:
     return render_drawer_shell()
 
 
+def _render_digest_regenerate_button(requested_pack: str) -> str:
+    """Render the "Regenerate digest now" button on ``/ops/today``.
+
+    POSTs to ``/ops/digest/regenerate`` which enqueues + dispatches
+    a ``DIGEST-daily`` task synchronously.  With the M23 input-hash
+    gate (BL-095), unchanged-data clicks return the prior body
+    without an LLM call — operators get a cheap "fresh" button.
+    """
+    pack_input = (
+        f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+        if requested_pack
+        else ""
+    )
+    return (
+        "<form method='post' action='/ops/digest/regenerate' "
+        "style='display:inline-block;margin:0.6rem 0 0.2rem 0'>"
+        f"{pack_input}"
+        "<button type='submit' class='btn'>"
+        "Regenerate today's digest"
+        "</button>"
+        " <span class='muted small'>"
+        "Cheap — skips the LLM call when nothing changed since last run."
+        "</span>"
+        "</form>"
+    )
+
+
 def _layout(
     title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
 ) -> str:
@@ -6538,6 +6565,11 @@ def _render_today_digest_page(payload: dict) -> str:
         f"<strong>{escape(date)}</strong> (UTC).  Click "
         f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
     )
+    # M23 BL-096: explicit "Regenerate digest now" affordance so an
+    # operator who drops articles mid-day can immediately trigger a
+    # new digest.  Input-hash gate (BL-095) keeps the cost bounded —
+    # unchanged inputs return the same body without an LLM call.
+    sections.append(_render_digest_regenerate_button(requested_pack))
     sections.append("<div class='grid stats' style='margin-top:1rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")

@@ -123,10 +123,24 @@ crystals — clusters with an existing crystal that predates today's
 inputs count as unsynthesized).
 
 ## Worth doing next
-Exactly ONE concrete question or action.  Forms that work well:
-- "3 articles on X converged today. Want to synthesize this cluster?"
-- "Today's new evergreen Y challenges the open contradiction Z.
-  Resolve?"
+Exactly ONE concrete question or action.  When the action involves a
+maintainer step (resolve a contradiction, synthesize a cluster),
+include a plain markdown link to the relevant maintainer page so
+the operator can act in one click:
+
+- For contradiction resolution:
+  `[Resolve contradiction →](/ops/queue/contradictions?status=open)`
+- For synthesis on a specific cluster:
+  `[Open cluster →](/ops/cluster?id=<cluster_id>)`
+- For routine intake review:
+  `[/ops/today →](/ops/today)`
+
+Use real ``cluster_id`` / ``contradiction_id`` values from the input
+layers above; do not invent ids.  Forms that work well:
+- "3 articles on X converged today. Want to synthesize this cluster?
+  [Open cluster →](/ops/cluster?id=cluster::memory-systems)"
+- "Today's new evergreen Y challenges contradiction Z. Resolve?
+  [Resolve contradiction →](/ops/queue/contradictions?status=open)"
 - "Cluster W has N unsynthesized evergreens. Run synthesis?"
 - "No new intake today. Continue with prior tensions, or seed
   the vault?"
@@ -547,7 +561,15 @@ def _render_no_data_body(inputs: DigestInputs) -> str:
 
 
 def _build_frontmatter(inputs: DigestInputs, input_hash: str) -> str:
+    """Compose the schema-v2 frontmatter block.
+
+    Layer-count fields (``intake_events`` / ``new_evergreens`` /
+    ``unsynthesized``) are surfaced explicitly so ``/digests`` (BL-096)
+    can render chip rows for each digest in the index without
+    parsing the body markdown.
+    """
     preflight = inputs.preflight
+    counts = _layer_counts(inputs)
     return (
         "---\n"
         "type: digest\n"
@@ -558,6 +580,11 @@ def _build_frontmatter(inputs: DigestInputs, input_hash: str) -> str:
         f"tz: {inputs.tz_name}\n"
         f"pack: {inputs.pack}\n"
         f"input_hash: {input_hash}\n"
+        f"intake_events: {counts['layer0_events']}\n"
+        f"new_evergreens: {counts['layer1_new']}\n"
+        f"updated_evergreens: {counts['layer1_updated']}\n"
+        f"unsynthesized: {counts['layer3_unsynth']}\n"
+        f"open_contradictions: {counts['layer3_open_contradictions']}\n"
         "preflight:\n"
         f"  evergreen_revisions_table: {preflight.evergreen_revisions_table}\n"
         f"  evergreen_revisions_recent: {preflight.evergreen_revisions_recent}\n"

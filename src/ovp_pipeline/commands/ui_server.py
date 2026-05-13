@@ -1453,6 +1453,9 @@ def create_server(
                 if path == "/chat/drawer/discard":
                     self._handle_chat_drawer_action_post(form, action="discard")
                     return
+                if path == "/ops/digest/regenerate":
+                    self._handle_digest_regenerate(form)
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -1838,6 +1841,42 @@ def create_server(
                 return
 
             self._write_json({"ok": True, "action": action, "chat_id": chat_id})
+
+        # ── M23 BL-096: mid-day digest regenerate ────────────────
+
+        def _handle_digest_regenerate(self, form: dict[str, list[str]]) -> None:
+            """Enqueue + synchronously dispatch a DIGEST-daily task.
+
+            With the M23 input-hash gate (BL-095), an unchanged-data
+            click costs only the preflight queries — no LLM call.
+            A real data change triggers a fresh digest.
+
+            POST-only (CSRF-protected by the global ``_csrf`` check
+            higher up in ``do_POST``).  Redirects back to
+            ``/ops/today`` so the operator can refresh and see the
+            new digest reflected in the home banner.
+            """
+            from ovp_pipeline.commands.digest_handler import _enqueue_daily
+            from ovp_pipeline.commands.task_dispatch import (
+                DispatchError,
+                RateLimitedError,
+                dispatch_task,
+            )
+
+            pack = (self._form_first(form, "pack") or "").strip() or "research-tech"
+            task = _enqueue_daily(resolved_vault)
+            try:
+                dispatch_task(resolved_vault, task, pack=pack)
+            except RateLimitedError as exc:
+                self.send_error(429, f"task rate limit reached: {exc}")
+                return
+            except DispatchError as exc:
+                self.send_error(500, f"digest regenerate failed: {exc}")
+                return
+            except Exception as exc:  # noqa: BLE001 — provider failures
+                self.send_error(500, f"digest regenerate failed: {exc}")
+                return
+            self._redirect(self._form_first(form, "next").strip() or "/ops/today")
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [
