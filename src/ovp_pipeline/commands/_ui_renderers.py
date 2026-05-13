@@ -512,11 +512,16 @@ def _anchor_title_for_note(relative_path: str, markdown: str) -> str:
     """Return the friendly title for a note anchor.
 
     Prefers the H1 line from the markdown body, then the YAML
-    ``title:`` frontmatter, then the path basename.  This is
-    what BL-087's entry button passes through to BL-086's
-    composer as the session's anchor title.
+    ``title:`` field *from the frontmatter block only* (CodeRabbit
+    M — searching the whole body would pick up an example code
+    fence's ``title:`` line), then the path basename.
     """
-    for line in markdown.splitlines():
+    body = markdown
+    try:
+        frontmatter, body = _parse_frontmatter(markdown)
+    except Exception:
+        frontmatter = {}
+    for line in body.splitlines():
         if line.startswith("# "):
             text = line[2:].strip()
             if text:
@@ -524,9 +529,8 @@ def _anchor_title_for_note(relative_path: str, markdown: str) -> str:
             break
         if line.startswith("## ") or line.startswith("### "):
             break
-    match = re.search(r"^title:\s*(.+)$", markdown, re.MULTILINE)
-    if match:
-        candidate = match.group(1).strip().strip('"').strip("'")
+    if isinstance(frontmatter, dict):
+        candidate = str(frontmatter.get("title") or "").strip()
         if candidate:
             return candidate
     stem = relative_path.rsplit("/", 1)[-1]
@@ -3375,12 +3379,26 @@ def _render_object_page(payload: dict) -> str:
                 f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>",
             ]
         )
-    ask_button = _render_ask_about_this_button(
-        "object",
-        str(payload["object"]["object_id"]),
-        title=str(reader_profile.get("headline") or payload["object"]["title"]),
-        requested_pack=requested_pack,
-    )
+    # Codex P2: the BL-083 context binder reads ``anchor.path`` as a
+    # vault-relative file path.  Prefer the object's evergreen /
+    # canonical markdown so the binder loads real anchor body;
+    # fall back to standalone (no anchor) when neither path exists
+    # rather than emitting a bare object_id that the binder can't
+    # resolve.
+    anchor_path_for_object = evergreen_path or payload["context"].get("canonical_path") or ""
+    if anchor_path_for_object:
+        ask_button = _render_ask_about_this_button(
+            "object",
+            str(anchor_path_for_object),
+            title=str(reader_profile.get("headline") or payload["object"]["title"]),
+            requested_pack=requested_pack,
+        )
+    else:
+        ask_button = _render_ask_about_this_button(
+            "standalone",
+            "",
+            requested_pack=requested_pack,
+        )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
@@ -3514,9 +3532,16 @@ def _render_topic_page(payload: dict) -> str:
             payload["production_summary"], requested_pack=requested_pack
         )
     )
+    # Codex P2: bind the center's vault-relative path (not the
+    # object_id) so the BL-083 binder loads the underlying note.
+    center_path = (
+        payload.get("links", {}).get("center_object_path")
+        or payload["center"].get("object_path")
+        or ""
+    )
     ask_button = _render_ask_about_this_button(
         "object",
-        str(payload["center"]["object_id"]),
+        str(center_path),
         title=str(payload["center"]["title"]),
         requested_pack=requested_pack,
     )
