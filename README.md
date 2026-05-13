@@ -107,7 +107,7 @@ Current milestone sequence:
 | M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (PRs #130–#133, closes the L3 gap with NM 0.8) |
 | M14 Intake Hardening (BL-058) | Done | URL preservation through deep-dive, deprecate legacy 13-section LLM rewrite, **global URL dedup across the active staging chain** (Clippings + 4 50-Inbox stages), audit-event `stage` field, fidelity-sample + prompt-ab measurement CLIs (PRs #170–#172, v0.13.0) |
 | M20 Cognitive Surface | Done | USER.md + OVP_RULES.md + LLM context loader (BL-075), QUEUE → GENERATED task dispatcher (BL-076), `/digest` daily synthesis (BL-077), thin-note Reader shell (PR #206) |
-| M21 Anchored Inquiry Surface | Done | Provider profiles + loader (BL-081), inquiry transcript schema + fileops (BL-082), two-layer context binder (BL-083), `ovp-ask` headless handler + CLI + write-back (BL-084), `chats` projection (BL-085), Reader `/chat` page (BL-086), "Ask about this" entry buttons (BL-087), `/chats` history list (BL-088) — PRs #210–#217 |
+| M21 Anchored Inquiry Surface | Done | Provider profiles + loader (BL-081), inquiry transcript schema + fileops (BL-082), two-layer context binder (BL-083), `ovp-ask` headless handler + CLI + write-back (BL-084), `chats` projection (BL-085), Reader `/chat` page (BL-086), "Ask about this" entry buttons (BL-087), `/chats` history list (BL-088) — PRs #210–#217, v0.21.0 |
 
 Recent major changes (PRs #98–#124):
 
