@@ -197,6 +197,66 @@ Older OVP docs and code use these legacy names; the new architecture vocabulary 
 
 ---
 
+## Projection schema changes
+
+Changes to ``knowledge.db`` (the primary projection) follow a
+three-bucket policy so existing operators don't pay a multi-minute
+full rebuild for every additive change.
+
+| Bucket | Examples | Cost on upgrade |
+| --- | --- | --- |
+| **additive** | new table; new nullable column on an existing table | seconds (CREATE TABLE + local re-projection) |
+| **recompute** | extraction/projection logic for an existing table changes; tokenizer / chunker behaviour change | seconds–minutes, **bounded to one table** |
+| **breaking** | column dropped; type changed; primary key restructured | full rebuild (`rebuild_knowledge_index`) — minutes |
+
+### How it's enforced
+
+1. **Bump** `KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION` in
+   `src/ovp_pipeline/knowledge_index.py`.
+2. **Register a migration** in the same file's `SCHEMA_MIGRATIONS`
+   dict:
+
+   ```python
+   SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
+       7: SchemaMigration(
+           from_version=7,
+           kind=SchemaMigrationKind.ADDITIVE,
+           reason="BL-085 — chats projection table",
+           runner=_migrate_7_to_8_chats,
+       ),
+       # add your entry here
+   }
+   ```
+
+3. **CI gate**: `tests/test_projection_schema_migrations.py` —
+   `test_every_version_bump_has_a_migration` fails red if the
+   constant moved without a registry entry.  Missed entries
+   can't ship past `ovp-knowledge-index` users by accident.
+
+### PR checklist
+
+Reviewers / autoreview agents look for:
+
+- [ ] Did `KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION` change?
+- [ ] If yes, is there a `SCHEMA_MIGRATIONS[old_version] = SchemaMigration(...)` entry on the same diff?
+- [ ] Is the `kind` honest? (purely new table → `ADDITIVE`; existing table re-extracted → `RECOMPUTE`; column dropped → `BREAKING`)
+- [ ] Does the migration runner use `CREATE ... IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN` so it's idempotent across retries?
+
+### Why this exists
+
+Pre-fix (BL-085 ship): a fresh code release made the next
+`ovp-ui` cold start trigger
+`rebuild_knowledge_index` because the new code's
+`projection_schema_version` (8) was greater than the operator's
+DB (7).  On a 10k-row vault this is a 1–3 minute wait, every
+upgrade.
+
+The registry path turns purely additive changes into
+`CREATE TABLE IF NOT EXISTS` + a local projection sweep —
+typically under a second on a real vault.
+
+---
+
 ## What is *not* in this file
 
 - **Pipeline stages** (Ingest / Interpret / Absorb / Refine / Normalize / Derive) — see [RUNTIME](./RUNTIME.md).

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from array import array
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import hashlib
 from io import TextIOBase
 import json
@@ -10,7 +12,7 @@ import math
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .concept_registry import ConceptRegistry, ResolutionAction
 from .event_emitter import iter_for_index
@@ -22,7 +24,10 @@ from .projection_lifecycle import close_projection_repair_marker, write_projecti
 from .provenance import bulk_upsert_provenance_ingest
 from .relation_writer import bulk_insert_relations
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
-from .truth_projection_registry import execute_truth_projection_builder, resolve_truth_projection_builder
+from .truth_projection_registry import (
+    execute_truth_projection_builder,
+    resolve_truth_projection_builder,
+)
 from .truth_store import TRUTH_STORE_SCHEMA
 from .truth_store_writers import insert_claims, insert_objects
 
@@ -32,6 +37,31 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
 KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
+# ``projection_schema_version`` policy
+# ===================================
+#
+# Every BL that changes the ``knowledge.db`` projection lands an
+# entry in :data:`SCHEMA_MIGRATIONS` below.  Bumps without an entry
+# fail ``tests/test_projection_schema_migrations.py`` — the registry
+# is what stops "撞版本号 → 用户冷启动等几分钟" from being the default.
+#
+# Three buckets, mirrored in :class:`SchemaMigrationKind`:
+#
+# * **additive** — pure new table, or new ``nullable`` column on an
+#   existing table.  Runner does ``CREATE TABLE IF NOT EXISTS …`` /
+#   ``ALTER TABLE … ADD COLUMN …`` plus an optional local
+#   re-projection.  Cost: seconds.
+# * **recompute** — extraction/projection logic for an existing
+#   table changed.  Runner does ``DELETE FROM <table>`` + the
+#   rebuild routine for that single table.  Cost: bounded to the
+#   touched table.
+# * **breaking** — column dropped, type changed, primary key
+#   restructured.  Runner falls through to a full
+#   :func:`rebuild_knowledge_index`.  Cost: full vault rescan.
+#   Only this bucket triggers the slow path.
+#
+# See ``ARCHITECTURE.md`` § Projection schema changes for the
+# review-side rules + PR checklist.
 KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 8
 
 
@@ -185,14 +215,186 @@ CREATE INDEX idx_chats_status ON chats(status);
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
+
+# ---------------------------------------------------------------
+# Schema migrations registry
+# ---------------------------------------------------------------
+#
+# Every projection_schema_version bump MUST register a migration
+# below or the test ``tests/test_projection_schema_migrations.py``
+# fails CI.  See the policy block on
+# :data:`KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION` above.
+
+
+class SchemaMigrationKind(str, Enum):
+    """Three buckets — only ``BREAKING`` triggers a full rebuild.
+
+    See the policy block above ``KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION``
+    for the review-side rules.
+    """
+
+    ADDITIVE = "additive"
+    RECOMPUTE = "recompute"
+    BREAKING = "breaking"
+
+
+@dataclass(frozen=True)
+class SchemaMigration:
+    """One ``from_version`` → ``from_version + 1`` step.
+
+    ``runner`` runs inside the same connection as the rest of the
+    init path — DDL + DML in one transaction.  ``vault_dir`` is
+    threaded through so additive migrations can re-project from
+    the markdown corpus (e.g. BL-085's chats).
+    """
+
+    from_version: int
+    kind: SchemaMigrationKind
+    reason: str  # short BL reference, e.g. "BL-085 — chats table"
+    runner: "Callable[[sqlite3.Connection, Path], None]"
+
+
+def _migrate_6_to_7_evergreen_revisions(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """BL-061 — ``evergreen_revisions`` append-only audit table.
+
+    Retroactively classified as additive: the table is declared in
+    ``TRUTH_STORE_SCHEMA``, so on a fresh DB build it's already
+    created via the main ``SCHEMA`` script.  This runner exists so
+    a vault that was somehow at v6 without the table (e.g. a hand-
+    rolled migration) gets the table created without re-running
+    the full vault rescan.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS evergreen_revisions (
+          pack TEXT NOT NULL,
+          object_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          content_md TEXT NOT NULL,
+          change_type TEXT NOT NULL,
+          changed_by TEXT NOT NULL DEFAULT '',
+          derived_at TEXT NOT NULL,
+          change_note TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (pack, object_id, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evergreen_revisions_object
+          ON evergreen_revisions(pack, object_id);
+        CREATE INDEX IF NOT EXISTS idx_evergreen_revisions_changed_at
+          ON evergreen_revisions(derived_at);
+        """)
+
+
+def _migrate_7_to_8_chats(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """BL-085 — ``chats`` projection.
+
+    Pure additive: new table, no cross-table dependency, no
+    schema change on any existing table.  Pre-fix this required
+    a full ``rebuild_knowledge_index`` (minutes); now it's a
+    ``CREATE TABLE`` + a local ``rebuild_chats_projection`` sweep
+    of ``40-Resources/Chats/`` (seconds).
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS chats (
+          chat_id TEXT PRIMARY KEY,
+          pack TEXT NOT NULL DEFAULT '',
+          file_path TEXT NOT NULL,
+          status TEXT NOT NULL,
+          visibility TEXT NOT NULL,
+          anchor_kind TEXT NOT NULL,
+          anchor_ref TEXT NOT NULL DEFAULT '',
+          anchor_title TEXT NOT NULL DEFAULT '',
+          profile TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL DEFAULT '',
+          temperature REAL NOT NULL DEFAULT 0.7,
+          started_at TEXT NOT NULL DEFAULT '',
+          last_message_at TEXT NOT NULL DEFAULT '',
+          turn_count INTEGER NOT NULL DEFAULT 0,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_chats_pack_last
+          ON chats(pack, last_message_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_chats_visibility
+          ON chats(visibility);
+        CREATE INDEX IF NOT EXISTS idx_chats_status
+          ON chats(status);
+        """)
+    # Populate from the markdown corpus.  Best-effort: the projection
+    # rebuild itself is BL-085 territory and already degrades on
+    # missing chats dir.
+    try:
+        from .chats_projection import rebuild_chats_projection
+
+        rebuild_chats_projection(conn, vault_dir=vault_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "chats projection seed during 7→8 migration skipped: %s",
+            exc,
+        )
+
+
+SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
+    6: SchemaMigration(
+        from_version=6,
+        kind=SchemaMigrationKind.ADDITIVE,
+        reason="BL-061 — evergreen_revisions audit table",
+        runner=_migrate_6_to_7_evergreen_revisions,
+    ),
+    7: SchemaMigration(
+        from_version=7,
+        kind=SchemaMigrationKind.ADDITIVE,
+        reason="BL-085 — chats projection table",
+        runner=_migrate_7_to_8_chats,
+    ),
+}
+
+
+def _plan_schema_upgrade(
+    from_version: int,
+    to_version: int,
+) -> tuple[list[SchemaMigration], list[int]]:
+    """Return ``(steps, unregistered_versions)`` for the version range.
+
+    Caller can short-circuit to full rebuild when ``unregistered``
+    is non-empty (no migration registered → safer to rebuild than
+    silently skip).  When every step is registered AND classified
+    as ``ADDITIVE`` or ``RECOMPUTE``, the delta path is safe.
+    A ``BREAKING`` step in the chain forces the full rebuild too.
+    """
+    steps: list[SchemaMigration] = []
+    missing: list[int] = []
+    for v in range(from_version, to_version):
+        migration = SCHEMA_MIGRATIONS.get(v)
+        if migration is None:
+            missing.append(v)
+            continue
+        steps.append(migration)
+    return steps, missing
+
+
+def _can_delta_migrate(steps: list[SchemaMigration]) -> bool:
+    """All steps are additive/recompute → safe to delta-migrate."""
+    return bool(steps) and all(
+        s.kind in (SchemaMigrationKind.ADDITIVE, SchemaMigrationKind.RECOMPUTE) for s in steps
+    )
+
+
 from .embedding import (
     assert_consistent_with as _assert_embedding_consistent,
     embed_text as _embed_text_semantic,
     get_dimensions,
     get_model_name,
 )
+
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug", "source_url"),
+    "objects": (
+        "pack",
+        "object_id",
+        "object_kind",
+        "title",
+        "canonical_path",
+        "source_slug",
+        "source_url",
+    ),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
     "claim_evidence": (
         "pack",
@@ -405,6 +607,7 @@ def _preserve_existing_truth_rows(
         source_conn = sqlite3.connect(source_db_path)
     except sqlite3.DatabaseError:
         return
+
     def _copy_table(
         table_name: str,
         columns: tuple[str, ...],
@@ -515,7 +718,9 @@ def _build_surface_map(metadata_items: list[NoteMetadata]) -> dict[str, str]:
     return surfaces
 
 
-def _resolve_target_slug(raw_target: str, registry: ConceptRegistry, surface_map: dict[str, str]) -> str | None:
+def _resolve_target_slug(
+    raw_target: str, registry: ConceptRegistry, surface_map: dict[str, str]
+) -> str | None:
     resolved = registry.resolve_mention(raw_target, include_related_context=False)
     if resolved.action == ResolutionAction.LINK_EXISTING and resolved.entry:
         return resolved.entry.slug
@@ -578,10 +783,7 @@ def _collect_entity_mention_rows(
     if len(registry) == 0:
         return []
 
-    entity_slugs = {
-        e.slug for e in registry.all_entries()
-        if e.status in ("active", "candidate")
-    }
+    entity_slugs = {e.slug for e in registry.all_entries() if e.status in ("active", "candidate")}
     entity_map = {e.slug: e for e in registry.all_entries() if e.slug in entity_slugs}
 
     rows: list[tuple[str, str, str, float, str, str, str]] = []
@@ -595,15 +797,17 @@ def _collect_entity_mention_rows(
             continue
         seen.add(key)
         entry = entity_map[target_slug]
-        rows.append((
-            target_slug,
-            entry.entity_type,
-            source_slug,
-            1.0,
-            "wikilink",
-            target_raw or target_slug,
-            "",
-        ))
+        rows.append(
+            (
+                target_slug,
+                entry.entity_type,
+                source_slug,
+                1.0,
+                "wikilink",
+                target_raw or target_slug,
+                "",
+            )
+        )
 
     for source_slug in known_slugs:
         for entry in registry.all_entries():
@@ -616,15 +820,17 @@ def _collect_entity_mention_rows(
                 key = (entry.slug, source_slug)
                 if key not in seen:
                     seen.add(key)
-                    rows.append((
-                        entry.slug,
-                        entry.entity_type,
-                        source_slug,
-                        entry.confidence_avg or 0.8,
-                        "alias_match",
-                        source_slug,
-                        "",
-                    ))
+                    rows.append(
+                        (
+                            entry.slug,
+                            entry.entity_type,
+                            source_slug,
+                            entry.confidence_avg or 0.8,
+                            "alias_match",
+                            source_slug,
+                            "",
+                        )
+                    )
 
     extraction_log = vault_dir / "60-Logs" / "entity-extractions.jsonl"
     if extraction_log.exists():
@@ -644,15 +850,17 @@ def _collect_entity_mention_rows(
                     seen.add(key)
                     entry = entity_map.get(e_slug)
                     e_type = entry.entity_type if entry else m.get("kind", "")
-                    rows.append((
-                        e_slug,
-                        e_type,
-                        src,
-                        m.get("confidence", 0.8),
-                        m.get("resolution", "llm_ner"),
-                        m.get("text", ""),
-                        m.get("snippet", ""),
-                    ))
+                    rows.append(
+                        (
+                            e_slug,
+                            e_type,
+                            src,
+                            m.get("confidence", 0.8),
+                            m.get("resolution", "llm_ner"),
+                            m.get("text", ""),
+                            m.get("snippet", ""),
+                        )
+                    )
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -699,7 +907,9 @@ def _infer_audit_slug(payload: dict[str, object]) -> str:
     return ""
 
 
-def _collect_reuse_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str, str, int, int, int, str]]:
+def _collect_reuse_rows(
+    layout: VaultLayout,
+) -> list[tuple[str, str, str, str, str, str, str, int, int, int, str]]:
     rows: list[tuple[str, str, str, str, str, str, str, int, int, int, str]] = []
     seen_event_ids: set[str] = set()
     for payload in iter_for_index(layout, "reuse-events.jsonl"):
@@ -788,6 +998,7 @@ def _embed_text(text: str) -> bytes:
 
 def _get_embedding_model_name() -> str:
     from .embedding import get_model_name
+
     return get_model_name()
 
 
@@ -840,19 +1051,108 @@ def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
             elif KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION > projection_schema_version:
                 rebuild_reason = "projection_schema_version_newer_than_metadata"
 
-    if rebuild_reason:
-        marker = write_projection_repair_marker(
-            resolved_vault,
-            kind="full_rebuild",
-            scope={"projection_kind": KNOWLEDGE_DB_PROJECTION_KIND},
-            reason=rebuild_reason,
-            caused_by="ensure_knowledge_db_current",
-            authority_schema_version=authority_schema_version,
-            projection_schema_version=projection_schema_version,
+    if not rebuild_reason:
+        return resolved_vault, layout
+
+    # Try the delta-migration fast path for projection_schema_version
+    # bumps where every step has a registered ADDITIVE / RECOMPUTE
+    # migration.  Authority-schema bumps + missing-DB + schema-
+    # incompatible cases keep going through the slow rebuild.
+    if rebuild_reason == "projection_schema_version_newer_than_metadata":
+        steps, missing = _plan_schema_upgrade(
+            from_version=projection_schema_version,
+            to_version=KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION,
         )
-        rebuild_knowledge_index(resolved_vault)
-        close_projection_repair_marker(resolved_vault, marker.marker_id)
+        if not missing and _can_delta_migrate(steps):
+            marker = write_projection_repair_marker(
+                resolved_vault,
+                kind="delta_migration",
+                scope={"projection_kind": KNOWLEDGE_DB_PROJECTION_KIND},
+                reason=rebuild_reason,
+                caused_by="ensure_knowledge_db_current",
+                authority_schema_version=authority_schema_version,
+                projection_schema_version=projection_schema_version,
+            )
+            try:
+                _run_delta_migrations(
+                    resolved_vault,
+                    db_path=layout.knowledge_db,
+                    steps=steps,
+                    authority_schema_version=authority_schema_version,
+                )
+            finally:
+                close_projection_repair_marker(resolved_vault, marker.marker_id)
+            return resolved_vault, layout
+        logger.info(
+            "knowledge.db delta-migration path unavailable for "
+            "version range %d → %d (missing=%s, breaking=%s); "
+            "falling through to full rebuild.",
+            projection_schema_version,
+            KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION,
+            missing,
+            [s.from_version for s in steps if s.kind == SchemaMigrationKind.BREAKING],
+        )
+
+    marker = write_projection_repair_marker(
+        resolved_vault,
+        kind="full_rebuild",
+        scope={"projection_kind": KNOWLEDGE_DB_PROJECTION_KIND},
+        reason=rebuild_reason,
+        caused_by="ensure_knowledge_db_current",
+        authority_schema_version=authority_schema_version,
+        projection_schema_version=projection_schema_version,
+    )
+    rebuild_knowledge_index(resolved_vault)
+    close_projection_repair_marker(resolved_vault, marker.marker_id)
     return resolved_vault, layout
+
+
+def _run_delta_migrations(
+    vault_dir: Path,
+    *,
+    db_path: Path,
+    steps: list[SchemaMigration],
+    authority_schema_version: int,
+) -> None:
+    """Run an ordered list of additive/recompute migrations.
+
+    Each step + the projection_metadata bump runs in a single
+    transaction so a mid-step failure rolls back cleanly.  Uses
+    the same write lock the full rebuild takes so concurrent
+    readers serialise behind the migration.
+    """
+    target = KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION
+    with knowledge_db_write_lock(vault_dir):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("BEGIN")
+            try:
+                for step in steps:
+                    logger.info(
+                        "knowledge.db migrating %d → %d (%s, %s)",
+                        step.from_version,
+                        step.from_version + 1,
+                        step.kind.value,
+                        step.reason,
+                    )
+                    step.runner(conn, vault_dir)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO projection_metadata (
+                        projection_kind, authority_schema_version,
+                        projection_schema_version, built_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        KNOWLEDGE_DB_PROJECTION_KIND,
+                        authority_schema_version,
+                        target,
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
 
 def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
@@ -905,17 +1205,12 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
             "confidence",
             "detection_method",
         },
-        # M21 BL-085 — chats projection.  Required so existing
-        # vaults trigger a full rebuild when this code lands;
-        # without the table, ``/chats`` and the visibility-aware
-        # FTS would silently 500.  Schema version bumped to 8.
-        "chats": {
-            "chat_id",
-            "visibility",
-            "anchor_kind",
-            "status",
-            "file_path",
-        },
+        # NOTE: do NOT add NEW additive tables (BL-085 chats,
+        # future projections) to this map.  This is the compat
+        # gate that triggers a *full rebuild* — additive changes
+        # belong in ``SCHEMA_MIGRATIONS`` so existing vaults pay
+        # seconds, not minutes.  Only column-level requirements
+        # on *existing* tables earn an entry here.
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -995,8 +1290,7 @@ def rebuild_knowledge_index(
         try:
             with sqlite3.connect(layout.knowledge_db) as _check_conn:
                 row = _check_conn.execute(
-                    "SELECT embedding_model, length(embedding_blob) "
-                    "FROM page_embeddings LIMIT 1"
+                    "SELECT embedding_model, length(embedding_blob) " "FROM page_embeddings LIMIT 1"
                 ).fetchone()
             if row is not None:
                 stored_model = row[0] or ""
@@ -1062,13 +1356,15 @@ def rebuild_knowledge_index(
                 ensure_schema as _ensure_source_authority_schema,
                 replay_authority_log as _replay_source_authority_log,
             )
+
             _ensure_source_authority_schema(conn)
             authority_log = layout.logs_dir / "source_authority.jsonl"
             authority_rows = _replay_source_authority_log(conn, authority_log)
             if authority_rows:
                 logger.debug(
                     "source_authority replayed %d rows from %s",
-                    authority_rows, authority_log,
+                    authority_rows,
+                    authority_log,
                 )
             _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
             page_rows = []
@@ -1089,7 +1385,9 @@ def rebuild_knowledge_index(
                     )
                 )
                 timeline_rows.extend(_extract_timeline_events(meta, body))
-                for chunk_index, (section_title, chunk_text) in enumerate(_chunk_page_body(body, meta.title)):
+                for chunk_index, (section_title, chunk_text) in enumerate(
+                    _chunk_page_body(body, meta.title)
+                ):
                     embedding_rows.append(
                         (
                             meta.note_id,
@@ -1117,7 +1415,9 @@ def rebuild_knowledge_index(
             for meta in deduped_page_metadata_items:
                 file_path = Path(meta.path)
                 for link in link_parser.parse_file(file_path):
-                    target_slug = _resolve_target_slug(link.target_raw or link.target, registry, surface_map)
+                    target_slug = _resolve_target_slug(
+                        link.target_raw or link.target, registry, surface_map
+                    )
                     if not target_slug or target_slug not in known_slugs:
                         continue
                     link_rows.append(
@@ -1344,12 +1644,8 @@ def rebuild_knowledge_index(
             from .relation_promotion import replay_relation_promotions
             from .evidence_replay import replay_evidence_verifications
 
-            relations_replayed = replay_relation_promotions(
-                conn, layout, pack_name=truth_pack
-            )
-            evidence_updates = replay_evidence_verifications(
-                conn, layout, pack_name=truth_pack
-            )
+            relations_replayed = replay_relation_promotions(conn, layout, pack_name=truth_pack)
+            evidence_updates = replay_evidence_verifications(conn, layout, pack_name=truth_pack)
 
             page_metrics_indexed = _rebuild_page_metrics(conn)
 
@@ -1359,15 +1655,19 @@ def rebuild_knowledge_index(
             # there are no community/contradiction crystals yet.
             try:
                 from .synthesis.crystal_scoring import rebuild_crystal_scores
+
                 rebuild_crystal_scores(
-                    conn, vault_dir=layout.vault_dir, pack=truth_pack,
+                    conn,
+                    vault_dir=layout.vault_dir,
+                    pack=truth_pack,
                 )
             except Exception as exc:
                 # Score rebuild is best-effort — never block the
                 # primary index rebuild on a scoring failure.  The
                 # next ``ovp-rescore-crystals`` run will catch up.
                 logger.warning(
-                    "crystal_scores rebuild skipped: %s", exc,
+                    "crystal_scores rebuild skipped: %s",
+                    exc,
                 )
 
             # M14 BL-047: append crystal bodies to page_fts so the
@@ -1376,14 +1676,17 @@ def rebuild_knowledge_index(
             # rationale as the scoring rebuild.
             try:
                 from .synthesis.crystal_fts import index_crystals_into_page_fts
+
                 n_fts = index_crystals_into_page_fts(conn, pack=truth_pack)
                 if n_fts:
                     logger.debug(
-                        "indexed %d crystal bodies into page_fts", n_fts,
+                        "indexed %d crystal bodies into page_fts",
+                        n_fts,
                     )
             except Exception as exc:
                 logger.warning(
-                    "crystal page_fts indexing skipped: %s", exc,
+                    "crystal page_fts indexing skipped: %s",
+                    exc,
                 )
 
             # M21 BL-085: rebuild chats projection.  Indexed sessions
@@ -1392,16 +1695,20 @@ def rebuild_knowledge_index(
             # effort — never block the primary index rebuild.
             try:
                 from .chats_projection import rebuild_chats_projection
+
                 chats_counts = rebuild_chats_projection(
-                    conn, vault_dir=layout.vault_dir,
+                    conn,
+                    vault_dir=layout.vault_dir,
                 )
                 if chats_counts.get("total"):
                     logger.debug(
-                        "chats projection rebuilt: %s", chats_counts,
+                        "chats projection rebuilt: %s",
+                        chats_counts,
                     )
             except Exception as exc:
                 logger.warning(
-                    "chats projection rebuild skipped: %s", exc,
+                    "chats projection rebuild skipped: %s",
+                    exc,
                 )
 
             conn.commit()
@@ -1522,7 +1829,9 @@ def _rebuild_page_metrics(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:
+def query_knowledge_index(
+    vault_dir: Path, query: str, limit: int = 5
+) -> list[dict[str, str | int | float]]:
     _, layout = _ensure_knowledge_db(vault_dir)
 
     query_vector = _decode_embedding(_embed_text(query))
@@ -1557,7 +1866,9 @@ def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[d
     return scored[:limit]
 
 
-def search_knowledge_index(vault_dir: Path, query: str, limit: int = 10) -> list[dict[str, str | float]]:
+def search_knowledge_index(
+    vault_dir: Path, query: str, limit: int = 10
+) -> list[dict[str, str | float]]:
     _, layout = _ensure_knowledge_db(vault_dir)
     with sqlite3.connect(layout.knowledge_db) as conn:
         matched_rows = conn.execute(
@@ -1938,8 +2249,7 @@ def rebuild_compiled_summaries(
                 FROM objects
                 WHERE pack = ?
                 ORDER BY object_id
-                """
-                ,
+                """,
                 (truth_pack,),
             ).fetchall()
 
@@ -2001,15 +2311,17 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
     stats: dict[str, object] = {"db_path": str(layout.knowledge_db)}
     with sqlite3.connect(layout.knowledge_db) as conn:
         for key, query in queries.items():
-            stats[key] = int(conn.execute(query, (truth_pack,)).fetchone()[0]) if "pack = ?" in query else int(conn.execute(query).fetchone()[0])
+            stats[key] = (
+                int(conn.execute(query, (truth_pack,)).fetchone()[0])
+                if "pack = ?" in query
+                else int(conn.execute(query).fetchone()[0])
+            )
         try:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT pack, owner_pack, builder_name, built_at
                 FROM truth_projections
                 ORDER BY pack
-                """
-            ).fetchall()
+                """).fetchall()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():
                 raise
@@ -2084,9 +2396,11 @@ def sync_audit_events_from_jsonl(vault_dir: Path) -> dict[str, object]:
     # "absorb_route_decision: 7" so the operator can confirm the
     # shadow data is queryable.
     with sqlite3.connect(layout.knowledge_db) as conn:
-        type_counts = dict(conn.execute(
-            "SELECT event_type, COUNT(*) FROM audit_events GROUP BY event_type"
-        ).fetchall())
+        type_counts = dict(
+            conn.execute(
+                "SELECT event_type, COUNT(*) FROM audit_events GROUP BY event_type"
+            ).fetchall()
+        )
     return {
         "status": "synced",
         "audit_events_indexed": len(audit_rows),
@@ -2194,7 +2508,9 @@ def knowledge_tools_json() -> list[dict[str, object]]:
     ]
 
 
-def dispatch_knowledge_tool(vault_dir: Path, tool_name: str, args: dict[str, object]) -> dict[str, object]:
+def dispatch_knowledge_tool(
+    vault_dir: Path, tool_name: str, args: dict[str, object]
+) -> dict[str, object]:
     if tool_name == "knowledge_search":
         query = str(args.get("query") or "")
         limit = int(args.get("limit") or 10)
