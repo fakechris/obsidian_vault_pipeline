@@ -105,8 +105,21 @@ def _make_vault(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
 @pytest.fixture
 def vault(tmp_path: Path):
     """Yield (vault_dir, sqlite3.Connection).  Caller seeds rows
-    then runs ``collect_digest_inputs``."""
-    return _make_vault(tmp_path)
+    then runs ``collect_digest_inputs``.
+
+    Connection is closed in teardown so tests can stay short — they
+    don't have to remember ``conn.close()`` themselves (gemini-code-
+    assist resource-leak nit).  Closing an already-closed sqlite3
+    connection is a no-op.
+    """
+    vault_dir, conn = _make_vault(tmp_path)
+    try:
+        yield vault_dir, conn
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 — defensive teardown
+            pass
 
 
 @pytest.fixture
@@ -408,7 +421,7 @@ def test_layer3_flags_stale_crystal_as_unsynthesized(vault, utc_config):
     assert result.pipeline_state.unsynthesized_evergreens == 6
     threshold_clusters = result.pipeline_state.clusters_at_threshold
     assert len(threshold_clusters) == 1
-    cid, label, count, stale = threshold_clusters[0]
+    cid, _label, count, stale = threshold_clusters[0]
     assert cid == "cluster::stale"
     assert stale is True
     assert count == 6
@@ -540,11 +553,12 @@ def test_input_hash_changes_when_data_changes(vault, utc_config):
     as_of = datetime(2026, 5, 13, 12, 0, tzinfo=ZoneInfo("UTC"))
     r1 = collect_digest_inputs(vault_dir, "research-tech", as_of=as_of, config=utc_config)
 
-    new_conn = sqlite3.connect(vault_dir / "60-Logs" / "knowledge.db")
+    # Reuse the fixture's open connection rather than opening a
+    # second handle that callers must remember to close (gemini-code-
+    # assist nit on resource leak).
     _seed_evergreen_revision(
-        new_conn, object_id="evg-new", version=1, change_type="created",
+        conn, object_id="evg-new", version=1, change_type="created",
         derived_at=as_of - timedelta(hours=1),
     )
-    new_conn.close()
     r2 = collect_digest_inputs(vault_dir, "research-tech", as_of=as_of, config=utc_config)
     assert r1.input_hash() != r2.input_hash()

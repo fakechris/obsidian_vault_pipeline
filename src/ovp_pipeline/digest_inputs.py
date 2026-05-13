@@ -61,6 +61,15 @@ _CHANGE_NOTE_QUALITY_PASS_RATIO: Final[float] = 0.5
 # falsely flagging an empty Layer 1 as a missing-data error.
 _PREFLIGHT_RECENT_DAYS: Final[int] = 7
 
+# Module-level stopword set for Layer 0 keyword chips.  Recomputing
+# this on every digest run is wasted work — operator runs the digest
+# at least daily, the set never changes.  (gemini-code-assist nitpick)
+_LAYER0_STOPWORDS: Final[frozenset[str]] = frozenset({
+    "the", "and", "for", "with", "from", "this", "that", "your",
+    "into", "what", "how", "why", "are", "was", "were", "will",
+    "you", "can", "all", "any", "but", "not", "use", "via",
+})
+
 
 # ---------------------------------------------------------------
 # Public schema
@@ -525,16 +534,11 @@ def _top_keyword_distribution(titles: Iterable[str]) -> tuple[tuple[str, int], .
     for "memory (7), AI agents (3), operations (2)" style chips —
     a real topic model can replace this later.
     """
-    stopwords = {
-        "the", "and", "for", "with", "from", "this", "that", "your",
-        "into", "what", "how", "why", "are", "was", "were", "will",
-        "you", "can", "all", "any", "but", "not", "use", "via",
-    }
     counts: dict[str, int] = {}
     for title in titles:
         for raw in title.lower().split():
             token = "".join(ch for ch in raw if ch.isalnum() or ch in "-_")
-            if len(token) < 4 or token in stopwords:
+            if len(token) < 4 or token in _LAYER0_STOPWORDS:
                 continue
             counts[token] = counts.get(token, 0) + 1
     ordered = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
@@ -860,9 +864,15 @@ def _collect_layer3(
     for cid, count in cluster_counts.items():
         synth_at = cluster_synth_at.get(cid, "")
         latest_ev = cluster_latest_evergreen.get(cid, "")
-        # Stale crystal = there IS a crystal but it predates the
-        # cluster's newest evergreen.
-        stale = bool(synth_at and latest_ev and latest_ev > synth_at)
+        # Codex / CodeRabbit review: ``knowledge.db`` stores some
+        # timestamps as ``...Z`` and others as ``...+00:00``; raw
+        # string compare is lexicographic and silently swaps the
+        # answer when the two formats meet.  Parse to datetimes and
+        # compare time-correctly.  Treat unparseable / empty values
+        # as "no signal", same as before.
+        synth_dt = _parse_iso(synth_at)
+        latest_dt = _parse_iso(latest_ev)
+        stale = bool(synth_dt and latest_dt and latest_dt > synth_dt)
         # No crystal at all = also "unsynthesized".
         no_crystal = not synth_at
         if no_crystal or stale:

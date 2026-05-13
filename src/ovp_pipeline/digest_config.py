@@ -31,10 +31,11 @@ What this module does NOT own
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import tzinfo
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Final, Mapping
+from typing import Any, Final
 
 import yaml
 
@@ -107,7 +108,7 @@ def load_digest_config(vault_dir: Path | str | None) -> DigestConfig:
     return _coerce_config(merged)
 
 
-def resolve_timezone(cfg: DigestConfig):  # type: ignore[no-untyped-def]
+def resolve_timezone(cfg: DigestConfig) -> tzinfo:
     """Return a ``datetime.tzinfo`` for the configured timezone.
 
     Resolution order:
