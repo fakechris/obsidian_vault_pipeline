@@ -125,23 +125,46 @@ def _render_transcript_body(text: str) -> str:
             continue
         if current_role is None:
             continue
-        if in_block_comment:
-            if "-->" in raw:
-                in_block_comment = False
-            continue
-        if "<!--" in raw and "-->" not in raw:
-            in_block_comment = True
-            continue
-        # Strip inline single-line comments (the manifest snapshot).
-        if "<!--" in raw and "-->" in raw:
-            stripped = raw.split("<!--", 1)[0]
-            if stripped.strip():
-                current_buffer.append(stripped)
-            continue
-        current_buffer.append(raw)
+        stripped, in_block_comment = _strip_html_comments(raw, in_block_comment)
+        if stripped.strip() or current_buffer:
+            current_buffer.append(stripped)
     sections.append(_flush_block(current_role, current_buffer))
-    title_html = f"<h1>{escape(title_line)}</h1>" if title_line else "<h1>Inquiry</h1>"
+    # h2 not h1: the page-shell already carries "Ask the vault" as
+    # the primary h1 (CodeRabbit M).
+    title_html = (
+        f"<h2 class='chat-title'>{escape(title_line)}</h2>"
+        if title_line
+        else "<h2 class='chat-title'>Inquiry</h2>"
+    )
     return title_html + "\n".join(s for s in sections if s)
+
+
+def _strip_html_comments(line: str, in_block: bool) -> tuple[str, bool]:
+    """Strip ``<!-- ... -->`` ranges from ``line`` in place.
+
+    Preserves prose on the same line as a comment marker — both
+    before and after — so the manifest comment doesn't take its
+    surrounding text down with it (CodeRabbit High).  Returns the
+    cleaned line plus the new in-block state.
+    """
+    result = line
+    if in_block:
+        # Resume after a previous block-opening line.
+        if "-->" in result:
+            result = result.split("-->", 1)[1]
+            in_block = False
+        else:
+            return "", True
+    # Strip every fully-closed pair.
+    while "<!--" in result and "-->" in result:
+        start = result.index("<!--")
+        end = result.index("-->", start) + len("-->")
+        result = result[:start] + result[end:]
+    # Open-ended comment — keep the prefix, swallow the rest.
+    if "<!--" in result and "-->" not in result:
+        result = result.split("<!--", 1)[0]
+        in_block = True
+    return result, in_block
 
 
 def _flush_block(role: str | None, lines: list[str]) -> str:
@@ -203,9 +226,22 @@ def render_chat_page_body(
     )
     profile_options = _profile_options(vault_dir, profile)
 
-    # Visibility toggle copy per M21 plan.
+    # Visibility toggle copy per M21 plan.  Disabled on existing
+    # sessions because run_turn doesn't accept a visibility change
+    # on a follow-up (CodeRabbit M — avoid the impression that
+    # toggling can flip a session's index status mid-conversation).
+    existing_session = fm is not None
     visibility_indexed_checked = " checked" if visibility == "indexed" else ""
     visibility_unindexed_checked = " checked" if visibility == "unindexed" else ""
+    visibility_disabled = " disabled" if existing_session else ""
+    visibility_lock_note = (
+        '<p class="muted small">'
+        "Visibility is locked once a session starts — start a new "
+        "inquiry to choose a different mode."
+        "</p>"
+        if existing_session
+        else ""
+    )
 
     error_block = ""
     if error_message:
@@ -216,13 +252,18 @@ def render_chat_page_body(
     )
 
     chat_id_hidden = (
-        f'<input type="hidden" name="chat_id" value="{escape(fm.chat_id if fm else "")}" />'
-        if fm
-        else ""
+        f'<input type="hidden" name="chat_id" value="{escape(fm.chat_id)}" />' if fm else ""
     )
     anchor_hidden = (
         f'<input type="hidden" name="anchor" '
         f'value="{escape(f"{anchor_kind}:{anchor_ref}" if anchor_ref else "")}" />'
+    )
+    # Codex P2: carry the anchor title through the POST so a new
+    # session lands with its friendly title intact.
+    anchor_title_hidden = (
+        f'<input type="hidden" name="anchor_title" value="{escape(anchor_title)}" />'
+        if anchor_title
+        else ""
     )
 
     return f"""
@@ -237,17 +278,18 @@ def render_chat_page_body(
     {csrf_field}
     {chat_id_hidden}
     {anchor_hidden}
+    {anchor_title_hidden}
     <label class="block">
       <span class="muted small">Profile</span>
       <select name="profile">{profile_options}</select>
     </label>
     <label class="block visibility-toggle">
-      <input type="radio" name="visibility" value="indexed"{visibility_indexed_checked} />
+      <input type="radio" name="visibility" value="indexed"{visibility_indexed_checked}{visibility_disabled} />
       <strong>Index this inquiry</strong>
       <span class="muted small">Show up in /search and the binder's retrieval layer.</span>
     </label>
     <label class="block visibility-toggle">
-      <input type="radio" name="visibility" value="unindexed"{visibility_unindexed_checked} />
+      <input type="radio" name="visibility" value="unindexed"{visibility_unindexed_checked}{visibility_disabled} />
       <strong>Don't index or reuse this inquiry.</strong>
       <span class="muted small">
         OVP won't include this session in search, the inquiry list,
@@ -255,6 +297,7 @@ def render_chat_page_body(
         still receives the current request.
       </span>
     </label>
+    {visibility_lock_note}
     <label class="block">
       <span class="muted small">Your message</span>
       <textarea name="message" rows="5" required
@@ -277,3 +320,20 @@ def _new_anchor_badge(kind: str, ref: str, title: str) -> str:
 def chat_page_redirect_target(chat_id: str) -> str:
     """Where to send the browser after a successful POST."""
     return "/chat?" + urlencode({"id": chat_id})
+
+
+def parse_anchor_string(raw: str) -> tuple[str, str]:
+    """Split ``"<kind>:<ref>"`` (or bare ``<path>``) into a tuple.
+
+    Empty input → ``("standalone", "")``.  Single helper shared by
+    both the GET and POST handlers (CodeRabbit M — dedup).
+    """
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return "standalone", ""
+    if ":" not in cleaned:
+        return "note", cleaned
+    kind, _, ref = cleaned.partition(":")
+    kind = kind.strip() or "standalone"
+    ref = ref.strip()
+    return kind, ref

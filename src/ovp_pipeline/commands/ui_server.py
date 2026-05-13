@@ -1419,10 +1419,10 @@ def create_server(
             passed by BL-087's entry buttons.
             """
             from ovp_pipeline.commands._chat_page import (
+                parse_anchor_string,
                 render_chat_page_body,
             )
             from ovp_pipeline.commands.chat_handler import _find_chat_by_id
-            from ovp_pipeline.commands._chat_page import _profile_options  # noqa: F401
 
             chat_id = (query.get("id", [""])[0] or "").strip()
             anchor_raw = (query.get("anchor", [""])[0] or "").strip()
@@ -1432,13 +1432,10 @@ def create_server(
             if chat_id:
                 chat_path = _find_chat_by_id(resolved_vault, chat_id)
 
-            anchor_kind = "standalone"
-            anchor_ref = ""
-            if anchor_raw and not chat_path:
-                if ":" in anchor_raw:
-                    anchor_kind, _, anchor_ref = anchor_raw.partition(":")
-                else:
-                    anchor_kind, anchor_ref = "note", anchor_raw
+            if chat_path:
+                anchor_kind, anchor_ref = "standalone", ""
+            else:
+                anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
 
             body = render_chat_page_body(
                 resolved_vault,
@@ -1459,6 +1456,7 @@ def create_server(
             """
             from ovp_pipeline.commands._chat_page import (
                 chat_page_redirect_target,
+                parse_anchor_string,
                 render_chat_page_body,
             )
             from ovp_pipeline.commands.chat_handler import (
@@ -1468,44 +1466,16 @@ def create_server(
 
             chat_id = self._form_first(form, "chat_id").strip() or None
             anchor_raw = self._form_first(form, "anchor").strip()
+            anchor_title = self._form_first(form, "anchor_title").strip()
             message = self._form_first(form, "message").strip()
             profile = self._form_first(form, "profile").strip() or "balanced"
             visibility = self._form_first(form, "visibility").strip() or "indexed"
 
-            if not message:
-                self._write_html(
-                    _layout(
-                        "Ask the vault",
-                        render_chat_page_body(
-                            resolved_vault,
-                            chat_id=chat_id,
-                            error_message="Message cannot be empty.",
-                            csrf_token=csrf,
-                        ),
-                    ),
-                    status=400,
-                )
-                return
+            anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
 
-            anchor_kind = "standalone"
-            anchor_ref = ""
-            if anchor_raw:
-                if ":" in anchor_raw:
-                    anchor_kind, _, anchor_ref = anchor_raw.partition(":")
-                else:
-                    anchor_kind, anchor_ref = "note", anchor_raw
-
-            try:
-                result = run_turn(
-                    resolved_vault,
-                    chat_id=chat_id,
-                    user_message=message,
-                    anchor_kind=anchor_kind,
-                    anchor_ref=anchor_ref,
-                    profile_name=profile if not chat_id else None,
-                    visibility=visibility,
-                )
-            except ChatCapExceeded as exc:
+            def _render_error(status: int, error_message: str) -> None:
+                """Re-render the page with the operator's submitted
+                form state preserved (CodeRabbit Major)."""
                 self._write_html(
                     _layout(
                         "Ask the vault",
@@ -1514,26 +1484,46 @@ def create_server(
                             chat_id=chat_id,
                             anchor_kind=anchor_kind,
                             anchor_ref=anchor_ref,
+                            anchor_title=anchor_title,
                             profile=profile,
-                            error_message=str(exc),
+                            error_message=error_message,
                             csrf_token=csrf,
                         ),
                     ),
-                    status=429,
+                    status=status,
                 )
+
+            if not message:
+                _render_error(400, "Message cannot be empty.")
+                return
+
+            try:
+                result = run_turn(
+                    resolved_vault,
+                    chat_id=chat_id,
+                    user_message=message,
+                    anchor_kind=anchor_kind,
+                    anchor_ref=anchor_ref,
+                    anchor_title=anchor_title,
+                    profile_name=profile or None,
+                    visibility=visibility,
+                )
+            except ChatCapExceeded as exc:
+                _render_error(429, str(exc))
                 return
             except ValueError as exc:
-                self._write_html(
-                    _layout(
-                        "Ask the vault",
-                        render_chat_page_body(
-                            resolved_vault,
-                            chat_id=chat_id,
-                            error_message=str(exc),
-                            csrf_token=csrf,
-                        ),
-                    ),
-                    status=400,
+                _render_error(400, str(exc))
+                return
+            except Exception as exc:  # noqa: BLE001 — codex P2
+                # Provider failures + ``litellm`` import errors raise
+                # generic RuntimeError / OSError / etc.  Render the
+                # page inline rather than 500-ing the request — the
+                # transcript already preserved the user turn so the
+                # operator can retry.
+                logger_name = exc.__class__.__name__
+                _render_error(
+                    500,
+                    f"Inquiry failed ({logger_name}): {exc}",
                 )
                 return
             self._redirect(chat_page_redirect_target(result.chat_id))

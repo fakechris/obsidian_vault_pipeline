@@ -7,6 +7,8 @@ from pathlib import Path
 from ovp_pipeline.chat_fileops import ChatAnchor, create_chat_file
 from ovp_pipeline.commands._chat_page import (
     _profile_options,
+    _strip_html_comments,
+    parse_anchor_string,
     render_chat_page_body,
 )
 
@@ -141,3 +143,75 @@ def test_visibility_toggle_preserves_unindexed_session(tmp_path: Path):
     html = render_chat_page_body(tmp_path, chat_path=path)
     assert 'value="unindexed" checked' in html
     assert 'value="indexed" checked' not in html
+
+
+def test_visibility_toggle_disabled_on_existing_session(tmp_path: Path):
+    """Once a session starts, visibility is locked — run_turn
+    ignores changes on follow-up turns, so the toggle is disabled
+    to avoid the impression you can flip it (CodeRabbit M)."""
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="note", path="x.md"),
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert "disabled" in html
+    assert "Visibility is locked" in html
+
+
+# ── Codex P2 — anchor_title round-trips through hidden field ───
+
+
+def test_new_anchored_chat_carries_anchor_title_as_hidden(tmp_path: Path):
+    """The friendly title from the GET URL must land as a hidden
+    field so the POST handler can persist it on creation."""
+    html = render_chat_page_body(
+        tmp_path,
+        anchor_kind="note",
+        anchor_ref="20-Areas/topic.md",
+        anchor_title="My Topic — explainer",
+    )
+    assert 'name="anchor_title"' in html
+    assert 'value="My Topic — explainer"' in html
+
+
+# ── CodeRabbit High — HTML comment stripping preserves prose ───
+
+
+def test_strip_html_comments_keeps_inline_prose():
+    """Single-line ``<!-- ... -->`` strips just the comment range
+    — content before AND after the comment is preserved
+    (CodeRabbit High)."""
+    cleaned, in_block = _strip_html_comments("before <!-- inline --> after", in_block=False)
+    assert cleaned == "before  after"
+    assert in_block is False
+
+
+def test_strip_html_comments_handles_multi_line_block():
+    open_line, in_block = _strip_html_comments("prefix <!-- start", in_block=False)
+    assert open_line == "prefix "
+    assert in_block is True
+    inside_line, in_block = _strip_html_comments("middle line", in_block=True)
+    assert inside_line == ""
+    assert in_block is True
+    close_line, in_block = _strip_html_comments("end --> suffix", in_block=True)
+    assert close_line == " suffix"
+    assert in_block is False
+
+
+# ── parse_anchor_string ────────────────────────────────────────
+
+
+def test_parse_anchor_string_empty_is_standalone():
+    assert parse_anchor_string("") == ("standalone", "")
+
+
+def test_parse_anchor_string_kind_colon_ref():
+    assert parse_anchor_string("note:20-Areas/x.md") == ("note", "20-Areas/x.md")
+
+
+def test_parse_anchor_string_bare_path_defaults_to_note():
+    assert parse_anchor_string("20-Areas/x.md") == ("note", "20-Areas/x.md")
+
+
+def test_parse_anchor_string_strips_whitespace():
+    assert parse_anchor_string("  note : x  ") == ("note", "x")
