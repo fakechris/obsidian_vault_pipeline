@@ -34,10 +34,10 @@ pass put the operator in the seat.
 
 Separate but adjacent failure on the digest surface:
 
-5. **Daily digest 无历史导航** — only today's digest has a
-   stable URL.  Yesterday's is reachable only by hand-typing
-   the date in `?path=`.  No `/digests` list, no prev/next
-   on the digest page itself.
+- **Daily digest 无历史导航** — only today's digest has a
+  stable URL.  Yesterday's is reachable only by hand-typing
+  the date in `?path=`.  No `/digests` list, no prev/next
+  on the digest page itself.
 
 This plan fixes all five in one milestone.
 
@@ -82,7 +82,7 @@ What they want at that moment:
 
 ## Architecture
 
-```
+```text
 ┌─ Reader page (digest / note / object / topic) ───────────────┐
 │                                                              │
 │  Operator sees the artifact as before.                       │
@@ -121,7 +121,7 @@ Drawer mechanics:
 
 | Aspect | M21b behaviour | M22 behaviour |
 |---|---|---|
-| Entry from `/note` / `/object` / `/topic` / digest | Anchor `<a href="/chat?anchor=…">` (full page nav) | Anchor `<button data-anchor="…">` (opens drawer); `data-href` falls back to full nav for no-JS / direct deep link |
+| Entry from `/note` / `/object` / `/topic` / digest | Anchor `<a href="/chat?anchor=…">` (full page nav) | `<a href="/chat?anchor=…">` wrapping a `<button>`; JS intercepts the click and opens the drawer.  No-JS path follows the `<a>` normally — `/chat` page stays as the fallback. |
 | Persistence at first prompt | `create_chat_file` runs immediately | **Ephemeral session in memory.**  `create_chat_file` runs only on Save / Absorb. |
 | Visibility prompt | Pre-submit radio | Post-answer affordance |
 | Profile picker | Always visible | Hidden by default; `⚙` expands |
@@ -201,11 +201,14 @@ helpers but emits a `<aside>` block + small JS that:
 - Calls `POST /chat/drawer/save` / `/absorb` / `/discard` on the
   three affordances
 
-"Ask about this" buttons change from `<a href>` to `<button
-data-anchor>` + a small click handler that opens the drawer.
-JS-disabled fallback: `<a href="/chat?anchor=…">` wrapper around
-the button, with CSS `progressive-enhancement` so JS-on hides the
-plain link and shows the button.
+"Ask about this" buttons stay as `<a href="/chat?anchor=…">`
+(the existing BL-087 output) wrapping the button label.  A
+single delegated click handler intercepts the anchor's
+`click` event, calls `event.preventDefault()`, and opens the
+drawer instead.  No-JS path: the `<a>` follows its `href`
+normally → user lands on the standalone `/chat` page that BL-086
+already serves.  This is the same progressive-enhancement
+pattern Linear / GitHub use for "open in panel" affordances.
 
 ### BL-091 — Save / Absorb / Discard
 
@@ -230,9 +233,13 @@ After Save / Absorb, the drawer flips its banner to "Saved as
   width.  No JS dep — use CSS `field-sizing: content` with a
   fallback `oninput` handler.
 - Profile picker: hide by default; render under a `<details>`
-  `⚙ Advanced` summary.  When all profiles point at the same
-  model (current state), don't even render the disclosure —
-  detect at render time via `len({p.litellm_model for p in book.profiles.values()}) > 1`.
+  `⚙ Advanced` summary, BUT only when the operator's profile
+  book actually has multiple distinct models.  Render condition:
+  `len({p.litellm_model for p in book.profiles.values()}) > 1`.
+  When the condition is false (current state — all three
+  profiles point at the same MiniMax model) the disclosure
+  isn't rendered at all; showing a picker with no real choice
+  is the M21b user-story failure #2.
 - Visibility radio: **removed** from the composer entirely.
   Logic moves to post-answer Save / Absorb / Discard
   affordances (BL-091).
@@ -273,7 +280,7 @@ After Save / Absorb, the drawer flips its banner to "Saved as
 
 ## Implementation order
 
-```
+```text
 BL-089 (ephemeral run_turn split)
   ├─→ BL-090 (drawer renderer + JS)
   │    └─→ BL-091 (Save/Absorb/Discard) — completes the drawer flow
