@@ -215,3 +215,54 @@ def test_parse_anchor_string_bare_path_defaults_to_note():
 
 def test_parse_anchor_string_strips_whitespace():
     assert parse_anchor_string("  note : x  ") == ("note", "x")
+
+
+# ── CodeRabbit Major — H1 in body must not overwrite title ────
+
+
+def test_h1_inside_user_turn_does_not_overwrite_title(tmp_path: Path):
+    """A markdown-heavy reply that contains ``# Heading`` lines as
+    body content must NOT lose those lines and must NOT have the
+    transcript-title silently overwritten."""
+    chat = tmp_path / "x.md"
+    chat.write_text(
+        "---\ntype: chat\nchat_id: chat-abc\n---\n\n"
+        "# Original Inquiry Title\n\n"
+        "## User · 2026-05-12T11:00:00Z\n\n"
+        "# Some H1 inside user prose\n\nbody text.\n\n"
+        "## Assistant · 2026-05-12T11:00:01Z · turn-2\n\n"
+        "<!-- context-manifest\n  token_estimate: 5\n-->\n\n"
+        "# Heading inside reply\n\nReply body.\n\n",
+        encoding="utf-8",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=chat)
+    # Title comes from the pre-turn H1 only.
+    assert "Original Inquiry Title" in html
+    # In-body H1s land in their respective turn bodies.
+    assert "Some H1 inside user prose" in html
+    assert "Heading inside reply" in html
+
+
+# ── CodeRabbit Major — hidden visibility carries through POST ──
+
+
+def test_existing_session_emits_hidden_visibility_field(tmp_path: Path):
+    """Disabled radio buttons aren't submitted with the form; the
+    hidden field is what actually carries ``visibility`` to the
+    POST handler on follow-ups."""
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="standalone"),
+        visibility="unindexed",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert 'type="hidden" name="visibility" value="unindexed"' in html
+
+
+def test_render_chat_page_body_respects_visibility_kwarg(tmp_path: Path):
+    """An error rerender passes the operator's submitted visibility
+    back to the renderer; pre-existing-session paths still derive
+    from frontmatter."""
+    html = render_chat_page_body(tmp_path, visibility="unindexed")
+    assert 'value="unindexed" checked' in html
+    assert 'value="indexed" checked' not in html

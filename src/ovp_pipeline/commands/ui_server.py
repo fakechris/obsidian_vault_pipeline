@@ -1464,6 +1464,8 @@ def create_server(
                 run_turn,
             )
 
+            from ovp_pipeline.commands.chat_handler import _find_chat_by_id
+
             chat_id = self._form_first(form, "chat_id").strip() or None
             anchor_raw = self._form_first(form, "anchor").strip()
             anchor_title = self._form_first(form, "anchor_title").strip()
@@ -1475,17 +1477,22 @@ def create_server(
 
             def _render_error(status: int, error_message: str) -> None:
                 """Re-render the page with the operator's submitted
-                form state preserved (CodeRabbit Major)."""
+                form state preserved (CodeRabbit Major).  Looks up
+                the existing chat path so a follow-up error
+                rerender still shows the transcript."""
+                existing_path = _find_chat_by_id(resolved_vault, chat_id) if chat_id else None
                 self._write_html(
                     _layout(
                         "Ask the vault",
                         render_chat_page_body(
                             resolved_vault,
                             chat_id=chat_id,
+                            chat_path=existing_path,
                             anchor_kind=anchor_kind,
                             anchor_ref=anchor_ref,
                             anchor_title=anchor_title,
                             profile=profile,
+                            visibility=visibility,
                             error_message=error_message,
                             csrf_token=csrf,
                         ),

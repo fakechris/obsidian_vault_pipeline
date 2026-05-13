@@ -108,7 +108,10 @@ def _render_transcript_body(text: str) -> str:
     in_block_comment = False
     title_line = ""
     for raw in text.splitlines():
-        if raw.startswith("# "):
+        # H1 detection only applies *before* the first turn header.
+        # Once a User/Assistant section opens, a ``# heading`` line is
+        # part of the message body (CodeRabbit Major).
+        if current_role is None and raw.startswith("# "):
             title_line = raw[2:].strip()
             continue
         if raw.startswith("## User ·"):
@@ -190,6 +193,7 @@ def render_chat_page_body(
     anchor_ref: str = "",
     anchor_title: str = "",
     profile: str = "balanced",
+    visibility: str = "indexed",
     error_message: str = "",
     csrf_token: str = "",
 ) -> str:
@@ -218,7 +222,9 @@ def render_chat_page_body(
         profile = fm.profile or profile
         visibility = fm.visibility
     else:
-        visibility = "indexed"
+        # Preserve the caller-supplied visibility (e.g. from an
+        # error rerender that needs to keep the operator's choice).
+        visibility = visibility or "indexed"
 
     manifest_card = _render_manifest_card(fm)
     anchor_badge = (
@@ -265,6 +271,15 @@ def render_chat_page_body(
         if anchor_title
         else ""
     )
+    # CodeRabbit Major: disabled radios are NOT submitted with the
+    # form.  An unindexed session would otherwise lose its
+    # visibility on every follow-up turn.  The hidden field carries
+    # the value while the disabled radios serve only as visual cue.
+    visibility_hidden = (
+        f'<input type="hidden" name="visibility" value="{escape(visibility)}" />'
+        if existing_session
+        else ""
+    )
 
     return f"""
 <header class="chat-header">
@@ -279,6 +294,7 @@ def render_chat_page_body(
     {chat_id_hidden}
     {anchor_hidden}
     {anchor_title_hidden}
+    {visibility_hidden}
     <label class="block">
       <span class="muted small">Profile</span>
       <select name="profile">{profile_options}</select>
