@@ -3121,68 +3121,32 @@ def build_timeline_payload(
 # BL-053: Ops workbench IA — by-day "today" digest + by-run "runs" index
 # ---------------------------------------------------------------------------
 
-# Per-card event-type buckets for ``/ops/today``.  These are
-# **inclusive** — an event listed in two cards (rare) gets counted in
-# both.  Card ordering is the rendering order.  Tweak when new
-# pipeline events land; the renderer reads the dict shape directly so
-# adding a card is purely a data change.
-TODAY_DIGEST_CARDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    (
-        "intake",
-        "Intake",
-        (
-            "clippings_processed",
-            "source_archived_to_processed",
-            "source_staged_for_processing",
-            "github_intake_completed",
-            "article_intake_only",
-            "source_dedup_skipped",
-        ),
-    ),
-    (
-        "absorb",
-        "Absorb",
-        (
-            "evergreen_auto_promoted",
-            "absorb_completed",
-            "candidates_upserted",
-        ),
-    ),
-    (
-        "synthesis",
-        "Synthesis",
-        (
-            "community_crystal_synthesized",
-            "contradiction_crystal_synthesized",
-            "crystal_archived",
-        ),
-    ),
-    (
-        "governance",
-        "Governance",
-        (
-            "promote_concept",
-            "concept_archived",
-            "concept_merged",
-            "dedup_cleanup_archived",
-            "candidate_review_action",
-            "evolution_review_action",
-            "contradictions_resolved",
-        ),
-    ),
-    (
-        "failures",
-        "Failures",
-        (
-            "absorb_parse_error",
-            "absorb_schema_drift",
-            "absorb_skipped_source",
-            "broken_link",
-            "github_intake_error",
-            "article_error",
-            "image_download_error",
-        ),
-    ),
+# Per-card event-type buckets for ``/ops/today``.
+#
+# M24.0 stop-gap (2026-05-14): card event_types are now sourced from
+# ``event_evidence_registry`` so the same lists drive the calendar
+# on ``/digests``, Layer 0 of the M23 digest, and these cards.
+# Previously three independent allowlists disagreed and the operator
+# saw 27 / 7 / many different counts for the same day.  The registry
+# excludes legacy / debug-only event types from the primary count by
+# default so high-volume forensic rows (``atlas_updated_from_registry``,
+# ``quality_checked``, etc.) don't drown the cards.
+from ..event_evidence_registry import (
+    CATEGORIES as _EVT_CATEGORIES,
+    event_types_for_category as _evt_for_category,
+)
+
+_TODAY_CARD_LABELS: dict[str, str] = {
+    "intake": "Intake",
+    "absorb": "Absorb",
+    "synthesis": "Synthesis",
+    "governance": "Governance",
+    "failures": "Failures",
+}
+
+TODAY_DIGEST_CARDS: tuple[tuple[str, str, tuple[str, ...]], ...] = tuple(
+    (cat, _TODAY_CARD_LABELS[cat], _evt_for_category(cat))
+    for cat in _EVT_CATEGORIES
 )
 
 # Cap on how many sample rows each ``/ops/today`` card surfaces.
@@ -3243,6 +3207,20 @@ def build_today_digest_payload(
     cards: list[dict[str, Any]] = []
     with sqlite3.connect(db_path) as conn:
         for card_id, card_label, event_types in TODAY_DIGEST_CARDS:
+            # CodeRabbit: SQL ``IN ()`` is invalid; if a registry
+            # category ever ships empty, emit a zero card without
+            # querying instead of crashing.
+            if not event_types:
+                cards.append({
+                    "id": card_id,
+                    "label": card_label,
+                    "total": 0,
+                    "by_type": {},
+                    "samples": [],
+                    "see_all_path": "",
+                    "event_types": [],
+                })
+                continue
             placeholders = ",".join("?" for _ in event_types)
             counts_rows = conn.execute(
                 f"""
@@ -3261,6 +3239,12 @@ def build_today_digest_payload(
             # Sample rows — favour high-signal subjects (slug / source
             # path / file) over raw event_type so the click-through is
             # actionable.  Skip stage events that don't carry a slug.
+            #
+            # M24.0 stop-gap: also pull the object_id + source path
+            # so we can wrap each sample in a real link.  Previously
+            # samples rendered as plain ``<span>`` and the operator
+            # couldn't drill from "intake: 7" into the actual
+            # 7 articles.
             sample_rows = conn.execute(
                 f"""
                 SELECT event_type,
@@ -3270,6 +3254,9 @@ def build_today_digest_payload(
                                 json_extract(payload_json, '$.url'),
                                 slug) AS subject,
                        json_extract(payload_json, '$.title') AS title,
+                       json_extract(payload_json, '$.object_id') AS object_id,
+                       json_extract(payload_json, '$.path') AS path,
+                       json_extract(payload_json, '$.source_path') AS source_path,
                        timestamp
                   FROM audit_events
                  WHERE date(timestamp) = ?
@@ -3279,16 +3266,38 @@ def build_today_digest_payload(
                 (date_key, *event_types),
             ).fetchall()
             samples: list[dict[str, str]] = []
-            for event_type, subject, title, ts in sample_rows:
+            for event_type, subject, title, object_id, path, source_path, ts in sample_rows:
                 if not subject:
                     continue
                 if len(samples) >= TODAY_CARD_SAMPLE_SIZE:
                     break
+                # Pick the most-actionable link target:
+                #   object_id → ``/object?id=…``  (canonical view)
+                #   path / source_path → ``/note?path=…``  (raw markdown)
+                #   else → bare ``/ops/events?q=<slug>``  (forensic fallback)
+                sample_path = ""
+                if object_id:
+                    sample_path = _scoped_path(
+                        f"/object?id={quote(str(object_id), safe='')}",
+                        pack_name=requested_pack,
+                    )
+                elif path or source_path:
+                    note_path = str(path or source_path)
+                    sample_path = _scoped_path(
+                        f"/note?path={quote(note_path, safe='')}",
+                        pack_name=requested_pack,
+                    )
+                else:
+                    sample_path = _scoped_path(
+                        f"/ops/events?q={quote(str(subject), safe='')}",
+                        pack_name=requested_pack,
+                    )
                 samples.append({
                     "event_type": str(event_type),
                     "subject": str(subject),
                     "title": str(title or subject),
                     "timestamp": str(ts or ""),
+                    "path": sample_path,
                 })
             # ``see_all_path`` deep-links into the event dossier
             # filtered to this card's date + event types so the
@@ -3297,12 +3306,23 @@ def build_today_digest_payload(
             # ``pack=`` when ``pack_name`` is set, so we don't add
             # it to ``see_all_qs`` ourselves — pre-fix doing both
             # produced duplicate ``pack=`` query params.
-            see_all_qs = "&".join(
-                [
-                    f"date={quote(date_key, safe='')}",
-                    "limit=200",
-                ]
-            )
+            #
+            # M24.0 stop-gap (2026-05-14): pass the card's
+            # ``event_types`` through as a comma-separated query
+            # param so ``/ops/events`` can filter to just those
+            # rows.  Previously this link dropped the filter and
+            # operators landed on a full audit dump — "See all 7"
+            # showed 100+ unrelated events, which was the most-
+            # complained-about lie on the page.
+            see_all_qs_parts = [
+                f"date={quote(date_key, safe='')}",
+                "limit=200",
+            ]
+            if event_types:
+                see_all_qs_parts.append(
+                    "event_types=" + quote(",".join(event_types), safe="")
+                )
+            see_all_qs = "&".join(see_all_qs_parts)
             see_all_path = _scoped_path(
                 f"/ops/events?{see_all_qs}", pack_name=requested_pack
             )
@@ -3814,23 +3834,38 @@ def build_event_dossier_payload(
     limit: int | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    event_types_filter: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     research_shell_enabled = _supports_research_shell(pack_name)
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
     normalized_from = (from_date or "").strip() or None
     normalized_to = (to_date or "").strip() or None
+    # M24.0 stop-gap: when an event_types filter is set, over-fetch
+    # so post-filter trim still has matches.  Filtering after the
+    # pre-limited fetch (CodeRabbit Major) would drop legitimately
+    # matching rows that happened to sit past the first
+    # ``effective_limit`` rows in the timeline.
+    query_limit = effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT
+    if event_types_filter:
+        query_limit = max(query_limit, 1000)
     events = [
         _build_timeline_event_item(row)
         for row in list_timeline_events(
             vault_dir,
             pack_name=pack_name,
             query=query,
-            limit=effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT,
+            limit=query_limit,
             from_date=normalized_from,
             to_date=normalized_to,
         )
     ]
+    if event_types_filter:
+        allowed = frozenset(event_types_filter)
+        events = [e for e in events if e.get("event_type") in allowed]
+        # Trim back to caller's effective_limit after filtering.
+        if effective_limit and effective_limit > 0:
+            events = events[:effective_limit]
     provenance_map = get_object_provenance_map(
         vault_dir,
         [event["object_id"] for event in events],
@@ -4021,6 +4056,16 @@ def build_event_dossier_payload(
         "dates": dates,
         "cluster_sections": cluster_sections,
         "event_type_counts": dict(event_type_counts),
+        # M24.0 stop-gap: surface the filter so the renderer can warn
+        # when an incoming ``event_types=`` filter returns 0 rows
+        # because this page is a *timeline projection*, not a raw
+        # audit-event browser.  The ``/ops/today`` cards count raw
+        # audit_events; the timeline only contains dated note /
+        # heading / contradiction projections.  Without the warning,
+        # an operator clicks "See all 27 →" and sees 0 rows and
+        # thinks the data is wrong — actually the data sources just
+        # differ.  M25's ``/ops/items`` unifies them.
+        "event_types_filter": list(event_types_filter),
         "limit": effective_limit,
         "is_limited": effective_limit is not None,
         "from_date": normalized_from or "",

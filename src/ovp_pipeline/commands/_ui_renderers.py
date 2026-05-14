@@ -3784,6 +3784,41 @@ def _render_events_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     assembly_contract_card = _render_assembly_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
+    # M24.0 stop-gap: when a ``See all N →`` link from ``/ops/today``
+    # lands here with a non-empty ``event_types`` filter, warn the
+    # operator about the data-source mismatch.  ``/ops/today`` counts
+    # raw ``audit_events`` rows; this page is a *timeline projection*
+    # over dated notes / headings / contradictions.  The two never
+    # align row-for-row.  Without this banner the operator clicks
+    # "See all 27 →" and sees 0 rows and thinks something is broken
+    # — actually they're looking at a different ledger.  M25's
+    # ``/ops/items`` will unify the two surfaces.
+    event_types_filter = payload.get("event_types_filter") or []
+    cross_surface_warning = ""
+    if event_types_filter and payload.get("event_count", 0) == 0:
+        # CodeRabbit: pack-scope the backlink so the operator
+        # doesn't drop their ``?pack=`` context when clicking back
+        # to /ops/today.
+        today_href = _shell_href("/ops/today", requested_pack)
+        filter_chip = escape(", ".join(event_types_filter[:3])) + (
+            "…" if len(event_types_filter) > 3 else ""
+        )
+        cross_surface_warning = (
+            "<div class='card' style='border-color:#c2410c;"
+            "background:#fef3e8;padding:0.75rem 1rem;margin-top:0.5rem'>"
+            "<strong>Heads up — this page can't show those rows.</strong>"
+            "<p class='muted small' style='margin:0.3rem 0 0'>"
+            "<code>/ops/today</code> counts raw <code>audit_events</code> "
+            "(intake / absorb / synthesis / governance / failures), but "
+            "this <em>Event Dossier</em> is a timeline projection over "
+            "dated notes &amp; contradictions.  The two ledgers track "
+            f"different things, so <code>{filter_chip}</code> won't "
+            "match a timeline row.  M24 / M25 will unify these two "
+            f"surfaces; for now use the per-row links on "
+            f"<a href='{escape(today_href)}'>/ops/today</a> to drill "
+            "into the actual source files."
+            "</p></div>"
+        )
     lead_sections, remaining_sections = _split_lead_compiled_sections(
         payload.get("compiled_sections", [])
     )
@@ -3891,6 +3926,7 @@ def _render_events_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Event Dossier</h1>",
+                cross_surface_warning,
                 _render_page_help(
                     "Event dossier",
                     what=(
@@ -6717,19 +6753,41 @@ def _render_today_digest_page(payload: dict) -> str:
             top = sorted(by_type.items(), key=lambda x: -x[1])[:_TODAY_CARD_TOP_TYPES_LIMIT]
             type_pills = " · ".join(f"<code>{escape(t)}</code>×{n}" for t, n in top)
 
+        # M24.0 stop-gap: wrap each sample in an ``<a>`` when the
+        # payload builder gave us a real link target.  Long subject
+        # strings get ``text-overflow: ellipsis`` + ``title="…"``
+        # tooltip so the card stays inside its box even on dense
+        # days (previously a long article title overflowed the card
+        # into the Inbox area).
         sample_html = ""
         if samples:
-            items = "".join(
-                "<li><span class='muted'>{type}</span> <strong>{subject}</strong></li>".format(
-                    type=escape(str(s.get("event_type", ""))[:_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS]),
-                    subject=escape(str(s.get("subject", ""))[:_TODAY_SAMPLE_SUBJECT_MAX_CHARS]),
+            li_rows: list[str] = []
+            for s in samples:
+                et = escape(
+                    str(s.get("event_type", ""))[:_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS]
                 )
-                for s in samples
-            )
+                subj_full = str(s.get("subject", ""))
+                subj_short = escape(subj_full[:_TODAY_SAMPLE_SUBJECT_MAX_CHARS])
+                path = str(s.get("path", "") or "")
+                subject_html = (
+                    f"<a href='{escape(path)}' "
+                    f"title='{escape(subj_full)}'>{subj_short}</a>"
+                    if path
+                    else f"<span title='{escape(subj_full)}'>{subj_short}</span>"
+                )
+                li_rows.append(
+                    "<li style='overflow:hidden;text-overflow:ellipsis;"
+                    "white-space:nowrap'>"
+                    f"<span class='muted'>{et}</span> <strong>{subject_html}</strong>"
+                    "</li>"
+                )
             sample_html = (
                 "<div style='margin-top:.6rem;padding-top:.6rem;"
-                "border-top:1px solid var(--border)'>"
-                f"<ul class='list-tight tiny'>{items}</ul></div>"
+                "border-top:1px solid var(--border);max-width:100%'>"
+                "<ul class='list-tight tiny' "
+                "style='list-style:none;padding-left:0;margin:0'>"
+                + "".join(li_rows)
+                + "</ul></div>"
             )
 
         see_all_html = ""
@@ -6740,11 +6798,27 @@ def _render_today_digest_page(payload: dict) -> str:
                 "</div>"
             )
 
+        # M24.0 honest-zero: when a card has zero evidence, don't
+        # fabricate a reason (could be not_run, ran_no_output, or
+        # missing instrumentation — three different upstream causes
+        # collapsed into one observation).  M24's lifecycle kernel
+        # will replace this with a real diagnosis; for now we name
+        # the ambiguity instead of guessing.
+        zero_html = ""
+        if total == 0:
+            zero_html = (
+                "<p class='muted tiny' style='margin-top:6px'>"
+                "No evidence in this window. "
+                "May mean: not run · no output · missing instrumentation."
+                "</p>"
+            )
+
         sections.append(
-            "<div class='card' style='margin:0'>"
+            "<div class='card' style='margin:0;overflow:hidden'>"
             f"<div class='muted tiny'>{escape(label)}</div>"
             f"<div class='metric-num{warn_cls}' style='margin-top:4px;{empty_style}'>{total}</div>"
             f"<div class='muted tiny' style='margin-top:6px'>{type_pills}</div>"
+            f"{zero_html}"
             f"{sample_html}"
             f"{see_all_html}"
             "</div>"

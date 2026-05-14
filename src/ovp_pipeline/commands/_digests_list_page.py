@@ -33,19 +33,14 @@ DIGESTS_DIR = "40-Resources/Generated/digests"
 KNOWLEDGE_DB_REL = "60-Logs/knowledge.db"
 CALENDAR_WINDOW_DAYS = 30
 
-# The intake event types Layer 0 of the M23 digest counts.  Mirrors
-# the default ``DigestConfig.intake_event_types`` so the calendar
-# tells the operator the same story the digest body would (modulo
-# config overrides — the calendar always uses defaults, which is
-# fine because /digests is a Reader view, not a maintainer dial).
-_INTAKE_EVENT_TYPES = (
-    "article_processed",
-    "source_archived_to_processed",
-    "source_staged_for_processing",
-    "clippings_batch_processed",
-    "github_source_ingested",
-    "arxiv_source_ingested",
-)
+# M24.0 stop-gap: pull intake event_types from the single canonical
+# registry (``event_evidence_registry``) so the calendar, the
+# ``/ops/today`` Intake card, and the M23 digest's Layer 0 all
+# classify the same way.  Before this, three independent lists
+# drifted and same-day counts disagreed across surfaces.
+from ..event_evidence_registry import event_types_for_category
+
+_INTAKE_EVENT_TYPES = event_types_for_category("intake")
 
 
 @dataclass(frozen=True)
@@ -169,7 +164,11 @@ def build_calendar_cells(
 
     intake_counts: dict[str, int] = {}
     db_path = Path(vault_dir) / KNOWLEDGE_DB_REL
-    if db_path.is_file():
+    # CodeRabbit: guard against ``IN ()`` — if the registry ever
+    # ships an empty intake category (e.g. operator override yields
+    # zero types), the SQL would be invalid.  Skip the query and
+    # leave intake_counts empty.
+    if db_path.is_file() and _INTAKE_EVENT_TYPES:
         try:
             with sqlite3.connect(db_path) as conn:
                 placeholders = ",".join("?" * len(_INTAKE_EVENT_TYPES))

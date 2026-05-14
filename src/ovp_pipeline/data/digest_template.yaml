@@ -24,15 +24,16 @@ cluster_threshold: 5
 
 # Layer 0 intake event allowlist — which ``audit_events.event_type``
 # rows count as "operator fed something into the system today".
-# Adding a new source authority requires extending this list, otherwise
-# its intakes are silently uncounted.
-intake_event_types:
-  - article_processed
-  - source_archived_to_processed
-  - source_staged_for_processing
-  - clippings_batch_processed
-  - github_source_ingested
-  - arxiv_source_ingested
+#
+# M24.0 stop-gap: the canonical default now comes from
+# ``src/ovp_pipeline/event_evidence_registry.py``; this list is the
+# operator override.  Leave it as an empty list (or omit) to inherit
+# the registry default — this is what new vaults should do.
+#
+# Override here only when you need to add a vault-specific source
+# authority that the registry doesn't ship.  Adding a new source
+# authority globally should land in the registry, not here.
+intake_event_types: []
 
 # Maintainer page exposes a "Regenerate digest now" button (Stage 4 of
 # the M23 plan).  Defaults to true so operators who drop articles
