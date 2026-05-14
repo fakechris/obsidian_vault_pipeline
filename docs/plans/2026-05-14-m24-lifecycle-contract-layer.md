@@ -121,11 +121,31 @@ class LifecycleState:
     evidence: tuple[str, ...]  # event_type strings, newest first
     last_evidence_at: str   # ISO timestamp of newest evidence row
     needs_action_reason: str | None  # populated when state=="NeedsAction"
+    pack: str               # pack scope this classification is valid for
 
-def lifecycle_state_of(conn, item_kind, item_id) -> LifecycleState | None
-def lifecycle_states_for_kind(conn, item_kind) -> Iterator[LifecycleState]
-def lifecycle_counts(conn) -> dict[str, int]  # state → count, for cards
+def lifecycle_state_of(
+    conn, item_kind, item_id, *, pack: str, as_of: str = "",
+) -> LifecycleState | None
+def lifecycle_states_for_kind(
+    conn, item_kind, *, pack: str, as_of: str = "",
+) -> Iterator[LifecycleState]
+def lifecycle_counts(
+    conn, *, pack: str, as_of: str = "",
+) -> dict[str, int]
 ```
+
+**Why `pack` is keyword-required:** the truth-projection tables
+(``objects``, ``graph_clusters``, ``community_crystals``) are all
+keyed by ``pack``, but ``audit_events`` is not.  Without a pack
+arg the kernel would silently merge evidence across packs when
+slugs / object_ids collide.  The pack kwarg forces every caller
+to be explicit about scope.
+
+**Why `as_of` is on every call:** freshness checks for the
+Synthesized state need a time anchor.  Putting ``as_of`` on the
+call (rather than inside the kernel) keeps the kernel pure for
+testing and lets ``ovp-ops-state --rebuild`` pass a stable
+boundary so two rebuilds in the same minute classify identically.
 
 **Rules (these are the contract, not implementation hints):**
 
@@ -194,7 +214,14 @@ the existing post-pipeline DAG step list, not a new cron.
 
 * Full rebuild only in M24.1.  Incremental refresh ships in M24.4 if
   needed.
-* Idempotent.  Calling `--rebuild` twice yields byte-identical rows.
+* **Content-idempotent.**  Calling `--rebuild` twice with no audit
+  change between calls produces byte-identical rows in every column
+  EXCEPT `refreshed_at` (which is set to the current rebuild time
+  on each call by design — it is the projection's "when did I last
+  look" stamp).  The test asserts equality on every column except
+  `refreshed_at`; production code consuming the projection should
+  treat `refreshed_at` as metadata, not as part of an item's
+  identity.
 * Adds **one** new step to the unified pipeline DAG, after
   `knowledge_index`, gated on `--full`.  No new scheduler.
 

@@ -74,14 +74,19 @@ review-queue work lives).
 
 > *"A canonical artifact exists in the vault for this item."*
 
-An evergreen has been promoted (auto or by operator), or the source
-has been archived to `03-Processed` because every extracted artifact
-reached a canonical form.  The item is no longer a candidate; it
-exists in `10-Knowledge/Evergreen/` and is reachable from MOCs / the
-graph.
+An evergreen has been promoted (auto or by operator), so a
+canonical artifact exists in `10-Knowledge/Evergreen/` and is
+reachable from MOCs / the graph.
 
-**Evidence:** `evergreen_auto_promoted`, `promote_concept`,
-`source_archived_to_processed` (after intake completed), or a
+> **Important:** `source_archived_to_processed` is NOT an Accepted
+> signal.  That event fires when a raw markdown file moves into
+> `50-Inbox/03-Processed/`, which is the *input* to the absorb
+> stage, not the output.  Many archived sources still need
+> extraction + promotion; counting that event as Accepted would
+> hide work waiting for the absorber.  Accepted requires a
+> downstream `evergreen_auto_promoted` or `promote_concept` row.
+
+**Evidence:** `evergreen_auto_promoted`, `promote_concept`, or a
 canonical-write event in the registry projection.
 
 **Visible to operator:** yes (primary card).
@@ -166,7 +171,7 @@ The mapping isn't 1:1:
 
 | Evidence category | Contributes to lifecycle state |
 |---|---|
-| `intake`     | Received (always); Accepted via `source_archived_to_processed` |
+| `intake`     | Received (always) — `source_archived_to_processed` stays at Received because 03-Processed is the absorber's *input*, not its output |
 | `absorb`     | Extracted (always); Accepted via `evergreen_auto_promoted` |
 | `synthesis`  | Synthesized (when fresh); otherwise no state change |
 | `governance` | Accepted (via `promote_concept`), Needs Action (via review actions) |
