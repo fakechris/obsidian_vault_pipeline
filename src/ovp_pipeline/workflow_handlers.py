@@ -111,6 +111,15 @@ def run_pipeline_knowledge_index(*, pipeline: Any, dry_run: bool = False, **_: A
     return pipeline.step_knowledge_index(dry_run)
 
 
+def run_pipeline_ops_state(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
+    """M24.1: rebuild the lifecycle projection over knowledge.db.
+
+    Runs after ``knowledge_index`` in the standard DAG so the
+    truth-projection tables it reads are fresh.
+    """
+    return pipeline.step_ops_state(dry_run)
+
+
 def run_autopilot_interpretation(*, daemon: Any, task: Any, **_: Any) -> dict[str, Any]:
     return daemon._run_interpretation(task)
 

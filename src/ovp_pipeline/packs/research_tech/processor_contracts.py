@@ -160,6 +160,20 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             description="Rebuild the derived truth and graph projections.",
         ),
         ProcessorContractSpec(
+            name="ops_state",
+            pack=pack_name,
+            stage="ops_state",
+            mode="projection_rebuild",
+            inputs=("audit_events", "truth_projection"),
+            outputs=("ops_state_projection",),
+            quality_hooks=(),
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_ops_state",
+            description=(
+                "M24.1: rebuild the ops_state lifecycle projection "
+                "from audit_events + truth-projection tables."
+            ),
+        ),
+        ProcessorContractSpec(
             name="interpretation",
             pack=pack_name,
             stage="interpretation",

@@ -146,6 +146,18 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             target_mode="batch",
         ),
         StageHandlerSpec(
+            name="ops_state",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="pipeline_step",
+            stage="ops_state",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_ops_state",
+            description=(
+                "M24.1: rebuild the ops_state lifecycle projection"
+            ),
+            target_mode="batch",
+        ),
+        StageHandlerSpec(
             name="interpretation",
             pack=pack_name,
             handler_kind="profile_stage",

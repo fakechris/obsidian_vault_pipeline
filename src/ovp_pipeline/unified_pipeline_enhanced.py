@@ -470,6 +470,7 @@ BASE_PIPELINE_STEPS = [
     "registry_sync",  # 9. 同步Registry与文件系统
     "moc",            # 10. 更新MOC
     "knowledge_index",  # 11. 刷新派生 knowledge.db
+    "ops_state",      # 12. M24.1: rebuild lifecycle projection
 ]
 
 OPTIONAL_PIPELINE_STEPS = ["refine"]  # cleanup + breakdown 的批处理重构
@@ -494,6 +495,7 @@ STAGE_CACHE_POLICIES = {
     "registry_sync": STAGE_CACHE_CHECKOUT,
     "moc": STAGE_CACHE_CHECKOUT,
     "knowledge_index": STAGE_CACHE_CHECKOUT,
+    "ops_state": STAGE_CACHE_RECORD_ONLY,
     "refine": STAGE_CACHE_RECORD_ONLY,
 }
 STAGE_ALGORITHM_VERSIONS = {
@@ -504,6 +506,7 @@ STAGE_ALGORITHM_VERSIONS = {
     "registry_sync": "registry_sync:rebuild-registry:v1",
     "moc": "moc:auto-moc-scan:v1",
     "knowledge_index": "knowledge_index:truth-projection:v1",
+    "ops_state": "ops_state:lifecycle-projection:v1",
     "pinboard": "pinboard:fetch:v1",
     "pinboard_process": "pinboard_process:route-and-process:v1",
     "clippings": "clippings:process-inbox:v1",
@@ -1440,6 +1443,12 @@ class EnhancedPipeline:
             results["produced"] = 1 if current_mtime and current_mtime != before_mtime else 0
             results["db_path"] = str(self.layout.knowledge_db)
             results["updated"] = bool(results["produced"])
+        elif step == "ops_state":
+            # M24.1: projection rebuild emits a counts dict in stdout
+            # JSON; surface the total for the run summary.
+            results["produced"] = int(cmd_result.get("total", 0) or 0)
+            results["counts"] = cmd_result.get("counts", {})
+            results["pack"] = cmd_result.get("pack", "")
         elif step == "refine":
             refine_log = self.layout.logs_dir / "refine-mutations.jsonl"
             current_mtime = refine_log.stat().st_mtime if refine_log.exists() else 0.0
@@ -1526,6 +1535,13 @@ class EnhancedPipeline:
             if file_count <= 0:
                 return 300
             return min(14400, max(600, file_count * 2))
+
+        elif step == "ops_state":
+            # Pure sqlite rebuild over the knowledge.db that
+            # ``knowledge_index`` just wrote.  Bounded by audit-row
+            # count, not file count; 5 minutes is generous for a
+            # vault with ~100k audit rows.
+            return 300
 
         return 1800  # 默认30分钟
 
@@ -3137,6 +3153,71 @@ class EnhancedPipeline:
 
         return _to_typed_step_result("knowledge_index", result)
 
+    def step_ops_state(self, dry_run: bool = False) -> dict[str, Any]:
+        """M24.1: rebuild the lifecycle ``ops_state`` projection.
+
+        Reads ``audit_events`` + truth-projection tables from
+        ``knowledge.db`` (so this step depends on a successful
+        ``knowledge_index`` run earlier in the DAG) and writes a
+        per-pack snapshot of the five-state lifecycle counts.
+
+        Pure projection rebuild — no LLM calls, no markdown reads.
+        Idempotent; safe to re-run on the same evidence.
+        """
+        print("\n" + "=" * 60)
+        print("STEP 12: Rebuilding ops_state lifecycle projection")
+        print("=" * 60)
+
+        if dry_run:
+            print("✓ ops_state rebuild (dry-run skipped)")
+            return {
+                "success": True,
+                "skipped": True,
+                "dry_run": True,
+                "pack": self.workflow_pack_name,
+                "produced": 0,
+            }
+
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.ops_state_cli",
+            "--vault-dir", str(self.vault_dir),
+            "--pack", self.workflow_pack_name,
+            "--rebuild",
+            "--json",
+        ]
+        result = self.run_command(
+            cmd, "ops_state",
+            timeout=self._calculate_timeout("ops_state"),
+        )
+
+        # ``ovp-ops-state --rebuild --json`` prints a single JSON
+        # object {counts, total, pack, vault_dir}.  Surface it on
+        # the result dict so the run-summary aggregator can render
+        # the bucket distribution without re-querying the projection.
+        stdout = str(result.get("stdout") or "").strip()
+        if stdout:
+            try:
+                parsed = json.loads(stdout)
+            except (ValueError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                result["counts"] = parsed.get("counts", {})
+                result["total"] = int(parsed.get("total", 0) or 0)
+                result["pack"] = parsed.get("pack", "")
+
+        if result.get("success"):
+            total = result.get("total", 0)
+            print(
+                f"✓ ops_state lifecycle projection rebuilt "
+                f"({total} items)"
+            )
+        else:
+            print(
+                f"✗ ops_state rebuild failed: "
+                f"{result.get('error', 'Unknown error')}"
+            )
+        return result
+
     def run_pipeline(
         self,
         steps: list[str] | None = None,
@@ -3372,6 +3453,20 @@ class EnhancedPipeline:
                     detail = "cleanup + breakdown 已执行"
                 elif step == "knowledge_index":
                     detail = "knowledge.db 已刷新"
+                elif step == "ops_state":
+                    total = result.get("produced", 0)
+                    counts = result.get("counts", {})
+                    if counts:
+                        bucket_str = ", ".join(
+                            f"{state}: {counts.get(state, 0)}"
+                            for state in (
+                                "Received", "Extracted", "Accepted",
+                                "Synthesized", "NeedsAction",
+                            )
+                        )
+                        detail = f"lifecycle 项目: {total} ({bucket_str})"
+                    else:
+                        detail = f"lifecycle 项目: {total}"
                 elif step == "quality":
                     checked = result.get("quality_checked", 0)
                     qualified = result.get("quality_qualified", 0)
