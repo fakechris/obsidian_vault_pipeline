@@ -164,6 +164,38 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
     return ("community_crystal", f"cluster::{stem}")
 
 
+def _strip_html_comments_inline(line: str, in_block: bool) -> tuple[str, bool]:
+    """Remove every ``<!-- ... -->`` range from ``line``.
+
+    Returns ``(stripped, in_block_after)``.  Handles:
+      * a line entirely inside an open block (returns ``""``);
+      * a line that closes a block then opens another;
+      * multiple comments on the same line (gemini review fix);
+      * an open-ended comment that runs to EOL (start of block).
+    """
+    result = line
+    if in_block:
+        if "-->" in result:
+            result = result.split("-->", 1)[1]
+            in_block = False
+        else:
+            return "", True
+    # Strip every fully-closed pair on this line.
+    while True:
+        start = result.find("<!--")
+        if start < 0:
+            break
+        end = result.find("-->", start)
+        if end < 0:
+            # Comment opens but doesn't close → swallow tail,
+            # carry the block state into the next line.
+            result = result[:start]
+            in_block = True
+            break
+        result = result[:start] + result[end + len("-->") :]
+    return result, in_block
+
+
 def _render_drawer_turns_from_transcript(text: str) -> str:
     """Convert a saved transcript into drawer-shaped turn HTML.
 
@@ -173,13 +205,12 @@ def _render_drawer_turns_from_transcript(text: str) -> str:
     Strips ``<!-- context-manifest ... -->`` blocks from assistant
     bodies — those are audit snapshots, not prose.
     """
+    # Strip frontmatter using the renderer's existing helper rather
+    # than re-implementing the parse here (gemini review).
+    from ovp_pipeline.commands._ui_renderers import _parse_frontmatter
     from ovp_pipeline.commands._chat_drawer import render_turn_html
 
-    # Strip frontmatter.
-    if text.startswith("---\n"):
-        end = text.find("\n---\n", 4)
-        if end > 0:
-            text = text[end + 5 :]
+    _frontmatter, body_text = _parse_frontmatter(text)
 
     sections: list[str] = []
     current_role: str | None = None
@@ -196,22 +227,8 @@ def _render_drawer_turns_from_transcript(text: str) -> str:
                 render_turn_html(current_role, body, header=current_header)
             )
 
-    for raw in text.splitlines():
-        # Strip <!-- ... --> ranges; the manifest comment lives
-        # inside assistant turn bodies but should not display.
-        if in_block_comment:
-            if "-->" in raw:
-                raw = raw.split("-->", 1)[1]
-                in_block_comment = False
-            else:
-                continue
-        if "<!--" in raw and "-->" not in raw:
-            raw = raw.split("<!--", 1)[0]
-            in_block_comment = True
-        elif "<!--" in raw and "-->" in raw:
-            start = raw.index("<!--")
-            end = raw.index("-->", start) + len("-->")
-            raw = raw[:start] + raw[end:]
+    for raw in body_text.splitlines():
+        raw, in_block_comment = _strip_html_comments_inline(raw, in_block_comment)
         if raw.startswith("## User ·"):
             _flush()
             current_role = "user"
@@ -1715,7 +1732,6 @@ def create_server(
             chat_id is bogus or the file was discarded.
             """
             from ovp_pipeline.chat_fileops import parse_chat
-            from ovp_pipeline.commands._chat_drawer import render_turn_html
             from ovp_pipeline.commands.chat_handler import _find_chat_by_id
 
             chat_id = (query.get("id", [""])[0] or "").strip()
