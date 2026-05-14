@@ -2081,11 +2081,19 @@ def create_server(
             click costs only the preflight queries — no LLM call.
             A real data change triggers a fresh digest.
 
+            Optional ``date`` form field selects a past day for
+            regenerate (M23.1).  The handler reads ``audit_events``
+            filtered to that day in operator-local tz; the synthesis
+            layer is still pulled from the *current* knowledge.db
+            (not a historical snapshot).
+
             POST-only (CSRF-protected by the global ``_csrf`` check
-            higher up in ``do_POST``).  Redirects back to
-            ``/ops/today`` so the operator can refresh and see the
-            new digest reflected in the home banner.
+            higher up in ``do_POST``).  Redirects back to the
+            referrer (or ``/ops/today``) so the operator can refresh
+            and see the new digest.
             """
+            from datetime import datetime
+
             from ovp_pipeline.commands.digest_handler import _enqueue_daily
             from ovp_pipeline.commands.task_dispatch import (
                 DispatchError,
@@ -2094,7 +2102,16 @@ def create_server(
             )
 
             pack = (self._form_first(form, "pack") or "").strip() or "research-tech"
-            task = _enqueue_daily(resolved_vault)
+            date_str = (self._form_first(form, "date") or "").strip()
+            if date_str:
+                try:
+                    datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError:
+                    self.send_error(
+                        400, f"date {date_str!r} is not YYYY-MM-DD"
+                    )
+                    return
+            task = _enqueue_daily(resolved_vault, target_date=date_str or None)
             try:
                 dispatch_task(resolved_vault, task, pack=pack)
             except RateLimitedError as exc:
@@ -2106,7 +2123,16 @@ def create_server(
             except Exception as exc:  # noqa: BLE001 — provider failures
                 self.send_error(500, f"digest regenerate failed: {exc}")
                 return
-            self._redirect(self._form_first(form, "next").strip() or "/ops/today")
+            # Default redirect: when a past date was regenerated,
+            # send the operator back to that day's view (or /digests
+            # if they came from the calendar).  Otherwise /ops/today.
+            next_target = self._form_first(form, "next").strip()
+            if not next_target:
+                if date_str:
+                    next_target = f"/ops/today?date={date_str}"
+                else:
+                    next_target = "/ops/today"
+            self._redirect(next_target)
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [
