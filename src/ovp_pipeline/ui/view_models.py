@@ -3207,6 +3207,20 @@ def build_today_digest_payload(
     cards: list[dict[str, Any]] = []
     with sqlite3.connect(db_path) as conn:
         for card_id, card_label, event_types in TODAY_DIGEST_CARDS:
+            # CodeRabbit: SQL ``IN ()`` is invalid; if a registry
+            # category ever ships empty, emit a zero card without
+            # querying instead of crashing.
+            if not event_types:
+                cards.append({
+                    "id": card_id,
+                    "label": card_label,
+                    "total": 0,
+                    "by_type": {},
+                    "samples": [],
+                    "see_all_path": "",
+                    "event_types": [],
+                })
+                continue
             placeholders = ",".join("?" for _ in event_types)
             counts_rows = conn.execute(
                 f"""
@@ -3827,25 +3841,31 @@ def build_event_dossier_payload(
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
     normalized_from = (from_date or "").strip() or None
     normalized_to = (to_date or "").strip() or None
+    # M24.0 stop-gap: when an event_types filter is set, over-fetch
+    # so post-filter trim still has matches.  Filtering after the
+    # pre-limited fetch (CodeRabbit Major) would drop legitimately
+    # matching rows that happened to sit past the first
+    # ``effective_limit`` rows in the timeline.
+    query_limit = effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT
+    if event_types_filter:
+        query_limit = max(query_limit, 1000)
     events = [
         _build_timeline_event_item(row)
         for row in list_timeline_events(
             vault_dir,
             pack_name=pack_name,
             query=query,
-            limit=effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT,
+            limit=query_limit,
             from_date=normalized_from,
             to_date=normalized_to,
         )
     ]
-    # M24.0 stop-gap: filter to the event-types the upstream
-    # "See all N →" link asked about so the drilldown count
-    # matches the card count.  Filter post-query because
-    # ``list_timeline_events`` doesn't accept event_type today;
-    # extending it is M24's job.
     if event_types_filter:
         allowed = frozenset(event_types_filter)
         events = [e for e in events if e.get("event_type") in allowed]
+        # Trim back to caller's effective_limit after filtering.
+        if effective_limit and effective_limit > 0:
+            events = events[:effective_limit]
     provenance_map = get_object_provenance_map(
         vault_dir,
         [event["object_id"] for event in events],

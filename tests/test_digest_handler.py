@@ -144,12 +144,22 @@ def _make_knowledge_db(vault: Path) -> sqlite3.Connection:
 
 
 def _seed_window_with_signal(
-    vault: Path, *, as_of: datetime, evergreens: int = 2
+    vault: Path,
+    *,
+    as_of: datetime,
+    evergreens: int = 2,
+    offset_hours: int = 2,
 ) -> None:
-    """Seed enough rows that ``_is_no_data`` returns False."""
+    """Seed enough rows that ``_is_no_data`` returns False.
+
+    ``offset_hours`` controls how far back of ``as_of`` the seeds
+    land.  Default 2h matches the historical behavior; tests that
+    run against a live ``datetime.now`` should pass ``offset_hours=0``
+    so seeds don't cross into yesterday near UTC midnight.
+    """
     conn = _make_knowledge_db(vault)
     for i in range(evergreens):
-        ts = (as_of - timedelta(hours=2, minutes=i)).isoformat()
+        ts = (as_of - timedelta(hours=offset_hours, minutes=i)).isoformat()
         conn.execute(
             "INSERT INTO evergreen_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -232,8 +242,12 @@ def test_calls_llm_with_v2_prompt_when_signal_present(tmp_path: Path):
     """With data, the handler calls the LLM exactly once with a
     prompt that mentions the v2 section headings."""
     vault = _make_vault(tmp_path)
-    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of, evergreens=2)
+    # Anchor the seed close to "now" so it lives inside the handler's
+    # default local-day window regardless of wall-clock time.  Going
+    # back 2h would put seeds in yesterday when the suite runs in
+    # the 2h after UTC midnight.
+    now = datetime.now(timezone.utc)
+    _seed_window_with_signal(vault, as_of=now, evergreens=2, offset_hours=0)
     llm = _FakeLLM(
         "## Window's intake\nOne intake.\n\n## Worth doing next\nResolve.\n"
     )
@@ -257,7 +271,7 @@ def test_frontmatter_contains_preflight_block(tmp_path: Path):
     Reader / digest-health page can read per-section state."""
     vault = _make_vault(tmp_path)
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    _seed_window_with_signal(vault, as_of=as_of, offset_hours=0)
     llm = _FakeLLM("body")
     result = handle_digest(_ctx(vault, llm))
     assert "preflight:" in result.body_md
@@ -270,7 +284,7 @@ def test_audit_event_emitted_on_generate(tmp_path: Path):
     """``digest_generated`` lands in pipeline.jsonl with input_hash + layer counts."""
     vault = _make_vault(tmp_path)
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    _seed_window_with_signal(vault, as_of=as_of, offset_hours=0)
     llm = _FakeLLM("body")
     handle_digest(_ctx(vault, llm))
     log_path = vault / "60-Logs" / "pipeline.jsonl"
@@ -291,7 +305,7 @@ def test_idempotency_skips_llm_when_prior_hash_matches(tmp_path: Path):
     must NOT call the LLM and must emit digest_skipped_no_change."""
     vault = _make_vault(tmp_path)
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    _seed_window_with_signal(vault, as_of=as_of, offset_hours=0)
     llm1 = _FakeLLM("first")
     result1 = handle_digest(_ctx(vault, llm1))
     # Persist result1 to disk at the path the gate will look for.
@@ -319,7 +333,7 @@ def test_idempotency_calls_llm_when_data_changes(tmp_path: Path):
     and forces the LLM call."""
     vault = _make_vault(tmp_path)
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of, evergreens=1)
+    _seed_window_with_signal(vault, as_of=as_of, evergreens=1, offset_hours=0)
     llm1 = _FakeLLM("first body")
     result1 = handle_digest(_ctx(vault, llm1))
     _expected_output_path(vault).write_text(result1.body_md, encoding="utf-8")
@@ -348,7 +362,7 @@ def test_skip_unchanged_disabled_forces_llm(tmp_path: Path):
     """``skip_unchanged: false`` in config disables the gate."""
     vault = _make_vault(tmp_path)
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    _seed_window_with_signal(vault, as_of=as_of, offset_hours=0)
     (vault / ".ovp").mkdir(exist_ok=True)
     (vault / ".ovp" / "digest.yaml").write_text(
         "skip_unchanged: false\n", encoding="utf-8"
@@ -396,7 +410,7 @@ def test_user_focus_flows_into_v2_prompt(tmp_path: Path):
         "# About Me\nFocus: memory systems.\n", encoding="utf-8",
     )
     as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    _seed_window_with_signal(vault, as_of=as_of, offset_hours=0)
     llm = _FakeLLM("body")
     handle_digest(_ctx(vault, llm))
     _sys_prompt, user_prompt = llm.calls[0]

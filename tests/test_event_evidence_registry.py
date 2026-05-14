@@ -68,6 +68,15 @@ def test_intake_includes_legacy_when_asked():
     with_legacy = event_types_for_category("intake", include_legacy=True)
     # ``include_legacy`` shouldn't drop any primary entries.
     assert set(primary) <= set(with_legacy)
+    # And it MUST actually add the legacy / non-user-visible rows
+    # the default excludes — otherwise the flag is a no-op
+    # (CodeRabbit Major caught this with the prior implementation).
+    # ``images_downloaded`` and ``pinboard_process_file_started``
+    # are intake-category, user_visible=False; ``include_legacy=True``
+    # must surface them.
+    assert "images_downloaded" not in primary
+    assert "images_downloaded" in with_legacy
+    assert "pinboard_process_file_started" in with_legacy
 
 
 # ── Failures stay separate ─────────────────────────────────────

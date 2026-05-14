@@ -211,9 +211,27 @@ _REGISTRY: Final[tuple[EventEvidence, ...]] = (
 )
 
 
-_BY_TYPE: Final[dict[str, EventEvidence]] = {
-    e.event_type: e for e in _REGISTRY
-}
+def _build_by_type_index(rows: tuple[EventEvidence, ...]) -> dict[str, EventEvidence]:
+    """Reject duplicate ``event_type`` keys at module-load time.
+
+    A duplicate would let ``classify`` silently return whichever
+    row appeared last in the registry — a quiet way for two
+    "single source of truth" rows to fight.  Fail loud (CodeRabbit
+    Major) so the contributor adding the duplicate sees it
+    immediately, not a year later when a count drifts.
+    """
+    index: dict[str, EventEvidence] = {}
+    for row in rows:
+        if row.event_type in index:
+            raise ValueError(
+                f"event_evidence_registry: duplicate event_type "
+                f"{row.event_type!r} — registry must have one entry per type"
+            )
+        index[row.event_type] = row
+    return index
+
+
+_BY_TYPE: Final[dict[str, EventEvidence]] = _build_by_type_index(_REGISTRY)
 
 CATEGORIES: Final[tuple[str, ...]] = (
     "intake", "absorb", "synthesis", "governance", "failures",
@@ -230,17 +248,30 @@ def event_types_for_category(
 ) -> tuple[str, ...]:
     """All registered event_types in ``category``.
 
-    Default excludes ``user_visible=False`` and ``legacy=True`` rows
-    so primary surfaces don't inflate their counts with high-volume
-    forensic / debug evidence (``atlas_updated_from_registry``,
-    ``quality_checked``, etc.).
+    Default (``include_legacy=False``) excludes ``user_visible=False``
+    and ``legacy=True`` rows so primary surfaces don't inflate their
+    counts with high-volume forensic / debug evidence
+    (``atlas_updated_from_registry``, ``quality_checked``, etc.).
+
+    ``include_legacy=True`` returns **every** row in ``category``,
+    legacy + non-user-visible included.  Used by ``/ops/events``
+    forensic view so it can classify rows that the primary cards
+    skip (CodeRabbit Major: previously the flag was a no-op because
+    the ``user_visible`` guard still ran, so debug-only legacy rows
+    stayed hidden even when explicitly requested).
     """
+    if include_legacy:
+        return tuple(
+            e.event_type
+            for e in _REGISTRY
+            if e.category == category
+        )
     return tuple(
         e.event_type
         for e in _REGISTRY
         if e.category == category
         and e.user_visible
-        and (include_legacy or not e.legacy)
+        and not e.legacy
     )
 
 

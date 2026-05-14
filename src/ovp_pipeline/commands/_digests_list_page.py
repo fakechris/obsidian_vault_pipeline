@@ -164,7 +164,11 @@ def build_calendar_cells(
 
     intake_counts: dict[str, int] = {}
     db_path = Path(vault_dir) / KNOWLEDGE_DB_REL
-    if db_path.is_file():
+    # CodeRabbit: guard against ``IN ()`` — if the registry ever
+    # ships an empty intake category (e.g. operator override yields
+    # zero types), the SQL would be invalid.  Skip the query and
+    # leave intake_counts empty.
+    if db_path.is_file() and _INTAKE_EVENT_TYPES:
         try:
             with sqlite3.connect(db_path) as conn:
                 placeholders = ",".join("?" * len(_INTAKE_EVENT_TYPES))

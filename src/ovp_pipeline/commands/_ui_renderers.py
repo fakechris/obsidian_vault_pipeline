@@ -3796,6 +3796,13 @@ def _render_events_page(payload: dict) -> str:
     event_types_filter = payload.get("event_types_filter") or []
     cross_surface_warning = ""
     if event_types_filter and payload.get("event_count", 0) == 0:
+        # CodeRabbit: pack-scope the backlink so the operator
+        # doesn't drop their ``?pack=`` context when clicking back
+        # to /ops/today.
+        today_href = _shell_href("/ops/today", requested_pack)
+        filter_chip = escape(", ".join(event_types_filter[:3])) + (
+            "…" if len(event_types_filter) > 3 else ""
+        )
         cross_surface_warning = (
             "<div class='card' style='border-color:#c2410c;"
             "background:#fef3e8;padding:0.75rem 1rem;margin-top:0.5rem'>"
@@ -3805,12 +3812,11 @@ def _render_events_page(payload: dict) -> str:
             "(intake / absorb / synthesis / governance / failures), but "
             "this <em>Event Dossier</em> is a timeline projection over "
             "dated notes &amp; contradictions.  The two ledgers track "
-            "different things, so <code>" + escape(", ".join(event_types_filter[:3]))
-            + ("…" if len(event_types_filter) > 3 else "")
-            + "</code> won't match a timeline row.  M24 / M25 will "
-            "unify these two surfaces; for now use the per-row links "
-            "on <a href='/ops/today'>/ops/today</a> to drill into the "
-            "actual source files."
+            f"different things, so <code>{filter_chip}</code> won't "
+            "match a timeline row.  M24 / M25 will unify these two "
+            f"surfaces; for now use the per-row links on "
+            f"<a href='{escape(today_href)}'>/ops/today</a> to drill "
+            "into the actual source files."
             "</p></div>"
         )
     lead_sections, remaining_sections = _split_lead_compiled_sections(
@@ -6778,7 +6784,7 @@ def _render_today_digest_page(payload: dict) -> str:
             sample_html = (
                 "<div style='margin-top:.6rem;padding-top:.6rem;"
                 "border-top:1px solid var(--border);max-width:100%'>"
-                f"<ul class='list-tight tiny' "
+                "<ul class='list-tight tiny' "
                 "style='list-style:none;padding-left:0;margin:0'>"
                 + "".join(li_rows)
                 + "</ul></div>"
