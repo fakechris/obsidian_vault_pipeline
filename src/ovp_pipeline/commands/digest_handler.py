@@ -622,7 +622,14 @@ def _render_no_data_body(inputs: DigestInputs) -> str:
     # ``ovp-knowledge-index`` simply hasn't built the audit_events
     # table yet.
     if preflight.audit_events_layer0 == "ok":
-        intake_line = "No new intake in this window."
+        # M24.3 honest-zero: the audit-events table is fine, but
+        # "no intake" here still has three possible upstream causes
+        # (producer didn't run, ran with no rows, missing
+        # instrumentation).  Don't fabricate a single one.
+        from ..ops_honest_zero import HONEST_ZERO_SHORT
+        intake_line = (
+            f"No new intake in this window.  _{HONEST_ZERO_SHORT}_"
+        )
     else:
         intake_line = (
             "Intake data unavailable — the audit_events table is "

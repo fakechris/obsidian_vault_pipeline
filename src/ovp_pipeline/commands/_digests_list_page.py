@@ -254,11 +254,17 @@ def _render_calendar_grid(cells: list[CalendarCell]) -> str:
     blank_html = "<div class='cal-cell cal-cell-blank'></div>" * leading_blanks
     cells_html = "".join(_cell_html(c) for c in cells)
 
+    # M24.3 honest-zero: "quiet day" used to be a single-word gloss
+    # but a quiet day really means "no audit evidence" — which has
+    # three possible upstream causes (didn't run, ran with no
+    # output, missing instrumentation).  Don't promise diagnosis.
     legend = (
         "<p class='muted small' style='margin-top:0.4rem'>"
         "✓ digest exists · "
         "N = intake events (click to inspect day) · "
-        "— = quiet day"
+        "— = no audit evidence "
+        "<span class='muted'>(may mean: not run · no output · "
+        "missing instrumentation)</span>"
         "</p>"
     )
     # Calendar styles live in /static/ovp-digests-calendar.css (gemini
