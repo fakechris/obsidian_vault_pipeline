@@ -21,6 +21,7 @@ import yaml
 from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
+from ..ops_honest_zero import honest_zero_html
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout
@@ -6798,20 +6799,13 @@ def _render_today_digest_page(payload: dict) -> str:
                 "</div>"
             )
 
-        # M24.0 honest-zero: when a card has zero evidence, don't
-        # fabricate a reason (could be not_run, ran_no_output, or
-        # missing instrumentation — three different upstream causes
-        # collapsed into one observation).  M24's lifecycle kernel
-        # will replace this with a real diagnosis; for now we name
-        # the ambiguity instead of guessing.
+        # M24.3 honest-zero: shared message across every surface so
+        # the wording stays consistent.  M24.4 will branch on the
+        # ops_state diagnosis instead of always returning the
+        # ambiguity, but the helper signature stays the same.
         zero_html = ""
         if total == 0:
-            zero_html = (
-                "<p class='muted tiny' style='margin-top:6px'>"
-                "No evidence in this window. "
-                "May mean: not run · no output · missing instrumentation."
-                "</p>"
-            )
+            zero_html = honest_zero_html(short=True)
 
         sections.append(
             "<div class='card' style='margin:0;overflow:hidden'>"
