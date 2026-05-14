@@ -6819,6 +6819,45 @@ def _render_today_digest_page(payload: dict) -> str:
         )
     sections.append("</div>")
 
+    # M24.4: passive lifecycle-backlog strip beneath the event cards.
+    # Five numbers, no clicks — answers "how many items are sitting
+    # in each lifecycle state right now?".  Orthogonal to the cards
+    # above (which count today's events).  M25 will rename the cards
+    # to this vocabulary; for M24 the two surfaces coexist so the
+    # operator can compare event flow with backlog at a glance.
+    lifecycle = payload.get("lifecycle_summary") or {}
+    if lifecycle.get("available"):
+        counts = lifecycle.get("counts") or {}
+        total = lifecycle.get("total", 0)
+        state_chips = "".join(
+            f"<span class='pill'>{escape(state)}: "
+            f"{int(counts.get(state, 0))}</span>"
+            for state in (
+                "Received", "Extracted", "Accepted",
+                "Synthesized", "NeedsAction",
+            )
+        )
+        sections.append(
+            "<section style='margin-top:1rem'>"
+            "<div class='muted tiny' style='margin-bottom:4px'>"
+            f"Lifecycle backlog "
+            f"<span class='muted'>· {int(total)} item"
+            f"{'s' if int(total) != 1 else ''} in scope</span>"
+            "</div>"
+            f"<div style='display:flex;gap:0.4rem;flex-wrap:wrap'>{state_chips}</div>"
+            "</section>"
+        )
+    elif lifecycle.get("reason"):
+        # Surface the explicit not-yet-built reason rather than
+        # silently dropping the section — honest-zero applies to
+        # the kernel's own readout too.
+        sections.append(
+            "<section style='margin-top:1rem'>"
+            "<div class='muted tiny'>Lifecycle backlog "
+            f"<span class='muted'>· {escape(str(lifecycle['reason']))}</span>"
+            "</div></section>"
+        )
+
     body = "".join(sections)
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
