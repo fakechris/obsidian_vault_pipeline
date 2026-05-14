@@ -105,10 +105,35 @@ _REGISTRY: Final[tuple[EventEvidence, ...]] = (
                   description="The router picked an absorb target for a source."),
     EventEvidence("evergreen_auto_promoted", "absorb",
                   description="An evergreen candidate was auto-promoted to canonical."),
+    # M24.2: legacy fallback branch in ``auto_evergreen_extractor``
+    # that creates an evergreen directly (skipping the candidate
+    # queue).  Registered so producer_audit can find it; the
+    # registry classifies it as absorb evidence with user_visible
+    # since it represents a canonical write the operator should see.
+    EventEvidence("evergreen_created", "absorb",
+                  description=(
+                      "Legacy fallback: extractor wrote an evergreen "
+                      "directly without going through the candidate "
+                      "queue."
+                  )),
     EventEvidence("evergreen_extraction_complete", "absorb",
                   description="Evergreen extraction finished for a source."),
     EventEvidence("candidates_upserted", "absorb",
                   description="Candidate rows were written to knowledge.db."),
+    # M24.2 (2026-05-14): the kernel reads this to detect Prepared
+    # sub-state precisely.  Producer fires it AFTER
+    # ``evergreen_extraction_complete`` and BEFORE the candidate
+    # upsert that follows; if the upsert fails or never happens,
+    # this row remains and the kernel surfaces Prepared with a
+    # real anchor.  ``user_visible=False`` so it never inflates
+    # Maintainer card counts.
+    EventEvidence("absorb_pending_upsert", "absorb",
+                  user_visible=False,
+                  description=(
+                      "Extraction finished but the candidate upsert "
+                      "hasn't been observed yet — kernel marker for "
+                      "Prepared sub-state."
+                  )),
 
     # ── synthesis ──────────────────────────────────────────────
     EventEvidence("community_crystal_synthesized", "synthesis",
@@ -125,6 +150,21 @@ _REGISTRY: Final[tuple[EventEvidence, ...]] = (
     # ── governance ─────────────────────────────────────────────
     EventEvidence("promote_concept", "governance",
                   description="An operator (or auto-promote) promoted a concept."),
+    # M24.2 (2026-05-14): ``promotion`` is the richer
+    # state-transition row that ``promotion_audit.emit_promotion``
+    # writes for the doctor's mtime check and the lint
+    # ZONE_BOUNDARY_VIOLATION rule.  It is paired 1:1 with
+    # ``promote_concept`` in the operator-promote path; both rows
+    # are intentional (different consumers).  Registering it here
+    # so ``/ops/events`` no longer labels it "uncategorised audit
+    # event" and the producer audit can verify it lands when
+    # expected.
+    EventEvidence("promotion", "governance",
+                  description=(
+                      "Rich state-transition row (state-lifecycle "
+                      "boundary crossing); pairs with promote_concept "
+                      "on the operator-promote path."
+                  )),
     EventEvidence("concept_archived", "governance",
                   description="A concept was archived by review."),
     EventEvidence("concept_merged", "governance",

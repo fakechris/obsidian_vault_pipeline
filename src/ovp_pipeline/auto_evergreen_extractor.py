@@ -1118,6 +1118,20 @@ class AutoEvergreenExtractor:
             concepts = self.extractor.extract_concepts(file_path, content, registry=registry)
             result["concepts_extracted"] = len(concepts)
 
+            # M24.2: emit ``absorb_pending_upsert`` once extraction
+            # returns concepts but BEFORE the candidate-upsert loop
+            # below runs.  If the upsert that follows succeeds, the
+            # ``candidates_upserted`` row at the end of the function
+            # pairs with this one.  If it fails (registry write
+            # error, exception in the loop), this row remains in the
+            # log and the kernel surfaces Prepared sub-state with a
+            # real anchor instead of inferring it from absence.
+            if not dry_run and concepts:
+                self.logger.log("absorb_pending_upsert", {
+                    "source": str(file_path.name),
+                    "expected_candidates": len(concepts),
+                })
+
             for concept in concepts:
                 concept_name = concept.get("concept_name")
                 if not concept_name:
@@ -1443,6 +1457,27 @@ class AutoEvergreenExtractor:
                     registry.save()
                 except Exception:
                     pass
+
+            # M24.2: emit ``candidates_upserted`` so the lifecycle
+            # kernel can see absorb-stage writes land.  Pre-M24.2 this
+            # row never fired, which forced the kernel to derive
+            # Prepared sub-state from absence — fine in tests, wrong
+            # in production where every source looked Prepared.  We
+            # also emit ``absorb_pending_upsert`` BEFORE the registry
+            # save above when there's at least one candidate to upsert,
+            # so callers can distinguish "extraction returned but
+            # upsert never happened" from "extraction returned and
+            # upsert completed cleanly".
+            if (
+                not dry_run
+                and result.get("candidates_added", 0) > 0
+            ):
+                self.logger.log("candidates_upserted", {
+                    "source": str(file_path.name),
+                    "candidates": int(result.get("candidates_added", 0)),
+                    "created": int(result.get("concepts_created", 0)),
+                    "promoted": int(result.get("concepts_promoted", 0)),
+                })
 
         except Exception as e:
             result["error"] = str(e)
