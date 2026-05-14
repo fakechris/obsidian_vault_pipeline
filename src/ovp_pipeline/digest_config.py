@@ -57,18 +57,21 @@ _TEMPLATE_REL: Final[str] = "data/digest_template.yaml"
 # to run a histogram.
 _DEFAULT_CLUSTER_THRESHOLD: Final[int] = 5
 
-# Default audit-event allowlist for Layer 0.  Adding a new source
-# authority (GitHub Discussions, Hacker News, etc.) requires extending
-# this list AND updating the bundled template so new vaults pick up
-# the new event types automatically.
-_DEFAULT_INTAKE_EVENT_TYPES: Final[tuple[str, ...]] = (
-    "article_processed",
-    "source_archived_to_processed",
-    "source_staged_for_processing",
-    "clippings_batch_processed",
-    "github_source_ingested",
-    "arxiv_source_ingested",
-)
+# Default audit-event allowlist for Layer 0.
+#
+# M24.0 stop-gap (2026-05-14): pull from the single canonical
+# ``event_evidence_registry`` so the M23 digest, ``/ops/today``, and
+# the ``/digests`` calendar all classify the same way.  Before this,
+# three independently-curated lists drifted and the same day showed
+# 27 / 7 / many different intake counts.
+#
+# The registry lists only event types real producers emit (verified
+# against the operator vault on 2026-05-14).  Operator overrides in
+# ``<vault>/.ovp/digest.yaml`` still win — the registry only
+# provides the **default**.
+from .event_evidence_registry import event_types_for_category as _evt_for
+
+_DEFAULT_INTAKE_EVENT_TYPES: Final[tuple[str, ...]] = _evt_for("intake")
 
 
 @dataclass(frozen=True)

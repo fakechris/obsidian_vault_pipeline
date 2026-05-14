@@ -798,6 +798,19 @@ def create_server(
                         evt_limit = None
                     if evt_limit is not None and evt_limit not in (25, 50, 100, 200):
                         evt_limit = None
+                    # M24.0 stop-gap: ``event_types`` is a
+                    # comma-separated allowlist forwarded by the
+                    # "See all N →" link on each ``/ops/today``
+                    # card.  Without this filter the drilldown
+                    # showed every event for the day; with it the
+                    # operator lands on exactly the rows the card
+                    # summed.
+                    event_types_raw = query.get("event_types", [""])[0] or ""
+                    event_types_filter = tuple(
+                        et.strip()
+                        for et in event_types_raw.split(",")
+                        if et.strip()
+                    )
                     payload = build_event_dossier_payload(
                         resolved_vault,
                         pack_name=pack_name,
@@ -805,6 +818,7 @@ def create_server(
                         limit=evt_limit,
                         from_date=from_date,
                         to_date=to_date,
+                        event_types_filter=event_types_filter,
                     )
                     self._write_html(_render_events_page(payload))
                     return
