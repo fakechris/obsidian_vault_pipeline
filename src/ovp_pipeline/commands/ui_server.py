@@ -164,6 +164,90 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
     return ("community_crystal", f"cluster::{stem}")
 
 
+def _strip_html_comments_inline(line: str, in_block: bool) -> tuple[str, bool]:
+    """Remove every ``<!-- ... -->`` range from ``line``.
+
+    Returns ``(stripped, in_block_after)``.  Handles:
+      * a line entirely inside an open block (returns ``""``);
+      * a line that closes a block then opens another;
+      * multiple comments on the same line (gemini review fix);
+      * an open-ended comment that runs to EOL (start of block).
+    """
+    result = line
+    if in_block:
+        if "-->" in result:
+            result = result.split("-->", 1)[1]
+            in_block = False
+        else:
+            return "", True
+    # Strip every fully-closed pair on this line.
+    while True:
+        start = result.find("<!--")
+        if start < 0:
+            break
+        end = result.find("-->", start)
+        if end < 0:
+            # Comment opens but doesn't close → swallow tail,
+            # carry the block state into the next line.
+            result = result[:start]
+            in_block = True
+            break
+        result = result[:start] + result[end + len("-->") :]
+    return result, in_block
+
+
+def _render_drawer_turns_from_transcript(text: str) -> str:
+    """Convert a saved transcript into drawer-shaped turn HTML.
+
+    Parses the same ``## User · <ISO>`` / ``## Assistant · <ISO> · turn-N``
+    sections that ``_chat_page._render_transcript_body`` reads, but
+    emits the narrower drawer markup via ``render_turn_html``.
+    Strips ``<!-- context-manifest ... -->`` blocks from assistant
+    bodies — those are audit snapshots, not prose.
+    """
+    # Strip frontmatter using the renderer's existing helper rather
+    # than re-implementing the parse here (gemini review).
+    from ovp_pipeline.commands._ui_renderers import _parse_frontmatter
+    from ovp_pipeline.commands._chat_drawer import render_turn_html
+
+    _frontmatter, body_text = _parse_frontmatter(text)
+
+    sections: list[str] = []
+    current_role: str | None = None
+    current_header = ""
+    current_lines: list[str] = []
+    in_block_comment = False
+
+    def _flush() -> None:
+        if current_role is None:
+            return
+        body = "\n".join(current_lines).strip()
+        if body or current_role == "user":
+            sections.append(
+                render_turn_html(current_role, body, header=current_header)
+            )
+
+    for raw in body_text.splitlines():
+        raw, in_block_comment = _strip_html_comments_inline(raw, in_block_comment)
+        if raw.startswith("## User ·"):
+            _flush()
+            current_role = "user"
+            current_header = raw[3:].strip()
+            current_lines = []
+            continue
+        if raw.startswith("## Assistant ·"):
+            _flush()
+            current_role = "assistant"
+            current_header = raw[3:].strip()
+            current_lines = []
+            continue
+        if current_role is None:
+            continue
+        current_lines.append(raw)
+    _flush()
+    return "".join(sections)
+
+
 def _maybe_update_chats_projection(
     vault_dir: Path | str,
     *,
@@ -1218,6 +1302,9 @@ def create_server(
                 if path == "/ops/digest-health":
                     self._handle_digest_health()
                     return
+                if path == "/chat/drawer/transcript":
+                    self._handle_chat_drawer_transcript_get(query)
+                    return
                 if path == "/chat":
                     self._handle_chat_page_get(query, csrf_token)
                     return
@@ -1624,6 +1711,60 @@ def create_server(
             self._redirect(chat_page_redirect_target(result.chat_id))
 
         # ── M22: anchored inquiry drawer ───────────────────────
+
+        def _handle_chat_drawer_transcript_get(
+            self, query: dict[str, list[str]]
+        ) -> None:
+            """Return the prior turns of a chat as drawer HTML.
+
+            The drawer JS calls this on reopen when localStorage has
+            a ``chat_id`` cached for the current anchor — without
+            this fetch the operator would see an empty drawer after
+            a page refresh (M22 user feedback 2026-05-13: "chat
+            history disappeared, can't find it").
+
+            Response shape::
+
+                {"chat_id": "chat-...",
+                 "turns_html": "<section>…</section><section>…</section>"}
+
+            Errors: ``{"error": "not_found"}`` with 404 when the
+            chat_id is bogus or the file was discarded.
+            """
+            from ovp_pipeline.chat_fileops import parse_chat
+            from ovp_pipeline.commands.chat_handler import _find_chat_by_id
+
+            chat_id = (query.get("id", [""])[0] or "").strip()
+            if not chat_id:
+                self._write_json(
+                    {"error": "missing_id", "detail": "id is required."},
+                    status=400,
+                )
+                return
+            chat_path = _find_chat_by_id(resolved_vault, chat_id)
+            if chat_path is None or not chat_path.is_file():
+                self._write_json(
+                    {"error": "not_found", "detail": f"chat_id {chat_id!r} not found."},
+                    status=404,
+                )
+                return
+            fm = parse_chat(chat_path)
+            if fm is None:
+                self._write_json(
+                    {"error": "not_a_chat", "detail": str(chat_path)},
+                    status=400,
+                )
+                return
+
+            text = chat_path.read_text(encoding="utf-8")
+            turns_html = _render_drawer_turns_from_transcript(text)
+            self._write_json(
+                {
+                    "chat_id": chat_id,
+                    "turn_count": fm.turn_count,
+                    "turns_html": turns_html,
+                }
+            )
 
         def _handle_chat_drawer_message_post(
             self, form: dict[str, list[str]]

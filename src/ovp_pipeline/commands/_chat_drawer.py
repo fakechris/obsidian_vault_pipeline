@@ -45,10 +45,23 @@ from __future__ import annotations
 
 from html import escape
 
+from markdown_it import MarkdownIt
+
 
 # Container id used by the static JS to find / show / hide the
 # drawer.  Kept as a module constant so the renderer + JS agree.
 DRAWER_ID = "ovp-chat-drawer"
+
+
+# Module-level renderer instance (gemini + CodeRabbit review):
+# instantiating MarkdownIt is non-trivial, and the drawer's
+# rehydrate-on-open + per-turn rendering would otherwise build a
+# fresh one for every turn.  ``html=False`` blocks raw HTML
+# (defence-in-depth — the LLM is the only writer here, but a
+# compromised provider shouldn't be able to inject script tags).
+_MARKDOWN_RENDERER = MarkdownIt(
+    "commonmark", {"breaks": True, "html": False}
+).enable("table")
 
 
 def render_drawer_shell() -> str:
@@ -130,15 +143,29 @@ def render_turn_html(role: str, body: str, header: str = "") -> str:
     """Render a single turn for drawer injection (JSON response).
 
     Mirrors the ``_chat_page._flush_block`` shape but with the
-    drawer's narrower CSS classes.  ``body`` is plain text;
-    HTML entities are escaped.  ``header`` is a short label
+    drawer's narrower CSS classes.  ``header`` is a short label
     rendered as a muted small caption (e.g. the timestamp).
+
+    The assistant typically returns markdown (lists, bold, code,
+    links).  Render it through ``MarkdownIt`` with ``html=False``
+    so embedded HTML is treated as plain text — no XSS path even
+    when an upstream LLM emits ``<script>``.  User turns stay as
+    plain text wrapped in ``<pre>`` so the operator sees their
+    message exactly as typed.
     """
     role_class = "chat-drawer-turn-user" if role == "user" else "chat-drawer-turn-assistant"
     caption = f"<p class='muted small'>{escape(header)}</p>" if header else ""
+    if role == "user":
+        body_html = f"<pre class='chat-drawer-body'>{escape(body)}</pre>"
+    else:
+        body_html = (
+            "<div class='chat-drawer-body chat-drawer-body-md'>"
+            f"{_MARKDOWN_RENDERER.render(body or '')}"
+            "</div>"
+        )
     return (
         f'<section class="chat-drawer-turn {role_class}">'
         f"{caption}"
-        f"<pre class='chat-drawer-body'>{escape(body)}</pre>"
+        f"{body_html}"
         "</section>"
     )

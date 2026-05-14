@@ -115,6 +115,15 @@
 
     clearStatus();
 
+    // User feedback (2026-05-13): "chat history disappeared, can't
+    // find it after refresh".  When localStorage carries a chat_id,
+    // fetch and rehydrate the prior turns so the operator sees what
+    // they typed before.  The session file lives on disk as
+    // ``visibility=unindexed`` until Save / Absorb / Discard.
+    if (state.chatId) {
+      rehydrateTranscript(state.chatId);
+    }
+
     // Restore the draft for this anchor (if any).  Survives page
     // reloads, drawer closes, and CSRF / network errors.
     const textarea = drawer.querySelector("[data-drawer-message]");
@@ -173,6 +182,53 @@
   }
 
   // --- Transcript injection ------------------------------------
+
+  async function rehydrateTranscript(chatId) {
+    try {
+      const resp = await fetch(
+        "/chat/drawer/transcript?id=" + encodeURIComponent(chatId),
+        { credentials: "same-origin", headers: { Accept: "application/json" } },
+      );
+      const data = await resp.json().catch(function () {
+        return { error: "invalid_json" };
+      });
+      if (!resp.ok) {
+        if (resp.status === 404) {
+          // Saved as indexed, absorbed, or discarded since last
+          // open — drop the stale chat_id and act like a fresh
+          // session.
+          state.chatId = null;
+          const key = anchorKey(state.anchorKind, state.anchorRef);
+          writeLS(SESSION_KEY_PREFIX, key, "");
+          const actions = $drawer().querySelector("[data-drawer-actions]");
+          if (actions) actions.hidden = true;
+          return;
+        }
+        showStatus(
+          "Couldn't load prior turns: " + (data.detail || resp.status),
+          { error: true },
+        );
+        return;
+      }
+      const turns = data && data.turns_html;
+      if (turns) {
+        const drawer = $drawer();
+        const transcript = drawer && drawer.querySelector("[data-drawer-transcript]");
+        if (transcript) {
+          transcript.innerHTML = turns;
+          transcript.dataset.empty = "false";
+          transcript.scrollTop = transcript.scrollHeight;
+        }
+        const actions = drawer && drawer.querySelector("[data-drawer-actions]");
+        if (actions) actions.hidden = false;
+      }
+    } catch (err) {
+      showStatus(
+        "Couldn't load prior turns: " + (err && err.message ? err.message : err),
+        { error: true },
+      );
+    }
+  }
 
   function appendTranscript(html) {
     const drawer = $drawer();

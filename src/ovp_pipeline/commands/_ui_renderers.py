@@ -382,7 +382,10 @@ def _render_digest_neighbour_nav(vault_dir: Path, relative_path: str) -> str:
     parts.append("<a href='/digests'>All digests</a>")
     if newer:
         parts.append(f"<a href='{escape(newer)}'>next day →</a>")
-    return "<p class='muted' style='margin-top:0.4rem'>" + " · ".join(parts) + "</p>"
+    # Inline span so the caller can lay this strip out on the same
+    # row as the "Ask about this" button without forcing a separate
+    # paragraph break.  Caller is responsible for vertical spacing.
+    return "<span class='muted small'>" + " · ".join(parts) + "</span>"
 
 
 def _render_chat_drawer_shell() -> str:
@@ -1976,14 +1979,24 @@ def _render_note_page(
         # M22 BL-093: prev/next pivot when this is a daily digest
         # so operators can step through history without bouncing
         # back to the /digests list every time.
+        # User feedback (2026-05-13): the "Ask about this" button
+        # and the digest prev/next strip were rendering on separate
+        # lines.  Lay them out as a single flex row so the page
+        # header stays compact.
         digest_nav_html = _render_digest_neighbour_nav(vault_dir, relative_path)
+        actions_row = (
+            "<div class='entry-actions' "
+            "style='display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap'>"
+            f"{ask_button}"
+            f"{digest_nav_html}"
+            "</div>"
+        )
         return _layout(
             f"Markdown Note: {relative_path}",
             (
                 "<h1>Markdown Note</h1>"
                 f"<p class='muted'>{escape(relative_path)}</p>"
-                + f"<div class='entry-actions'>{ask_button}</div>"
-                + digest_nav_html
+                + actions_row
                 + preamble_html
                 + f"<section class='card'>{note_html}</section>"
                 + _render_frontmatter_details(frontmatter_html)

@@ -207,13 +207,19 @@ def test_no_data_path_skips_llm(tmp_path: Path):
 
 def test_is_no_data_detects_real_signal(tmp_path: Path):
     """When any layer has signal, _is_no_data returns False so the
-    handler enters the LLM branch."""
+    handler enters the LLM branch.
+
+    Use a pinned mid-day ``as_of`` so the test isn't flaky when run
+    just after UTC midnight (where seed-2h would land before the
+    window's local-day start).
+    """
     vault = _make_vault(tmp_path)
-    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
-    _seed_window_with_signal(vault, as_of=as_of)
+    pinned_as_of = datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc)
+    seed_at = pinned_as_of - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=seed_at)
     inputs = collect_digest_inputs(
         vault, "research-tech",
-        as_of=datetime.now(timezone.utc),
+        as_of=pinned_as_of,
         config=DigestConfig(tz="UTC"),
     )
     assert _is_no_data(inputs) is False

@@ -141,8 +141,55 @@
   font-size: 0.9375rem;
   line-height: 1.45;
   white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow-wrap: break-word;
   margin: 0.25rem 0 0;
+}
+
+/* Markdown-rendered assistant turn — typography matches the
+ * pre-wrapped user variant but lays out as real HTML so lists,
+ * bold, links, code, tables all read properly. */
+.chat-drawer-body-md {
+  white-space: normal;
+}
+.chat-drawer-body-md p,
+.chat-drawer-body-md ul,
+.chat-drawer-body-md ol,
+.chat-drawer-body-md pre {
+  margin: 0.4rem 0;
+}
+.chat-drawer-body-md ul,
+.chat-drawer-body-md ol {
+  padding-left: 1.25rem;
+}
+.chat-drawer-body-md code {
+  background: var(--chat-drawer-muted);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.875em;
+}
+.chat-drawer-body-md pre {
+  background: var(--chat-drawer-muted);
+  padding: 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.chat-drawer-body-md pre code {
+  background: transparent;
+  padding: 0;
+}
+.chat-drawer-body-md a {
+  color: var(--accent, #c2410c);
+  text-decoration: underline;
+}
+.chat-drawer-body-md table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+.chat-drawer-body-md th,
+.chat-drawer-body-md td {
+  border: 1px solid var(--chat-drawer-border);
+  padding: 0.25rem 0.5rem;
+  text-align: left;
 }
 
 .chat-drawer-composer {

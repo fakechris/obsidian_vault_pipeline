@@ -53,6 +53,11 @@ dependencies = [
     "tomli>=1.0.0; python_version < '3.11'",
     "defusedxml>=0.7.1",
     "tzlocal>=5.0",
+    # Direct import in commands/_ui_renderers.py and
+    # commands/_chat_drawer.py — was previously pulled in
+    # transitively; pin explicitly so a transitive drop doesn't
+    # silently break Reader rendering (CodeRabbit Major review).
+    "markdown-it-py>=2.2",
 ]
 
 [project.optional-dependencies]
