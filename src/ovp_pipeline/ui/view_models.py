@@ -3353,6 +3353,18 @@ def build_today_digest_payload(
             return ""
         return _scoped_path(f"/ops/today?date={quote(d, safe='')}", pack_name=requested_pack)
 
+    # M24.4: pull the per-pack lifecycle distribution from
+    # ``ops_state`` when the projection exists.  This is a *passive*
+    # readout — five numbers, no new drilldown route — that surfaces
+    # the kernel's truth alongside the existing time-windowed cards.
+    # Cards continue to count today's audit_events; the lifecycle
+    # summary answers a different (orthogonal) question: "how many
+    # items are sitting in each state right now?".  M25 will rename
+    # the cards onto this vocabulary; for M24 the two coexist.
+    lifecycle_summary = _read_lifecycle_summary(
+        vault_dir, pack=requested_pack
+    )
+
     return {
         "screen": "ops/today",
         "requested_pack": requested_pack,
@@ -3362,7 +3374,63 @@ def build_today_digest_payload(
         "prev_date_path": _date_path(prev_date),
         "next_date_path": _date_path(next_date),
         "cards": cards,
+        "lifecycle_summary": lifecycle_summary,
         "available": True,
+    }
+
+
+def _read_lifecycle_summary(
+    vault_dir: Path | str,
+    *,
+    pack: str,
+) -> dict[str, Any]:
+    """Read the five-state lifecycle distribution from ``ops_state``.
+
+    Returns ``{"available": False, "reason": ...}`` when the
+    projection table doesn't exist yet (e.g. the ``ops_state`` DAG
+    step hasn't run).  Returns ``{"available": True, "counts": {…}}``
+    otherwise.
+
+    Keeping this in ``view_models`` rather than calling
+    ``ops_state.counts_from_projection`` directly avoids ``view_models``
+    accidentally creating the table on a vault that hasn't run the
+    DAG yet — we read what's there; we don't write.
+    """
+    from ..ops_lifecycle import ALL_STATES
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {"available": False, "reason": "knowledge_index has not been built yet"}
+
+    effective_pack = pack or PRIMARY_PACK_NAME
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='ops_state'"
+            ).fetchone()
+            if row is None:
+                return {
+                    "available": False,
+                    "reason": "ops_state projection not built yet — run `ovp-ops-state --rebuild`",
+                }
+            rows = conn.execute(
+                "SELECT state, COUNT(*) FROM ops_state "
+                " WHERE pack = ? GROUP BY state",
+                (effective_pack,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        return {"available": False, "reason": f"ops_state read failed: {exc}"}
+
+    counts: dict[str, int] = {s: 0 for s in ALL_STATES}
+    for state, count in rows:
+        if state in counts:
+            counts[state] = int(count)
+    return {
+        "available": True,
+        "pack": effective_pack,
+        "counts": counts,
+        "total": sum(counts.values()),
     }
 
 
