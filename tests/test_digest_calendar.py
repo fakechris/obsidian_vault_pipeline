@@ -54,31 +54,35 @@ def _seed_intake(conn: sqlite3.Connection, day: str, count: int) -> None:
 # ── Slug parsing ────────────────────────────────────────────────
 
 
+# Slug parser is a shape-only regex; ``_as_of_for_target_date`` is
+# what catches calendar-invalid dates like 2026-13-01.  Split the
+# two responsibilities into two clearly-named tests so the
+# parametrize stops mixing happy-path and shape-only-bad cases
+# (gemini code-review nit on the prior single-table form).
 @pytest.mark.parametrize(
     "slug,expected",
     [
         ("daily", ""),
-        ("daily-2026-05-11", "2026-05-11"),
-        ("daily-2026-12-31", "2026-12-31"),
         ("daily-foo", ""),
         ("", ""),
-        ("daily-2026-13-01", ""),  # bad month — handler validates downstream
+        ("daily-2026-05-11", "2026-05-11"),
+        ("daily-2026-12-31", "2026-12-31"),
     ],
 )
-def test_parse_target_date_from_slug(slug, expected):
-    # The regex only checks shape, not date validity — that's the
-    # handler's job via _as_of_for_target_date.  Bad-month case
-    # should pass the regex but fail the strptime later.
-    result = _parse_target_date_from_slug(slug)
-    if expected:
-        assert result == expected
-    else:
-        # Bad-month case (2026-13-01) returns the matched string;
-        # strptime catches it.  Empty / no-suffix returns "".
-        if slug == "daily-2026-13-01":
-            assert result == "2026-13-01"
-        else:
-            assert result == ""
+def test_parse_target_date_extracts_or_returns_empty(slug, expected):
+    """Happy path: well-formed suffix → date string; missing or
+    malformed suffix → empty string."""
+    assert _parse_target_date_from_slug(slug) == expected
+
+
+def test_parse_target_date_passes_shape_but_invalid_calendar_dates():
+    """The regex only checks shape (``\\d{4}-\\d{2}-\\d{2}``); a bad
+    calendar date like 2026-13-01 still matches the shape, and
+    downstream ``_as_of_for_target_date`` is where it gets caught.
+    Documented here so the contract is clear."""
+    assert _parse_target_date_from_slug("daily-2026-13-01") == "2026-13-01"
+    # The validation gate that catches it:
+    assert _as_of_for_target_date(DigestConfig(tz="UTC"), "2026-13-01") is None
 
 
 def test_as_of_for_target_date_invalid_returns_none():

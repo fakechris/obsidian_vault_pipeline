@@ -262,29 +262,11 @@ def _render_calendar_grid(cells: list[CalendarCell]) -> str:
         "— = quiet day"
         "</p>"
     )
+    # Calendar styles live in /static/ovp-digests-calendar.css (gemini
+    # code review — embed-CSS was hurting cache + maintainability).
+    # Loaded by the page shell via _layout's stylesheet block.
     return (
         "<section style='margin:1rem 0'>"
-        "<style>"
-        ".cal-grid{display:grid;grid-template-columns:repeat(7,1fr);"
-        "gap:4px;margin-top:0.5rem}"
-        ".cal-cell{border:1px solid var(--border, #e5e5e5);border-radius:4px;"
-        "padding:6px 8px;min-height:48px;font-size:0.85rem;"
-        "display:flex;flex-direction:column;justify-content:space-between}"
-        ".cal-cell-blank{border:0}"
-        ".cal-cell a{text-decoration:none;color:inherit;display:block}"
-        ".cal-cell-has-digest{background:var(--accent-soft, #fef3e8);"
-        "border-color:var(--accent, #c2410c)}"
-        ".cal-cell-has-digest .cal-tick{color:var(--accent, #c2410c);"
-        "font-weight:600}"
-        ".cal-cell-has-intake{background:var(--muted-bg, #f6f6f6)}"
-        ".cal-cell-empty{opacity:0.55}"
-        ".cal-cell .cal-date{font-family:var(--ovp-font-mono, monospace);"
-        "font-size:0.85em}"
-        ".cal-cell .cal-count{float:right;font-size:0.8em;"
-        "color:var(--muted, #666)}"
-        ".cal-cell .cal-explore{float:right;font-size:0.85em;"
-        "color:var(--muted, #666)}"
-        "</style>"
         f"<div class='cal-grid'>{blank_html}{cells_html}</div>"
         f"{legend}"
         "</section>"

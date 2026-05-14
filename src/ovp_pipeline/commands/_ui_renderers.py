@@ -573,6 +573,7 @@ def _layout(
     <link rel="stylesheet" href="/static/ovp-ui.css" />
     <link rel="stylesheet" href="/static/ovp-pages.css" />
     <link rel="stylesheet" href="/static/ovp-chat-drawer.css" />
+    <link rel="stylesheet" href="/static/ovp-digests-calendar.css" />
     <script src="/static/ovp-chat-drawer.js" defer></script>
     <style>
       /* Page-local additions only — anything reusable belongs in

@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from ..context_loader import load_user_profile
-from ..digest_config import DigestConfig, load_digest_config
+from ..digest_config import DigestConfig, load_digest_config, resolve_timezone
 from ..digest_inputs import (
     ConnectionLayer,
     DeltaLayer,
@@ -197,8 +197,6 @@ def _as_of_for_target_date(config: DigestConfig, target_date: str) -> datetime |
     """
     if not target_date:
         return None
-    from ..digest_config import resolve_timezone
-
     tz = resolve_timezone(config)
     try:
         when = datetime.strptime(target_date, "%Y-%m-%d")
