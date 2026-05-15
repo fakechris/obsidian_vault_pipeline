@@ -258,6 +258,17 @@ _REGISTRY: Final[tuple[EventEvidence, ...]] = (
                   description="A pipeline run completed."),
     EventEvidence("task_dispatched", "governance", user_visible=False,
                   description="The task dispatcher ran a task (forensic only)."),
+    # M25.6 dogfood pass on operator vault flagged this as drift —
+    # ``ovp-live-concept-scan`` emits ``live_concept_agent_run``
+    # but no registry row claimed it.  Register as governance /
+    # forensic-only so it surfaces in /ops/events with a real
+    # label and producer-audit stops flagging drift.
+    EventEvidence("live_concept_agent_run", "governance",
+                  user_visible=False,
+                  description=(
+                      "Live-concept synthesis agent ran "
+                      "(``ovp-live-concept-scan``); forensic only."
+                  )),
 )
 
 
