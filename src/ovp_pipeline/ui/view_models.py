@@ -3434,6 +3434,197 @@ def _read_lifecycle_summary(
     }
 
 
+# M25.2: /ops/items default page size.  Cards drill into this view
+# carrying state= and optional pack=; the page paginates the rest.
+ITEMS_LIST_DEFAULT_LIMIT = 50
+ITEMS_LIST_MAX_LIMIT = 500
+
+
+def build_items_list_payload(
+    vault_dir: Path | str,
+    *,
+    state: str,
+    pack_name: str | None = None,
+    offset: int = 0,
+    limit: int = ITEMS_LIST_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """M25.2: ``/ops/items?state=<state>`` payload.
+
+    Reads ``ops_state`` (built by M24.1's ``ovp-ops-state``) and
+    returns the items currently in ``state``.  This is the route
+    the M25 hybrid card primary CTA targets, so card N === page N
+    is a hard contract: both numbers come from the same projection
+    table with the same pack filter.
+
+    No ``date=`` filter — the primary card number is "all current
+    items in this state", not date-windowed.  The plan doc locks
+    this in §M25.2 / M25.3 acceptance.
+    """
+    from ..ops_lifecycle import ALL_STATES
+
+    requested_pack = pack_name or ""
+    state = state.strip()
+    if state not in ALL_STATES:
+        return {
+            "screen": "ops/items",
+            "available": False,
+            "reason": (
+                f"unknown state {state!r}; expected one of "
+                f"{ALL_STATES}"
+            ),
+            "state": state,
+            "requested_pack": requested_pack,
+            "rows": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    safe_limit = max(1, min(int(limit or ITEMS_LIST_DEFAULT_LIMIT), ITEMS_LIST_MAX_LIMIT))
+    safe_offset = max(0, int(offset or 0))
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/items",
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+            "state": state,
+            "requested_pack": requested_pack,
+            "rows": [],
+            "total": 0,
+            "offset": safe_offset,
+            "limit": safe_limit,
+        }
+
+    effective_pack = requested_pack or PRIMARY_PACK_NAME
+    try:
+        with sqlite3.connect(db_path) as conn:
+            # Guard: ops_state may not exist yet (M24.1 DAG step
+            # hasn't run).  Surface explicitly rather than crash.
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='ops_state'"
+            ).fetchone()
+            if row is None:
+                return {
+                    "screen": "ops/items",
+                    "available": False,
+                    "reason": (
+                        "ops_state projection not built yet — run "
+                        "`ovp-ops-state --rebuild`"
+                    ),
+                    "state": state,
+                    "requested_pack": requested_pack,
+                    "rows": [],
+                    "total": 0,
+                    "offset": safe_offset,
+                    "limit": safe_limit,
+                }
+
+            total_row = conn.execute(
+                "SELECT COUNT(*) FROM ops_state "
+                " WHERE pack = ? AND state = ?",
+                (effective_pack, state),
+            ).fetchone()
+            total = int(total_row[0] or 0) if total_row else 0
+
+            # M25.2: NeedsAction surfaces oldest-first so the
+            # operator can attack the most-aged blockers first.
+            # Every other state surfaces newest-first.
+            order_dir = (
+                "ASC" if state == "NeedsAction" else "DESC"
+            )
+            rows = conn.execute(
+                f"""
+                SELECT item_kind, item_id, sub_state,
+                       last_evidence_at, evidence_event_types_json,
+                       needs_action_reason
+                  FROM ops_state
+                 WHERE pack = ? AND state = ?
+                 ORDER BY last_evidence_at {order_dir}
+                 LIMIT ? OFFSET ?
+                """,
+                (effective_pack, state, safe_limit, safe_offset),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        return {
+            "screen": "ops/items",
+            "available": False,
+            "reason": f"ops_state read failed: {exc}",
+            "state": state,
+            "requested_pack": requested_pack,
+            "rows": [],
+            "total": 0,
+            "offset": safe_offset,
+            "limit": safe_limit,
+        }
+
+    items: list[dict[str, Any]] = []
+    for kind, item_id, sub_state, last_evidence_at, evt_json, na_reason in rows:
+        try:
+            evt_types = json.loads(evt_json) if evt_json else []
+        except (TypeError, ValueError):
+            evt_types = []
+        # Top-3 evidence types for the row preview; rest are
+        # available on the item's drilldown (out of scope for v1).
+        evt_preview = list(evt_types)[:3] if isinstance(evt_types, list) else []
+        items.append({
+            "item_kind": str(kind or ""),
+            "item_id": str(item_id or ""),
+            "sub_state": str(sub_state) if sub_state else "",
+            "last_evidence_at": str(last_evidence_at or ""),
+            "evidence_types": evt_preview,
+            "needs_action_reason": str(na_reason) if na_reason else "",
+            "primary_href": _items_primary_href(kind, item_id, effective_pack),
+        })
+
+    has_more = safe_offset + len(items) < total
+    next_offset = safe_offset + safe_limit if has_more else None
+    prev_offset = max(0, safe_offset - safe_limit) if safe_offset > 0 else None
+
+    return {
+        "screen": "ops/items",
+        "available": True,
+        "state": state,
+        "pack": effective_pack,
+        "requested_pack": requested_pack,
+        "rows": items,
+        "total": total,
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "next_offset": next_offset,
+        "prev_offset": prev_offset,
+    }
+
+
+def _items_primary_href(item_kind: str | None, item_id: str | None, pack: str) -> str:
+    """Map (kind, id) → the canonical drilldown URL.
+
+    * ``source``  → ``/note?path=…`` is impossible without a path;
+      fall back to ``/ops/events/audit?slug=…`` (raw audit row
+      view) so the operator can at least see the evidence trail.
+      M25.4 builds the audit-evidence view.
+    * ``object``  → ``/object?id=…``  (existing route).
+    * ``cluster`` → ``/ops/cluster?id=…`` (existing route).
+    """
+    if not item_id:
+        return ""
+    kind = (item_kind or "").lower()
+    pack_qs = f"&pack={quote(pack, safe='')}" if pack else ""
+    if kind == "object":
+        return f"/object?id={quote(str(item_id), safe='')}{pack_qs}"
+    if kind == "cluster":
+        return f"/ops/cluster?id={quote(str(item_id), safe='')}{pack_qs}"
+    # source — point at the future raw-audit view; M25.4 will
+    # build it.  Until then this 404s, which is honest about the
+    # gap.
+    return (
+        f"/ops/events/audit?slug={quote(str(item_id), safe='')}"
+        + pack_qs
+    )
+
+
 def build_digest_health_payload(vault_dir: Path | str) -> dict[str, Any]:
     """``/ops/digest-health`` payload — three metric panels (M23 / BL-097).
 

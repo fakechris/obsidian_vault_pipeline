@@ -46,6 +46,7 @@ from ..ui.view_models import (
     build_stale_summary_browser_payload,
     build_timeline_payload,
     build_today_digest_payload,
+    build_items_list_payload,
     build_runs_index_payload,
     build_run_detail_payload,
     build_topic_overview_payload,
@@ -104,6 +105,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_queue_overview_page,
     _render_timeline_page,
     _render_today_digest_page,
+    _render_items_list_page,
     _render_runs_index_page,
     _render_run_detail_page,
     _render_reuse_report_fragment,
@@ -1235,6 +1237,34 @@ def create_server(
                         self._write_json(payload)
                     else:
                         self._write_html(_render_today_digest_page(payload))
+                    return
+                # M25.2: /ops/items?state=<state>[&offset=…&limit=…]
+                # is the lifecycle drilldown M25 cards target.
+                # ``date=`` is intentionally NOT a filter — the
+                # primary card number is "all current items", not
+                # date-windowed (see M25 plan §M25.2/3).
+                if path in ("/ops/items", "/api/items"):
+                    pack_name = query.get("pack", [""])[0] or None
+                    state = query.get("state", [""])[0] or ""
+                    raw_offset = query.get("offset", ["0"])[0]
+                    raw_limit = query.get("limit", [""])[0]
+                    offset = int(raw_offset) if raw_offset.isdigit() else 0
+                    limit = (
+                        int(raw_limit)
+                        if raw_limit.isdigit() and int(raw_limit) > 0
+                        else 50
+                    )
+                    payload = build_items_list_payload(
+                        resolved_vault,
+                        state=state,
+                        pack_name=pack_name,
+                        offset=offset,
+                        limit=limit,
+                    )
+                    if path == "/api/items":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_items_list_page(payload))
                     return
                 # BL-053: by-run "runs" index
                 if path in ("/ops/runs", "/api/runs"):
