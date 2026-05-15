@@ -3547,6 +3547,35 @@ def build_items_list_payload(
                 """,
                 (effective_pack, state, safe_limit, safe_offset),
             ).fetchall()
+
+            # M25.2 (codex review on PR #236): source-kind items
+            # don't have a known canonical drilldown route yet
+            # (the M25.4 ``/ops/events/audit`` view doesn't exist
+            # until that PR lands).  Resolve source slugs to their
+            # real file paths via ``pages_index`` so the primary
+            # link points at ``/note?path=…`` — a route that
+            # exists.  Sources we can't resolve fall through to an
+            # unlinked cell.
+            source_slugs = [
+                str(r[1]) for r in rows
+                if r and r[0] == "source" and r[1]
+            ]
+            slug_to_path: dict[str, str] = {}
+            if source_slugs:
+                page_row = conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='pages_index'"
+                ).fetchone()
+                if page_row is not None:
+                    placeholders = ",".join("?" * len(source_slugs))
+                    page_rows = conn.execute(
+                        f"SELECT slug, path FROM pages_index "
+                        f" WHERE slug IN ({placeholders})",
+                        source_slugs,
+                    ).fetchall()
+                    slug_to_path = {
+                        str(s): str(p) for s, p in page_rows if s and p
+                    }
     except sqlite3.OperationalError as exc:
         return {
             "screen": "ops/items",
@@ -3569,14 +3598,22 @@ def build_items_list_payload(
         # Top-3 evidence types for the row preview; rest are
         # available on the item's drilldown (out of scope for v1).
         evt_preview = list(evt_types)[:3] if isinstance(evt_types, list) else []
+        kind_str = str(kind or "")
+        item_id_str = str(item_id or "")
+        resolved_source_path = (
+            slug_to_path.get(item_id_str) if kind_str == "source" else ""
+        )
         items.append({
-            "item_kind": str(kind or ""),
-            "item_id": str(item_id or ""),
+            "item_kind": kind_str,
+            "item_id": item_id_str,
             "sub_state": str(sub_state) if sub_state else "",
             "last_evidence_at": str(last_evidence_at or ""),
             "evidence_types": evt_preview,
             "needs_action_reason": str(na_reason) if na_reason else "",
-            "primary_href": _items_primary_href(kind, item_id, effective_pack),
+            "primary_href": _items_primary_href(
+                kind_str, item_id_str, effective_pack,
+                source_path=resolved_source_path,
+            ),
         })
 
     has_more = safe_offset + len(items) < total
@@ -3598,13 +3635,21 @@ def build_items_list_payload(
     }
 
 
-def _items_primary_href(item_kind: str | None, item_id: str | None, pack: str) -> str:
+def _items_primary_href(
+    item_kind: str | None,
+    item_id: str | None,
+    pack: str,
+    *,
+    source_path: str = "",
+) -> str:
     """Map (kind, id) → the canonical drilldown URL.
 
-    * ``source``  → ``/note?path=…`` is impossible without a path;
-      fall back to ``/ops/events/audit?slug=…`` (raw audit row
-      view) so the operator can at least see the evidence trail.
-      M25.4 builds the audit-evidence view.
+    * ``source``  → ``/note?path=<vault-relative-path>`` when the
+      caller resolved the path via ``pages_index``; otherwise
+      empty string (renderer falls back to a plain non-link cell).
+      We DON'T link to the future M25.4 ``/ops/events/audit``
+      route because that doesn't exist yet — clicking would 404
+      (codex review on PR #236 flagged this).
     * ``object``  → ``/object?id=…``  (existing route).
     * ``cluster`` → ``/ops/cluster?id=…`` (existing route).
     """
@@ -3616,13 +3661,12 @@ def _items_primary_href(item_kind: str | None, item_id: str | None, pack: str) -
         return f"/object?id={quote(str(item_id), safe='')}{pack_qs}"
     if kind == "cluster":
         return f"/ops/cluster?id={quote(str(item_id), safe='')}{pack_qs}"
-    # source — point at the future raw-audit view; M25.4 will
-    # build it.  Until then this 404s, which is honest about the
-    # gap.
-    return (
-        f"/ops/events/audit?slug={quote(str(item_id), safe='')}"
-        + pack_qs
-    )
+    if kind == "source" and source_path:
+        return f"/note?path={quote(str(source_path), safe='')}"
+    # No known drilldown — return empty so the renderer surfaces
+    # the item as plain text rather than a broken link.  M25.4
+    # adds the raw-audit-evidence view that will pick this up.
+    return ""
 
 
 def build_digest_health_payload(vault_dir: Path | str) -> dict[str, Any]:

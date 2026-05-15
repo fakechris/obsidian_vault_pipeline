@@ -322,3 +322,50 @@ def test_row_carries_evidence_event_types(tmp_path):
     )
     row = payload["rows"][0]
     assert "article_intake_only" in row["evidence_types"]
+
+
+def test_source_row_with_no_pages_index_has_empty_href(tmp_path):
+    """Source items WITHOUT a matching ``pages_index`` row must
+    fall back to no link rather than pointing at the unbuilt
+    M25.4 audit route — clicking that would 404.  Regression
+    guard for the codex P2 on PR #236."""
+    db_path = _make_db(tmp_path)
+    _seed(db_path, received=1)
+    payload = build_items_list_payload(
+        tmp_path, state="Received", pack_name=PACK
+    )
+    row = payload["rows"][0]
+    assert row["item_kind"] == "source"
+    assert row["primary_href"] == "", (
+        "source rows without a resolved path must render unlinked"
+    )
+
+
+def test_source_row_with_pages_index_links_to_note_route(tmp_path):
+    """When ``pages_index`` has the slug, the primary href points at
+    the existing ``/note?path=…`` route."""
+    db_path = _make_db(tmp_path)
+    _seed(db_path, received=1)
+    # Seed pages_index manually with a matching slug.
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE pages_index (slug TEXT PRIMARY KEY, "
+        "title TEXT NOT NULL, note_type TEXT NOT NULL, "
+        "path TEXT NOT NULL, day_id TEXT NOT NULL, "
+        "frontmatter_json TEXT NOT NULL, body TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO pages_index VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("src-r-000", "Test", "interpretation",
+         "20-Areas/AI-Research/foo.md", "2026-05-13", "{}", ""),
+    )
+    conn.commit()
+    conn.close()
+    payload = build_items_list_payload(
+        tmp_path, state="Received", pack_name=PACK
+    )
+    src_row = next(
+        r for r in payload["rows"] if r["item_id"] == "src-r-000"
+    )
+    assert src_row["primary_href"].startswith("/note?path=")
+    assert "foo.md" in src_row["primary_href"]
