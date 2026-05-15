@@ -233,6 +233,50 @@ def test_prepared_substate_when_extraction_without_upsert():
     assert state.sub_state == SUBSTATE_PREPARED
 
 
+def test_audit_index_finds_nested_object_id_mention():
+    """Regression guard from codex review on PR #243.
+
+    Some producers carry ``object_id`` inside a nested payload
+    dict (e.g. ``{"mutation": {"object_id": "..."}}``).  The SQL
+    LIKE fallback used by the single-item path finds these via
+    full-text scan.  The bulk path's in-memory index must match
+    that semantic — otherwise ``ops_state.rebuild`` would silently
+    miss evidence that ``ovp-lifecycle-show`` finds.
+    """
+    from ovp_pipeline.ops_lifecycle import (
+        _build_audit_index,
+        lifecycle_state_of,
+    )
+
+    conn = _make_db()
+    # Emit a promote_concept whose object_id is NESTED inside a
+    # mutation dict, NOT at the top level.
+    _emit(conn, "promote_concept",
+          ts="2026-05-13T08:00:00+00:00",
+          payload={"mutation": {"object_id": "obj-nested"}, "concept": "x"})
+    # Also add the projection row so this looks like a real
+    # accepted object.
+    conn.execute(
+        "INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (PACK, "obj-nested", "evergreen", "Nested",
+         "10-Knowledge/Evergreen/Nested.md", "src-x", ""),
+    )
+    conn.commit()
+
+    # Bulk path (uses audit_index): must find the nested mention.
+    audit_index = _build_audit_index(conn)
+    state = lifecycle_state_of(
+        conn, "object", "obj-nested", pack=PACK,
+        audit_index=audit_index,
+    )
+    assert state is not None
+    assert state.state == STATE_ACCEPTED
+    # The promote_concept evidence MUST be visible — otherwise
+    # the kernel would surface Projected sub-state instead.
+    assert "promote_concept" in state.evidence
+    assert state.sub_state is None
+
+
 def test_projected_substate_when_object_row_without_promote_event():
     """An ``objects`` row exists but no ``evergreen_auto_promoted`` or
     ``promote_concept`` audit row references the same object_id — the
