@@ -3196,13 +3196,29 @@ M25_LIFECYCLE_CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
         # Accepted is the promote-event signal: auto-promote
         # (absorb-cat) + operator promote (governance-cat).
+        #
+        # Codex review on PR #237 caught two double-counting bugs
+        # that landed on main inside the M25.3 squash before the
+        # fix could ship.  This PR re-applies the fix:
+        #
+        #   * ``ovp-promote run`` emits BOTH ``promote_concept``
+        #     and ``promotion`` (M24.2 wired them as a pair for
+        #     different consumers — kernel reads promote_concept,
+        #     doctor mtime check reads promotion).  Counting both
+        #     turns one operator action into "2 accepted today".
+        #     Drop ``promotion``; ``promote_concept`` is the
+        #     canonical card-counting row.
+        #   * ``source_archived_to_processed`` is in the intake
+        #     category and counts on the Received card.  Per the
+        #     M24.1 doc fix (PR #230) it's a Received signal —
+        #     03-Processed is the absorber's INPUT, not its output.
+        #     Drop here so a single archival doesn't increment
+        #     both cards.
         "categories": (),
         "include_event_types": (
             "evergreen_auto_promoted",
             "promote_concept",
-            "promotion",
             "evergreen_created",
-            "source_archived_to_processed",
         ),
         "secondary_verb": "accepted today",
     },
