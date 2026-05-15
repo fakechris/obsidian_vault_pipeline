@@ -1550,11 +1550,15 @@ class EnhancedPipeline:
             return min(14400, max(600, file_count * 2))
 
         elif step == "ops_state":
-            # Pure sqlite rebuild over the knowledge.db that
-            # ``knowledge_index`` just wrote.  Bounded by audit-row
-            # count, not file count; 5 minutes is generous for a
-            # vault with ~100k audit rows.
-            return 300
+            # M25.6 dogfood pass on the operator vault timed out
+            # this step at 300s: 9.5k objects × 36k audit rows
+            # exceeded the per-item SQL LIKE budget.  M25.6 perf
+            # fix added an in-memory inverted index; even with
+            # that, walking the items takes ~1 min on the live
+            # vault.  20 min ceiling matches the
+            # ``knowledge_index`` step's order of magnitude and
+            # leaves headroom for vaults a few × larger.
+            return 1200
 
         return 1800  # 默认30分钟
 

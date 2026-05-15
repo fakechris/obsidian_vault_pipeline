@@ -195,22 +195,97 @@ def _state_priority(state: str) -> int:
 # ── Internal helpers ───────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _AuditIndex:
+    """In-memory inverted index over ``audit_events``.
+
+    Built once at bulk-classification time; reused for every
+    per-item lookup.  Without this, the kernel does a full-table
+    LIKE scan per item — O(items × rows), which on the operator
+    vault was 9.5k items × 36k rows and timed out at 5 minutes
+    during the M25.6 dogfood run.
+
+    Each map is ``key -> [(event_type, timestamp, payload_json), …]``
+    sorted newest-first.
+    """
+
+    by_slug: dict[str, list[tuple[str, str, str]]]
+    by_object_id: dict[str, list[tuple[str, str, str]]]
+    by_cluster_id: dict[str, list[tuple[str, str, str]]]
+
+
+def _build_audit_index(conn: sqlite3.Connection) -> _AuditIndex:
+    """Single-pass index build.  Parses payload_json once per row
+    so per-item lookups are O(1) hash lookups instead of full-table
+    LIKE scans.
+    """
+    by_slug: dict[str, list[tuple[str, str, str]]] = {}
+    by_object_id: dict[str, list[tuple[str, str, str]]] = {}
+    by_cluster_id: dict[str, list[tuple[str, str, str]]] = {}
+
+    rows = conn.execute(
+        "SELECT event_type, timestamp, slug, payload_json "
+        "  FROM audit_events "
+        " ORDER BY timestamp DESC"
+    ).fetchall()
+
+    for event_type, ts, slug, payload_json in rows:
+        et = event_type or ""
+        ts = ts or ""
+        pj = payload_json or "{}"
+        record = (et, ts, pj)
+        if slug:
+            by_slug.setdefault(str(slug), []).append(record)
+        # Parse payload to discover object_id + cluster_id keys.
+        try:
+            payload = json.loads(pj)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            obj_id = payload.get("object_id")
+            if isinstance(obj_id, str) and obj_id:
+                by_object_id.setdefault(obj_id, []).append(record)
+            cluster_id = payload.get("cluster_id")
+            if isinstance(cluster_id, str) and cluster_id:
+                by_cluster_id.setdefault(cluster_id, []).append(record)
+    return _AuditIndex(
+        by_slug=by_slug,
+        by_object_id=by_object_id,
+        by_cluster_id=by_cluster_id,
+    )
+
+
 def _fetch_audit_rows(
     conn: sqlite3.Connection,
     *,
     slug: str | None = None,
     object_id: str | None = None,
     cluster_id: str | None = None,
+    audit_index: _AuditIndex | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return ``(event_type, timestamp, payload_json)`` rows about an item,
     newest first.
 
-    The ``audit_events`` table only carries ``slug`` natively; matches
-    against ``object_id`` and ``cluster_id`` go via the payload_json
-    ``LIKE`` filter.  This is intentionally lossy — payload schemas
-    aren't enforced — so kernel callers must be tolerant of misses
-    and rely on the ``Projected`` sub-state to flag mismatches.
+    When ``audit_index`` is provided (the bulk-classification path),
+    use the in-memory map for an O(1) lookup.  Otherwise (the
+    single-item path used by ``ovp-lifecycle-show``), fall back to
+    the SQL LIKE scan that was the original implementation.
+
+    The fallback is still correct; it's just slow at scale.
+    Adding the index for one-shot lookups would force callers to
+    pay the index-build cost (a few seconds) for a single
+    classification, which would make the CLI feel sluggish.
     """
+    if audit_index is not None:
+        if slug:
+            return list(audit_index.by_slug.get(slug, ()))
+        if object_id:
+            return list(audit_index.by_object_id.get(object_id, ()))
+        if cluster_id:
+            return list(audit_index.by_cluster_id.get(cluster_id, ()))
+        return []
+
+    # Single-item fallback (SQL).
     if slug:
         rows = conn.execute(
             "SELECT event_type, timestamp, payload_json "
@@ -328,6 +403,7 @@ def lifecycle_state_of(
     *,
     pack: str,
     as_of: str = "",
+    audit_index: _AuditIndex | None = None,
 ) -> LifecycleState | None:
     """Derive ``LifecycleState`` for one item.
 
@@ -335,6 +411,12 @@ def lifecycle_state_of(
     pass the operator's local-day boundary when reporting "today's"
     state.  Empty string means "use the data's own timestamps", i.e.
     no time gating — useful for backfill / batch rebuilds.
+
+    ``audit_index`` is the in-memory inverted index built by
+    ``_build_audit_index`` for bulk classification.  When ``None``
+    (single-item path used by ``ovp-lifecycle-show``), the kernel
+    falls back to SQL LIKE scans.  See ``_fetch_audit_rows`` for the
+    rationale.
 
     Returns ``None`` when the kernel finds zero audit evidence **and**
     zero projection rows referencing the item.  Callers should treat
@@ -348,11 +430,11 @@ def lifecycle_state_of(
 
     # Pull every audit row about the item.
     if item_kind == ITEM_KIND_SOURCE:
-        rows = _fetch_audit_rows(conn, slug=item_id)
+        rows = _fetch_audit_rows(conn, slug=item_id, audit_index=audit_index)
     elif item_kind == ITEM_KIND_OBJECT:
-        rows = _fetch_audit_rows(conn, object_id=item_id)
+        rows = _fetch_audit_rows(conn, object_id=item_id, audit_index=audit_index)
     else:
-        rows = _fetch_audit_rows(conn, cluster_id=item_id)
+        rows = _fetch_audit_rows(conn, cluster_id=item_id, audit_index=audit_index)
 
     # Check projections — used both for Projected sub-state detection
     # and for "no audit evidence at all but a row exists" fallback.
@@ -456,6 +538,7 @@ def lifecycle_states_for_kind(
     *,
     pack: str,
     as_of: str = "",
+    audit_index: _AuditIndex | None = None,
 ) -> Iterator[LifecycleState]:
     """Yield ``LifecycleState`` for every item of ``item_kind`` in ``pack``.
 
@@ -465,7 +548,15 @@ def lifecycle_states_for_kind(
       place sources are tracked in ``knowledge.db``).
     * ``object`` — rows in ``objects``.
     * ``cluster`` — rows in ``graph_clusters``.
+
+    M25.6 perf fix: build the audit index ONCE per call (or accept
+    a pre-built one) so per-item lookups are O(1) hash hits.  The
+    operator vault has ~9.5k objects × 36k audit rows; without
+    this, the bulk classification timed out at 5 minutes.
     """
+    if audit_index is None:
+        audit_index = _build_audit_index(conn)
+
     if item_kind == ITEM_KIND_SOURCE:
         rows = conn.execute(
             "SELECT DISTINCT slug FROM audit_events "
@@ -474,7 +565,8 @@ def lifecycle_states_for_kind(
         ).fetchall()
         for (slug,) in rows:
             state = lifecycle_state_of(
-                conn, ITEM_KIND_SOURCE, slug, pack=pack, as_of=as_of
+                conn, ITEM_KIND_SOURCE, slug,
+                pack=pack, as_of=as_of, audit_index=audit_index,
             )
             if state is not None:
                 yield state
@@ -491,7 +583,8 @@ def lifecycle_states_for_kind(
         ).fetchall()
         for (object_id,) in rows:
             state = lifecycle_state_of(
-                conn, ITEM_KIND_OBJECT, object_id, pack=pack, as_of=as_of
+                conn, ITEM_KIND_OBJECT, object_id,
+                pack=pack, as_of=as_of, audit_index=audit_index,
             )
             if state is not None:
                 yield state
@@ -508,7 +601,8 @@ def lifecycle_states_for_kind(
         ).fetchall()
         for (cluster_id,) in rows:
             state = lifecycle_state_of(
-                conn, ITEM_KIND_CLUSTER, cluster_id, pack=pack, as_of=as_of
+                conn, ITEM_KIND_CLUSTER, cluster_id,
+                pack=pack, as_of=as_of, audit_index=audit_index,
             )
             if state is not None:
                 yield state
@@ -531,10 +625,14 @@ def lifecycle_counts(
     Missing states are present with count 0 — callers can plot the
     five buckets without preprocessing.
     """
+    # M25.6 perf fix: build the audit index ONCE for all three
+    # item kinds rather than three times.
+    audit_index = _build_audit_index(conn)
     counts: dict[str, int] = {s: 0 for s in ALL_STATES}
     for kind in ALL_ITEM_KINDS:
         for state in lifecycle_states_for_kind(
-            conn, kind, pack=pack, as_of=as_of
+            conn, kind, pack=pack, as_of=as_of,
+            audit_index=audit_index,
         ):
             counts[state.state] = counts.get(state.state, 0) + 1
     return counts

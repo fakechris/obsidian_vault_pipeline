@@ -110,11 +110,20 @@ def rebuild(
 
     conn.execute("DELETE FROM ops_state WHERE pack = ?", (pack,))
 
+    # M25.6 perf fix: build the audit-events index ONCE for the
+    # whole rebuild, share across all three item kinds.  Before
+    # this, each kind triggered its own kernel-internal index
+    # build, which on the operator vault (9.5k objects × 36k
+    # audit rows) timed out the M24.1 step at 5 minutes.
+    from .ops_lifecycle import _build_audit_index
+    audit_index = _build_audit_index(conn)
+
     counts: dict[str, int] = {s: 0 for s in ALL_STATES}
     rows: list[tuple] = []
     for kind in ALL_ITEM_KINDS:
         for state in lifecycle_states_for_kind(
-            conn, kind, pack=pack, as_of=as_of
+            conn, kind, pack=pack, as_of=as_of,
+            audit_index=audit_index,
         ):
             rows.append(_row_from_state(state, refreshed_at))
             counts[state.state] = counts.get(state.state, 0) + 1
