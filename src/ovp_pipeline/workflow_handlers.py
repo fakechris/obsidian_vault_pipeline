@@ -157,3 +157,13 @@ def run_autopilot_refine(*, daemon: Any, **_: Any) -> dict[str, Any]:
 def run_autopilot_knowledge_index(*, daemon: Any, **_: Any) -> dict[str, Any]:
     daemon._run_knowledge_index_refresh()
     return {"stage": "knowledge_index"}
+
+
+def run_autopilot_ops_state(*, daemon: Any, **_: Any) -> dict[str, Any]:
+    """M24.1: autopilot ``ops_state`` refresh — pairs with the
+    pipeline_step handler.  Runs after each autopilot cycle's
+    knowledge_index rebuild so the lifecycle projection stays
+    in sync with the truth tables that knowledge_index wrote.
+    """
+    daemon._run_ops_state_refresh()
+    return {"stage": "ops_state"}

@@ -63,13 +63,18 @@ def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_pa
     monkeypatch.setattr(daemon, "_run_absorb", lambda: order.append("absorb"))
     monkeypatch.setattr(daemon, "_run_moc_update", lambda: order.append("moc"))
     monkeypatch.setattr(daemon, "_run_knowledge_index_refresh", lambda: order.append("knowledge_index"))
+    # M24.1: autopilot also refreshes the lifecycle projection.
+    monkeypatch.setattr(daemon, "_run_ops_state_refresh", lambda: order.append("ops_state"))
 
     task = Task(id=1, source="inbox", file_path=str(vault / "50-Inbox" / "01-Raw" / "note.md"))
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert result["stages"] == ["interpretation", "absorb", "dedup", "moc", "knowledge_index"]
-    assert order == ["absorb", "moc", "knowledge_index"]
+    assert result["stages"] == [
+        "interpretation", "absorb", "dedup", "moc",
+        "knowledge_index", "ops_state",
+    ]
+    assert order == ["absorb", "moc", "knowledge_index", "ops_state"]
 
 
 def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
@@ -86,7 +91,12 @@ def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
 
     assert daemon.pack.name == "default-knowledge"
     assert daemon.workflow_profile.name == "autopilot"
-    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
+    assert daemon.workflow_profile.stages == [
+        "interpretation", "quality", "absorb", "dedup", "moc",
+        "knowledge_index",
+        # M24.1: lifecycle projection.
+        "ops_state",
+    ]
 
 
 def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
@@ -103,7 +113,12 @@ def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
 
     assert daemon.pack.name == "research-tech"
     assert daemon.workflow_profile.name == "autopilot"
-    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
+    assert daemon.workflow_profile.stages == [
+        "interpretation", "quality", "absorb", "dedup", "moc",
+        "knowledge_index",
+        # M24.1: lifecycle projection.
+        "ops_state",
+    ]
 
 
 def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monkeypatch):
@@ -122,13 +137,20 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     monkeypatch.setattr(daemon, "_run_moc_update", lambda: order.append("moc"))
     monkeypatch.setattr(daemon, "_run_refine", lambda: order.append("refine"))
     monkeypatch.setattr(daemon, "_run_knowledge_index_refresh", lambda: order.append("knowledge_index"))
+    # M24.1: autopilot also refreshes the lifecycle projection.
+    monkeypatch.setattr(daemon, "_run_ops_state_refresh", lambda: order.append("ops_state"))
 
     task = Task(id=1, source="inbox", file_path=str(vault / "50-Inbox" / "01-Raw" / "note.md"))
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert result["stages"] == ["interpretation", "absorb", "dedup", "moc", "refine", "knowledge_index"]
-    assert order == ["absorb", "moc", "refine", "knowledge_index"]
+    # M24.1: refine still runs before knowledge_index (refine
+    # writes data knowledge_index indexes); ops_state runs after.
+    assert result["stages"] == [
+        "interpretation", "absorb", "dedup", "moc", "refine",
+        "knowledge_index", "ops_state",
+    ]
+    assert order == ["absorb", "moc", "refine", "knowledge_index", "ops_state"]
 
 
 def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypatch):
@@ -173,7 +195,11 @@ def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypa
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert calls == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
+    # M24.1: ops_state lands at the tail.
+    assert calls == [
+        "interpretation", "quality", "absorb", "dedup", "moc",
+        "knowledge_index", "ops_state",
+    ]
 
 
 def test_autopilot_knowledge_index_refresh_passes_pack(tmp_path, monkeypatch):

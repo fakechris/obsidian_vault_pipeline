@@ -235,6 +235,22 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             supports_autopilot=True,
         ),
         StageHandlerSpec(
+            name="ops_state",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="autopilot_stage",
+            stage="ops_state",
+            entrypoint=(
+                "ovp_pipeline.workflow_handlers:run_autopilot_ops_state"
+            ),
+            description=(
+                "M24.1: refresh ops_state lifecycle projection "
+                "after autopilot knowledge_index"
+            ),
+            target_mode="single_note",
+            supports_autopilot=True,
+        ),
+        StageHandlerSpec(
             name="deep_dive_workflow",
             pack=pack_name,
             handler_kind="focused_action",
