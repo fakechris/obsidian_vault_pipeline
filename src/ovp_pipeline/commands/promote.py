@@ -31,6 +31,7 @@ from ..concept_registry import ConceptRegistry
 from ..derived.paths import review_queue_path
 from ..knowledge_index import rebuild_knowledge_index
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
+from ..event_emitter import emit as _emit_audit
 from ..promote_candidates import promote_candidate
 from ..promotion_audit import emit_promotion
 from ..promotion_policy import (
@@ -134,6 +135,42 @@ def _run_concept(args: argparse.Namespace) -> int:
                 actor="ovp-promote run",
                 reason=decision.reason_code,
                 payload={"slug": entry.slug},
+            )
+            # M24.2: emit ``promote_concept`` alongside the
+            # ``promotion`` row above so the lifecycle kernel sees
+            # the operator-promote signal it expects.  The two rows
+            # are intentionally redundant — ``promotion`` carries
+            # the rich state-transition shape that the doctor's
+            # mtime check reads; ``promote_concept`` is the
+            # registry-classified evidence row that drives Accepted.
+            #
+            # The payload MUST carry ``slug`` (so
+            # ``knowledge_index._infer_audit_slug`` indexes the row
+            # under ``audit_events.slug``, which the kernel reads
+            # for source-kind lookups) AND ``object_id`` in the JSON
+            # body (so kernel ``object_id`` lookups find this row in
+            # the payload LIKE filter).  Without both, the operator-
+            # promote signal is invisible to the kernel even though
+            # the row exists in the log (codex review on PR #234
+            # flagged this).
+            _emit_audit(
+                vault_dir,
+                "pipeline.jsonl",
+                "promote_concept",
+                {
+                    "slug": entry.slug,
+                    "object_id": entry.slug,
+                    "concept": entry.slug,
+                    "source": entry.title or "",
+                    "path": str(
+                        Path(mutation.touched_files[0])
+                        if mutation.touched_files
+                        else vault_dir
+                    ),
+                    "actor": "ovp-promote run",
+                    "reason": decision.reason_code,
+                },
+                pack=pack.name,
             )
             actions["promoted"].append({"slug": entry.slug, "mutation": mutation.to_dict()})
         elif decision.lane == LANE_ESCALATE:

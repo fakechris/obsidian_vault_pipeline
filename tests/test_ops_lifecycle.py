@@ -189,6 +189,33 @@ def test_failure_event_dominates_other_categories():
     assert state.needs_action_reason == "absorb_parse_error"
 
 
+def test_prepared_substate_with_absorb_pending_upsert_anchor():
+    """M24.2: when the extractor explicitly emits
+    ``absorb_pending_upsert``, the kernel classifies the source as
+    Prepared (the anchor row IS the pending signal).  Once
+    ``candidates_upserted`` follows, the Prepared sub-state
+    clears — that's the producer-pair contract."""
+    conn = _make_db()
+    _emit(conn, "article_intake_only", slug="src-pending",
+          ts="2026-05-13T08:00:00+00:00")
+    _emit(conn, "evergreen_extraction_complete", slug="src-pending",
+          ts="2026-05-13T08:01:00+00:00")
+    _emit(conn, "absorb_pending_upsert", slug="src-pending",
+          ts="2026-05-13T08:01:01+00:00")
+
+    state = lifecycle_state_of(conn, "source", "src-pending", pack=PACK)
+    assert state is not None
+    # Still Prepared — extraction finished, no candidates_upserted.
+    assert state.sub_state == SUBSTATE_PREPARED
+
+    # Now the upsert lands.  Prepared clears.
+    _emit(conn, "candidates_upserted", slug="src-pending",
+          ts="2026-05-13T08:01:30+00:00")
+    state = lifecycle_state_of(conn, "source", "src-pending", pack=PACK)
+    assert state is not None
+    assert state.sub_state is None
+
+
 def test_prepared_substate_when_extraction_without_upsert():
     """``evergreen_extraction_complete`` without a downstream
     ``candidates_upserted`` is the Prepared internal sub-state — the

@@ -1118,6 +1118,28 @@ class AutoEvergreenExtractor:
             concepts = self.extractor.extract_concepts(file_path, content, registry=registry)
             result["concepts_extracted"] = len(concepts)
 
+            # M24.2: emit ``absorb_pending_upsert`` once extraction
+            # returns concepts but BEFORE the candidate-upsert loop
+            # below runs.  If the upsert that follows succeeds, the
+            # ``candidates_upserted`` row at the end of the function
+            # pairs with this one.  If it fails (registry write
+            # error, exception in the loop), this row remains in the
+            # log and the kernel surfaces Prepared sub-state with a
+            # real anchor instead of inferring it from absence.
+            #
+            # ``slug`` is the source's canonical slug so
+            # ``knowledge_index._infer_audit_slug`` indexes the row
+            # under ``audit_events.slug``; the lifecycle kernel reads
+            # source evidence by that column, so a row without
+            # ``slug`` is invisible to it.
+            if not dry_run and concepts:
+                source_slug = canonicalize_note_id(file_path.stem)
+                self.logger.log("absorb_pending_upsert", {
+                    "slug": source_slug,
+                    "source": str(file_path.name),
+                    "expected_candidates": len(concepts),
+                })
+
             for concept in concepts:
                 concept_name = concept.get("concept_name")
                 if not concept_name:
@@ -1438,11 +1460,43 @@ class AutoEvergreenExtractor:
                 result["concepts"].append(concept_info)
 
             # 文件内所有概念处理完毕后，一次性保存 registry（而非每概念保存一次）
+            #
+            # M24.2: track whether the save actually succeeded so the
+            # ``candidates_upserted`` emit below can be gated on
+            # durable writes.  Pre-M24.2 fix this swallowed the
+            # exception and the emit still fired, which would clear
+            # the kernel's Prepared sub-state on a non-durable write
+            # (codex review on PR #234 flagged this race).
+            save_ok = not registry_needs_save or dry_run
             if registry and registry_needs_save and not dry_run:
                 try:
                     registry.save()
+                    save_ok = True
                 except Exception:
-                    pass
+                    save_ok = False
+
+            # M24.2: emit ``candidates_upserted`` so the lifecycle
+            # kernel can see absorb-stage writes land.  Pre-M24.2 this
+            # row never fired, which forced the kernel to derive
+            # Prepared sub-state from absence — fine in tests, wrong
+            # in production where every source looked Prepared.
+            #
+            # ``slug`` is the indexable key the knowledge indexer reads;
+            # without it the row is invisible to the lifecycle kernel
+            # (codex review on PR #234 caught this).
+            if (
+                not dry_run
+                and save_ok
+                and result.get("candidates_added", 0) > 0
+            ):
+                source_slug = canonicalize_note_id(file_path.stem)
+                self.logger.log("candidates_upserted", {
+                    "slug": source_slug,
+                    "source": str(file_path.name),
+                    "candidates": int(result.get("candidates_added", 0)),
+                    "created": int(result.get("concepts_created", 0)),
+                    "promoted": int(result.get("concepts_promoted", 0)),
+                })
 
         except Exception as e:
             result["error"] = str(e)
