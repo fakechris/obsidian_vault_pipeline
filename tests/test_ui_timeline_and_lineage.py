@@ -557,27 +557,69 @@ class TestBuildTodayDigestPayload:
         assert payload["available"] is False
         assert payload["cards"] == []
 
-    def test_groups_events_into_five_cards(self, tmp_path):
+    def test_returns_five_lifecycle_cards(self, tmp_path):
+        """M25.3: cards are keyed on lifecycle states, not event
+        categories.  Pre-M25 the IDs were
+        intake/absorb/synthesis/governance/failures; today they're
+        the lifecycle vocabulary."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
         _seed_run_db(tmp_path)
         payload = build_today_digest_payload(tmp_path)
         assert payload["available"] is True
-        # Five cards in canonical order.
         assert [c["id"] for c in payload["cards"]] == [
-            "intake", "absorb", "synthesis", "governance", "failures",
+            "Received", "Extracted", "Accepted",
+            "Synthesized", "NeedsAction",
         ]
-        # Intake card carries clippings_processed + article_intake_only events.
-        intake = payload["cards"][0]
-        assert intake["total"] >= 4  # 1 clippings_processed + 3 intake_only
-        assert intake["by_type"].get("clippings_processed") == 1
-        assert intake["by_type"].get("article_intake_only") == 3
-        # Failures card surfaces the absorb_parse_error.
-        failures = payload["cards"][-1]
-        assert failures["by_type"].get("absorb_parse_error") == 1
-        # Each card with non-zero total has at least one sample.
+
+    def test_received_card_counts_intake_events_as_secondary(self, tmp_path):
+        """The Received card's SECONDARY count picks up
+        clippings_processed + article_intake_only events from
+        today's audit log."""
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
+        received = next(c for c in payload["cards"] if c["id"] == "Received")
+        # Seeded: 1 clippings_processed + 3 article_intake_only.
+        assert received["event_count"] >= 4
+        assert received["event_label"] == f"{received['event_count']} arrived today"
+
+    def test_needs_action_card_counts_failures_as_secondary(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
+        na = next(c for c in payload["cards"] if c["id"] == "NeedsAction")
+        # Seeded: 1 absorb_parse_error.
+        assert na["event_count"] == 1
+        assert "blockers today" in na["event_label"]
+
+    def test_primary_href_targets_ops_items_with_no_date_param(self, tmp_path):
+        """M25 plan §M25.3 hard lock: primary CTA links to
+        /ops/items?state=... and MUST NOT carry a date param —
+        the primary count is "all current items", not date-windowed.
+        Adding date would break card-N === page-N."""
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
         for card in payload["cards"]:
-            if card["total"] > 0:
-                assert card["samples"], f"{card['id']} has no samples"
+            href = card["primary_href"]
+            assert href.startswith("/ops/items?state="), (
+                f"{card['id']} primary_href must target /ops/items"
+            )
+            assert "date=" not in href, (
+                f"{card['id']} primary_href must NOT carry date= "
+                f"(got {href!r})"
+            )
+
+    def test_secondary_href_targets_ops_events_with_date_filter(self, tmp_path):
+        """Secondary CTA carries date= because the secondary count
+        IS date-windowed."""
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
+        received = next(c for c in payload["cards"] if c["id"] == "Received")
+        assert received["event_href"].startswith("/ops/events?")
+        assert "date=" in received["event_href"]
+        assert "event_types=" in received["event_href"]
 
     def test_target_date_overrides_today(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_today_digest_payload
@@ -586,7 +628,19 @@ class TestBuildTodayDigestPayload:
         future = "2099-01-01"
         payload = build_today_digest_payload(tmp_path, target_date=future)
         assert payload["date"] == future
-        assert all(c["total"] == 0 for c in payload["cards"])
+        # Secondary counts (event_count) drop to 0; primary
+        # (current items in state) is independent of the date.
+        assert all(c["event_count"] == 0 for c in payload["cards"])
+
+    def test_payload_keeps_lifecycle_summary_for_renderer(self, tmp_path):
+        """The renderer surfaces an explicit ``projection not built``
+        banner when the lifecycle summary says so — keep the field
+        plumbed through even though the cards now consume it
+        directly."""
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
+        assert "lifecycle_summary" in payload
 
 
 class TestBuildRunsIndexPayload:

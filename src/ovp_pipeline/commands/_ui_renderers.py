@@ -6664,11 +6664,21 @@ _TODAY_DIGEST_STYLE = ""
 
 
 def _render_today_digest_page(payload: dict) -> str:
-    """5-card today digest — the maintainer's "what happened today" view.
+    """M25.3: hybrid lifecycle cards for ``/ops/today``.
 
-    Replaces the old "open ``/ops`` and squint at recent activity"
-    workflow with five explicit cards (one per pipeline macro-stage)
-    that summarise *today's* audit events.
+    Five cards keyed on the lifecycle vocabulary (Received,
+    Extracted, Accepted, Synthesized, Needs Action).  Each card
+    shows TWO numbers per the M25 plan §M25.3 contract:
+
+    * Primary: current items in this state (from ``ops_state``).
+    * Secondary: today's evidence events (from ``audit_events``).
+
+    Primary CTA → ``/ops/items?state=…`` (no date param).
+    Secondary CTA → ``/ops/events?event_types=…&date=…``.
+
+    The two numbers are intentionally rendered as parallel rows,
+    not stacked or summed.  No "+N today" framing — the plan
+    forbids it because the sets aren't additive.
     """
     requested_pack = str(payload.get("requested_pack") or "")
     date = str(payload.get("date") or "")
@@ -6680,7 +6690,9 @@ def _render_today_digest_page(payload: dict) -> str:
             "<h2>Today digest unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "<p>Run <code>ovp-knowledge-index</code> to populate "
-            "<code>audit_events</code>.</p>"
+            "<code>audit_events</code> then <code>ovp-ops-state "
+            "--rebuild</code> to materialise the lifecycle "
+            "projection.</p>"
             "</section>"
         )
         return _layout(f"Today — {date}", body, requested_pack=requested_pack)
@@ -6690,19 +6702,21 @@ def _render_today_digest_page(payload: dict) -> str:
         _render_page_help(
             "Today digest",
             what=(
-                "Five-card summary of what the pipeline did today (UTC),"
-                " grouped by macro-stage: intake, absorb, synthesis,"
-                " governance, failures.  Counts come from"
-                " <code>audit_events</code>."
+                "Five lifecycle cards (Received, Extracted, Accepted,"
+                " Synthesized, Needs Action).  Each card shows the"
+                " current item count plus today's evidence activity."
+                "  Primary number reads <code>ops_state</code>;"
+                " secondary number reads <code>audit_events</code>."
             ),
             can=(
-                "Click <strong>See all N →</strong> on any card to drop"
-                " into <strong>/ops/events</strong> filtered to that day."
-                "  Use the prev/next pivots to step through history."
+                "Click the <strong>Open N items →</strong> link to drill"
+                " into all current items in that state.  Click the"
+                " <strong>View today's N events →</strong> link to drop"
+                " into the audit ledger filtered to today."
             ),
             effect=(
-                "All links read from the audit ledger.  This page mutates"
-                " nothing — it's a window onto the pipeline's day."
+                "Read-only.  Drilldowns navigate to /ops/items"
+                " (lifecycle) and /ops/events (forensic)."
             ),
         )
     )
@@ -6718,68 +6732,78 @@ def _render_today_digest_page(payload: dict) -> str:
         pivot_parts.append(f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>")
     sections.append(f"<p class='muted'>{' · '.join(pivot_parts)}</p>")
     sections.append(
-        f"<p class='muted'>Audit events recorded on "
-        f"<strong>{escape(date)}</strong> (UTC).  Click "
-        f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
+        f"<p class='muted'>Lifecycle state — current backlog · today's"
+        f" activity recorded on <strong>{escape(date)}</strong> (UTC)."
+        f"  Click <a href='/ops/timeline'>Timeline</a> for the"
+        f" multi-day evidence view.</p>"
     )
-    # M23 BL-096: explicit "Regenerate digest now" affordance so an
-    # operator who drops articles mid-day can immediately trigger a
-    # new digest.  Input-hash gate (BL-095) keeps the cost bounded —
-    # unchanged inputs return the same body without an LLM call.
-    #
-    # M23.1: pass the page's ``date`` through so a past-date dispatch
-    # writes to the right ``YYYY-MM-DD-digest-daily.md`` file rather
-    # than UTC-today.
+
+    # M24.3 honest-zero applies to the projection itself: when
+    # ``ops_state`` doesn't exist yet (DAG step hasn't run), every
+    # card's primary number would be 0 — surface that explicitly so
+    # the operator doesn't read it as "no backlog".
+    lifecycle = payload.get("lifecycle_summary") or {}
+    if not lifecycle.get("available") and lifecycle.get("reason"):
+        sections.append(
+            "<div class='card' style='border-color:#c2410c;"
+            "background:#fef3e8;padding:0.75rem 1rem;margin:0.5rem 0'>"
+            "<strong>Lifecycle projection unavailable.</strong> "
+            f"<p class='muted small' style='margin:0.3rem 0 0'>"
+            f"{escape(str(lifecycle['reason']))}.  Card primary "
+            "numbers below will be 0 until this lands.</p>"
+            "</div>"
+        )
+
+    # M23 BL-096 regenerate-digest button stays.
     sections.append(
         _render_digest_regenerate_button(requested_pack, date=date)
     )
+
     sections.append("<div class='grid stats' style='margin-top:1rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
-        total = int(card.get("total") or 0)
-        by_type = card.get("by_type") or {}
+        explainer = str(card.get("explainer") or "")
+        primary_count = int(card.get("primary_count") or 0)
+        event_count = int(card.get("event_count") or 0)
+        event_label = str(card.get("event_label") or "")
+        primary_href = str(card.get("primary_href") or "")
+        event_href = str(card.get("event_href") or "")
         samples = card.get("samples") or []
-        see_all_path = str(card.get("see_all_path") or "")
 
-        # Failures get the warn-tinted big number; empty totals fade to
-        # border-strong so they read as "nothing today" without
-        # distracting from cards that DO have activity.
-        warn_cls = " warn" if card_id == "failures" and total > 0 else ""
-        empty_style = "color:var(--border-strong)" if total == 0 else ""
+        # NeedsAction with non-zero gets the warn tint; primary
+        # of 0 fades the big number so it reads as "nothing in
+        # this state" without distracting.
+        warn_cls = (
+            " warn" if card_id == "NeedsAction" and primary_count > 0
+            else ""
+        )
+        empty_style = (
+            "color:var(--border-strong)" if primary_count == 0 else ""
+        )
 
-        # Type breakdown — top-N types as a tail line.
-        type_pills = ""
-        if by_type:
-            top = sorted(by_type.items(), key=lambda x: -x[1])[:_TODAY_CARD_TOP_TYPES_LIMIT]
-            type_pills = " · ".join(f"<code>{escape(t)}</code>×{n}" for t, n in top)
-
-        # M24.0 stop-gap: wrap each sample in an ``<a>`` when the
-        # payload builder gave us a real link target.  Long subject
-        # strings get ``text-overflow: ellipsis`` + ``title="…"``
-        # tooltip so the card stays inside its box even on dense
-        # days (previously a long article title overflowed the card
-        # into the Inbox area).
+        # Item samples block — each sample is one row from
+        # ``ops_state`` (NOT an event).
         sample_html = ""
         if samples:
             li_rows: list[str] = []
             for s in samples:
-                et = escape(
-                    str(s.get("event_type", ""))[:_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS]
-                )
-                subj_full = str(s.get("subject", ""))
-                subj_short = escape(subj_full[:_TODAY_SAMPLE_SUBJECT_MAX_CHARS])
-                path = str(s.get("path", "") or "")
+                item_id = str(s.get("item_id", ""))
+                kind = str(s.get("item_kind", ""))
+                href = str(s.get("path", "") or "")
+                short_id = escape(item_id[:_TODAY_SAMPLE_SUBJECT_MAX_CHARS])
+                kind_label = escape(kind[:_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS])
                 subject_html = (
-                    f"<a href='{escape(path)}' "
-                    f"title='{escape(subj_full)}'>{subj_short}</a>"
-                    if path
-                    else f"<span title='{escape(subj_full)}'>{subj_short}</span>"
+                    f"<a href='{escape(href)}' "
+                    f"title='{escape(item_id)}'>{short_id}</a>"
+                    if href
+                    else f"<span title='{escape(item_id)}'>{short_id}</span>"
                 )
                 li_rows.append(
                     "<li style='overflow:hidden;text-overflow:ellipsis;"
                     "white-space:nowrap'>"
-                    f"<span class='muted'>{et}</span> <strong>{subject_html}</strong>"
+                    f"<span class='muted'>{kind_label}</span> "
+                    f"<strong>{subject_html}</strong>"
                     "</li>"
                 )
             sample_html = (
@@ -6791,72 +6815,69 @@ def _render_today_digest_page(payload: dict) -> str:
                 + "</ul></div>"
             )
 
-        see_all_html = ""
-        if see_all_path and total > len(samples):
-            see_all_html = (
+        # Primary CTA — only render when there's something to drill
+        # into; otherwise the link would land on an empty page.
+        primary_cta = ""
+        if primary_count > 0 and primary_href:
+            primary_cta = (
                 "<div class='tiny' style='margin-top:.5rem'>"
-                f"<a href='{escape(see_all_path)}'>See all {total} →</a>"
+                f"<a href='{escape(primary_href)}'>"
+                f"Open {primary_count} item"
+                f"{'s' if primary_count != 1 else ''} →</a>"
                 "</div>"
             )
 
-        # M24.3 honest-zero: shared message across every surface so
-        # the wording stays consistent.  M24.4 will branch on the
-        # ops_state diagnosis instead of always returning the
-        # ambiguity, but the helper signature stays the same.
+        # Secondary CTA — only render when there are events to
+        # drill into.  Label uses per-state phrasing from the
+        # payload (e.g. "5 arrived today" / "3 extracted today").
+        secondary_cta = ""
+        if event_count > 0 and event_href:
+            secondary_cta = (
+                "<div class='tiny' style='margin-top:.3rem'>"
+                f"<a href='{escape(event_href)}' class='muted'>"
+                f"View today's {event_count} evidence "
+                f"event{'s' if event_count != 1 else ''} →</a>"
+                "</div>"
+            )
+
+        # Honest-zero footer applies when BOTH numbers are 0.
         zero_html = ""
-        if total == 0:
+        if primary_count == 0 and event_count == 0:
             zero_html = honest_zero_html(short=True)
+
+        # Secondary text always renders so the card always shows
+        # both numbers (or both zeros) — the M25 plan locks this:
+        # never collapse one number into the other.
+        secondary_text = (
+            f"<div class='muted tiny' style='margin-top:6px'>"
+            f"{escape(event_label)}</div>"
+            if event_label
+            else ""
+        )
+
+        explainer_html = (
+            f"<div class='muted tiny' style='margin-top:4px'>"
+            f"{escape(explainer)}</div>"
+            if explainer
+            else ""
+        )
 
         sections.append(
             "<div class='card' style='margin:0;overflow:hidden'>"
             f"<div class='muted tiny'>{escape(label)}</div>"
-            f"<div class='metric-num{warn_cls}' style='margin-top:4px;{empty_style}'>{total}</div>"
-            f"<div class='muted tiny' style='margin-top:6px'>{type_pills}</div>"
+            f"<div class='metric-num{warn_cls}' "
+            f"style='margin-top:4px;{empty_style}'>{primary_count}</div>"
+            f"<div class='muted tiny'>current item"
+            f"{'s' if primary_count != 1 else ''}</div>"
+            f"{secondary_text}"
+            f"{explainer_html}"
             f"{zero_html}"
             f"{sample_html}"
-            f"{see_all_html}"
+            f"{primary_cta}"
+            f"{secondary_cta}"
             "</div>"
         )
     sections.append("</div>")
-
-    # M24.4: passive lifecycle-backlog strip beneath the event cards.
-    # Five numbers, no clicks — answers "how many items are sitting
-    # in each lifecycle state right now?".  Orthogonal to the cards
-    # above (which count today's events).  M25 will rename the cards
-    # to this vocabulary; for M24 the two surfaces coexist so the
-    # operator can compare event flow with backlog at a glance.
-    lifecycle = payload.get("lifecycle_summary") or {}
-    if lifecycle.get("available"):
-        counts = lifecycle.get("counts") or {}
-        total = lifecycle.get("total", 0)
-        state_chips = "".join(
-            f"<span class='pill'>{escape(state)}: "
-            f"{int(counts.get(state, 0))}</span>"
-            for state in (
-                "Received", "Extracted", "Accepted",
-                "Synthesized", "NeedsAction",
-            )
-        )
-        sections.append(
-            "<section style='margin-top:1rem'>"
-            "<div class='muted tiny' style='margin-bottom:4px'>"
-            f"Lifecycle backlog "
-            f"<span class='muted'>· {int(total)} item"
-            f"{'s' if int(total) != 1 else ''} in scope</span>"
-            "</div>"
-            f"<div style='display:flex;gap:0.4rem;flex-wrap:wrap'>{state_chips}</div>"
-            "</section>"
-        )
-    elif lifecycle.get("reason"):
-        # Surface the explicit not-yet-built reason rather than
-        # silently dropping the section — honest-zero applies to
-        # the kernel's own readout too.
-        sections.append(
-            "<section style='margin-top:1rem'>"
-            "<div class='muted tiny'>Lifecycle backlog "
-            f"<span class='muted'>· {escape(str(lifecycle['reason']))}</span>"
-            "</div></section>"
-        )
 
     body = "".join(sections)
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)

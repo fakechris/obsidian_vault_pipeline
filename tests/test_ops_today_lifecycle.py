@@ -159,6 +159,12 @@ def test_cards_are_independent_of_lifecycle_summary(tmp_path):
     db_path = _make_db(tmp_path)
     _seed_two_items(db_path)
     payload = build_today_digest_payload(tmp_path, pack_name=PACK)
-    failures_card = next(c for c in payload["cards"] if c["id"] == "failures")
-    assert failures_card["total"] == 1  # 1 failure event today
+    # M25.3: cards are now keyed on lifecycle states.  The
+    # NeedsAction card carries BOTH numbers — secondary count
+    # (today's failure events) and primary count (current items
+    # in NeedsAction).  The plan explicitly forbids collapsing
+    # them.
+    na_card = next(c for c in payload["cards"] if c["id"] == "NeedsAction")
+    assert na_card["event_count"] == 1  # 1 failure event today
+    assert na_card["primary_count"] == 1  # 1 item in NeedsAction state
     assert payload["lifecycle_summary"]["counts"][STATE_NEEDS_ACTION] == 1
