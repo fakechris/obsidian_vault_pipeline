@@ -610,14 +610,15 @@ class TestBuildTodayDigestPayload:
                 f"(got {href!r})"
             )
 
-    def test_secondary_href_targets_ops_events_with_date_filter(self, tmp_path):
-        """Secondary CTA carries date= because the secondary count
-        IS date-windowed."""
+    def test_secondary_href_targets_events_audit_with_date_filter(self, tmp_path):
+        """M25.4: Secondary CTA targets /ops/events/audit (the new
+        raw-audit-evidence view) so card N === page N.  Carries
+        date= because the secondary count IS date-windowed."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
         _seed_run_db(tmp_path)
         payload = build_today_digest_payload(tmp_path)
         received = next(c for c in payload["cards"] if c["id"] == "Received")
-        assert received["event_href"].startswith("/ops/events?")
+        assert received["event_href"].startswith("/ops/events/audit?")
         assert "date=" in received["event_href"]
         assert "event_types=" in received["event_href"]
 

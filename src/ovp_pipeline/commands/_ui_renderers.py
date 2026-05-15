@@ -3922,11 +3922,29 @@ def _render_events_page(payload: dict) -> str:
             else "<p class='muted'>No open contradictions in the visible event scope.</p>"
         )
     )
+    # M25.4: reciprocal role banner naming this page as the timeline-
+    # projection view (NOT raw audit_events).  Pairs with the
+    # /ops/events/audit banner.  Pre-M25.4 the operator landed here
+    # from a card's secondary CTA and saw fewer rows than the card
+    # promised — different ledgers.
+    role_banner = (
+        "<div class='card' style='border-color:#9ca3af;"
+        "background:#f5f5f4;padding:0.75rem 1rem;margin:0.5rem 0'>"
+        "<strong>Timeline projection view.</strong> "
+        "<p class='muted small' style='margin:0.3rem 0 0'>"
+        "These rows are NOT raw <code>audit_events</code> — they "
+        "are derived events grouped by date and object.  For raw "
+        "audit evidence (the rows the Maintainer cards count) use "
+        "<a href='/ops/events/audit'>/ops/events/audit</a>."
+        "</p></div>"
+    )
+
     return _layout(
         "Event Dossier",
         "".join(
             [
                 "<h1>Event Dossier</h1>",
+                role_banner,
                 cross_surface_warning,
                 _render_page_help(
                     "Event dossier",
@@ -7040,6 +7058,127 @@ def _render_items_list_page(payload: dict) -> str:
     )
 
     body = "".join(head) + table_html + pager_html
+    return _layout(title, body, requested_pack=requested_pack)
+
+
+# M25.4: /ops/events/audit renderer.  Raw-audit-evidence view —
+# flat table of audit_events rows.  Card secondary CTAs target
+# this page so that ``View today's N evidence events →`` lands on
+# exactly N rows (card-N === page-N).  The pre-existing
+# /ops/events page renders timeline projections, which is a
+# different ledger; both pages carry reciprocal banners explaining
+# their respective roles.
+def _render_events_audit_page(payload: dict) -> str:
+    """Render the ``/ops/events/audit`` raw-audit-evidence table."""
+    requested_pack = str(payload.get("requested_pack") or "")
+    event_types = payload.get("event_types") or []
+    date_key = str(payload.get("date") or "")
+    total = int(payload.get("total") or 0)
+    rows = payload.get("rows") or []
+
+    title = "Audit evidence"
+
+    if not payload.get("available"):
+        reason = escape(str(payload.get("reason") or "unavailable"))
+        body = (
+            f"<h1>{escape(title)}</h1>"
+            "<div class='card' style='border-color:#9ca3af;"
+            "background:#f5f5f4;padding:0.75rem 1rem;margin:0.5rem 0'>"
+            f"<p class='muted small' style='margin:0'>{reason}</p>"
+            "</div>"
+        )
+        return _layout(title, body, requested_pack=requested_pack)
+
+    # Banner explaining the role + cross-link to /ops/events.
+    timeline_href = (
+        f"/ops/events?date={quote(date_key, safe='')}"
+        if date_key
+        else "/ops/events"
+    )
+    role_banner = (
+        "<div class='card' style='border-color:#9ca3af;"
+        "background:#f5f5f4;padding:0.75rem 1rem;margin-bottom:0.6rem'>"
+        "<strong>Raw audit evidence.</strong> "
+        "<p class='muted small' style='margin:0.3rem 0 0'>"
+        "These are the exact <code>audit_events</code> rows the "
+        "Maintainer card counted.  For timeline projections "
+        "(events grouped by date and object) use "
+        f"<a href='{escape(timeline_href)}'>/ops/events</a>."
+        "</p></div>"
+    )
+
+    # Filter summary.
+    filter_chips: list[str] = []
+    if event_types:
+        et_preview = ", ".join(event_types[:5])
+        if len(event_types) > 5:
+            et_preview += f" (+{len(event_types) - 5} more)"
+        filter_chips.append(
+            f"<span class='pill'>event_types: {escape(et_preview)}</span>"
+        )
+    if date_key:
+        filter_chips.append(
+            f"<span class='pill'>date: {escape(date_key)}</span>"
+        )
+    filter_html = ""
+    if filter_chips:
+        filter_html = (
+            "<div style='display:flex;gap:0.4rem;flex-wrap:wrap;"
+            "margin-bottom:0.6rem'>"
+            + "".join(filter_chips)
+            + "</div>"
+        )
+
+    head = [
+        f"<h1>{escape(title)}</h1>",
+        role_banner,
+        filter_html,
+        f"<p class='muted small'>"
+        f"{total} matching row{'s' if total != 1 else ''} "
+        f"(showing {len(rows)})"
+        f"</p>",
+    ]
+
+    if not rows:
+        head.append(honest_zero_html(short=True))
+        return _layout(
+            title, "".join(head), requested_pack=requested_pack
+        )
+
+    thead = (
+        "<thead><tr>"
+        "<th>Timestamp</th><th>Event type</th>"
+        "<th>Slug</th><th>Payload</th>"
+        "</tr></thead>"
+    )
+    body_rows: list[str] = []
+    for r in rows:
+        ts = escape(str(r.get("timestamp") or ""))
+        event_type = escape(str(r.get("event_type") or ""))
+        slug = escape(str(r.get("slug") or ""))
+        snippet = escape(str(r.get("payload_snippet") or ""))
+        full = escape(str(r.get("payload_full") or ""))
+        slug_cell = (
+            slug if slug else "<span class='muted'>—</span>"
+        )
+        body_rows.append(
+            "<tr>"
+            f"<td class='mono small'>{ts}</td>"
+            f"<td><code>{event_type}</code></td>"
+            f"<td>{slug_cell}</td>"
+            f"<td class='mono small' title='{full}' "
+            "style='max-width:50ch;overflow:hidden;"
+            f"text-overflow:ellipsis'>{snippet}</td>"
+            "</tr>"
+        )
+    table_html = (
+        "<table class='table' style='margin-top:0.6rem'>"
+        + thead
+        + "<tbody>" + "".join(body_rows) + "</tbody>"
+        + "</table>"
+    )
+
+    body = "".join(head) + table_html
     return _layout(title, body, requested_pack=requested_pack)
 
 
