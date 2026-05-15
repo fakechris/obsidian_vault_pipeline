@@ -502,6 +502,29 @@ class AutoPilotDaemon:
         self._run_build_crystals()
         self._run_working_memory()
 
+    def _run_ops_state_refresh(self):
+        """M24.1: rebuild the lifecycle ``ops_state`` projection.
+
+        Reads ``audit_events`` + truth-projection tables that
+        ``_run_knowledge_index_refresh`` just rebuilt; must run
+        AFTER it.  Cheap rebuild (projection-only, no LLM); safe
+        to fire after every autopilot cycle.
+        """
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.ops_state_cli",
+            "--vault-dir", str(self.vault_dir),
+            "--pack", self.pack.name,
+            "--rebuild",
+            "--json",
+        ]
+        try:
+            subprocess.run(
+                cmd, capture_output=True, cwd=str(self.vault_dir),
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            self.log("⚠️ ops_state --rebuild 超时 (300s)")
+
     def _run_build_crystals(self):
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.build_crystals",

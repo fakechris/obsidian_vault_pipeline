@@ -527,7 +527,20 @@ def pipeline_steps(
 ) -> list[str]:
     steps = list(base_steps or BASE_PIPELINE_STEPS)
     if include_refine and "refine" not in steps:
-        steps.insert(-1, "refine")
+        # M24.1: refine writes data that ``knowledge_index`` then
+        # indexes, so refine MUST run before knowledge_index.
+        # Pre-M24.1 we inserted at ``-1`` (penultimate) because
+        # knowledge_index was the last step.  Today the last step
+        # is ``ops_state``, so inserting at -1 would put refine
+        # between knowledge_index and ops_state — wrong order.
+        # Find knowledge_index explicitly and insert before it.
+        try:
+            idx = steps.index("knowledge_index")
+            steps.insert(idx, "refine")
+        except ValueError:
+            # Profile doesn't include knowledge_index (e.g. a
+            # custom slice).  Fall back to inserting near the end.
+            steps.append("refine")
     return steps
 
 

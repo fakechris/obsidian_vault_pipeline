@@ -211,6 +211,8 @@ def test_build_execution_plan_includes_pinboard_process_for_history():
         "registry_sync",
         "moc",
         "knowledge_index",
+        # M24.1: lifecycle projection runs after knowledge_index.
+        "ops_state",
     ]
 
 
@@ -228,7 +230,9 @@ def test_build_execution_plan_includes_pinboard_process_for_recent_days():
     plan = build_execution_plan(args)
 
     assert "pinboard_process" in plan["steps"]
-    assert plan["steps"][-1] == "knowledge_index"
+    # M24.1: last step is now ops_state (lifecycle projection).
+    assert plan["steps"][-1] == "ops_state"
+    assert plan["steps"][-2] == "knowledge_index"
 
 
 def test_build_execution_plan_full_can_insert_refine_before_knowledge_index():
@@ -244,7 +248,9 @@ def test_build_execution_plan_full_can_insert_refine_before_knowledge_index():
 
     plan = build_execution_plan(args)
 
-    assert plan["steps"][-2:] == ["refine", "knowledge_index"]
+    # M24.1: refine runs BEFORE knowledge_index (refine writes
+    # data knowledge_index indexes); ops_state runs last.
+    assert plan["steps"][-3:] == ["refine", "knowledge_index", "ops_state"]
     assert "absorb" in plan["steps"]
 
 
@@ -263,7 +269,8 @@ def test_build_execution_plan_full_respects_from_step():
 
     assert plan["steps"][0] == "quality"
     assert "pinboard" not in plan["steps"]
-    assert plan["steps"][-2:] == ["refine", "knowledge_index"]
+    # M24.1: see comment on the can_insert_refine test above.
+    assert plan["steps"][-3:] == ["refine", "knowledge_index", "ops_state"]
 
 
 def test_build_execution_plan_incremental_includes_pinboard_and_defaults_recent_days():
@@ -283,7 +290,9 @@ def test_build_execution_plan_incremental_includes_pinboard_and_defaults_recent_
     plan = build_execution_plan(args)
 
     assert plan["steps"][:3] == ["pinboard", "pinboard_process", "clippings"]
-    assert plan["steps"][-1] == "knowledge_index"
+    # M24.1: ops_state is the new tail.
+    assert plan["steps"][-1] == "ops_state"
+    assert plan["steps"][-2] == "knowledge_index"
     assert plan["pinboard_days"] == 7
     assert plan["description"] == "Incremental pipeline (research-tech/full)"
 

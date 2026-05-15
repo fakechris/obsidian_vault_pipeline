@@ -145,6 +145,13 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "registry_sync",
                 "moc",
                 "knowledge_index",
+                # M24.1: lifecycle projection.  Reads what
+                # ``knowledge_index`` just rebuilt; must run
+                # AFTER it.  Missing from the profile pre-M25.6
+                # dogfood — caught when ``ops_state`` didn't
+                # rebuild on the live operator vault even though
+                # the step existed in BASE_PIPELINE_STEPS.
+                "ops_state",
             ],
         ),
         WorkflowProfile(
@@ -157,6 +164,10 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "dedup",
                 "moc",
                 "knowledge_index",
+                # M24.1: same reason as the full profile —
+                # autopilot also needs a fresh lifecycle
+                # projection at end of run.
+                "ops_state",
             ],
             supports_autopilot=True,
         ),

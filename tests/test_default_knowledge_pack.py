@@ -40,4 +40,10 @@ def test_default_knowledge_full_profile_matches_current_stage_order():
         "registry_sync",
         "moc",
         "knowledge_index",
+        # M24.1: lifecycle projection step appended after
+        # knowledge_index.  M25.6 dogfood pass caught that it was
+        # missing from the workflow profile despite being in
+        # BASE_PIPELINE_STEPS — fix in
+        # ``packs/research_tech/shared.py``.
+        "ops_state",
     ]
