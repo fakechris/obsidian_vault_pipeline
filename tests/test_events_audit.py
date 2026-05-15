@@ -75,17 +75,25 @@ def test_unavailable_when_db_missing(tmp_path):
     assert "knowledge_index" in payload["reason"]
 
 
-def test_empty_event_types_returns_empty_available_page(tmp_path):
-    """No event_types in the URL → page renders cleanly with 0
-    rows.  Doesn't crash on SQL ``IN ()`` because the SQL is
-    skipped entirely."""
-    _seed_audit(tmp_path, [])
+def test_empty_event_types_returns_recent_rows_across_all_types(tmp_path):
+    """M25.4 (codex review on PR #239): when the page is hit without
+    an event_types filter (e.g. operator landed here from the
+    timeline-projection banner), default to showing the N most
+    recent audit_events rows across ALL event_types rather than
+    a useless empty page."""
+    today_iso = "2026-05-13T08:00:00"
+    _seed_audit(tmp_path, [
+        ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
+        ("pipeline.jsonl", "absorb_parse_error", "src-b", "s", today_iso, "{}"),
+    ])
     payload = build_events_audit_payload(
-        tmp_path, event_types=(), date_key="2026-05-13",
+        tmp_path, event_types=(), date_key="",
     )
     assert payload["available"] is True
-    assert payload["rows"] == []
-    assert payload["total"] == 0
+    # Both seeded rows surface, despite no event_types filter.
+    assert payload["total"] == 2
+    types_in_rows = {r["event_type"] for r in payload["rows"]}
+    assert types_in_rows == {"article_intake_only", "absorb_parse_error"}
 
 
 # ── Filtering ─────────────────────────────────────────────────────
@@ -171,6 +179,35 @@ def test_limit_clamped_to_max(tmp_path):
         limit=EVENTS_AUDIT_MAX_LIMIT * 10,
     )
     assert payload["limit"] == EVENTS_AUDIT_MAX_LIMIT
+
+
+def test_card_secondary_href_carries_limit_above_event_count(tmp_path):
+    """M25.4 (codex review on PR #239): when a card has more than
+    the default 200 events, the secondary CTA URL must carry a
+    limit big enough to surface all rows — otherwise the audit
+    page silently truncates and the card-N === page-N contract
+    breaks for high-volume days."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    # Seed 250 intake rows — over the default 200 limit.
+    rows = [
+        ("pipeline.jsonl", "article_intake_only", f"src-{i:03d}", "s",
+         today, "{}")
+        for i in range(250)
+    ]
+    _seed_audit(tmp_path, rows)
+    digest = build_today_digest_payload(tmp_path)
+    received = next(c for c in digest["cards"] if c["id"] == "Received")
+    assert received["event_count"] == 250
+    href = received["event_href"]
+    # URL must carry limit >= 250 (or hit the audit MAX cap).
+    import re
+    match = re.search(r"limit=(\d+)", href)
+    assert match is not None
+    url_limit = int(match.group(1))
+    assert url_limit >= 250, (
+        f"Secondary CTA limit {url_limit} is below event_count 250 "
+        "— high-volume days will silently truncate"
+    )
 
 
 def test_zero_limit_falls_back_to_default(tmp_path):

@@ -3397,11 +3397,18 @@ def _build_m25_hybrid_cards(
             # by construction.  The legacy /ops/events (timeline
             # projection) remains accessible from the audit page's
             # role banner.
+            #
+            # M25.4 (codex review on PR #239): set the URL limit to
+            # at LEAST the card's event_count so high-volume days
+            # don't silently truncate to 200 rows.  Clamp to the
+            # audit view's hard MAX so the URL stays bounded.
             secondary_href = ""
             if event_types:
+                target_limit = max(EVENTS_AUDIT_DEFAULT_LIMIT, event_count)
+                target_limit = min(target_limit, EVENTS_AUDIT_MAX_LIMIT)
                 see_all_qs_parts = [
                     f"date={quote(date_key, safe='')}",
-                    "limit=200",
+                    f"limit={target_limit}",
                     "event_types=" + quote(",".join(event_types), safe=""),
                 ]
                 secondary_href = _scoped_path(
@@ -3895,30 +3902,26 @@ def build_events_audit_payload(
             "limit": safe_limit,
         }
 
-    if not event_types_tup:
-        return {
-            "screen": "ops/events/audit",
-            "available": True,
-            "reason": "",
-            "event_types": [],
-            "date": date_key,
-            "requested_pack": requested_pack,
-            "rows": [],
-            "total": 0,
-            "limit": safe_limit,
-        }
-
-    placeholders = ",".join("?" for _ in event_types_tup)
-    params: list[object] = list(event_types_tup)
-    where = [f"event_type IN ({placeholders})"]
+    # M25.4 (codex review on PR #239): when no event_types filter
+    # is passed (operator landed here from the timeline-projection
+    # banner with no specific scope), show the N most-recent
+    # audit_events rows across ALL event_types so the page isn't
+    # empty.  The role banner explains the page's purpose; the
+    # default content has to be useful.
+    where: list[str] = []
+    params: list[object] = []
+    if event_types_tup:
+        placeholders = ",".join("?" for _ in event_types_tup)
+        where.append(f"event_type IN ({placeholders})")
+        params.extend(event_types_tup)
     if date_key:
         where.append("date(timestamp) = ?")
         params.append(date_key)
-    where_sql = " AND ".join(where)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
     with sqlite3.connect(db_path) as conn:
         total_row = conn.execute(
-            f"SELECT COUNT(*) FROM audit_events WHERE {where_sql}",
+            f"SELECT COUNT(*) FROM audit_events {where_sql}",
             params,
         ).fetchone()
         total = int(total_row[0] or 0) if total_row else 0
@@ -3926,7 +3929,7 @@ def build_events_audit_payload(
             f"""
             SELECT timestamp, event_type, slug, payload_json, source_log
               FROM audit_events
-             WHERE {where_sql}
+             {where_sql}
              ORDER BY timestamp DESC
              LIMIT ?
             """,
