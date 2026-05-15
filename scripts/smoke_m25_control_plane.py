@@ -82,6 +82,25 @@ def _knowledge_db(vault_dir: Path) -> Path:
     return vault_dir / "60-Logs" / "knowledge.db"
 
 
+def _subprocess_env() -> dict[str, str]:
+    """Codex P2 fix on PR #241: when this script is run from a
+    source checkout (no editable install), our top-level
+    ``sys.path.insert`` makes ``ovp_pipeline`` importable for THIS
+    process only.  Child ``python -m ovp_pipeline.…`` subprocesses
+    inherit ``os.environ`` but NOT ``sys.path``, so they crash
+    with ``ModuleNotFoundError``.  Propagate via ``PYTHONPATH`` so
+    the subprocess sees the same import surface.
+    """
+    import os
+    env = os.environ.copy()
+    src_path = str(Path(__file__).resolve().parent.parent / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{src_path}:{existing}" if existing else src_path
+    )
+    return env
+
+
 def _run_producer_audit(vault_dir: Path) -> CheckResult:
     """Run ``ovp-producer-audit --json`` and surface missing /
     drift counts.  We don't fail on drift (registered-but-not-
@@ -96,6 +115,7 @@ def _run_producer_audit(vault_dir: Path) -> CheckResult:
     ]
     proc = subprocess.run(
         cmd, capture_output=True, text=True, check=False,
+        env=_subprocess_env(),
     )
     try:
         payload = json.loads(proc.stdout)
@@ -144,6 +164,7 @@ def _ensure_ops_state(vault_dir: Path, pack: str) -> CheckResult:
     ]
     proc = subprocess.run(
         cmd, capture_output=True, text=True, check=False,
+        env=_subprocess_env(),
     )
     if proc.returncode != 0:
         return CheckResult(
@@ -196,8 +217,24 @@ def _check_card_n_equals_drilldown_n(
             ),
             [],
         )
+
+    # Codex P2 fix on PR #241: verify ALL five states are in the
+    # card set.  Pre-fix the loop only walked cards that were
+    # present, so a regression that dropped a state from
+    # ``M25_LIFECYCLE_CARD_DEFS`` would let the smoke pass with
+    # only four cards.
+    card_ids = {c["id"] for c in digest["cards"]}
+    expected_ids = set(ALL_STATES)
+    missing_states = expected_ids - card_ids
+    unexpected_states = card_ids - expected_ids
     table: list[dict[str, Any]] = []
-    all_ok = True
+    all_ok = not (missing_states or unexpected_states)
+    structural_detail: list[str] = []
+    if missing_states:
+        structural_detail.append(f"missing_states={sorted(missing_states)}")
+    if unexpected_states:
+        structural_detail.append(f"unexpected_states={sorted(unexpected_states)}")
+
     for card in digest["cards"]:
         state = card["id"]
         primary_count = int(card["primary_count"])
@@ -207,6 +244,12 @@ def _check_card_n_equals_drilldown_n(
             vault_dir, state=state, pack_name=pack,
             limit=10_000,  # huge — we want the true row count
         )
+        # Codex P2 fix on PR #241: when --skip-rebuild is used
+        # before the projection exists, items.available is False
+        # and items.total falls back to 0.  Comparing
+        # primary_count == items_total would then pass with both
+        # equal to 0, hiding the missing-projection condition.
+        items_available = bool(items.get("available", False))
         items_total = int(items.get("total", 0))
 
         if card["event_types"]:
@@ -218,11 +261,13 @@ def _check_card_n_equals_drilldown_n(
                 limit=10_000,
             )
             audit_total = int(audit.get("total", 0))
+            audit_available = bool(audit.get("available", True))
         else:
             audit_total = 0
+            audit_available = True
 
-        primary_match = (primary_count == items_total)
-        audit_match = (event_count == audit_total)
+        primary_match = items_available and (primary_count == items_total)
+        audit_match = audit_available and (event_count == audit_total)
         if not (primary_match and audit_match):
             all_ok = False
         table.append({
@@ -233,12 +278,19 @@ def _check_card_n_equals_drilldown_n(
             "audit_rows": audit_total,
             "primary_match": primary_match,
             "audit_match": audit_match,
+            "items_available": items_available,
+            "audit_available": audit_available,
         })
+    detail_parts = [
+        f"states_ok={sum(1 for t in table if t['primary_match'] and t['audit_match'])}/5",
+    ]
+    if structural_detail:
+        detail_parts.extend(structural_detail)
     return (
         CheckResult(
             name="card_n_equals_drilldown_n",
             ok=all_ok,
-            detail=f"states_ok={sum(1 for t in table if t['primary_match'] and t['audit_match'])}/5",
+            detail=" · ".join(detail_parts),
             data={"table": table},
         ),
         table,
