@@ -58,8 +58,8 @@ shape:
 | **Primary number** | ``ops_state.counts_from_projection`` | items currently in this state |
 | **Secondary activity** | ``event_evidence_registry`` + ``audit_events`` | evidence events for this state in the operator's date window |
 | Samples | ``ops_state`` rows | newest items in this state — **not** event rows |
-| Primary CTA | ``/ops/items?state=…`` | drill into the items themselves |
-| Secondary CTA | ``/ops/events?event_types=…&date=…`` | drill into the raw audit evidence (forensic) |
+| Primary CTA | ``/ops/items?state=…`` | drill into the items themselves — **no date param**, because the primary number is "all current items in this state", not a date-windowed subset |
+| Secondary CTA | ``/ops/events?event_types=…&date=…`` | drill into today's audit evidence (forensic) — date param matches the secondary number's window |
 | Empty state | ``ops_honest_zero`` | M24.3 ambiguity messaging when both numbers are 0 |
 
 ### Hard locks on phrasing
@@ -198,25 +198,50 @@ hybrid card has nowhere to go.
 * Secondary number reads the existing audit-event query (already
   in ``build_today_digest_payload``) — keep that code, demote its
   role.
-* Primary CTA: ``/ops/items?state=…&date=…``.
-* Secondary CTA: keep the existing ``/ops/events?event_types=…``
-  link with the new "View today's N evidence events →" label.
+* Primary CTA: ``/ops/items?state=…`` (no date param — see card
+  contract above; primary count is "all current items", not
+  date-windowed).
+* Secondary CTA: ``/ops/events/audit?event_types=…&date=…`` —
+  the new raw-audit-evidence view built in M25.4.  Label:
+  "View today's N audit evidence rows →".
 * Drop the M24.4 standalone lifecycle backlog strip — the cards
   now carry the same info.
 * Tests cover: rename, primary/secondary number split, primary
-  CTA pointing at ``/ops/items``, samples coming from ops_state.
+  CTA pointing at ``/ops/items``, primary CTA carrying no date
+  param, secondary CTA pointing at ``/ops/events/audit``, samples
+  coming from ops_state.
 
-### M25.4 — ``/ops/events`` forensic banner
+### M25.4 — ``/ops/events/audit`` raw-audit-evidence view
 
-* Add an explanatory banner at the top of ``/ops/events`` (the
-  existing event dossier) that names its role:
-  > Forensic audit evidence.  This page shows raw audit-event
-  > rows; it is **not** the operational-state surface.  Use
-  > [/ops/items] to see current lifecycle state and act on items.
-* No structural changes to the page beneath.  The cross-surface
-  warning banner from M24.0 stays (operators landing here from
-  a stale link still get the explanation).
-* Tests for the banner presence + link target.
+The existing ``/ops/events`` page renders **timeline projections**
+(``list_timeline_events`` over dated notes + contradictions), not
+raw ``audit_events`` rows.  The card's secondary number counts
+raw ``audit_events`` rows.  Pointing the secondary CTA at the
+existing ``/ops/events`` page would resurrect the M24.0
+two-ledger problem — the page would show fewer rows than the
+card counted because the projection filters differently than the
+raw audit table.
+
+So M25.4 builds a small **new** view:
+
+* Route ``/ops/events/audit?event_types=…&date=…``.
+* Reads ``audit_events`` directly with the same SQL the card
+  uses, so card N === page N by construction.
+* Renders a flat table: timestamp, event_type, slug, payload
+  preview.  No timeline grouping — that's what ``/ops/events``
+  is for.
+* Banner at the top of the new view explains its role:
+  > Raw audit evidence.  These are the exact rows the
+  > Maintainer card counted.  For timeline projections (events
+  > grouped by date and object) use [/ops/events].
+* The existing ``/ops/events`` page keeps its UI; M25.4 adds a
+  reciprocal banner there too:
+  > Timeline projection view.  These rows are NOT raw
+  > ``audit_events`` — they are derived events grouped by date
+  > and object.  For raw audit evidence (the rows the
+  > Maintainer cards count) use [/ops/events/audit].
+* Tests: card secondary number matches the audit page row
+  count; both banners present; cross-links work.
 
 ### M25.5 — Digest / calendar alignment
 
@@ -271,7 +296,8 @@ hybrid card has nowhere to go.
       merged on main.
 * [ ] ``/ops/items`` route + tests merged.
 * [ ] ``/ops/today`` cards renamed + reshaped + tests merged.
-* [ ] ``/ops/events`` forensic banner + tests merged.
+* [ ] ``/ops/events/audit`` raw-audit view + reciprocal banners
+      on ``/ops/events`` + tests merged.
 * [ ] Digest / calendar alignment regression test merged.
 * [ ] Full ``pytest`` stays green (modulo the two pre-existing
       architecture-fitness violations).
