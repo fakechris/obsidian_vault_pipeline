@@ -3144,10 +3144,275 @@ _TODAY_CARD_LABELS: dict[str, str] = {
     "failures": "Failures",
 }
 
+# Legacy: kept for back-compat with anything that imported the
+# old card list shape.  Same content the previous TODAY_DIGEST_CARDS
+# carried; the M25.3 view model below uses ``M25_LIFECYCLE_CARDS``.
 TODAY_DIGEST_CARDS: tuple[tuple[str, str, tuple[str, ...]], ...] = tuple(
     (cat, _TODAY_CARD_LABELS[cat], _evt_for_category(cat))
     for cat in _EVT_CATEGORIES
 )
+
+
+# M25.3: hybrid cards keyed on lifecycle state.  Each card carries
+# both the primary (state count) and secondary (events-in-window
+# count) numbers per the M25 plan §M25.3.  The event-category
+# mapping below decides which event_types feed each card's
+# secondary number.  ``governance`` events live on both Accepted
+# (promote_concept) and NeedsAction (open contradictions); we
+# split that category at the event-type level so the secondary
+# counts don't double-count.
+M25_LIFECYCLE_CARD_DEFS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "Received",
+        "label": "Received",
+        "explainer": (
+            "Items where evidence shows intake but no extraction "
+            "yet."
+        ),
+        "categories": ("intake",),
+        "secondary_verb": "arrived today",
+    },
+    {
+        "id": "Extracted",
+        "label": "Extracted",
+        "explainer": (
+            "Items where the absorber ran, producing candidates "
+            "waiting for promotion."
+        ),
+        "categories": ("absorb",),
+        # ``evergreen_auto_promoted`` and ``promote_concept`` move
+        # items to Accepted, not Extracted — exclude from secondary.
+        "exclude_event_types": (
+            "evergreen_auto_promoted",
+            "evergreen_created",
+        ),
+        "secondary_verb": "extracted today",
+    },
+    {
+        "id": "Accepted",
+        "label": "Accepted",
+        "explainer": (
+            "Items with a canonical artifact in the vault."
+        ),
+        # Accepted is the promote-event signal: auto-promote
+        # (absorb-cat) + operator promote (governance-cat).
+        "categories": (),
+        "include_event_types": (
+            "evergreen_auto_promoted",
+            "promote_concept",
+            "promotion",
+            "evergreen_created",
+            "source_archived_to_processed",
+        ),
+        "secondary_verb": "accepted today",
+    },
+    {
+        "id": "Synthesized",
+        "label": "Synthesized",
+        "explainer": (
+            "Items in clusters with a fresh synthesis crystal."
+        ),
+        "categories": ("synthesis",),
+        "secondary_verb": "synthesized today",
+    },
+    {
+        "id": "NeedsAction",
+        "label": "Needs Action",
+        "explainer": (
+            "Items blocked or waiting on operator action — "
+            "failures, open contradictions, stale review queues."
+        ),
+        "categories": ("failures",),
+        "secondary_verb": "new blockers today",
+    },
+)
+
+
+def _event_types_for_card(card: dict[str, Any]) -> tuple[str, ...]:
+    """Compose the event_type list for a hybrid card's secondary
+    count.  Starts from the card's declared categories, adds any
+    ``include_event_types``, removes any ``exclude_event_types``.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for cat in card.get("categories", ()):
+        for et in _evt_for_category(cat):
+            if et not in seen:
+                seen.add(et)
+                result.append(et)
+    for et in card.get("include_event_types", ()):
+        if et not in seen:
+            seen.add(et)
+            result.append(et)
+    excluded = set(card.get("exclude_event_types", ()))
+    return tuple(et for et in result if et not in excluded)
+
+
+def _build_m25_hybrid_cards(
+    db_path: Path,
+    *,
+    date_key: str,
+    requested_pack: str,
+    effective_pack: str,
+) -> list[dict[str, Any]]:
+    """Build the five M25 hybrid cards.
+
+    See ``build_today_digest_payload`` docstring for the shape /
+    contract.  Single sqlite connection so we don't reopen per
+    card.
+    """
+    cards: list[dict[str, Any]] = []
+    with sqlite3.connect(db_path) as conn:
+        has_ops_state = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='ops_state'"
+        ).fetchone() is not None
+
+        for card_def in M25_LIFECYCLE_CARD_DEFS:
+            state = str(card_def["id"])
+            event_types = _event_types_for_card(card_def)
+
+            # ── Primary number + samples ──────────────────────
+            primary_count = 0
+            samples: list[dict[str, str]] = []
+            if has_ops_state:
+                primary_row = conn.execute(
+                    "SELECT COUNT(*) FROM ops_state "
+                    " WHERE pack = ? AND state = ?",
+                    (effective_pack, state),
+                ).fetchone()
+                primary_count = int(primary_row[0] or 0) if primary_row else 0
+
+                # Samples: 3 newest items per card, sourced from
+                # ``ops_state`` (M25 plan §M25.3 lock — samples
+                # come from items, not events).  NeedsAction is
+                # the one exception: oldest first so the operator
+                # sees the most-aged blockers.
+                order_dir = (
+                    "ASC" if state == "NeedsAction" else "DESC"
+                )
+                sample_rows = conn.execute(
+                    f"""
+                    SELECT item_kind, item_id, last_evidence_at
+                      FROM ops_state
+                     WHERE pack = ? AND state = ?
+                     ORDER BY last_evidence_at {order_dir}
+                     LIMIT ?
+                    """,
+                    (effective_pack, state, TODAY_CARD_SAMPLE_SIZE),
+                ).fetchall()
+
+                # Resolve source slugs to vault paths so samples link
+                # to real routes (mirrors the M25.2 lookup).
+                source_slugs = [
+                    str(r[1]) for r in sample_rows
+                    if r and r[0] == "source" and r[1]
+                ]
+                slug_to_path: dict[str, str] = {}
+                if source_slugs:
+                    has_pages = conn.execute(
+                        "SELECT 1 FROM sqlite_master "
+                        "WHERE type='table' AND name='pages_index'"
+                    ).fetchone()
+                    if has_pages is not None:
+                        placeholders = ",".join("?" * len(source_slugs))
+                        for slug, path in conn.execute(
+                            f"SELECT slug, path FROM pages_index "
+                            f" WHERE slug IN ({placeholders})",
+                            source_slugs,
+                        ).fetchall():
+                            if slug and path:
+                                slug_to_path[str(slug)] = str(path)
+
+                for kind, item_id, last_ts in sample_rows:
+                    kind_str = str(kind or "")
+                    item_id_str = str(item_id or "")
+                    source_path = (
+                        slug_to_path.get(item_id_str)
+                        if kind_str == "source"
+                        else ""
+                    )
+                    href = _items_primary_href(
+                        kind_str, item_id_str, effective_pack,
+                        source_path=source_path or "",
+                    )
+                    samples.append({
+                        "item_kind": kind_str,
+                        "item_id": item_id_str,
+                        "last_evidence_at": str(last_ts or ""),
+                        "path": href,
+                    })
+
+            # ── Secondary number (events-in-window) ───────────
+            event_count = 0
+            by_type: dict[str, int] = {}
+            if event_types:
+                placeholders = ",".join("?" for _ in event_types)
+                counts_rows = conn.execute(
+                    f"""
+                    SELECT event_type, COUNT(*) AS n
+                      FROM audit_events
+                     WHERE date(timestamp) = ?
+                       AND event_type IN ({placeholders})
+                     GROUP BY event_type
+                     ORDER BY n DESC
+                    """,
+                    (date_key, *event_types),
+                ).fetchall()
+                by_type = {row[0]: int(row[1]) for row in counts_rows}
+                event_count = sum(by_type.values())
+
+            # ── Hrefs ─────────────────────────────────────────
+            # Primary CTA → /ops/items.  Critically NO date param:
+            # the primary number is "all current items in this
+            # state", not date-windowed (M25 plan §M25.2/3 lock).
+            primary_href_parts = [f"state={quote(state, safe='')}"]
+            if requested_pack:
+                primary_href_parts.append(
+                    f"pack={quote(requested_pack, safe='')}"
+                )
+            primary_href = (
+                f"/ops/items?{'&'.join(primary_href_parts)}"
+            )
+
+            # Secondary CTA → /ops/events (M25.4 will swap to
+            # /ops/events/audit when that view ships).
+            secondary_href = ""
+            if event_types:
+                see_all_qs_parts = [
+                    f"date={quote(date_key, safe='')}",
+                    "limit=200",
+                    "event_types=" + quote(",".join(event_types), safe=""),
+                ]
+                secondary_href = _scoped_path(
+                    f"/ops/events?{'&'.join(see_all_qs_parts)}",
+                    pack_name=requested_pack,
+                )
+
+            # Per-state secondary label.  Fall back to the
+            # conservative "N evidence events today" when the
+            # default verb would be misleading.
+            secondary_verb = str(card_def.get("secondary_verb", ""))
+            secondary_label = (
+                f"{event_count} {secondary_verb}"
+                if secondary_verb
+                else f"{event_count} evidence events today"
+            )
+
+            cards.append({
+                "id": state,
+                "label": str(card_def["label"]),
+                "explainer": str(card_def.get("explainer", "")),
+                "primary_count": primary_count,
+                "primary_href": primary_href,
+                "event_count": event_count,
+                "event_label": secondary_label,
+                "event_href": secondary_href,
+                "event_by_type": by_type,
+                "event_types": list(event_types),
+                "samples": samples,
+            })
+    return cards
 
 # Cap on how many sample rows each ``/ops/today`` card surfaces.
 # Cards are skim-mode — operators click through to the per-stage page
@@ -3173,18 +3438,30 @@ def build_today_digest_payload(
     pack_name: str | None = None,
     target_date: str | None = None,
 ) -> dict[str, Any]:
-    """5-card today digest for the maintainer dashboard.
+    """M25.3 hybrid cards for ``/ops/today``.
 
-    Pre-BL-053 the maintainer's day started by visiting ``/ops`` (a
-    static dashboard) and ``/ops/timeline`` (a 14-day histogram with
-    samples).  Neither answered "what happened **today**" at a glance.
-    This payload groups today's audit events into 5 cards aligned
-    with the pipeline's 5 macro-stages — intake, absorb, synthesis,
-    governance, failures — each carrying total + breakdown +
-    clickable samples.
+    Five cards keyed on the lifecycle vocabulary
+    (Received / Extracted / Accepted / Synthesized / NeedsAction).
+    Each card carries two parallel numbers per the M25 plan
+    §M25.3:
+
+    * **Primary** — items currently in this state, read from
+      ``ops_state``.  Primary CTA targets ``/ops/items?state=…``
+      with NO date param (cards count "current items", not
+      date-windowed; adding date would break card-N === page-N).
+    * **Secondary** — evidence events for this state in the
+      operator's date window, read from ``audit_events``.
+      Secondary CTA targets ``/ops/events?event_types=…&date=…``
+      (M25.4 will move this to ``/ops/events/audit`` to honor
+      raw-audit semantics).
+
+    Samples come from ``ops_state`` rows, not event rows — the
+    plan locks this so the visible items match what the primary
+    number counted.
 
     ``target_date`` accepts ``YYYY-MM-DD`` for back-dated views
-    (defaults to today UTC).
+    (defaults to today UTC).  The date affects the SECONDARY
+    number only; the primary number is "right now", not historic.
     """
     from datetime import datetime, timezone
     requested_pack = pack_name or ""
@@ -3204,137 +3481,13 @@ def build_today_digest_payload(
             "reason": "knowledge_index has not been built yet",
         }
 
-    cards: list[dict[str, Any]] = []
-    with sqlite3.connect(db_path) as conn:
-        for card_id, card_label, event_types in TODAY_DIGEST_CARDS:
-            # CodeRabbit: SQL ``IN ()`` is invalid; if a registry
-            # category ever ships empty, emit a zero card without
-            # querying instead of crashing.
-            if not event_types:
-                cards.append({
-                    "id": card_id,
-                    "label": card_label,
-                    "total": 0,
-                    "by_type": {},
-                    "samples": [],
-                    "see_all_path": "",
-                    "event_types": [],
-                })
-                continue
-            placeholders = ",".join("?" for _ in event_types)
-            counts_rows = conn.execute(
-                f"""
-                SELECT event_type, COUNT(*) AS n
-                  FROM audit_events
-                 WHERE date(timestamp) = ?
-                   AND event_type IN ({placeholders})
-                 GROUP BY event_type
-                 ORDER BY n DESC
-                """,
-                (date_key, *event_types),
-            ).fetchall()
-            by_type = {row[0]: int(row[1]) for row in counts_rows}
-            total = sum(by_type.values())
-
-            # Sample rows — favour high-signal subjects (slug / source
-            # path / file) over raw event_type so the click-through is
-            # actionable.  Skip stage events that don't carry a slug.
-            #
-            # M24.0 stop-gap: also pull the object_id + source path
-            # so we can wrap each sample in a real link.  Previously
-            # samples rendered as plain ``<span>`` and the operator
-            # couldn't drill from "intake: 7" into the actual
-            # 7 articles.
-            sample_rows = conn.execute(
-                f"""
-                SELECT event_type,
-                       COALESCE(json_extract(payload_json, '$.slug'),
-                                json_extract(payload_json, '$.source'),
-                                json_extract(payload_json, '$.file'),
-                                json_extract(payload_json, '$.url'),
-                                slug) AS subject,
-                       json_extract(payload_json, '$.title') AS title,
-                       json_extract(payload_json, '$.object_id') AS object_id,
-                       json_extract(payload_json, '$.path') AS path,
-                       json_extract(payload_json, '$.source_path') AS source_path,
-                       timestamp
-                  FROM audit_events
-                 WHERE date(timestamp) = ?
-                   AND event_type IN ({placeholders})
-                 ORDER BY timestamp DESC
-                """,
-                (date_key, *event_types),
-            ).fetchall()
-            samples: list[dict[str, str]] = []
-            for event_type, subject, title, object_id, path, source_path, ts in sample_rows:
-                if not subject:
-                    continue
-                if len(samples) >= TODAY_CARD_SAMPLE_SIZE:
-                    break
-                # Pick the most-actionable link target:
-                #   object_id → ``/object?id=…``  (canonical view)
-                #   path / source_path → ``/note?path=…``  (raw markdown)
-                #   else → bare ``/ops/events?q=<slug>``  (forensic fallback)
-                sample_path = ""
-                if object_id:
-                    sample_path = _scoped_path(
-                        f"/object?id={quote(str(object_id), safe='')}",
-                        pack_name=requested_pack,
-                    )
-                elif path or source_path:
-                    note_path = str(path or source_path)
-                    sample_path = _scoped_path(
-                        f"/note?path={quote(note_path, safe='')}",
-                        pack_name=requested_pack,
-                    )
-                else:
-                    sample_path = _scoped_path(
-                        f"/ops/events?q={quote(str(subject), safe='')}",
-                        pack_name=requested_pack,
-                    )
-                samples.append({
-                    "event_type": str(event_type),
-                    "subject": str(subject),
-                    "title": str(title or subject),
-                    "timestamp": str(ts or ""),
-                    "path": sample_path,
-                })
-            # ``see_all_path`` deep-links into the event dossier
-            # filtered to this card's date + event types so the
-            # operator can drill from the card sample (5 rows) into
-            # the full audit list.  ``_scoped_path`` already appends
-            # ``pack=`` when ``pack_name`` is set, so we don't add
-            # it to ``see_all_qs`` ourselves — pre-fix doing both
-            # produced duplicate ``pack=`` query params.
-            #
-            # M24.0 stop-gap (2026-05-14): pass the card's
-            # ``event_types`` through as a comma-separated query
-            # param so ``/ops/events`` can filter to just those
-            # rows.  Previously this link dropped the filter and
-            # operators landed on a full audit dump — "See all 7"
-            # showed 100+ unrelated events, which was the most-
-            # complained-about lie on the page.
-            see_all_qs_parts = [
-                f"date={quote(date_key, safe='')}",
-                "limit=200",
-            ]
-            if event_types:
-                see_all_qs_parts.append(
-                    "event_types=" + quote(",".join(event_types), safe="")
-                )
-            see_all_qs = "&".join(see_all_qs_parts)
-            see_all_path = _scoped_path(
-                f"/ops/events?{see_all_qs}", pack_name=requested_pack
-            )
-            cards.append({
-                "id": card_id,
-                "label": card_label,
-                "total": total,
-                "by_type": by_type,
-                "samples": samples,
-                "see_all_path": see_all_path,
-                "event_types": list(event_types),
-            })
+    effective_pack = requested_pack or PRIMARY_PACK_NAME
+    cards: list[dict[str, Any]] = _build_m25_hybrid_cards(
+        db_path,
+        date_key=date_key,
+        requested_pack=requested_pack,
+        effective_pack=effective_pack,
+    )
 
     # Prev/next date pivots so the operator can step through history
     # without crafting query strings.  Always populated (the dossier
@@ -3353,14 +3506,12 @@ def build_today_digest_payload(
             return ""
         return _scoped_path(f"/ops/today?date={quote(d, safe='')}", pack_name=requested_pack)
 
-    # M24.4: pull the per-pack lifecycle distribution from
-    # ``ops_state`` when the projection exists.  This is a *passive*
-    # readout — five numbers, no new drilldown route — that surfaces
-    # the kernel's truth alongside the existing time-windowed cards.
-    # Cards continue to count today's audit_events; the lifecycle
-    # summary answers a different (orthogonal) question: "how many
-    # items are sitting in each state right now?".  M25 will rename
-    # the cards onto this vocabulary; for M24 the two coexist.
+    # M25.3: the M24.4 standalone lifecycle backlog strip is now
+    # collapsed INTO the cards above (primary number per card).
+    # We keep the ``lifecycle_summary`` payload field so the
+    # renderer can detect "projection not built yet" and surface
+    # an explicit reason banner — same honest-zero rule that
+    # already governs every other M24/M25 surface.
     lifecycle_summary = _read_lifecycle_summary(
         vault_dir, pack=requested_pack
     )
