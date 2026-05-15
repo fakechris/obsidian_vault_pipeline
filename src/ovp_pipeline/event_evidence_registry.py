@@ -165,6 +165,16 @@ _REGISTRY: Final[tuple[EventEvidence, ...]] = (
                       "boundary crossing); pairs with promote_concept "
                       "on the operator-promote path."
                   )),
+    # M24.2: ``zone_violation`` is emitted by ``promotion_audit.emit_zone_violation``
+    # when something writes into the accepted-zone without going
+    # through promotion.  The lint ZONE_BOUNDARY_VIOLATION rule
+    # reads it; registering here so /ops/events labels it and the
+    # producer audit doesn't flag it as drift.
+    EventEvidence("zone_violation", "governance",
+                  description=(
+                      "Accepted-zone write that bypassed promotion "
+                      "(read by lint ZONE_BOUNDARY_VIOLATION rule)."
+                  )),
     EventEvidence("concept_archived", "governance",
                   description="A concept was archived by review."),
     EventEvidence("concept_merged", "governance",

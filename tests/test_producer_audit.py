@@ -177,12 +177,32 @@ def test_audit_does_not_flag_may_emit_absence():
 
 
 def test_audit_flags_unknown_event_types_as_drift():
-    """A row whose event_type isn't declared in any contract surfaces
-    in ``unknown_event_types`` so the operator can investigate."""
+    """A row whose event_type isn't declared in any contract AND isn't
+    registered anywhere surfaces in ``unknown_event_types`` so the
+    operator can investigate."""
     conn = _make_db()
     _emit(conn, "something_we_never_promised", slug="x")
     report = audit_against_log(conn, window_days=7)
     assert "something_we_never_promised" in report.unknown_event_types
+
+
+def test_audit_does_not_flag_registered_non_contract_events():
+    """Many event_types in the registry are registered but NOT on the
+    hot-path producer contracts (``article_processed``,
+    ``moc_updated``, ``zone_violation``, ``transaction_started``…).
+    Those must NOT surface as drift — otherwise ovp-producer-audit
+    exit-codes 2 on every healthy vault, defeating its purpose.
+    Regression guard for the codex-flagged P2 on PR #234."""
+    conn = _make_db()
+    # article_processed is registered (intake category) but not on
+    # any producer contract.
+    _emit(conn, "article_processed", slug="src-x")
+    _emit(conn, "zone_violation", slug="src-y")
+    _emit(conn, "transaction_started", slug="")
+    report = audit_against_log(conn, window_days=7)
+    assert "article_processed" not in report.unknown_event_types
+    assert "zone_violation" not in report.unknown_event_types
+    assert "transaction_started" not in report.unknown_event_types
 
 
 def test_audit_groups_findings_per_producer():

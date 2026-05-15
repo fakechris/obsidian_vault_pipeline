@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
-from .event_evidence_registry import classify
+from .event_evidence_registry import all_event_types, classify
 
 
 @dataclass(frozen=True)
@@ -276,14 +276,30 @@ def audit_against_log(
                 )
             )
 
+    # Drift = event_types in the log that are neither in a
+    # producer contract NOR in the central event-evidence registry.
+    # Registered-but-not-hot-path events (article_processed,
+    # moc_updated, zone_violation, transaction_started, …) are
+    # intentionally outside the contract scope and should NOT
+    # surface as drift; that would make ovp-producer-audit exit 2
+    # on every healthy vault.  Truly unknown rows — events neither
+    # declared by a producer nor classified by the registry — are
+    # the real signal the operator wants.  CodeRabbit review on
+    # PR #234 caught this.
     declared = all_declared_event_types(include_may=True)
+    registered = set(all_event_types(include_legacy=True))
     rows = conn.execute(
         "SELECT DISTINCT event_type FROM audit_events "
         " WHERE timestamp >= ? AND timestamp <= ?",
         (window_start, window_end),
     ).fetchall()
     observed = {r[0] for r in rows if r[0]}
-    unknown = tuple(sorted(et for et in observed if et not in declared))
+    unknown = tuple(
+        sorted(
+            et for et in observed
+            if et not in declared and et not in registered
+        )
+    )
 
     return ProducerAuditReport(
         window_start=window_start,

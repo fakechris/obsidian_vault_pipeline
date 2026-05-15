@@ -117,6 +117,47 @@ def test_extraction_emits_pending_then_upserted(configured_extractor, tmp_path):
         )
 
 
+def test_pending_row_carries_indexable_slug(configured_extractor, tmp_path):
+    """The ``absorb_pending_upsert`` payload MUST carry ``slug`` so
+    ``knowledge_index._infer_audit_slug`` populates
+    ``audit_events.slug`` — without it the lifecycle kernel's
+    source-kind lookups don't find the row.  Regression guard for
+    the codex P1 finding on PR #234."""
+    extractor, log_path = configured_extractor
+    article = tmp_path / "memory_systems_survey.md"
+    article.write_text(
+        "# Memory survey\n\nLLM memory stores combine retrieval + episodic context.",
+        encoding="utf-8",
+    )
+    extractor.process_file(article)
+    rows = _read_log(log_path)
+    pending = next(
+        r for r in rows if r.get("event_type") == "absorb_pending_upsert"
+    )
+    assert pending.get("slug"), (
+        "absorb_pending_upsert is missing the ``slug`` payload key — "
+        "kernel will never see this row."
+    )
+
+
+def test_upsert_row_carries_indexable_slug(configured_extractor, tmp_path):
+    """Same invariant for ``candidates_upserted`` — without ``slug``
+    in the payload the kernel can't clear Prepared sub-state."""
+    extractor, log_path = configured_extractor
+    article = tmp_path / "another_one.md"
+    article.write_text("# Topic\n\nBody.", encoding="utf-8")
+    extractor.process_file(article)
+    rows = _read_log(log_path)
+    upserts = [
+        r for r in rows if r.get("event_type") == "candidates_upserted"
+    ]
+    if upserts:
+        # When candidates landed, the row must carry slug.
+        assert upserts[0].get("slug"), (
+            "candidates_upserted is missing the ``slug`` payload key"
+        )
+
+
 def test_dry_run_does_not_emit_pairing(configured_extractor, tmp_path):
     """In dry-run mode the producer mustn't lie to the kernel — no
     pending row, no upsert row."""
