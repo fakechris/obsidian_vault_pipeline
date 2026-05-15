@@ -47,6 +47,7 @@ from ..ui.view_models import (
     build_timeline_payload,
     build_today_digest_payload,
     build_items_list_payload,
+    build_events_audit_payload,
     build_runs_index_payload,
     build_run_detail_payload,
     build_topic_overview_payload,
@@ -106,6 +107,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_timeline_page,
     _render_today_digest_page,
     _render_items_list_page,
+    _render_events_audit_page,
     _render_runs_index_page,
     _render_run_detail_page,
     _render_reuse_report_fragment,
@@ -1265,6 +1267,37 @@ def create_server(
                         self._write_json(payload)
                     else:
                         self._write_html(_render_items_list_page(payload))
+                    return
+                # M25.4: /ops/events/audit — raw audit_events table
+                # view.  Pairs with /ops/events (timeline
+                # projection).  Card secondary CTAs target this so
+                # card-N === audit-page-N by construction.
+                if path in ("/ops/events/audit", "/api/events/audit"):
+                    pack_name = query.get("pack", [""])[0] or None
+                    raw_event_types = query.get("event_types", [""])[0]
+                    event_types = tuple(
+                        t.strip()
+                        for t in raw_event_types.split(",")
+                        if t.strip()
+                    )
+                    date_key = query.get("date", [""])[0] or ""
+                    raw_limit = query.get("limit", [""])[0]
+                    limit = (
+                        int(raw_limit)
+                        if raw_limit.isdigit() and int(raw_limit) > 0
+                        else 200
+                    )
+                    payload = build_events_audit_payload(
+                        resolved_vault,
+                        event_types=event_types,
+                        date_key=date_key,
+                        pack_name=pack_name,
+                        limit=limit,
+                    )
+                    if path == "/api/events/audit":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_events_audit_page(payload))
                     return
                 # BL-053: by-run "runs" index
                 if path in ("/ops/runs", "/api/runs"):

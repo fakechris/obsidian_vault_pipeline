@@ -3391,17 +3391,28 @@ def _build_m25_hybrid_cards(
                 f"/ops/items?{'&'.join(primary_href_parts)}"
             )
 
-            # Secondary CTA → /ops/events (M25.4 will swap to
-            # /ops/events/audit when that view ships).
+            # Secondary CTA → /ops/events/audit (M25.4).  This is
+            # the raw-audit-evidence view that reads the same SQL
+            # the card secondary count used, so card N === page N
+            # by construction.  The legacy /ops/events (timeline
+            # projection) remains accessible from the audit page's
+            # role banner.
+            #
+            # M25.4 (codex review on PR #239): set the URL limit to
+            # at LEAST the card's event_count so high-volume days
+            # don't silently truncate to 200 rows.  Clamp to the
+            # audit view's hard MAX so the URL stays bounded.
             secondary_href = ""
             if event_types:
+                target_limit = max(EVENTS_AUDIT_DEFAULT_LIMIT, event_count)
+                target_limit = min(target_limit, EVENTS_AUDIT_MAX_LIMIT)
                 see_all_qs_parts = [
                     f"date={quote(date_key, safe='')}",
-                    "limit=200",
+                    f"limit={target_limit}",
                     "event_types=" + quote(",".join(event_types), safe=""),
                 ]
                 secondary_href = _scoped_path(
-                    f"/ops/events?{'&'.join(see_all_qs_parts)}",
+                    f"/ops/events/audit?{'&'.join(see_all_qs_parts)}",
                     pack_name=requested_pack,
                 )
 
@@ -3834,6 +3845,128 @@ def _items_primary_href(
     # the item as plain text rather than a broken link.  M25.4
     # adds the raw-audit-evidence view that will pick this up.
     return ""
+
+
+# M25.4: /ops/events/audit page size.  Slightly larger than the
+# items list because raw audit rows are noisier; operators tend to
+# scan rather than click.
+EVENTS_AUDIT_DEFAULT_LIMIT = 200
+EVENTS_AUDIT_MAX_LIMIT = 2000
+
+
+def build_events_audit_payload(
+    vault_dir: Path | str,
+    *,
+    event_types: tuple[str, ...] | list[str] | None = None,
+    date_key: str = "",
+    pack_name: str | None = None,
+    limit: int = EVENTS_AUDIT_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """M25.4: ``/ops/events/audit`` raw-audit-evidence view.
+
+    The M25 cards' SECONDARY count comes from a query against the
+    raw ``audit_events`` table.  ``/ops/events`` today renders
+    **timeline projections** (``list_timeline_events`` over dated
+    notes + contradictions) — a different ledger.  Pointing the
+    card's secondary CTA at that page resurrects the M24.0
+    two-ledger problem (card N != page N).
+
+    This view fixes the contract: it reads ``audit_events``
+    directly using the same SQL the card uses, so card N === page
+    N by construction.  Flat table, no timeline grouping.
+
+    Plan contract (locked in M25 §M25.4):
+    * ``event_types`` is the card's event_types list — required
+      so the page count matches what the card counted.
+    * ``date_key`` filters to that day.
+    * No pack filter on rows: ``audit_events`` doesn't carry a
+      pack column.  Pack-scoping is part of the routing context
+      (URL) but doesn't restrict rows returned.
+    """
+    requested_pack = pack_name or ""
+    event_types_tup = tuple(event_types or ())
+
+    safe_limit = max(1, min(int(limit or EVENTS_AUDIT_DEFAULT_LIMIT), EVENTS_AUDIT_MAX_LIMIT))
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/events/audit",
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+            "event_types": list(event_types_tup),
+            "date": date_key,
+            "requested_pack": requested_pack,
+            "rows": [],
+            "total": 0,
+            "limit": safe_limit,
+        }
+
+    # M25.4 (codex review on PR #239): when no event_types filter
+    # is passed (operator landed here from the timeline-projection
+    # banner with no specific scope), show the N most-recent
+    # audit_events rows across ALL event_types so the page isn't
+    # empty.  The role banner explains the page's purpose; the
+    # default content has to be useful.
+    where: list[str] = []
+    params: list[object] = []
+    if event_types_tup:
+        placeholders = ",".join("?" for _ in event_types_tup)
+        where.append(f"event_type IN ({placeholders})")
+        params.extend(event_types_tup)
+    if date_key:
+        where.append("date(timestamp) = ?")
+        params.append(date_key)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+    with sqlite3.connect(db_path) as conn:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) FROM audit_events {where_sql}",
+            params,
+        ).fetchone()
+        total = int(total_row[0] or 0) if total_row else 0
+        rows = conn.execute(
+            f"""
+            SELECT timestamp, event_type, slug, payload_json, source_log
+              FROM audit_events
+             {where_sql}
+             ORDER BY timestamp DESC
+             LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+
+    audit_rows: list[dict[str, Any]] = []
+    for ts, event_type, slug, payload_json, source_log in rows:
+        # Snippet of payload — first 120 chars so the page doesn't
+        # flood with full JSON dumps.  Renderer adds a title=…
+        # tooltip carrying the full body for hover-inspection.
+        payload_str = str(payload_json or "")
+        snippet = (
+            payload_str[:117] + "…"
+            if len(payload_str) > 120
+            else payload_str
+        )
+        audit_rows.append({
+            "timestamp": str(ts or ""),
+            "event_type": str(event_type or ""),
+            "slug": str(slug or ""),
+            "payload_snippet": snippet,
+            "payload_full": payload_str,
+            "source_log": str(source_log or ""),
+        })
+
+    return {
+        "screen": "ops/events/audit",
+        "available": True,
+        "reason": "",
+        "event_types": list(event_types_tup),
+        "date": date_key,
+        "requested_pack": requested_pack,
+        "rows": audit_rows,
+        "total": total,
+        "limit": safe_limit,
+    }
 
 
 def build_digest_health_payload(vault_dir: Path | str) -> dict[str, Any]:
