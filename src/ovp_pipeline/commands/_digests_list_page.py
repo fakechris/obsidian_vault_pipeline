@@ -35,9 +35,11 @@ CALENDAR_WINDOW_DAYS = 30
 
 # M24.0 stop-gap: pull intake event_types from the single canonical
 # registry (``event_evidence_registry``) so the calendar, the
-# ``/ops/today`` Intake card, and the M23 digest's Layer 0 all
-# classify the same way.  Before this, three independent lists
-# drifted and same-day counts disagreed across surfaces.
+# ``/ops/today`` Received card's secondary count, and the M23
+# digest's Layer 0 all classify the same way.  Before this, three
+# independent lists drifted and same-day counts disagreed across
+# surfaces.  M25.3 renamed the card from "Intake" → "Received";
+# the underlying evidence category stays ``intake``.
 from ..event_evidence_registry import event_types_for_category
 
 _INTAKE_EVENT_TYPES = event_types_for_category("intake")
