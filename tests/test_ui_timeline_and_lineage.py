@@ -642,6 +642,73 @@ class TestBuildTodayDigestPayload:
         payload = build_today_digest_payload(tmp_path)
         assert "lifecycle_summary" in payload
 
+    def test_accepted_card_does_not_double_count_paired_events(self, tmp_path):
+        """Regression guard for codex review on PR #237:
+        ``ovp-promote run`` emits BOTH ``promote_concept`` and
+        ``promotion`` per operator action.  Accepted card must
+        count ONE per promotion, not two."""
+        import json
+        import sqlite3
+        from datetime import datetime, timezone
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+
+        db_path = tmp_path / "60-Logs" / "knowledge.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.executescript(_AUDIT_EVENTS_SCHEMA)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        # Seed one operator-promote pair.
+        conn.executemany(
+            "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("pipeline.jsonl", "promote_concept", "obj-x", "s", ts,
+                 json.dumps({"slug": "obj-x"})),
+                ("pipeline.jsonl", "promotion", "obj-x", "s", ts,
+                 json.dumps({"target_path": "10-Knowledge/Evergreen/X.md"})),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        payload = build_today_digest_payload(tmp_path)
+        accepted = next(c for c in payload["cards"] if c["id"] == "Accepted")
+        assert accepted["event_count"] == 1, (
+            "Accepted card double-counted the promote_concept + "
+            "promotion pair as 2 events.  Drop one from the "
+            "include_event_types."
+        )
+
+    def test_source_archived_does_not_double_count_across_cards(self, tmp_path):
+        """Regression guard for codex review on PR #237:
+        ``source_archived_to_processed`` is a Received signal
+        (M24.1 doc fix).  Including it in Accepted's
+        include_event_types would let one archival increment both
+        cards.  Verify it counts only on Received."""
+        import json
+        import sqlite3
+        from datetime import datetime, timezone
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+
+        db_path = tmp_path / "60-Logs" / "knowledge.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.executescript(_AUDIT_EVENTS_SCHEMA)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        conn.execute(
+            "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+            ("pipeline.jsonl", "source_archived_to_processed",
+             "src-y", "s", ts, "{}"),
+        )
+        conn.commit()
+        conn.close()
+        payload = build_today_digest_payload(tmp_path)
+        received = next(c for c in payload["cards"] if c["id"] == "Received")
+        accepted = next(c for c in payload["cards"] if c["id"] == "Accepted")
+        assert received["event_count"] == 1
+        assert accepted["event_count"] == 0, (
+            "source_archived_to_processed double-counted on the "
+            "Accepted card — drop it from Accepted's include list."
+        )
+
 
 class TestBuildRunsIndexPayload:
     def test_unavailable_when_db_missing(self, tmp_path):
