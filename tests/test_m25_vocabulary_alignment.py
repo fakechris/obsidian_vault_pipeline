@@ -16,9 +16,6 @@ state-card label — fails CI loudly.
 
 from __future__ import annotations
 
-import pytest
-
-
 # ── State-label vocabulary lock ──────────────────────────────────
 
 
@@ -31,8 +28,11 @@ def test_m25_card_def_ids_use_the_five_locked_states():
 
     ids = [c["id"] for c in M25_LIFECYCLE_CARD_DEFS]
     assert ids == [
-        "Received", "Extracted", "Accepted",
-        "Synthesized", "NeedsAction",
+        "Received",
+        "Extracted",
+        "Accepted",
+        "Synthesized",
+        "NeedsAction",
     ]
 
 
@@ -78,7 +78,6 @@ def test_digests_calendar_legend_uses_audit_evidence_phrase():
     misleading "quiet day" to the honest "no audit evidence" with
     the three-cause ambiguity.  M25 keeps this — regression guard
     that the legend doesn't get reduced back to "quiet day"."""
-    from pathlib import Path
     from ovp_pipeline.commands._digests_list_page import (
         _render_calendar_grid,
         CalendarCell,
@@ -103,14 +102,27 @@ def test_digests_calendar_legend_uses_audit_evidence_phrase():
 def test_ops_items_state_explainers_cover_every_state():
     """The /ops/items renderer prints a state-specific explainer
     paragraph below the H1.  Every state in M25_LIFECYCLE_CARD_DEFS
-    must have copy."""
-    from ovp_pipeline.commands._ui_renderers import _render_items_list_page
-    from ovp_pipeline.ui.view_models import M25_LIFECYCLE_CARD_DEFS
+    must produce that explainer in the rendered HTML.
 
-    for card in M25_LIFECYCLE_CARD_DEFS:
-        state = card["id"]
-        # Render the empty-state page for this state — explainer
-        # appears regardless of whether there are rows.
+    Codex review on PR #240 caught the original weak form of this
+    test: ``state in html`` always passes because the page H1
+    contains "Items · <state>".  The strong form checks for a
+    distinctive substring from each explainer paragraph.
+    """
+    from ovp_pipeline.commands._ui_renderers import _render_items_list_page
+
+    # Locked: one distinctive substring per state's explainer.
+    # Edit this dict when intentionally changing copy; CI flags
+    # accidental drift.
+    expected_phrases = {
+        "Received": "intake but no extraction",
+        "Extracted": "candidates waiting for promotion",
+        "Accepted": "canonical artifact in the vault",
+        "Synthesized": "fresh community crystal",
+        "NeedsAction": "failures, open contradictions",
+    }
+
+    for state, phrase in expected_phrases.items():
         payload = {
             "screen": "ops/items",
             "available": True,
@@ -125,8 +137,8 @@ def test_ops_items_state_explainers_cover_every_state():
             "prev_offset": None,
         }
         html = _render_items_list_page(payload)
-        assert state in html, (
-            f"/ops/items renderer does not name the state {state!r}"
+        assert phrase in html, (
+            f"/ops/items renderer missing the {state!r} explainer " f"phrase {phrase!r}"
         )
 
 
@@ -141,8 +153,11 @@ def test_state_labels_are_not_used_as_event_categories():
     from ovp_pipeline.event_evidence_registry import CATEGORIES
 
     state_labels = {
-        "Received", "Extracted", "Accepted",
-        "Synthesized", "NeedsAction",
+        "Received",
+        "Extracted",
+        "Accepted",
+        "Synthesized",
+        "NeedsAction",
     }
     leaked = state_labels & set(CATEGORIES)
     assert not leaked, (
