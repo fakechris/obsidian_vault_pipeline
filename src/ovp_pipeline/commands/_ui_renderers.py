@@ -6682,21 +6682,27 @@ _TODAY_DIGEST_STYLE = ""
 
 
 def _render_today_digest_page(payload: dict) -> str:
-    """M25.3: hybrid lifecycle cards for ``/ops/today``.
+    """M25.7: ``/ops/today`` split into two clearly-separated zones.
 
-    Five cards keyed on the lifecycle vocabulary (Received,
-    Extracted, Accepted, Synthesized, Needs Action).  Each card
-    shows TWO numbers per the M25 plan §M25.3 contract:
+    M25.6 dogfood found that the M25.3 hybrid card conflated two
+    things with different date-sensitivity inside ONE card, so
+    changing ``?date=`` looked like nothing happened (the big
+    primary numbers dominate the visual and never move with the
+    date; only small secondary lines do).  M25.7 splits the page:
 
-    * Primary: current items in this state (from ``ops_state``).
-    * Secondary: today's evidence events (from ``audit_events``).
+    * **Zone A — Current backlog.**  Five lifecycle-state cards
+      with the primary count from ``ops_state``.  A snapshot of
+      *right now*.  Explicitly labeled "not affected by the date
+      below".  Primary CTA → ``/ops/items?state=…`` (no date).
 
-    Primary CTA → ``/ops/items?state=…`` (no date param).
-    Secondary CTA → ``/ops/events?event_types=…&date=…``.
+    * **Zone B — Activity on <date>.**  The date pivot lives here,
+      visually attached to the only content it governs.  Per-state
+      evidence counts from ``audit_events`` for the selected date.
+      Secondary CTA → ``/ops/events/audit?…&date=…``.
 
-    The two numbers are intentionally rendered as parallel rows,
-    not stacked or summed.  No "+N today" framing — the plan
-    forbids it because the sets aren't additive.
+    The data contract (``build_today_digest_payload``) is
+    unchanged; this is purely presentational so card-N ===
+    drilldown-N still holds on both axes.
     """
     requested_pack = str(payload.get("requested_pack") or "")
     date = str(payload.get("date") or "")
@@ -6718,80 +6724,66 @@ def _render_today_digest_page(payload: dict) -> str:
     sections: list[str] = [_TODAY_DIGEST_STYLE]
     sections.append(
         _render_page_help(
-            "Today digest",
+            "Today",
             what=(
-                "Five lifecycle cards (Received, Extracted, Accepted,"
-                " Synthesized, Needs Action).  Each card shows the"
-                " current item count plus today's evidence activity."
-                "  Primary number reads <code>ops_state</code>;"
-                " secondary number reads <code>audit_events</code>."
+                "Two zones.  <strong>Current backlog</strong> is a"
+                " snapshot of how many items sit in each lifecycle"
+                " state right now (from <code>ops_state</code>) — it"
+                " does NOT change when you change the date."
+                "  <strong>Activity on &lt;date&gt;</strong> is the"
+                " evidence recorded on the selected day (from"
+                " <code>audit_events</code>) — this is what the date"
+                " selector governs."
             ),
             can=(
-                "Click the <strong>Open N items →</strong> link to drill"
-                " into all current items in that state.  Click the"
-                " <strong>View today's N events →</strong> link to drop"
-                " into the audit ledger filtered to today."
+                "In Current backlog, click <strong>Open N items"
+                " →</strong> to drill into all current items in a"
+                " state.  In Activity, use the date pivot and click"
+                " <strong>View N evidence events →</strong> to drop"
+                " into the raw audit ledger for that day."
             ),
             effect=(
                 "Read-only.  Drilldowns navigate to /ops/items"
-                " (lifecycle) and /ops/events (forensic)."
+                " (lifecycle) and /ops/events/audit (forensic)."
             ),
         )
     )
-    prev_path = str(payload.get("prev_date_path") or "")
-    next_path = str(payload.get("next_date_path") or "")
-    prev_date = str(payload.get("prev_date") or "")
-    next_date = str(payload.get("next_date") or "")
-    pivot_parts: list[str] = []
-    if prev_path:
-        pivot_parts.append(f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>")
-    pivot_parts.append(f"<strong>Today: {escape(date)}</strong>")
-    if next_path:
-        pivot_parts.append(f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>")
-    sections.append(f"<p class='muted'>{' · '.join(pivot_parts)}</p>")
-    sections.append(
-        f"<p class='muted'>Lifecycle state — current backlog · today's"
-        f" activity recorded on <strong>{escape(date)}</strong> (UTC)."
-        f"  Click <a href='/ops/timeline'>Timeline</a> for the"
-        f" multi-day evidence view.</p>"
+
+    lifecycle = payload.get("lifecycle_summary") or {}
+    projection_unavailable = (
+        not lifecycle.get("available") and lifecycle.get("reason")
     )
 
-    # M24.3 honest-zero applies to the projection itself: when
-    # ``ops_state`` doesn't exist yet (DAG step hasn't run), every
-    # card's primary number would be 0 — surface that explicitly so
-    # the operator doesn't read it as "no backlog".
-    lifecycle = payload.get("lifecycle_summary") or {}
-    if not lifecycle.get("available") and lifecycle.get("reason"):
+    # ── ZONE A — Current backlog (date-independent) ────────────────
+    sections.append(
+        "<section style='margin-top:1rem'>"
+        "<h2 style='margin-bottom:.2rem'>Current backlog</h2>"
+        "<p class='muted small' style='margin:0 0 .6rem'>"
+        "Snapshot of how many items are in each lifecycle state "
+        "<strong>right now</strong>.  Source: "
+        "<code>ops_state</code>.  "
+        "<span style='color:var(--accent,#c2410c)'>Not affected by "
+        "the date selector below.</span></p>"
+    )
+    if projection_unavailable:
         sections.append(
             "<div class='card' style='border-color:#c2410c;"
             "background:#fef3e8;padding:0.75rem 1rem;margin:0.5rem 0'>"
             "<strong>Lifecycle projection unavailable.</strong> "
             f"<p class='muted small' style='margin:0.3rem 0 0'>"
-            f"{escape(str(lifecycle['reason']))}.  Card primary "
-            "numbers below will be 0 until this lands.</p>"
+            f"{escape(str(lifecycle['reason']))}.  Backlog numbers "
+            "below will be 0 until this lands.</p>"
             "</div>"
         )
-
-    # M23 BL-096 regenerate-digest button stays.
-    sections.append(
-        _render_digest_regenerate_button(requested_pack, date=date)
-    )
-
-    sections.append("<div class='grid stats' style='margin-top:1rem'>")
+    sections.append("<div class='grid stats'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
         explainer = str(card.get("explainer") or "")
         primary_count = int(card.get("primary_count") or 0)
-        event_count = int(card.get("event_count") or 0)
-        event_label = str(card.get("event_label") or "")
         primary_href = str(card.get("primary_href") or "")
-        event_href = str(card.get("event_href") or "")
         samples = card.get("samples") or []
 
-        # NeedsAction with non-zero gets the warn tint; primary
-        # of 0 fades the big number so it reads as "nothing in
-        # this state" without distracting.
         warn_cls = (
             " warn" if card_id == "NeedsAction" and primary_count > 0
             else ""
@@ -6800,8 +6792,6 @@ def _render_today_digest_page(payload: dict) -> str:
             "color:var(--border-strong)" if primary_count == 0 else ""
         )
 
-        # Item samples block — each sample is one row from
-        # ``ops_state`` (NOT an event).
         sample_html = ""
         if samples:
             li_rows: list[str] = []
@@ -6833,8 +6823,6 @@ def _render_today_digest_page(payload: dict) -> str:
                 + "</ul></div>"
             )
 
-        # Primary CTA — only render when there's something to drill
-        # into; otherwise the link would land on an empty page.
         primary_cta = ""
         if primary_count > 0 and primary_href:
             primary_cta = (
@@ -6845,33 +6833,12 @@ def _render_today_digest_page(payload: dict) -> str:
                 "</div>"
             )
 
-        # Secondary CTA — only render when there are events to
-        # drill into.  Label uses per-state phrasing from the
-        # payload (e.g. "5 arrived today" / "3 extracted today").
-        secondary_cta = ""
-        if event_count > 0 and event_href:
-            secondary_cta = (
-                "<div class='tiny' style='margin-top:.3rem'>"
-                f"<a href='{escape(event_href)}' class='muted'>"
-                f"View today's {event_count} evidence "
-                f"event{'s' if event_count != 1 else ''} →</a>"
-                "</div>"
-            )
-
-        # Honest-zero footer applies when BOTH numbers are 0.
+        # Honest-zero only when there is genuinely nothing in this
+        # state right now (and the projection IS available — if it
+        # isn't, the banner above already explained the 0).
         zero_html = ""
-        if primary_count == 0 and event_count == 0:
+        if primary_count == 0 and not projection_unavailable:
             zero_html = honest_zero_html(short=True)
-
-        # Secondary text always renders so the card always shows
-        # both numbers (or both zeros) — the M25 plan locks this:
-        # never collapse one number into the other.
-        secondary_text = (
-            f"<div class='muted tiny' style='margin-top:6px'>"
-            f"{escape(event_label)}</div>"
-            if event_label
-            else ""
-        )
 
         explainer_html = (
             f"<div class='muted tiny' style='margin-top:4px'>"
@@ -6887,15 +6854,105 @@ def _render_today_digest_page(payload: dict) -> str:
             f"style='margin-top:4px;{empty_style}'>{primary_count}</div>"
             f"<div class='muted tiny'>current item"
             f"{'s' if primary_count != 1 else ''}</div>"
-            f"{secondary_text}"
             f"{explainer_html}"
             f"{zero_html}"
             f"{sample_html}"
             f"{primary_cta}"
+            "</div>"
+        )
+    sections.append("</div></section>")
+
+    # ── ZONE B — Activity on <date> (date-driven) ──────────────────
+    prev_path = str(payload.get("prev_date_path") or "")
+    next_path = str(payload.get("next_date_path") or "")
+    prev_date = str(payload.get("prev_date") or "")
+    next_date = str(payload.get("next_date") or "")
+    pivot_parts: list[str] = []
+    if prev_path:
+        pivot_parts.append(
+            f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>"
+        )
+    pivot_parts.append(
+        f"<strong>{escape(date)}</strong>"
+    )
+    if next_path:
+        pivot_parts.append(
+            f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>"
+        )
+
+    sections.append(
+        "<section style='margin-top:1.8rem;border-top:2px solid "
+        "var(--border);padding-top:1rem'>"
+        f"<h2 style='margin-bottom:.2rem'>Activity on "
+        f"<span style='color:var(--accent,#c2410c)'>{escape(date)}"
+        "</span></h2>"
+        "<p class='muted small' style='margin:0 0 .5rem'>"
+        "Evidence events recorded on this UTC day.  Source: "
+        "<code>audit_events</code>.  "
+        "<strong>This is the zone the date selector controls</strong>"
+        " — change the day to see other days' flow.  "
+        "<a href='/ops/timeline'>Timeline</a> has the multi-day view."
+        "</p>"
+        f"<p class='muted' style='margin:0 0 .6rem'>"
+        f"{' · '.join(pivot_parts)}</p>"
+    )
+
+    # Regenerate-digest acts on the SELECTED date — belongs in this
+    # zone, not globally.
+    sections.append(
+        _render_digest_regenerate_button(requested_pack, date=date)
+    )
+
+    sections.append("<div class='grid stats' style='margin-top:.6rem'>")
+    for card in cards:
+        card_id = str(card.get("id") or "")
+        label = str(card.get("label") or card_id)
+        event_count = int(card.get("event_count") or 0)
+        event_label = str(card.get("event_label") or "")
+        event_href = str(card.get("event_href") or "")
+
+        warn_cls = (
+            " warn" if card_id == "NeedsAction" and event_count > 0
+            else ""
+        )
+        empty_style = (
+            "color:var(--border-strong)" if event_count == 0 else ""
+        )
+
+        secondary_cta = ""
+        if event_count > 0 and event_href:
+            secondary_cta = (
+                "<div class='tiny' style='margin-top:.4rem'>"
+                f"<a href='{escape(event_href)}'>"
+                f"View {event_count} evidence "
+                f"event{'s' if event_count != 1 else ''} →</a>"
+                "</div>"
+            )
+
+        # Per-state label e.g. "5 arrived today" / "3 extracted
+        # today".  When 0, the honest-zero footer carries the
+        # ambiguity instead.
+        label_html = (
+            f"<div class='muted tiny' style='margin-top:4px'>"
+            f"{escape(event_label)}</div>"
+            if event_label and event_count > 0
+            else ""
+        )
+        zero_html = honest_zero_html(short=True) if event_count == 0 else ""
+
+        sections.append(
+            "<div class='card' style='margin:0;overflow:hidden'>"
+            f"<div class='muted tiny'>{escape(label)}</div>"
+            f"<div class='metric-num{warn_cls}' "
+            f"style='margin-top:4px;{empty_style}'>{event_count}</div>"
+            f"<div class='muted tiny'>event"
+            f"{'s' if event_count != 1 else ''} on {escape(date)}</div>"
+            f"{label_html}"
+            f"{zero_html}"
             f"{secondary_cta}"
             "</div>"
         )
-    sections.append("</div>")
+    sections.append("</div></section>")
 
     body = "".join(sections)
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)
