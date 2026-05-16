@@ -2588,6 +2588,68 @@ class EnhancedPipeline:
             ]
 
         if normalized_files is not None and not normalized_files:
+            # PR-A (BL-029 quality→absorb fallback): the pipeline
+            # quality stage only scans the now-defunct
+            # ``20-Areas/*/Topics/<month>`` deep-dive layer, so
+            # post-BL-029 it qualifies nothing and absorb would
+            # skip forever — even though absorb v2 reads
+            # ``50-Inbox/03-Processed`` intake sources directly.
+            # Before giving up, probe absorb's OWN recent-target
+            # discovery (the same path standalone ``ovp-absorb
+            # --recent`` uses).  If eligible intake sources exist,
+            # fall back to the recent workflow instead of the
+            # ``no_qualified_files`` skip.  Per the agreed design
+            # we do NOT widen the quality checker into a
+            # general intake scanner — intake sources are not
+            # deep-dive quality artifacts.
+            try:
+                from .auto_evergreen_extractor import (
+                    _collect_absorb_targets,
+                )
+
+                intake_targets = _collect_absorb_targets(
+                    self.layout, recent=recent_days
+                )
+            except Exception:  # noqa: BLE001 — probe is best-effort
+                intake_targets = []
+
+            if intake_targets:
+                print(
+                    "\n⚠️  Quality artifact qualified 0 files "
+                    "(post-BL-029 the quality stage only scans the "
+                    "removed deep-dive layer).  Falling back to "
+                    f"absorb --recent {recent_days}: "
+                    f"{len(intake_targets)} eligible intake source"
+                    f"{'s' if len(intake_targets) != 1 else ''} "
+                    "in 03-Processed."
+                )
+                fb = self._run_absorb_workflow_direct(
+                    dry_run=dry_run,
+                    recent=recent_days,
+                    record_item_ledger=True,
+                )
+                fb_payload = (
+                    fb.to_dict()
+                    if hasattr(fb, "to_dict")
+                    else dict(fb)
+                )
+                # Tag the result so the run is auditable as the
+                # BL-029 fallback, not a normal quality-gated run.
+                fb_payload["bl029_intake_fallback"] = True
+                fb_payload["fallback_reason"] = (
+                    "quality_artifact_empty_post_bl029"
+                )
+                fb_payload["fallback_intake_targets"] = len(
+                    intake_targets
+                )
+                if input_artifact is not None:
+                    fb_payload["input_artifact"] = {
+                        "stage": input_artifact.get("stage"),
+                        "fingerprint": input_artifact.get("fingerprint"),
+                        "run_id": input_artifact.get("run_id"),
+                    }
+                return _to_absorb_result(fb_payload)
+
             print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
             result = {
                 "success": True,

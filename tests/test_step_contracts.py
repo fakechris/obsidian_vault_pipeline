@@ -181,6 +181,10 @@ class TestAbsorbContract:
         "qualified_files", "pending_qualified_files",
         "item_cache_hits", "item_cache_hit_files",
         "summary", "results", "input_artifact", "total_evergreen",
+        # PR-A BL-029 quality→absorb fallback markers (auditable
+        # first-class fields, not dropped by typed coercion).
+        "bl029_intake_fallback", "fallback_reason",
+        "fallback_intake_targets",
     }
 
     def test_absorb_contract_has_all_required_fields(self):
