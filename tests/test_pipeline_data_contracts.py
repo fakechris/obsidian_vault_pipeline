@@ -268,11 +268,87 @@ class TestAbsorbStepResultContract:
         assert sorted(result["promoted_slugs"]) == ["a-深度解读", "b-深度解读"]
 
     def test_step_absorb_no_qualified_files_path(self, temp_vault):
+        # No intake sources in 03-Processed → the BL-029 fallback
+        # finds nothing → existing ``no_qualified_files`` skip
+        # still holds.
         pipeline = self._make_pipeline(temp_vault)
         result = pipeline.step_absorb(qualified_files=[])
         assert self.REQUIRED_KEYS <= result.keys()
         assert result["processed_files"] == []
         assert result["promoted_slugs"] == []
+        assert not result.get("bl029_intake_fallback")
+
+    def test_step_absorb_bl029_fallback_when_intake_sources_exist(
+        self, temp_vault
+    ):
+        """PR-A: pipeline absorb is called with
+        ``require_quality_artifact``-derived ``qualified_files=[]``
+        (post-BL-029 the quality stage only scans the removed
+        deep-dive layer).  When eligible intake sources exist in
+        50-Inbox/03-Processed, absorb must fall back to its own
+        recent-target discovery instead of the
+        ``no_qualified_files`` skip — otherwise post-BL-029 vaults
+        never absorb anything via the pipeline."""
+        from datetime import datetime, timezone
+
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        proc_dir = (
+            temp_vault / "50-Inbox" / "03-Processed" / month
+        )
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        src = proc_dir / "2026-05-16_example_source.md"
+        # Frontmatter with ``source:`` + body >200 chars →
+        # passes _is_intake_only_source_markdown.
+        src.write_text(
+            "---\ntitle: Example\nsource: https://example.com/x\n---\n\n"
+            + ("Real article body. " * 30),
+            encoding="utf-8",
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            return_value=self._canned_payload([src]),
+        ):
+            result = pipeline.step_absorb(qualified_files=[])
+
+        assert self.REQUIRED_KEYS <= result.keys()
+        # The skip path must NOT have been taken.
+        assert result.get("reason") != "no_qualified_files"
+        assert result.get("bl029_intake_fallback") is True
+        assert (
+            result.get("fallback_reason")
+            == "quality_artifact_empty_post_bl029"
+        )
+        assert result.get("fallback_intake_targets", 0) >= 1
+
+    def test_step_absorb_fallback_ignores_qc_failed_deep_dives(
+        self, temp_vault
+    ):
+        """codex PR #248 P1: a recent ``20-Areas`` deep-dive that
+        FAILED quality (so the artifact is empty for THAT reason,
+        not the BL-029 empty-scan) must NOT trigger the fallback.
+        Falling back on it would bypass the quality gate.  With
+        only a deep-dive present and no 03-Processed intake
+        source, the skip must hold."""
+        from datetime import datetime, timezone
+
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        dd_dir = (
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / month
+        )
+        dd_dir.mkdir(parents=True, exist_ok=True)
+        (dd_dir / "qc_failed_深度解读.md").write_text(
+            "---\ntitle: QC failed\n---\n" + ("low quality. " * 30),
+            encoding="utf-8",
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+        result = pipeline.step_absorb(qualified_files=[])
+        # Skip preserved — the deep-dive is NOT a fallback target.
+        assert result.get("reason") == "no_qualified_files"
+        assert not result.get("bl029_intake_fallback")
+        assert result["processed_files"] == []
 
     def test_step_absorb_quality_blocked_path(self, temp_vault):
         pipeline = self._make_pipeline(temp_vault)

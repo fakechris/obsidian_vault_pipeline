@@ -2588,6 +2588,126 @@ class EnhancedPipeline:
             ]
 
         if normalized_files is not None and not normalized_files:
+            # PR-A (BL-029 quality→absorb fallback): the pipeline
+            # quality stage only scans the now-defunct
+            # ``20-Areas/*/Topics/<month>`` deep-dive layer, so
+            # post-BL-029 it qualifies nothing and absorb would
+            # skip forever — even though absorb v2 reads
+            # ``50-Inbox/03-Processed`` intake sources directly.
+            # Before giving up, probe absorb's OWN recent-target
+            # discovery (the same path standalone ``ovp-absorb
+            # --recent`` uses).  If eligible intake sources exist,
+            # fall back to the recent workflow instead of the
+            # ``no_qualified_files`` skip.  Per the agreed design
+            # we do NOT widen the quality checker into a
+            # general intake scanner — intake sources are not
+            # deep-dive quality artifacts.
+            # codex PR #248 P1: probe ONLY 03-Processed intake
+            # sources — NOT ``_collect_absorb_targets(recent=N)``,
+            # which also returns ``20-Areas/*/Topics/*_深度解读.md``
+            # deep-dives.  If a vault still has deep-dives that
+            # FAILED quality, the artifact is empty for that
+            # reason; falling back on those would bypass the
+            # quality gate.  ``_collect_processed_github_sources``
+            # (BL-071-widened, despite the legacy name) returns
+            # exactly the intake-only + github sources under
+            # 50-Inbox/03-Processed and nothing else — so the
+            # fallback is strictly the BL-029 empty-scan case.
+            try:
+                from datetime import datetime as _dt
+                from datetime import timedelta as _td
+                from datetime import timezone as _tz
+
+                from .auto_evergreen_extractor import (
+                    _collect_processed_github_sources,
+                )
+
+                _now = _dt.now(_tz.utc)
+                _cutoff = _now - _td(days=recent_days)
+                _months = {
+                    (_now - _td(days=d)).strftime("%Y-%m")
+                    for d in range(recent_days)
+                }
+                intake_targets = _collect_processed_github_sources(
+                    self.layout,
+                    month_names=_months,
+                    cutoff=_cutoff,
+                )
+            except Exception:  # noqa: BLE001 — probe is best-effort
+                intake_targets = []
+
+            if intake_targets:
+                print(
+                    "\n⚠️  Quality artifact qualified 0 files "
+                    "(post-BL-029 the quality stage only scans the "
+                    "removed deep-dive layer).  Falling back to "
+                    f"{len(intake_targets)} eligible intake source"
+                    f"{'s' if len(intake_targets) != 1 else ''} "
+                    "in 03-Processed (deep-dives are NOT included; "
+                    "the quality gate is not bypassed)."
+                )
+                # codex PR #248 P1: run absorb SCOPED to exactly the
+                # discovered intake targets via the same staging
+                # mechanism the ``normalized_files`` path uses —
+                # never the broad ``recent`` workflow, which would
+                # also pull in QC-failed 20-Areas deep-dives.
+                self.layout.logs_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(
+                    prefix="absorb-bl029-fallback-",
+                    dir=str(self.layout.logs_dir),
+                ) as staging_dir:
+                    staging_path = Path(staging_dir)
+                    staged_sources: dict[str, str] = {}
+                    used_targets: set[Path] = set()
+                    for src_path in intake_targets:
+                        source = Path(src_path)
+                        target = staging_path / source.name
+                        if target.exists() or target in used_targets:
+                            stem, suffix = source.stem, source.suffix
+                            counter = 2
+                            while True:
+                                cand = staging_path / f"{stem}-{counter}{suffix}"
+                                if not cand.exists() and cand not in used_targets:
+                                    target = cand
+                                    break
+                                counter += 1
+                        used_targets.add(target)
+                        staged_sources[str(target)] = str(source)
+                        try:
+                            target.symlink_to(source)
+                        except OSError:
+                            target.write_text(
+                                source.read_text(encoding="utf-8"),
+                                encoding="utf-8",
+                            )
+                    fb = self._run_absorb_workflow_direct(
+                        directory=staging_path,
+                        dry_run=dry_run,
+                        staged_sources=staged_sources,
+                        record_item_ledger=not dry_run,
+                    )
+                fb_payload = (
+                    fb.to_dict()
+                    if hasattr(fb, "to_dict")
+                    else dict(fb)
+                )
+                # Tag the result so the run is auditable as the
+                # BL-029 fallback, not a normal quality-gated run.
+                fb_payload["bl029_intake_fallback"] = True
+                fb_payload["fallback_reason"] = (
+                    "quality_artifact_empty_post_bl029"
+                )
+                fb_payload["fallback_intake_targets"] = len(
+                    intake_targets
+                )
+                if input_artifact is not None:
+                    fb_payload["input_artifact"] = {
+                        "stage": input_artifact.get("stage"),
+                        "fingerprint": input_artifact.get("fingerprint"),
+                        "run_id": input_artifact.get("run_id"),
+                    }
+                return _to_absorb_result(fb_payload)
+
             print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
             result = {
                 "success": True,

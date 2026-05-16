@@ -185,6 +185,16 @@ class AbsorbStepResult(StepResult):
     results: list[dict] = field(default_factory=list)
     input_artifact: dict | None = None
     total_evergreen: int = 0  # post-run population (filled by dispatcher)
+    # PR-A BL-029 quality→absorb fallback markers.  Set when the
+    # pipeline quality artifact qualified 0 files (post-BL-029 the
+    # quality stage only scans the removed deep-dive layer) but
+    # absorb fell back to its own recent-target discovery against
+    # 50-Inbox/03-Processed intake sources.  First-class fields so
+    # the fallback is auditable in run reports / typed consumers,
+    # not silently dropped by ``to_typed_step_result``.
+    bl029_intake_fallback: bool = False
+    fallback_reason: str | None = None
+    fallback_intake_targets: int = 0
 
 
 @dataclass(frozen=True, slots=True)
