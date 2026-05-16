@@ -133,8 +133,26 @@ def _parse_audit_ts(raw: str) -> datetime | None:
     return None
 
 
-def _canonical_evidence_since(conn: sqlite3.Connection, window_minutes: int) -> dict[str, int]:
-    """Count canonical-object audit events in the recent window.
+def _row_pack(payload_json: str) -> str | None:
+    """Pack recorded inside the audit payload, or None if absent.
+
+    ``event_emitter`` stores ``pack`` in ``payload_json``; legacy
+    rows predate that field.  None means "pack unknown".
+    """
+    try:
+        payload = json.loads(payload_json or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    pack = payload.get("pack")
+    return str(pack) if pack else None
+
+
+def _canonical_evidence_since(
+    conn: sqlite3.Connection, window_minutes: int, pack: str
+) -> dict[str, int]:
+    """Count canonical-object audit events for ``pack`` in the window.
 
     Timestamps are parsed in Python rather than compared
     lexicographically in SQL — audit rows mix ISO ``T`` and
@@ -142,19 +160,28 @@ def _canonical_evidence_since(conn: sqlite3.Connection, window_minutes: int) -> 
     boundary misclassifies rows (false positives that wrongly
     trigger the heavy rebuild path).  We only need "did any land",
     so precision beyond the parse is unnecessary.
+
+    Evidence is scoped to ``pack``: a recent ``promote_concept`` for a
+    DIFFERENT pack must not make this command tell wrappers the
+    selected pack needs a heavier rebuild.  Legacy rows with no
+    recorded pack are kept (conservative — never suppress a real
+    warning just because an old row lacks the field).
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(window_minutes))
     placeholders = ",".join("?" * len(_CANONICAL_OBJECT_EVENTS))
     rows = conn.execute(
         f"""
-        SELECT event_type, timestamp
+        SELECT event_type, timestamp, payload_json
           FROM audit_events
          WHERE event_type IN ({placeholders})
         """,
         (*_CANONICAL_OBJECT_EVENTS,),
     ).fetchall()
     found: dict[str, int] = {}
-    for et, ts in rows:
+    for et, ts, payload_json in rows:
+        row_pack = _row_pack(str(payload_json or ""))
+        if row_pack is not None and row_pack != pack:
+            continue
         parsed = _parse_audit_ts(str(ts or ""))
         if parsed is None or parsed < cutoff:
             continue
@@ -227,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     with sqlite3.connect(str(db_path)) as conn:
         after_counts = rebuild_ops_state(conn, pack=args.pack)
         # 5. canonical-object evidence detection
-        canonical = _canonical_evidence_since(conn, args.canonical_window_minutes)
+        canonical = _canonical_evidence_since(conn, args.canonical_window_minutes, args.pack)
 
     after = {s: int(after_counts.get(s, 0)) for s in ALL_STATES}
     deltas = {s: after[s] - before[s] for s in ALL_STATES}

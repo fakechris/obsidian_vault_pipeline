@@ -90,7 +90,7 @@ def test_canonical_evidence_detects_promote_in_window(tmp_path):
     conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
     _emit(conn, "evergreen_auto_promoted", slug="obj-x")
     conn.commit()
-    found = refresh_ops._canonical_evidence_since(conn, 180)
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
     assert found.get("evergreen_auto_promoted") == 1
 
 
@@ -101,7 +101,7 @@ def test_canonical_evidence_ignores_candidates_only(tmp_path):
     _emit(conn, "absorb_pending_upsert", slug="src-a")
     _emit(conn, "absorb_route_decision", slug="src-a")
     conn.commit()
-    assert refresh_ops._canonical_evidence_since(conn, 180) == {}
+    assert refresh_ops._canonical_evidence_since(conn, 180, PACK) == {}
 
 
 def test_canonical_evidence_respects_window(tmp_path):
@@ -111,7 +111,7 @@ def test_canonical_evidence_respects_window(tmp_path):
     _emit(conn, "promote_concept", slug="obj-y", ts=old)
     conn.commit()
     # 180-minute window excludes a 5-day-old promote.
-    assert refresh_ops._canonical_evidence_since(conn, 180) == {}
+    assert refresh_ops._canonical_evidence_since(conn, 180, PACK) == {}
 
 
 def test_canonical_evidence_parses_iso_t_timestamps(tmp_path):
@@ -126,7 +126,7 @@ def test_canonical_evidence_parses_iso_t_timestamps(tmp_path):
     _emit(conn, "evergreen_auto_promoted", slug="obj-now", ts=now_iso)
     _emit(conn, "promote_concept", slug="obj-old", ts=old_iso)
     conn.commit()
-    found = refresh_ops._canonical_evidence_since(conn, 180)
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
     assert found.get("evergreen_auto_promoted") == 1
     # 5-day-old ISO promote is outside the 180m window.
     assert "promote_concept" not in found
@@ -145,8 +145,35 @@ def test_canonical_evidence_naive_local_recent_detected(tmp_path):
     _emit(conn, "evergreen_auto_promoted", slug="obj-now", ts=now_local)
     _emit(conn, "promote_concept", slug="obj-old", ts=old_local)
     conn.commit()
-    found = refresh_ops._canonical_evidence_since(conn, 180)
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
     assert found.get("evergreen_auto_promoted") == 1
+    assert "promote_concept" not in found
+
+
+def test_canonical_evidence_scoped_to_pack(tmp_path):
+    """A recent promote for a DIFFERENT pack must not be counted as
+    evidence for the requested pack; same-pack and pack-less legacy
+    rows are counted."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    _emit(
+        conn,
+        "promote_concept",
+        slug="obj-other",
+        payload={"pack": "some-other-pack"},
+    )
+    _emit(
+        conn,
+        "evergreen_auto_promoted",
+        slug="obj-mine",
+        payload={"pack": PACK},
+    )
+    # legacy row, no pack recorded → kept (conservative)
+    _emit(conn, "evergreen_created", slug="obj-legacy")
+    conn.commit()
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
+    assert found.get("evergreen_auto_promoted") == 1
+    assert found.get("evergreen_created") == 1
     assert "promote_concept" not in found
 
 
