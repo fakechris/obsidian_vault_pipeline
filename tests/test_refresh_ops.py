@@ -132,6 +132,24 @@ def test_canonical_evidence_parses_iso_t_timestamps(tmp_path):
     assert "promote_concept" not in found
 
 
+def test_canonical_evidence_naive_local_recent_detected(tmp_path):
+    """PipelineLogger writes ``datetime.now().isoformat()`` — a NAIVE
+    *local* timestamp.  A just-emitted promote must be detected
+    regardless of the machine's tz offset; labelling naive-local as
+    UTC would shift it hours into the past and wrongly skip it."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    # naive local, no tz suffix — exactly what PipelineLogger emits
+    now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    old_local = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    _emit(conn, "evergreen_auto_promoted", slug="obj-now", ts=now_local)
+    _emit(conn, "promote_concept", slug="obj-old", ts=old_local)
+    conn.commit()
+    found = refresh_ops._canonical_evidence_since(conn, 180)
+    assert found.get("evergreen_auto_promoted") == 1
+    assert "promote_concept" not in found
+
+
 def test_parse_audit_ts_handles_mixed_formats():
     p = refresh_ops._parse_audit_ts
     assert p("2026-05-14T12:30:00Z") is not None
@@ -141,6 +159,14 @@ def test_parse_audit_ts_handles_mixed_formats():
     assert p("2026-05-14") is not None
     assert p("") is None
     assert p("not-a-timestamp") is None
+    # explicit-Z → UTC; naive → local. A naive value and the same
+    # value with Z differ by the machine's utc offset (0 only if the
+    # box itself is UTC).
+    naive = p("2026-05-14 12:30:00")
+    aware = p("2026-05-14 12:30:00Z")
+    assert naive is not None and aware is not None
+    assert naive.utcoffset() == datetime.now().astimezone().utcoffset()
+    assert aware.utcoffset() == timedelta(0)
 
 
 def test_state_counts_all_keys_present(tmp_path):

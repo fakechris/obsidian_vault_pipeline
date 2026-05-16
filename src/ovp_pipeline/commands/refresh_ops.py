@@ -88,23 +88,29 @@ def _state_counts(conn: sqlite3.Connection, pack: str) -> dict[str, int]:
 def _parse_audit_ts(raw: str) -> datetime | None:
     """Best-effort parse of an audit timestamp to an aware datetime.
 
-    Audit rows carry mixed formats: ``event_emitter.emit`` writes
-    ISO-8601 (``2026-05-14T12:30:00Z`` / ``+00:00``), the older
-    ``PipelineLogger`` path writes space-separated
-    ``2026-05-14 12:30:00``.  A lexicographic SQL compare across the
-    ``T``/space separator boundary silently misclassifies rows, so we
-    parse to a real datetime and treat all audit timestamps as UTC
-    (the same coarse stance the kernel takes).
+    Audit rows carry mixed formats with DIFFERENT timezone semantics:
+    ``event_emitter.emit`` writes UTC ISO-8601
+    (``2026-05-14T12:30:00Z`` / ``+00:00``), while the older
+    ``PipelineLogger`` path writes ``datetime.now().isoformat()`` —
+    a NAIVE *local* wall time.  Labelling a naive local timestamp as
+    UTC re-clocks it by the machine's offset, so on a non-UTC
+    operator a freshly-emitted promote parses as hours old, falls
+    outside the window, and the command wrongly reports "no rebuild
+    needed" — the exact safety failure this command exists to
+    prevent.  So: explicit ``Z``/offset → UTC; naive → local.
     """
     s = (raw or "").strip()
     if not s:
         return None
     s = s.replace("T", " ", 1)
+    had_tz = False
     if s.endswith("Z"):
         s = s[:-1]
+        had_tz = True
     m = re.search(r"[+-]\d{2}:?\d{2}$", s)
     if m:
         s = s[: m.start()]
+        had_tz = True
     s = s.strip()
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f",
@@ -113,9 +119,17 @@ def _parse_audit_ts(raw: str) -> datetime | None:
         "%Y-%m-%d",
     ):
         try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(s, fmt)
         except ValueError:
             continue
+        if had_tz:
+            # event_emitter.emit always emits UTC (Z / +00:00).
+            return dt.replace(tzinfo=timezone.utc)
+        # Naive → PipelineLogger's datetime.now().isoformat() = local
+        # wall time.  astimezone() on a naive datetime attaches the
+        # machine's local tz, making the window compare correct on
+        # non-UTC operators.
+        return dt.astimezone()
     return None
 
 
