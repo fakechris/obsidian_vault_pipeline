@@ -3137,6 +3137,7 @@ from ..audit_identity import (
     audit_slug_for_column,
 )
 from ..audit_time import local_day as _audit_local_day
+from ..audit_time import parse_audit_ts as _parse_audit_ts
 from ..event_evidence_registry import (
     CATEGORIES as _EVT_CATEGORIES,
     event_types_for_category as _evt_for_category,
@@ -3612,6 +3613,151 @@ DEFAULT_RUNS_INDEX_LIMIT = 30
 # full run on the live vault (~3h) with comfortable headroom.
 RUNS_STALE_AFTER_HOURS = 6
 
+# Clock-skew slack when comparing timestamps from different
+# producers (event_emitter UTC vs PipelineLogger naive-local, plus
+# ops_state.refreshed_at).  Below this delta we call it "current"
+# rather than flag a spurious staleness.
+_STALENESS_SLACK_SECONDS = 120
+
+
+def _jsonl_latest_ts(jsonl_path: Path):
+    """Newest audit timestamp in ``pipeline.jsonl`` WITHOUT a full
+    read (BL-108 debt): the log is append-only so the last non-empty
+    line is the newest event.  Tail ~64KB, walk lines from the end,
+    return the first that parses.  None if unreadable/unparseable."""
+    try:
+        size = jsonl_path.stat().st_size
+    except OSError:
+        return None
+    if size == 0:
+        return None
+    try:
+        with open(jsonl_path, "rb") as fh:
+            fh.seek(max(0, size - 65536))
+            tail = fh.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        ts = row.get("timestamp") or row.get("ts")
+        parsed = _parse_audit_ts(str(ts or ""))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def compute_today_staleness(
+    vault_dir: Path | str, *, pack: str
+) -> dict[str, Any]:
+    """BL-103a: can the operator trust the daily numbers, or is a
+    sync / projection rebuild outstanding?
+
+    Two cheap, telemetry-free signals:
+
+    * ``audit_sync_stale`` — ``pipeline.jsonl`` has a newer event
+      than the newest row in ``knowledge.db.audit_events`` (the
+      JSONL ledger advanced but the sync hasn't run).
+    * ``projection_stale`` — ``ops_state`` was last refreshed BEFORE
+      the newest synced audit row (audit is current but the
+      lifecycle projection hasn't been rebuilt to reflect it).
+
+    ``None`` for either flag means "could not determine" — the UI
+    must say "run status unknown", never imply freshness it can't
+    prove.
+    """
+    db_path = _db_path(vault_dir)
+    jsonl_path = db_path.with_name("pipeline.jsonl")
+
+    db_latest = None
+    projection_at = None
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT MAX(timestamp) FROM audit_events"
+                ).fetchone()
+                if row and row[0]:
+                    db_latest = _parse_audit_ts(str(row[0]))
+                has_ops = conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='ops_state'"
+                ).fetchone()
+                if has_ops:
+                    prow = conn.execute(
+                        "SELECT MAX(refreshed_at) FROM ops_state "
+                        " WHERE pack = ?",
+                        (pack,),
+                    ).fetchone()
+                    if prow and prow[0]:
+                        projection_at = _parse_audit_ts(str(prow[0]))
+        except sqlite3.Error:
+            pass
+
+    jsonl_latest = _jsonl_latest_ts(jsonl_path)
+    slack = _dt.timedelta(seconds=_STALENESS_SLACK_SECONDS)
+
+    # audit_sync_stale
+    if jsonl_latest is None:
+        audit_sync_stale: bool | None = None
+    elif db_latest is None:
+        # JSONL has events but nothing is synced.
+        audit_sync_stale = True
+    else:
+        audit_sync_stale = jsonl_latest > db_latest + slack
+
+    # projection_stale
+    if db_latest is None:
+        projection_stale: bool | None = None
+    elif projection_at is None:
+        # audit synced but no projection materialized yet.
+        projection_stale = True
+    else:
+        projection_stale = projection_at < db_latest - slack
+
+    if audit_sync_stale:
+        summary = "audit_sync_stale"
+        detail = (
+            "pipeline.jsonl has newer events than knowledge.db — run "
+            "`ovp-refresh-ops` before trusting today's counts."
+        )
+    elif projection_stale:
+        summary = "projection_stale"
+        detail = (
+            "audit is synced but the lifecycle projection is older "
+            "than it — run `ovp-ops-state --rebuild` (or "
+            "`ovp-refresh-ops`)."
+        )
+    elif audit_sync_stale is None or projection_stale is None:
+        summary = "unknown"
+        detail = (
+            "Could not determine freshness (missing pipeline.jsonl "
+            "or knowledge.db); run status unknown."
+        )
+    else:
+        summary = "current"
+        detail = "Audit and lifecycle projection are current."
+
+    def _iso(dt: Any) -> str:
+        return dt.isoformat() if dt is not None else ""
+
+    return {
+        "summary": summary,
+        "detail": detail,
+        "audit_sync_stale": audit_sync_stale,
+        "projection_stale": projection_stale,
+        "jsonl_latest": _iso(jsonl_latest),
+        "db_latest": _iso(db_latest),
+        "projection_at": _iso(projection_at),
+    }
+
 
 def build_today_digest_payload(
     vault_dir: Path | str,
@@ -3696,6 +3842,9 @@ def build_today_digest_payload(
     lifecycle_summary = _read_lifecycle_summary(
         vault_dir, pack=requested_pack
     )
+    staleness = compute_today_staleness(
+        vault_dir, pack=effective_pack
+    )
 
     return {
         "screen": "ops/today",
@@ -3707,6 +3856,7 @@ def build_today_digest_payload(
         "next_date_path": _date_path(next_date),
         "cards": cards,
         "lifecycle_summary": lifecycle_summary,
+        "staleness": staleness,
         "available": True,
     }
 

@@ -6681,6 +6681,45 @@ _TS_DISPLAY_LEN = 19
 _TODAY_DIGEST_STYLE = ""
 
 
+def _render_staleness_banner(staleness: dict) -> str:
+    """BL-103a top-line freshness verdict.  Answers "can I trust
+    these numbers?" BEFORE the operator reads any count — a zero (or
+    any number) is meaningless if the audit sync or the lifecycle
+    projection is behind.  ``unknown`` never implies freshness."""
+    if not staleness:
+        return ""
+    summary = str(staleness.get("summary") or "unknown")
+    detail = str(staleness.get("detail") or "")
+    if summary == "current":
+        icon, word, style = (
+            "✓",
+            "Projections current",
+            "border-left:3px solid var(--ok,#3a7);"
+            "background:var(--ok-bg,#f0f7f2)",
+        )
+    elif summary == "unknown":
+        icon, word, style = (
+            "?",
+            "Run status unknown",
+            "border-left:3px solid var(--border-strong,#999);"
+            "background:var(--card-bg,#f6f6f6)",
+        )
+    else:  # audit_sync_stale | projection_stale
+        icon, word, style = (
+            "⚠",
+            "Stale — refresh before trusting today's numbers",
+            "border-left:3px solid var(--warn,#c70);"
+            "background:var(--warn-bg,#fdf4e8)",
+        )
+    return (
+        f"<section class='card' style='margin:0 0 .6rem;{style}'>"
+        f"<strong>{icon} {escape(word)}</strong>"
+        f"<div class='muted tiny' style='margin-top:2px'>"
+        f"{escape(detail)}</div>"
+        "</section>"
+    )
+
+
 def _render_today_digest_page(payload: dict) -> str:
     """M25.7: ``/ops/today`` split into two clearly-separated zones.
 
@@ -6747,6 +6786,12 @@ def _render_today_digest_page(payload: dict) -> str:
                 " (lifecycle) and /ops/events/audit (forensic)."
             ),
         )
+    )
+
+    # BL-103a: top-line freshness verdict — the operator must know
+    # whether the numbers below are current before reading them.
+    sections.append(
+        _render_staleness_banner(payload.get("staleness") or {})
     )
 
     lifecycle = payload.get("lifecycle_summary") or {}
