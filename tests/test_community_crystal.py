@@ -392,6 +392,42 @@ class TestSynthesizeEndToEnd:
         assert llm_model == "anthropic/MiniMax-M2.7-highspeed"
         assert prompt_version == CRYSTAL_PROMPT_VERSION
 
+    def test_emits_community_crystal_synthesized_audit_event(self, tmp_path):
+        """M24.2 gap fixed (M25.6 dogfood): synthesis MUST emit the
+        ``community_crystal_synthesized`` audit event the M24.1
+        kernel reads to classify a cluster as Synthesized.  Before
+        the fix, synthesis wrote crystals to the DB but the
+        lifecycle Synthesized bucket stayed at 0 on every vault
+        because this event never fired."""
+        vault, db = _seed_vault(
+            tmp_path,
+            clusters=[("cluster::evt00001", "C1", ["a", "b"])],
+            objects=[("a", "A", "body a"), ("b", "B", "body b")],
+        )
+        llm = _StubLLM()
+        synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+        )
+        log_path = vault / "60-Logs" / "pipeline.jsonl"
+        assert log_path.exists(), "no pipeline.jsonl written"
+        rows = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        synth_events = [
+            r for r in rows
+            if r.get("event_type") == "community_crystal_synthesized"
+        ]
+        assert len(synth_events) == 1, (
+            "synthesis did not emit community_crystal_synthesized"
+        )
+        payload = synth_events[0]
+        # cluster_id MUST be at the payload top level so the M24.1
+        # kernel's audit index picks it up.
+        assert payload.get("cluster_id") == "cluster::evt00001"
+        assert payload.get("sample_size") == 2
+
     def test_dry_run_skips_writes(self, tmp_path):
         vault, db = _seed_vault(
             tmp_path,
