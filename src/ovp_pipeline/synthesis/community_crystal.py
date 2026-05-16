@@ -522,6 +522,41 @@ def synthesize_community_crystals(
                     "community_total": community_total,
                 },
             )
+
+            # M24.2 gap fixed (M25.6 dogfood): the producer-audit
+            # contract declared ``community_crystal_synthesized``
+            # for this producer and the M24.1 kernel reads it to
+            # classify a cluster as Synthesized — but the emit was
+            # never wired here, so synthesis wrote crystals to the
+            # DB while the lifecycle "Synthesized" bucket stayed at
+            # 0 on every vault.  Emit it now, carrying ``cluster_id``
+            # at the payload top level so ``ops_lifecycle``'s audit
+            # index picks it up.
+            try:
+                from ..event_emitter import emit as _emit_audit
+
+                _emit_audit(
+                    vault_dir,
+                    "pipeline.jsonl",
+                    "community_crystal_synthesized",
+                    {
+                        "cluster_id": cluster_id,
+                        "synthesized_at": crystal.synthesized_at,
+                        "llm_model": crystal.llm_model,
+                        "prompt_version": crystal.prompt_version,
+                        "sample_size": len(crystal.source_evergreen_slugs),
+                    },
+                    pack=pack_name,
+                )
+            except Exception:  # noqa: BLE001
+                # Audit emit is best-effort: a logging failure must
+                # not sink a synthesis batch that already committed
+                # the crystal + provenance row.
+                logger.warning(
+                    "community_crystal_synthesized emit failed for "
+                    "cluster=%r (crystal already committed)",
+                    cluster_id,
+                )
         return out
     finally:
         conn.close()

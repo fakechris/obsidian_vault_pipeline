@@ -345,6 +345,43 @@ def test_synthesized_fresh_crystal_classifies_as_synthesized():
     assert state.state == STATE_SYNTHESIZED
 
 
+def test_synthesized_from_crystal_projection_without_audit_event():
+    """codex #246 P1 / M25.6 dogfood: a cluster with an active,
+    fresh ``community_crystals`` row IS Synthesized even when NO
+    ``community_crystal_synthesized`` audit event exists (crystals
+    synthesized before the M24.2 emit was wired, or the
+    ``--skip-existing`` resume path).  The kernel treats the
+    projection as evidence and flags ``Projected`` sub-state
+    because the audit didn't witness it."""
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO graph_clusters VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (PACK, "cluster-noaudit", "community", "Memory",
+         "obj-1", json.dumps(["obj-1"]), 0.5),
+    )
+    conn.execute(
+        "INSERT INTO evergreen_revisions "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (PACK, "obj-1", 1, "## body", "created", "absorber",
+         "2026-05-10T08:00:00+00:00", ""),
+    )
+    conn.execute(
+        "INSERT INTO community_crystals "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (PACK, "cluster-noaudit", "## crystal body",
+         json.dumps(["obj-1"]),
+         "2026-05-11T08:00:00+00:00",
+         "fake-model", "v1", ""),
+    )
+    # NO community_crystal_synthesized audit event emitted.
+    state = lifecycle_state_of(
+        conn, "cluster", "cluster-noaudit", pack=PACK
+    )
+    assert state is not None
+    assert state.state == STATE_SYNTHESIZED
+    assert state.sub_state == SUBSTATE_PROJECTED
+
+
 def test_synthesized_stale_crystal_demotes_to_accepted():
     """If a cluster's newest revision is newer than its crystal, the
     crystal is stale and the cluster's state is Accepted, not

@@ -505,22 +505,44 @@ def lifecycle_state_of(
             best_event = event_type
             needs_action_reason = reason
 
-    # Apply freshness for Synthesized at the cluster level.
+    # Cluster Synthesized resolution.
     sub_state: str | None = None
-    if best_state == STATE_SYNTHESIZED and item_kind == ITEM_KIND_CLUSTER:
+    if item_kind == ITEM_KIND_CLUSTER:
         latest_synth, active = _crystal_for_cluster(conn, pack, item_id)
         newest_member_rev = _cluster_max_member_revision_ts(
             conn, pack, item_id
         )
-        if not active:
-            best_state = STATE_ACCEPTED
-        elif (
-            newest_member_rev
+        # A cluster is freshly synthesized when its crystal is
+        # active (not superseded) AND not stale relative to its
+        # member revisions.
+        crystal_fresh = bool(
+            active
             and latest_synth
-            and newest_member_rev > latest_synth
-        ):
-            # Crystal is stale relative to its inputs.
-            best_state = STATE_ACCEPTED
+            and (
+                not newest_member_rev
+                or newest_member_rev <= latest_synth
+            )
+        )
+        if best_state == STATE_SYNTHESIZED:
+            # An audit event said synthesized — demote only if the
+            # crystal is actually stale / superseded.
+            if not crystal_fresh:
+                best_state = STATE_ACCEPTED
+        elif crystal_fresh:
+            # M25.6 dogfood / codex #246 P1: projection-as-evidence.
+            # An active, fresh ``community_crystals`` row IS a
+            # synthesized cluster even when no
+            # ``community_crystal_synthesized`` audit event exists
+            # — e.g. crystals synthesized before the M24.2 emit was
+            # wired, or the ``--skip-existing`` resume path that
+            # never re-commits.  Without this, the operator vault's
+            # 576 pre-existing crystals stay at Synthesized=0
+            # forever unless every one is re-synthesized.  Mirrors
+            # the object ``Projected`` pattern: the projection
+            # asserts the state, the audit just didn't witness it.
+            best_state = STATE_SYNTHESIZED
+            if "community_crystal_synthesized" not in evidence_types:
+                sub_state = SUBSTATE_PROJECTED
 
     # Projected sub-state: object projection exists but no
     # ``evergreen_auto_promoted`` / ``promote_concept`` evidence.
