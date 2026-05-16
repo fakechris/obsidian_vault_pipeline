@@ -19,6 +19,7 @@ from .concept_registry import ConceptRegistry, ResolutionAction
 from .event_emitter import iter_for_index
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
+from .audit_identity import audit_slug_for_column
 from .identity import canonicalize_note_id
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .projection_lifecycle import close_projection_repair_marker, write_projection_repair_marker
@@ -888,22 +889,20 @@ def _collect_raw_rows(layout: VaultLayout) -> list[tuple[str, str, str, str]]:
 
 
 def _infer_audit_slug(payload: dict[str, object]) -> str:
-    slug = payload.get("slug")
-    if isinstance(slug, str) and slug:
-        return canonicalize_note_id(slug)
+    """Value for the ``audit_events.slug`` column.
 
-    targets = payload.get("targets")
-    if isinstance(targets, list) and len(targets) == 1 and isinstance(targets[0], str):
-        return canonicalize_note_id(targets[0])
-
-    # promotion / zone_violation events carry a `target_path`; index it as-is
-    # (vault-relative when the caller passed a relative path) so that lint
-    # check_zone_boundary can match by the same key without the lossy
-    # path.stem collision (e.g. 30-Projects/*/Plan.md).
-    target_path = payload.get("target_path")
-    if isinstance(target_path, str) and target_path:
-        return target_path
-    return ""
+    M24 audit-identity normalization (PR-B): delegates to the
+    shared ``audit_identity.audit_slug_for_column`` so this and the
+    lifecycle kernel's index cannot drift.  The new behavior over
+    the legacy slug/targets/target_path-only logic: ``source`` /
+    ``file`` / ``path`` now produce a non-empty slug column, so the
+    ~13k historical source-class events (``source_archived_to_processed``,
+    ``article_processed``, ``article_intake_only``,
+    ``absorb_route_decision``) finally become visible to source
+    lifecycle discovery.  ``target_path`` still returns raw for the
+    lint zone-boundary contract.
+    """
+    return audit_slug_for_column(payload)
 
 
 def _collect_reuse_rows(

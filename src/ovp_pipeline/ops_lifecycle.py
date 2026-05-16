@@ -48,6 +48,11 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Final, Iterator
 
+from .audit_identity import (
+    audit_cluster_ids,
+    audit_object_ids,
+    collect_string_values,
+)
 from .event_evidence_registry import classify
 
 
@@ -214,30 +219,12 @@ class _AuditIndex:
     by_cluster_id: dict[str, list[tuple[str, str, str]]]
 
 
-def _collect_string_values(node: object, keys: tuple[str, ...]) -> set[str]:
-    """Walk a parsed-JSON tree and return every string value
-    whose key is in ``keys``, at ANY depth.
-
-    Mirrors the SQL LIKE fallback's matching semantics — the
-    original kernel found nested ``object_id`` / ``cluster_id``
-    mentions (e.g. ``{"mutation": {"object_id": "..."}}``) because
-    LIKE scans the whole JSON text.  The bulk index must preserve
-    that or some evidence rows go missing from ``ops_state``.
-    """
-    found: set[str] = set()
-
-    def _walk(value: object) -> None:
-        if isinstance(value, dict):
-            for k, v in value.items():
-                if k in keys and isinstance(v, str) and v:
-                    found.add(v)
-                _walk(v)
-        elif isinstance(value, list):
-            for item in value:
-                _walk(item)
-
-    _walk(node)
-    return found
+# M24 PR-B: identity extraction moved to the shared
+# ``audit_identity`` module so this index and
+# ``knowledge_index._infer_audit_slug`` use ONE normalization and
+# cannot drift.  ``_collect_string_values`` kept as a thin
+# backward-compatible alias for any external importer / test.
+_collect_string_values = collect_string_values
 
 
 def _build_audit_index(conn: sqlite3.Connection) -> _AuditIndex:
@@ -245,11 +232,17 @@ def _build_audit_index(conn: sqlite3.Connection) -> _AuditIndex:
     so per-item lookups are O(1) hash lookups instead of full-table
     LIKE scans.
 
-    Matches the SQL LIKE fallback's semantics by walking the
-    payload tree at any depth — a row that mentions
-    ``object_id`` inside a nested mutation dict is still indexed
-    under that object_id.  Codex review on PR #243 flagged the
-    top-level-only version as a regression.
+    M24 PR-B audit-identity normalization: ``by_object_id`` now
+    keys on ``audit_identity.audit_object_ids`` (object_id +
+    concept + mutation.slug + mutation.target_slug, verbatim AND
+    canonicalized), recovering the ~10k historical
+    ``evergreen_auto_promoted`` events that carried ``concept`` /
+    ``mutation.*`` instead of ``object_id``.  ``by_slug`` keys on
+    the ``audit_events.slug`` column, which ``_infer_audit_slug``
+    now fills from ``source`` / ``file`` / ``path`` for
+    source-class events.  Source and object identities stay in
+    separate maps — the shared helper never mixes them (see
+    ``audit_identity`` module docstring).
     """
     by_slug: dict[str, list[tuple[str, str, str]]] = {}
     by_object_id: dict[str, list[tuple[str, str, str]]] = {}
@@ -268,16 +261,15 @@ def _build_audit_index(conn: sqlite3.Connection) -> _AuditIndex:
         record = (et, ts, pj)
         if slug:
             by_slug.setdefault(str(slug), []).append(record)
-        # Parse payload to discover object_id + cluster_id at any
-        # depth — the SQL LIKE fallback finds nested mentions
-        # too, so the index must match.
         try:
             payload = json.loads(pj)
         except (TypeError, ValueError):
             continue
-        for obj_id in _collect_string_values(payload, ("object_id",)):
+        if not isinstance(payload, dict):
+            continue
+        for obj_id in audit_object_ids(payload):
             by_object_id.setdefault(obj_id, []).append(record)
-        for cluster_id in _collect_string_values(payload, ("cluster_id",)):
+        for cluster_id in audit_cluster_ids(payload):
             by_cluster_id.setdefault(cluster_id, []).append(record)
     return _AuditIndex(
         by_slug=by_slug,
