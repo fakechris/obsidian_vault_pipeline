@@ -277,6 +277,51 @@ def test_audit_index_finds_nested_object_id_mention():
     assert state.sub_state is None
 
 
+def test_single_item_path_matches_bulk_for_concept_evidence():
+    """codex PR #247 P2-2: an object whose ONLY promote evidence
+    uses ``concept`` (no ``object_id``) — the dominant real-vault
+    ``evergreen_auto_promoted`` shape — must classify identically
+    via the bulk index AND the single-item SQL fallback
+    (``ovp-lifecycle-show``, audit_index=None).  Pre-fix the
+    fallback only LIKE-matched ``"object_id"`` so it reported the
+    object as missing/projected while bulk found it Accepted."""
+    from ovp_pipeline.ops_lifecycle import (
+        _build_audit_index,
+        lifecycle_state_of,
+    )
+
+    conn = _make_db()
+    _emit(conn, "evergreen_auto_promoted",
+          ts="2026-05-13T08:00:00+00:00",
+          payload={
+              "concept": "obj-concept-only",
+              "source": "2026-04-02_some_深度解读.md",
+              "mutation": {"action": "promote",
+                           "slug": "obj-concept-only",
+                           "target_slug": "obj-concept-only"},
+          })
+    conn.execute(
+        "INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (PACK, "obj-concept-only", "evergreen", "C",
+         "10-Knowledge/Evergreen/C.md", "src-x", ""),
+    )
+    conn.commit()
+
+    bulk = lifecycle_state_of(
+        conn, "object", "obj-concept-only", pack=PACK,
+        audit_index=_build_audit_index(conn),
+    )
+    single = lifecycle_state_of(
+        conn, "object", "obj-concept-only", pack=PACK,
+        audit_index=None,
+    )
+    assert bulk is not None and single is not None
+    assert bulk.state == single.state == STATE_ACCEPTED
+    assert "evergreen_auto_promoted" in bulk.evidence
+    assert "evergreen_auto_promoted" in single.evidence
+    assert bulk.sub_state == single.sub_state
+
+
 def test_projected_substate_when_object_row_without_promote_event():
     """An ``objects`` row exists but no ``evergreen_auto_promoted`` or
     ``promote_concept`` audit row references the same object_id — the

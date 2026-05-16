@@ -74,15 +74,19 @@ def collect_string_values(node: Any, keys: tuple[str, ...]) -> set[str]:
     return found
 
 
-# Object-class payload keys.  ``concept`` is the promoted slug;
-# ``mutation.slug`` / ``mutation.target_slug`` cover the
-# promote-vs-merge fork (a merge re-points to an existing slug).
+# Object-class payload keys that are UNAMBIGUOUS at any depth.
+# Deliberately excludes a bare ``slug``: the M24.2-era source
+# producers (``absorb_pending_upsert`` / ``candidates_upserted`` /
+# ``community_crystal_synthesized``) carry a top-level ``slug``
+# that is the SOURCE slug, not an object id.  Sweeping ``slug``
+# via the blind nested walk would contaminate ``by_object_id``
+# with source identities (codex review on PR #247).  The
+# object-class ``mutation.slug`` is recovered explicitly from the
+# ``mutation`` dict below instead, so it is captured without the
+# ambiguous top-level sweep.
 _OBJECT_KEYS: tuple[str, ...] = (
     "object_id",
     "concept",
-    "slug",  # only meaningful inside object-shaped payloads; the
-    # source slug column is derived separately below so this does
-    # not leak source identities into the object index.
     "target_slug",
 )
 
@@ -119,11 +123,21 @@ def audit_object_ids(payload: dict[str, Any]) -> set[str]:
     Source / file keys are intentionally excluded — see the module
     docstring's hard boundary.
     """
+    candidates: set[str] = set(
+        collect_string_values(payload, _OBJECT_KEYS)
+    )
+    # ``mutation.slug`` is object-class ONLY in the mutation
+    # context (promote/merge).  Extract it precisely from the
+    # ``mutation`` dict rather than via the blind walk so a
+    # top-level source ``slug`` never enters here.
+    mutation = payload.get("mutation")
+    if isinstance(mutation, dict):
+        m_slug = mutation.get("slug")
+        if isinstance(m_slug, str) and m_slug.strip():
+            candidates.add(m_slug)
+
     out: set[str] = set()
-    # ``mutation`` is a nested dict on promote/merge events; the
-    # nested walk picks ``object_id`` / ``slug`` / ``target_slug``
-    # / ``concept`` from any depth.
-    for raw in collect_string_values(payload, _OBJECT_KEYS):
+    for raw in candidates:
         raw = raw.strip()
         if not raw:
             continue

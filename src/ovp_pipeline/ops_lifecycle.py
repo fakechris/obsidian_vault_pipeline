@@ -294,10 +294,16 @@ def _fetch_audit_rows(
     single-item path used by ``ovp-lifecycle-show``), fall back to
     the SQL LIKE scan that was the original implementation.
 
-    The fallback is still correct; it's just slow at scale.
-    Adding the index for one-shot lookups would force callers to
-    pay the index-build cost (a few seconds) for a single
-    classification, which would make the CLI feel sluggish.
+    The single-item fallback (``audit_index is None``, e.g.
+    ``ovp-lifecycle-show``) MUST agree with the bulk path.  PR-B
+    codex review caught that the old SQL fallback only matched
+    ``"object_id"`` literals, so an object whose evidence used
+    ``concept`` / ``mutation.slug`` / ``mutation.target_slug``
+    showed evidence in a bulk rebuild but "missing" in a one-off
+    lookup.  The fallback now does a COARSE ``LIKE %value%`` to
+    bound the candidate set, then confirms membership through the
+    SAME shared ``audit_object_ids`` / ``audit_cluster_ids``
+    helpers the index uses — zero drift, by construction.
     """
     if audit_index is not None:
         if slug:
@@ -318,30 +324,34 @@ def _fetch_audit_rows(
             (slug,),
         ).fetchall()
         return [(r[0], r[1] or "", r[2] or "{}") for r in rows]
-    if object_id:
-        # Payload-based match.  Use a LIKE on the JSON literal — robust
-        # enough for the kernel's classification needs.
-        needle = f'"object_id": "{object_id}"'
-        needle_alt = f'"object_id":"{object_id}"'
+
+    if object_id or cluster_id:
+        target = object_id or cluster_id
+        # Coarse candidate fetch: any row mentioning the id string
+        # anywhere in the payload.  The authoritative include/
+        # exclude decision is delegated to the shared helper so
+        # this can never diverge from ``_build_audit_index``.
         rows = conn.execute(
             "SELECT event_type, timestamp, payload_json "
             "  FROM audit_events "
-            " WHERE payload_json LIKE ? OR payload_json LIKE ? "
+            " WHERE payload_json LIKE ? "
             " ORDER BY timestamp DESC",
-            (f"%{needle}%", f"%{needle_alt}%"),
+            (f"%{target}%",),
         ).fetchall()
-        return [(r[0], r[1] or "", r[2] or "{}") for r in rows]
-    if cluster_id:
-        needle = f'"cluster_id": "{cluster_id}"'
-        needle_alt = f'"cluster_id":"{cluster_id}"'
-        rows = conn.execute(
-            "SELECT event_type, timestamp, payload_json "
-            "  FROM audit_events "
-            " WHERE payload_json LIKE ? OR payload_json LIKE ? "
-            " ORDER BY timestamp DESC",
-            (f"%{needle}%", f"%{needle_alt}%"),
-        ).fetchall()
-        return [(r[0], r[1] or "", r[2] or "{}") for r in rows]
+        out: list[tuple[str, str, str]] = []
+        for et, ts, pj in rows:
+            pj = pj or "{}"
+            try:
+                payload = json.loads(pj)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if object_id and object_id in audit_object_ids(payload):
+                out.append((et or "", ts or "", pj))
+            elif cluster_id and cluster_id in audit_cluster_ids(payload):
+                out.append((et or "", ts or "", pj))
+        return out
     return []
 
 

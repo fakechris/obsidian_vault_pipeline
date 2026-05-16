@@ -94,6 +94,24 @@ def test_object_ids_excludes_source_and_file():
     assert audit_object_ids(payload) == set()
 
 
+def test_object_ids_excludes_top_level_source_slug():
+    """codex PR #247 P2-1: M24.2-era source producers
+    (``absorb_pending_upsert`` / ``candidates_upserted`` /
+    ``community_crystal_synthesized``) carry a TOP-LEVEL ``slug``
+    that is the SOURCE slug.  It must NOT be swept into the object
+    index — otherwise an object whose object_id equals that source
+    slug would consume source-only absorb evidence."""
+    payload = {
+        "slug": "2026-04-04-some-source",
+        "candidates": 3,
+        "source": "2026-04-04_some_source.md",
+    }
+    assert audit_object_ids(payload) == set()
+    # But object-context mutation.slug IS still recovered.
+    obj_payload = {"mutation": {"slug": "real-object", "action": "promote"}}
+    assert "real-object" in audit_object_ids(obj_payload)
+
+
 # ── audit_slug_for_column ──────────────────────────────────────────
 
 
