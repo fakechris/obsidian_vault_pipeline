@@ -6935,8 +6935,8 @@ def _render_today_digest_page(payload: dict) -> str:
             secondary_cta = (
                 "<div class='tiny' style='margin-top:.4rem'>"
                 f"<a href='{escape(event_href)}'>"
-                f"View {event_count} evidence "
-                f"event{'s' if event_count != 1 else ''} →</a>"
+                f"View {event_count} item"
+                f"{'s' if event_count != 1 else ''} in raw evidence →</a>"
                 "</div>"
             )
 
@@ -6956,7 +6956,7 @@ def _render_today_digest_page(payload: dict) -> str:
             f"<div class='muted tiny'>{escape(label)}</div>"
             f"<div class='metric-num{warn_cls}' "
             f"style='margin-top:4px;{empty_style}'>{event_count}</div>"
-            f"<div class='muted tiny'>event"
+            f"<div class='muted tiny'>item"
             f"{'s' if event_count != 1 else ''} on {escape(date)}</div>"
             f"{label_html}"
             f"{zero_html}"
