@@ -322,6 +322,34 @@ class TestAbsorbStepResultContract:
         )
         assert result.get("fallback_intake_targets", 0) >= 1
 
+    def test_step_absorb_fallback_ignores_qc_failed_deep_dives(
+        self, temp_vault
+    ):
+        """codex PR #248 P1: a recent ``20-Areas`` deep-dive that
+        FAILED quality (so the artifact is empty for THAT reason,
+        not the BL-029 empty-scan) must NOT trigger the fallback.
+        Falling back on it would bypass the quality gate.  With
+        only a deep-dive present and no 03-Processed intake
+        source, the skip must hold."""
+        from datetime import datetime, timezone
+
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        dd_dir = (
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / month
+        )
+        dd_dir.mkdir(parents=True, exist_ok=True)
+        (dd_dir / "qc_failed_深度解读.md").write_text(
+            "---\ntitle: QC failed\n---\n" + ("low quality. " * 30),
+            encoding="utf-8",
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+        result = pipeline.step_absorb(qualified_files=[])
+        # Skip preserved — the deep-dive is NOT a fallback target.
+        assert result.get("reason") == "no_qualified_files"
+        assert not result.get("bl029_intake_fallback")
+        assert result["processed_files"] == []
+
     def test_step_absorb_quality_blocked_path(self, temp_vault):
         pipeline = self._make_pipeline(temp_vault)
         result = pipeline.step_absorb(quality_score=2.5)
