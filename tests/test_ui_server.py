@@ -1803,7 +1803,9 @@ def test_ops_queue_legacy_paths_301_to_new_routes(temp_vault, legacy, canonical)
         ("/ops/queue/contradictions", "Contradictions"),
         ("/ops/queue/signals", "Signals"),
         ("/ops/queue/actions", "Action queue"),
-        ("/ops/today", "Today digest"),
+        # M25.7: page-help title is "Today" (the page is now two
+        # zones — Current backlog + Activity — not a single digest).
+        ("/ops/today", "Today"),
         ("/ops/timeline", "Timeline"),
         ("/ops/pulse", "Pulse"),
         ("/ops/events", "Event dossier"),

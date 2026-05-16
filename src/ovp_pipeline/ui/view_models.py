@@ -6154,6 +6154,8 @@ def build_reader_home_payload(
     # ``ovp-knowledge-index`` yet — show the empty-state hint instead.
     atlas = None
     recent_rows: list[tuple] = []
+    recent_total_active = 0
+    recent_newest_at = ""
     if db_path.exists():
         try:
             with sqlite3.connect(db_path) as conn:
@@ -6176,9 +6178,32 @@ def build_reader_home_payload(
                     """,
                     (pack, cutoff, READER_HOME_RECENT_CRYSTALS_LIMIT),
                 ).fetchall()
+                # M25.7 honest-zero: when the 7-day window is empty,
+                # the operator needs to know WHY — a bare "no topics"
+                # reads as broken when in fact there are hundreds of
+                # crystals that are simply older than the window.
+                # Pull the active-crystal total + newest synthesized
+                # date so the renderer can explain instead of going
+                # silent (M25.6 dogfood finding: home looked broken
+                # on a vault whose newest crystal was 10 days old).
+                ctx_row = conn.execute(
+                    """
+                    SELECT COUNT(*), MAX(synthesized_at)
+                      FROM community_crystals
+                     WHERE pack = ?
+                       AND superseded_by_synthesized_at = ''
+                    """,
+                    (pack,),
+                ).fetchone()
+                recent_total_active = int(ctx_row[0] or 0) if ctx_row else 0
+                recent_newest_at = (
+                    str(ctx_row[1]) if ctx_row and ctx_row[1] else ""
+                )
         except sqlite3.DatabaseError:
             atlas = None
             recent_rows = []
+            recent_total_active = 0
+            recent_newest_at = ""
     if atlas is None:
         # Empty placeholder so downstream rendering shows the
         # ``run ovp-knowledge-index`` hint without special-casing.
@@ -6245,6 +6270,18 @@ def build_reader_home_payload(
         },
         "recent_crystals": recent_crystals,
         "recent_days": READER_HOME_RECENT_DAYS,
+        # M25.7 honest-zero context for the empty Recent Topics
+        # state.  ``total_active`` = crystals that exist regardless
+        # of age; ``newest_at`` = when the most recent one was
+        # synthesized.  The renderer uses these to explain an
+        # empty 7-day window instead of going silent.
+        "recent_context": {
+            "total_active": recent_total_active,
+            "newest_at": recent_newest_at,
+            "topics_href": _scoped_path(
+                "/topics", pack_name=requested_pack
+            ),
+        },
         "map_supported": _supports_research_shell(pack_name),
         "search_href": _scoped_path("/search", pack_name=requested_pack),
         "map_href": _scoped_path("/map", pack_name=requested_pack),

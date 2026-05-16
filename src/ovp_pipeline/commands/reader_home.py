@@ -68,10 +68,54 @@ def _render_reader_home(payload: dict) -> str:
            "<code>ovp-synthesize-community-crystals</code> then "
            "<code>ovp-knowledge-index</code> to populate.</p>"
     )
-    recent_html = (
-        "".join(_recent_card(item) for item in recent_crystals)
-        or f"<p class='muted'>No topics synthesized in the last {recent_days} days.</p>"
-    )
+    # M25.7 honest-zero: an empty 7-day window is not "broken" —
+    # it usually means hundreds of crystals exist but the newest
+    # is older than the window.  Explain that + offer the action,
+    # the same doctrine M24.3 applied to every other zero surface.
+    if recent_crystals:
+        recent_html = "".join(_recent_card(item) for item in recent_crystals)
+    else:
+        rctx = payload.get("recent_context") or {}
+        total_active = int(rctx.get("total_active") or 0)
+        newest_at = str(rctx.get("newest_at") or "")
+        topics_href = str(rctx.get("topics_href") or _shell_href("/topics", requested_pack))
+        if total_active > 0:
+            newest_day = escape(newest_at[:10]) if newest_at else "unknown"
+            age_hint = ""
+            if newest_at:
+                try:
+                    from datetime import datetime, timezone
+
+                    newest_dt = datetime.fromisoformat(
+                        newest_at.replace("Z", "+00:00")
+                    )
+                    if newest_dt.tzinfo is None:
+                        newest_dt = newest_dt.replace(tzinfo=timezone.utc)
+                    days = (datetime.now(timezone.utc) - newest_dt).days
+                    age_hint = f" ({days} day{'s' if days != 1 else ''} ago)"
+                except (ValueError, TypeError):
+                    age_hint = ""
+            recent_html = (
+                "<p class='muted'>No topics synthesized in the last "
+                f"{recent_days} days — but this vault has "
+                f"<strong>{total_active}</strong> synthesized topic"
+                f"{'s' if total_active != 1 else ''} overall; the "
+                f"newest was synthesized <strong>{newest_day}</strong>"
+                f"{age_hint}.</p>"
+                "<p class='muted small'>This window is empty because "
+                "synthesis hasn't run recently, not because there's "
+                "nothing here.  Run "
+                "<code>ovp-synthesize-community-crystals</code> to "
+                "refresh, or "
+                f"<a href='{escape(topics_href)}'>browse all "
+                f"{total_active} topics →</a>.</p>"
+            )
+        else:
+            recent_html = (
+                "<p class='muted'>No topics synthesized yet.  Run "
+                "<code>ovp-synthesize-community-crystals</code> then "
+                "<code>ovp-knowledge-index</code> to populate.</p>"
+            )
     see_all_html = (
         f"<p class='muted'><a href='{escape(atlas_href)}'>See all "
         f"{atlas_top_n} featured topics →</a></p>"
