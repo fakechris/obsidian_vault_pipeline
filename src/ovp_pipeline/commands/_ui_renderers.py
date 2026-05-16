@@ -6754,19 +6754,30 @@ def _render_today_digest_page(payload: dict) -> str:
         not lifecycle.get("available") and lifecycle.get("reason")
     )
 
+    # M25.7 fix: the date pivot lives in the Activity zone.  If
+    # Activity renders BELOW Current backlog, clicking prev/next
+    # reloads the page at the top and the operator has to scroll
+    # a long way to find the date controls again.  So we build
+    # each zone into its own list and emit Activity FIRST (date
+    # controls near the top, no scroll-hunting), Current backlog
+    # second.
+    backlog_sections: list[str] = []
+    activity_sections: list[str] = []
+
     # ── ZONE A — Current backlog (date-independent) ────────────────
-    sections.append(
-        "<section style='margin-top:1rem'>"
+    backlog_sections.append(
+        "<section style='margin-top:1.8rem;border-top:2px solid "
+        "var(--border);padding-top:1rem'>"
         "<h2 style='margin-bottom:.2rem'>Current backlog</h2>"
         "<p class='muted small' style='margin:0 0 .6rem'>"
         "Snapshot of how many items are in each lifecycle state "
         "<strong>right now</strong>.  Source: "
         "<code>ops_state</code>.  "
         "<span style='color:var(--accent,#c2410c)'>Not affected by "
-        "the date selector below.</span></p>"
+        "the date selector above.</span></p>"
     )
     if projection_unavailable:
-        sections.append(
+        backlog_sections.append(
             "<div class='card' style='border-color:#c2410c;"
             "background:#fef3e8;padding:0.75rem 1rem;margin:0.5rem 0'>"
             "<strong>Lifecycle projection unavailable.</strong> "
@@ -6775,7 +6786,7 @@ def _render_today_digest_page(payload: dict) -> str:
             "below will be 0 until this lands.</p>"
             "</div>"
         )
-    sections.append("<div class='grid stats'>")
+    backlog_sections.append("<div class='grid stats'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
@@ -6847,7 +6858,7 @@ def _render_today_digest_page(payload: dict) -> str:
             else ""
         )
 
-        sections.append(
+        backlog_sections.append(
             "<div class='card' style='margin:0;overflow:hidden'>"
             f"<div class='muted tiny'>{escape(label)}</div>"
             f"<div class='metric-num{warn_cls}' "
@@ -6860,7 +6871,7 @@ def _render_today_digest_page(payload: dict) -> str:
             f"{primary_cta}"
             "</div>"
         )
-    sections.append("</div></section>")
+    backlog_sections.append("</div></section>")
 
     # ── ZONE B — Activity on <date> (date-driven) ──────────────────
     prev_path = str(payload.get("prev_date_path") or "")
@@ -6880,9 +6891,8 @@ def _render_today_digest_page(payload: dict) -> str:
             f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>"
         )
 
-    sections.append(
-        "<section style='margin-top:1.8rem;border-top:2px solid "
-        "var(--border);padding-top:1rem'>"
+    activity_sections.append(
+        "<section style='margin-top:1rem'>"
         f"<h2 style='margin-bottom:.2rem'>Activity on "
         f"<span style='color:var(--accent,#c2410c)'>{escape(date)}"
         "</span></h2>"
@@ -6890,7 +6900,8 @@ def _render_today_digest_page(payload: dict) -> str:
         "Evidence events recorded on this UTC day.  Source: "
         "<code>audit_events</code>.  "
         "<strong>This is the zone the date selector controls</strong>"
-        " — change the day to see other days' flow.  "
+        " — change the day to see other days' flow.  Current "
+        "backlog is below and does not move with the date.  "
         "<a href='/ops/timeline'>Timeline</a> has the multi-day view."
         "</p>"
         f"<p class='muted' style='margin:0 0 .6rem'>"
@@ -6899,11 +6910,11 @@ def _render_today_digest_page(payload: dict) -> str:
 
     # Regenerate-digest acts on the SELECTED date — belongs in this
     # zone, not globally.
-    sections.append(
+    activity_sections.append(
         _render_digest_regenerate_button(requested_pack, date=date)
     )
 
-    sections.append("<div class='grid stats' style='margin-top:.6rem'>")
+    activity_sections.append("<div class='grid stats' style='margin-top:.6rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
@@ -6940,7 +6951,7 @@ def _render_today_digest_page(payload: dict) -> str:
         )
         zero_html = honest_zero_html(short=True) if event_count == 0 else ""
 
-        sections.append(
+        activity_sections.append(
             "<div class='card' style='margin:0;overflow:hidden'>"
             f"<div class='muted tiny'>{escape(label)}</div>"
             f"<div class='metric-num{warn_cls}' "
@@ -6952,9 +6963,11 @@ def _render_today_digest_page(payload: dict) -> str:
             f"{secondary_cta}"
             "</div>"
         )
-    sections.append("</div></section>")
+    activity_sections.append("</div></section>")
 
-    body = "".join(sections)
+    # M25.7 fix: Activity FIRST (date pivot near top — no
+    # scroll-hunting after prev/next), Current backlog SECOND.
+    body = "".join(sections + activity_sections + backlog_sections)
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
 
