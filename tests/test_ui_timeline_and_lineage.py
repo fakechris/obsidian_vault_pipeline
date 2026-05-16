@@ -571,24 +571,27 @@ class TestBuildTodayDigestPayload:
             "Synthesized", "NeedsAction",
         ]
 
-    def test_received_card_counts_intake_events_as_secondary(self, tmp_path):
-        """The Received card's SECONDARY count picks up
-        clippings_processed + article_intake_only events from
-        today's audit log."""
+    def test_received_card_counts_distinct_sources_as_secondary(self, tmp_path):
+        """M26 BL-101: the Received SECONDARY count is DISTINCT
+        sources, not raw event rows.  Seeded intake rows reference
+        alpha.md / beta.md / gamma.md (3 distinct sources);
+        clippings_processed carries no file ref so it is not a
+        distinct source.  Pre-M26 this counted 4 raw rows."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
         _seed_run_db(tmp_path)
         payload = build_today_digest_payload(tmp_path)
         received = next(c for c in payload["cards"] if c["id"] == "Received")
-        # Seeded: 1 clippings_processed + 3 article_intake_only.
-        assert received["event_count"] >= 4
-        assert received["event_label"] == f"{received['event_count']} arrived today"
+        assert received["event_count"] == 3
+        assert received["event_label"] == "3 arrived today"
+        # raw-row breakdown preserved for the drilldown
+        assert sum(received["event_by_type"].values()) >= 4
 
-    def test_needs_action_card_counts_failures_as_secondary(self, tmp_path):
+    def test_needs_action_card_counts_distinct_blockers_as_secondary(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_today_digest_payload
         _seed_run_db(tmp_path)
         payload = build_today_digest_payload(tmp_path)
         na = next(c for c in payload["cards"] if c["id"] == "NeedsAction")
-        # Seeded: 1 absorb_parse_error.
+        # Seeded: 1 absorb_parse_error on broken.md → 1 distinct blocker.
         assert na["event_count"] == 1
         assert "blockers today" in na["event_label"]
 

@@ -3131,6 +3131,12 @@ def build_timeline_payload(
 # excludes legacy / debug-only event types from the primary count by
 # default so high-volume forensic rows (``atlas_updated_from_registry``,
 # ``quality_checked``, etc.) don't drown the cards.
+from ..audit_identity import (
+    audit_cluster_ids,
+    audit_object_ids,
+    audit_slug_for_column,
+)
+from ..audit_time import local_day as _audit_local_day
 from ..event_evidence_registry import (
     CATEGORIES as _EVT_CATEGORIES,
     event_types_for_category as _evt_for_category,
@@ -3264,6 +3270,145 @@ def _event_types_for_card(card: dict[str, Any]) -> tuple[str, ...]:
     return tuple(et for et in result if et not in excluded)
 
 
+# BL-101: the Activity card secondary number is a DISTINCT ITEM
+# count, not a raw event-row count.  One source emits several intake
+# rows; one promote run emits one row per candidate.  The identity
+# kind depends on the lifecycle state the card represents.
+_ACTIVITY_IDENTITY_KIND: dict[str, str] = {
+    "Received": "source",
+    "Extracted": "source",
+    "Accepted": "object",
+    "Synthesized": "cluster",
+    "NeedsAction": "source",
+}
+
+
+def _activity_item_identity(
+    state: str, slug: str, payload: dict[str, Any]
+) -> str | None:
+    """Stable distinct-count identity for one audit row under a
+    given Activity card, or None when the row carries no usable
+    identity (then it is shown in the drilldown but counted by
+    neither side — so card count == drilldown distinct count holds
+    by construction).
+
+    Identity kind per state (BL-101): source slug for
+    Received/Extracted/NeedsAction, object id for Accepted, cluster
+    id for Synthesized.  ``min()`` picks a deterministic
+    representative when a payload carries several.
+    """
+    kind = _ACTIVITY_IDENTITY_KIND.get(state, "source")
+    if kind == "object":
+        ids = audit_object_ids(payload)
+        if ids:
+            return min(ids)
+        # promote rows that only carry a source fall back to the
+        # source identity so they still count once.
+        return _source_identity(slug, payload)
+    if kind == "cluster":
+        ids = audit_cluster_ids(payload)
+        return min(ids) if ids else None
+    return _source_identity(slug, payload)
+
+
+def _source_identity(slug: str, payload: dict[str, Any]) -> str | None:
+    """Source-class distinct identity: the populated ``slug`` column
+    if present, else derived from the payload exactly as ingest's
+    ``_infer_audit_slug`` would (``file`` / ``source`` / ``path``
+    basename).  The ``slug`` column is only ~60% backfilled on the
+    live vault (M24 PR-B), so relying on it alone would silently
+    drop ~40% of source rows from the count."""
+    s = (slug or "").strip()
+    if s:
+        return s
+    derived = audit_slug_for_column(payload)
+    return derived or None
+
+
+def _audit_row_pack(payload: dict[str, Any]) -> str | None:
+    """Pack recorded in the audit payload, or None for legacy rows
+    that predate pack stamping."""
+    pack = payload.get("pack")
+    return str(pack) if pack else None
+
+
+def _fetch_activity_rows(
+    conn: sqlite3.Connection,
+    event_types: tuple[str, ...],
+    date_key: str,
+    effective_pack: str,
+) -> list[tuple[str, str, str, dict[str, Any]]]:
+    """Rows for an Activity card / its drilldown, scoped by
+    operator-local day (BL-102) and pack.
+
+    Day bucketing is done in Python via the shared
+    ``audit_time.local_day`` so UTC-``Z`` and naive-local rows fall
+    on the same operator day — SQLite ``date(timestamp)`` mixed the
+    two clocks.  A coarse ``substr`` prefilter (±1 day) keeps the
+    Python scan bounded; a tz shift moves a row at most one calendar
+    day.  Pack scoping: matching pack included, different pack
+    excluded, legacy pack-less rows only under the default pack.
+    Both the card count and the drilldown call THIS, so they cannot
+    disagree.
+    """
+    if not event_types:
+        return []
+    try:
+        anchor = _dt.datetime.strptime(date_key, "%Y-%m-%d")
+    except ValueError:
+        return []
+    day_prefixes = [
+        (anchor + _dt.timedelta(days=d)).strftime("%Y-%m-%d")
+        for d in (-1, 0, 1)
+    ]
+    et_ph = ",".join("?" for _ in event_types)
+    pre_ph = ",".join("?" for _ in day_prefixes)
+    raw = conn.execute(
+        f"""
+        SELECT timestamp, event_type, slug, payload_json
+          FROM audit_events
+         WHERE event_type IN ({et_ph})
+           AND substr(timestamp, 1, 10) IN ({pre_ph})
+        """,
+        (*event_types, *day_prefixes),
+    ).fetchall()
+    out: list[tuple[str, str, str, dict[str, Any]]] = []
+    for ts, et, slug, pj in raw:
+        if _audit_local_day(str(ts or "")) != date_key:
+            continue
+        try:
+            payload = json.loads(pj or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        row_pack = _audit_row_pack(payload)
+        if row_pack is None:
+            if effective_pack != PRIMARY_PACK_NAME:
+                continue
+        elif row_pack != effective_pack:
+            continue
+        out.append(
+            (str(ts or ""), str(et or ""), str(slug or ""), payload)
+        )
+    return out
+
+
+def _state_for_event_types(event_types: tuple[str, ...]) -> str:
+    """Infer the lifecycle state a card-drilldown belongs to from its
+    event_types set.  Card links carry exactly a card's composed
+    event_types, so an exact set match resolves the state without an
+    extra URL param.  Empty string when it can't be resolved (the
+    drilldown then shows rows but no distinct-item reconciliation)."""
+    want = set(event_types)
+    if not want:
+        return ""
+    for card_def in M25_LIFECYCLE_CARD_DEFS:
+        if set(_event_types_for_card(card_def)) == want:
+            return str(card_def["id"])
+    return ""
+
+
 def _build_m25_hybrid_cards(
     db_path: Path,
     *,
@@ -3359,24 +3504,31 @@ def _build_m25_hybrid_cards(
                         "path": href,
                     })
 
-            # ── Secondary number (events-in-window) ───────────
+            # ── Secondary number (distinct items on this day) ──
+            # BL-101/BL-102: count DISTINCT items (not raw event
+            # rows), bucketed by operator-local day with pack
+            # scoping.  ``by_type`` stays a raw-row breakdown so the
+            # drilldown evidence still reconciles per event_type.
             event_count = 0
             by_type: dict[str, int] = {}
             if event_types:
-                placeholders = ",".join("?" for _ in event_types)
-                counts_rows = conn.execute(
-                    f"""
-                    SELECT event_type, COUNT(*) AS n
-                      FROM audit_events
-                     WHERE date(timestamp) = ?
-                       AND event_type IN ({placeholders})
-                     GROUP BY event_type
-                     ORDER BY n DESC
-                    """,
-                    (date_key, *event_types),
-                ).fetchall()
-                by_type = {row[0]: int(row[1]) for row in counts_rows}
-                event_count = sum(by_type.values())
+                rows = _fetch_activity_rows(
+                    conn, event_types, date_key, effective_pack
+                )
+                identities: set[str] = set()
+                for _ts, et, slug, payload in rows:
+                    by_type[et] = by_type.get(et, 0) + 1
+                    ident = _activity_item_identity(state, slug, payload)
+                    if ident is not None:
+                        identities.add(ident)
+                by_type = dict(
+                    sorted(
+                        by_type.items(),
+                        key=lambda kv: kv[1],
+                        reverse=True,
+                    )
+                )
+                event_count = len(identities)
 
             # ── Hrefs ─────────────────────────────────────────
             # Primary CTA → /ops/items.  Critically NO date param:
@@ -3399,12 +3551,14 @@ def _build_m25_hybrid_cards(
             # role banner.
             #
             # M25.4 (codex review on PR #239): set the URL limit to
-            # at LEAST the card's event_count so high-volume days
-            # don't silently truncate to 200 rows.  Clamp to the
-            # audit view's hard MAX so the URL stays bounded.
+            # at LEAST the raw evidence-row volume (NOT the distinct
+            # item count) so the drilldown isn't silently truncated
+            # — one item can carry many rows.  Clamp to the audit
+            # view's hard MAX so the URL stays bounded.
             secondary_href = ""
             if event_types:
-                target_limit = max(EVENTS_AUDIT_DEFAULT_LIMIT, event_count)
+                raw_row_total = sum(by_type.values())
+                target_limit = max(EVENTS_AUDIT_DEFAULT_LIMIT, raw_row_total)
                 target_limit = min(target_limit, EVENTS_AUDIT_MAX_LIMIT)
                 see_all_qs_parts = [
                     f"date={quote(date_key, safe='')}",
@@ -3423,7 +3577,7 @@ def _build_m25_hybrid_cards(
             secondary_label = (
                 f"{event_count} {secondary_verb}"
                 if secondary_verb
-                else f"{event_count} evidence events today"
+                else f"{event_count} items today"
             )
 
             cards.append({
@@ -3861,6 +4015,7 @@ def build_events_audit_payload(
     date_key: str = "",
     pack_name: str | None = None,
     limit: int = EVENTS_AUDIT_DEFAULT_LIMIT,
+    state: str = "",
 ) -> dict[str, Any]:
     """M25.4: ``/ops/events/audit`` raw-audit-evidence view.
 
@@ -3875,13 +4030,20 @@ def build_events_audit_payload(
     directly using the same SQL the card uses, so card N === page
     N by construction.  Flat table, no timeline grouping.
 
-    Plan contract (locked in M25 §M25.4):
+    Plan contract (locked in M25 §M25.4, tightened by M26 BL-102):
     * ``event_types`` is the card's event_types list — required
-      so the page count matches what the card counted.
-    * ``date_key`` filters to that day.
-    * No pack filter on rows: ``audit_events`` doesn't carry a
-      pack column.  Pack-scoping is part of the routing context
-      (URL) but doesn't restrict rows returned.
+      so the page rows match what the card counted.
+    * ``date_key`` filters to that day, bucketed by operator-local
+      day via the shared ``audit_time`` parser (NOT SQLite
+      ``date(timestamp)``) so it matches the card exactly.
+    * Pack scoping is applied to rows (BL-102): matching payload
+      pack included, different excluded, legacy pack-less rows only
+      under the default pack — identical to the card.
+    * ``state`` (optional) lets the page report the distinct-item
+      count; inferred from ``event_types`` when omitted.  The card
+      count equals ``distinct_item_count`` here by construction —
+      both go through ``_fetch_activity_rows`` +
+      ``_activity_item_identity``.
     """
     requested_pack = pack_name or ""
     event_types_tup = tuple(event_types or ())
@@ -3894,6 +4056,8 @@ def build_events_audit_payload(
             "screen": "ops/events/audit",
             "available": False,
             "reason": "knowledge_index has not been built yet",
+            "state": state or _state_for_event_types(event_types_tup),
+            "distinct_item_count": 0,
             "event_types": list(event_types_tup),
             "date": date_key,
             "requested_pack": requested_pack,
@@ -3902,64 +4066,102 @@ def build_events_audit_payload(
             "limit": safe_limit,
         }
 
-    # M25.4 (codex review on PR #239): when no event_types filter
-    # is passed (operator landed here from the timeline-projection
-    # banner with no specific scope), show the N most-recent
-    # audit_events rows across ALL event_types so the page isn't
-    # empty.  The role banner explains the page's purpose; the
-    # default content has to be useful.
-    where: list[str] = []
-    params: list[object] = []
-    if event_types_tup:
-        placeholders = ",".join("?" for _ in event_types_tup)
-        where.append(f"event_type IN ({placeholders})")
-        params.extend(event_types_tup)
-    if date_key:
-        where.append("date(timestamp) = ?")
-        params.append(date_key)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-
-    with sqlite3.connect(db_path) as conn:
-        total_row = conn.execute(
-            f"SELECT COUNT(*) FROM audit_events {where_sql}",
-            params,
-        ).fetchone()
-        total = int(total_row[0] or 0) if total_row else 0
-        rows = conn.execute(
-            f"""
-            SELECT timestamp, event_type, slug, payload_json, source_log
-              FROM audit_events
-             {where_sql}
-             ORDER BY timestamp DESC
-             LIMIT ?
-            """,
-            (*params, safe_limit),
-        ).fetchall()
+    resolved_state = state or _state_for_event_types(event_types_tup)
+    effective_pack = requested_pack or PRIMARY_PACK_NAME
 
     audit_rows: list[dict[str, Any]] = []
-    for ts, event_type, slug, payload_json, source_log in rows:
-        # Snippet of payload — first 120 chars so the page doesn't
-        # flood with full JSON dumps.  Renderer adds a title=…
-        # tooltip carrying the full body for hover-inspection.
-        payload_str = str(payload_json or "")
+    distinct_item_count = 0
+
+    def _row(ts: str, et: str, slug: str, payload_str: str, src: str) -> dict[str, Any]:
         snippet = (
-            payload_str[:117] + "…"
-            if len(payload_str) > 120
-            else payload_str
+            payload_str[:117] + "…" if len(payload_str) > 120 else payload_str
         )
-        audit_rows.append({
-            "timestamp": str(ts or ""),
-            "event_type": str(event_type or ""),
-            "slug": str(slug or ""),
+        return {
+            "timestamp": ts,
+            "event_type": et,
+            "slug": slug,
             "payload_snippet": snippet,
             "payload_full": payload_str,
-            "source_log": str(source_log or ""),
-        })
+            "source_log": src,
+        }
+
+    if event_types_tup and date_key:
+        # Card-drilldown path: identical scoping to the card
+        # (operator-local day + pack) so card N === page N by
+        # construction.  source_log isn't returned by the shared
+        # fetch; re-read it here keyed on the same scoped rows.
+        with sqlite3.connect(db_path) as conn:
+            scoped = _fetch_activity_rows(
+                conn, event_types_tup, date_key, effective_pack
+            )
+        identities: set[str] = set()
+        for ts, et, slug, payload in scoped:
+            if resolved_state:
+                ident = _activity_item_identity(resolved_state, slug, payload)
+                if ident is not None:
+                    identities.add(ident)
+            audit_rows.append(
+                _row(
+                    ts,
+                    et,
+                    slug,
+                    json.dumps(payload, ensure_ascii=False)
+                    if payload
+                    else "",
+                    "",
+                )
+            )
+        distinct_item_count = len(identities)
+        total = len(audit_rows)
+        audit_rows.sort(key=lambda r: r["timestamp"], reverse=True)
+        audit_rows = audit_rows[:safe_limit]
+    else:
+        # Legacy landing (no scope): N most-recent rows across all
+        # event_types so the page isn't empty when the operator
+        # arrives from the timeline-projection role banner.
+        where: list[str] = []
+        params: list[object] = []
+        if event_types_tup:
+            placeholders = ",".join("?" for _ in event_types_tup)
+            where.append(f"event_type IN ({placeholders})")
+            params.extend(event_types_tup)
+        if date_key:
+            where.append("date(timestamp) = ?")
+            params.append(date_key)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        with sqlite3.connect(db_path) as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) FROM audit_events {where_sql}",
+                params,
+            ).fetchone()
+            total = int(total_row[0] or 0) if total_row else 0
+            rows = conn.execute(
+                f"""
+                SELECT timestamp, event_type, slug, payload_json, source_log
+                  FROM audit_events
+                 {where_sql}
+                 ORDER BY timestamp DESC
+                 LIMIT ?
+                """,
+                (*params, safe_limit),
+            ).fetchall()
+        for ts, event_type, slug, payload_json, source_log in rows:
+            audit_rows.append(
+                _row(
+                    str(ts or ""),
+                    str(event_type or ""),
+                    str(slug or ""),
+                    str(payload_json or ""),
+                    str(source_log or ""),
+                )
+            )
 
     return {
         "screen": "ops/events/audit",
         "available": True,
         "reason": "",
+        "state": resolved_state,
+        "distinct_item_count": distinct_item_count,
         "event_types": list(event_types_tup),
         "date": date_key,
         "requested_pack": requested_pack,
