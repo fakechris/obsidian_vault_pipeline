@@ -6720,6 +6720,84 @@ def _render_staleness_banner(staleness: dict) -> str:
     )
 
 
+def _render_intake_cohort_zone(cohort: dict, date: str) -> str:
+    """BL-105 "Flow by intake day" zone.  Distinct from Activity:
+    Activity counts what the system DID on the event day; this
+    follows the sources whose intake STARTED on this day to where
+    they are now.  The copy says so — BL-100 forbids making the
+    operator infer which timestamp a number uses."""
+    if not cohort or not cohort.get("available"):
+        reason = escape(str((cohort or {}).get("reason") or ""))
+        body = (
+            f"<p class='muted tiny'>{reason}</p>" if reason else
+            "<p class='muted tiny'>No intake-cohort data.</p>"
+        )
+        return (
+            "<section class='card' style='margin:.6rem 0 0'>"
+            "<div class='muted tiny'>Flow by intake day</div>"
+            f"{body}</section>"
+        )
+    size = int(cohort.get("cohort_size") or 0)
+    dist = cohort.get("distribution") or {}
+    untracked = int(cohort.get("untracked") or 0)
+    stalled = int(cohort.get("stalled") or 0)
+    stall_days = int(cohort.get("stall_days") or 7)
+    oldest = int(cohort.get("oldest_age_days") or 0)
+
+    if size == 0:
+        return (
+            "<section class='card' style='margin:.6rem 0 0'>"
+            "<div class='muted tiny'>Flow by intake day — "
+            f"{escape(date)}</div>"
+            "<p class='muted tiny' style='margin-top:4px'>No sources"
+            " first entered intake on this day.  (This is the"
+            " intake-time axis, not the event-time Activity above.)"
+            "</p></section>"
+        )
+
+    parts = []
+    for st in ("Received", "Extracted", "Accepted", "Synthesized", "NeedsAction"):
+        n = int(dist.get(st) or 0)
+        if n:
+            parts.append(f"{n} {escape(st)}")
+    if untracked:
+        parts.append(f"{untracked} Untracked")
+    distribution_line = " · ".join(parts) if parts else "no current state"
+
+    stalled_html = (
+        f"<span class='warn'> · {stalled} stalled "
+        f"(&gt;{stall_days}d in Received/Extracted)</span>"
+        if stalled
+        else ""
+    )
+
+    sample_rows = ""
+    for s in cohort.get("samples") or []:
+        sample_rows += (
+            "<div class='tiny' style='margin-top:2px'>"
+            f"<a href='{escape(str(s.get('href') or '#'))}'>"
+            f"{escape(str(s.get('slug') or ''))}</a> "
+            f"<span class='muted'>→ {escape(str(s.get('state') or ''))}"
+            f" · {int(s.get('age_days') or 0)}d old</span></div>"
+        )
+
+    return (
+        "<section class='card' style='margin:.6rem 0 0'>"
+        f"<div class='muted tiny'>Flow by intake day — {escape(date)}"
+        " <span style='opacity:.7'>(where the sources first saved"
+        " this day are now — NOT the event-time Activity above)</span>"
+        "</div>"
+        f"<div style='margin-top:4px'><strong>{size}</strong> "
+        f"source{'s' if size != 1 else ''} first entered intake on "
+        f"{escape(date)}</div>"
+        f"<div class='muted tiny' style='margin-top:2px'>"
+        f"now: {distribution_line}{stalled_html} · oldest {oldest}d"
+        "</div>"
+        f"{sample_rows}"
+        "</section>"
+    )
+
+
 def _render_today_digest_page(payload: dict) -> str:
     """M25.7: ``/ops/today`` split into two clearly-separated zones.
 
@@ -7009,6 +7087,14 @@ def _render_today_digest_page(payload: dict) -> str:
             "</div>"
         )
     activity_sections.append("</div></section>")
+
+    # BL-105: New Intake (intake-time axis) sits with the other
+    # date-driven content, clearly separated from Activity.
+    activity_sections.append(
+        _render_intake_cohort_zone(
+            payload.get("intake_cohort") or {}, date
+        )
+    )
 
     # M25.7 fix: Activity FIRST (date pivot near top — no
     # scroll-hunting after prev/next), Current backlog SECOND.

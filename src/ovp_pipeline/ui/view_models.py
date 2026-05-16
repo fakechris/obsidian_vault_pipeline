@@ -3759,6 +3759,153 @@ def compute_today_staleness(
     }
 
 
+# A cohort source still sitting in Received/Extracted older than
+# this is "stalled" — intake happened but the pipeline never moved
+# it forward.  One week covers the normal manual-absorb cadence.
+_INTAKE_STALL_DAYS = 7
+
+
+def build_intake_cohort_payload(
+    vault_dir: Path | str, *, date_key: str, pack: str
+) -> dict[str, Any]:
+    """BL-105: "Flow by intake day".  For the sources whose FIRST
+    durable intake (operator-local day) is ``date_key``, show where
+    they are *now* — current ``ops_state`` distribution, age, and
+    how many stalled in Received/Extracted.
+
+    Answers the operator's actual question — "what happened to the
+    articles I saved that day?" — which Activity (event-day) cannot:
+    a source saved on the 10th but absorbed on the 16th shows up in
+    the 10th's cohort here, but in the 16th's Activity there.
+
+    Identity + pack scoping reuse the BL-101 helpers; needs only
+    intake-class audit evidence + current ``ops_state`` (both exist
+    post-PR-B), so it ships before the BL-103b stage ledger.
+    """
+    from ..ops_lifecycle import ALL_STATES
+
+    db_path = _db_path(vault_dir)
+    base: dict[str, Any] = {
+        "screen": "ops/intake-cohort",
+        "date": date_key,
+        "requested_pack": pack,
+        "available": False,
+        "reason": "",
+        "cohort_size": 0,
+        "distribution": {s: 0 for s in ALL_STATES},
+        "untracked": 0,
+        "stalled": 0,
+        "stall_days": _INTAKE_STALL_DAYS,
+        "oldest_age_days": 0,
+        "samples": [],
+    }
+    if not db_path.exists():
+        base["reason"] = "knowledge_index has not been built yet"
+        return base
+
+    intake_types = tuple(_evt_for_category("intake"))
+    if not intake_types:
+        base["available"] = True
+        return base
+    effective_pack = pack or PRIMARY_PACK_NAME
+
+    # Earliest intake instant per source identity, across ALL
+    # history — we can only know a source's cohort day by proving it
+    # had no earlier intake.  (Full intake-subset scan; BL-108
+    # streaming is the perf follow-up, not a blocker here.)
+    earliest: dict[str, Any] = {}
+    state_by_id: dict[str, str] = {}
+    with sqlite3.connect(db_path) as conn:
+        et_ph = ",".join("?" for _ in intake_types)
+        for ts, slug, pj in conn.execute(
+            f"SELECT timestamp, slug, payload_json FROM audit_events "
+            f" WHERE event_type IN ({et_ph})",
+            intake_types,
+        ):
+            parsed = _parse_audit_ts(str(ts or ""))
+            if parsed is None:
+                continue
+            try:
+                payload = json.loads(pj or "{}")
+            except ValueError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            rp = _audit_row_pack(payload)
+            if rp is None:
+                if effective_pack != PRIMARY_PACK_NAME:
+                    continue
+            elif rp != effective_pack:
+                continue
+            ident = _source_identity(str(slug or ""), payload)
+            if not ident:
+                continue
+            cur = earliest.get(ident)
+            if cur is None or parsed < cur:
+                earliest[ident] = parsed
+
+        cohort = {
+            sid: ts
+            for sid, ts in earliest.items()
+            if ts.astimezone().date().isoformat() == date_key
+        }
+        has_ops = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='ops_state'"
+        ).fetchone()
+        if has_ops and cohort:
+            ids = list(cohort)
+            for i in range(0, len(ids), 400):
+                chunk = ids[i : i + 400]
+                ph = ",".join("?" for _ in chunk)
+                for iid, st in conn.execute(
+                    f"SELECT item_id, state FROM ops_state "
+                    f" WHERE pack = ? AND item_kind = 'source' "
+                    f"   AND item_id IN ({ph})",
+                    (effective_pack, *chunk),
+                ):
+                    state_by_id[str(iid)] = str(st)
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    dist = {s: 0 for s in ALL_STATES}
+    untracked = 0
+    stalled = 0
+    ages: list[int] = []
+    samples: list[dict[str, Any]] = []
+    for sid, ts in sorted(cohort.items(), key=lambda kv: kv[1]):
+        st = state_by_id.get(sid)
+        age = (now - ts).days
+        ages.append(age)
+        if st in dist:
+            dist[st] += 1
+        else:
+            untracked += 1
+        if st in ("Received", "Extracted") and age > _INTAKE_STALL_DAYS:
+            stalled += 1
+        if len(samples) < TODAY_CARD_SAMPLE_SIZE:
+            samples.append({
+                "slug": sid,
+                "state": st or "Untracked",
+                "intake_at": ts.astimezone().isoformat(),
+                "age_days": age,
+                "href": _scoped_path(
+                    f"/ops/items?state={quote(st or '', safe='')}",
+                    pack_name=pack,
+                ),
+            })
+
+    base.update(
+        available=True,
+        cohort_size=len(cohort),
+        distribution=dist,
+        untracked=untracked,
+        stalled=stalled,
+        oldest_age_days=max(ages) if ages else 0,
+        samples=samples,
+    )
+    return base
+
+
 def build_today_digest_payload(
     vault_dir: Path | str,
     *,
@@ -3845,6 +3992,9 @@ def build_today_digest_payload(
     staleness = compute_today_staleness(
         vault_dir, pack=effective_pack
     )
+    intake_cohort = build_intake_cohort_payload(
+        vault_dir, date_key=date_key, pack=effective_pack
+    )
 
     return {
         "screen": "ops/today",
@@ -3857,6 +4007,7 @@ def build_today_digest_payload(
         "cards": cards,
         "lifecycle_summary": lifecycle_summary,
         "staleness": staleness,
+        "intake_cohort": intake_cohort,
         "available": True,
     }
 
