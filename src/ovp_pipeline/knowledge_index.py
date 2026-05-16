@@ -955,7 +955,19 @@ def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, s
                     str(payload.get("event_type") or "unknown"),
                     _infer_audit_slug(payload),
                     str(payload.get("session_id") or ""),
-                    str(payload.get("timestamp") or ""),
+                    # codex #246 P2: ``event_emitter.emit`` writes the
+                    # timestamp under ``ts``, while PipelineLogger
+                    # writes ``timestamp``.  Fall back to ``ts`` so
+                    # date-filtered consumers (/ops/today Activity
+                    # zone, /ops/events/audit?date=) see emit-based
+                    # rows (community_crystal_synthesized,
+                    # promote_concept, candidates_upserted, …)
+                    # instead of dropping them on an empty timestamp.
+                    str(
+                        payload.get("timestamp")
+                        or payload.get("ts")
+                        or ""
+                    ),
                     json.dumps(payload, ensure_ascii=False),
                 )
             )
