@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..knowledge_index import sync_audit_events_from_jsonl
@@ -69,14 +71,12 @@ def _state_counts(conn: sqlite3.Connection, pack: str) -> dict[str, int]:
     # degrade to all-zeros, not crash (it gets created by the
     # rebuild that follows).
     has_table = conn.execute(
-        "SELECT 1 FROM sqlite_master "
-        "WHERE type='table' AND name='ops_state'"
+        "SELECT 1 FROM sqlite_master " "WHERE type='table' AND name='ops_state'"
     ).fetchone()
     if not has_table:
         return counts
     rows = conn.execute(
-        "SELECT state, COUNT(*) FROM ops_state "
-        " WHERE pack = ? GROUP BY state",
+        "SELECT state, COUNT(*) FROM ops_state " " WHERE pack = ? GROUP BY state",
         (pack,),
     ).fetchall()
     for state, n in rows:
@@ -85,30 +85,67 @@ def _state_counts(conn: sqlite3.Connection, pack: str) -> dict[str, int]:
     return counts
 
 
-def _canonical_evidence_since(
-    conn: sqlite3.Connection, window_minutes: int
-) -> dict[str, int]:
+def _parse_audit_ts(raw: str) -> datetime | None:
+    """Best-effort parse of an audit timestamp to an aware datetime.
+
+    Audit rows carry mixed formats: ``event_emitter.emit`` writes
+    ISO-8601 (``2026-05-14T12:30:00Z`` / ``+00:00``), the older
+    ``PipelineLogger`` path writes space-separated
+    ``2026-05-14 12:30:00``.  A lexicographic SQL compare across the
+    ``T``/space separator boundary silently misclassifies rows, so we
+    parse to a real datetime and treat all audit timestamps as UTC
+    (the same coarse stance the kernel takes).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None
+    s = s.replace("T", " ", 1)
+    if s.endswith("Z"):
+        s = s[:-1]
+    m = re.search(r"[+-]\d{2}:?\d{2}$", s)
+    if m:
+        s = s[: m.start()]
+    s = s.strip()
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _canonical_evidence_since(conn: sqlite3.Connection, window_minutes: int) -> dict[str, int]:
     """Count canonical-object audit events in the recent window.
 
-    Uses a coarse timestamp-prefix filter — same lossy-but-stable
-    approach the kernel uses; we only need "did any land", not
-    precision.
+    Timestamps are parsed in Python rather than compared
+    lexicographically in SQL — audit rows mix ISO ``T`` and
+    space-separated formats, and a string compare across that
+    boundary misclassifies rows (false positives that wrongly
+    trigger the heavy rebuild path).  We only need "did any land",
+    so precision beyond the parse is unnecessary.
     """
-    found: dict[str, int] = {}
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(window_minutes))
     placeholders = ",".join("?" * len(_CANONICAL_OBJECT_EVENTS))
     rows = conn.execute(
         f"""
-        SELECT event_type, COUNT(*)
+        SELECT event_type, timestamp
           FROM audit_events
          WHERE event_type IN ({placeholders})
-           AND timestamp >= datetime('now', ?)
-         GROUP BY event_type
         """,
-        (*_CANONICAL_OBJECT_EVENTS, f"-{int(window_minutes)} minutes"),
+        (*_CANONICAL_OBJECT_EVENTS,),
     ).fetchall()
-    for et, n in rows:
-        if int(n) > 0:
-            found[str(et)] = int(n)
+    found: dict[str, int] = {}
+    for et, ts in rows:
+        parsed = _parse_audit_ts(str(ts or ""))
+        if parsed is None or parsed < cutoff:
+            continue
+        key = str(et)
+        found[key] = found.get(key, 0) + 1
     return found
 
 
@@ -121,9 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             "candidates-only case."
         )
     )
-    parser.add_argument(
-        "--vault-dir", type=Path, default=None, help="Vault directory"
-    )
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     parser.add_argument(
         "--pack",
         default=DEFAULT_WORKFLOW_PACK_NAME,
@@ -139,17 +174,14 @@ def main(argv: list[str] | None = None) -> int:
             "(default: 180)."
         ),
     )
-    parser.add_argument(
-        "--json", action="store_true", help="Emit JSON output"
-    )
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args(argv)
 
     vault_dir = resolve_vault_dir(args.vault_dir)
     db_path = _db_path(vault_dir)
     if not db_path.is_file():
         print(
-            f"refresh-ops: no knowledge.db at {db_path} — run "
-            "`ovp-knowledge-index` once first.",
+            f"refresh-ops: no knowledge.db at {db_path} — run " "`ovp-knowledge-index` once first.",
             file=sys.stderr,
         )
         return 1
@@ -160,14 +192,28 @@ def main(argv: list[str] | None = None) -> int:
 
     # 2. lightweight audit re-ingest (NO embeddings / projection)
     sync_payload = sync_audit_events_from_jsonl(vault_dir)
+    sync_status = sync_payload.get("status", "?")
+    if sync_status != "synced":
+        # Deciding "is a heavier rebuild needed?" on a stale or
+        # un-synced audit table is worse than not deciding — the
+        # entire value of this command is a TRUSTWORTHY state
+        # movement.  Abort with a distinct code so a wrapper can
+        # tell "stale, can't decide" apart from "heavier needed".
+        reason = sync_payload.get("reason", "unknown reason")
+        print(
+            f"refresh-ops: audit sync did not complete "
+            f"(status={sync_status}: {reason}). Refusing to decide "
+            "on a stale audit table — run `ovp-knowledge-index` "
+            "once first.",
+            file=sys.stderr,
+        )
+        return 3
 
     # 3. rebuild ops_state projection
     with sqlite3.connect(str(db_path)) as conn:
         after_counts = rebuild_ops_state(conn, pack=args.pack)
         # 5. canonical-object evidence detection
-        canonical = _canonical_evidence_since(
-            conn, args.canonical_window_minutes
-        )
+        canonical = _canonical_evidence_since(conn, args.canonical_window_minutes)
 
     after = {s: int(after_counts.get(s, 0)) for s in ALL_STATES}
     deltas = {s: after[s] - before[s] for s in ALL_STATES}
@@ -178,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "vault_dir": str(vault_dir),
         "pack": args.pack,
-        "audit_sync": sync_payload.get("status", "?"),
+        "audit_sync": sync_status,
         "before": before,
         "after": after,
         "deltas": deltas,
@@ -193,24 +239,17 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"refresh-ops  pack={args.pack}")
         print(f"  audit sync: {payload['audit_sync']}")
-        print(
-            f"  {'state':<14}{'before':>9}{'after':>8}{'delta':>8}"
-        )
+        print(f"  {'state':<14}{'before':>9}{'after':>8}{'delta':>8}")
         for s in ALL_STATES:
             d = deltas[s]
-            print(
-                f"  {s:<14}{before[s]:>9}{after[s]:>8}"
-                f"{('+' if d >= 0 else '') + str(d):>8}"
-            )
+            print(f"  {s:<14}{before[s]:>9}{after[s]:>8}" f"{('+' if d >= 0 else '') + str(d):>8}")
         print(
             f"  {'TOTAL':<14}{before_total:>9}{after_total:>8}"
             f"{('+' if after_total - before_total >= 0 else '') + str(after_total - before_total):>8}"
         )
         print()
         if heavier_needed:
-            ev = ", ".join(
-                f"{k}×{v}" for k, v in sorted(canonical.items())
-            )
+            ev = ", ".join(f"{k}×{v}" for k, v in sorted(canonical.items()))
             print(
                 "  ⚠️  Canonical-object evidence detected in the "
                 f"last {args.canonical_window_minutes}m: {ev}.\n"

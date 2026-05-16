@@ -22,8 +22,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from ovp_pipeline.commands import refresh_ops
 from ovp_pipeline.ops_lifecycle import ALL_STATES
 
@@ -80,8 +78,7 @@ def _emit(conn, et, *, slug="", ts=None, payload=None):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
         "INSERT INTO audit_events VALUES (?,?,?,?,?,?)",
-        ("pipeline.jsonl", et, slug, "s", ts,
-         json.dumps(payload or {})),
+        ("pipeline.jsonl", et, slug, "s", ts, json.dumps(payload or {})),
     )
 
 
@@ -110,13 +107,40 @@ def test_canonical_evidence_ignores_candidates_only(tmp_path):
 def test_canonical_evidence_respects_window(tmp_path):
     v = _vault(tmp_path)
     conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
-    old = (datetime.now(timezone.utc) - timedelta(days=5)).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    old = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
     _emit(conn, "promote_concept", slug="obj-y", ts=old)
     conn.commit()
     # 180-minute window excludes a 5-day-old promote.
     assert refresh_ops._canonical_evidence_since(conn, 180) == {}
+
+
+def test_canonical_evidence_parses_iso_t_timestamps(tmp_path):
+    """ISO-8601 ``T``-separated + ``Z`` timestamps (event_emitter.emit
+    format) must be parsed, not lexicographically compared.  A naive
+    string compare against ``datetime('now')`` (space-separated)
+    misclassifies these rows."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _emit(conn, "evergreen_auto_promoted", slug="obj-now", ts=now_iso)
+    _emit(conn, "promote_concept", slug="obj-old", ts=old_iso)
+    conn.commit()
+    found = refresh_ops._canonical_evidence_since(conn, 180)
+    assert found.get("evergreen_auto_promoted") == 1
+    # 5-day-old ISO promote is outside the 180m window.
+    assert "promote_concept" not in found
+
+
+def test_parse_audit_ts_handles_mixed_formats():
+    p = refresh_ops._parse_audit_ts
+    assert p("2026-05-14T12:30:00Z") is not None
+    assert p("2026-05-14 12:30:00") is not None
+    assert p("2026-05-14T12:30:00+00:00") is not None
+    assert p("2026-05-14T12:30:00.123456Z") is not None
+    assert p("2026-05-14") is not None
+    assert p("") is None
+    assert p("not-a-timestamp") is None
 
 
 def test_state_counts_all_keys_present(tmp_path):
@@ -130,8 +154,7 @@ def test_state_counts_all_keys_present(tmp_path):
         "PRIMARY KEY (pack,item_kind,item_id))"
     )
     conn.execute(
-        "INSERT INTO ops_state VALUES "
-        "(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO ops_state VALUES " "(?,?,?,?,?,?,?,?,?)",
         (PACK, "source", "s1", "Received", None, "", "[]", None, ""),
     )
     conn.commit()
@@ -149,9 +172,26 @@ def test_main_missing_db_exits_1(tmp_path):
     assert rc == 1
 
 
-def test_main_candidates_only_exits_0_and_says_not_needed(
-    tmp_path, capsys
-):
+def test_main_aborts_when_sync_not_synced(tmp_path, capsys):
+    """If audit sync is skipped/failed, refuse to decide on a stale
+    audit table — distinct exit 3, no rebuild, no verdict."""
+    v = _vault(tmp_path)
+    with patch.object(
+        refresh_ops,
+        "sync_audit_events_from_jsonl",
+        return_value={
+            "status": "skipped",
+            "reason": "knowledge.db incompatible",
+        },
+    ):
+        rc = refresh_ops.main(["--vault-dir", str(v), "--pack", PACK])
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "did not complete" in err
+    assert "knowledge.db incompatible" in err
+
+
+def test_main_candidates_only_exits_0_and_says_not_needed(tmp_path, capsys):
     v = _vault(tmp_path)
     conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
     # A source with candidate/source evidence only.
@@ -161,43 +201,42 @@ def test_main_candidates_only_exits_0_and_says_not_needed(
     conn.close()
 
     with patch.object(
-        refresh_ops, "sync_audit_events_from_jsonl",
+        refresh_ops,
+        "sync_audit_events_from_jsonl",
         return_value={"status": "synced"},
     ):
-        rc = refresh_ops.main(
-            ["--vault-dir", str(v), "--pack", PACK]
-        )
+        rc = refresh_ops.main(["--vault-dir", str(v), "--pack", PACK])
     out = capsys.readouterr().out
     assert rc == 0
     assert "Full `ovp-knowledge-index` rebuild NOT needed" in out
     assert "audit sync: synced" in out
 
 
-def test_main_canonical_evidence_exits_2_and_warns(
-    tmp_path, capsys
-):
+def test_main_canonical_evidence_exits_2_and_warns(tmp_path, capsys):
     v = _vault(tmp_path)
     conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
     _emit(conn, "article_intake_only", slug="src-b")
     _emit(conn, "candidates_upserted", slug="src-b")
     # A real promote → canonical object changed.
-    _emit(conn, "evergreen_auto_promoted", slug="src-b",
-          payload={"object_id": "obj-b", "concept": "obj-b"})
+    _emit(
+        conn,
+        "evergreen_auto_promoted",
+        slug="src-b",
+        payload={"object_id": "obj-b", "concept": "obj-b"},
+    )
     conn.execute(
         "INSERT INTO objects VALUES (?,?,?,?,?,?,?)",
-        (PACK, "obj-b", "evergreen", "B",
-         "10-Knowledge/Evergreen/B.md", "src-b", ""),
+        (PACK, "obj-b", "evergreen", "B", "10-Knowledge/Evergreen/B.md", "src-b", ""),
     )
     conn.commit()
     conn.close()
 
     with patch.object(
-        refresh_ops, "sync_audit_events_from_jsonl",
+        refresh_ops,
+        "sync_audit_events_from_jsonl",
         return_value={"status": "synced"},
     ):
-        rc = refresh_ops.main(
-            ["--vault-dir", str(v), "--pack", PACK]
-        )
+        rc = refresh_ops.main(["--vault-dir", str(v), "--pack", PACK])
     out = capsys.readouterr().out
     assert rc == 2
     assert "Canonical-object evidence detected" in out
@@ -212,12 +251,11 @@ def test_main_json_mode_shape(tmp_path, capsys):
     conn.close()
 
     with patch.object(
-        refresh_ops, "sync_audit_events_from_jsonl",
+        refresh_ops,
+        "sync_audit_events_from_jsonl",
         return_value={"status": "synced"},
     ):
-        rc = refresh_ops.main(
-            ["--vault-dir", str(v), "--pack", PACK, "--json"]
-        )
+        rc = refresh_ops.main(["--vault-dir", str(v), "--pack", PACK, "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert payload["heavier_rebuild_needed"] is False
@@ -227,9 +265,7 @@ def test_main_json_mode_shape(tmp_path, capsys):
     assert "deltas" in payload
 
 
-def test_main_total_conserved_when_only_state_moves(
-    tmp_path, capsys
-):
+def test_main_total_conserved_when_only_state_moves(tmp_path, capsys):
     """The hallmark of a clean candidates-only refresh: items move
     Received→Extracted but the TOTAL is conserved (no phantom
     rows, no double-count) — the exact invariant the recent=3
@@ -248,12 +284,11 @@ def test_main_total_conserved_when_only_state_moves(
     conn.close()
 
     with patch.object(
-        refresh_ops, "sync_audit_events_from_jsonl",
+        refresh_ops,
+        "sync_audit_events_from_jsonl",
         return_value={"status": "synced"},
     ):
-        rc = refresh_ops.main(
-            ["--vault-dir", str(v), "--pack", PACK, "--json"]
-        )
+        rc = refresh_ops.main(["--vault-dir", str(v), "--pack", PACK, "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
     # before=0 (no ops_state yet), after=2 — both sources counted
