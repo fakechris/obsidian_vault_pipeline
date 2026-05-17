@@ -332,7 +332,13 @@ register_handler("DIGEST", handle_digest, "Daily knowledge feedback brief.")
 
 def _is_no_data(inputs: DigestInputs) -> bool:
     """Layers 0 + 1 + 2 empty AND Layer 3 has no actionable signal."""
-    has_intake = inputs.intake.intake_events_processed > 0
+    # BL-106: a day where the operator saved articles is NOT
+    # "no data" even if absorb/synthesis hasn't run yet — the
+    # intake cohort (intake-time axis) must keep the digest honest.
+    has_intake = (
+        inputs.intake.intake_events_processed > 0
+        or inputs.intake.intake_cohort_sources > 0
+    )
     has_delta = bool(inputs.delta.new_evergreens or inputs.delta.updated_evergreens)
     has_connections = bool(
         inputs.connections.connected_community_crystals
@@ -473,16 +479,31 @@ def _build_digest_user_prompt_v2(inputs: DigestInputs, user_focus: str) -> str:
 
 
 def _render_layer0_for_prompt(layer: IntakeLayer) -> str:
+    cohort = int(layer.intake_cohort_sources or 0)
     if layer.intake_events_processed == 0:
-        return "(no intake events in this window)"
+        if cohort == 0:
+            return "(no intake activity in this window)"
+        # BL-106: saved-but-not-yet-processed must still be reported
+        # — otherwise a quiet manual-absorb day looks empty.
+        return (
+            f"- Sources first saved in window (intake-time): {cohort}\n"
+            "- No downstream intake events yet (absorb/synthesis "
+            "runs later — these are acknowledged, not lost)"
+        )
     chips = ", ".join(f"{k} ({n})" for k, n in layer.topic_distribution) or "(no topic distribution)"
     samples = "; ".join(layer.representative_samples) or "(no titles)"
     authors = ", ".join(layer.authors_or_sources) or "(no attributed sources)"
+    cohort_line = (
+        f"\n- Sources first saved in window (intake-time): {cohort}"
+        if cohort
+        else ""
+    )
     return (
         f"- Events processed: {layer.intake_events_processed}\n"
         f"- Topic distribution: {chips}\n"
         f"- Authors / sources: {authors}\n"
         f"- Representative titles: {samples}"
+        f"{cohort_line}"
     )
 
 

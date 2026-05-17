@@ -267,6 +267,46 @@ def test_layer0_ignores_events_outside_window(vault, utc_config):
     assert result.intake.intake_events_processed == 0
 
 
+def test_layer0_cohort_counts_distinct_first_intake_sources(vault, utc_config):
+    """BL-106: intake_cohort_sources counts DISTINCT sources whose
+    EARLIEST intake is in the window — intake-time axis, de-duped —
+    not raw event-window rows."""
+    vault_dir, conn = vault
+    as_of = datetime(2026, 5, 13, 12, 0, tzinfo=ZoneInfo("UTC"))
+    # 3 fresh sources first saved in-window.
+    _seed_intake(conn, count=3, base_ts=as_of - timedelta(hours=2))
+    conn.close()
+    result = collect_digest_inputs(
+        vault_dir, "research-tech", as_of=as_of, config=utc_config
+    )
+    assert result.intake.intake_cohort_sources == 3
+
+
+def test_layer0_cohort_excludes_resaved_old_source(vault, utc_config):
+    """A source first intaken 3 days ago, re-touched in-window:
+    event-window count sees the in-window row, but the cohort must
+    NOT count it (its FIRST intake predates the window)."""
+    vault_dir, conn = vault
+    as_of = datetime(2026, 5, 13, 12, 0, tzinfo=ZoneInfo("UTC"))
+    old = (as_of - timedelta(days=3)).isoformat()
+    inwin = (as_of - timedelta(hours=1)).isoformat()
+    for ts in (old, inwin):
+        conn.execute(
+            "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+            ("pipeline.jsonl", "article_processed", "slug-old",
+             "s1", ts, json.dumps({"title": "Old source"})),
+        )
+    conn.commit()
+    conn.close()
+    result = collect_digest_inputs(
+        vault_dir, "research-tech", as_of=as_of, config=utc_config
+    )
+    # in-window event row is counted by the event-time layer …
+    assert result.intake.intake_events_processed == 1
+    # … but the cohort (intake-time, earliest) excludes it.
+    assert result.intake.intake_cohort_sources == 0
+
+
 def test_layer0_ignores_non_allowlist_event_types(vault, utc_config):
     """An audit row with event_type outside the allowlist doesn't
     inflate the Layer 0 count."""
