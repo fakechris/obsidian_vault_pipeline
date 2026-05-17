@@ -4076,6 +4076,100 @@ def build_intake_cohort_payload(
     return base
 
 
+def build_workflow_progress_payload(
+    vault_dir: Path | str, *, date_key: str, pack: str
+) -> dict[str, Any]:
+    """BL-104: which items MOVED into a lifecycle state on this day.
+
+    Distinct from the other two date surfaces:
+
+    * **Activity** counts evidence ROWS on the event day.
+    * **Workflow Progress** (here) counts distinct ITEMS whose
+      EARLIEST qualifying evidence for a state lands on this day —
+      i.e. the day they *entered* that state ("16 sources moved
+      into Extracted today"), the transition-time axis.
+    * **Current Backlog** is the right-now snapshot.
+
+    Earliest-qualifying-evidence-day is a sound, storage-free proxy
+    for entry-into-state: the lifecycle kernel derives state from
+    cumulative evidence, so the first time an item has evidence of a
+    state's qualifying types is the day it reached that state.
+    Reuses BL-101 identity + BL-102 local-day + the card
+    event_type composition so it cannot drift from the cards.
+    """
+    db_path = _db_path(vault_dir)
+    base: dict[str, Any] = {
+        "screen": "ops/workflow-progress",
+        "date": date_key,
+        "requested_pack": pack,
+        "available": False,
+        "reason": "",
+        "moved": {},
+        "total": 0,
+        "samples": {},
+    }
+    if not db_path.exists():
+        base["reason"] = "knowledge_index has not been built yet"
+        return base
+
+    effective_pack = pack or PRIMARY_PACK_NAME
+    moved: dict[str, int] = {}
+    samples: dict[str, list[str]] = {}
+    with sqlite3.connect(db_path) as conn:
+        for card_def in M25_LIFECYCLE_CARD_DEFS:
+            state = str(card_def["id"])
+            ets = _event_types_for_card(card_def)
+            moved[state] = 0
+            samples[state] = []
+            if not ets:
+                continue
+            et_ph = ",".join("?" for _ in ets)
+            earliest: dict[str, Any] = {}
+            for ts, slug, pj in conn.execute(
+                f"SELECT timestamp, slug, payload_json FROM audit_events "
+                f" WHERE event_type IN ({et_ph})",
+                ets,
+            ):
+                parsed = _parse_audit_ts(str(ts or ""))
+                if parsed is None:
+                    continue
+                try:
+                    payload = json.loads(pj or "{}")
+                except ValueError:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                rp = _audit_row_pack(payload)
+                if rp is None:
+                    if effective_pack != PRIMARY_PACK_NAME:
+                        continue
+                elif rp != effective_pack:
+                    continue
+                ident = _activity_item_identity(
+                    state, str(slug or ""), payload
+                )
+                if ident is None:
+                    continue
+                cur = earliest.get(ident)
+                if cur is None or parsed < cur:
+                    earliest[ident] = parsed
+            entered = sorted(
+                sid
+                for sid, ts in earliest.items()
+                if ts.astimezone().date().isoformat() == date_key
+            )
+            moved[state] = len(entered)
+            samples[state] = entered[:TODAY_CARD_SAMPLE_SIZE]
+
+    base.update(
+        available=True,
+        moved=moved,
+        total=sum(moved.values()),
+        samples=samples,
+    )
+    return base
+
+
 def build_today_digest_payload(
     vault_dir: Path | str,
     *,
@@ -4170,6 +4264,9 @@ def build_today_digest_payload(
     intake_cohort = build_intake_cohort_payload(
         vault_dir, date_key=date_key, pack=effective_pack
     )
+    workflow_progress = build_workflow_progress_payload(
+        vault_dir, date_key=date_key, pack=effective_pack
+    )
 
     # BL-103b: attach a zero-reason to every card showing 0 so the
     # operator can tell "did not run" from "ran, no output" from
@@ -4202,6 +4299,7 @@ def build_today_digest_payload(
         "lifecycle_summary": lifecycle_summary,
         "staleness": staleness,
         "intake_cohort": intake_cohort,
+        "workflow_progress": workflow_progress,
         "available": True,
     }
 

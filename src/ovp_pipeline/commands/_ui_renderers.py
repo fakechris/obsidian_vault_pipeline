@@ -6798,6 +6798,49 @@ def _render_intake_cohort_zone(cohort: dict, date: str) -> str:
     )
 
 
+def _render_workflow_progress_zone(wp: dict, date: str) -> str:
+    """BL-104 "Workflow Progress" zone — items that ENTERED a state
+    on this day (transition-time axis).  Explicitly NOT the
+    event-row Activity and NOT the right-now Current backlog."""
+    if not wp or not wp.get("available"):
+        reason = escape(str((wp or {}).get("reason") or ""))
+        return (
+            "<section class='card' style='margin:.6rem 0 0'>"
+            "<div class='muted tiny'>Workflow progress</div>"
+            + (f"<p class='muted tiny'>{reason}</p>" if reason else "")
+            + "</section>"
+        )
+    moved = wp.get("moved") or {}
+    total = int(wp.get("total") or 0)
+    if total == 0:
+        return (
+            "<section class='card' style='margin:.6rem 0 0'>"
+            "<div class='muted tiny'>Workflow progress — "
+            f"{escape(date)}</div>"
+            "<p class='muted tiny' style='margin-top:4px'>No items"
+            " changed lifecycle state on this day.  (Transition-time"
+            " axis — not the event-row Activity, not the right-now"
+            " backlog.)</p></section>"
+        )
+    parts = []
+    for st in ("Received", "Extracted", "Accepted", "Synthesized", "NeedsAction"):
+        n = int(moved.get(st) or 0)
+        if n:
+            parts.append(f"{n} → {escape(st)}")
+    line = " · ".join(parts) if parts else "no transitions"
+    return (
+        "<section class='card' style='margin:.6rem 0 0'>"
+        f"<div class='muted tiny'>Workflow progress — {escape(date)}"
+        " <span style='opacity:.7'>(items that ENTERED a state this"
+        " day — not event rows, not the right-now backlog)</span>"
+        "</div>"
+        f"<div style='margin-top:4px'><strong>{total}</strong> "
+        f"item{'s' if total != 1 else ''} moved forward</div>"
+        f"<div class='muted tiny' style='margin-top:2px'>{line}</div>"
+        "</section>"
+    )
+
+
 def _render_today_digest_page(payload: dict) -> str:
     """M25.7: ``/ops/today`` split into two clearly-separated zones.
 
@@ -7113,6 +7156,13 @@ def _render_today_digest_page(payload: dict) -> str:
     activity_sections.append(
         _render_intake_cohort_zone(
             payload.get("intake_cohort") or {}, date
+        )
+    )
+    # BL-104: Workflow Progress (transition-time axis) joins the
+    # date-driven group, clearly separated from Activity + backlog.
+    activity_sections.append(
+        _render_workflow_progress_zone(
+            payload.get("workflow_progress") or {}, date
         )
     )
 
