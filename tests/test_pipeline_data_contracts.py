@@ -8,6 +8,7 @@ across pipeline stages (extractor -> registry -> candidate -> promote -> knowled
 import pytest
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ovp_pipeline.identity import canonicalize_note_id
@@ -514,15 +515,78 @@ class TestStrictModeCrossStepIntegration:
         assert result.skipped is True
         assert result.reason == "dry_run"
 
-    def test_step_dedup_no_clusters_path_typed(self, temp_vault):
+    def test_step_dedup_skips_when_no_promoted_scope(self, temp_vault):
+        """PR1 fail-closed: no absorb / no promoted_slugs ⇒ step_dedup
+        SKIPS and must NOT trigger an implicit full-vault O(N²) scan."""
+        from unittest.mock import patch
+
         from ovp_pipeline.step_contracts import DedupStepResult
 
         pipeline = self._make_pipeline(temp_vault)
-        # No evergreens in vault → no clusters → success-empty path.
-        result = pipeline.step_dedup(dry_run=True)
+        with patch("ovp_pipeline.concept_dedup.find_clusters") as fc:
+            result = pipeline.step_dedup(dry_run=True)
         assert isinstance(result, DedupStepResult)
         assert result.success is True
+        assert result.skipped is True
+        assert result.reason == "no_promoted_scope"
         assert result.clusters == 0
+        fc.assert_not_called()
+
+    def test_step_dedup_empty_promoted_slugs_skips(self, temp_vault):
+        """An absorb result with an *empty* promoted_slugs list is still
+        'no scope' — skip, never full-vault."""
+        from unittest.mock import patch
+
+        from ovp_pipeline.step_contracts import AbsorbStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        pipeline.step_results["absorb"] = AbsorbStepResult(
+            success=True, processed_files=["a.md"], promoted_slugs=[]
+        )
+        with patch("ovp_pipeline.concept_dedup.find_clusters") as fc:
+            result = pipeline.step_dedup(dry_run=True)
+        assert result.skipped is True
+        assert result.reason == "no_promoted_scope"
+        fc.assert_not_called()
+
+    def test_step_dedup_scopes_to_promoted_slugs(self, temp_vault):
+        """With promoted_slugs, dedup runs SCOPED — find_clusters is
+        called with exactly that scope and never the full vault."""
+        from unittest.mock import patch
+
+        from ovp_pipeline.step_contracts import AbsorbStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        pipeline.step_results["absorb"] = AbsorbStepResult(
+            success=True,
+            processed_files=["a.md"],
+            promoted_slugs=["concept-x", "concept-y"],
+        )
+        with patch(
+            "ovp_pipeline.concept_dedup.find_clusters", return_value=[]
+        ) as fc:
+            result = pipeline.step_dedup(dry_run=True)
+        assert result.success is True
+        assert result.skipped is False
+        fc.assert_called_once()
+        _, kwargs = fc.call_args
+        assert kwargs["scope_slugs"] == {"concept-x", "concept-y"}
+        assert kwargs.get("allow_full_scan", False) is False
+
+    def test_run_autopilot_dedup_skips_no_full_scan(self, temp_vault):
+        """PR1 fail-closed: autopilot carries no promoted scope, so the
+        dedup stage SKIPS instead of an unconditional full-vault scan."""
+        from unittest.mock import patch
+
+        from ovp_pipeline.workflow_handlers import run_autopilot_dedup
+
+        daemon = SimpleNamespace(vault_dir=temp_vault)
+        with patch("ovp_pipeline.concept_dedup.find_clusters") as fc:
+            out = run_autopilot_dedup(daemon=daemon)
+        assert out["stage"] == "dedup"
+        assert out["skipped"] is True
+        assert out["reason"] == "no_promoted_scope"
+        fc.assert_not_called()
 
     def test_run_pipeline_handles_frozen_step_result(self, temp_vault, monkeypatch):
         """Regression: run_pipeline used to call cmd_result.update() / write

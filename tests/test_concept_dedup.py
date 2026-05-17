@@ -8,8 +8,11 @@ from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
 
+import pytest
+
 from ovp_pipeline.concept_dedup import (
     DEFAULT_THRESHOLD,
+    FullScanRefused,
     apply_cluster,
     apply_proposal,
     archive_applied_proposal,
@@ -62,7 +65,7 @@ def test_find_clusters_groups_near_duplicates(tmp_path: Path):
     _evergreen(tmp_path, "MCP-Client-Variant", body="dup")
     _evergreen(tmp_path, "Some-Other-Concept", body="unrelated")
 
-    clusters = find_clusters(tmp_path, threshold=0.5)
+    clusters = find_clusters(tmp_path, threshold=0.5, allow_full_scan=True)
 
     assert len(clusters) == 1
     cluster = clusters[0]
@@ -77,7 +80,7 @@ def test_find_clusters_skips_underscored_and_hidden(tmp_path: Path):
     _evergreen(tmp_path, "Real-Note")
     _evergreen(tmp_path, "Real-Notes")
 
-    clusters = find_clusters(tmp_path, threshold=0.7)
+    clusters = find_clusters(tmp_path, threshold=0.7, allow_full_scan=True)
     canonical_slugs = {c.canonical.slug for c in clusters}
     dup_slugs = {d.slug for c in clusters for d in c.duplicates}
     assert "_Candidate-Note" not in canonical_slugs
@@ -85,7 +88,7 @@ def test_find_clusters_skips_underscored_and_hidden(tmp_path: Path):
 
 
 def test_find_clusters_returns_empty_when_no_evergreen_dir(tmp_path: Path):
-    assert find_clusters(tmp_path) == []
+    assert find_clusters(tmp_path, allow_full_scan=True) == []
 
 
 def test_rewrite_wikilinks_preserves_anchor_and_display():
@@ -129,7 +132,7 @@ def test_write_and_load_proposal_roundtrip(tmp_path: Path):
     _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
     _evergreen(tmp_path, "MCP-Clients")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     path, proposal = write_proposal(tmp_path, clusters, threshold=0.6)
 
     assert path.is_file()
@@ -145,7 +148,7 @@ def test_write_and_load_proposal_roundtrip(tmp_path: Path):
 def test_archive_applied_proposal_removes_it_from_pending_list(tmp_path: Path):
     _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
     _evergreen(tmp_path, "MCP-Clients")
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     path, proposal = write_proposal(tmp_path, clusters, threshold=0.6)
 
     archived = archive_applied_proposal(tmp_path, path)
@@ -161,7 +164,7 @@ def test_apply_cluster_dry_run_makes_no_writes(tmp_path: Path):
     dup = _evergreen(tmp_path, "MCP-Clients", body="dup")
     refer = _other(tmp_path, "20-Areas/Note.md", "see [[MCP-Clients]] and [[MCP-Clients|Friendly]]")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     assert clusters
 
     result = apply_cluster(tmp_path, clusters[0], dry_run=True)
@@ -186,7 +189,7 @@ def test_apply_cluster_writes_archive_aliases_audit(tmp_path: Path):
         "see [[MCP-Clients]] and [[MCP-Clients#anchor]] and [[MCP-Clients|Display]]",
     )
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     assert clusters
 
     result = apply_cluster(tmp_path, clusters[0], dry_run=False, proposal_id="test-prop")
@@ -231,7 +234,7 @@ def test_apply_cluster_archives_with_obsidian_move_when_available(tmp_path: Path
     dup = _evergreen(tmp_path, "MCP-Clients", body="dup body")
     _other(tmp_path, "20-Areas/Topic.md", "see [[MCP-Clients]]")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     assert clusters
 
     calls: list[list[str]] = []
@@ -264,11 +267,11 @@ def test_apply_cluster_skips_archive_dir_during_rewrite(tmp_path: Path):
     _evergreen(tmp_path, "MCP-Clients")
     _other(tmp_path, "20-Areas/Note.md", "see [[MCP-Clients]]")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     apply_cluster(tmp_path, clusters[0], dry_run=False)
 
     # Re-scan: cluster should be gone.
-    clusters_after = find_clusters(tmp_path, threshold=DEFAULT_THRESHOLD)
+    clusters_after = find_clusters(tmp_path, threshold=DEFAULT_THRESHOLD, allow_full_scan=True)
     assert clusters_after == []
 
 
@@ -280,7 +283,7 @@ def test_apply_cluster_handles_archive_collision(tmp_path: Path):
     archive_dir.mkdir(parents=True)
     (archive_dir / "MCP-Clients.md").write_text("pre-existing", encoding="utf-8")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     result = apply_cluster(tmp_path, clusters[0], dry_run=False)
 
     assert result.errors == []
@@ -298,7 +301,7 @@ def test_apply_proposal_only_filter(tmp_path: Path):
     _evergreen(tmp_path, "Vector-Database", body="canonical " * 10)
     _evergreen(tmp_path, "Vector-Databases")
 
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     assert len(clusters) == 2
     _, proposal = write_proposal(tmp_path, clusters, threshold=DEFAULT_THRESHOLD)
 
@@ -316,7 +319,7 @@ def test_concept_dedup_apply_uses_vault_workflow_lock(tmp_path: Path, monkeypatc
 
     _evergreen(tmp_path, "MCP-Client", body="canonical body that is long " * 10)
     _evergreen(tmp_path, "MCP-Clients", body="duplicate body")
-    clusters = find_clusters(tmp_path, threshold=0.6)
+    clusters = find_clusters(tmp_path, threshold=0.6, allow_full_scan=True)
     proposal_path, _ = write_proposal(tmp_path, clusters, threshold=DEFAULT_THRESHOLD)
     calls: list[str] = []
 
@@ -376,13 +379,25 @@ def test_find_clusters_scope_slugs_limits_search(tmp_path: Path):
     assert "Vector-Databases" not in slugs_in_clusters
 
 
-def test_find_clusters_scope_slugs_none_returns_all(tmp_path: Path):
+def test_find_clusters_scope_none_refuses_without_opt_in(tmp_path: Path):
+    """PR1 fail-closed: an unscoped run is the O(N²) full-vault scan;
+    it must be refused unless the caller explicitly opts in."""
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="dup")
+
+    with pytest.raises(FullScanRefused):
+        find_clusters(tmp_path, threshold=0.5, scope_slugs=None)
+
+
+def test_find_clusters_scope_none_runs_with_explicit_opt_in(tmp_path: Path):
     _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
     _evergreen(tmp_path, "MCP-Clients", body="dup")
     _evergreen(tmp_path, "Vector-Database", body="canonical " * 10)
     _evergreen(tmp_path, "Vector-Databases", body="dup")
 
-    clusters_all = find_clusters(tmp_path, threshold=0.5, scope_slugs=None)
+    clusters_all = find_clusters(
+        tmp_path, threshold=0.5, scope_slugs=None, allow_full_scan=True
+    )
     assert len(clusters_all) == 2
 
 
