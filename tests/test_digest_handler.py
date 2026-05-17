@@ -437,7 +437,7 @@ def test_build_user_prompt_omits_empty_data_gracefully(tmp_path: Path):
     assert "Layer 1 — Evergreen delta" in prompt
     assert "Layer 2 — Connections" in prompt
     assert "Layer 3 — Pipeline state" in prompt
-    assert "(no intake events in this window)" in prompt
+    assert "(no intake activity in this window)" in prompt
     assert "(no new or updated evergreens in this window)" in prompt
 
 

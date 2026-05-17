@@ -43,6 +43,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Iterable
 
+from ovp_pipeline.audit_identity import audit_slug_for_column
+from ovp_pipeline.audit_time import parse_audit_ts
 from ovp_pipeline.digest_config import (
     DigestConfig,
     load_digest_config,
@@ -84,6 +86,11 @@ class IntakeLayer:
     topic_distribution: tuple[tuple[str, int], ...]
     authors_or_sources: tuple[str, ...]
     representative_samples: tuple[str, ...]
+    # BL-106: distinct sources whose FIRST durable intake falls in
+    # the window (intake-time axis).  A day's digest must acknowledge
+    # articles saved that day even when absorb/synthesis runs later;
+    # ``intake_events_processed`` (event-time, raw rows) misses that.
+    intake_cohort_sources: int = 0
 
 
 @dataclass(frozen=True)
@@ -522,11 +529,63 @@ def _collect_layer0(
 
     topic_dist = _top_keyword_distribution(titles)
     samples = tuple(titles[:5])
+    cohort = _intake_cohort_count(
+        conn, window_start, window_end, config
+    )
     return IntakeLayer(
         intake_events_processed=len(rows),
         topic_distribution=topic_dist,
         authors_or_sources=tuple(sorted(authors)),
         representative_samples=samples,
+        intake_cohort_sources=cohort,
+    )
+
+
+def _intake_cohort_count(
+    conn: sqlite3.Connection,
+    window_start: datetime,
+    window_end: datetime,
+    config: DigestConfig,
+) -> int:
+    """BL-106: distinct sources whose EARLIEST intake event (all
+    history) lands in [window_start, window_end].
+
+    The lifecycle kernel derives state from cumulative evidence, so
+    a source's first intake event is the moment it entered the
+    pipeline — the intake-time axis BL-105 uses.  Scans the intake
+    subset (BL-108 streaming is the perf follow-up); identity via
+    the shared ``audit_slug_for_column`` so it matches the cards.
+    """
+    if not config.intake_event_types:
+        return 0
+    placeholders = ",".join("?" * len(config.intake_event_types))
+    try:
+        rows = conn.execute(
+            f"SELECT slug, payload_json, timestamp FROM audit_events "
+            f" WHERE event_type IN ({placeholders})",
+            tuple(config.intake_event_types),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    earliest: dict[str, datetime] = {}
+    for row in rows:
+        parsed = parse_audit_ts(str(row["timestamp"] or ""))
+        if parsed is None:
+            continue
+        slug = (row["slug"] or "").strip()
+        if not slug:
+            payload = _safe_json(row["payload_json"])
+            if isinstance(payload, dict):
+                slug = audit_slug_for_column(payload)
+        if not slug:
+            continue
+        cur = earliest.get(slug)
+        if cur is None or parsed < cur:
+            earliest[slug] = parsed
+    return sum(
+        1
+        for ts in earliest.values()
+        if window_start <= ts <= window_end
     )
 
 
