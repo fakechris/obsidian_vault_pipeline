@@ -34,7 +34,8 @@ Authority / Projection boundary is unenforceable.
 | BL-110 | P1 | ✅ **Done** — **Maintainer UI module split** (#262 view_models, #263 _ui_renderers).  Each ~8000-line file → a package: `_constants` leaf + topologically-layered `_layer*` + per-surface modules + `__init__` re-export with a `ModuleType.__setattr__` monkeypatch shim (zero call-site/test churn).  Every file < the 3000 default; both stale 5000 ratchet entries removed (tightened, not relocated).  `test_file_size_limits` cleared for both. |
 | BL-111 | P1 | ✅ **Done (policy codification)** — **SQLite boundary policy**, grouped + rationalised.  Made `test_no_direct_sqlite_in_non_data_modules` green by recording the rule's TRUE boundary, NOT relaxing it: (a) prefix-aware allowlist matcher so BL-110's package splits keep their pre-existing grant (path-shape change, not a new exception); (b) the 15 genuine pre-existing violators grouped into named sets — `ui_projection_payload_builders`, `ops_projection_readers`, `projection_writers`, `thin_projection_clis` — each with a rationale stating it reads/writes the DERIVED `knowledge.db` projection, never canonical Authority (vault markdown + registries), same category already baselined (`digest_inputs`/`materializers/*`/`synthesis/_shared`).  The actual facade migration is **BL-111b** (below), deliberately deferred per "NOT a big migration first". |
 | BL-111b | P2 | **Data-access facade migration** (the real refactor BL-111 deferred).  Introduce `ops_state_store` / `audit_events_store` / `digest_store` / `chat_store` so business code never hand-writes SQL; migrate the BL-111 allowlisted groups onto them and shrink the allowlist as each lands.  Start from the highest-value targets: **duplicated SQL** (same table queried from many modules) and **hot paths** (`absorb_router` 1131L, `auto_evergreen_extractor` 2081L, `ops_lifecycle` 713L).  Each migration is behaviour-preserving + full-suite gated; the allowlist is the ratchet (entries only ever removed, never added). |
-| BL-112 | P2 | **`unified_pipeline_enhanced.py` split** | ~3805 lines mixing CLI args, orchestration, stage artifacts, `step_absorb`/`step_quality`/`step_articles`, batch handling, runtime status, error handling. Split into `pipeline/{orchestrator,artifacts,results}.py` + `pipeline/stages/{articles,quality,absorb}.py`. Outcome: absorb-fallback / quality-artifact / step-contract edits stop happening inside one giant orchestration file; clears the 3805/3500 fitness failure. |
+| BL-112 | P2 | ✅ **Done** — **`unified_pipeline_enhanced.py` leaf-extraction** (#265).  3806→3192: standalone constants/helpers/classes → flat `_pipeline_{constants,env,plan,runtime,utils}.py` siblings (same dir ⇒ `__file__`-derived path constants byte-identical), re-exported so the `ovp`/`ovp-pipeline` entrypoints + 19 importers are unchanged.  `EnhancedPipeline` + `main` byte-identical — the hot path is untouched.  Cleared the last `test_file_size_limits` red; **architecture-fitness fully green (9/9)**, full suite 3036/0.  The deep god-class decomposition is deferred to **BL-112b**. |
+| BL-112b | P3 | **`EnhancedPipeline` god-class decomposition** (the deep refactor BL-112 deferred).  2865L / 59-method class (`step_absorb`/`step_quality`/`_run_pipeline_locked`/DAG runner).  Mixin or delegation split of the hot orchestration path — behaviour-risky, much larger, **zero file-size urgency** now (file already <3500).  Behaviour-preserving + full-suite gated per step; only when a real maintenance need justifies the risk. |
 
 ## Sequence
 
@@ -42,11 +43,24 @@ Authority / Projection boundary is unenforceable.
 2. ✅ **BL-111** — done (policy codification): sqlite-boundary check
    green by recording the true boundary; facade migration split out
    as **BL-111b**.
-3. **BL-112** — pipeline orchestration split; the last remaining
-   `test_file_size_limits` red (`unified_pipeline_enhanced.py`
-   3805/3500).
-4. **BL-111b** — the deferred data-access facade migration; P2,
-   runs after BL-112 (or independently — no ordering dependency).
+3. ✅ **BL-112** — done (#265): leaf-extraction cleared the last
+   `test_file_size_limits` red.  **Architecture-fitness is fully
+   green (9/9 in `tests/test_architecture_fitness.py`).**
+4. **BL-111b** / **BL-112b** — the two deferred deep refactors
+   (data-access facade migration; `EnhancedPipeline` god-class
+   decomposition).  No file-size/sqlite urgency — both gated only
+   by a real maintenance need; behaviour-preserving + full-suite
+   gated when undertaken.
+
+## M27 status: ✅ COMPLETE (core objective)
+
+All three `KNOWN_OVERSIZED` mega-files resolved (BL-110 ×2,
+BL-112) and the sqlite boundary made enforceable (BL-111).
+`tests/test_architecture_fitness.py` is **9/9 green** on `main`;
+the full suite is **3036 passed / 0 failed**.  Remaining
+**BL-111b** + **BL-112b** are explicitly-scoped deep-refactor
+follow-ups (facade migration; god-class decomposition) with no
+fitness urgency — tracked, not blocking.
 
 ## Non-Goals
 
