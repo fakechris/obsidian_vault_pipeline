@@ -460,22 +460,36 @@ def _check_audit_layer0(
         return "degraded"
     placeholders = ",".join("?" * len(config.intake_event_types))
     try:
-        count = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM audit_events
-             WHERE event_type IN ({placeholders})
-               AND timestamp >= ?
-               AND timestamp <= ?
-            """,
-            (
-                *config.intake_event_types,
-                _utc_iso(window_start),
-                _utc_iso(window_end),
-            ),
-        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT timestamp FROM audit_events "
+            f" WHERE event_type IN ({placeholders})",
+            tuple(config.intake_event_types),
+        ).fetchall()
     except sqlite3.OperationalError:
         return "unavailable"
+    # BL-109: window filter in Python via the shared tz-correct
+    # parser, NOT a raw SQL string compare over mixed UTC-Z / naive
+    # formats.  Defensive: `_utc_iso` itself concedes the string
+    # compare is "lexicographic, not time-correct".  Keeps the
+    # digest bucketing identical to /ops/today (BL-102).
+    count = sum(
+        1
+        for r in rows
+        if _ts_in_window(str(r["timestamp"] or ""), window_start, window_end)
+    )
     return "ok" if count > 0 else "degraded"
+
+
+def _ts_in_window(
+    ts_text: str, window_start: datetime, window_end: datetime
+) -> bool:
+    """True iff the audit timestamp parses and falls within
+    [window_start, window_end].  Shared by the Layer 0 preflight and
+    the Layer 0 collector so they cannot disagree (BL-109)."""
+    parsed = parse_audit_ts(ts_text)
+    if parsed is None:
+        return False
+    return window_start <= parsed <= window_end
 
 
 # ---------------------------------------------------------------
@@ -493,22 +507,30 @@ def _collect_layer0(
         return IntakeLayer(0, (), (), ())
     placeholders = ",".join("?" * len(config.intake_event_types))
     try:
-        rows = conn.execute(
-            f"""
-            SELECT slug, payload_json FROM audit_events
-             WHERE event_type IN ({placeholders})
-               AND timestamp >= ?
-               AND timestamp <= ?
-             ORDER BY timestamp DESC
-            """,
-            (
-                *config.intake_event_types,
-                _utc_iso(window_start),
-                _utc_iso(window_end),
-            ),
+        raw_rows = conn.execute(
+            f"SELECT slug, payload_json, timestamp FROM audit_events "
+            f" WHERE event_type IN ({placeholders})",
+            tuple(config.intake_event_types),
         ).fetchall()
     except sqlite3.OperationalError:
         return IntakeLayer(0, (), (), ())
+
+    # BL-109: window filter + newest-first ordering done in Python
+    # via the shared tz-correct parser, NOT a raw SQL string compare
+    # / ORDER BY over mixed UTC-Z and naive-local timestamps.
+    # Defensive consistency with /ops/today (BL-102) — removes the
+    # latent lexicographic hazard `_utc_iso` documents.  (Not the
+    # cause of the backdated-probe 0 seen dogfooding BL-106.)
+    windowed: list[tuple[datetime, Any]] = []
+    for row in raw_rows:
+        parsed = parse_audit_ts(str(row["timestamp"] or ""))
+        if parsed is None or not (
+            window_start <= parsed <= window_end
+        ):
+            continue
+        windowed.append((parsed, row))
+    windowed.sort(key=lambda pr: pr[0], reverse=True)
+    rows = [r for _ts, r in windowed]
 
     titles: list[str] = []
     authors: set[str] = set()
