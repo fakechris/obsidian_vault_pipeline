@@ -13,7 +13,7 @@ import math
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .concept_registry import ConceptRegistry, ResolutionAction
 from .event_emitter import iter_for_index
@@ -64,7 +64,7 @@ KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
 #
 # See ``ARCHITECTURE.md`` § Projection schema changes for the
 # review-side rules + PR checklist.
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 8
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 9
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -152,10 +152,14 @@ CREATE TABLE page_embeddings (
   chunk_text TEXT NOT NULL,
   embedding_blob BLOB NOT NULL,
   embedding_model TEXT NOT NULL,
+  chunk_hash TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (slug, chunk_index)
 );
 
 CREATE INDEX idx_page_embeddings_slug ON page_embeddings(slug);
+
+CREATE INDEX idx_page_embeddings_hash
+  ON page_embeddings(chunk_hash, embedding_model);
 
 CREATE TABLE page_metrics (
   slug TEXT PRIMARY KEY,
@@ -332,6 +336,42 @@ def _migrate_7_to_8_chats(conn: sqlite3.Connection, vault_dir: Path) -> None:
     rebuild_chats_projection(conn, vault_dir=vault_dir)
 
 
+def _migrate_8_to_9_embedding_hash(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """PR3 — ``page_embeddings.chunk_hash`` for embedding reuse.
+
+    Pure additive: one new ``NOT NULL DEFAULT ''`` column on an
+    existing table plus a lookup index.  No re-projection — existing
+    rows keep ``chunk_hash=''`` which simply never matches a freshly
+    computed SHA-256, so the next full rebuild recomputes them once
+    and from then on the hash is populated and reuse kicks in.  The
+    ``IF NOT EXISTS`` / duplicate-column guard makes it idempotent
+    against a DB already at the v9 shape (e.g. built fresh from
+    ``SCHEMA``).
+    """
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='page_embeddings'"
+    ).fetchone()
+    if not table_exists:
+        # No page_embeddings (minimal/partial DB).  A real DB gets
+        # the v9-shaped table from the main SCHEMA on fresh build;
+        # nothing to migrate here.
+        return
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(page_embeddings)").fetchall()
+    }
+    if "chunk_hash" not in cols:
+        conn.execute(
+            "ALTER TABLE page_embeddings "
+            "ADD COLUMN chunk_hash TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_page_embeddings_hash "
+        "ON page_embeddings(chunk_hash, embedding_model)"
+    )
+
+
 SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
     6: SchemaMigration(
         from_version=6,
@@ -344,6 +384,12 @@ SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
         kind=SchemaMigrationKind.ADDITIVE,
         reason="BL-085 — chats projection table",
         runner=_migrate_7_to_8_chats,
+    ),
+    8: SchemaMigration(
+        from_version=8,
+        kind=SchemaMigrationKind.ADDITIVE,
+        reason="PR3 — page_embeddings.chunk_hash for embedding reuse",
+        runner=_migrate_8_to_9_embedding_hash,
     ),
 }
 
@@ -1105,14 +1151,79 @@ def _flush_embeddings(conn: sqlite3.Connection, embed_batch: list[tuple]) -> int
         return 0
     conn.executemany(
         """
-        INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model, chunk_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         embed_batch,
     )
     n = len(embed_batch)
     embed_batch.clear()
     return n
+
+
+def _chunk_embed_hash(embed_input: str) -> str:
+    """Stable content hash of the exact text handed to the embedding
+    backend (``section_title\\nchunk_text``).  Same text + same model
+    ⇒ the prior embedding can be reused verbatim."""
+    return hashlib.sha256(embed_input.encode("utf-8")).hexdigest()
+
+
+class _EmbeddingReuseCache:
+    """Bounded reuse of prior embeddings across a rebuild.
+
+    The previous ``knowledge.db`` is still on disk while the temp DB
+    is built (the atomic replace happens last).  This opens it
+    read-only and looks a stored embedding up by
+    ``(chunk_hash, embedding_model)`` through the
+    ``idx_page_embeddings_hash`` index — no full-table load, so memory
+    stays bounded (the PR2b discipline).  A missing DB / table /
+    column makes every lookup miss, so the chunk is recomputed and
+    the cache self-heals on the next rebuild.
+    """
+
+    def __init__(self, old_db: Path) -> None:
+        self._conn: sqlite3.Connection | None = None
+        self.hits = 0
+        self.misses = 0
+        if not old_db.exists():
+            return
+        try:
+            conn = sqlite3.connect(f"file:{old_db}?mode=ro", uri=True)
+            cols = {
+                r[1]
+                for r in conn.execute(
+                    "PRAGMA table_info(page_embeddings)"
+                ).fetchall()
+            }
+            if "chunk_hash" not in cols:
+                conn.close()
+                return
+            self._conn = conn
+        except sqlite3.Error:
+            self._conn = None
+
+    def get(self, chunk_hash: str, model: str) -> bytes | None:
+        if self._conn is None or not chunk_hash:
+            self.misses += 1
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT embedding_blob FROM page_embeddings "
+                "WHERE chunk_hash = ? AND embedding_model = ? LIMIT 1",
+                (chunk_hash, model),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is None:
+            self.misses += 1
+            return None
+        self.hits += 1
+        return cast("bytes", row[0])
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
 
 def _embed_text(text: str) -> bytes:
@@ -1487,6 +1598,7 @@ def rebuild_knowledge_index(
         _remove_sqlite_artifacts(temp_db_path)
 
         conn = None
+        reuse_cache: _EmbeddingReuseCache | None = None
         try:
             conn = _initialize_database(temp_db_path)
             # BL-054: source_authority lives in its own module — make
@@ -1526,6 +1638,10 @@ def rebuild_knowledge_index(
             pages_indexed = 0
             timeline_events_indexed = 0
             embedding_chunks_indexed = 0
+            # PR3: reuse unchanged embeddings from the prior DB (still
+            # on disk until the atomic replace) instead of re-running
+            # the embedding backend for every chunk every rebuild.
+            reuse_cache = _EmbeddingReuseCache(layout.knowledge_db)
             for meta in deduped_page_metadata_items:
                 file_path = Path(meta.path)
                 body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
@@ -1548,14 +1664,21 @@ def rebuild_knowledge_index(
                 for chunk_index, (section_title, chunk_text) in enumerate(
                     _chunk_page_body(body, meta.title)
                 ):
+                    embed_input = f"{section_title}\n{chunk_text}"
+                    chunk_hash = _chunk_embed_hash(embed_input)
+                    model_name = get_model_name()
+                    blob = reuse_cache.get(chunk_hash, model_name)
+                    if blob is None:
+                        blob = _embed_text(embed_input)
                     embed_batch.append(
                         (
                             meta.note_id,
                             chunk_index,
                             section_title,
                             chunk_text,
-                            _embed_text(f"{section_title}\n{chunk_text}"),
-                            get_model_name(),
+                            blob,
+                            model_name,
+                            chunk_hash,
                         )
                     )
                     if len(embed_batch) >= _EMBED_FLUSH_BATCH:
@@ -1567,6 +1690,8 @@ def rebuild_knowledge_index(
             pages_indexed += _flush_pages(conn, page_batch, fts_batch)
             timeline_events_indexed += _flush_timeline(conn, timeline_batch)
             embedding_chunks_indexed += _flush_embeddings(conn, embed_batch)
+            embedding_chunks_reused = reuse_cache.hits
+            reuse_cache.close()
 
             link_rows = []
             for meta in deduped_page_metadata_items:
@@ -1859,6 +1984,8 @@ def rebuild_knowledge_index(
 
             conn.commit()
         except Exception:
+            if reuse_cache is not None:
+                reuse_cache.close()
             if conn is not None:
                 conn.close()
             _remove_sqlite_artifacts(temp_db_path)
@@ -1879,6 +2006,7 @@ def rebuild_knowledge_index(
                 "audit_events_indexed": len(audit_rows),
                 "reuse_events_indexed": len(reuse_rows),
                 "embedding_chunks_indexed": embedding_chunks_indexed,
+                "embedding_chunks_reused": embedding_chunks_reused,
                 "objects_indexed": len(truth_projection.objects),
                 "claims_indexed": len(truth_projection.claims),
                 "relations_indexed": len(truth_projection.relations),
