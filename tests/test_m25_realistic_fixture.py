@@ -315,7 +315,7 @@ def test_acceptance_needs_action_card_n_equals_items_page_n(realistic_vault):
 
 
 def test_acceptance_received_secondary_matches_audit_page(realistic_vault):
-    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
     digest = build_today_digest_payload(
         realistic_vault, pack_name=PACK, target_date=today_date,
     )
@@ -331,7 +331,7 @@ def test_acceptance_received_secondary_matches_audit_page(realistic_vault):
 
 
 def test_acceptance_needs_action_secondary_matches_audit_page(realistic_vault):
-    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
     digest = build_today_digest_payload(
         realistic_vault, pack_name=PACK, target_date=today_date,
     )
@@ -351,7 +351,7 @@ def test_acceptance_accepted_secondary_no_double_count(realistic_vault):
     ``evergreen_auto_promoted``, half via ``promote_concept``.
     Today only the first 4 fired; secondary count must equal 4
     (not 8 — that would mean we double-counted the promote pair)."""
-    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
     digest = build_today_digest_payload(
         realistic_vault, pack_name=PACK, target_date=today_date,
     )
@@ -416,7 +416,7 @@ def test_acceptance_audit_page_banner_against_realistic_payload(realistic_vault)
     not just a hand-built one."""
     from ovp_pipeline.commands._ui_renderers import _render_events_audit_page
 
-    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
     payload = build_events_audit_payload(
         realistic_vault,
         event_types=("article_intake_only",),

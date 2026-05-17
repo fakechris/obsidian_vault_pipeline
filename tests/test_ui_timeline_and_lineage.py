@@ -31,7 +31,6 @@ from ovp_pipeline.ui.view_models import (
     build_timeline_payload,
 )
 
-
 # ---------------------------------------------------------------------------
 # Nav expansion
 # ---------------------------------------------------------------------------
@@ -45,8 +44,7 @@ class TestOpsNav:
         # Actions / Contradictions / Signals) are consolidated into
         # a single ``Queue`` link.  The other by-time / browse pivots
         # remain as before.
-        for label in ("Today", "Runs", "Timeline", "Pulse", "Events",
-                      "Evergreens", "Queue"):
+        for label in ("Today", "Runs", "Timeline", "Pulse", "Events", "Evergreens", "Queue"):
             assert label in items, f"{label!r} missing from ops nav"
         assert items["Today"] == "/ops/today"
         assert items["Runs"] == "/ops/runs"
@@ -64,8 +62,11 @@ class TestOpsNav:
         # ``/ops/clusters`` etc. on packs that didn't support graph
         # synthesis.
         from ovp_pipeline.commands import _ui_renderers
+
         monkeypatch.setattr(
-            _ui_renderers, "_shell_supports_research_nav", lambda _p: False,
+            _ui_renderers,
+            "_shell_supports_research_nav",
+            lambda _p: False,
         )
         items = dict(_ops_nav_items(""))
         assert "Clusters" not in items
@@ -73,7 +74,9 @@ class TestOpsNav:
         assert "Deep-dives" not in items
 
         monkeypatch.setattr(
-            _ui_renderers, "_shell_supports_research_nav", lambda _p: True,
+            _ui_renderers,
+            "_shell_supports_research_nav",
+            lambda _p: True,
         )
         items_research = dict(_ops_nav_items(""))
         assert items_research["Clusters"] == "/ops/clusters"
@@ -107,27 +110,62 @@ def _seed_audit_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(db_path)
     conn.executescript(_AUDIT_EVENTS_SCHEMA)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    yesterday = (
-        datetime.now(timezone.utc) - timedelta(days=1)
-    ).strftime("%Y-%m-%dT%H:%M:%S")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
     rows = [
         # Today: 3 evergreen promotions + 1 absorb error.
-        ("pipeline.jsonl", "evergreen_auto_promoted", "", "s1", today,
-         json.dumps({"slug": "alpha", "title": "Alpha"})),
-        ("pipeline.jsonl", "evergreen_auto_promoted", "", "s1", today,
-         json.dumps({"slug": "beta", "title": "Beta"})),
-        ("pipeline.jsonl", "evergreen_auto_promoted", "", "s1", today,
-         json.dumps({"slug": "gamma", "title": "Gamma"})),
-        ("pipeline.jsonl", "absorb_parse_error", "", "s1", today,
-         json.dumps({"source": "/path/to/source.md", "error": "JSON decode"})),
+        (
+            "pipeline.jsonl",
+            "evergreen_auto_promoted",
+            "",
+            "s1",
+            today,
+            json.dumps({"slug": "alpha", "title": "Alpha"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "evergreen_auto_promoted",
+            "",
+            "s1",
+            today,
+            json.dumps({"slug": "beta", "title": "Beta"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "evergreen_auto_promoted",
+            "",
+            "s1",
+            today,
+            json.dumps({"slug": "gamma", "title": "Gamma"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "absorb_parse_error",
+            "",
+            "s1",
+            today,
+            json.dumps({"source": "/path/to/source.md", "error": "JSON decode"}),
+        ),
         # Yesterday: 2 github intakes.
-        ("pipeline.jsonl", "github_intake_completed", "", "s0", yesterday,
-         json.dumps({"url": "https://github.com/a/b", "tier": "deepwiki"})),
-        ("pipeline.jsonl", "github_intake_completed", "", "s0", yesterday,
-         json.dumps({"url": "https://github.com/c/d", "tier": "gitingest"})),
+        (
+            "pipeline.jsonl",
+            "github_intake_completed",
+            "",
+            "s0",
+            yesterday,
+            json.dumps({"url": "https://github.com/a/b", "tier": "deepwiki"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "github_intake_completed",
+            "",
+            "s0",
+            yesterday,
+            json.dumps({"url": "https://github.com/c/d", "tier": "gitingest"}),
+        ),
     ]
     conn.executemany(
-        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)", rows,
+        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
     )
     conn.commit()
     conn.close()
@@ -170,9 +208,7 @@ class TestBuildTimelinePayload:
         _seed_audit_db(tmp_path)
         payload = build_timeline_payload(tmp_path, days=7)
         today = payload["days"][0]
-        assert any(
-            e["event_type"] == "absorb_parse_error" for e in today["errors"]
-        )
+        assert any(e["event_type"] == "absorb_parse_error" for e in today["errors"])
         # Subject pulled from payload_json.source field
         err = next(e for e in today["errors"] if e["event_type"] == "absorb_parse_error")
         assert "/path/to/source.md" in err["subject"]
@@ -180,18 +216,29 @@ class TestBuildTimelinePayload:
 
 class TestRenderTimelinePage:
     def test_renders_unavailable_state(self):
-        html = _render_timeline_page({
-            "screen": "ops/timeline", "requested_pack": "", "window_days": 14,
-            "days": [], "available": False, "reason": "test",
-        })
+        html = _render_timeline_page(
+            {
+                "screen": "ops/timeline",
+                "requested_pack": "",
+                "window_days": 14,
+                "days": [],
+                "available": False,
+                "reason": "test",
+            }
+        )
         assert "Timeline unavailable" in html
         assert "ovp-knowledge-index" in html
 
     def test_renders_empty_window(self):
-        html = _render_timeline_page({
-            "screen": "ops/timeline", "requested_pack": "", "window_days": 7,
-            "days": [], "available": True,
-        })
+        html = _render_timeline_page(
+            {
+                "screen": "ops/timeline",
+                "requested_pack": "",
+                "window_days": 7,
+                "days": [],
+                "available": True,
+            }
+        )
         assert "No events in the last 7 days" in html
 
     def test_renders_day_card_with_pills_and_samples(self):
@@ -201,30 +248,34 @@ class TestRenderTimelinePage:
             "window_days": 7,
             "available": True,
             "highlighted_types": ["evergreen_auto_promoted", "absorb_parse_error"],
-            "days": [{
-                "date": "2026-05-06",
-                "total": 5,
-                "by_type": {
-                    "evergreen_auto_promoted": 3,
-                    "absorb_parse_error": 1,
-                    "moc_updated": 1,
-                },
-                "samples": [
-                    {"slug": "alpha", "title": "Alpha title",
-                     "note_href": "/note?path=10-Knowledge%2FEvergreen%2Falpha.md"},
-                ],
-                "errors": [
-                    {"event_type": "absorb_parse_error",
-                     "subject": "bad.md", "snippet": "..."},
-                ],
-            }],
+            "days": [
+                {
+                    "date": "2026-05-06",
+                    "total": 5,
+                    "by_type": {
+                        "evergreen_auto_promoted": 3,
+                        "absorb_parse_error": 1,
+                        "moc_updated": 1,
+                    },
+                    "samples": [
+                        {
+                            "slug": "alpha",
+                            "title": "Alpha title",
+                            "note_href": "/note?path=10-Knowledge%2FEvergreen%2Falpha.md",
+                        },
+                    ],
+                    "errors": [
+                        {"event_type": "absorb_parse_error", "subject": "bad.md", "snippet": "..."},
+                    ],
+                }
+            ],
         }
         html = _render_timeline_page(payload)
         assert "2026-05-06" in html
         assert "5 events" in html
         # Highlighted types render with .highlight / .error CSS class
         assert "highlight" in html  # evergreen_auto_promoted
-        assert "error" in html      # absorb_parse_error
+        assert "error" in html  # absorb_parse_error
         # Sample evergreen link present
         assert "Alpha title" in html
         assert "/note?path=10-Knowledge%2FEvergreen%2Falpha.md" in html
@@ -297,7 +348,7 @@ def _seed_lineage_vault(tmp_path: Path) -> Path:
         ("neutts-voice-cloning-3-15s", "NeuTTS voice cloning 3-15s"),
     ]:
         (eg_dir / f"{slug}.md").write_text(
-            f"---\nnote_id: {slug}\ntitle: \"{title}\"\n"
+            f'---\nnote_id: {slug}\ntitle: "{title}"\n'
             f"extraction_prompt_version: v2\n---\n\n"
             f"# {title}\n\nbody\n\n"
             f"## Source\n\n- [[2026-04-28_neuphonic_neutts]]\n",
@@ -316,26 +367,42 @@ def _seed_lineage_vault(tmp_path: Path) -> Path:
     ]:
         conn.execute(
             "INSERT INTO pages_index VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (slug, title, "evergreen",
-             str(eg_dir / f"{slug}.md"), "2026-05-06",
-             "{}",
-             f"# {title}\n\nbody\n\n## Source\n\n- [[2026-04-28_neuphonic_neutts]]\n"),
+            (
+                slug,
+                title,
+                "evergreen",
+                str(eg_dir / f"{slug}.md"),
+                "2026-05-06",
+                "{}",
+                f"# {title}\n\nbody\n\n## Source\n\n- [[2026-04-28_neuphonic_neutts]]\n",
+            ),
         )
     # One cluster containing both evergreens.
     conn.execute(
         "INSERT INTO graph_clusters VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("research-tech", "cluster::tts1", "louvain_community",
-         "TTS / voice cloning", "neutts-perth-watermarking",
-         json.dumps(["neutts-perth-watermarking", "neutts-voice-cloning-3-15s"]),
-         2.0),
+        (
+            "research-tech",
+            "cluster::tts1",
+            "louvain_community",
+            "TTS / voice cloning",
+            "neutts-perth-watermarking",
+            json.dumps(["neutts-perth-watermarking", "neutts-voice-cloning-3-15s"]),
+            2.0,
+        ),
     )
     # One community crystal.
     conn.execute(
         "INSERT INTO community_crystals VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("research-tech", "cluster::tts1",
-         "## body",
-         json.dumps(["neutts-perth-watermarking", "neutts-voice-cloning-3-15s"]),
-         "2026-05-06T00:00:00Z", "m", "v1", ""),
+        (
+            "research-tech",
+            "cluster::tts1",
+            "## body",
+            json.dumps(["neutts-perth-watermarking", "neutts-voice-cloning-3-15s"]),
+            "2026-05-06T00:00:00Z",
+            "m",
+            "v1",
+            "",
+        ),
     )
     conn.commit()
     conn.close()
@@ -349,21 +416,31 @@ class TestLineageFromEvergreen:
         # because those want a fully populated knowledge_index — we
         # only care about the new ``lineage`` field.
         from ovp_pipeline.ui import view_models as vm
-        monkeypatch.setattr(vm, "get_note_provenance",
-                            lambda *a, **k: {"original_source_note": None,
-                                              "derived_deep_dives": []})
-        monkeypatch.setattr(vm, "get_note_traceability",
-                            lambda *a, **k: {
-                                "note": {"title": "x", "path": "x"},
-                                "source_notes": [], "deep_dives": [],
-                                "objects": [], "atlas_pages": [],
-                                "counts": {"deep_dives": 0, "objects": 0,
-                                            "atlas_pages": 0},
-                                "stage_label": "", "chain_status": "",
-                                "chain_summary": "", "missing_stages": [],
-                            })
-        monkeypatch.setattr(vm, "get_note_inbound_capture_summary",
-                            lambda *a, **k: {"summary": "", "items": []})
+
+        monkeypatch.setattr(
+            vm,
+            "get_note_provenance",
+            lambda *a, **k: {"original_source_note": None, "derived_deep_dives": []},
+        )
+        monkeypatch.setattr(
+            vm,
+            "get_note_traceability",
+            lambda *a, **k: {
+                "note": {"title": "x", "path": "x"},
+                "source_notes": [],
+                "deep_dives": [],
+                "objects": [],
+                "atlas_pages": [],
+                "counts": {"deep_dives": 0, "objects": 0, "atlas_pages": 0},
+                "stage_label": "",
+                "chain_status": "",
+                "chain_summary": "",
+                "missing_stages": [],
+            },
+        )
+        monkeypatch.setattr(
+            vm, "get_note_inbound_capture_summary", lambda *a, **k: {"summary": "", "items": []}
+        )
 
         payload = build_note_page_payload(
             vault,
@@ -373,8 +450,10 @@ class TestLineageFromEvergreen:
         assert lineage is not None
         assert lineage["kind"] == "evergreen"
         assert lineage["raw_source"]["slug"] == "2026-04-28_neuphonic_neutts"
-        assert lineage["raw_source"]["path"] == \
-            "50-Inbox/03-Processed/2026-04/2026-04-28_neuphonic_neutts.md"
+        assert (
+            lineage["raw_source"]["path"]
+            == "50-Inbox/03-Processed/2026-04/2026-04-28_neuphonic_neutts.md"
+        )
         # Sibling evergreens — both notes that link to the same raw source
         slugs = [eg["slug"] for eg in lineage["evergreens"]]
         assert "neutts-perth-watermarking" in slugs
@@ -389,21 +468,31 @@ class TestLineageFromEvergreen:
     def test_raw_source_traces_forward_to_evergreens(self, tmp_path, monkeypatch):
         vault = _seed_lineage_vault(tmp_path)
         from ovp_pipeline.ui import view_models as vm
-        monkeypatch.setattr(vm, "get_note_provenance",
-                            lambda *a, **k: {"original_source_note": None,
-                                              "derived_deep_dives": []})
-        monkeypatch.setattr(vm, "get_note_traceability",
-                            lambda *a, **k: {
-                                "note": {"title": "x", "path": "x"},
-                                "source_notes": [], "deep_dives": [],
-                                "objects": [], "atlas_pages": [],
-                                "counts": {"deep_dives": 0, "objects": 0,
-                                            "atlas_pages": 0},
-                                "stage_label": "", "chain_status": "",
-                                "chain_summary": "", "missing_stages": [],
-                            })
-        monkeypatch.setattr(vm, "get_note_inbound_capture_summary",
-                            lambda *a, **k: {"summary": "", "items": []})
+
+        monkeypatch.setattr(
+            vm,
+            "get_note_provenance",
+            lambda *a, **k: {"original_source_note": None, "derived_deep_dives": []},
+        )
+        monkeypatch.setattr(
+            vm,
+            "get_note_traceability",
+            lambda *a, **k: {
+                "note": {"title": "x", "path": "x"},
+                "source_notes": [],
+                "deep_dives": [],
+                "objects": [],
+                "atlas_pages": [],
+                "counts": {"deep_dives": 0, "objects": 0, "atlas_pages": 0},
+                "stage_label": "",
+                "chain_status": "",
+                "chain_summary": "",
+                "missing_stages": [],
+            },
+        )
+        monkeypatch.setattr(
+            vm, "get_note_inbound_capture_summary", lambda *a, **k: {"summary": "", "items": []}
+        )
 
         payload = build_note_page_payload(
             vault,
@@ -428,24 +517,35 @@ class TestLineageFromEvergreen:
         moc_dir.mkdir(parents=True)
         (moc_dir / "moc.md").write_text("# MOC\n", encoding="utf-8")
         from ovp_pipeline.ui import view_models as vm
-        monkeypatch.setattr(vm, "get_note_provenance",
-                            lambda *a, **k: {"original_source_note": None,
-                                              "derived_deep_dives": []})
-        monkeypatch.setattr(vm, "get_note_traceability",
-                            lambda *a, **k: {
-                                "note": {"title": "x", "path": "x"},
-                                "source_notes": [], "deep_dives": [],
-                                "objects": [], "atlas_pages": [],
-                                "counts": {"deep_dives": 0, "objects": 0,
-                                            "atlas_pages": 0},
-                                "stage_label": "", "chain_status": "",
-                                "chain_summary": "", "missing_stages": [],
-                            })
-        monkeypatch.setattr(vm, "get_note_inbound_capture_summary",
-                            lambda *a, **k: {"summary": "", "items": []})
+
+        monkeypatch.setattr(
+            vm,
+            "get_note_provenance",
+            lambda *a, **k: {"original_source_note": None, "derived_deep_dives": []},
+        )
+        monkeypatch.setattr(
+            vm,
+            "get_note_traceability",
+            lambda *a, **k: {
+                "note": {"title": "x", "path": "x"},
+                "source_notes": [],
+                "deep_dives": [],
+                "objects": [],
+                "atlas_pages": [],
+                "counts": {"deep_dives": 0, "objects": 0, "atlas_pages": 0},
+                "stage_label": "",
+                "chain_status": "",
+                "chain_summary": "",
+                "missing_stages": [],
+            },
+        )
+        monkeypatch.setattr(
+            vm, "get_note_inbound_capture_summary", lambda *a, **k: {"summary": "", "items": []}
+        )
 
         payload = build_note_page_payload(
-            vault, note_path="10-Knowledge/Atlas/moc.md",
+            vault,
+            note_path="10-Knowledge/Atlas/moc.md",
         )
         assert payload["lineage"] is None
 
@@ -455,28 +555,38 @@ class TestRenderLineageCard:
         assert _render_lineage_card(None) == ""
 
     def test_evergreen_chain_renders_all_blocks(self):
-        html = _render_lineage_card({
-            "kind": "evergreen",
-            "raw_source": {
-                "slug": "2026-04-28_neuphonic_neutts",
-                "path": "50-Inbox/03-Processed/2026-04/2026-04-28_neuphonic_neutts.md",
-                "note_href": "/note?path=...",
-            },
-            "evergreens": [
-                {"slug": "a", "title": "A", "note_href": "/note?a"},
-                {"slug": "b", "title": "B", "note_href": "/note?b"},
-            ],
-            "clusters": [
-                {"cluster_id": "cluster::aa", "label": "Topic A",
-                 "member_count": 5, "matched": ["a"],
-                 "cluster_href": "/ops/cluster?id=...",
-                 "crystal_note_href": "/note?path=40-Resources..."},
-            ],
-            "crystals": [
-                {"kind": "community_crystal", "crystal_id": "cluster::aa",
-                 "label": "cluster::aa", "note_href": "/note?path=..."},
-            ],
-        })
+        html = _render_lineage_card(
+            {
+                "kind": "evergreen",
+                "raw_source": {
+                    "slug": "2026-04-28_neuphonic_neutts",
+                    "path": "50-Inbox/03-Processed/2026-04/2026-04-28_neuphonic_neutts.md",
+                    "note_href": "/note?path=...",
+                },
+                "evergreens": [
+                    {"slug": "a", "title": "A", "note_href": "/note?a"},
+                    {"slug": "b", "title": "B", "note_href": "/note?b"},
+                ],
+                "clusters": [
+                    {
+                        "cluster_id": "cluster::aa",
+                        "label": "Topic A",
+                        "member_count": 5,
+                        "matched": ["a"],
+                        "cluster_href": "/ops/cluster?id=...",
+                        "crystal_note_href": "/note?path=40-Resources...",
+                    },
+                ],
+                "crystals": [
+                    {
+                        "kind": "community_crystal",
+                        "crystal_id": "cluster::aa",
+                        "label": "cluster::aa",
+                        "note_href": "/note?path=...",
+                    },
+                ],
+            }
+        )
         assert "Lineage" in html
         assert "Raw source" in html
         assert "2026-04-28_neuphonic_neutts" in html
@@ -491,13 +601,15 @@ class TestRenderLineageCard:
     def test_archived_raw_source_shows_muted_note(self):
         # When the raw source can't be located on disk (archived) the
         # card still renders the stem with a hint.
-        html = _render_lineage_card({
-            "kind": "evergreen",
-            "raw_source": {"slug": "old-source", "path": "", "note_href": ""},
-            "evergreens": [],
-            "clusters": [],
-            "crystals": [],
-        })
+        html = _render_lineage_card(
+            {
+                "kind": "evergreen",
+                "raw_source": {"slug": "old-source", "path": "", "note_href": ""},
+                "evergreens": [],
+                "clusters": [],
+                "crystals": [],
+            }
+        )
         assert "old-source" in html
         assert "archived" in html
 
@@ -520,28 +632,74 @@ def _seed_run_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(db_path)
     conn.executescript(_AUDIT_EVENTS_SCHEMA)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    later = (
-        datetime.now(timezone.utc) + timedelta(seconds=30)
-    ).strftime("%Y-%m-%dT%H:%M:%S")
+    later = (datetime.now(timezone.utc) + timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%S")
     rows = [
         # Run A: bracketed by transaction_started + transaction_completed.
-        ("pipeline.jsonl", "transaction_started", "", "sess-A", today,
-         json.dumps({"txn_id": "txn-A", "type": "article-processing"})),
-        ("pipeline.jsonl", "clippings_processed", "", "sess-A", today,
-         json.dumps({"scanned": 2, "migrated": 2})),
-        ("pipeline.jsonl", "article_intake_only", "", "sess-A", today,
-         json.dumps({"file": "alpha.md", "source_url": "https://x.com/a"})),
-        ("pipeline.jsonl", "article_intake_only", "", "sess-A", today,
-         json.dumps({"file": "beta.md", "source_url": "https://x.com/b"})),
-        ("pipeline.jsonl", "absorb_parse_error", "", "sess-A", today,
-         json.dumps({"source": "/path/to/broken.md", "error": "JSON decode"})),
-        ("pipeline.jsonl", "transaction_completed", "", "sess-A", later,
-         json.dumps({"txn_id": "txn-A", "results": {"completed": 2}})),
+        (
+            "pipeline.jsonl",
+            "transaction_started",
+            "",
+            "sess-A",
+            today,
+            json.dumps({"txn_id": "txn-A", "type": "article-processing"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "clippings_processed",
+            "",
+            "sess-A",
+            today,
+            json.dumps({"scanned": 2, "migrated": 2}),
+        ),
+        (
+            "pipeline.jsonl",
+            "article_intake_only",
+            "",
+            "sess-A",
+            today,
+            json.dumps({"file": "alpha.md", "source_url": "https://x.com/a"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "article_intake_only",
+            "",
+            "sess-A",
+            today,
+            json.dumps({"file": "beta.md", "source_url": "https://x.com/b"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "absorb_parse_error",
+            "",
+            "sess-A",
+            today,
+            json.dumps({"source": "/path/to/broken.md", "error": "JSON decode"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "transaction_completed",
+            "",
+            "sess-A",
+            later,
+            json.dumps({"txn_id": "txn-A", "results": {"completed": 2}}),
+        ),
         # Run B: started but not completed.
-        ("pipeline.jsonl", "transaction_started", "", "sess-B", today,
-         json.dumps({"txn_id": "txn-B", "type": "github-redo"})),
-        ("pipeline.jsonl", "article_intake_only", "", "sess-B", today,
-         json.dumps({"file": "gamma.md"})),
+        (
+            "pipeline.jsonl",
+            "transaction_started",
+            "",
+            "sess-B",
+            today,
+            json.dumps({"txn_id": "txn-B", "type": "github-redo"}),
+        ),
+        (
+            "pipeline.jsonl",
+            "article_intake_only",
+            "",
+            "sess-B",
+            today,
+            json.dumps({"file": "gamma.md"}),
+        ),
     ]
     conn.executemany("INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)", rows)
     conn.commit()
@@ -552,7 +710,10 @@ def _seed_run_db(tmp_path: Path) -> Path:
 class TestBuildTodayDigestPayload:
     def test_unavailable_when_db_missing(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_today_digest_payload
-        payload = build_today_digest_payload(tmp_path)
+
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         assert payload["screen"] == "ops/today"
         assert payload["available"] is False
         assert payload["cards"] == []
@@ -563,12 +724,18 @@ class TestBuildTodayDigestPayload:
         intake/absorb/synthesis/governance/failures; today they're
         the lifecycle vocabulary."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         assert payload["available"] is True
         assert [c["id"] for c in payload["cards"]] == [
-            "Received", "Extracted", "Accepted",
-            "Synthesized", "NeedsAction",
+            "Received",
+            "Extracted",
+            "Accepted",
+            "Synthesized",
+            "NeedsAction",
         ]
 
     def test_received_card_counts_distinct_sources_as_secondary(self, tmp_path):
@@ -578,8 +745,11 @@ class TestBuildTodayDigestPayload:
         clippings_processed carries no file ref so it is not a
         distinct source.  Pre-M26 this counted 4 raw rows."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         received = next(c for c in payload["cards"] if c["id"] == "Received")
         assert received["event_count"] == 3
         assert received["event_label"] == "3 arrived today"
@@ -588,8 +758,11 @@ class TestBuildTodayDigestPayload:
 
     def test_needs_action_card_counts_distinct_blockers_as_secondary(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         na = next(c for c in payload["cards"] if c["id"] == "NeedsAction")
         # Seeded: 1 absorb_parse_error on broken.md → 1 distinct blocker.
         assert na["event_count"] == 1
@@ -601,16 +774,18 @@ class TestBuildTodayDigestPayload:
         the primary count is "all current items", not date-windowed.
         Adding date would break card-N === page-N."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         for card in payload["cards"]:
             href = card["primary_href"]
-            assert href.startswith("/ops/items?state="), (
-                f"{card['id']} primary_href must target /ops/items"
-            )
+            assert href.startswith(
+                "/ops/items?state="
+            ), f"{card['id']} primary_href must target /ops/items"
             assert "date=" not in href, (
-                f"{card['id']} primary_href must NOT carry date= "
-                f"(got {href!r})"
+                f"{card['id']} primary_href must NOT carry date= " f"(got {href!r})"
             )
 
     def test_secondary_href_targets_events_audit_with_date_filter(self, tmp_path):
@@ -618,8 +793,11 @@ class TestBuildTodayDigestPayload:
         raw-audit-evidence view) so card N === page N.  Carries
         date= because the secondary count IS date-windowed."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         received = next(c for c in payload["cards"] if c["id"] == "Received")
         assert received["event_href"].startswith("/ops/events/audit?")
         assert "date=" in received["event_href"]
@@ -627,6 +805,7 @@ class TestBuildTodayDigestPayload:
 
     def test_target_date_overrides_today(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
         # Future date → no events.
         future = "2099-01-01"
@@ -642,8 +821,11 @@ class TestBuildTodayDigestPayload:
         plumbed through even though the cards now consume it
         directly."""
         from ovp_pipeline.ui.view_models import build_today_digest_payload
+
         _seed_run_db(tmp_path)
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         assert "lifecycle_summary" in payload
 
     def test_accepted_card_does_not_double_count_paired_events(self, tmp_path):
@@ -665,15 +847,29 @@ class TestBuildTodayDigestPayload:
         conn.executemany(
             "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
             [
-                ("pipeline.jsonl", "promote_concept", "obj-x", "s", ts,
-                 json.dumps({"slug": "obj-x"})),
-                ("pipeline.jsonl", "promotion", "obj-x", "s", ts,
-                 json.dumps({"target_path": "10-Knowledge/Evergreen/X.md"})),
+                (
+                    "pipeline.jsonl",
+                    "promote_concept",
+                    "obj-x",
+                    "s",
+                    ts,
+                    json.dumps({"slug": "obj-x"}),
+                ),
+                (
+                    "pipeline.jsonl",
+                    "promotion",
+                    "obj-x",
+                    "s",
+                    ts,
+                    json.dumps({"target_path": "10-Knowledge/Evergreen/X.md"}),
+                ),
             ],
         )
         conn.commit()
         conn.close()
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         accepted = next(c for c in payload["cards"] if c["id"] == "Accepted")
         assert accepted["event_count"] == 1, (
             "Accepted card double-counted the promote_concept + "
@@ -699,12 +895,13 @@ class TestBuildTodayDigestPayload:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         conn.execute(
             "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
-            ("pipeline.jsonl", "source_archived_to_processed",
-             "src-y", "s", ts, "{}"),
+            ("pipeline.jsonl", "source_archived_to_processed", "src-y", "s", ts, "{}"),
         )
         conn.commit()
         conn.close()
-        payload = build_today_digest_payload(tmp_path)
+        payload = build_today_digest_payload(
+            tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
         received = next(c for c in payload["cards"] if c["id"] == "Received")
         accepted = next(c for c in payload["cards"] if c["id"] == "Accepted")
         assert received["event_count"] == 1
@@ -717,12 +914,14 @@ class TestBuildTodayDigestPayload:
 class TestBuildRunsIndexPayload:
     def test_unavailable_when_db_missing(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_runs_index_payload
+
         payload = build_runs_index_payload(tmp_path)
         assert payload["available"] is False
         assert payload["runs"] == []
 
     def test_lists_runs_with_status(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_runs_index_payload
+
         _seed_run_db(tmp_path)
         payload = build_runs_index_payload(tmp_path)
         assert payload["available"] is True
@@ -741,6 +940,7 @@ class TestBuildRunsIndexPayload:
 
     def test_limit_caps_results(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_runs_index_payload
+
         _seed_run_db(tmp_path)
         payload = build_runs_index_payload(tmp_path, limit=1)
         assert len(payload["runs"]) == 1
@@ -749,6 +949,7 @@ class TestBuildRunsIndexPayload:
 class TestBuildRunDetailPayload:
     def test_returns_unavailable_for_unknown_txn(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_run_detail_payload
+
         _seed_run_db(tmp_path)
         payload = build_run_detail_payload(tmp_path, "txn-does-not-exist")
         assert payload["available"] is False
@@ -756,6 +957,7 @@ class TestBuildRunDetailPayload:
 
     def test_returns_session_scoped_events_for_known_txn(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_run_detail_payload
+
         _seed_run_db(tmp_path)
         payload = build_run_detail_payload(tmp_path, "txn-A")
         assert payload["available"] is True
@@ -775,6 +977,7 @@ class TestBuildRunDetailPayload:
 
     def test_empty_txn_id_returns_unavailable(self, tmp_path):
         from ovp_pipeline.ui.view_models import build_run_detail_payload
+
         payload = build_run_detail_payload(tmp_path, "")
         assert payload["available"] is False
         assert payload["txn_id"] == ""

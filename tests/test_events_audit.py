@@ -36,7 +36,6 @@ from ovp_pipeline.commands._ui_renderers import (
     _render_events_page,
 )
 
-
 _AUDIT_EVENTS_SCHEMA = """
 CREATE TABLE audit_events (
     source_log TEXT NOT NULL,
@@ -55,7 +54,8 @@ def _seed_audit(tmp_path: Path, rows: list[tuple]) -> Path:
     conn = sqlite3.connect(db_path)
     conn.executescript(_AUDIT_EVENTS_SCHEMA)
     conn.executemany(
-        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)", rows,
+        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
     )
     conn.commit()
     conn.close()
@@ -82,12 +82,17 @@ def test_empty_event_types_returns_recent_rows_across_all_types(tmp_path):
     recent audit_events rows across ALL event_types rather than
     a useless empty page."""
     today_iso = "2026-05-13T08:00:00"
-    _seed_audit(tmp_path, [
-        ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
-        ("pipeline.jsonl", "absorb_parse_error", "src-b", "s", today_iso, "{}"),
-    ])
+    _seed_audit(
+        tmp_path,
+        [
+            ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
+            ("pipeline.jsonl", "absorb_parse_error", "src-b", "s", today_iso, "{}"),
+        ],
+    )
     payload = build_events_audit_payload(
-        tmp_path, event_types=(), date_key="",
+        tmp_path,
+        event_types=(),
+        date_key="",
     )
     assert payload["available"] is True
     # Both seeded rows surface, despite no event_types filter.
@@ -102,11 +107,14 @@ def test_empty_event_types_returns_recent_rows_across_all_types(tmp_path):
 def test_event_type_filter_isolates_rows(tmp_path):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     today_date = today[:10]
-    _seed_audit(tmp_path, [
-        ("pipeline.jsonl", "article_intake_only", "src-a", "s", today, "{}"),
-        ("pipeline.jsonl", "article_intake_only", "src-b", "s", today, "{}"),
-        ("pipeline.jsonl", "absorb_parse_error", "src-c", "s", today, "{}"),
-    ])
+    _seed_audit(
+        tmp_path,
+        [
+            ("pipeline.jsonl", "article_intake_only", "src-a", "s", today, "{}"),
+            ("pipeline.jsonl", "article_intake_only", "src-b", "s", today, "{}"),
+            ("pipeline.jsonl", "absorb_parse_error", "src-c", "s", today, "{}"),
+        ],
+    )
     payload = build_events_audit_payload(
         tmp_path,
         event_types=("article_intake_only",),
@@ -119,10 +127,13 @@ def test_event_type_filter_isolates_rows(tmp_path):
 def test_date_filter_excludes_other_days(tmp_path):
     today_iso = "2026-05-13T08:00:00"
     other_iso = "2026-05-12T08:00:00"
-    _seed_audit(tmp_path, [
-        ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
-        ("pipeline.jsonl", "article_intake_only", "src-b", "s", other_iso, "{}"),
-    ])
+    _seed_audit(
+        tmp_path,
+        [
+            ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
+            ("pipeline.jsonl", "article_intake_only", "src-b", "s", other_iso, "{}"),
+        ],
+    )
     payload = build_events_audit_payload(
         tmp_path,
         event_types=("article_intake_only",),
@@ -142,16 +153,12 @@ def test_card_n_equals_audit_page_n(tmp_path):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     today_date = today[:10]
     rows = [
-        ("pipeline.jsonl", "article_intake_only", f"src-{i}", "s",
-         today, "{}")
-        for i in range(4)
-    ] + [
-        ("pipeline.jsonl", "absorb_parse_error", f"src-f{i}", "s",
-         today, "{}")
-        for i in range(2)
-    ]
+        ("pipeline.jsonl", "article_intake_only", f"src-{i}", "s", today, "{}") for i in range(4)
+    ] + [("pipeline.jsonl", "absorb_parse_error", f"src-f{i}", "s", today, "{}") for i in range(2)]
     _seed_audit(tmp_path, rows)
-    digest = build_today_digest_payload(tmp_path)
+    digest = build_today_digest_payload(
+        tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
 
     for card in digest["cards"]:
         if card["event_count"] == 0 or not card["event_types"]:
@@ -190,17 +197,19 @@ def test_card_secondary_href_carries_limit_above_event_count(tmp_path):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     # Seed 250 intake rows — over the default 200 limit.
     rows = [
-        ("pipeline.jsonl", "article_intake_only", f"src-{i:03d}", "s",
-         today, "{}")
+        ("pipeline.jsonl", "article_intake_only", f"src-{i:03d}", "s", today, "{}")
         for i in range(250)
     ]
     _seed_audit(tmp_path, rows)
-    digest = build_today_digest_payload(tmp_path)
+    digest = build_today_digest_payload(
+        tmp_path, target_date=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
     received = next(c for c in digest["cards"] if c["id"] == "Received")
     assert received["event_count"] == 250
     href = received["event_href"]
     # URL must carry limit >= 250 (or hit the audit MAX cap).
     import re
+
     match = re.search(r"limit=(\d+)", href)
     assert match is not None
     url_limit = int(match.group(1))
@@ -228,9 +237,12 @@ def test_audit_renderer_carries_role_banner(tmp_path):
     """Page must explain its role + link to /ops/events for the
     timeline-projection view."""
     today_iso = "2026-05-13T08:00:00"
-    _seed_audit(tmp_path, [
-        ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
-    ])
+    _seed_audit(
+        tmp_path,
+        [
+            ("pipeline.jsonl", "article_intake_only", "src-a", "s", today_iso, "{}"),
+        ],
+    )
     payload = build_events_audit_payload(
         tmp_path,
         event_types=("article_intake_only",),

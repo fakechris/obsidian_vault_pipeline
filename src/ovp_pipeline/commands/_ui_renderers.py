@@ -7072,7 +7072,27 @@ def _render_today_digest_page(payload: dict) -> str:
             if event_label and event_count > 0
             else ""
         )
-        zero_html = honest_zero_html(short=True) if event_count == 0 else ""
+        if event_count == 0:
+            zr = str(card.get("zero_reason") or "")
+            zd = str(card.get("zero_detail") or "")
+            if zr:
+                tone = (
+                    "color:var(--ok,#3a7)"
+                    if zr == "healthy"
+                    else "color:var(--warn,#c70)"
+                    if zr in ("audit_sync_stale", "projection_stale", "failed")
+                    else "color:var(--muted,#888)"
+                )
+                zero_html = (
+                    "<div class='tiny' style='margin-top:4px;"
+                    f"{tone}'><strong>{escape(zr)}</strong>"
+                    f"<div class='muted' style='margin-top:1px'>"
+                    f"{escape(zd)}</div></div>"
+                )
+            else:
+                zero_html = honest_zero_html(short=True)
+        else:
+            zero_html = ""
 
         activity_sections.append(
             "<div class='card' style='margin:0;overflow:hidden'>"
