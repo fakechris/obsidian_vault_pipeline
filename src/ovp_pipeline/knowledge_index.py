@@ -972,7 +972,45 @@ def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, s
     return rows
 
 
-def _chunk_page_body(body: str, fallback_title: str) -> list[tuple[str, str]]:
+# A single embedding chunk is hard-capped: an un-sectioned page body
+# (no ``## `` headings) would otherwise become one chunk of the whole
+# body — observed up to ~903k chars — and be fed whole into the
+# embedding backend.  The cap bounds both memory and the embedded text.
+_MAX_CHUNK_CHARS = 3000
+_CHUNK_OVERLAP_CHARS = 200
+
+
+def _split_to_cap(text: str, max_chars: int, overlap: int) -> list[str]:
+    """Slice *text* into pieces no longer than *max_chars*, each
+    overlapping the previous by *overlap* chars so a concept split
+    across a boundary still embeds with local context.  Empty / blank
+    input yields no pieces."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+    step = max(1, max_chars - max(0, overlap))
+    pieces: list[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        piece = text[start : start + max_chars]
+        if piece.strip():
+            pieces.append(piece)
+        if start + max_chars >= n:
+            break
+        start += step
+    return pieces
+
+
+def _chunk_page_body(
+    body: str,
+    fallback_title: str,
+    *,
+    max_chunk_chars: int = _MAX_CHUNK_CHARS,
+    overlap_chars: int = _CHUNK_OVERLAP_CHARS,
+) -> list[tuple[str, str]]:
     sections: list[tuple[str, str]] = []
     current_title: str | None = None
     current_lines: list[str] = []
@@ -992,12 +1030,18 @@ def _chunk_page_body(body: str, fallback_title: str) -> list[tuple[str, str]]:
         sections.append((current_title, "\n".join(current_lines).strip()))
 
     if sections:
-        return sections
+        raw = sections
+    else:
+        normalized_body = body.strip()
+        if not normalized_body:
+            return []
+        raw = [(fallback_title, normalized_body)]
 
-    normalized_body = body.strip()
-    if not normalized_body:
-        return []
-    return [(fallback_title, normalized_body)]
+    capped: list[tuple[str, str]] = []
+    for title, text in raw:
+        for piece in _split_to_cap(text, max_chunk_chars, overlap_chars):
+            capped.append((title, piece))
+    return capped
 
 
 def _embed_text(text: str) -> bytes:
