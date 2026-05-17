@@ -307,6 +307,43 @@ def test_layer0_cohort_excludes_resaved_old_source(vault, utc_config):
     assert result.intake.intake_cohort_sources == 0
 
 
+def test_layer0_window_handles_mixed_timestamp_formats(vault, utc_config):
+    """BL-109 (defensive): a space+offset in-window row and a UTC-Z
+    in-window row must BOTH be counted.  The pre-BL-109 raw SQL
+    `timestamp >= 'YYYY-MM-DDT..+00:00'` string compare drops the
+    space+offset row (' ' < 'T') even though it is in-window — the
+    latent lexicographic hazard `_utc_iso` documents.  (This is
+    correctness hardening / consistency with /ops/today; it was NOT
+    the cause of the backdated-probe 0 seen dogfooding BL-106.)"""
+    vault_dir, conn = vault
+    as_of = datetime(2026, 5, 13, 12, 0, tzinfo=ZoneInfo("UTC"))
+    # All tz-explicit (deterministic on any machine).  The
+    # space+offset form is lexicographically < the `...T..+00:00`
+    # SQL bound (' ' < 'T'), so the pre-BL-109 string compare
+    # dropped it even though it is in-window — the exact bug.
+    space_offset = "2026-05-13 10:00:00+00:00"   # < 'T' bound → was dropped
+    iso_z = "2026-05-13T10:30:00Z"               # event_emitter style
+    out_of_window = "2026-05-10T10:00:00Z"       # 3 days before
+    for slug, ts in (
+        ("slug-space", space_offset),
+        ("slug-z", iso_z),
+        ("slug-old", out_of_window),
+    ):
+        conn.execute(
+            "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+            ("pipeline.jsonl", "article_processed", slug, "s1", ts,
+             json.dumps({"title": f"T {slug}"})),
+        )
+    conn.commit()
+    conn.close()
+    result = collect_digest_inputs(
+        vault_dir, "research-tech", as_of=as_of, config=utc_config
+    )
+    # Both in-window rows counted regardless of format; old row excluded.
+    assert result.intake.intake_events_processed == 2
+    assert result.preflight.audit_events_layer0 == "ok"
+
+
 def test_layer0_ignores_non_allowlist_event_types(vault, utc_config):
     """An audit row with event_type outside the allowlist doesn't
     inflate the Layer 0 count."""

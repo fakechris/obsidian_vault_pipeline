@@ -128,6 +128,7 @@ recorded; run status unknown."
 | BL-106 | P1 | **Digest uses intake cohorts, not only event-day activity** | Feed M23 digest Layer 0/3 from New Intake + Intake Cohorts so a daily digest reflects articles saved that day even when absorb/synthesis happens later. |
 | BL-107 | P2 | **Refresh-ops heavy-rebuild watermark** | Make `ovp-refresh-ops` idempotent for canonical evidence warnings by tracking the last successful projection/full rebuild watermark in a `knowledge.db` metadata row written only after a successful full/projection rebuild.  Do not use `ops_state.refreshed_at`; that can suppress a real canonical-change warning before the heavy rebuild has handled it.  Supersedes issue #250's initial `ops_state.refreshed_at` proposal. |
 | BL-108 | P2 | **Streaming audit ingest/read path** | Replace remaining `read_text().splitlines()` audit JSONL reads with streaming iteration before daily rollups scale further.  This is performance hygiene, not a blocker for the semantic fixes. |
+| BL-109 | P1 | **Defensive timestamp normalization for digest windows** | BL-102 analog for the M23 digest — cross-surface consistency infrastructure, not a visible bug fix.  Digest Layer 0 (and its preflight gate) filtered the window with a raw SQL `timestamp >= ? AND timestamp <= ?` string comparison over mixed UTC-`Z` ISO and naive-local `audit_events.timestamp`.  `_utc_iso`'s own docstring concedes this compare is "lexicographic, not time-correct"; it is a known bad pattern that will re-diverge `/ops/today` and Digest as formats drift.  Replace the SQL bound with the shared `audit_time.parse_audit_ts` + an in-Python window compare, exactly as `/ops/today`'s Activity / cohort paths do, so the digest and the daily surfaces bucket identically.  **Honest scope:** the 0-count observed while dogfooding BL-106 was traced to a backdated probe hitting the `last-successful-digest` window watermark, *not* this comparison; current vault data is uniformly `T`-form and happens not to trip the lexicographic hazard.  No expected visible change on the current operator vault — this is correctness hardening + M26/M23 semantic alignment so the daily model stays unified. |
 
 ## Implementation Sequence
 
@@ -144,7 +145,12 @@ recorded; run status unknown."
 6. **BL-104**: add state-transition progress once item activity and
    cohort views are no longer raw-event based.
 7. **BL-106**: wire the new daily model back into Digest.
-8. **BL-107 / BL-108**: operational follow-ups; valuable, but not the
+8. **BL-109**: normalize the digest's own window timestamps (BL-102
+   analog) — defensive cross-surface consistency so Digest and
+   `/ops/today` keep one timestamp model.  Surfaced (mis-attributed
+   then corrected) while dogfooding BL-106; no visible change on
+   current data, but keeps the daily model from re-diverging.
+9. **BL-107 / BL-108**: operational follow-ups; valuable, but not the
    core product gap.
 
 ## Non-Goals
