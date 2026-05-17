@@ -22,8 +22,11 @@ MAX_MODULE_LINES = 3000
 # shrinks below its cap, lower the cap to lock in the gain.
 KNOWN_OVERSIZED = {
     "truth_api.py": 7000,           # target: split into truth_queries / governance_api / search_api
-    "commands/_ui_renderers.py": 5000,  # target: split by surface (M27 BL-110 PR2)
-    # ui/view_models.py — RETIRED: M27 BL-110 split it into the
+    # commands/_ui_renderers.py — RETIRED: M27 BL-110 PR2 split it
+    # into the commands/_ui_renderers/ package (same shape as
+    # view_models: constants leaf + topological layers + per-surface
+    # modules), every file < the 3000 default.  Ratchet tightened.
+    # ui/view_models.py — RETIRED: M27 BL-110 PR1 split it into the
     # ui/view_models/ package (constants leaf + topological layers +
     # per-surface modules), every file < the 3000 default.  Ratchet
     # tightened: the 5000 carve-out is gone, not relocated.
