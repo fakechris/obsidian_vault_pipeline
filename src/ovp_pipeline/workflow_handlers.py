@@ -135,13 +135,18 @@ def run_autopilot_absorb(*, daemon: Any, **_: Any) -> dict[str, Any]:
 
 
 def run_autopilot_dedup(*, daemon: Any, **_: Any) -> dict[str, Any]:
-    from .concept_dedup import DEFAULT_THRESHOLD, find_clusters
-
-    vault_dir = daemon.vault_dir if hasattr(daemon, "vault_dir") else None
-    if vault_dir:
-        clusters = find_clusters(vault_dir, threshold=DEFAULT_THRESHOLD)
-        return {"stage": "dedup", "clusters_found": len(clusters)}
-    return {"stage": "dedup", "skipped": True}
+    """Autopilot dedup is fail-closed: the daemon runs absorb as a
+    subprocess and carries no promoted-slug scope, so there is no
+    incremental scope to dedup against.  We SKIP rather than fall back
+    to an implicit full-vault O(N²) scan (9k+ Evergreen ⇒ ~44M pair
+    comparisons every cycle).  Full-vault dedup is an explicit
+    maintenance op (``ovp-concept-dedup propose``) only.
+    """
+    return {
+        "stage": "dedup",
+        "skipped": True,
+        "reason": "no_promoted_scope",
+    }
 
 
 def run_autopilot_moc(*, daemon: Any, **_: Any) -> dict[str, Any]:

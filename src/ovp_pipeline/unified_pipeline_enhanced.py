@@ -2445,10 +2445,12 @@ class EnhancedPipeline:
             write_proposal,
         )
 
-        # Read absorb's typed contract.  promoted_slugs is now guaranteed
-        # to exist on every absorb return path (PATCH-1 + commit 2 of the
-        # contract refactor); empty list means "no scope, fall back to
-        # full vault".
+        # Read absorb's typed contract.  promoted_slugs is guaranteed to
+        # exist on every absorb return path.  No promoted slugs means
+        # there is nothing this run absorbed to dedup against — we SKIP.
+        # We must never fall back to an implicit full-vault O(N²) scan
+        # here (9k+ Evergreen ⇒ ~44M pair comparisons); that is an
+        # explicit maintenance op (``ovp-concept-dedup propose``) only.
         scope_slugs: set[str] | None = None
         absorb_result = self.step_results.get("absorb")
         if absorb_result is not None:
@@ -2456,12 +2458,23 @@ class EnhancedPipeline:
             if promoted:
                 scope_slugs = set(promoted)
 
+        if scope_slugs is None:
+            print(
+                "  No promoted slugs from absorb — skipping dedup "
+                "(no implicit full-vault fallback)."
+            )
+            return DedupStepResult(
+                success=True,
+                clusters=0,
+                skipped=True,
+                reason="no_promoted_scope",
+            )
+
         threshold = DEFAULT_THRESHOLD
         clusters = find_clusters(self.vault_dir, threshold=threshold, scope_slugs=scope_slugs)
 
         if not clusters:
-            scope_desc = f"scope={len(scope_slugs)} slugs" if scope_slugs else "full vault"
-            print(f"  No duplicates found ({scope_desc}, threshold={threshold}).")
+            print(f"  No duplicates found (scope={len(scope_slugs)} slugs, threshold={threshold}).")
             return DedupStepResult(success=True)
 
         prop_path, proposal = write_proposal(self.vault_dir, clusters, threshold=threshold)

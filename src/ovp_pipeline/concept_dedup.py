@@ -251,11 +251,23 @@ def _pick_canonical(members: list[DedupCandidate]) -> DedupCandidate:
     )
 
 
+class FullScanRefused(RuntimeError):
+    """Raised when an unscoped full-vault dedup is requested without an
+    explicit ``allow_full_scan=True`` opt-in.
+
+    Full-vault clustering is O(N²) over every Evergreen file.  It must
+    never run silently inside the default pipeline / autopilot path —
+    only an explicit maintenance command (``ovp-concept-dedup propose``)
+    may opt in.
+    """
+
+
 def find_clusters(
     vault_dir: Path,
     *,
     threshold: float = DEFAULT_THRESHOLD,
     scope_slugs: set[str] | None = None,
+    allow_full_scan: bool = False,
 ) -> list[DedupCluster]:
     """Find duplicate clusters among Evergreen files.
 
@@ -263,7 +275,19 @@ def find_clusters(
     scope set — or whose trigram-Jaccard similarity to any scope slug is above
     *threshold* — are considered.  This makes incremental (post-absorb) runs
     O(scope × N) instead of O(N²).
+
+    With no *scope_slugs*, the run would compare every Evergreen pair
+    (O(N²)).  That is refused with :class:`FullScanRefused` unless the
+    caller passes ``allow_full_scan=True`` — a guard so the default
+    pipeline / autopilot path can never trigger it implicitly.
     """
+    if scope_slugs is None and not allow_full_scan:
+        raise FullScanRefused(
+            "find_clusters called with no scope_slugs and "
+            "allow_full_scan=False; refusing implicit full-vault O(N²) "
+            "scan. Pipeline/autopilot must scope to promoted slugs or "
+            "skip; only the explicit maintenance CLI may opt in."
+        )
     cands = _scan_evergreen(vault_dir)
     if scope_slugs is not None:
         scope_norms = {_normalize_slug_for_compare(s) for s in scope_slugs}

@@ -58,7 +58,19 @@ def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
 def _cmd_propose(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     with vault_workflow_lock(vault_dir):
-        clusters = find_clusters(vault_dir, threshold=args.threshold)
+        eg_dir = vault_dir / "10-Knowledge" / "Evergreen"
+        n = sum(1 for _ in eg_dir.glob("*.md")) if eg_dir.is_dir() else 0
+        if n:
+            print(
+                f"Full-vault scan: {n} Evergreen files, "
+                f"~{n * (n - 1) // 2:,} pair comparisons (explicit "
+                f"maintenance op; pipeline/autopilot never run this)."
+            )
+        # Explicit operator opt-in to the O(N²) full-vault scan; the
+        # pipeline / autopilot paths are fail-closed and never pass this.
+        clusters = find_clusters(
+            vault_dir, threshold=args.threshold, allow_full_scan=True
+        )
         if not clusters:
             print(f"No duplicate clusters found at threshold {args.threshold}.")
             return 0
