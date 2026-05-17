@@ -1,6 +1,14 @@
 # M26 — Daily Observability And Explainable Zeros
 
-> **Status**: backlog lock, 2026-05-16.
+> **Status**: ✅ COMPLETE — shipped 2026-05-16.  All of BL-100…109
+> merged to `main` (PRs #251, #252, #253, #254, #255, #256, #258,
+> #259, #260); issue #250 closed by #259.  Dogfooded on the operator
+> vault; the three date-axes (Activity / intake cohort / workflow
+> progress) reconcile.  Architecture-hygiene tail (mega-file split,
+> sqlite boundary) is deliberately OUT of M26 scope → tracked as
+> milestone **M27** (BL-110/111/112).
+>
+> **Original status**: backlog lock, 2026-05-16.
 >
 > **Problem**: `/ops/today` currently renders what its SQL asks for,
 > but the product meaning is wrong.  The Activity cards count raw
