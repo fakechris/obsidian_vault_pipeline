@@ -172,9 +172,7 @@ date: 2026-04-07
     assert result["objects_indexed"] == 1
 
     with sqlite3.connect(db_path) as conn:
-        pages = conn.execute(
-            "SELECT slug, note_type FROM pages_index ORDER BY slug"
-        ).fetchall()
+        pages = conn.execute("SELECT slug, note_type FROM pages_index ORDER BY slug").fetchall()
         links = conn.execute(
             "SELECT source_slug, target_slug, link_type FROM page_links ORDER BY source_slug"
         ).fetchall()
@@ -275,12 +273,8 @@ date: 2026-04-15
     assert result["graph_clusters_indexed"] >= 1
 
     with sqlite3.connect(db_path) as conn:
-        object_packs = conn.execute(
-            "SELECT DISTINCT pack FROM objects ORDER BY pack"
-        ).fetchall()
-        graph_packs = conn.execute(
-            "SELECT DISTINCT pack FROM graph_edges ORDER BY pack"
-        ).fetchall()
+        object_packs = conn.execute("SELECT DISTINCT pack FROM objects ORDER BY pack").fetchall()
+        graph_packs = conn.execute("SELECT DISTINCT pack FROM graph_edges ORDER BY pack").fetchall()
 
     assert object_packs == [("default-knowledge",)]
     assert graph_packs == [("default-knowledge",)]
@@ -325,9 +319,7 @@ date: 2026-04-15
 
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
     with sqlite3.connect(db_path) as conn:
-        object_packs = conn.execute(
-            "SELECT DISTINCT pack FROM objects ORDER BY pack"
-        ).fetchall()
+        object_packs = conn.execute("SELECT DISTINCT pack FROM objects ORDER BY pack").fetchall()
         graph_packs = conn.execute(
             "SELECT DISTINCT pack FROM graph_clusters ORDER BY pack"
         ).fetchall()
@@ -574,7 +566,9 @@ Something happened.
                 "article": "source-note",
                 "resolver_version": "v2",
                 "area": "general",
-                "decisions": [{"surface": "Linked Note", "action": "link_existing", "slug": "linked-note"}],
+                "decisions": [
+                    {"surface": "Linked Note", "action": "link_existing", "slug": "linked-note"}
+                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -878,8 +872,7 @@ def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
 
     db_path = tmp_path / "knowledge.db"
     with sqlite3.connect(db_path) as conn:
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE TABLE objects (pack TEXT, object_id TEXT);
             CREATE TABLE claims (pack TEXT, claim_id TEXT);
             CREATE TABLE claim_evidence (pack TEXT, claim_id TEXT);
@@ -894,13 +887,14 @@ def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
                 builder_name TEXT,
                 built_at TEXT
             );
-            """
-        )
+            """)
 
     assert _knowledge_db_supports_pack_schema(db_path) is False
 
 
-def test_ensure_knowledge_db_current_records_projection_rebuild_marker_for_legacy_schema(temp_vault):
+def test_ensure_knowledge_db_current_records_projection_rebuild_marker_for_legacy_schema(
+    temp_vault,
+):
     from ovp_pipeline.knowledge_index import ensure_knowledge_db_current
     from ovp_pipeline.projection_lifecycle import list_projection_repair_markers
     from ovp_pipeline.runtime import VaultLayout
@@ -921,11 +915,9 @@ date: 2026-04-07
     layout = VaultLayout.from_vault(temp_vault)
     layout.knowledge_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(layout.knowledge_db) as conn:
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE TABLE objects (object_id TEXT PRIMARY KEY, title TEXT);
-            """
-        )
+            """)
 
     ensure_knowledge_db_current(temp_vault)
 
@@ -993,13 +985,11 @@ date: 2026-04-07
 
     assert (temp_vault / ".ovp" / "schema_version").read_text(encoding="utf-8") == "1\n"
     with sqlite3.connect(layout.knowledge_db) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT projection_kind, authority_schema_version, projection_schema_version, built_at
             FROM projection_metadata
             WHERE projection_kind = 'knowledge_db'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert row[0] == "knowledge_db"
     assert row[1] == 1
@@ -1011,7 +1001,8 @@ date: 2026-04-07
 
 
 def test_rebuild_knowledge_index_invokes_crystal_scoring_without_attribute_error(
-    temp_vault, caplog,
+    temp_vault,
+    caplog,
 ):
     """Pre-fix: ``rebuild_knowledge_index`` called the M14 BL-045
     score rebuild with ``layout.vault_root`` — an attribute that
@@ -1024,8 +1015,7 @@ def test_rebuild_knowledge_index_invokes_crystal_scoring_without_attribute_error
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "x.md"
     note.write_text(
-        "---\nnote_id: x\ntitle: X\ntype: evergreen\ndate: 2026-04-07\n"
-        "---\n\n# X\n",
+        "---\nnote_id: x\ntitle: X\ntype: evergreen\ndate: 2026-04-07\n" "---\n\n# X\n",
         encoding="utf-8",
     )
     with caplog.at_level(logging.WARNING, logger="ovp_pipeline.knowledge_index"):
@@ -1033,12 +1023,10 @@ def test_rebuild_knowledge_index_invokes_crystal_scoring_without_attribute_error
     # No "skipped" warning fired — the integration call site is
     # passing the right attribute so the helper completes cleanly.
     skipped = [
-        r.getMessage() for r in caplog.records
-        if "crystal_scores rebuild skipped" in r.getMessage()
+        r.getMessage() for r in caplog.records if "crystal_scores rebuild skipped" in r.getMessage()
     ]
-    assert skipped == [], (
-        "crystal scoring failed during knowledge_index rebuild: "
-        + " | ".join(skipped)
+    assert skipped == [], "crystal scoring failed during knowledge_index rebuild: " + " | ".join(
+        skipped
     )
 
 
@@ -1080,13 +1068,11 @@ date: 2026-04-07
     assert markers[-1].projection_schema_version == 8
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT authority_schema_version, projection_schema_version
             FROM projection_metadata
             WHERE projection_kind = 'knowledge_db'
-            """
-        ).fetchone()
+            """).fetchone()
     # M21 BL-085 bumped projection_schema_version 7 → 8 to ensure
     # vaults rebuild when the chats projection lands.
     assert row == (2, 8)
@@ -1113,13 +1099,11 @@ date: 2026-04-07
     layout = VaultLayout.from_vault(temp_vault)
     ensure_knowledge_db_current(temp_vault)
     with sqlite3.connect(layout.knowledge_db) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE projection_metadata
             SET projection_schema_version = 0
             WHERE projection_kind = 'knowledge_db'
-            """
-        )
+            """)
 
     ensure_knowledge_db_current(temp_vault)
 
@@ -1131,13 +1115,11 @@ date: 2026-04-07
     assert markers[-1].projection_schema_version == 0
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT authority_schema_version, projection_schema_version
             FROM projection_metadata
             WHERE projection_kind = 'knowledge_db'
-            """
-        ).fetchone()
+            """).fetchone()
     # BL-061: see version-bump rationale above.  M21 BL-085 bumped
     # to 8.
     assert row == (1, 8)
@@ -1165,12 +1147,22 @@ date: 2026-04-07
     layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
     layout.pipeline_log.write_text(
         json.dumps(
-            {"timestamp": "2026-04-07T11:00:00Z", "session_id": "s1", "event_type": "older", "slug": "agent-harness"},
+            {
+                "timestamp": "2026-04-07T11:00:00Z",
+                "session_id": "s1",
+                "event_type": "older",
+                "slug": "agent-harness",
+            },
             ensure_ascii=False,
         )
         + "\n"
         + json.dumps(
-            {"timestamp": "2026-04-07T12:00:00Z", "session_id": "s2", "event_type": "newer", "slug": "agent-harness"},
+            {
+                "timestamp": "2026-04-07T12:00:00Z",
+                "session_id": "s2",
+                "event_type": "newer",
+                "slug": "agent-harness",
+            },
             ensure_ascii=False,
         )
         + "\n",
@@ -1197,21 +1189,23 @@ def test_sync_audit_events_from_jsonl_round_trips(temp_vault):
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     note.write_text(
-        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n"
-        "date: 2026-04-07\n---\n\n# Alpha\n",
+        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n" "date: 2026-04-07\n---\n\n# Alpha\n",
         encoding="utf-8",
     )
     layout = VaultLayout.from_vault(temp_vault)
     layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
     layout.pipeline_log.write_text(
-        json.dumps({
-            "timestamp": "2026-04-07T12:00:00Z",
-            "session_id": "s1",
-            "event_type": "absorb_route_decision",
-            "slug": "",
-            "status": "ok",
-            "update_slugs": ["alpha"],
-        }) + "\n",
+        json.dumps(
+            {
+                "timestamp": "2026-04-07T12:00:00Z",
+                "session_id": "s1",
+                "event_type": "absorb_route_decision",
+                "slug": "",
+                "status": "ok",
+                "update_slugs": ["alpha"],
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
@@ -1220,14 +1214,19 @@ def test_sync_audit_events_from_jsonl_round_trips(temp_vault):
     # shadow-mode workflow: absorb runs emit JSONL between
     # scheduled rebuilds.
     with layout.pipeline_log.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({
-            "timestamp": "2026-04-07T13:00:00Z",
-            "session_id": "s2",
-            "event_type": "absorb_route_decision",
-            "slug": "",
-            "status": "ok",
-            "update_slugs": ["beta"],
-        }) + "\n")
+        fh.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-04-07T13:00:00Z",
+                    "session_id": "s2",
+                    "event_type": "absorb_route_decision",
+                    "slug": "",
+                    "status": "ok",
+                    "update_slugs": ["beta"],
+                }
+            )
+            + "\n"
+        )
 
     payload = sync_audit_events_from_jsonl(temp_vault)
     assert payload["status"] == "synced"
@@ -1236,8 +1235,11 @@ def test_sync_audit_events_from_jsonl_round_trips(temp_vault):
 
     # Spot-check by querying via the public API.
     from ovp_pipeline.knowledge_index import recent_audit_events
+
     events = recent_audit_events(
-        temp_vault, limit=10, event_type="absorb_route_decision",
+        temp_vault,
+        limit=10,
+        event_type="absorb_route_decision",
     )
     assert len(events) == 2
     timestamps = sorted(e["timestamp"] for e in events)
@@ -1252,6 +1254,7 @@ def test_sync_audit_events_skips_when_db_missing(tmp_path):
     ``skipped`` status rather than creating an empty DB or
     triggering a full 20-min rebuild (codex P2)."""
     from ovp_pipeline.knowledge_index import sync_audit_events_from_jsonl
+
     payload = sync_audit_events_from_jsonl(tmp_path)
     assert payload["status"] == "skipped"
     assert "does not exist" in payload["reason"]
@@ -1277,7 +1280,9 @@ def test_sync_audit_events_does_not_trigger_full_rebuild(temp_vault, monkeypatch
         raise RuntimeError("audit-sync must not trigger rebuild")
 
     monkeypatch.setattr(
-        knowledge_index, "rebuild_knowledge_index", fake_rebuild,
+        knowledge_index,
+        "rebuild_knowledge_index",
+        fake_rebuild,
     )
 
     # On a fresh vault (no DB), sync must skip cleanly.
@@ -1299,22 +1304,42 @@ def test_recent_audit_events_filters_by_event_type_in_sql(temp_vault):
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     note.write_text(
-        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n"
-        "date: 2026-04-07\n---\n\n# Alpha\n",
+        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n" "date: 2026-04-07\n---\n\n# Alpha\n",
         encoding="utf-8",
     )
     layout = VaultLayout.from_vault(temp_vault)
     layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
     # Two noise events + one target event, in timestamp order.
     layout.pipeline_log.write_text(
-        "\n".join([
-            json.dumps({"timestamp": "2026-04-07T10:00:00Z", "session_id": "s",
-                        "event_type": "noise_a", "slug": "alpha"}),
-            json.dumps({"timestamp": "2026-04-07T11:00:00Z", "session_id": "s",
-                        "event_type": "noise_b", "slug": "alpha"}),
-            json.dumps({"timestamp": "2026-04-07T12:00:00Z", "session_id": "s",
-                        "event_type": "target_kind", "slug": "alpha"}),
-        ]) + "\n",
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-07T10:00:00Z",
+                        "session_id": "s",
+                        "event_type": "noise_a",
+                        "slug": "alpha",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-07T11:00:00Z",
+                        "session_id": "s",
+                        "event_type": "noise_b",
+                        "slug": "alpha",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-07T12:00:00Z",
+                        "session_id": "s",
+                        "event_type": "target_kind",
+                        "slug": "alpha",
+                    }
+                ),
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
@@ -1322,13 +1347,17 @@ def test_recent_audit_events_filters_by_event_type_in_sql(temp_vault):
     # event_type filter returns only the matching row even though
     # noise events are newer / would otherwise dominate.
     events = recent_audit_events(
-        temp_vault, limit=10, event_type="target_kind",
+        temp_vault,
+        limit=10,
+        event_type="target_kind",
     )
     assert [e["event_type"] for e in events] == ["target_kind"]
 
     # since filter excludes older rows.
     since_events = recent_audit_events(
-        temp_vault, limit=10, since="2026-04-07T11:30:00Z",
+        temp_vault,
+        limit=10,
+        since="2026-04-07T11:30:00Z",
     )
     assert [e["event_type"] for e in since_events] == ["target_kind"]
 
@@ -1357,7 +1386,12 @@ Agent harness architecture manages tools and execution layers.
     layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
     layout.pipeline_log.write_text(
         json.dumps(
-            {"timestamp": "2026-04-07T12:00:00Z", "session_id": "s1", "event_type": "pipeline_stage_completed", "slug": "agent-harness"},
+            {
+                "timestamp": "2026-04-07T12:00:00Z",
+                "session_id": "s1",
+                "event_type": "pipeline_stage_completed",
+                "slug": "agent-harness",
+            },
             ensure_ascii=False,
         )
         + "\n",
@@ -1367,7 +1401,10 @@ Agent harness architecture manages tools and execution layers.
     main(["--vault-dir", str(temp_vault), "--json"])
     capsys.readouterr()
 
-    assert main(["--vault-dir", str(temp_vault), "--search", "architecture", "--limit", "1", "--json"]) == 0
+    assert (
+        main(["--vault-dir", str(temp_vault), "--search", "architecture", "--limit", "1", "--json"])
+        == 0
+    )
     search_payload = json.loads(capsys.readouterr().out)
     assert search_payload["results"][0]["slug"] == "agent-harness"
 
@@ -1379,7 +1416,20 @@ Agent harness architecture manages tools and execution layers.
     stats_payload = json.loads(capsys.readouterr().out)
     assert stats_payload["stats"]["pages"] == 1
 
-    assert main(["--vault-dir", str(temp_vault), "--audit-recent", "1", "--source-log", "pipeline", "--json"]) == 0
+    assert (
+        main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--audit-recent",
+                "1",
+                "--source-log",
+                "pipeline",
+                "--json",
+            ]
+        )
+        == 0
+    )
     audit_payload = json.loads(capsys.readouterr().out)
     assert audit_payload["events"][0]["event_type"] == "pipeline_stage_completed"
 
@@ -1421,9 +1471,15 @@ Agent harness architecture manages tools and execution layers.
         encoding="utf-8",
     )
 
-    search_result = dispatch_knowledge_tool(temp_vault, "knowledge_search", {"query": "architecture", "limit": 1})
-    truth_result = dispatch_knowledge_tool(temp_vault, "knowledge_truth_search", {"query": "architecture", "limit": 1})
-    contradictions_result = dispatch_knowledge_tool(temp_vault, "knowledge_contradictions", {"limit": 5})
+    search_result = dispatch_knowledge_tool(
+        temp_vault, "knowledge_search", {"query": "architecture", "limit": 1}
+    )
+    truth_result = dispatch_knowledge_tool(
+        temp_vault, "knowledge_truth_search", {"query": "architecture", "limit": 1}
+    )
+    contradictions_result = dispatch_knowledge_tool(
+        temp_vault, "knowledge_contradictions", {"limit": 5}
+    )
     get_result = dispatch_knowledge_tool(temp_vault, "knowledge_get", {"slug": "agent-harness"})
     stats_result = dispatch_knowledge_tool(temp_vault, "knowledge_stats", {})
 
@@ -1456,7 +1512,10 @@ Agent harness architecture manages tools and execution layers.
         encoding="utf-8",
     )
 
-    stdin = StringIO(json.dumps({"tool": "knowledge_search", "args": {"query": "architecture", "limit": 1}}) + "\n")
+    stdin = StringIO(
+        json.dumps({"tool": "knowledge_search", "args": {"query": "architecture", "limit": 1}})
+        + "\n"
+    )
     stdout = StringIO()
 
     serve_knowledge_index(temp_vault, stdin, stdout)
@@ -1636,3 +1695,46 @@ date: 2026-04-10
 
     assert result["pages_indexed"] == 1
     assert calls == ["enter:True", "exit"]
+
+
+def test_collect_audit_rows_streams_and_skips_corrupt_lines(temp_vault):
+    """BL-108: _collect_audit_rows streams via iter_for_index — a
+    blank line and a corrupt JSON line are skipped rather than
+    aborting the whole rebuild (the old read_text+json.loads raised
+    on the first bad line)."""
+    from ovp_pipeline.knowledge_index import _collect_audit_rows
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
+    good1 = json.dumps(
+        {
+            "timestamp": "2026-05-10T09:00:00Z",
+            "session_id": "s1",
+            "event_type": "article_intake_only",
+            "slug": "src-a",
+        }
+    )
+    good2 = json.dumps(
+        {
+            "ts": "2026-05-10T10:00:00Z",
+            "session_id": "s2",
+            "event_type": "promote_concept",
+            "concept": "obj-x",
+        }
+    )
+    layout.pipeline_log.write_text(
+        good1
+        + "\n"
+        + "\n"  # blank line — skipped
+        + "{not valid json at all]\n"  # corrupt — skipped, not raised
+        + good2
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = _collect_audit_rows(layout)  # must not raise
+    ets = [r[1] for r in rows]
+    assert ets == ["article_intake_only", "promote_concept"]
+    # ts-fallback (codex #246) preserved: 2nd row used `ts`
+    assert rows[1][4] == "2026-05-10T10:00:00Z"

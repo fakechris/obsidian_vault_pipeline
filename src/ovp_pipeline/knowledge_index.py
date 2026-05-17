@@ -934,20 +934,23 @@ def _collect_reuse_rows(
 
 
 def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str]]:
+    # BL-108: stream via ``iter_for_index`` instead of
+    # ``read_text().splitlines()``.  ``pipeline.jsonl`` is 36k+ rows
+    # and growing on the operator vault; the old full-file read
+    # spiked RSS during every ``ovp-knowledge-index`` rebuild
+    # (memory: audit-rows-streaming-debt, flagged at the M24
+    # review).  Same line-by-line pattern ``_collect_reuse_rows``
+    # already uses.  Bonus: ``iter_for_index`` skips a malformed
+    # line instead of raising, so one corrupt row no longer aborts
+    # the whole rebuild.
     rows: list[tuple[str, str, str, str, str, str]] = []
     log_specs = [
-        ("pipeline", layout.pipeline_log),
-        ("refine", layout.logs_dir / "refine-mutations.jsonl"),
-        ("review-actions", layout.logs_dir / "review-actions.jsonl"),
+        ("pipeline", "pipeline.jsonl"),
+        ("refine", "refine-mutations.jsonl"),
+        ("review-actions", "review-actions.jsonl"),
     ]
-    for source_log, path in log_specs:
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            payload = json.loads(stripped)
+    for source_log, log_name in log_specs:
+        for payload in iter_for_index(layout, log_name):
             rows.append(
                 (
                     source_log,
@@ -962,11 +965,7 @@ def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, s
                     # rows (community_crystal_synthesized,
                     # promote_concept, candidates_upserted, …)
                     # instead of dropping them on an empty timestamp.
-                    str(
-                        payload.get("timestamp")
-                        or payload.get("ts")
-                        or ""
-                    ),
+                    str(payload.get("timestamp") or payload.get("ts") or ""),
                     json.dumps(payload, ensure_ascii=False),
                 )
             )
