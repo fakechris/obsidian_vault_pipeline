@@ -60,7 +60,21 @@ CREATE TABLE evergreen_revisions (
     changed_by TEXT NOT NULL DEFAULT '', derived_at TEXT NOT NULL,
     change_note TEXT NOT NULL DEFAULT '', PRIMARY KEY (pack, object_id, version)
 );
+CREATE TABLE truth_projections (
+    pack TEXT NOT NULL, owner_pack TEXT NOT NULL DEFAULT '',
+    builder_name TEXT NOT NULL DEFAULT '', built_at TEXT NOT NULL
+);
 """
+
+
+def _stamp_rebuild(conn, *, pack, built_at):
+    """BL-107: simulate a successful full ovp-knowledge-index
+    truth-projection rebuild for ``pack`` at ``built_at``."""
+    conn.execute(
+        "INSERT INTO truth_projections (pack, owner_pack, "
+        "builder_name, built_at) VALUES (?, ?, ?, ?)",
+        (pack, pack, "test", built_at),
+    )
 
 
 def _vault(tmp_path: Path) -> Path:
@@ -349,3 +363,89 @@ def test_main_total_conserved_when_only_state_moves(tmp_path, capsys):
     assert payload["after_total"] == sum(payload["after"].values())
     assert payload["after"]["Received"] >= 1
     assert payload["after"]["Extracted"] >= 1
+
+
+# ── BL-107 / issue #250: rebuild-watermark idempotency ─────────────
+
+
+def test_watermark_idempotent_promote_before_rebuild_not_flagged(tmp_path):
+    """The #250 fix: a promote that a later full rebuild already
+    absorbed is OLDER than the watermark → NOT re-flagged, so a
+    second candidates-only refresh stops nagging."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    _emit(
+        conn,
+        "promote_concept",
+        slug="obj-x",
+        ts="2026-05-10T08:00:00+00:00",
+        payload={"pack": PACK},
+    )
+    # operator ran the full rebuild AFTER the promote
+    _stamp_rebuild(conn, pack=PACK, built_at="2026-05-10T09:00:00+00:00")
+    conn.commit()
+    assert refresh_ops._canonical_evidence_since(conn, 180, PACK) == {}
+
+
+def test_watermark_promote_after_rebuild_is_flagged(tmp_path):
+    """A promote NEWER than the last full rebuild is unhandled →
+    flagged."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    _stamp_rebuild(conn, pack=PACK, built_at="2026-05-10T08:00:00+00:00")
+    _emit(
+        conn,
+        "promote_concept",
+        slug="obj-y",
+        ts="2026-05-10T09:00:00+00:00",
+        payload={"pack": PACK},
+    )
+    conn.commit()
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
+    assert found.get("promote_concept") == 1
+
+
+def test_watermark_beats_window_for_stale_unhandled_promote(tmp_path):
+    """Strictly more correct than the old window: a 5-day-old
+    promote never rebuilt is still newer than a 6-day-old watermark
+    → flagged, where a 180m window would have missed it."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    old_rebuild = (datetime.now(timezone.utc) - timedelta(days=6)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+    stale_promote = (datetime.now(timezone.utc) - timedelta(days=5)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+    _stamp_rebuild(conn, pack=PACK, built_at=old_rebuild)
+    _emit(conn, "evergreen_auto_promoted", slug="obj-z", ts=stale_promote, payload={"pack": PACK})
+    conn.commit()
+    found = refresh_ops._canonical_evidence_since(conn, 180, PACK)
+    assert found.get("evergreen_auto_promoted") == 1
+
+
+def test_no_watermark_falls_back_to_window(tmp_path):
+    """No truth_projections row (never rebuilt) → window heuristic,
+    the pre-BL-107 safe default."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    _emit(conn, "promote_concept", slug="obj-r", ts=recent, payload={"pack": PACK})
+    conn.commit()
+    assert refresh_ops._last_rebuild_watermark(conn, PACK) is None
+    assert refresh_ops._canonical_evidence_since(conn, 180, PACK).get("promote_concept") == 1
+
+
+def test_watermark_is_pack_scoped(tmp_path):
+    """A different pack's rebuild must NOT suppress this pack's
+    unhandled promote."""
+    v = _vault(tmp_path)
+    conn = sqlite3.connect(v / "60-Logs" / "knowledge.db")
+    recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    # other pack rebuilt just now …
+    _stamp_rebuild(conn, pack="other-pack", built_at=recent)
+    # … but THIS pack has a fresh unhandled promote and no rebuild
+    _emit(conn, "promote_concept", slug="obj-p", ts=recent, payload={"pack": PACK})
+    conn.commit()
+    assert refresh_ops._last_rebuild_watermark(conn, PACK) is None
+    assert refresh_ops._canonical_evidence_since(conn, 180, PACK).get("promote_concept") == 1

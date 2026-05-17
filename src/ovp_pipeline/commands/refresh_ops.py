@@ -17,12 +17,19 @@ manual:
    graph projection rebuild, low memory).
 3. ``ops_state.rebuild`` — re-derive the lifecycle projection.
 4. Print the state diff (before → after, conserved-total check).
-5. Inspect the just-synced audit window for canonical-object
-   evidence (``evergreen_auto_promoted`` / ``promote_concept``).
+5. Inspect for canonical-object evidence
+   (``evergreen_auto_promoted`` / ``promote_concept`` /
+   ``evergreen_created``) NEWER than the last successful full
+   rebuild (BL-107 / issue #250 — the ``truth_projections.built_at``
+   watermark; falls back to a time window only when no rebuild has
+   ever run).
    * none → print "full knowledge rebuild NOT needed".
    * present → print an explicit WARNING that canonical objects
      changed and a projection / full rebuild may be warranted,
      and exit non-zero so a wrapper script can branch on it.
+   Idempotent: once the operator runs the full rebuild the
+   watermark advances past the evidence, so a subsequent
+   candidates-only refresh stops nagging (the issue #250 fix).
 
 Read-only over markdown; the only writes are to the derived
 ``knowledge.db`` (audit_events + ops_state), exactly what the
@@ -101,17 +108,58 @@ def _row_pack(payload_json: str) -> str | None:
     return str(pack) if pack else None
 
 
+def _last_rebuild_watermark(conn: sqlite3.Connection, pack: str) -> datetime | None:
+    """BL-107 / issue #250: timestamp of the last SUCCESSFUL full
+    canonical (truth/object) projection rebuild for ``pack``.
+
+    ``truth_projections.built_at`` is stamped only by the full
+    ``ovp-knowledge-index`` truth-projection rebuild — NOT by
+    ``ops_state.rebuild`` and NOT by ``sync_audit_events_from_jsonl``
+    (verified: neither writes that table).  So it is exactly "the
+    moment canonical objects were last re-derived", which is the
+    correct idempotency watermark.  ``ops_state.refreshed_at`` was
+    rejected for #250 precisely because it advances on a
+    lifecycle-only refresh and would suppress a real warning before
+    a canonical rebuild handled it.
+
+    None when never rebuilt / table absent → caller falls back to
+    the time-window heuristic (safe default for fresh vaults).
+    """
+    try:
+        row = conn.execute(
+            "SELECT MAX(built_at) FROM truth_projections " " WHERE pack = ?",
+            (pack,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row or not row[0]:
+        return None
+    return _parse_audit_ts(str(row[0]))
+
+
 def _canonical_evidence_since(
     conn: sqlite3.Connection, window_minutes: int, pack: str
 ) -> dict[str, int]:
-    """Count canonical-object audit events for ``pack`` in the window.
+    """Count UNHANDLED canonical-object audit events for ``pack``.
+
+    BL-107 / issue #250 — idempotency: the lower bound is the last
+    successful full rebuild watermark, NOT merely "the last
+    ``window_minutes``".  A promote that a prior
+    ``ovp-knowledge-index`` rebuild already absorbed is older than
+    the watermark and is NOT re-flagged, so a second candidates-only
+    refresh after a handled promote stops nagging (exit 0).  When no
+    rebuild has ever run (no watermark) we fall back to the
+    ``window_minutes`` heuristic — the pre-BL-107 behaviour, still
+    safe for fresh vaults.  The watermark path is also strictly more
+    correct than the window for a stale unhandled promote: a
+    5-day-old promote never rebuilt is still newer than the
+    watermark and is correctly flagged, whereas a 180m window would
+    have missed it.
 
     Timestamps are parsed in Python rather than compared
     lexicographically in SQL — audit rows mix ISO ``T`` and
     space-separated formats, and a string compare across that
-    boundary misclassifies rows (false positives that wrongly
-    trigger the heavy rebuild path).  We only need "did any land",
-    so precision beyond the parse is unnecessary.
+    boundary misclassifies rows.
 
     Evidence is scoped to ``pack``: a recent ``promote_concept`` for a
     DIFFERENT pack must not make this command tell wrappers the
@@ -119,7 +167,11 @@ def _canonical_evidence_since(
     recorded pack are kept (conservative — never suppress a real
     warning just because an old row lacks the field).
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(window_minutes))
+    watermark = _last_rebuild_watermark(conn, pack)
+    if watermark is not None:
+        cutoff = watermark
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(window_minutes))
     placeholders = ",".join("?" * len(_CANONICAL_OBJECT_EVENTS))
     rows = conn.execute(
         f"""
@@ -205,7 +257,9 @@ def main(argv: list[str] | None = None) -> int:
     # 3. rebuild ops_state projection
     with sqlite3.connect(str(db_path)) as conn:
         after_counts = rebuild_ops_state(conn, pack=args.pack)
-        # 5. canonical-object evidence detection
+        # 5. canonical-object evidence detection (gated on the last
+        #    successful full-rebuild watermark — BL-107 / #250)
+        watermark = _last_rebuild_watermark(conn, args.pack)
         canonical = _canonical_evidence_since(conn, args.canonical_window_minutes, args.pack)
 
     after = {s: int(after_counts.get(s, 0)) for s in ALL_STATES}
@@ -225,6 +279,12 @@ def main(argv: list[str] | None = None) -> int:
         "after_total": after_total,
         "canonical_object_evidence": canonical,
         "heavier_rebuild_needed": heavier_needed,
+        "rebuild_watermark": (watermark.isoformat() if watermark is not None else ""),
+        "watermark_source": (
+            "last_full_rebuild"
+            if watermark is not None
+            else f"window_{args.canonical_window_minutes}m"
+        ),
     }
 
     if args.json:
@@ -241,19 +301,27 @@ def main(argv: list[str] | None = None) -> int:
             f"{('+' if after_total - before_total >= 0 else '') + str(after_total - before_total):>8}"
         )
         print()
+        if watermark is not None:
+            scope_msg = f"since the last full rebuild " f"({watermark.isoformat()})"
+        else:
+            scope_msg = (
+                f"in the last {args.canonical_window_minutes}m " "(no prior full rebuild on record)"
+            )
         if heavier_needed:
             ev = ", ".join(f"{k}×{v}" for k, v in sorted(canonical.items()))
             print(
-                "  ⚠️  Canonical-object evidence detected in the "
-                f"last {args.canonical_window_minutes}m: {ev}.\n"
+                "  ⚠️  Canonical-object evidence detected "
+                f"{scope_msg}: {ev}.\n"
                 "      New / changed canonical objects are NOT fully "
                 "reflected by audit-sync alone — a projection or "
                 "full `ovp-knowledge-index` rebuild may be "
-                "warranted before trusting Accepted / Synthesized."
+                "warranted before trusting Accepted / Synthesized.\n"
+                "      (Once you run that rebuild this stops warning "
+                "— the watermark advances past this evidence.)"
             )
         else:
             print(
-                "  ✓ No canonical-object evidence in the window "
+                f"  ✓ No canonical-object evidence {scope_msg} "
                 "(candidates / source evidence only).\n"
                 "    Full `ovp-knowledge-index` rebuild NOT needed "
                 "— the lightweight path fully reflects this change."
