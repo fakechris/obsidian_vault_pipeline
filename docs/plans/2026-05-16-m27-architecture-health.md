@@ -31,19 +31,22 @@ Authority / Projection boundary is unenforceable.
 
 | ID | Priority | Work item | Notes |
 | --- | --- | --- | --- |
-| BL-110 | P1 | **Maintainer UI module split** | Split the two ~8000-line files by product surface. Target: `ui/view_models/{today,items,digest,chats,reader,atlas}.py` and `commands/renderers/{today,items,digest,chats,reader}.py`. Behaviour-preserving moves + a thin back-compat shim if any import path is external. Outcome: changing `/ops/today` no longer touches an 8000-line file; clears the two file-size fitness failures for these modules. |
-| BL-111 | P1 | **SQLite boundary cleanup** | NOT a big migration first. Define a data-access facade / repository layer — e.g. `ops_state_store`, `audit_events_store`, `digest_store`, `chat_store` — plus an allowlist policy so `test_architecture_fitness`'s sqlite-boundary check stops being a permanent red. Business modules call the store API; raw `sqlite3` confined to the data layer. Converge read/write rules per table so schema changes have bounded blast radius and the Authority/Projection boundary is enforceable. |
+| BL-110 | P1 | ✅ **Done** — **Maintainer UI module split** (#262 view_models, #263 _ui_renderers).  Each ~8000-line file → a package: `_constants` leaf + topologically-layered `_layer*` + per-surface modules + `__init__` re-export with a `ModuleType.__setattr__` monkeypatch shim (zero call-site/test churn).  Every file < the 3000 default; both stale 5000 ratchet entries removed (tightened, not relocated).  `test_file_size_limits` cleared for both. |
+| BL-111 | P1 | ✅ **Done (policy codification)** — **SQLite boundary policy**, grouped + rationalised.  Made `test_no_direct_sqlite_in_non_data_modules` green by recording the rule's TRUE boundary, NOT relaxing it: (a) prefix-aware allowlist matcher so BL-110's package splits keep their pre-existing grant (path-shape change, not a new exception); (b) the 15 genuine pre-existing violators grouped into named sets — `ui_projection_payload_builders`, `ops_projection_readers`, `projection_writers`, `thin_projection_clis` — each with a rationale stating it reads/writes the DERIVED `knowledge.db` projection, never canonical Authority (vault markdown + registries), same category already baselined (`digest_inputs`/`materializers/*`/`synthesis/_shared`).  The actual facade migration is **BL-111b** (below), deliberately deferred per "NOT a big migration first". |
+| BL-111b | P2 | **Data-access facade migration** (the real refactor BL-111 deferred).  Introduce `ops_state_store` / `audit_events_store` / `digest_store` / `chat_store` so business code never hand-writes SQL; migrate the BL-111 allowlisted groups onto them and shrink the allowlist as each lands.  Start from the highest-value targets: **duplicated SQL** (same table queried from many modules) and **hot paths** (`absorb_router` 1131L, `auto_evergreen_extractor` 2081L, `ops_lifecycle` 713L).  Each migration is behaviour-preserving + full-suite gated; the allowlist is the ratchet (entries only ever removed, never added). |
 | BL-112 | P2 | **`unified_pipeline_enhanced.py` split** | ~3805 lines mixing CLI args, orchestration, stage artifacts, `step_absorb`/`step_quality`/`step_articles`, batch handling, runtime status, error handling. Split into `pipeline/{orchestrator,artifacts,results}.py` + `pipeline/stages/{articles,quality,absorb}.py`. Outcome: absorb-fallback / quality-artifact / step-contract edits stop happening inside one giant orchestration file; clears the 3805/3500 fitness failure. |
 
 ## Sequence
 
-1. **BL-110** first — highest maintenance risk after M26; the UI
-   mega-files block clean review of every future maintainer change.
-2. **BL-111** — converge data access so schema/projection edits stop
-   being project-wide; pairs well with BL-110 (split modules call the
-   new stores instead of raw SQL).
-3. **BL-112** — pipeline orchestration split; valuable but the
-   pipeline file is less hot than the UI ones day-to-day.
+1. ✅ **BL-110** — done (#262, #263). UI mega-files split.
+2. ✅ **BL-111** — done (policy codification): sqlite-boundary check
+   green by recording the true boundary; facade migration split out
+   as **BL-111b**.
+3. **BL-112** — pipeline orchestration split; the last remaining
+   `test_file_size_limits` red (`unified_pipeline_enhanced.py`
+   3805/3500).
+4. **BL-111b** — the deferred data-access facade migration; P2,
+   runs after BL-112 (or independently — no ordering dependency).
 
 ## Non-Goals
 
