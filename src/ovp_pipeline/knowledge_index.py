@@ -1052,6 +1052,11 @@ def _chunk_page_body(
 # takes it as an in-process argument.
 _PAGE_FLUSH_BATCH = 200
 _EMBED_FLUSH_BATCH = 128
+# Timeline events are flushed independently of the page batch: a
+# single page can emit many events (e.g. a long changelog), so a
+# page-boundary-only flush could let timeline_batch grow unbounded
+# between page flushes.
+_TIMELINE_FLUSH_BATCH = 500
 
 
 def _flush_pages(
@@ -1538,6 +1543,8 @@ def rebuild_knowledge_index(
                 if meta.note_id in known_slugs:
                     object_page_rows.append(page_row)
                 timeline_batch.extend(_extract_timeline_events(meta, body))
+                if len(timeline_batch) >= _TIMELINE_FLUSH_BATCH:
+                    timeline_events_indexed += _flush_timeline(conn, timeline_batch)
                 for chunk_index, (section_title, chunk_text) in enumerate(
                     _chunk_page_body(body, meta.title)
                 ):

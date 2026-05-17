@@ -98,3 +98,31 @@ def test_truth_projection_still_produced_after_bounded_flush(temp_vault, monkeyp
 
     assert result["objects_indexed"] == objects
     assert objects > 0
+
+
+def test_high_event_density_page_flushes_timeline_independently(
+    temp_vault, monkeypatch
+):
+    """A single page can emit many timeline events; timeline must
+    flush on its own size, not only at the page-batch boundary, so
+    timeline_batch cannot grow unbounded between page flushes."""
+    monkeypatch.setattr(knowledge_index, "_TIMELINE_FLUSH_BATCH", 10)
+    monkeypatch.setattr(knowledge_index, "_PAGE_FLUSH_BATCH", 1000)
+
+    # 60 dated headings on ONE page => 60 heading_date events (+1
+    # page_date), far above the forced timeline batch of 10, while
+    # the page batch never fills — only the independent timeline
+    # flush can keep the batch bounded.
+    headings = "\n".join(f"## 2026-{m:02d}\nnote {m}" for m in range(1, 13)) * 5
+    _evergreen(temp_vault, "changelog", headings)
+
+    result = rebuild_knowledge_index(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+
+    with sqlite3.connect(db_path) as conn:
+        timeline = conn.execute(
+            "SELECT COUNT(*) FROM timeline_events WHERE slug = 'changelog'"
+        ).fetchone()[0]
+
+    assert timeline > 10  # exceeded the forced batch
+    assert result["timeline_events_indexed"] == timeline
