@@ -1044,6 +1044,77 @@ def _chunk_page_body(
     return capped
 
 
+# Bounded-flush batch sizes for the rebuild loop.  The rebuild must
+# not hold every page body + every embedding blob in a Python list at
+# once (observed: 10k+ pages, 31k+ chunks, 332MB db) — rows are
+# flushed to the DB in capped batches.  Only the (smaller) object-slug
+# subset is retained in memory, because the truth-projection builder
+# takes it as an in-process argument.
+_PAGE_FLUSH_BATCH = 200
+_EMBED_FLUSH_BATCH = 128
+# Timeline events are flushed independently of the page batch: a
+# single page can emit many events (e.g. a long changelog), so a
+# page-boundary-only flush could let timeline_batch grow unbounded
+# between page flushes.
+_TIMELINE_FLUSH_BATCH = 500
+
+
+def _flush_pages(
+    conn: sqlite3.Connection,
+    page_batch: list[tuple],
+    fts_batch: list[tuple],
+) -> int:
+    """Insert a page batch into ``pages_index`` + ``page_fts`` and
+    clear the batches.  Returns the number of pages flushed."""
+    if not page_batch:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO pages_index (slug, title, note_type, path, day_id, frontmatter_json, body)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        page_batch,
+    )
+    conn.executemany(
+        "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
+        fts_batch,
+    )
+    n = len(page_batch)
+    page_batch.clear()
+    fts_batch.clear()
+    return n
+
+
+def _flush_timeline(conn: sqlite3.Connection, timeline_batch: list[tuple]) -> int:
+    if not timeline_batch:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO timeline_events (slug, event_date, event_type, heading, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        timeline_batch,
+    )
+    n = len(timeline_batch)
+    timeline_batch.clear()
+    return n
+
+
+def _flush_embeddings(conn: sqlite3.Connection, embed_batch: list[tuple]) -> int:
+    if not embed_batch:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        embed_batch,
+    )
+    n = len(embed_batch)
+    embed_batch.clear()
+    return n
+
+
 def _embed_text(text: str) -> bytes:
     """Delegate to the semantic embedding backend (Qwen3-Embedding MLX or hash fallback)."""
     return _embed_text_semantic(text)
@@ -1438,28 +1509,46 @@ def rebuild_knowledge_index(
                     authority_log,
                 )
             _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
-            page_rows = []
-            timeline_rows = []
-            embedding_rows = []
+            # Bounded rebuild: stream pages / FTS / timeline / embeddings
+            # to the DB in capped batches instead of accumulating every
+            # body and every embedding blob in Python lists.  Only the
+            # object-slug subset (``object_page_rows``) is retained,
+            # because the truth-projection builder consumes it as an
+            # in-process argument (see the ``execute_truth_projection_builder``
+            # call below).  This is the PR2b memory-safety floor; the
+            # second full-body FTS list and the full ``embedding_rows``
+            # accumulation are gone.
+            page_batch: list[tuple] = []
+            fts_batch: list[tuple] = []
+            timeline_batch: list[tuple] = []
+            embed_batch: list[tuple] = []
+            object_page_rows: list[tuple] = []
+            pages_indexed = 0
+            timeline_events_indexed = 0
+            embedding_chunks_indexed = 0
             for meta in deduped_page_metadata_items:
                 file_path = Path(meta.path)
                 body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
-                page_rows.append(
-                    (
-                        meta.note_id,
-                        meta.title,
-                        meta.note_type,
-                        str(file_path),
-                        meta.day_id,
-                        json.dumps(meta.to_dict(), ensure_ascii=False),
-                        body,
-                    )
+                page_row = (
+                    meta.note_id,
+                    meta.title,
+                    meta.note_type,
+                    str(file_path),
+                    meta.day_id,
+                    json.dumps(meta.to_dict(), ensure_ascii=False),
+                    body,
                 )
-                timeline_rows.extend(_extract_timeline_events(meta, body))
+                page_batch.append(page_row)
+                fts_batch.append((meta.note_id, meta.title, body))
+                if meta.note_id in known_slugs:
+                    object_page_rows.append(page_row)
+                timeline_batch.extend(_extract_timeline_events(meta, body))
+                if len(timeline_batch) >= _TIMELINE_FLUSH_BATCH:
+                    timeline_events_indexed += _flush_timeline(conn, timeline_batch)
                 for chunk_index, (section_title, chunk_text) in enumerate(
                     _chunk_page_body(body, meta.title)
                 ):
-                    embedding_rows.append(
+                    embed_batch.append(
                         (
                             meta.note_id,
                             chunk_index,
@@ -1469,18 +1558,15 @@ def rebuild_knowledge_index(
                             get_model_name(),
                         )
                     )
+                    if len(embed_batch) >= _EMBED_FLUSH_BATCH:
+                        embedding_chunks_indexed += _flush_embeddings(conn, embed_batch)
+                if len(page_batch) >= _PAGE_FLUSH_BATCH:
+                    pages_indexed += _flush_pages(conn, page_batch, fts_batch)
+                    timeline_events_indexed += _flush_timeline(conn, timeline_batch)
 
-            conn.executemany(
-                """
-                INSERT INTO pages_index (slug, title, note_type, path, day_id, frontmatter_json, body)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                page_rows,
-            )
-            conn.executemany(
-                "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
-                [(slug, title, body) for slug, title, _, _, _, _, body in page_rows],
-            )
+            pages_indexed += _flush_pages(conn, page_batch, fts_batch)
+            timeline_events_indexed += _flush_timeline(conn, timeline_batch)
+            embedding_chunks_indexed += _flush_embeddings(conn, embed_batch)
 
             link_rows = []
             for meta in deduped_page_metadata_items:
@@ -1509,7 +1595,8 @@ def rebuild_knowledge_index(
                 link_rows,
             )
 
-            object_page_rows = [row for row in page_rows if row[0] in known_slugs]
+            # object_page_rows was retained incrementally during the
+            # bounded page loop above (slug ∈ known_slugs).
             object_link_rows = [row for row in link_rows if row[0] in known_slugs]
             projection_spec, truth_projection = execute_truth_projection_builder(
                 vault_dir=resolved_vault,
@@ -1662,13 +1749,7 @@ def rebuild_knowledge_index(
                 raw_rows,
             )
 
-            conn.executemany(
-                """
-                INSERT INTO timeline_events (slug, event_date, event_type, heading, payload_json)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                timeline_rows,
-            )
+            # timeline_events were streamed in the bounded page loop.
 
             audit_rows = _collect_audit_rows(layout)
             conn.executemany(
@@ -1690,13 +1771,7 @@ def rebuild_knowledge_index(
                 """,
                 reuse_rows,
             )
-            conn.executemany(
-                """
-                INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                embedding_rows,
-            )
+            # page_embeddings were streamed in the bounded page loop.
 
             entity_mention_rows = _collect_entity_mention_rows(
                 resolved_vault, link_rows, known_slugs
@@ -1797,13 +1872,13 @@ def rebuild_knowledge_index(
             return {
                 "db_path": str(layout.knowledge_db),
                 "projection_pack": truth_pack,
-                "pages_indexed": len(page_rows),
+                "pages_indexed": pages_indexed,
                 "links_indexed": len(link_rows),
                 "raw_records_indexed": len(raw_rows),
-                "timeline_events_indexed": len(timeline_rows),
+                "timeline_events_indexed": timeline_events_indexed,
                 "audit_events_indexed": len(audit_rows),
                 "reuse_events_indexed": len(reuse_rows),
-                "embedding_chunks_indexed": len(embedding_rows),
+                "embedding_chunks_indexed": embedding_chunks_indexed,
                 "objects_indexed": len(truth_projection.objects),
                 "claims_indexed": len(truth_projection.claims),
                 "relations_indexed": len(truth_projection.relations),
