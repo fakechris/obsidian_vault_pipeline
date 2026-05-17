@@ -1636,3 +1636,35 @@ date: 2026-04-10
 
     assert result["pages_indexed"] == 1
     assert calls == ["enter:True", "exit"]
+
+
+def test_collect_audit_rows_streams_and_skips_corrupt_lines(temp_vault):
+    """BL-108: _collect_audit_rows streams via iter_for_index — a
+    blank line and a corrupt JSON line are skipped rather than
+    aborting the whole rebuild (the old read_text+json.loads raised
+    on the first bad line)."""
+    from ovp_pipeline.knowledge_index import _collect_audit_rows
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
+    good1 = json.dumps(
+        {"timestamp": "2026-05-10T09:00:00Z", "session_id": "s1",
+         "event_type": "article_intake_only", "slug": "src-a"}
+    )
+    good2 = json.dumps(
+        {"ts": "2026-05-10T10:00:00Z", "session_id": "s2",
+         "event_type": "promote_concept", "concept": "obj-x"}
+    )
+    layout.pipeline_log.write_text(
+        good1 + "\n"
+        + "\n"
+        + "{not valid json at all]\n"
+        + good2 + "\n",
+        encoding="utf-8",
+    )
+
+    rows = _collect_audit_rows(layout)  # must not raise
+    ets = [r[1] for r in rows]
+    assert ets == ["article_intake_only", "promote_concept"]
+    assert rows[1][4] == "2026-05-10T10:00:00Z"
