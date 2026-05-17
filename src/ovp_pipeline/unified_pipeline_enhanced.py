@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Enhanced Unified Pipeline - 增强版统一自动化调度器
 支持Pinboard+Clippings双输入源，支持历史日期处理
@@ -45,7 +44,7 @@ from typing import Any
 
 try:
     from .handler_registry import execute_profile_stage_handler
-    from .runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
+    from .runtime import VaultLayout, resolve_vault_dir, vault_workflow_lock
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
@@ -72,16 +71,9 @@ try:
         to_absorb_result as _to_absorb_result,
         to_typed_step_result as _to_typed_step_result,
     )
-    from .txn import (
-        build_transaction_payload,
-        heartbeat_transaction,
-        mark_transaction_completed,
-        mark_transaction_failed,
-        update_transaction_step,
-    )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
-    from runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
+    from runtime import VaultLayout, resolve_vault_dir, vault_workflow_lock
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
@@ -108,666 +100,59 @@ except ImportError:  # pragma: no cover - script mode fallback
         to_typed_step_result as _to_typed_step_result,
     )
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
-    from txn import (
-        build_transaction_payload,
-        heartbeat_transaction,
-        mark_transaction_completed,
-        mark_transaction_failed,
-        update_transaction_step,
-    )
 
 # ========== 环境初始化 ==========
 # 加载 .env 文件（从 Vault 根目录或 auto_vault 目录）
-SCRIPTS_DIR = Path(__file__).parent
-VAULT_DIR = SCRIPTS_DIR.parent.parent
-ENV_FILE = VAULT_DIR / ".env"
-ENV_FILE_ALT = SCRIPTS_DIR / "auto_vault" / ".env"
-ENV_EXAMPLE = VAULT_DIR / ".env.example"
 
 
-def parse_pinboard_frontmatter(content: str) -> dict[str, str]:
-    """Parse lightweight frontmatter emitted by pinboard-processor."""
-    metadata: dict[str, str] = {}
-    if not content.startswith("---"):
-        return metadata
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return metadata
-    for line in parts[1].splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        metadata[key.strip()] = value.strip().strip('"').strip("'")
-    return metadata
+# BL-112: standalone helpers/constants/classes extracted to flat
+# _pipeline_* siblings (file-size ratchet — unified_pipeline_enhanced.py
+# 3806 -> <3500).  EXPLICITLY re-exported (no star) so the ovp /
+# ovp-pipeline entrypoints and all external importers are unchanged;
+# EnhancedPipeline + main below are byte-identical.
+from ._pipeline_constants import (  # noqa: F401,E402
+    SCRIPTS_DIR,
+    VAULT_DIR,
+    ENV_FILE,
+    ENV_FILE_ALT,
+    ENV_EXAMPLE,
+    BASE_PIPELINE_STEPS,
+    OPTIONAL_PIPELINE_STEPS,
+    STEP_ALIASES,
+    PIPELINE_STEP_CHOICES,
+    PROJECT_ROOT,
+    PROJECT_SRC,
+    QUALITY_STAGE_ALGORITHM_VERSION,
+    STAGE_CACHE_CHECKOUT,
+    STAGE_CACHE_RECORD_ONLY,
+    STAGE_CACHE_DISABLED,
+    STAGE_CACHE_POLICIES,
+    STAGE_ALGORITHM_VERSIONS,
+)
+from ._pipeline_env import (  # noqa: F401,E402
+    parse_pinboard_frontmatter,
+    detect_pinboard_processor,
+    _load_env,
+    _check_api_key,
+    init_env_file,
+    check_environment,
+)
+from ._pipeline_plan import (  # noqa: F401,E402
+    normalize_step_name,
+    pipeline_steps,
+    build_execution_plan,
+)
+from ._pipeline_runtime import (  # noqa: F401,E402
+    PipelineLogger,
+    TransactionManager,
+)
+from ._pipeline_utils import (  # noqa: F401,E402
+    _extract_json_suffix,
+    _safe_int,
+    _get_version,
+)
 
 
-def detect_pinboard_processor(content: str) -> str | None:
-    """Route stale Pinboard files by source/title/tags instead of trusting old type fields."""
-    metadata = parse_pinboard_frontmatter(content)
-    declared_type = metadata.get("type", "")
-    if declared_type.startswith("pinboard-"):
-        declared_type = declared_type.split("pinboard-", 1)[1]
-
-    source = metadata.get("source", "").lower()
-    title = metadata.get("title", "")
-    tags = metadata.get("tags", "").lower()
-
-    if "gist.github.com" in source:
-        return "website"
-    if "github.com" in source or declared_type == "github":
-        return "github"
-    if (
-        "arxiv.org" in source
-        or source.endswith(".pdf")
-        or "paper" in tags
-        or re.match(r"^\[\d{4}\.\d+\]", title)
-        or declared_type == "paper"
-    ):
-        return "paper"
-    if declared_type == "social":
-        return "social"
-    if declared_type in ("article", "website"):
-        return declared_type
-    if source:
-        return "website"
-    return None
-
-
-def _extract_json_suffix(text: str) -> dict[str, Any] | None:
-    """Extract a JSON object payload from stdout that may contain log prefixes."""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else None
-    except json.JSONDecodeError:
-        pass
-
-    decoder = json.JSONDecoder()
-    for idx, ch in enumerate(raw):
-        if ch != "{":
-            continue
-        try:
-            payload, end = decoder.raw_decode(raw[idx:])
-        except json.JSONDecodeError:
-            continue
-        if idx + end == len(raw) and isinstance(payload, dict):
-            return payload
-    return None
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _load_env(vault_dir: Path | None = None) -> bool:
-    """加载 .env 文件，返回是否成功
-
-    尝试顺序:
-    1. 指定的 vault_dir
-    2. 当前工作目录
-    3. 脚本所在目录的 vault 结构
-    4. auto_vault 子目录
-    """
-    try:
-        from dotenv import load_dotenv
-
-        # 尝试多个位置
-        env_paths = []
-        if vault_dir:
-            env_paths.append(vault_dir / ".env")
-        env_paths.append(Path.cwd() / ".env")  # 当前工作目录
-        env_paths.append(ENV_FILE)  # 脚本相对路径
-        env_paths.append(ENV_FILE_ALT)  # auto_vault 子目录
-
-        for env_path in env_paths:
-            if env_path.exists():
-                load_dotenv(dotenv_path=env_path, override=True)
-                return True
-        return False
-    except ImportError:
-        # dotenv 未安装，检查文件是否存在
-        return any([
-            (vault_dir / ".env").exists() if vault_dir else False,
-            (Path.cwd() / ".env").exists(),
-            ENV_FILE.exists(),
-            ENV_FILE_ALT.exists()
-        ])
-
-
-def _get_version() -> str:
-    """Read the installed package version, falling back to repository metadata."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-
-        return version("obsidian-vault-pipeline")
-    except (ImportError, PackageNotFoundError):
-        pass
-
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        try:
-            import tomli as tomllib
-        except ModuleNotFoundError:
-            tomllib = None
-
-    if tomllib is not None:
-        for parent in Path(__file__).resolve().parents:
-            pyproject = parent / "pyproject.toml"
-            if not pyproject.exists():
-                continue
-            try:
-                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            except (OSError, tomllib.TOMLDecodeError, UnicodeError):
-                continue
-            project_version = data.get("project", {}).get("version")
-            if project_version:
-                return str(project_version)
-    return "0.3.2"
-
-
-def _check_api_key() -> tuple[bool, str]:
-    """检查API Key是否配置，返回(是否有效, 提示信息)"""
-    # API密钥回退链
-    key_fallbacks = (
-        "AUTO_VAULT_API_KEY",
-        "SPEC_ORCH_LLM_API_KEY",
-        "MINIMAX_API_KEY",
-        "MINIMAX_CN_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-    )
-    key = None
-    for env_name in key_fallbacks:
-        value = os.environ.get(env_name, "")
-        if value and value not in ("", "your_key_here", "test_key_for_testing_only"):
-            key = value
-            break
-    if not key:
-        return False, "No valid API key found in environment"
-    if len(key) < 10:  # 基本验证
-        return False, "API key looks invalid (too short)"
-    return True, "OK"
-
-
-def init_env_file(vault_dir: Path | str | None = None) -> int:
-    """初始化 .env 文件(交互式)"""
-    resolved_vault = resolve_vault_dir(vault_dir)
-    env_file = resolved_vault / ".env"
-    env_example = resolved_vault / ".env.example"
-
-    print("="*60)
-    print("Obsidian Vault Pipeline - 环境初始化")
-    print("="*60)
-
-    # 检查是否已有 .env
-    if env_file.exists():
-        print(f"\n✓ 发现已有配置文件: {env_file}")
-        content = env_file.read_text(encoding="utf-8")
-        if "AUTO_VAULT_API_KEY=" in content and "your_key" not in content:
-            print("  看起来已经配置好了。如需重新配置, 请先删除该文件。")
-            return 0
-        print("  但可能未正确配置, 继续引导设置...\n")
-
-    # 创建 .env.example 如果不存在
-    if not env_example.exists():
-        example_content = '''# Obsidian Vault Pipeline 环境配置
-# ══════════════════════════════════════════════════════════
-# 配置说明:
-# 1. 复制本文件为 .env: cp .env.example .env
-# 2. 编辑 .env 填入你的 API Key
-# ══════════════════════════════════════════════════════════
-
-# ── LLM Provider (必需) ─────────────────────────────────
-# MiniMax (推荐，成本较低，中文好)
-AUTO_VAULT_API_KEY=your_key_here
-AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
-AUTO_VAULT_MODEL=anthropic/MiniMax-M2.7-highspeed
-
-# 或 Anthropic (官方)
-# AUTO_VAULT_API_KEY=sk-ant-xxxxx
-# AUTO_VAULT_API_BASE=https://api.anthropic.com
-# AUTO_VAULT_MODEL=anthropic/claude-3-5-sonnet-20241022
-
-# 或 OpenAI 兼容端点
-# AUTO_VAULT_API_KEY=sk-xxxxx
-# AUTO_VAULT_API_BASE=https://api.openai.com/v1
-
-# ── Pinboard (可选) ─────────────────────────────────────
-# 从 https://pinboard.in/settings/password 获取
-PINBOARD_TOKEN=your_username:your_token
-
-# ── 代理配置 (可选) ─────────────────────────────────────
-# HTTP_PROXY=http://127.0.0.1:7897
-'''
-        env_example.write_text(example_content, encoding="utf-8")
-        print(f"✓ 创建模板文件: {env_example}")
-
-    # 提示用户获取 API Key
-    print("\n📋 你需要一个 LLM API Key 才能运行 Pipeline")
-    print("\n推荐选项:")
-    print("  1. MiniMax ( https://api.minimaxi.com ) - 成本较低，中文好")
-    print("  2. Anthropic ( https://console.anthropic.com ) - Claude官方")
-    print("  3. OpenAI 兼容端点")
-    print("\n获取 Key 后，请输入:")
-
-    # 交互式输入
-    api_key = input("\n🔑 你的 API Key (sk-...): ").strip()
-    if not api_key:
-        print("\n❌ 未提供 API Key，初始化取消")
-        print(f"\n你可以稍后手动创建 {env_file}:")
-        print(f"  cp {env_example} {env_file}")
-        print("  然后编辑填入你的 Key")
-        return 1
-
-    # 选择提供商
-    print("\n选择提供商:")
-    print("  1. MiniMax (默认)")
-    print("  2. Anthropic")
-    print("  3. 其他 (OpenAI兼容)")
-    choice = input("选择 [1-3] (默认1): ").strip() or "1"
-
-    if choice == "1":
-        base_url = "https://api.minimaxi.com/anthropic"
-        model = "anthropic/MiniMax-M2.7-highspeed"
-    elif choice == "2":
-        base_url = "https://api.anthropic.com"
-        model = "anthropic/claude-3-5-sonnet-20241022"
-    else:
-        base_url = input("API Base URL: ").strip() or "https://api.openai.com/v1"
-        model = input("Model name: ").strip() or "gpt-4"
-
-    # 写入 .env
-    env_content = f'''# Obsidian Vault Pipeline 环境配置
-# 生成时间: {datetime.now().isoformat()}
-AUTO_VAULT_API_KEY={api_key}
-AUTO_VAULT_API_BASE={base_url}
-AUTO_VAULT_MODEL={model}
-'''
-
-    env_file.write_text(env_content, encoding="utf-8")
-    os.chmod(env_file, 0o600)  # 设置权限为仅用户可读
-
-    print(f"\n✓ 配置文件已创建: {env_file}")
-    print(f"  Provider: {base_url}")
-    print(f"  Model: {model}")
-    print("\n现在可以运行: ovp --full")
-    return 0
-
-
-def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
-    """检查环境配置，返回(是否就绪, 问题列表)"""
-    issues = []
-    resolved_vault = resolve_vault_dir(vault_dir)
-
-    # 加载环境变量（尝试多个位置）
-    _load_env(resolved_vault)
-
-    # 检查 API Key
-    key_ok, key_msg = _check_api_key()
-    if key_ok:
-        issues.append(f"API Key: {key_msg}")
-    else:
-        issues.append(f"API Key: {key_msg}")
-
-    # 检查 Python 依赖
-    required_modules = ["requests"]
-    for module in required_modules:
-        try:
-            __import__(module)
-            issues.append(f"Module {module}: OK")
-        except ImportError:
-            issues.append(f"Module {module}: NOT FOUND (pip install {module})")
-
-    # 检查 .env 文件（多个位置）
-    env_paths = []
-    env_paths.append(resolved_vault / ".env")
-    env_paths.append(Path.cwd() / ".env")
-    env_paths.append(ENV_FILE)
-    env_paths.append(ENV_FILE_ALT)
-
-    found_env = None
-    for env_path in env_paths:
-        if env_path.exists():
-            found_env = env_path
-            break
-
-    if found_env:
-        issues.append(f".env file: Found at {found_env}")
-    else:
-        issues.append(".env file: NOT FOUND")
-
-    vault_ok = looks_like_vault_dir(resolved_vault)
-    if vault_ok:
-        issues.append(f"Vault root: OK ({resolved_vault})")
-    else:
-        issues.append(
-            "Vault root: not a vault "
-            f"({resolved_vault}; expected 10-Knowledge, 20-Areas, 50-Inbox plus .obsidian or root Index.md/Log.md)"
-        )
-
-    return key_ok and vault_ok, issues
-
-
-# ========== 配置 ==========
-# Pipeline步骤定义（含Pinboard）
-BASE_PIPELINE_STEPS = [
-    "pinboard",       # 1. 获取Pinboard书签到 02-Pinboard/
-    "pinboard_process", # 2. 处理 02-Pinboard/ 文件到对应处理器
-    "clippings",      # 3. 扫描并迁移Clippings到 01-Raw/
-    "articles",       # 4. 生成深度解读
-    "quality",        # 5. 质量检查
-    "fix_links",      # 6. 修复断裂链接
-    "absorb",         # 7. 吸收 Evergreen 生命周期动作（quality >= 3.0 才能执行）
-    "entity_extract", # 7b. Entity NER 提取 (从深度解读中提取命名实体)
-    "dedup",          # 7c. 去重刚吸收的 Evergreen（scope 限于本轮 absorb 产出）
-    "note_type_normalize",  # 8. 规范化 note_type 元数据
-    "registry_sync",  # 9. 同步Registry与文件系统
-    "moc",            # 10. 更新MOC
-    "knowledge_index",  # 11. 刷新派生 knowledge.db
-    "ops_state",      # 12. M24.1: rebuild lifecycle projection
-]
-
-OPTIONAL_PIPELINE_STEPS = ["refine"]  # cleanup + breakdown 的批处理重构
-STEP_ALIASES = {"evergreen": "absorb"}
-PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_ALIASES.keys()]
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROJECT_SRC = PROJECT_ROOT / "src"
-QUALITY_STAGE_ALGORITHM_VERSION = "quality:v1"
-STAGE_CACHE_CHECKOUT = "checkout"
-STAGE_CACHE_RECORD_ONLY = "record_only"
-STAGE_CACHE_DISABLED = "disabled"
-STAGE_CACHE_POLICIES = {
-    "pinboard": STAGE_CACHE_RECORD_ONLY,
-    "pinboard_process": STAGE_CACHE_RECORD_ONLY,
-    "clippings": STAGE_CACHE_RECORD_ONLY,
-    "articles": STAGE_CACHE_RECORD_ONLY,
-    "quality": STAGE_CACHE_CHECKOUT,
-    "fix_links": STAGE_CACHE_CHECKOUT,
-    "absorb": STAGE_CACHE_CHECKOUT,
-    "entity_extract": STAGE_CACHE_RECORD_ONLY,
-    "note_type_normalize": STAGE_CACHE_RECORD_ONLY,
-    "registry_sync": STAGE_CACHE_CHECKOUT,
-    "moc": STAGE_CACHE_CHECKOUT,
-    "knowledge_index": STAGE_CACHE_CHECKOUT,
-    "ops_state": STAGE_CACHE_RECORD_ONLY,
-    "refine": STAGE_CACHE_RECORD_ONLY,
-}
-STAGE_ALGORITHM_VERSIONS = {
-    "quality": QUALITY_STAGE_ALGORITHM_VERSION,
-    "fix_links": "fix_links:exact-only:v1",
-    "absorb": "absorb:qualified-files:item-ledger:v2",
-    "note_type_normalize": "note_type_normalize:canonical-note-types:v1",
-    "registry_sync": "registry_sync:rebuild-registry:v1",
-    "moc": "moc:auto-moc-scan:v1",
-    "knowledge_index": "knowledge_index:truth-projection:v1",
-    "ops_state": "ops_state:lifecycle-projection:v1",
-    "pinboard": "pinboard:fetch:v1",
-    "pinboard_process": "pinboard_process:route-and-process:v1",
-    "clippings": "clippings:process-inbox:v1",
-    "articles": "articles:auto-article-processor:v1",
-    "refine": "refine:cleanup-breakdown:v1",
-}
-
-
-def normalize_step_name(step: str | None) -> str | None:
-    if step is None:
-        return None
-    return STEP_ALIASES.get(step, step)
-
-
-def pipeline_steps(
-    include_refine: bool = False,
-    base_steps: list[str] | None = None,
-) -> list[str]:
-    steps = list(base_steps or BASE_PIPELINE_STEPS)
-    if include_refine and "refine" not in steps:
-        # M24.1: refine writes data that ``knowledge_index`` then
-        # indexes, so refine MUST run before knowledge_index.
-        # Pre-M24.1 we inserted at ``-1`` (penultimate) because
-        # knowledge_index was the last step.  Today the last step
-        # is ``ops_state``, so inserting at -1 would put refine
-        # between knowledge_index and ops_state — wrong order.
-        # Find knowledge_index explicitly and insert before it.
-        try:
-            idx = steps.index("knowledge_index")
-            steps.insert(idx, "refine")
-        except ValueError:
-            # Profile doesn't include knowledge_index (e.g. a
-            # custom slice).  Fall back to inserting near the end.
-            steps.append("refine")
-    return steps
-
-
-def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
-    """Build the requested execution plan from CLI args."""
-    include_refine = bool(getattr(args, "with_refine", False))
-    incremental = bool(getattr(args, "incremental", False))
-    pack_name = getattr(args, "pack", None)
-    profile_name = getattr(args, "profile", None)
-    pack, profile = resolve_workflow_profile(
-        pack_name=pack_name,
-        profile_name=profile_name,
-        default_profile="full",
-        runtime_adapter="pipeline_step",
-    )
-    selected_steps = pipeline_steps(include_refine=include_refine, base_steps=profile.stages)
-    pinboard_selected_steps = [step for step in selected_steps if step != "clippings"]
-    normalized_from_step = (
-        normalize_step_name(args.from_step)
-        if getattr(args, "from_step", None)
-        else None
-    )
-
-    def plan_dict(steps: list[str], description: str, pinboard_days: int | None, pinboard_start: str | None, pinboard_end: str | None) -> dict[str, Any]:
-        return {
-            "pack": pack.name,
-            "profile": profile.name,
-            "steps": steps,
-            "pinboard_days": pinboard_days,
-            "pinboard_start": pinboard_start,
-            "pinboard_end": pinboard_end,
-            "description": description,
-        }
-
-    def slice_from_step(steps: list[str]) -> list[str]:
-        if normalized_from_step and normalized_from_step in steps:
-            return steps[steps.index(normalized_from_step):]
-        return steps
-
-    if args.full:
-        requested_steps = slice_from_step(selected_steps)
-        description = (
-            f"Full pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
-            if normalized_from_step
-            else f"Full pipeline ({pack.name}/{profile.name})"
-        )
-        return plan_dict(
-            requested_steps,
-            description,
-            args.pinboard_days or 7,
-            None,
-            None,
-        )
-
-    if incremental:
-        requested_steps = slice_from_step(selected_steps)
-        description = (
-            f"Incremental pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
-            if normalized_from_step
-            else f"Incremental pipeline ({pack.name}/{profile.name})"
-        )
-        return plan_dict(
-            requested_steps,
-            description,
-            args.pinboard_days or 7,
-            None,
-            None,
-        )
-
-    if args.pinboard_new:
-        return plan_dict(["pinboard", "pinboard_process"], "New Pinboard bookmarks only", 7, None, None)
-
-    if args.pinboard_history:
-        pinboard_start, pinboard_end = args.pinboard_history
-        return plan_dict(
-            pinboard_selected_steps,
-            f"Historical Pinboard {pinboard_start} to {pinboard_end}",
-            None,
-            pinboard_start,
-            pinboard_end,
-        )
-
-    if args.pinboard_days:
-        return plan_dict(
-            pinboard_selected_steps,
-            f"Pinboard last {args.pinboard_days} days + full pipeline",
-            args.pinboard_days,
-            None,
-            None,
-        )
-
-    if args.step:
-        return plan_dict(
-            [normalize_step_name(args.step)],
-            f"Single step: {normalize_step_name(args.step)}",
-            args.pinboard_days,
-            None,
-            None,
-        )
-
-    if args.from_step:
-        return plan_dict(
-            slice_from_step(selected_steps),
-            f"From step: {normalized_from_step}",
-            args.pinboard_days or 7,
-            None,
-            None,
-        )
-
-    return {}
-
-
-class PipelineLogger:
-    """统一过程日志记录器"""
-
-    def __init__(self, log_file: Path):
-        self.log_file = log_file
-        self.session_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
-
-    def log(self, event_type: str, data: dict[str, Any]):
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "session_id": self.session_id,
-            "event_type": event_type,
-            **data
-        }
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
-class TransactionManager:
-    """事务管理器"""
-
-    def __init__(self, txn_dir: Path):
-        self.txn_dir = txn_dir
-
-    def _txn_file(self, txn_id: str) -> Path:
-        return self.txn_dir / f"{txn_id}.json"
-
-    def _read(self, txn_id: str) -> dict[str, Any] | None:
-        txn_file = self._txn_file(txn_id)
-        if not txn_file.exists():
-            return None
-        with open(txn_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def _write(self, txn_id: str, txn_data: dict[str, Any]) -> None:
-        txn_file = self._txn_file(txn_id)
-        txn_file.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=txn_file.parent,
-            prefix=f".{txn_file.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as f:
-            tmp_file = Path(f.name)
-            try:
-                json.dump(txn_data, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            except Exception:
-                try:
-                    tmp_file.unlink()
-                except OSError:
-                    pass
-                raise
-        try:
-            os.replace(tmp_file, txn_file)
-        finally:
-            if tmp_file.exists():
-                try:
-                    tmp_file.unlink()
-                except OSError:
-                    pass
-
-    def start(
-        self,
-        workflow_type: str,
-        description: str,
-        *,
-        pack_name: str | None = None,
-        workflow_profile: str | None = None,
-        planned_steps: list[str] | None = None,
-    ) -> str:
-        txn_id = f"pipeline-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()[:8]}"
-        txn_data = build_transaction_payload(
-            txn_id,
-            workflow_type,
-            description,
-            pack_name=pack_name,
-            workflow_profile=workflow_profile,
-            planned_steps=planned_steps,
-        )
-        self._write(txn_id, txn_data)
-        return txn_id
-
-    def step(self, txn_id: str, step_name: str, status: str, output: str = "", **progress_kwargs: Any):
-        txn_data = self._read(txn_id)
-        if txn_data is None:
-            return
-        update_transaction_step(txn_data, step_name, status, output=output, **progress_kwargs)
-        self._write(txn_id, txn_data)
-
-    def heartbeat(self, txn_id: str, *, step_name: str | None = None, **kwargs: Any):
-        txn_data = self._read(txn_id)
-        if txn_data is None:
-            return
-        heartbeat_transaction(txn_data, step_name=step_name, **kwargs)
-        self._write(txn_id, txn_data)
-
-    def complete(self, txn_id: str):
-        txn_data = self._read(txn_id)
-        if txn_data is None:
-            return
-        mark_transaction_completed(txn_data)
-        self._write(txn_id, txn_data)
-
-    def fail(self, txn_id: str, reason: str):
-        txn_data = self._read(txn_id)
-        if txn_data is None:
-            return
-        mark_transaction_failed(txn_data, reason)
-        self._write(txn_id, txn_data)
 
 
 class EnhancedPipeline:
@@ -3637,6 +3022,7 @@ class EnhancedPipeline:
         return report_file
 
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="增强版统一自动化Pipeline（支持 Pinboard/Clippings、Absorb、Refine、knowledge.db）"
@@ -3799,6 +3185,7 @@ def main():
     print(f"Report saved: {report_file}")
 
     return 0 if all_success else 1
+
 
 
 if __name__ == "__main__":

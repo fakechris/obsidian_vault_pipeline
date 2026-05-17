@@ -37,7 +37,11 @@ LEGACY_SILENT_IMPORTS = {
     ("auto_paper_processor.py", 86),            # dotenv optional
     ("clippings_processor.py", 64),             # dotenv optional (BL-058 source_dedup imports shifted line)
     ("batch_quality_checker.py", 64),           # dotenv optional
-    ("unified_pipeline_enhanced.py", 244),      # importlib.metadata version probe
+    # BL-112: _get_version's importlib.metadata version probe was
+    # leaf-extracted verbatim from unified_pipeline_enhanced.py:244
+    # to _pipeline_utils.py.  Same pre-existing site relocated —
+    # net-zero on the ratchet (old removed, new added), not new debt.
+    ("_pipeline_utils.py", 44),                 # importlib.metadata version probe
     # General except-Exception-pass after import (broader, more dangerous).
     # We may tighten these in follow-up PRs but keep them here so the
     # ratchet test doesn't break.
