@@ -58,8 +58,19 @@ def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
 def _cmd_propose(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     with vault_workflow_lock(vault_dir):
+        # Mirror _scan_evergreen exactly (same path, same _/.
+        # stem skip) so the printed pair-comparison estimate equals
+        # the candidate set find_clusters actually scans.
         eg_dir = vault_dir / "10-Knowledge" / "Evergreen"
-        n = sum(1 for _ in eg_dir.glob("*.md")) if eg_dir.is_dir() else 0
+        n = (
+            sum(
+                1
+                for p in eg_dir.glob("*.md")
+                if not p.stem.startswith(("_", "."))
+            )
+            if eg_dir.is_dir()
+            else 0
+        )
         if n:
             print(
                 f"Full-vault scan: {n} Evergreen files, "
