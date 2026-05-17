@@ -3764,6 +3764,176 @@ def compute_today_staleness(
 # it forward.  One week covers the normal manual-absorb cadence.
 _INTAKE_STALL_DAYS = 7
 
+# BL-103b: DAG-boundary stage telemetry event types + which DAG
+# stages feed each lifecycle card.  Synthesis crystals are a
+# separate command (not a DAG stage) so a 0 there legitimately maps
+# to "not_run"/"unknown", which is itself the honest answer.
+_STAGE_EVENT_TYPES = (
+    "stage_started",
+    "stage_completed",
+    "stage_failed",
+    "stage_skipped",
+)
+_STATE_FEEDING_STAGES: dict[str, frozenset[str]] = {
+    "Received": frozenset(
+        {"pinboard", "pinboard_process", "clippings", "articles"}
+    ),
+    "Extracted": frozenset({"absorb"}),
+    "Accepted": frozenset({"absorb"}),
+    "Synthesized": frozenset({"moc"}),
+    "NeedsAction": frozenset(),
+}
+
+
+def _stage_runs_for_day(
+    conn: sqlite3.Connection, date_key: str, effective_pack: str
+) -> dict[str, dict[str, Any]]:
+    """Roll the BL-103b ``stage_*`` audit events up to the latest run
+    per stage on ``date_key`` (operator-local, pack-scoped).
+
+    Derived on read from ``audit_events`` rather than a materialized
+    ``ops_stage_runs`` table: the rollup is a pure projection of the
+    audit ledger (rebuildable by definition) and avoids a
+    knowledge.db schema migration + version-gate risk for a
+    read-only surface.  A physical table can follow if a writer ever
+    needs it.
+    """
+    et_ph = ",".join("?" for _ in _STAGE_EVENT_TYPES)
+    rows = conn.execute(
+        f"""
+        SELECT timestamp, event_type, payload_json
+          FROM audit_events
+         WHERE event_type IN ({et_ph})
+        """,
+        _STAGE_EVENT_TYPES,
+    ).fetchall()
+    # (stage, run_id) → {events: {event_type: payload}, ts: latest}
+    runs: dict[tuple[str, str], dict[str, Any]] = {}
+    for ts, et, pj in rows:
+        if _audit_local_day(str(ts or "")) != date_key:
+            continue
+        try:
+            payload = json.loads(pj or "{}")
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        rp = _audit_row_pack(payload)
+        if rp is None:
+            if effective_pack != PRIMARY_PACK_NAME:
+                continue
+        elif rp != effective_pack:
+            continue
+        stage = str(payload.get("stage") or "")
+        if not stage:
+            continue
+        run_id = str(payload.get("run_id") or "")
+        key = (stage, run_id)
+        slot = runs.setdefault(key, {"events": {}, "ts": ""})
+        slot["events"][str(et)] = payload
+        tsx = str(ts or "")
+        if tsx > slot["ts"]:
+            slot["ts"] = tsx
+    # Collapse to the latest run per stage.
+    latest: dict[str, dict[str, Any]] = {}
+    for (stage, _rid), slot in runs.items():
+        cur = latest.get(stage)
+        if cur is None or slot["ts"] > cur["_ts"]:
+            ev = slot["events"]
+            if "stage_failed" in ev:
+                status = "failed"
+                term = ev["stage_failed"]
+            elif "stage_completed" in ev:
+                status = "completed"
+                term = ev["stage_completed"]
+            elif "stage_skipped" in ev:
+                status = "skipped"
+                term = ev["stage_skipped"]
+            else:
+                status = "started"
+                term = ev.get("stage_started", {})
+            latest[stage] = {
+                "status": status,
+                "input": term.get("input_count"),
+                "output": term.get("output_count"),
+                "_ts": slot["ts"],
+            }
+    return latest
+
+
+def _zero_reason_for_card(
+    state: str,
+    stage_runs: dict[str, dict[str, Any]],
+    staleness: dict[str, Any],
+) -> tuple[str, str]:
+    """BL-103b: why is this card 0?  Returns (reason, detail).
+
+    A zero is only meaningful with a reason — staleness first (the
+    numbers may simply be behind), then the stage-run ledger.
+    """
+    if state == "NeedsAction":
+        return ("healthy", "No blockers recorded on this day.")
+    if staleness.get("audit_sync_stale"):
+        return (
+            "audit_sync_stale",
+            "Audit sync is behind pipeline.jsonl — run "
+            "`ovp-refresh-ops`; the real count may be non-zero.",
+        )
+    if staleness.get("projection_stale"):
+        return (
+            "projection_stale",
+            "Lifecycle projection is older than synced audit — run "
+            "`ovp-ops-state --rebuild`.",
+        )
+    feeding = _STATE_FEEDING_STAGES.get(state, frozenset())
+    relevant = {s: stage_runs[s] for s in feeding if s in stage_runs}
+    if not relevant:
+        joined = ", ".join(sorted(feeding)) or "the feeding stage"
+        return (
+            "not_run",
+            f"No run recorded for {joined} on this day.",
+        )
+    statuses = {r["status"] for r in relevant.values()}
+    if "failed" in statuses:
+        return (
+            "failed",
+            "A feeding stage failed before completing on this day.",
+        )
+    completed = [
+        r for r in relevant.values() if r["status"] == "completed"
+    ]
+    if completed:
+        in_known = [
+            r["input"] for r in completed if isinstance(r["input"], int)
+        ]
+        out_known = [
+            r["output"] for r in completed if isinstance(r["output"], int)
+        ]
+        if in_known and max(in_known) == 0:
+            return (
+                "ran_no_input",
+                "The feeding stage ran but found zero eligible "
+                "inputs on this day.",
+            )
+        if in_known and max(in_known) > 0 and out_known and max(out_known) == 0:
+            return (
+                "ran_no_output",
+                "The feeding stage ran inputs but produced zero "
+                "outputs on this day.",
+            )
+        if out_known and max(out_known) > 0:
+            return (
+                "telemetry_missing",
+                "A feeding stage reported output but no evidence "
+                "projected here — projection may be stale.",
+            )
+    if "skipped" in statuses:
+        return (
+            "not_run",
+            "The feeding stage was skipped on this day.",
+        )
+    return ("unknown", "Run status unknown for this day.")
+
 
 def build_intake_cohort_payload(
     vault_dir: Path | str, *, date_key: str, pack: str
@@ -3937,12 +4107,17 @@ def build_today_digest_payload(
     (defaults to today UTC).  The date affects the SECONDARY
     number only; the primary number is "right now", not historic.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     requested_pack = pack_name or ""
     if target_date:
         date_key = target_date.strip()
     else:
-        date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # BL-102 consistency: Activity buckets by operator-LOCAL
+        # day, so the default "today" must be the local day too —
+        # a UTC default is off-by-one near midnight for every
+        # operator and made now()-seeded tests wall-clock flaky.
+        date_key = datetime.now().astimezone().strftime("%Y-%m-%d")
 
     db_path = _db_path(vault_dir)
     if not db_path.exists():
@@ -3995,6 +4170,25 @@ def build_today_digest_payload(
     intake_cohort = build_intake_cohort_payload(
         vault_dir, date_key=date_key, pack=effective_pack
     )
+
+    # BL-103b: attach a zero-reason to every card showing 0 so the
+    # operator can tell "did not run" from "ran, no output" from
+    # "stale" — a bare 0 is otherwise undiagnosable.
+    zero_cards = [c for c in cards if int(c.get("event_count") or 0) == 0]
+    if zero_cards:
+        try:
+            with sqlite3.connect(db_path) as _conn:
+                _runs = _stage_runs_for_day(
+                    _conn, date_key, effective_pack
+                )
+        except sqlite3.Error:
+            _runs = {}
+        for c in zero_cards:
+            reason, detail = _zero_reason_for_card(
+                str(c.get("id") or ""), _runs, staleness
+            )
+            c["zero_reason"] = reason
+            c["zero_detail"] = detail
 
     return {
         "screen": "ops/today",
