@@ -1006,7 +1006,8 @@ date: 2026-04-07
     # BL-061: KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION bumped 6→7 to
     # materialise ``evergreen_revisions`` on existing vaults.
     # BL-085: bumped 7→8 to materialise the ``chats`` projection.
-    assert row[2] == 8
+    # PR3: bumped 8→9 for ``page_embeddings.chunk_hash``.
+    assert row[2] == 9
     assert row[3]
 
 
@@ -1077,7 +1078,7 @@ date: 2026-04-07
     # table on existing vaults.  BL-085 bumped 7 → 8 for the ``chats``
     # projection.  Each future BL that adds a canonical table will
     # keep bumping this constant; the test should track it.
-    assert markers[-1].projection_schema_version == 8
+    assert markers[-1].projection_schema_version == 9
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
@@ -1088,8 +1089,9 @@ date: 2026-04-07
             """
         ).fetchone()
     # M21 BL-085 bumped projection_schema_version 7 → 8 to ensure
-    # vaults rebuild when the chats projection lands.
-    assert row == (2, 8)
+    # vaults rebuild when the chats projection lands.  PR3 bumped
+    # 8 → 9 for page_embeddings.chunk_hash.
+    assert row == (2, 9)
 
 
 def test_ensure_knowledge_db_current_rebuilds_when_projection_schema_version_advances(temp_vault):
@@ -1139,8 +1141,8 @@ date: 2026-04-07
             """
         ).fetchone()
     # BL-061: see version-bump rationale above.  M21 BL-085 bumped
-    # to 8.
-    assert row == (1, 8)
+    # to 8.  PR3 bumped to 9 for page_embeddings.chunk_hash.
+    assert row == (1, 9)
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
@@ -1506,6 +1508,25 @@ Stable body.
         raise RuntimeError("boom")
 
     monkeypatch.setattr("ovp_pipeline.knowledge_index._embed_text", fail_embed)
+
+    # PR3: unchanged chunks are reused from the prior DB and never
+    # hit _embed_text.  Change the body so the chunk hash differs,
+    # forcing a recompute that exercises the failure path.
+    evergreen.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+## Architecture
+Body changed — forces an embedding recompute.
+""",
+        encoding="utf-8",
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         rebuild_knowledge_index(temp_vault)
