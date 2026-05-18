@@ -2,15 +2,78 @@
 # ruff: noqa: F401, F403, F405  # deliberate package re-export shim (BL-110).
 from __future__ import annotations
 
+import copy as _copy
+from collections import OrderedDict as _OrderedDict
+
 from ._constants import *
 from ._layer0 import *
 from ._layer1 import *
 from ._layer2 import *
 
 
+# /ops/today day-switch performance: build_today_digest_payload runs
+# 6 heavy builders (each its own sqlite connect on a ~350MB db) with
+# no caching, so flipping back and forth between dates re-pays the
+# full cost every click.  The payload is a pure projection of
+# knowledge.db, so an atomic db rebuild (knowledge_index) or any
+# ops_state write changes the file's mtime — keying the cache on
+# (db_path, db_mtime_ns, date, pack) means a real data change busts
+# it (no staleness, the very failure mode this whole effort fought)
+# while repeated day navigation between rebuilds is served instantly.
+_TODAY_PAYLOAD_CACHE: "_OrderedDict[tuple, dict]" = _OrderedDict()
+_TODAY_PAYLOAD_CACHE_MAX = 48
 
 
 def build_today_digest_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """mtime-keyed cache wrapper around the real builder.
+
+    The cache key embeds ``knowledge.db``'s ``st_mtime_ns``, so any
+    projection rebuild (atomic replace) or ops_state write
+    invalidates every cached date for that vault — repeated
+    day-switching between rebuilds is O(1), correctness is unchanged.
+    """
+    from datetime import datetime
+
+    try:
+        db_path = _db_path(vault_dir)
+        if not db_path.exists():
+            # Cheap "not built" path — nothing to cache.
+            return _build_today_digest_payload_uncached(
+                vault_dir, pack_name=pack_name, target_date=target_date
+            )
+        if target_date:
+            date_key = target_date.strip()
+        else:
+            date_key = datetime.now().astimezone().strftime("%Y-%m-%d")
+        effective_pack = (pack_name or "") or PRIMARY_PACK_NAME
+        mtime_ns = db_path.stat().st_mtime_ns
+        key = (str(db_path), mtime_ns, date_key, effective_pack)
+    except OSError:
+        # stat()/path race → bypass the cache, never fail the page.
+        return _build_today_digest_payload_uncached(
+            vault_dir, pack_name=pack_name, target_date=target_date
+        )
+
+    cached = _TODAY_PAYLOAD_CACHE.get(key)
+    if cached is not None:
+        _TODAY_PAYLOAD_CACHE.move_to_end(key)
+        return _copy.deepcopy(cached)
+
+    payload = _build_today_digest_payload_uncached(
+        vault_dir, pack_name=pack_name, target_date=target_date
+    )
+    _TODAY_PAYLOAD_CACHE[key] = payload
+    while len(_TODAY_PAYLOAD_CACHE) > _TODAY_PAYLOAD_CACHE_MAX:
+        _TODAY_PAYLOAD_CACHE.popitem(last=False)
+    return _copy.deepcopy(payload)
+
+
+def _build_today_digest_payload_uncached(
     vault_dir: Path | str,
     *,
     pack_name: str | None = None,
@@ -38,8 +101,9 @@ def build_today_digest_payload(
     number counted.
 
     ``target_date`` accepts ``YYYY-MM-DD`` for back-dated views
-    (defaults to today UTC).  The date affects the SECONDARY
-    number only; the primary number is "right now", not historic.
+    (defaults to the operator-local day).  The date affects the
+    SECONDARY number only; the primary number is "right now", not
+    historic.
     """
     from datetime import datetime
 
