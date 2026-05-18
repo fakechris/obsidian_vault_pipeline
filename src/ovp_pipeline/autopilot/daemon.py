@@ -493,14 +493,22 @@ class AutoPilotDaemon:
         今日条目），所以挂到每次 refresh 上也不会产生噪音。
         """
         # PR4: same shared decision the pipeline uses (no
-        # pipeline/autopilot fork).  The lightweight audit-sync +
-        # ops_state rebuild runs inside decide_knowledge_refresh;
-        # only escalate to the heavy rebuild on canonical-object
-        # evidence or an unknown/untrustworthy state (conservative:
-        # unknown ⇒ full).
+        # pipeline/autopilot fork).  Review P1: this method only runs
+        # AFTER an article passed quality, so the cycle just wrote a
+        # new ``20-Areas/..._深度解读.md`` (and ran absorb) — an
+        # indexed-source change every time.  The canonical-audit
+        # detector alone would let that interpretation page go
+        # silently stale in pages_index/page_fts, so the autopilot
+        # always reports local change evidence → full rebuild
+        # (matches the agreed "autopilot ingested an article ⇒ full"
+        # rule; the lightweight path is for the no-op pipeline case).
         from ..commands.refresh_ops import decide_knowledge_refresh
 
-        decision = decide_knowledge_refresh(self.vault_dir, self.pack.name)
+        decision = decide_knowledge_refresh(
+            self.vault_dir,
+            self.pack.name,
+            local_change_reason="autopilot_processed_article",
+        )
         if not decision.is_full:
             self.log(
                 "✓ knowledge_index: lightweight refresh sufficient "

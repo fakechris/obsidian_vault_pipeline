@@ -269,6 +269,7 @@ def decide_knowledge_refresh(
     pack: str,
     *,
     force_full: bool = False,
+    local_change_reason: str | None = None,
     canonical_window_minutes: int = 180,
 ) -> RefreshDecision:
     """Shared post-absorb refresh decision for the pipeline AND
@@ -278,25 +279,43 @@ def decide_knowledge_refresh(
     Conservative escalation — *unknown ⇒ full rebuild*:
 
     1. ``force_full`` (operator ``--force-full-index``) → full.
-    2. ``knowledge.db`` missing → full (first build).
-    3. projection metadata missing / schema mismatch → full.
-    4. audit-sync did not reach ``synced`` → full (never decide on a
+    2. ``local_change_reason`` set → full.  The caller has
+       out-of-band evidence that an INDEXED source changed this run
+       (a new ``20-Areas/..._深度解读.md`` from articles, an Atlas/MOC
+       rewrite, a ``note_type`` frontmatter change, an absorb
+       promote, an entity-surface change …).  ``knowledge_index``
+       indexes a far wider surface than the canonical-object audit
+       events (Evergreen + Atlas + 20-Areas + Entity + registry +
+       entity-extraction log — see
+       ``EnhancedPipeline._knowledge_index_source_files``), so the
+       audit-event detector ALONE would let those changes go
+       silently stale in ``pages_index`` / ``page_fts`` /
+       ``page_embeddings`` / the truth projection.  This closes that
+       silent-correctness cliff.
+    3. ``knowledge.db`` missing → full (first build).
+    4. projection metadata missing / schema mismatch → full.
+    5. audit-sync did not reach ``synced`` → full (never decide on a
        stale audit table).
-    5. canonical-object evidence (``_canonical_evidence_since``,
+    6. canonical-object evidence (``_canonical_evidence_since``,
        BL-107 watermark) present → full.
-    6. otherwise → ``audit_sync_only``: the lightweight audit-sync +
-       ``ops_state`` rebuild already ran here and fully reflects the
-       change; the heavy rebuild is NOT needed.
+    7. otherwise → ``audit_sync_only``: the lightweight audit-sync
+       already ran here and fully reflects the change; the heavy
+       rebuild is NOT needed.
 
-    The lightweight work (audit-sync + ops_state rebuild) is executed
-    *inside* this function for the cases that reach step 5/6, so the
-    caller never double-runs it.
+    This function performs ONLY the audit-sync side effect (needed
+    for the canonical-evidence read).  It deliberately does NOT
+    rebuild ``ops_state`` — the dedicated ``ops_state`` DAG stage
+    (pipeline) / ``run_autopilot_ops_state`` (autopilot) runs right
+    after ``knowledge_index`` and owns that rebuild; doing it here
+    too was a redundant double-rebuild.
     """
     resolved = resolve_vault_dir(vault_dir)
     db_path = _db_path(resolved)
 
     if force_full:
         return RefreshDecision("full_rebuild", "force_full_index")
+    if local_change_reason:
+        return RefreshDecision("full_rebuild", local_change_reason)
     if not db_path.is_file():
         return RefreshDecision("full_rebuild", "knowledge_db_missing")
 
@@ -315,7 +334,6 @@ def decide_knowledge_refresh(
         )
 
     with sqlite3.connect(str(db_path)) as conn:
-        rebuild_ops_state(conn, pack=pack)
         watermark = _last_rebuild_watermark(conn, pack)
         canonical = _canonical_evidence_since(conn, canonical_window_minutes, pack)
 

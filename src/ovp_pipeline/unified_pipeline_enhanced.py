@@ -314,6 +314,60 @@ class EnhancedPipeline:
             files.append(extraction_log)
         return self._existing_files([path for path in files if "_Candidates" not in path.parts])
 
+    def _local_indexed_change_reason(self) -> str | None:
+        """PR4 / review P1: did THIS pipeline run change a file that
+        ``knowledge_index`` indexes (a far wider surface than the
+        canonical-object audit events)?
+
+        ``_knowledge_index_source_files`` indexes Evergreen + Atlas +
+        20-Areas + Entity + concept-registry + entity-extraction log.
+        A run can mutate any of those WITHOUT emitting
+        ``evergreen_auto_promoted`` / ``promote_concept`` /
+        ``evergreen_created`` (e.g. ``articles`` writes a new
+        ``20-Areas/..._深度解读.md``, ``moc`` rewrites Atlas,
+        ``note_type_normalize`` rewrites frontmatter).  The
+        canonical-audit detector alone would let those go silently
+        stale — so the pipeline reports its own per-run change
+        evidence and the shared decision escalates to a full rebuild.
+
+        Returns a short reason string when an indexed surface
+        changed this run, else None (defer to the audit detector).
+        """
+        sr = self.step_results
+
+        articles = sr.get("articles")
+        if articles is not None and (
+            articles.get("produced_files")
+            or int(articles.get("produced", 0) or 0) > 0
+            or int(articles.get("total_interpretations", 0) or 0) > 0
+        ):
+            return "articles_produced_indexed_markdown"
+
+        note_type = sr.get("note_type_normalize")
+        if note_type is not None and int(
+            note_type.get("note_type_changed", 0) or 0
+        ) > 0:
+            return "note_type_frontmatter_changed"
+
+        moc = sr.get("moc")
+        if moc is not None and (
+            moc.get("updated") or moc.get("changed_files")
+        ):
+            return "moc_atlas_changed"
+
+        absorb = sr.get("absorb")
+        if absorb is not None and absorb.get("promoted_slugs"):
+            return "absorb_promoted_canonical_object"
+
+        entity = sr.get("entity_extract")
+        if entity is not None and (
+            int(entity.get("mentions_extracted", 0) or 0) > 0
+            or int(entity.get("total_entities", 0) or 0) > 0
+        ):
+            return "entity_surface_changed"
+
+        return None
+
     def _stage_input_files(self, stage: str) -> list[Path]:
         if stage in {"quality", "fix_links"}:
             return self._existing_files(collect_quality_files(self.layout, all_areas=True))
@@ -2636,17 +2690,22 @@ class EnhancedPipeline:
         # PR4: do not unconditionally run the heavy
         # rebuild_knowledge_index.  The shared decision
         # (decide_knowledge_refresh — same helper autopilot uses)
-        # runs the lightweight audit-sync + ops_state rebuild and
-        # only escalates to the full rebuild on canonical-object
-        # evidence or an untrustworthy/unknown state (conservative:
-        # unknown ⇒ full).  dry-run keeps the prior behaviour.
+        # runs the lightweight audit-sync and only escalates to the
+        # full rebuild on (a) THIS run having changed an indexed
+        # source surface — review P1, the silent-staleness cliff:
+        # knowledge_index indexes far more than the canonical-object
+        # audit events — (b) canonical-object audit evidence, or
+        # (c) an untrustworthy/unknown state (conservative: unknown
+        # ⇒ full).  dry-run keeps the prior behaviour.
         if not dry_run:
             from .commands.refresh_ops import decide_knowledge_refresh
 
+            local_reason = self._local_indexed_change_reason()
             decision = decide_knowledge_refresh(
                 self.vault_dir,
                 self.workflow_pack_name,
                 force_full=self.force_full_index,
+                local_change_reason=local_reason,
             )
             self.logger.log(
                 "knowledge_index_refresh_decision",

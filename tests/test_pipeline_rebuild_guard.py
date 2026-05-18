@@ -96,9 +96,7 @@ def _synced(_vault_dir):
 def test_no_canonical_evidence_takes_audit_sync_only(tmp_path):
     v = _vault(tmp_path)
     _emit(v, "candidates_upserted")
-    with patch.object(refresh_ops, "sync_audit_events_from_jsonl", _synced), patch.object(
-        refresh_ops, "rebuild_ops_state", return_value={}
-    ):
+    with patch.object(refresh_ops, "sync_audit_events_from_jsonl", _synced):
         d = decide_knowledge_refresh(v, PACK)
     assert d.refresh_mode == "audit_sync_only"
     assert d.is_full is False
@@ -110,14 +108,43 @@ def test_no_canonical_evidence_takes_audit_sync_only(tmp_path):
 def test_canonical_evidence_forces_full_rebuild(tmp_path):
     v = _vault(tmp_path)
     _emit(v, "evergreen_auto_promoted", payload={"pack": PACK})
-    with patch.object(refresh_ops, "sync_audit_events_from_jsonl", _synced), patch.object(
-        refresh_ops, "rebuild_ops_state", return_value={}
-    ):
+    with patch.object(refresh_ops, "sync_audit_events_from_jsonl", _synced):
         d = decide_knowledge_refresh(v, PACK)
     assert d.refresh_mode == "full_rebuild"
     assert d.is_full is True
     assert d.reason == "canonical_object_evidence"
     assert d.canonical_evidence_count == 1
+
+
+# P1 ───────────────────────────────────────────────────────────────
+def test_local_change_reason_forces_full_and_short_circuits(tmp_path):
+    """Review P1: an indexed-markdown change this run (e.g. a new
+    20-Areas interpretation) must force full rebuild even with NO
+    canonical-object audit evidence — and short-circuit before any
+    audit-sync work."""
+    v = _vault(tmp_path)
+    _emit(v, "candidates_upserted")  # NOT a canonical-object event
+    with patch.object(refresh_ops, "sync_audit_events_from_jsonl") as sync_mock:
+        d = decide_knowledge_refresh(
+            v, PACK, local_change_reason="articles_produced_indexed_markdown"
+        )
+    assert d.refresh_mode == "full_rebuild"
+    assert d.reason == "articles_produced_indexed_markdown"
+    sync_mock.assert_not_called()
+
+
+# P2 ───────────────────────────────────────────────────────────────
+def test_decide_does_not_rebuild_ops_state(tmp_path):
+    """Review P2: the dedicated ops_state DAG stage owns that
+    rebuild — decide_knowledge_refresh must NOT also run it."""
+    v = _vault(tmp_path)
+    _emit(v, "candidates_upserted")
+    with patch.object(
+        refresh_ops, "sync_audit_events_from_jsonl", _synced
+    ), patch.object(refresh_ops, "rebuild_ops_state") as ops_mock:
+        d = decide_knowledge_refresh(v, PACK)
+    assert d.refresh_mode == "audit_sync_only"
+    ops_mock.assert_not_called()
 
 
 # 3 ────────────────────────────────────────────────────────────────
@@ -172,6 +199,82 @@ def test_force_full_index_short_circuits(tmp_path):
     assert d.refresh_mode == "full_rebuild"
     assert d.reason == "force_full_index"
     sync_mock.assert_not_called()
+
+
+# P1 pipeline evidence detector ────────────────────────────────────
+def _make_pipeline(vault_dir):
+    from ovp_pipeline.auto_moc_updater import PipelineLogger
+    from ovp_pipeline.unified_pipeline_enhanced import (
+        EnhancedPipeline,
+        TransactionManager,
+    )
+
+    logger = PipelineLogger(vault_dir / "60-Logs" / "pipeline.jsonl")
+    txn_dir = vault_dir / "60-Logs" / "transactions"
+    txn_dir.mkdir(parents=True, exist_ok=True)
+    return EnhancedPipeline(vault_dir, logger, TransactionManager(txn_dir))
+
+
+def test_local_indexed_change_reason_detects_each_surface(temp_vault):
+    from ovp_pipeline.step_contracts import (
+        AbsorbStepResult,
+        ArticlesStepResult,
+        EntityExtractStepResult,
+        MocStepResult,
+        NoteTypeNormalizeStepResult,
+    )
+
+    p = _make_pipeline(temp_vault)
+    assert p._local_indexed_change_reason() is None  # nothing ran
+
+    p.step_results = {
+        "articles": ArticlesStepResult(success=True, produced_files=["a.md"])
+    }
+    assert p._local_indexed_change_reason() == "articles_produced_indexed_markdown"
+
+    p.step_results = {
+        "note_type_normalize": NoteTypeNormalizeStepResult(
+            success=True, note_type_changed=2
+        )
+    }
+    assert p._local_indexed_change_reason() == "note_type_frontmatter_changed"
+
+    p.step_results = {"moc": MocStepResult(success=True, updated=True)}
+    assert p._local_indexed_change_reason() == "moc_atlas_changed"
+
+    p.step_results = {
+        "absorb": AbsorbStepResult(success=True, promoted_slugs=["x"])
+    }
+    assert p._local_indexed_change_reason() == "absorb_promoted_canonical_object"
+
+    p.step_results = {
+        "entity_extract": EntityExtractStepResult(
+            success=True, mentions_extracted=3
+        )
+    }
+    assert p._local_indexed_change_reason() == "entity_surface_changed"
+
+
+def test_local_indexed_change_reason_none_when_no_indexed_change(temp_vault):
+    from ovp_pipeline.step_contracts import AbsorbStepResult, MocStepResult
+
+    p = _make_pipeline(temp_vault)
+    # absorb ran but promoted nothing; moc ran but changed nothing →
+    # defer to the canonical-audit detector (return None).
+    p.step_results = {
+        "absorb": AbsorbStepResult(success=True, promoted_slugs=[]),
+        "moc": MocStepResult(success=True, updated=False, changed_files=[]),
+    }
+    assert p._local_indexed_change_reason() is None
+
+
+def test_autopilot_passes_processed_article_reason():
+    """Autopilot's _run_knowledge_index_refresh only runs after an
+    article passed quality — it must always declare local change."""
+    import ovp_pipeline.autopilot.daemon as daemon
+
+    src = Path(daemon.__file__).read_text(encoding="utf-8")
+    assert 'local_change_reason="autopilot_processed_article"' in src
 
 
 # 5 ────────────────────────────────────────────────────────────────
