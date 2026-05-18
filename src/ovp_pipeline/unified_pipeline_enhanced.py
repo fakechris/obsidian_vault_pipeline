@@ -169,6 +169,10 @@ class EnhancedPipeline:
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
         self.run_mode = "custom"
+        # PR4: operator escape hatch — force the heavy
+        # rebuild_knowledge_index even when the shared decision would
+        # take the lightweight audit-sync-only path.
+        self.force_full_index = False
         # Contract mode: "strict" (default) raises on unknown fields,
         # "warn" emits StepContractWarning, "off" stores raw dicts.
         self.step_contract_mode: str = "strict"
@@ -2629,6 +2633,64 @@ class EnhancedPipeline:
         print("STEP 10: Refreshing Knowledge Index")
         print("="*60)
 
+        # PR4: do not unconditionally run the heavy
+        # rebuild_knowledge_index.  The shared decision
+        # (decide_knowledge_refresh — same helper autopilot uses)
+        # runs the lightweight audit-sync + ops_state rebuild and
+        # only escalates to the full rebuild on canonical-object
+        # evidence or an untrustworthy/unknown state (conservative:
+        # unknown ⇒ full).  dry-run keeps the prior behaviour.
+        if not dry_run:
+            from .commands.refresh_ops import decide_knowledge_refresh
+
+            decision = decide_knowledge_refresh(
+                self.vault_dir,
+                self.workflow_pack_name,
+                force_full=self.force_full_index,
+            )
+            self.logger.log(
+                "knowledge_index_refresh_decision",
+                {
+                    "pack": self.workflow_pack_name,
+                    "refresh_mode": decision.refresh_mode,
+                    "reason": decision.reason,
+                    "canonical_evidence_count": decision.canonical_evidence_count,
+                    "canonical_evidence": decision.canonical_evidence,
+                    "rebuild_watermark": decision.watermark,
+                    "audit_sync_status": decision.audit_sync_status,
+                },
+            )
+            if not decision.is_full:
+                print(
+                    "  ✓ Lightweight refresh sufficient "
+                    f"(refresh_mode={decision.refresh_mode}, "
+                    f"reason={decision.reason}). Heavy "
+                    "knowledge-index rebuild skipped — audit-sync + "
+                    "ops_state already reflect this change."
+                )
+                return _to_typed_step_result(
+                    "knowledge_index",
+                    {
+                        "success": True,
+                        "updated": False,
+                        "skipped": True,
+                        "reason": decision.reason,
+                        "refresh_mode": decision.refresh_mode,
+                        "canonical_evidence_count": decision.canonical_evidence_count,
+                        "rebuild_watermark": decision.watermark,
+                        "db_path": str(self.layout.knowledge_db),
+                    },
+                )
+            print(
+                f"  ↳ Full rebuild required (reason={decision.reason}"
+                + (
+                    f", canonical_evidence={decision.canonical_evidence_count}"
+                    if decision.canonical_evidence_count
+                    else ""
+                )
+                + ")."
+            )
+
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
@@ -2685,6 +2747,14 @@ class EnhancedPipeline:
             self.run_command(working_memory_cmd, "knowledge_index", timeout=60)
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
+
+        if not dry_run and isinstance(result, dict):
+            result.setdefault("refresh_mode", "full_rebuild")
+            result.setdefault("reason", decision.reason)
+            result.setdefault(
+                "canonical_evidence_count", decision.canonical_evidence_count
+            )
+            result.setdefault("rebuild_watermark", decision.watermark)
 
         return _to_typed_step_result("knowledge_index", result)
 
@@ -3056,6 +3126,16 @@ def main():
                        help="初始化环境配置（交互式）")
     parser.add_argument("--check", action="store_true",
                        help="检查环境配置")
+    parser.add_argument(
+        "--force-full-index",
+        action="store_true",
+        help=(
+            "Force the heavy knowledge-index rebuild even when the "
+            "post-absorb decision would take the lightweight "
+            "audit-sync-only path (escape hatch; default is the "
+            "conservative auto decision)."
+        ),
+    )
 
     # Pinboard参数
     pinboard_group = parser.add_argument_group("Pinboard Options")
@@ -3133,6 +3213,7 @@ def main():
     txn = TransactionManager(layout.transactions_dir)
     pipeline = EnhancedPipeline(layout.vault_dir, logger, txn)
     pipeline.run_mode = "full" if args.full else ("incremental" if args.incremental else "custom")
+    pipeline.force_full_index = bool(getattr(args, "force_full_index", False))
 
     steps = execution_plan["steps"]
     pinboard_days = execution_plan["pinboard_days"]

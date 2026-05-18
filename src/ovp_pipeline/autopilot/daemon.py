@@ -492,6 +492,31 @@ class AutoPilotDaemon:
         两者都是幂等的（Crystal 内容哈希相同则文件不变；Working Memory 覆盖
         今日条目），所以挂到每次 refresh 上也不会产生噪音。
         """
+        # PR4: same shared decision the pipeline uses (no
+        # pipeline/autopilot fork).  The lightweight audit-sync +
+        # ops_state rebuild runs inside decide_knowledge_refresh;
+        # only escalate to the heavy rebuild on canonical-object
+        # evidence or an unknown/untrustworthy state (conservative:
+        # unknown ⇒ full).
+        from ..commands.refresh_ops import decide_knowledge_refresh
+
+        decision = decide_knowledge_refresh(self.vault_dir, self.pack.name)
+        if not decision.is_full:
+            self.log(
+                "✓ knowledge_index: lightweight refresh sufficient "
+                f"(reason={decision.reason}) — heavy rebuild skipped"
+            )
+            return
+
+        self.log(
+            f"↳ knowledge_index: full rebuild (reason={decision.reason}"
+            + (
+                f", canonical_evidence={decision.canonical_evidence_count}"
+                if decision.canonical_evidence_count
+                else ""
+            )
+            + ")"
+        )
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),

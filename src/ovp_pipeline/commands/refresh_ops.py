@@ -42,11 +42,16 @@ import argparse
 import json
 import sqlite3
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..audit_time import parse_audit_ts as _parse_audit_ts
-from ..knowledge_index import sync_audit_events_from_jsonl
+from ..knowledge_index import (
+    KNOWLEDGE_DB_PROJECTION_KIND,
+    KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION,
+    sync_audit_events_from_jsonl,
+)
 from ..ops_lifecycle import ALL_STATES
 from ..ops_state import rebuild as rebuild_ops_state
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
@@ -192,6 +197,147 @@ def _canonical_evidence_since(
         key = str(et)
         found[key] = found.get(key, 0) + 1
     return found
+
+
+@dataclass(frozen=True)
+class RefreshDecision:
+    """Outcome of :func:`decide_knowledge_refresh`.
+
+    ``refresh_mode`` is the binary the pipeline / autopilot
+    knowledge_index step branches on:
+
+    * ``"audit_sync_only"`` — the lightweight path
+      (``sync_audit_events_from_jsonl`` + ``ops_state`` rebuild) ALREADY
+      RAN inside the decision and fully reflects this change; the
+      caller must NOT run the heavy ``rebuild_knowledge_index``.
+    * ``"full_rebuild"`` — the caller must run the full
+      ``rebuild_knowledge_index``.  Either canonical-object evidence
+      was detected, or the state was unknown/untrustworthy
+      (DB/metadata/schema/sync) — conservative by design: *unknown
+      ⇒ full rebuild*, never silently skip and let the projection go
+      stale.
+    """
+
+    refresh_mode: str
+    reason: str
+    canonical_evidence_count: int = 0
+    canonical_evidence: dict[str, int] = field(default_factory=dict)
+    watermark: str = ""
+    audit_sync_status: str = ""
+
+    @property
+    def is_full(self) -> bool:
+        return self.refresh_mode == "full_rebuild"
+
+
+def _projection_health(conn: sqlite3.Connection) -> str | None:
+    """Return a failure reason if the projection metadata is missing
+    or at a different schema version, else None.
+
+    A missing ``projection_metadata`` row / ``truth_projections``
+    table, or a schema-version mismatch, means audit-sync alone
+    cannot be trusted to leave a coherent projection — escalate to a
+    full rebuild (which is also what ``ensure_knowledge_db_current``
+    would do).
+    """
+    has_tp = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='truth_projections'"
+    ).fetchone()
+    if not has_tp:
+        return "truth_projections_table_missing"
+    try:
+        row = conn.execute(
+            "SELECT projection_schema_version FROM projection_metadata "
+            "WHERE projection_kind = ?",
+            (KNOWLEDGE_DB_PROJECTION_KIND,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return "projection_metadata_table_missing"
+    if row is None or row[0] is None:
+        return "projection_metadata_missing"
+    if int(row[0]) != int(KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION):
+        return (
+            f"projection_schema_mismatch"
+            f"(db={row[0]},expected={KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION})"
+        )
+    return None
+
+
+def decide_knowledge_refresh(
+    vault_dir: Path,
+    pack: str,
+    *,
+    force_full: bool = False,
+    canonical_window_minutes: int = 180,
+) -> RefreshDecision:
+    """Shared post-absorb refresh decision for the pipeline AND
+    autopilot knowledge_index step (single source of truth — no
+    pipeline/autopilot fork).
+
+    Conservative escalation — *unknown ⇒ full rebuild*:
+
+    1. ``force_full`` (operator ``--force-full-index``) → full.
+    2. ``knowledge.db`` missing → full (first build).
+    3. projection metadata missing / schema mismatch → full.
+    4. audit-sync did not reach ``synced`` → full (never decide on a
+       stale audit table).
+    5. canonical-object evidence (``_canonical_evidence_since``,
+       BL-107 watermark) present → full.
+    6. otherwise → ``audit_sync_only``: the lightweight audit-sync +
+       ``ops_state`` rebuild already ran here and fully reflects the
+       change; the heavy rebuild is NOT needed.
+
+    The lightweight work (audit-sync + ops_state rebuild) is executed
+    *inside* this function for the cases that reach step 5/6, so the
+    caller never double-runs it.
+    """
+    resolved = resolve_vault_dir(vault_dir)
+    db_path = _db_path(resolved)
+
+    if force_full:
+        return RefreshDecision("full_rebuild", "force_full_index")
+    if not db_path.is_file():
+        return RefreshDecision("full_rebuild", "knowledge_db_missing")
+
+    with sqlite3.connect(str(db_path)) as conn:
+        health = _projection_health(conn)
+    if health is not None:
+        return RefreshDecision("full_rebuild", health)
+
+    sync_payload = sync_audit_events_from_jsonl(resolved)
+    sync_status = str(sync_payload.get("status", "?"))
+    if sync_status != "synced":
+        return RefreshDecision(
+            "full_rebuild",
+            f"audit_sync_{sync_status}",
+            audit_sync_status=sync_status,
+        )
+
+    with sqlite3.connect(str(db_path)) as conn:
+        rebuild_ops_state(conn, pack=pack)
+        watermark = _last_rebuild_watermark(conn, pack)
+        canonical = _canonical_evidence_since(conn, canonical_window_minutes, pack)
+
+    wm = watermark.isoformat() if watermark is not None else ""
+    evidence_count = sum(canonical.values())
+    if canonical:
+        return RefreshDecision(
+            "full_rebuild",
+            "canonical_object_evidence",
+            canonical_evidence_count=evidence_count,
+            canonical_evidence=canonical,
+            watermark=wm,
+            audit_sync_status=sync_status,
+        )
+    return RefreshDecision(
+        "audit_sync_only",
+        "no_canonical_evidence",
+        canonical_evidence_count=0,
+        canonical_evidence={},
+        watermark=wm,
+        audit_sync_status=sync_status,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
