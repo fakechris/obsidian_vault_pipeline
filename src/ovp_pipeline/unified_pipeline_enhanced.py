@@ -589,6 +589,28 @@ class EnhancedPipeline:
         if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
             return None
         context = self._build_stage_artifact_context(stage, results=results)
+        if (
+            stage == "absorb"
+            and context.get("inputs", {}).get("qualified_file_count", 0) == 0
+        ):
+            # BL-029 cache-correctness: post-BL-029 `articles` is
+            # intake-only and the pipeline quality stage qualifies
+            # nothing (qualified_files == []), so absorb's REAL input
+            # is the time-windowed 50-Inbox/03-Processed probe inside
+            # step_absorb()'s BL-029 fallback — which this
+            # quality-derived fingerprint cannot represent (it is the
+            # SAME constant for every empty-qualified run).  A
+            # stage-level checkout here short-circuits absorb forever
+            # and strands every new intake in Received.  Skip the
+            # checkout and let step_absorb() decide; absorb v2's
+            # per-item ledger cache keeps a genuinely-no-new-intake
+            # run cheap, so this is not a perf regression.
+            print(
+                "  ↳ absorb stage-cache checkout skipped "
+                "(quality qualified 0 — delegating to step_absorb "
+                "BL-029 03-Processed intake fallback)"
+            )
+            return None
         manifest = self._stage_artifact_store().load(
             stage,
             context["fingerprint"],
@@ -1521,9 +1543,16 @@ class EnhancedPipeline:
         return _to_typed_step_result("clippings", result)
 
     def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> "ArticlesStepResult":
-        """执行文章深度解读步骤"""
+        """Article INTAKE staging (post-BL-029).
+
+        The legacy 13-section LLM deep-dive generation is gone: this
+        step now only stages raw sources into 50-Inbox/03-Processed
+        for absorb v2.  ``Produced 0`` here means "no NEW sources to
+        stage", NOT "nothing happened" — evergreen/candidate creation
+        is absorb's job, not this step's.
+        """
         print("\n" + "="*60)
-        print("STEP 4: Generating Article Interpretations")
+        print("STEP 4: Article Intake (staging sources for absorb)")
         print("="*60)
 
         cmd = [
