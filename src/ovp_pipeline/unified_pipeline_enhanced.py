@@ -169,6 +169,10 @@ class EnhancedPipeline:
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
         self.run_mode = "custom"
+        # PR4: operator escape hatch — force the heavy
+        # rebuild_knowledge_index even when the shared decision would
+        # take the lightweight audit-sync-only path.
+        self.force_full_index = False
         # Contract mode: "strict" (default) raises on unknown fields,
         # "warn" emits StepContractWarning, "off" stores raw dicts.
         self.step_contract_mode: str = "strict"
@@ -309,6 +313,65 @@ class EnhancedPipeline:
         if extraction_log.exists():
             files.append(extraction_log)
         return self._existing_files([path for path in files if "_Candidates" not in path.parts])
+
+    def _local_indexed_change_reason(self) -> str | None:
+        """PR4 / review P1: did THIS pipeline run change a file that
+        ``knowledge_index`` indexes (a far wider surface than the
+        canonical-object audit events)?
+
+        ``_knowledge_index_source_files`` indexes Evergreen + Atlas +
+        20-Areas + Entity + concept-registry + entity-extraction log.
+        A run can mutate any of those WITHOUT emitting
+        ``evergreen_auto_promoted`` / ``promote_concept`` /
+        ``evergreen_created`` (e.g. ``articles`` writes a new
+        ``20-Areas/..._深度解读.md``, ``moc`` rewrites Atlas,
+        ``note_type_normalize`` rewrites frontmatter).  The
+        canonical-audit detector alone would let those go silently
+        stale — so the pipeline reports its own per-run change
+        evidence and the shared decision escalates to a full rebuild.
+
+        Returns a short reason string when an indexed surface
+        changed this run, else None (defer to the audit detector).
+        """
+        sr = self.step_results
+
+        # Only PER-RUN signals — never cumulative post-run totals
+        # (total_interpretations / total_entities are vault-wide
+        # population counts; using them would make every run on a
+        # non-empty vault report change and collapse the guard back
+        # to always-full).  produced / produced_files /
+        # note_type_changed / changed_files / promoted_slugs /
+        # mentions_extracted are all "this run did X" deltas.
+        articles = sr.get("articles")
+        if articles is not None and (
+            articles.get("produced_files")
+            or int(articles.get("produced", 0) or 0) > 0
+        ):
+            return "articles_produced_indexed_markdown"
+
+        note_type = sr.get("note_type_normalize")
+        if note_type is not None and int(
+            note_type.get("note_type_changed", 0) or 0
+        ) > 0:
+            return "note_type_frontmatter_changed"
+
+        moc = sr.get("moc")
+        if moc is not None and (
+            moc.get("updated") or moc.get("changed_files")
+        ):
+            return "moc_atlas_changed"
+
+        absorb = sr.get("absorb")
+        if absorb is not None and absorb.get("promoted_slugs"):
+            return "absorb_promoted_canonical_object"
+
+        entity = sr.get("entity_extract")
+        if entity is not None and int(
+            entity.get("mentions_extracted", 0) or 0
+        ) > 0:
+            return "entity_surface_changed"
+
+        return None
 
     def _stage_input_files(self, stage: str) -> list[Path]:
         if stage in {"quality", "fix_links"}:
@@ -2629,6 +2692,85 @@ class EnhancedPipeline:
         print("STEP 10: Refreshing Knowledge Index")
         print("="*60)
 
+        # A dry run must NOT trigger the heavy rebuild (gemini review:
+        # otherwise --dry-run could fire a ~20-min full rebuild).
+        # Mirror the skipped-result shape the other steps use.
+        if dry_run:
+            print("  ✓ knowledge_index (dry-run skipped)")
+            return _to_typed_step_result(
+                "knowledge_index",
+                {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "dry_run",
+                    "updated": False,
+                    "db_path": str(self.layout.knowledge_db),
+                },
+            )
+
+        # PR4: do not unconditionally run the heavy
+        # rebuild_knowledge_index.  The shared decision
+        # (decide_knowledge_refresh — same helper autopilot uses)
+        # runs the lightweight audit-sync and only escalates to the
+        # full rebuild on (a) THIS run having changed an indexed
+        # source surface — review P1, the silent-staleness cliff:
+        # knowledge_index indexes far more than the canonical-object
+        # audit events — (b) canonical-object audit evidence, or
+        # (c) an untrustworthy/unknown state (conservative: unknown
+        # ⇒ full).  dry-run already returned above.
+        from .commands.refresh_ops import decide_knowledge_refresh
+
+        local_reason = self._local_indexed_change_reason()
+        decision = decide_knowledge_refresh(
+            self.vault_dir,
+            self.workflow_pack_name,
+            force_full=self.force_full_index,
+            local_change_reason=local_reason,
+        )
+        self.logger.log(
+            "knowledge_index_refresh_decision",
+            {
+                "pack": self.workflow_pack_name,
+                "refresh_mode": decision.refresh_mode,
+                "reason": decision.reason,
+                "canonical_evidence_count": decision.canonical_evidence_count,
+                "canonical_evidence": decision.canonical_evidence,
+                "rebuild_watermark": decision.watermark,
+                "audit_sync_status": decision.audit_sync_status,
+            },
+        )
+        if not decision.is_full:
+            print(
+                "  ✓ Lightweight refresh sufficient "
+                f"(refresh_mode={decision.refresh_mode}, "
+                f"reason={decision.reason}). Heavy knowledge-index "
+                "rebuild skipped — audit-sync done here; the "
+                "dedicated ops_state stage rebuilds the lifecycle "
+                "projection next."
+            )
+            return _to_typed_step_result(
+                "knowledge_index",
+                {
+                    "success": True,
+                    "updated": False,
+                    "skipped": True,
+                    "reason": decision.reason,
+                    "refresh_mode": decision.refresh_mode,
+                    "canonical_evidence_count": decision.canonical_evidence_count,
+                    "rebuild_watermark": decision.watermark,
+                    "db_path": str(self.layout.knowledge_db),
+                },
+            )
+        print(
+            f"  ↳ Full rebuild required (reason={decision.reason}"
+            + (
+                f", canonical_evidence={decision.canonical_evidence_count}"
+                if decision.canonical_evidence_count
+                else ""
+            )
+            + ")."
+        )
+
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
@@ -2685,6 +2827,14 @@ class EnhancedPipeline:
             self.run_command(working_memory_cmd, "knowledge_index", timeout=60)
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
+
+        if isinstance(result, dict):
+            result.setdefault("refresh_mode", "full_rebuild")
+            result.setdefault("reason", decision.reason)
+            result.setdefault(
+                "canonical_evidence_count", decision.canonical_evidence_count
+            )
+            result.setdefault("rebuild_watermark", decision.watermark)
 
         return _to_typed_step_result("knowledge_index", result)
 
@@ -3056,6 +3206,16 @@ def main():
                        help="初始化环境配置（交互式）")
     parser.add_argument("--check", action="store_true",
                        help="检查环境配置")
+    parser.add_argument(
+        "--force-full-index",
+        action="store_true",
+        help=(
+            "Force the heavy knowledge-index rebuild even when the "
+            "post-absorb decision would take the lightweight "
+            "audit-sync-only path (escape hatch; default is the "
+            "conservative auto decision)."
+        ),
+    )
 
     # Pinboard参数
     pinboard_group = parser.add_argument_group("Pinboard Options")
@@ -3133,6 +3293,7 @@ def main():
     txn = TransactionManager(layout.transactions_dir)
     pipeline = EnhancedPipeline(layout.vault_dir, logger, txn)
     pipeline.run_mode = "full" if args.full else ("incremental" if args.incremental else "custom")
+    pipeline.force_full_index = bool(getattr(args, "force_full_index", False))
 
     steps = execution_plan["steps"]
     pinboard_days = execution_plan["pinboard_days"]

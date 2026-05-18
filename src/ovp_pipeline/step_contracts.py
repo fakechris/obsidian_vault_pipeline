@@ -243,6 +243,11 @@ class KnowledgeIndexStepResult(StepResult):
     db_path: str = ""
     updated: bool = False
     db_mtime: float = 0.0
+    # PR4: which refresh path this step took and why.
+    # refresh_mode: "audit_sync_only" | "full_rebuild" | ""
+    refresh_mode: str = ""
+    canonical_evidence_count: int = 0
+    rebuild_watermark: str = ""
 
 
 # ---------------------------------------------------------------------------
