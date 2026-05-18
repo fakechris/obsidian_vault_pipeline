@@ -589,9 +589,10 @@ class EnhancedPipeline:
         if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
             return None
         context = self._build_stage_artifact_context(stage, results=results)
-        if stage == "absorb" and int(
-            context.get("inputs", {}).get("qualified_file_count", 0)
-        ) == 0:
+        if (
+            stage == "absorb"
+            and context.get("inputs", {}).get("qualified_file_count", 0) == 0
+        ):
             # BL-029 cache-correctness: post-BL-029 `articles` is
             # intake-only and the pipeline quality stage qualifies
             # nothing (qualified_files == []), so absorb's REAL input

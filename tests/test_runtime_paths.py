@@ -481,6 +481,33 @@ def test_run_pipeline_checkouts_cacheable_stage_artifact_without_dispatching_han
     assert "Cache hit" in step["output"]
 
 
+def _absorb_cache_pipeline(tmp_path):
+    """Shared setup for the absorb stage-cache regression tests:
+    a fresh EnhancedPipeline rooted at an empty temp vault."""
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    return vault, pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+
+def _write_absorb_manifest(pipeline, ctx, *, run_id):
+    pipeline._stage_artifact_store().write_completed(
+        stage="absorb",
+        fingerprint=ctx["fingerprint"],
+        input_digest=ctx["input_digest"],
+        algorithm_digest=ctx["algorithm_digest"],
+        run_id=run_id,
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=ctx["inputs"],
+        outputs=ctx["outputs"],
+    )
+
+
 def test_absorb_checkout_skipped_when_quality_qualified_zero(tmp_path):
     """BL-029 cache-correctness regression: post-BL-029 `articles` is
     intake-only and quality qualifies nothing, so absorb's stage
@@ -489,14 +516,7 @@ def test_absorb_checkout_skipped_when_quality_qualified_zero(tmp_path):
     in Received.  When qualified_file_count == 0 the checkout must be
     SKIPPED (return None) so step_absorb()'s 03-Processed fallback
     runs — even if a matching absorb manifest exists on disk."""
-    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
-    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
-
-    vault = tmp_path / "vault"
-    (vault / "60-Logs").mkdir(parents=True)
-    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
-    txn = TransactionManager(vault / "60-Logs" / "transactions")
-    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    _vault, pipeline = _absorb_cache_pipeline(tmp_path)
 
     # No quality artifact / no results → qualified_files == [] →
     # qualified_file_count == 0.
@@ -505,17 +525,7 @@ def test_absorb_checkout_skipped_when_quality_qualified_zero(tmp_path):
 
     # Even with a matching manifest written at that fingerprint, the
     # checkout must refuse to short-circuit absorb.
-    pipeline._stage_artifact_store().write_completed(
-        stage="absorb",
-        fingerprint=ctx["fingerprint"],
-        input_digest=ctx["input_digest"],
-        algorithm_digest=ctx["algorithm_digest"],
-        run_id="stale-empty-qualified-run",
-        pack_name=pipeline.workflow_pack_name,
-        workflow_profile=pipeline.workflow_profile_name,
-        inputs=ctx["inputs"],
-        outputs=ctx["outputs"],
-    )
+    _write_absorb_manifest(pipeline, ctx, run_id="stale-empty-qualified-run")
 
     assert pipeline._checkout_stage_artifact("absorb") is None
 
@@ -524,18 +534,10 @@ def test_absorb_checkout_honored_when_quality_qualified_nonzero(tmp_path):
     """Positive control: the fix only disables the empty-qualified
     case — when quality genuinely qualified files, the absorb
     stage-cache checkout still works."""
-    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
-    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
-
-    vault = tmp_path / "vault"
-    (vault / "60-Logs").mkdir(parents=True)
+    vault, pipeline = _absorb_cache_pipeline(tmp_path)
     qualified = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "q_深度解读.md"
     qualified.parent.mkdir(parents=True, exist_ok=True)
     qualified.write_text("# q\n", encoding="utf-8")
-
-    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
-    txn = TransactionManager(vault / "60-Logs" / "transactions")
-    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
 
     results = {
         "quality": {
@@ -546,17 +548,7 @@ def test_absorb_checkout_honored_when_quality_qualified_nonzero(tmp_path):
     ctx = pipeline._build_stage_artifact_context("absorb", results=results)
     assert ctx["inputs"]["qualified_file_count"] == 1
 
-    pipeline._stage_artifact_store().write_completed(
-        stage="absorb",
-        fingerprint=ctx["fingerprint"],
-        input_digest=ctx["input_digest"],
-        algorithm_digest=ctx["algorithm_digest"],
-        run_id="prev",
-        pack_name=pipeline.workflow_pack_name,
-        workflow_profile=pipeline.workflow_profile_name,
-        inputs=ctx["inputs"],
-        outputs=ctx["outputs"],
-    )
+    _write_absorb_manifest(pipeline, ctx, run_id="prev")
 
     checked_out = pipeline._checkout_stage_artifact("absorb", results=results)
     assert checked_out is not None
