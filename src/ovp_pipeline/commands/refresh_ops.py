@@ -206,10 +206,12 @@ class RefreshDecision:
     ``refresh_mode`` is the binary the pipeline / autopilot
     knowledge_index step branches on:
 
-    * ``"audit_sync_only"`` — the lightweight path
-      (``sync_audit_events_from_jsonl`` + ``ops_state`` rebuild) ALREADY
-      RAN inside the decision and fully reflects this change; the
-      caller must NOT run the heavy ``rebuild_knowledge_index``.
+    * ``"audit_sync_only"`` — ``sync_audit_events_from_jsonl``
+      ALREADY RAN inside the decision; the caller must NOT run the
+      heavy ``rebuild_knowledge_index``.  The lifecycle ``ops_state``
+      projection is NOT rebuilt here — the dedicated ``ops_state``
+      DAG stage (``run_pipeline_ops_state``) / autopilot
+      ``run_autopilot_ops_state`` runs right after and owns it.
     * ``"full_rebuild"`` — the caller must run the full
       ``rebuild_knowledge_index``.  Either canonical-object evidence
       was detected, or the state was unknown/untrustworthy

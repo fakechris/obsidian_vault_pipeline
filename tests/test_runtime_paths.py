@@ -672,7 +672,16 @@ def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
 
-    result = pipeline.step_knowledge_index(dry_run=True)
+    # dry-run must NOT trigger the heavy rebuild (gemini review):
+    # returns a skipped result, invokes no command.
+    dry = pipeline.step_knowledge_index(dry_run=True)
+    assert dry["success"] is True
+    assert dry["skipped"] is True
+    assert invocations == []
+
+    # Real run, no knowledge.db → decision = full_rebuild
+    # (knowledge_db_missing) → the rebuild command runs, well-formed.
+    result = pipeline.step_knowledge_index(dry_run=False)
 
     assert result["success"] is True
     rebuild = next(

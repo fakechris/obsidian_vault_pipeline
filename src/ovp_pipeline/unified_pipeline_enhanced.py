@@ -335,11 +335,17 @@ class EnhancedPipeline:
         """
         sr = self.step_results
 
+        # Only PER-RUN signals — never cumulative post-run totals
+        # (total_interpretations / total_entities are vault-wide
+        # population counts; using them would make every run on a
+        # non-empty vault report change and collapse the guard back
+        # to always-full).  produced / produced_files /
+        # note_type_changed / changed_files / promoted_slugs /
+        # mentions_extracted are all "this run did X" deltas.
         articles = sr.get("articles")
         if articles is not None and (
             articles.get("produced_files")
             or int(articles.get("produced", 0) or 0) > 0
-            or int(articles.get("total_interpretations", 0) or 0) > 0
         ):
             return "articles_produced_indexed_markdown"
 
@@ -360,10 +366,9 @@ class EnhancedPipeline:
             return "absorb_promoted_canonical_object"
 
         entity = sr.get("entity_extract")
-        if entity is not None and (
-            int(entity.get("mentions_extracted", 0) or 0) > 0
-            or int(entity.get("total_entities", 0) or 0) > 0
-        ):
+        if entity is not None and int(
+            entity.get("mentions_extracted", 0) or 0
+        ) > 0:
             return "entity_surface_changed"
 
         return None
@@ -2687,6 +2692,22 @@ class EnhancedPipeline:
         print("STEP 10: Refreshing Knowledge Index")
         print("="*60)
 
+        # A dry run must NOT trigger the heavy rebuild (gemini review:
+        # otherwise --dry-run could fire a ~20-min full rebuild).
+        # Mirror the skipped-result shape the other steps use.
+        if dry_run:
+            print("  ✓ knowledge_index (dry-run skipped)")
+            return _to_typed_step_result(
+                "knowledge_index",
+                {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "dry_run",
+                    "updated": False,
+                    "db_path": str(self.layout.knowledge_db),
+                },
+            )
+
         # PR4: do not unconditionally run the heavy
         # rebuild_knowledge_index.  The shared decision
         # (decide_knowledge_refresh — same helper autopilot uses)
@@ -2696,59 +2717,59 @@ class EnhancedPipeline:
         # knowledge_index indexes far more than the canonical-object
         # audit events — (b) canonical-object audit evidence, or
         # (c) an untrustworthy/unknown state (conservative: unknown
-        # ⇒ full).  dry-run keeps the prior behaviour.
-        if not dry_run:
-            from .commands.refresh_ops import decide_knowledge_refresh
+        # ⇒ full).  dry-run already returned above.
+        from .commands.refresh_ops import decide_knowledge_refresh
 
-            local_reason = self._local_indexed_change_reason()
-            decision = decide_knowledge_refresh(
-                self.vault_dir,
-                self.workflow_pack_name,
-                force_full=self.force_full_index,
-                local_change_reason=local_reason,
+        local_reason = self._local_indexed_change_reason()
+        decision = decide_knowledge_refresh(
+            self.vault_dir,
+            self.workflow_pack_name,
+            force_full=self.force_full_index,
+            local_change_reason=local_reason,
+        )
+        self.logger.log(
+            "knowledge_index_refresh_decision",
+            {
+                "pack": self.workflow_pack_name,
+                "refresh_mode": decision.refresh_mode,
+                "reason": decision.reason,
+                "canonical_evidence_count": decision.canonical_evidence_count,
+                "canonical_evidence": decision.canonical_evidence,
+                "rebuild_watermark": decision.watermark,
+                "audit_sync_status": decision.audit_sync_status,
+            },
+        )
+        if not decision.is_full:
+            print(
+                "  ✓ Lightweight refresh sufficient "
+                f"(refresh_mode={decision.refresh_mode}, "
+                f"reason={decision.reason}). Heavy knowledge-index "
+                "rebuild skipped — audit-sync done here; the "
+                "dedicated ops_state stage rebuilds the lifecycle "
+                "projection next."
             )
-            self.logger.log(
-                "knowledge_index_refresh_decision",
+            return _to_typed_step_result(
+                "knowledge_index",
                 {
-                    "pack": self.workflow_pack_name,
-                    "refresh_mode": decision.refresh_mode,
+                    "success": True,
+                    "updated": False,
+                    "skipped": True,
                     "reason": decision.reason,
+                    "refresh_mode": decision.refresh_mode,
                     "canonical_evidence_count": decision.canonical_evidence_count,
-                    "canonical_evidence": decision.canonical_evidence,
                     "rebuild_watermark": decision.watermark,
-                    "audit_sync_status": decision.audit_sync_status,
+                    "db_path": str(self.layout.knowledge_db),
                 },
             )
-            if not decision.is_full:
-                print(
-                    "  ✓ Lightweight refresh sufficient "
-                    f"(refresh_mode={decision.refresh_mode}, "
-                    f"reason={decision.reason}). Heavy "
-                    "knowledge-index rebuild skipped — audit-sync + "
-                    "ops_state already reflect this change."
-                )
-                return _to_typed_step_result(
-                    "knowledge_index",
-                    {
-                        "success": True,
-                        "updated": False,
-                        "skipped": True,
-                        "reason": decision.reason,
-                        "refresh_mode": decision.refresh_mode,
-                        "canonical_evidence_count": decision.canonical_evidence_count,
-                        "rebuild_watermark": decision.watermark,
-                        "db_path": str(self.layout.knowledge_db),
-                    },
-                )
-            print(
-                f"  ↳ Full rebuild required (reason={decision.reason}"
-                + (
-                    f", canonical_evidence={decision.canonical_evidence_count}"
-                    if decision.canonical_evidence_count
-                    else ""
-                )
-                + ")."
+        print(
+            f"  ↳ Full rebuild required (reason={decision.reason}"
+            + (
+                f", canonical_evidence={decision.canonical_evidence_count}"
+                if decision.canonical_evidence_count
+                else ""
             )
+            + ")."
+        )
 
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
@@ -2807,7 +2828,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
 
-        if not dry_run and isinstance(result, dict):
+        if isinstance(result, dict):
             result.setdefault("refresh_mode", "full_rebuild")
             result.setdefault("reason", decision.reason)
             result.setdefault(

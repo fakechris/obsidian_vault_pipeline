@@ -268,29 +268,63 @@ def test_local_indexed_change_reason_none_when_no_indexed_change(temp_vault):
     assert p._local_indexed_change_reason() is None
 
 
-def test_autopilot_passes_processed_article_reason():
-    """Autopilot's _run_knowledge_index_refresh only runs after an
-    article passed quality — it must always declare local change."""
-    import ovp_pipeline.autopilot.daemon as daemon
+def test_autopilot_invokes_decision_with_processed_article_reason():
+    """Runtime behaviour (not source text): the autopilot refresh
+    actually CALLS the shared helper with
+    local_change_reason='autopilot_processed_article' and, on a
+    non-full decision, returns without a heavy rebuild."""
+    from types import SimpleNamespace
 
-    src = Path(daemon.__file__).read_text(encoding="utf-8")
-    assert 'local_change_reason="autopilot_processed_article"' in src
+    import ovp_pipeline.autopilot.daemon as daemon_mod
+
+    light = refresh_ops.RefreshDecision("audit_sync_only", "no_canonical_evidence")
+    fake = SimpleNamespace(
+        vault_dir=Path("/tmp/does-not-matter"),
+        pack=SimpleNamespace(name=PACK),
+        log=lambda *_a, **_k: None,
+    )
+    with patch.object(
+        refresh_ops, "decide_knowledge_refresh", return_value=light
+    ) as dec:
+        daemon_mod.AutoPilotDaemon._run_knowledge_index_refresh(fake)
+
+    dec.assert_called_once()
+    _, kwargs = dec.call_args
+    assert kwargs.get("local_change_reason") == "autopilot_processed_article"
 
 
 # 5 ────────────────────────────────────────────────────────────────
-def test_pipeline_and_autopilot_share_one_decision(tmp_path):
-    """Both call sites import the SAME decide_knowledge_refresh —
-    asserting identity prevents a future pipeline/autopilot fork."""
-    from ovp_pipeline import unified_pipeline_enhanced as upe  # noqa: F401
-    import ovp_pipeline.autopilot.daemon as daemon  # noqa: F401
+def test_pipeline_and_autopilot_call_the_same_helper_at_runtime(temp_vault):
+    """Runtime no-fork proof: patch ONE object
+    (refresh_ops.decide_knowledge_refresh) and observe that BOTH the
+    pipeline step AND the autopilot refresh invoke that exact
+    object."""
+    from types import SimpleNamespace
 
-    # Both modules resolve the helper from commands.refresh_ops.
-    from ovp_pipeline.commands.refresh_ops import (
-        decide_knowledge_refresh as canonical,
-    )
+    import ovp_pipeline.autopilot.daemon as daemon_mod
 
-    src_pipeline = Path(upe.__file__).read_text(encoding="utf-8")
-    src_daemon = Path(daemon.__file__).read_text(encoding="utf-8")
-    assert "from .commands.refresh_ops import decide_knowledge_refresh" in src_pipeline
-    assert "from ..commands.refresh_ops import decide_knowledge_refresh" in src_daemon
-    assert canonical is refresh_ops.decide_knowledge_refresh
+    light = refresh_ops.RefreshDecision("audit_sync_only", "no_canonical_evidence")
+
+    with patch.object(
+        refresh_ops, "decide_knowledge_refresh", return_value=light
+    ) as dec:
+        # pipeline path
+        p = _make_pipeline(temp_vault)
+        result = p.step_knowledge_index(dry_run=False)
+        assert result.skipped is True
+        assert result.refresh_mode == "audit_sync_only"
+
+        # autopilot path
+        fake = SimpleNamespace(
+            vault_dir=temp_vault,
+            pack=SimpleNamespace(name=PACK),
+            log=lambda *_a, **_k: None,
+        )
+        daemon_mod.AutoPilotDaemon._run_knowledge_index_refresh(fake)
+
+    assert dec.call_count == 2  # one pipeline + one autopilot, same patched obj
+    pipeline_kwargs = dec.call_args_list[0].kwargs
+    assert pipeline_kwargs.get("local_change_reason") is None  # no steps ran
+    assert pipeline_kwargs.get("force_full") is False
+    autopilot_kwargs = dec.call_args_list[1].kwargs
+    assert autopilot_kwargs.get("local_change_reason") == "autopilot_processed_article"
