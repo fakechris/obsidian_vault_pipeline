@@ -297,7 +297,7 @@ def render_digests_list_body(vault_dir: Path | str) -> str:
         empty = (
             "<p class='muted'>No digest files yet.  Generated digests land in "
             f"<code>{escape(DIGESTS_DIR)}</code> as the pipeline produces "
-            "them — typically one per UTC day.</p>"
+            "them — typically one per operator-local day.</p>"
         )
         return header + empty
 

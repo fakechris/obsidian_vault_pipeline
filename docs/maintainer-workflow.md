@@ -21,7 +21,7 @@ the place to look when the inline banner is too terse.
 screen.
 
 **Decision.** Three blocks, each with a deep-link:
-- **Today** — ingested + failure counts for the current UTC day → `/ops/today`
+- **Today** — ingested + failure counts for the current operator-local day → `/ops/today`
 - **Queue** — pending counts across the four review queues → `/ops/queue`
 - **Last run** — most recent transaction's workflow + status → `/ops/runs`
 
