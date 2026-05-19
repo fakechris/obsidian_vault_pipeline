@@ -24,6 +24,22 @@ _TODAY_PAYLOAD_CACHE: "_OrderedDict[tuple, dict]" = _OrderedDict()
 _TODAY_PAYLOAD_CACHE_MAX = 48
 
 
+def _resolve_today_date_key(target_date: str | None) -> str:
+    """The /ops/today date bucket.
+
+    BL-102 consistency: Activity buckets by operator-LOCAL day, so
+    the default "today" must be the local day too — a UTC default is
+    off-by-one near midnight for every operator and made now()-seeded
+    tests wall-clock flaky.  Single source of truth so the cache
+    wrapper and the real builder cannot disagree on the key.
+    """
+    if target_date:
+        return target_date.strip()
+    from datetime import datetime
+
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
 def build_today_digest_payload(
     vault_dir: Path | str,
     *,
@@ -37,8 +53,6 @@ def build_today_digest_payload(
     invalidates every cached date for that vault — repeated
     day-switching between rebuilds is O(1), correctness is unchanged.
     """
-    from datetime import datetime
-
     try:
         db_path = _db_path(vault_dir)
         if not db_path.exists():
@@ -46,10 +60,7 @@ def build_today_digest_payload(
             return _build_today_digest_payload_uncached(
                 vault_dir, pack_name=pack_name, target_date=target_date
             )
-        if target_date:
-            date_key = target_date.strip()
-        else:
-            date_key = datetime.now().astimezone().strftime("%Y-%m-%d")
+        date_key = _resolve_today_date_key(target_date)
         effective_pack = (pack_name or "") or PRIMARY_PACK_NAME
         mtime_ns = db_path.stat().st_mtime_ns
         key = (str(db_path), mtime_ns, date_key, effective_pack)
@@ -67,10 +78,14 @@ def build_today_digest_payload(
     payload = _build_today_digest_payload_uncached(
         vault_dir, pack_name=pack_name, target_date=target_date
     )
-    _TODAY_PAYLOAD_CACHE[key] = payload
+    # Store an isolated deep copy so the cached entry can never be
+    # mutated through any reference to the freshly-built payload
+    # (gemini review); return the fresh build to the caller, so the
+    # cold path does exactly one deepcopy, not two.
+    _TODAY_PAYLOAD_CACHE[key] = _copy.deepcopy(payload)
     while len(_TODAY_PAYLOAD_CACHE) > _TODAY_PAYLOAD_CACHE_MAX:
         _TODAY_PAYLOAD_CACHE.popitem(last=False)
-    return _copy.deepcopy(payload)
+    return payload
 
 
 def _build_today_digest_payload_uncached(
@@ -105,17 +120,8 @@ def _build_today_digest_payload_uncached(
     SECONDARY number only; the primary number is "right now", not
     historic.
     """
-    from datetime import datetime
-
     requested_pack = pack_name or ""
-    if target_date:
-        date_key = target_date.strip()
-    else:
-        # BL-102 consistency: Activity buckets by operator-LOCAL
-        # day, so the default "today" must be the local day too —
-        # a UTC default is off-by-one near midnight for every
-        # operator and made now()-seeded tests wall-clock flaky.
-        date_key = datetime.now().astimezone().strftime("%Y-%m-%d")
+    date_key = _resolve_today_date_key(target_date)
 
     db_path = _db_path(vault_dir)
     if not db_path.exists():
