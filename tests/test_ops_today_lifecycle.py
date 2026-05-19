@@ -168,3 +168,47 @@ def test_cards_are_independent_of_lifecycle_summary(tmp_path):
     assert na_card["event_count"] == 1  # 1 failure event today
     assert na_card["primary_count"] == 1  # 1 item in NeedsAction state
     assert payload["lifecycle_summary"]["counts"][STATE_NEEDS_ACTION] == 1
+
+
+def test_today_payload_cached_by_db_mtime(tmp_path, monkeypatch):
+    """Day-switch perf: a second call with the db unchanged is
+    served from cache (the 6 heavy builders do NOT re-run); a db
+    mtime change (rebuild / ops_state write) busts every cached
+    date so the payload can never go stale."""
+    import os
+
+    from ovp_pipeline.ui.view_models import _layer3
+
+    db_path = _make_db(tmp_path)
+    _seed_two_items(db_path)
+
+    calls = {"n": 0}
+    real = _layer3._build_today_digest_payload_uncached
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(_layer3, "_build_today_digest_payload_uncached", counting)
+    _layer3._TODAY_PAYLOAD_CACHE.clear()
+
+    p1 = build_today_digest_payload(tmp_path, pack_name=PACK)
+    assert calls["n"] == 1
+    p2 = build_today_digest_payload(tmp_path, pack_name=PACK)
+    assert calls["n"] == 1  # cache hit — builders NOT re-run
+    assert p2 == p1  # identical payload
+
+    # mutating the returned dict must not corrupt the cached copy
+    p2["cards"] = "tampered"
+    p3 = build_today_digest_payload(tmp_path, pack_name=PACK)
+    assert calls["n"] == 1
+    assert p3["cards"] != "tampered"
+
+    # a db write (atomic rebuild / ops_state) changes st_mtime_ns →
+    # cache busts → recompute, still correct.
+    st = db_path.stat()
+    os.utime(db_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    p4 = build_today_digest_payload(tmp_path, pack_name=PACK)
+    assert calls["n"] == 2  # cache busted by mtime change
+    na = next(c for c in p4["cards"] if c["id"] == "NeedsAction")
+    assert na["primary_count"] == 1  # data still correct post-bust
