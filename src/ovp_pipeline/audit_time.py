@@ -24,6 +24,13 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+# Trailing colonless numeric offset, e.g. ``+0800`` / ``-0700`` at the
+# very end of the string.  Python 3.10's ``datetime.fromisoformat``
+# rejects this form (3.11+ accepts it); the project still supports
+# 3.10, so a ``%z``-emitted row would otherwise parse as ``None`` and
+# be silently dropped from staleness / local-day bucketing.
+_COLONLESS_OFFSET_RE = re.compile(r"([+-]\d{2})(\d{2})$")
+
 __all__ = ["parse_audit_ts", "local_day"]
 
 _FORMATS = (
@@ -32,14 +39,11 @@ _FORMATS = (
     "%Y-%m-%d %H:%M",
     "%Y-%m-%d",
 )
-_OFFSET_RE = re.compile(r"[+-]\d{2}:?\d{2}$")
-
-
 def parse_audit_ts(raw: str) -> datetime | None:
     """Parse an audit timestamp to an aware datetime, or None.
 
-    Explicit ``Z`` / numeric offset → UTC (``event_emitter`` always
-    emits UTC).  A naive value → the machine's local wall time
+    Explicit ``Z`` / numeric offset → the represented instant in
+    UTC.  A naive value → the machine's local wall time
     (``PipelineLogger``); ``astimezone()`` on a naive datetime
     attaches the local tz, so a freshly-emitted row is not
     re-clocked by the operator's UTC offset.
@@ -47,23 +51,27 @@ def parse_audit_ts(raw: str) -> datetime | None:
     s = (raw or "").strip()
     if not s:
         return None
-    s = s.replace("T", " ", 1)
-    had_tz = False
     if s.endswith("Z"):
-        s = s[:-1]
-        had_tz = True
-    m = _OFFSET_RE.search(s)
-    if m:
-        s = s[: m.start()]
-        had_tz = True
-    s = s.strip()
+        s = s[:-1] + "+00:00"
+    else:
+        # Normalize a trailing ``±HHMM`` → ``±HH:MM`` so Python 3.10's
+        # fromisoformat accepts %z-emitted rows (see _COLONLESS_OFFSET_RE).
+        s = _COLONLESS_OFFSET_RE.sub(r"\1:\2", s)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        dt = None
+    if dt is not None:
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc)
+        return dt.astimezone()
+
+    normalized = s.replace("T", " ", 1).strip()
     for fmt in _FORMATS:
         try:
-            dt = datetime.strptime(s, fmt)
+            dt = datetime.strptime(normalized, fmt)
         except ValueError:
             continue
-        if had_tz:
-            return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone()
     return None
 

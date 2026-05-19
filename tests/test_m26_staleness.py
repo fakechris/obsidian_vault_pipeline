@@ -99,6 +99,35 @@ def test_audit_sync_stale_when_jsonl_ahead(tmp_path):
     assert "ovp-refresh-ops" in s["detail"]
 
 
+def test_current_with_mixed_timestamp_formats(tmp_path):
+    v = _db(
+        tmp_path,
+        audit_max="2026-05-17T10:59:45Z",
+        refreshed_at="2026-05-17T11:28:01Z",
+    )
+    db = tmp_path / "60-Logs" / "knowledge.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO audit_events VALUES (?,?,?,?,?,?)",
+            (
+                "pipeline.jsonl",
+                "command_error",
+                "",
+                "x",
+                "2026-05-17T04:26:21.639658-07:00",
+                "{}",
+            ),
+        )
+        conn.commit()
+    _jsonl(tmp_path, "2026-05-17T04:26:21.639658-07:00")
+
+    s = compute_today_staleness(v, pack=PACK)
+
+    assert s["summary"] == "current"
+    assert s["audit_sync_stale"] is False
+    assert s["db_latest"] == "2026-05-17T11:26:21.639658+00:00"
+
+
 def test_projection_stale_when_ops_state_behind_audit(tmp_path):
     v = _db(tmp_path, audit_max="2026-05-10T12:00:00", refreshed_at="2026-05-09T08:00:00")
     _jsonl(tmp_path, "2026-05-10T12:00:00")  # in sync with DB

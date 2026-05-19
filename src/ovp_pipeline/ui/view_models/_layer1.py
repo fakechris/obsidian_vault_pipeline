@@ -2384,11 +2384,21 @@ def compute_today_staleness(
     if db_path.exists():
         try:
             with sqlite3.connect(db_path) as conn:
-                row = conn.execute(
-                    "SELECT MAX(timestamp) FROM audit_events"
-                ).fetchone()
-                if row and row[0]:
-                    db_latest = _parse_audit_ts(str(row[0]))
+                # Stream a running max instead of materializing one
+                # datetime per audit_events row (Codex review P2):
+                # /ops/today runs this on every request and the
+                # ledger grows unbounded on long-lived vaults
+                # (~37k rows on the operator vault) — a full list
+                # here reintroduces the exact page-load memory class
+                # the recent bounded-rebuild work removed.
+                for (ts,) in conn.execute(
+                    "SELECT timestamp FROM audit_events"
+                ):
+                    parsed = _parse_audit_ts(str(ts or ""))
+                    if parsed is not None and (
+                        db_latest is None or parsed > db_latest
+                    ):
+                        db_latest = parsed
                 has_ops = conn.execute(
                     "SELECT 1 FROM sqlite_master "
                     "WHERE type='table' AND name='ops_state'"
