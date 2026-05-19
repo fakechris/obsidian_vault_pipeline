@@ -22,14 +22,19 @@ identically.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-# Trailing colonless numeric offset, e.g. ``+0800`` / ``-0700`` at the
-# very end of the string.  Python 3.10's ``datetime.fromisoformat``
-# rejects this form (3.11+ accepts it); the project still supports
-# 3.10, so a ``%z``-emitted row would otherwise parse as ``None`` and
-# be silently dropped from staleness / local-day bucketing.
-_COLONLESS_OFFSET_RE = re.compile(r"([+-]\d{2})(\d{2})$")
+# A trailing timezone designator: ``Z`` is handled separately; this
+# matches a numeric offset with OR without the colon (``+08:00`` /
+# ``-0700``) anchored at end of string.  Python 3.10's
+# ``datetime.fromisoformat`` rejects the colonless form, and the
+# strptime fallback has no ``%z``; peeling the designator to a
+# tzinfo BEFORE parsing the offset-free body makes every emitted
+# form parse correctly on 3.10/3.11 alike instead of being silently
+# dropped (gemini review: ``2026-05-14Z`` previously mis-parsed as
+# local time, and offset rows that fromisoformat rejected returned
+# ``None``).
+_TRAILING_OFFSET_RE = re.compile(r"([+-])(\d{2}):?(\d{2})$")
 
 __all__ = ["parse_audit_ts", "local_day"]
 
@@ -51,29 +56,48 @@ def parse_audit_ts(raw: str) -> datetime | None:
     s = (raw or "").strip()
     if not s:
         return None
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    else:
-        # Normalize a trailing ``±HHMM`` → ``±HH:MM`` so Python 3.10's
-        # fromisoformat accepts %z-emitted rows (see _COLONLESS_OFFSET_RE).
-        s = _COLONLESS_OFFSET_RE.sub(r"\1:\2", s)
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        dt = None
-    if dt is not None:
-        if dt.tzinfo is not None:
-            return dt.astimezone(timezone.utc)
-        return dt.astimezone()
 
-    normalized = s.replace("T", " ", 1).strip()
-    for fmt in _FORMATS:
-        try:
-            dt = datetime.strptime(normalized, fmt)
-        except ValueError:
-            continue
-        return dt.astimezone()
-    return None
+    # Peel any explicit trailing tz designator into ``tz`` and parse
+    # an offset-free ``body``.  Doing this BEFORE fromisoformat means
+    # the colonless offset, the ``Z``, and a date-only ``Z`` all
+    # parse uniformly on 3.10 and 3.11 — and the strptime fallback
+    # (which has no ``%z``) still works because ``body`` carries no
+    # offset.
+    tz: timezone | None = None
+    body = s
+    if s.endswith("Z"):
+        tz = timezone.utc
+        body = s[:-1]
+    else:
+        m = _TRAILING_OFFSET_RE.search(s)
+        if m:
+            delta = timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
+            tz = timezone(delta if m.group(1) == "+" else -delta)
+            body = s[: m.start()]
+
+    dt: datetime | None = None
+    try:
+        dt = datetime.fromisoformat(body)
+    except ValueError:
+        normalized = body.replace("T", " ", 1).strip()
+        for fmt in _FORMATS:
+            try:
+                dt = datetime.strptime(normalized, fmt)
+                break
+            except ValueError:
+                continue
+
+    if dt is None:
+        return None
+    if tz is not None:
+        # Explicit designator → the represented instant, in UTC.
+        return dt.replace(tzinfo=tz).astimezone(timezone.utc)
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc)
+    # Naive value (``PipelineLogger``) → the machine's local wall
+    # time; ``astimezone()`` attaches the local tz without
+    # re-clocking by the operator's UTC offset.
+    return dt.astimezone()
 
 
 def local_day(raw: str) -> str | None:
