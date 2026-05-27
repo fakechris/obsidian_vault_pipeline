@@ -677,6 +677,14 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "llm_model",
         "prompt_version",
         "superseded_by_synthesized_at",
+        # BL-114: stable identity that survives re-clusters; without
+        # preserving it across rebuild every crystal would be re-seeded
+        # via the trigger with concept_id == cluster_id, wiping any
+        # BL-115 inheritance the prior run had recorded.
+        "concept_id",
+        # BL-116: distinguishes orphan-supersede from normal re-synthesis
+        # supersede; preserved so the audit trail survives rebuild too.
+        "supersede_reason",
     ),
     "contradiction_crystals": (
         "pack",
@@ -690,6 +698,22 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "llm_model",
         "prompt_version",
         "superseded_by_synthesized_at",
+    ),
+    # BL-114 / BL-115: concept-identity ledger.  Preserved verbatim
+    # so a re-cluster's BL-115 matcher reads PRIOR ``current_cluster_id``
+    # values from the last run.  Without preservation the BL-114
+    # AFTER-INSERT trigger would re-seed the ledger with
+    # ``current_cluster_id = cluster_id`` for every preserved crystal,
+    # erasing BL-115's inheritance history.  Trigger's
+    # ``INSERT OR IGNORE`` makes this a no-op once the ledger row
+    # exists.
+    "concept_identity_ledger": (
+        "pack",
+        "concept_id",
+        "current_cluster_id",
+        "last_matched_at",
+        "created_at",
+        "lineage_json",
     ),
     # BL-061: prose-level evergreen revision history.  Same
     # treatment as ``provenance`` — an immutable append-only audit
@@ -784,6 +808,15 @@ def _preserve_existing_truth_rows(
     except sqlite3.DatabaseError:
         return
 
+    # BL-114/115: the AFTER-INSERT trigger on community_crystals
+    # auto-seeds ``concept_identity_ledger`` with default values.
+    # When preservation later copies the REAL ledger rows (with
+    # BL-115 lineage_json + current_cluster_id), the plain INSERT
+    # collides on the PK.  REPLACE-on-conflict for this table makes
+    # the preserved row authoritative; the trigger's seed is just
+    # a placeholder that gets overwritten.
+    _INSERT_OR_REPLACE_TABLES = {"concept_identity_ledger"}
+
     def _copy_table(
         table_name: str,
         columns: tuple[str, ...],
@@ -807,8 +840,13 @@ def _preserve_existing_truth_rows(
         if not rows:
             return []
         placeholders = ", ".join("?" for _ in columns)
+        verb = (
+            "INSERT OR REPLACE"
+            if table_name in _INSERT_OR_REPLACE_TABLES
+            else "INSERT"
+        )
         dest_conn.executemany(
-            f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            f"{verb} INTO {table_name} ({column_sql}) VALUES ({placeholders})",
             rows,
         )
         return rows
@@ -1724,6 +1762,20 @@ def rebuild_knowledge_index(
         surface_map = _build_surface_map(object_metadata_items)
         known_slugs = {meta.note_id for meta in object_metadata_items}
 
+        # BL-115: snapshot prior graph_clusters BEFORE the temp-DB
+        # build starts.  The match step compares this against the
+        # freshly-inserted clusters so identity continuity survives
+        # Louvain re-clustering.  Helper handles all the "DB doesn't
+        # exist yet / table missing / malformed JSON" edge cases —
+        # returns ``{}`` for any failure mode, which the matcher
+        # treats as "fresh vault" and skips inheritance.
+        from .synthesis.identity_match import (
+            snapshot_prior_graph_clusters as _snapshot_prior_clusters,
+        )
+        prior_graph_clusters = _snapshot_prior_clusters(
+            layout.knowledge_db, pack=truth_pack,
+        )
+
         temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
         _remove_sqlite_artifacts(temp_db_path)
 
@@ -1964,6 +2016,39 @@ def rebuild_knowledge_index(
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.graph_clusters],
+            )
+
+            # BL-115 / BL-116 — concept identity continuity.
+            #
+            # Run the Jaccard matcher in the SAME transaction as the
+            # graph_clusters INSERT so the ledger update + orphan
+            # supersede are atomic with the rebuild.  The matcher
+            # touches three tables already in this transaction:
+            # ``concept_identity_ledger`` (UPDATE current_cluster_id +
+            # lineage_json), and ``community_crystals`` (UPDATE
+            # superseded_by_synthesized_at + supersede_reason for
+            # orphans).  If anything below raises, the whole rebuild
+            # rolls back via the surrounding try/except.
+            new_graph_clusters = {
+                row.cluster_id: list(json.loads(row.member_object_ids_json))
+                for row in truth_projection.graph_clusters
+                if row.cluster_kind == "louvain_community"
+            }
+            from .synthesis.identity_match import (
+                match_concept_identities,
+                emit_identity_audit,
+            )
+            identity_result = match_concept_identities(
+                conn,
+                pack=truth_pack,
+                prior_clusters=prior_graph_clusters,
+                new_clusters=new_graph_clusters,
+                now_ts=datetime.now(timezone.utc).isoformat(
+                    timespec="microseconds",
+                ),
+            )
+            emit_identity_audit(
+                resolved_vault, pack=truth_pack, result=identity_result,
             )
             conn.execute(
                 """
