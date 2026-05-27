@@ -1,0 +1,7 @@
+# Used by tests/fake_pipeline.rs and `ovp-next run --fake`.
+[pipeline]
+nodes = ["fake_source", "fake_transform", "fake_sink"]
+edges = [
+  ["fake_source", "fake_transform"],
+  ["fake_transform", "fake_sink"],
+]

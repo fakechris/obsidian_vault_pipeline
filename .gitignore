@@ -1,0 +1,5 @@
+/target
+/.run
+Cargo.lock.bak
+*.swp
+.DS_Store

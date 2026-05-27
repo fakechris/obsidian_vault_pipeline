@@ -1,0 +1,17 @@
+[package]
+name = "ovp-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next CLI"
+
+[[bin]]
+name = "ovp-next"
+path = "src/main.rs"
+
+[dependencies]
+ovp-core = { path = "../ovp-core", features = ["fakes"] }
+clap = { workspace = true }
+serde_json = { workspace = true }
