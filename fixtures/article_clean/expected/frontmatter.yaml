@@ -1,0 +1,29 @@
+# Interpretation frontmatter — what the new system must emit equivalents for.
+# See ../notes.md for which fields are MUST / SHOULD / MAY-break.
+title: A Guide to Agent-native Product Management
+source: https://every.to/guides/ai-product-management-guide
+author: 原文未说明
+date: 2026-05-04
+type: article
+tags: ["AI产品管理", "Agent", "产品策略", "LLM", "Compound-Engineering"]
+status: completed
+area: ai
+canonical_concepts: []
+concept_candidates:
+  - 8020
+  - agent-native-product-management
+  - approach
+  - compound-engineering
+  - crossing-the-chasm
+  - good-strategy-bad-strategy
+  - product-pulse
+  - product-strategy
+  - sdlc
+  - smart
+  - strategy-document
+  - target-problem
+  - 对话即工作
+link_resolution_status: resolved
+link_resolution_version: v2
+pipeline_run_id: 20260504-230446-cd910f66
+original_note_type: ai
