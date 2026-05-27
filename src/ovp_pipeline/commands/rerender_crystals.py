@@ -68,6 +68,10 @@ def _rerender_communities(
     ``(rewritten_count, skipped_count)``."""
     rewritten = 0
     skipped = 0
+    # BL-114: re-render every crystal — current AND superseded.  The
+    # ledger LEFT JOIN resolves a crystal's CURRENT label even after
+    # re-clusters; falls back to '' for orphan crystals whose ledger
+    # row has no current_cluster_id mapping anymore.
     rows = conn.execute(
         """
         SELECT cc.pack, cc.cluster_id, cc.body_md,
@@ -77,8 +81,10 @@ def _rerender_communities(
                COALESCE(gc.label, '') AS label,
                COALESCE(gc.member_object_ids_json, '[]') AS members_json
           FROM community_crystals AS cc
+          LEFT JOIN concept_identity_ledger cil
+            ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
           LEFT JOIN graph_clusters AS gc
-            ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+            ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
          WHERE cc.pack = ?
          ORDER BY cc.cluster_id, cc.synthesized_at
         """,

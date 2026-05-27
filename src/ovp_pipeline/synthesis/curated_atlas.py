@@ -162,6 +162,12 @@ def _load_top_n(
 
     # Community crystals join ``crystal_scores`` ↔ ``community_crystals``
     # (current row only) ↔ ``graph_clusters`` (label).
+    #
+    # BL-114: ``crystal_scores.crystal_id`` is now the stable
+    # ``concept_id`` (BL-114 made ``_load_community_index`` return
+    # concept_ids).  The label comes from the CURRENT Louvain cluster
+    # via the ledger so a concept whose ``current_cluster_id`` shifted
+    # across a re-cluster still picks up a fresh label.
     cur = conn.execute(
         """
         SELECT cs.crystal_id, 'community' AS kind, gc.label,
@@ -171,10 +177,12 @@ def _load_top_n(
                cc.body_md, cc.source_evergreen_slugs_json
           FROM crystal_scores cs
           JOIN community_crystals cc
-            ON cc.pack = cs.pack AND cc.cluster_id = cs.crystal_id
+            ON cc.pack = cs.pack AND cc.concept_id = cs.crystal_id
            AND cc.superseded_by_synthesized_at = ''
+          JOIN concept_identity_ledger cil
+            ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
           JOIN graph_clusters gc
-            ON gc.pack = cs.pack AND gc.cluster_id = cs.crystal_id
+            ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
          WHERE cs.pack = ?
            AND cs.crystal_kind = 'community'
          ORDER BY cs.score DESC

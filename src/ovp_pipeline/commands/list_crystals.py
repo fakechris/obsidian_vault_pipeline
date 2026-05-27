@@ -29,20 +29,28 @@ _KIND_ALL = "all"
 def _list_community_chains(
     conn: sqlite3.Connection, pack: str,
 ) -> list[tuple[str, str, int, str]]:
-    """Return ``[(cluster_id, label, version_count, latest_synth_at), ...]``
-    sorted by cluster_id."""
+    """Return ``[(concept_id, label, version_count, latest_synth_at), ...]``
+    sorted by concept_id.
+
+    BL-114: chains are grouped by ``concept_id`` (stable identity), not
+    ``cluster_id`` — so a concept that survived re-clustering shows
+    as one chain rather than splitting per cluster_id.  Label comes
+    from the CURRENT Louvain cluster via the ledger.
+    """
     rows = conn.execute(
         """
-        SELECT cc.cluster_id,
+        SELECT cc.concept_id,
                COALESCE(gc.label, '') AS label,
                COUNT(*) AS n_versions,
                MAX(cc.synthesized_at) AS latest_at
           FROM community_crystals AS cc
+          LEFT JOIN concept_identity_ledger cil
+            ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
           LEFT JOIN graph_clusters AS gc
-            ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+            ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
          WHERE cc.pack = ?
-         GROUP BY cc.cluster_id, gc.label
-         ORDER BY cc.cluster_id
+         GROUP BY cc.concept_id, gc.label
+         ORDER BY cc.concept_id
         """,
         (pack,),
     ).fetchall()

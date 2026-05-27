@@ -86,8 +86,45 @@ CREATE TABLE community_crystals (
   llm_model TEXT NOT NULL,
   prompt_version TEXT NOT NULL,
   superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
+  concept_id TEXT NOT NULL DEFAULT '',
+  supersede_reason TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, cluster_id, synthesized_at)
 );
+
+CREATE TABLE concept_identity_ledger (
+  pack TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  current_cluster_id TEXT NOT NULL DEFAULT '',
+  last_matched_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  lineage_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (pack, concept_id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id = ''
+BEGIN
+  UPDATE community_crystals
+     SET concept_id = NEW.cluster_id
+   WHERE pack = NEW.pack
+     AND cluster_id = NEW.cluster_id
+     AND synthesized_at = NEW.synthesized_at;
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id <> ''
+BEGIN
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
 CREATE TABLE contradiction_crystals (
   pack TEXT NOT NULL,
   contradiction_id TEXT NOT NULL,

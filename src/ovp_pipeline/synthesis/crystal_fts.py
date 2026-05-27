@@ -119,13 +119,19 @@ def index_crystals_into_page_fts(
 
     inserted = 0
 
-    # Community crystals — current rows only.
+    # Community crystals — current rows only.  BL-114: resolve the
+    # label through the ledger so a concept whose current_cluster_id
+    # shifted across a re-cluster still gets the label of its CURRENT
+    # Louvain cluster.  Slug keys off ``concept_id`` (stable identity)
+    # so FTS / pages_index entries survive re-clusters.
     cur = conn.execute(
         """
-        SELECT cc.cluster_id, gc.label, cc.body_md
+        SELECT cc.concept_id, gc.label, cc.body_md
           FROM community_crystals cc
+          JOIN concept_identity_ledger cil
+            ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
           JOIN graph_clusters gc
-            ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+            ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
          WHERE cc.pack = ?
            AND cc.superseded_by_synthesized_at = ''
         """,
@@ -133,8 +139,8 @@ def index_crystals_into_page_fts(
     )
     fts_rows: list[tuple[str, str, str]] = []
     page_rows: list[tuple[str, str, str, str, str, str, str]] = []
-    for cluster_id, label, body_md in cur:
-        safe_id = _community_safe_id(cluster_id)
+    for concept_id, label, body_md in cur:
+        safe_id = _community_safe_id(concept_id)
         slug = _COMMUNITY_PREFIX + safe_id
         # BL-051: user-facing label says "topic", not "crystal".
         # Slug prefix (``crystal:``) stays as-is — it's a stable

@@ -77,8 +77,44 @@ def _make_db() -> sqlite3.Connection:
             llm_model TEXT NOT NULL,
             prompt_version TEXT NOT NULL,
             superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
+          concept_id TEXT NOT NULL DEFAULT '',
+          supersede_reason TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (pack, cluster_id, synthesized_at)
         );
+CREATE TABLE concept_identity_ledger (
+  pack TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  current_cluster_id TEXT NOT NULL DEFAULT '',
+  last_matched_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  lineage_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (pack, concept_id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id = ''
+BEGIN
+  UPDATE community_crystals
+     SET concept_id = NEW.cluster_id
+   WHERE pack = NEW.pack
+     AND cluster_id = NEW.cluster_id
+     AND synthesized_at = NEW.synthesized_at;
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id <> ''
+BEGIN
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
         CREATE TABLE evergreen_revisions (
             pack TEXT NOT NULL,
             object_id TEXT NOT NULL,
@@ -373,7 +409,7 @@ def test_synthesized_fresh_crystal_classifies_as_synthesized():
          "2026-05-10T08:00:00+00:00", ""),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-1", "## crystal body",
          json.dumps(["obj-1"]),
@@ -411,7 +447,7 @@ def test_synthesized_from_crystal_projection_without_audit_event():
          "2026-05-10T08:00:00+00:00", ""),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-noaudit", "## crystal body",
          json.dumps(["obj-1"]),
@@ -439,7 +475,7 @@ def test_synthesized_stale_crystal_demotes_to_accepted():
          "obj-2", json.dumps(["obj-2"]), 0.5),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-2", "## old crystal",
          json.dumps(["obj-2"]),
@@ -473,7 +509,7 @@ def test_synthesized_with_superseded_crystal_demotes_to_accepted():
          "obj-3", json.dumps(["obj-3"]), 0.5),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-3", "## body",
          json.dumps(["obj-3"]),

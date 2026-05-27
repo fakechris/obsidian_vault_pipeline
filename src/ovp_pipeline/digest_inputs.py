@@ -781,19 +781,25 @@ def _collect_layer2(
     if touched_clusters:
         placeholders = ",".join("?" * len(touched_clusters))
         try:
+            # BL-114: ``touched_clusters`` carries CURRENT Louvain
+            # ``cluster_id``s (from graph_clusters), so route via the
+            # ledger and emit the stable ``concept_id`` — that's what
+            # downstream digest links should use for URL stability.
             rows = conn.execute(
                 f"""
-                SELECT cc.cluster_id, gc.label
-                  FROM community_crystals cc
-                  LEFT JOIN graph_clusters gc
-                    ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
-                 WHERE cc.pack = ?
-                   AND cc.cluster_id IN ({placeholders})
+                SELECT cc.concept_id, gc.label
+                  FROM concept_identity_ledger cil
+                  JOIN community_crystals cc
+                    ON cc.pack = cil.pack AND cc.concept_id = cil.concept_id
                    AND cc.superseded_by_synthesized_at = ''
+                  LEFT JOIN graph_clusters gc
+                    ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
+                 WHERE cil.pack = ?
+                   AND cil.current_cluster_id IN ({placeholders})
                 """,
                 (pack, *touched_clusters),
             ).fetchall()
-            connected_crystals = [(r["cluster_id"], r["label"] or "") for r in rows]
+            connected_crystals = [(r["concept_id"], r["label"] or "") for r in rows]
         except sqlite3.OperationalError:
             connected_crystals = []
 
@@ -952,19 +958,27 @@ def _collect_layer3(
         if row["latest_at"] and row["latest_at"] > prior:
             cluster_latest_evergreen[cid] = row["latest_at"]
 
-    # Per-cluster latest synthesis.
+    # Per-cluster latest synthesis.  BL-114: dict keys are the
+    # CURRENT Louvain ``cluster_id`` (resolved via the ledger from
+    # the crystal's stable ``concept_id``).  Keeps these dicts aligned
+    # with ``cluster_latest_evergreen`` above, which is also keyed by
+    # the current cluster_id.  ``AS cluster_id`` preserves the row-
+    # access field name so the unpack below stays unchanged.
     cluster_synth_at: dict[str, str] = {}
     cluster_label: dict[str, str] = {}
     try:
         for row in conn.execute(
             """
-            SELECT cc.cluster_id, MAX(cc.synthesized_at) AS latest_at,
+            SELECT cil.current_cluster_id AS cluster_id,
+                   MAX(cc.synthesized_at) AS latest_at,
                    MAX(gc.label) AS label
               FROM community_crystals cc
+              JOIN concept_identity_ledger cil
+                ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
               LEFT JOIN graph_clusters gc
-                ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+                ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
              WHERE cc.pack = ? AND cc.superseded_by_synthesized_at = ''
-             GROUP BY cc.cluster_id
+             GROUP BY cil.current_cluster_id
             """,
             (pack,),
         ).fetchall():

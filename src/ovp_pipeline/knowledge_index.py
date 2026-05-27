@@ -64,7 +64,7 @@ KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
 #
 # See ``ARCHITECTURE.md`` § Projection schema changes for the
 # review-side rules + PR checklist.
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 9
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 10
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -372,6 +372,130 @@ def _migrate_8_to_9_embedding_hash(conn: sqlite3.Connection, vault_dir: Path) ->
     )
 
 
+def _migrate_9_to_10_concept_identity(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """BL-114 — ``concept_identity_ledger`` + ``community_crystals.concept_id``.
+
+    Pure additive: one new table, two new ``NOT NULL DEFAULT ''`` columns
+    on the existing ``community_crystals`` table, and a one-shot seed
+    where each existing ``cluster_id`` becomes its own ``concept_id``
+    (so behaviour is byte-identical until BL-115's Jaccard matcher
+    starts making the two diverge).
+
+    Idempotent: ``IF NOT EXISTS`` on the table+indexes, duplicate-column
+    guard on the ALTERs, and the UPDATE/INSERT both no-op when the
+    seed already ran.  Safe to re-run against a DB already at the v10
+    shape (e.g. built fresh from ``SCHEMA``).
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS concept_identity_ledger (
+          pack TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          current_cluster_id TEXT NOT NULL DEFAULT '',
+          last_matched_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          lineage_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (pack, concept_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_identity_ledger_current_cluster
+          ON concept_identity_ledger(pack, current_cluster_id);
+        """)
+
+    # Guard against minimal vaults that don't have community_crystals
+    # yet (e.g. v7 DBs in the migration-path tests).  The fresh-DB
+    # build path defines this table via TRUTH_STORE_SCHEMA; this
+    # migration only needs to do work if it already exists.
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='community_crystals'"
+    ).fetchone()
+    if not table_exists:
+        return
+
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(community_crystals)").fetchall()
+    }
+    if "concept_id" not in cols:
+        conn.execute(
+            "ALTER TABLE community_crystals "
+            "ADD COLUMN concept_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "supersede_reason" not in cols:
+        conn.execute(
+            "ALTER TABLE community_crystals "
+            "ADD COLUMN supersede_reason TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_community_crystals_pack_concept "
+        "ON community_crystals(pack, concept_id)"
+    )
+
+    # Seed: every existing crystal becomes its own concept_id.  Skips
+    # rows already backfilled (re-runs become no-ops).
+    conn.execute(
+        "UPDATE community_crystals SET concept_id = cluster_id "
+        "WHERE concept_id = ''"
+    )
+    # Seed the ledger: one row per (pack, cluster_id).  Use the
+    # *latest* synthesized_at of an active crystal as last_matched_at
+    # so BL-115 can compare staleness against it; created_at is the
+    # earliest synthesized_at for that cluster_id so the chain has
+    # a stable origin timestamp.  ``ON CONFLICT DO NOTHING`` makes
+    # the seed idempotent against partial prior runs.
+    conn.execute(
+        """
+        INSERT INTO concept_identity_ledger
+            (pack, concept_id, current_cluster_id, last_matched_at,
+             created_at, lineage_json)
+        SELECT pack,
+               cluster_id AS concept_id,
+               cluster_id AS current_cluster_id,
+               MAX(synthesized_at) AS last_matched_at,
+               MIN(synthesized_at) AS created_at,
+               '[]' AS lineage_json
+          FROM community_crystals
+         GROUP BY pack, cluster_id
+        ON CONFLICT(pack, concept_id) DO NOTHING
+        """
+    )
+
+    # Same auto-seed triggers that fresh DBs get from TRUTH_STORE_SCHEMA.
+    # Adding them here keeps upgraded vaults consistent with the
+    # canonical shape.  ``IF NOT EXISTS`` is idempotent — fresh DBs
+    # (which already ran the SCHEMA script) ignore this; upgrades that
+    # didn't have the triggers now get them.  Two triggers split on
+    # WHEN NEW.concept_id = '' so legacy INSERTs (no concept_id) get
+    # backfilled while BL-115's explicit-concept_id path stays in
+    # control of the ledger row.
+    conn.executescript("""
+        CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+        AFTER INSERT ON community_crystals
+        WHEN NEW.concept_id = ''
+        BEGIN
+          UPDATE community_crystals
+             SET concept_id = NEW.cluster_id
+           WHERE pack = NEW.pack
+             AND cluster_id = NEW.cluster_id
+             AND synthesized_at = NEW.synthesized_at;
+          INSERT OR IGNORE INTO concept_identity_ledger
+              (pack, concept_id, current_cluster_id,
+               last_matched_at, created_at, lineage_json)
+          VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+                  NEW.synthesized_at, NEW.synthesized_at, '[]');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+        AFTER INSERT ON community_crystals
+        WHEN NEW.concept_id <> ''
+        BEGIN
+          INSERT OR IGNORE INTO concept_identity_ledger
+              (pack, concept_id, current_cluster_id,
+               last_matched_at, created_at, lineage_json)
+          VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+                  NEW.synthesized_at, NEW.synthesized_at, '[]');
+        END;
+    """)
+
+
 SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
     6: SchemaMigration(
         from_version=6,
@@ -390,6 +514,12 @@ SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
         kind=SchemaMigrationKind.ADDITIVE,
         reason="PR3 — page_embeddings.chunk_hash for embedding reuse",
         runner=_migrate_8_to_9_embedding_hash,
+    ),
+    9: SchemaMigration(
+        from_version=9,
+        kind=SchemaMigrationKind.ADDITIVE,
+        reason="BL-114 — concept_identity_ledger seeded from community_crystals",
+        runner=_migrate_9_to_10_concept_identity,
     ),
 }
 
