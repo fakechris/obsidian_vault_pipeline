@@ -6,8 +6,9 @@
 //! 3. WritePlan contains exactly 2 ops (one per forwarded record)
 //! 4. EventLog timestamps are strictly monotonic
 //! 5. RunReport is deterministic across runs
+//! 6. Fan-out: one transform feeding two sinks delivers records to both
 
-use ovp_core::fakes::{DropZeroes, FakeSource, VaultPlanSink};
+use ovp_core::fakes::{DropZeroes, FakeBody, FakeSource, VaultPlanSink};
 use ovp_core::*;
 
 const MANIFEST: &str = r#"
@@ -19,7 +20,7 @@ edges = [
 ]
 "#;
 
-fn build_runner(run_id: &str) -> GraphRunner {
+fn build_runner(run_id: &str) -> GraphRunner<FakeBody> {
     let manifest = PipelineManifest::parse(MANIFEST).unwrap();
     let run_id = RunId::new(run_id);
     let mut runner = GraphRunner::new(manifest, run_id.clone());
@@ -57,7 +58,7 @@ fn drop_emits_filter_dropped_event() {
         .collect();
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].0.as_str(), "r-drop-me");
-    assert_eq!(drops[0].1.code, "fake_zero");
+    assert_eq!(drops[0].1.code.as_str(), "transform.fake.zero_payload");
     assert!(drops[0].1.detail.contains("drop-me"));
 }
 
@@ -96,4 +97,43 @@ fn report_is_deterministic_across_runs() {
     let a = build_runner("same-run").run().unwrap();
     let b = build_runner("same-run").run().unwrap();
     assert_eq!(a, b);
+}
+
+const FANOUT_MANIFEST: &str = r#"
+[pipeline]
+nodes = ["fake_source", "fake_transform", "sink_a", "sink_b"]
+edges = [
+  ["fake_source", "fake_transform"],
+  ["fake_transform", "sink_a"],
+  ["fake_transform", "sink_b"],
+]
+"#;
+
+#[test]
+fn fan_out_broadcasts_to_both_sinks() {
+    // Regression test for the per-edge queue bug found in R1 codex review:
+    // one transform → two sinks should deliver records to BOTH sinks, not
+    // just the first one in declaration order.
+    let manifest = PipelineManifest::parse(FANOUT_MANIFEST).unwrap();
+    let run_id = RunId::new("fanout-1");
+    let mut runner: GraphRunner<FakeBody> = GraphRunner::new(manifest, run_id.clone());
+    runner.register_source("fake_source", FakeSource::new("fake_source", run_id.clone()));
+    runner.register_transform("fake_transform", DropZeroes::new("fake_transform"));
+    runner.register_sink("sink_a", VaultPlanSink::new("sink_a"));
+    runner.register_sink("sink_b", VaultPlanSink::new("sink_b"));
+
+    let report = runner.run().unwrap();
+    // 2 records forwarded (1 dropped) × 2 sinks = 4 records reaching sinks.
+    assert_eq!(report.records_forwarded_to_sinks, 4);
+    // 2 sinks × 2 ops each = 4 write ops total.
+    assert_eq!(report.write_plan.len(), 4);
+
+    let mut emitted_by: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for ev in &report.events {
+        if let EventKind::SinkEmitted { step_id, ops } = &ev.kind {
+            *emitted_by.entry(step_id.as_str().to_string()).or_default() += ops;
+        }
+    }
+    assert_eq!(emitted_by.get("sink_a").copied(), Some(2));
+    assert_eq!(emitted_by.get("sink_b").copied(), Some(2));
 }

@@ -50,6 +50,15 @@ Any future search index, embedding store, or denormalized cache must be reconstr
 
 Events record what happened, in order. They are not a business query store.
 
+## Known v0.1 stubs (NOT invariants — explicit deferrals)
+
+These would violate the spirit of #2/#3 if shipped long-term, but are acceptable v0.1 stubs because real domain types don't exist yet:
+
+- **`CanonicalUpsertOp.payload: String`** and **`EventAppendOp.payload: String`** in `crates/ovp-core/src/plan.rs`. The fields are typed-as-string-for-now because there is no domain payload type to put there. Will become generic / sum-typed when `ovp-domain` lands.
+- **No async runtime anywhere.** When the LLM client crate arrives, invariant #6 will be relaxed *for that crate only* (likely via an explicit `[lints]` exception in its `Cargo.toml`), and the gate will be updated. `ovp-core` itself stays sync.
+
+If these stubs are still here three crates from now, the deferral wasn't justified — flag it.
+
 ## File budgets (soft, but enforced by review)
 
 - `ovp-core` total: ≤1200 LOC in v0.1

@@ -4,7 +4,9 @@
 
 Captures a case the other three fixtures don't: **source → enriched raw → STOP**. No interpretation file was produced. This is real legacy behavior, not an oversight in fixture capture.
 
-If the new system silently produces an interpretation for every input, it's making a different product than the legacy system was — that may be the right call, but it should be a **deliberate** decision documented somewhere, not an accidental side effect of "we ran the interpreter on everything because it was easier."
+The contract here is **single-outcome**: for v0.1, "terminal raw, no interpretation" is the only legal outcome. The new system's github-handling path must route the record to a terminal state with an observable event, and produce no `_深度解读.md` and no WriteOp targeting `20-Areas/`.
+
+Whether the new system *eventually* grows a GitHub interpreter is a **post-v0.1 product decision**, separate from this contract. See "Out of scope for v0.1" at the bottom.
 
 ## Source
 
@@ -20,38 +22,29 @@ If the new system silently produces an interpretation for every input, it's maki
 | Role | Path in legacy vault |
 |---|---|
 | Raw input | `50-Inbox/03-Processed/2026-05/2026-05-04_jordanbaird_Ice.md` |
-| Interpretation | **none** |
+| Interpretation | **none** (terminal state) |
 
-A search across the entire vault (`find ovp-vault -name '*Ice*' -o -name '*jordanbaird*'`) returned only the raw + a pinboard archive copy. No `_深度解读.md` exists.
+A vault-wide search returned only the raw + a pinboard archive copy. No `_深度解读.md` exists or is expected.
 
 ## Contract: MUST preserve
 
 - `SourceKind::GithubRepo` as a first-class variant of `SourceBody`.
-- Raw github frontmatter fields are typed, not optional flags on a generic struct: `github_owner`, `github_repo`, `github_stars`, `deepwiki_section_count`, `source_tier`.
-- The pipeline must be able to **route an input to a terminal state with no interpretation** and emit an event explaining why. Whatever the routing decision is (`StopAtRaw`, `NotImplemented`, `LowValue`), it must be observable in the event log.
+- Raw github frontmatter is typed, not optional flags on a generic struct: `github_owner`, `github_repo`, `github_stars: u32`, `deepwiki_section_count: u32`, `source_tier`.
+- Routing must emit an explicit terminal event (`SourceRoutedToTerminalRaw` or similar) when a github record reaches the end of its v0.1 pipeline. Silent "no interpretation produced" is not acceptable.
+- The pipeline emits **zero WriteOps targeting `20-Areas/`** for this input — only Inbox-side writes are allowed.
 
 ## Contract: SHOULD preserve
 
-- The deepwiki section structure within the raw body — these sections are pre-extracted by an upstream enricher and contain useful structured content (Architecture, Modules, etc.). Re-extracting them in the new system would be wasteful.
-- `github_stars` as a number, not a string.
+- The deepwiki section structure within the raw body is pre-extracted by an upstream enricher. The new system should preserve it (not re-extract).
+- `github_stars` as a number.
 
 ## Contract: MAY break
 
-- The decision to **not interpret** github repos. The new system MAY add a `GithubRepoInterpreter` that produces a project-overview note. This is **net-new behavior**, not a regression — make it explicit in the new system's manifest by including a routed `github_interpreter` node.
+- Legacy raw's `tags: [menu]` is incidental noise from the clipping side. New system may use a richer tag scheme.
+- Exact directory placement of the raw (e.g. `50-Inbox/03-Processed/` vs a new layout).
 
-## Open questions (the important ones)
+## Out of scope for v0.1 (post-v0.1 product question)
 
-1. **Was "no interpretation" deliberate or accidental in the legacy system?** Best guess from looking at code organization and the existence of `auto_github_processor.py` in the legacy `ovp_pipeline`: the github processor was implemented for ingestion + enrichment, but the interpretation step was lower priority and never reached most repos. So this is closer to "accidental" / "backlog" than "designed".
-2. **What would a github interpretation look like?** Suggested shape:
-   - 一句话定义 (this repo's purpose, 1 sentence)
-   - 核心模块 (top-level architecture from deepwiki sections)
-   - 关键代码模式 (recurring patterns worth learning from)
-   - 适用场景 (when to use this vs alternatives)
-   - 不适用场景 (anti-patterns / when to avoid)
-   - 相关项目 (concept_candidates pointing at related repos/concepts)
+Whether to **build** a GitHub interpreter is a product decision, not a contract clause. If the new system grows one later, it would produce a structured project-overview note (suggested shape: 一句话定义 / 核心模块 / 关键代码模式 / 适用场景 / 不适用场景 / 相关项目). That decision is deferred — it doesn't belong in this fixture's MUST/SHOULD/MAY contract.
 
-   This is shorter than article/paper interpretations because most repos are tools, not knowledge contributions.
-
-## Recommendation for the new system
-
-Implement github interpretation. The legacy gap is a real product gap, not a desired feature. Mark this fixture as **MAY-IMPROVE** — the new system should produce more than the legacy system did here, but be honest about what it's adding.
+The reason the legacy system has no github interpretation is best-guessed as backlog (not deliberate design); see `fixtures/SURVEY.md` open questions.

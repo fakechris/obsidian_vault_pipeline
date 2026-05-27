@@ -5,7 +5,7 @@
 Demonstrates that papers are a **fundamentally different document kind** from articles, not just a tag variation:
 
 - **Raw frontmatter** has paper-specific fields (`arxiv_id`, `source_authors` as list, `source_published_at`, `arxiv_categories`).
-- **Interpretation structure** is 9-section (元信息 / 一句话核心贡献 / 研究背景 / 方法 / 实验 / 局限 / 影响 / 相关工作 / 总结) and **table-heavy** — vs articles' 6-dimension prose structure.
+- **Interpretation structure** is 10 numbered sections (`元信息` / `一句话核心贡献` / `研究背景与动机` / `方法详解` / `实验设计` / `核心洞察` / `方法复现指南` / `局限性与未来工作` / `关联研究` / `个人思考`) plus a trailing references block. It is **table-heavy** — vs articles' 6-dimension prose structure.
 - **Interpretation frontmatter is sparse**: only 5 fields. No `canonical_concepts`, no `concept_candidates`, no `area`, no `pipeline_run_id`. Papers appear to skip the absorb step entirely.
 
 The new system must model papers as a separate `SourceKind::Paper` with its own interpreter, not a parameterization of the article interpreter.
@@ -26,7 +26,7 @@ Note: the interp was found in **archive**, not in the live `20-Areas/AI-Research
 - `SourceKind::Paper` as a first-class variant of `SourceBody`. Routing must dispatch papers to a paper-specific interpreter.
 - `arxiv_id` round-trips from raw → interp.
 - `source_authors` must remain a typed `Vec<Author>`, not flattened to a comma-separated string in the public API. (The legacy interp does flatten it in the rendered Markdown table; that's a rendering detail, not the data model.)
-- The 9-section paper structure is the interpreter's output contract. Section names can be renamed (e.g. English vs Chinese) but the set must be present.
+- The 10-section paper structure is the interpreter's output contract. Section names can be renamed (e.g. English vs Chinese) but the set must be present.
 - The interp's `date` field is the **paper's publication date**, not the interpretation creation date. (Conflicting convention with articles — articles use interpretation date. New system should pick one and stick to it. **Recommendation: separate `source_date` and `interpreted_at` fields.**)
 
 ## Contract: SHOULD preserve

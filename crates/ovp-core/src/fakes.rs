@@ -1,16 +1,22 @@
 //! In-tree fake filters used by tests and `ovp-next run --fake`.
 //!
-//! Available only when the `fakes` feature is enabled. The set is
-//! deliberately small — these exist to exercise the runner, not to
-//! be a public extension point.
+//! Available only when the `fakes` feature is enabled. `FakeBody` is the
+//! concrete body type the v0.1 demo pipeline uses — domain crates will
+//! ship their own body enum.
+
+use serde::{Deserialize, Serialize};
 
 use crate::filter::{
     DropReason, FilterDecision, Sink, SinkOutput, Source, SourceOutput, Transform,
 };
 use crate::plan::{ContentHash, OpId, VaultCreateOp, VaultPath, WriteOp};
-use crate::record::{
-    FakeBody, Record, RecordBody, RecordId, RecordMeta, RunId, StepId,
-};
+use crate::record::{Record, RecordId, RecordMeta, RunId, StepId};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FakeBody {
+    pub label: String,
+    pub payload: i64,
+}
 
 pub struct FakeSource {
     step: StepId,
@@ -24,9 +30,9 @@ impl FakeSource {
     }
 }
 
-impl Source for FakeSource {
+impl Source<FakeBody> for FakeSource {
     fn step_id(&self) -> &StepId { &self.step }
-    fn produce(&mut self) -> SourceOutput {
+    fn produce(&mut self) -> SourceOutput<FakeBody> {
         if self.emitted {
             return SourceOutput::Exhausted;
         }
@@ -34,7 +40,7 @@ impl Source for FakeSource {
         let mk = |label: &str, payload: i64, seq: u64, run_id: RunId, step: StepId| {
             Record::new(
                 RecordId::new(format!("r-{label}")),
-                RecordBody::Fake(FakeBody { label: label.into(), payload }),
+                FakeBody { label: label.into(), payload },
                 RecordMeta { run_id, seq },
             )
             .with_step(step, "produced")
@@ -57,17 +63,16 @@ impl DropZeroes {
     }
 }
 
-impl Transform for DropZeroes {
+impl Transform<FakeBody> for DropZeroes {
     fn step_id(&self) -> &StepId { &self.step }
-    fn process(&mut self, record: Record) -> FilterDecision {
-        match &record.body {
-            RecordBody::Fake(b) if b.payload == 0 => FilterDecision::Drop(DropReason::new(
-                "fake_zero",
-                format!("payload was 0 for `{}`", b.label),
-            )),
-            RecordBody::Fake(_) => FilterDecision::Forward(vec![
-                record.with_step(self.step.clone(), "forwarded"),
-            ]),
+    fn process(&mut self, record: Record<FakeBody>) -> FilterDecision<FakeBody> {
+        if record.body.payload == 0 {
+            FilterDecision::Drop(DropReason::new(
+                "transform.fake.zero_payload",
+                format!("payload was 0 for `{}`", record.body.label),
+            ))
+        } else {
+            FilterDecision::Forward(vec![record.with_step(self.step.clone(), "forwarded")])
         }
     }
 }
@@ -82,15 +87,11 @@ impl VaultPlanSink {
     }
 }
 
-impl Sink for VaultPlanSink {
+impl Sink<FakeBody> for VaultPlanSink {
     fn step_id(&self) -> &StepId { &self.step }
-    fn consume(&mut self, record: Record) -> SinkOutput {
-        let (body, path) = match &record.body {
-            RecordBody::Fake(b) => (
-                format!("# {}\n\npayload: {}\n", b.label, b.payload),
-                VaultPath::new(format!("50-Inbox/{}.md", b.label)),
-            ),
-        };
+    fn consume(&mut self, record: Record<FakeBody>) -> SinkOutput {
+        let body = format!("# {}\n\npayload: {}\n", record.body.label, record.body.payload);
+        let path = VaultPath::new(format!("50-Inbox/{}.md", record.body.label));
         let op = WriteOp::VaultCreate(VaultCreateOp {
             op_id: OpId::new(format!("op-{}", record.id.as_str())),
             path,

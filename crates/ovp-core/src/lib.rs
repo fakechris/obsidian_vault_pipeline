@@ -16,13 +16,13 @@ pub mod fakes;
 pub use error::{CoreError, GraphError, ManifestError};
 pub use event::{Event, EventKind, EventLog, EventTs};
 pub use filter::{
-    CompleteReason, DropReason, FilterDecision, FilterError, Sink, SinkOutput, Source,
+    CompleteReason, DropReason, FilterDecision, FilterError, ReasonCode, Sink, SinkOutput, Source,
     SourceOutput, Transform,
 };
+pub use graph::{GraphRunner, RunReport};
+pub use manifest::{PipelineBody, PipelineManifest};
 pub use plan::{
     CanonicalKey, CanonicalUpsertOp, ContentHash, EventAppendOp, OpId, VaultCreateOp, VaultPath,
     VaultUpdateOp, WriteOp, WritePlan,
 };
-pub use graph::{GraphRunner, RunReport};
-pub use manifest::{PipelineBody, PipelineManifest};
-pub use record::{FakeBody, Provenance, Record, RecordBody, RecordId, RecordMeta, RunId, StepId};
+pub use record::{Provenance, Record, RecordId, RecordMeta, RunId, StepId};

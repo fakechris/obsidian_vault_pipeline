@@ -1,20 +1,54 @@
 use serde::{Deserialize, Serialize};
 
-use crate::record::{Record, RecordId, StepId};
+use crate::record::{Record, StepId};
+
+/// Validated drop/error code: a dotted namespace string like
+/// `transform.article.low_quality` or `source.inbox.unreadable`.
+///
+/// The newtype prevents free-form strings creeping in. Plugins and domain
+/// crates extend the code space by namespacing under their own prefix —
+/// we deliberately don't seal this into an enum.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ReasonCode(String);
+
+impl ReasonCode {
+    /// Construct a reason code. Requires at least one `.` separator and
+    /// non-empty segments — e.g. `transform.article.low_quality`. Panics
+    /// on invalid input because reason codes are always literal in source.
+    pub fn new(s: &str) -> Self {
+        Self::try_new(s).unwrap_or_else(|e| panic!("invalid ReasonCode `{s}`: {e}"))
+    }
+
+    pub fn try_new(s: &str) -> Result<Self, &'static str> {
+        if s.is_empty() {
+            return Err("empty code");
+        }
+        if !s.contains('.') {
+            return Err("missing namespace separator `.`");
+        }
+        if s.split('.').any(|seg| seg.is_empty()) {
+            return Err("empty segment between dots");
+        }
+        if !s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_') {
+            return Err("only [a-z0-9._] allowed");
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str { &self.0 }
+}
 
 /// Why a transform refused to forward a Record.
-///
-/// `code` is stable, short, machine-readable (e.g. `"quality_below_threshold"`).
-/// `detail` is human prose for the event log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DropReason {
-    pub code: String,
+    pub code: ReasonCode,
     pub detail: String,
 }
 
 impl DropReason {
-    pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { code: code.into(), detail: detail.into() }
+    pub fn new(code: &str, detail: impl Into<String>) -> Self {
+        Self { code: ReasonCode::new(code), detail: detail.into() }
     }
 }
 
@@ -28,58 +62,45 @@ impl CompleteReason {
     pub fn new(note: impl Into<String>) -> Self { Self { note: note.into() } }
 }
 
-/// Filter-side errors. These are surfaced as `FilterDecision::Error` and
-/// recorded in the event log; they do not panic the runner unless escalated
-/// by the application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilterError {
-    pub code: String,
+    pub code: ReasonCode,
     pub detail: String,
 }
 
 impl FilterError {
-    pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { code: code.into(), detail: detail.into() }
+    pub fn new(code: &str, detail: impl Into<String>) -> Self {
+        Self { code: ReasonCode::new(code), detail: detail.into() }
     }
 }
 
-/// What a transform decided to do with a Record.
-///
-/// Drops, completions, and errors are first-class — never "yield nothing and
-/// hope the runner notices."
+/// What a transform decided to do with a Record. All five outcomes are
+/// first-class; the runner is required to log each one to the event log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
-pub enum FilterDecision {
-    /// Forward zero or more records downstream. The empty Vec is legal but
-    /// strongly discouraged — prefer `Drop` with a reason.
-    Forward(Vec<Record>),
-    /// Refuse to forward this record. Must include a reason.
+pub enum FilterDecision<B> {
+    Forward(Vec<Record<B>>),
     Drop(DropReason),
-    /// One-record fan-out into multiple downstream records.
-    /// Semantically the same as `Forward` with len > 1, but explicit at
-    /// the call site for readability.
-    FanOut(Vec<Record>),
-    /// Transform is done and will not produce more output for the rest
-    /// of the run.
+    FanOut(Vec<Record<B>>),
     Complete(CompleteReason),
-    /// Transform errored on this record.
     Error(FilterError),
 }
 
 /// What a source produced this tick.
+///
+/// v0.1 keeps this synchronous: either a source has records, or it's
+/// exhausted, or it errored. There is no "idle this tick" state —
+/// streaming/polling sources will reach this layer via an async adapter
+/// in a later crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceOutput {
-    /// One or more records this tick.
-    Records(Vec<Record>),
-    /// No record this tick, but the source is still alive.
-    Idle,
-    /// Source is done forever.
+pub enum SourceOutput<B> {
+    Records(Vec<Record<B>>),
     Exhausted,
-    /// Source errored.
     Error(FilterError),
 }
 
-/// What a sink emitted for this record.
+/// What a sink emitted for this record. WriteOps and extra events are
+/// not generic — they live downstream of the typed pipeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SinkOutput {
     pub plan_ops: Vec<crate::plan::WriteOp>,
@@ -90,30 +111,24 @@ impl SinkOutput {
     pub fn empty() -> Self { Self { plan_ops: Vec::new(), extra_events: Vec::new() } }
 }
 
-/// A node that produces Records from the outside world.
-pub trait Source {
+/// Produces Records from the outside world.
+pub trait Source<B> {
     fn step_id(&self) -> &StepId;
-    fn produce(&mut self) -> SourceOutput;
+    fn produce(&mut self) -> SourceOutput<B>;
 }
 
-/// A pure node: Record in, FilterDecision out. No I/O, no Store access.
-pub trait Transform {
+/// Pure: Record in, FilterDecision out. No I/O, no Store access, no spawned processes.
+pub trait Transform<B> {
     fn step_id(&self) -> &StepId;
-    fn process(&mut self, record: Record) -> FilterDecision;
+    fn process(&mut self, record: Record<B>) -> FilterDecision<B>;
 }
 
-/// A node that consumes records and emits WriteOps (no actual I/O).
-pub trait Sink {
+/// Consumes records, emits WriteOps. Real side effects belong to PlanApplier,
+/// not Sink — Sink only describes what *should* happen.
+pub trait Sink<B> {
     fn step_id(&self) -> &StepId;
-    fn consume(&mut self, record: Record) -> SinkOutput;
-    /// Called once after all records have been processed. Allows the sink
-    /// to flush any buffered ops (e.g. an aggregated index update).
+    fn consume(&mut self, record: Record<B>) -> SinkOutput;
     fn finish(&mut self) -> SinkOutput {
         SinkOutput::empty()
-    }
-    /// Bookkeeping: used by the runner to attribute dropped/errored records
-    /// to a downstream sink that never saw them. Default: just the step_id.
-    fn would_have_consumed(&self, _record_id: &RecordId) -> bool {
-        true
     }
 }

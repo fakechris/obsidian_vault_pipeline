@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::{CoreError, GraphError};
-use crate::event::{Event, EventKind, EventLog, EventTs};
+use crate::event::{Event, EventKind, EventLog};
 use crate::filter::{
     FilterDecision, Sink, SinkOutput, Source, SourceOutput, Transform,
 };
@@ -10,13 +10,13 @@ use crate::plan::WritePlan;
 use crate::record::{Record, RunId};
 
 /// A registered node in the graph. Owns the underlying trait object.
-enum Node {
-    Source(Box<dyn Source>),
-    Transform(Box<dyn Transform>),
-    Sink(Box<dyn Sink>),
+enum Node<B> {
+    Source(Box<dyn Source<B>>),
+    Transform(Box<dyn Transform<B>>),
+    Sink(Box<dyn Sink<B>>),
 }
 
-impl Node {
+impl<B> Node<B> {
     fn kind_str(&self) -> &'static str {
         match self {
             Node::Source(_) => "source",
@@ -39,35 +39,37 @@ pub struct RunReport {
 
 /// In-memory single-threaded GraphRunner.
 ///
-/// v0.1 model:
-/// - Sources are drained to exhaustion before transforms run.
-/// - Topology is walked in topological order. Each non-source node
-///   processes all records currently sitting in its upstream node's
-///   output queue.
-/// - Sinks emit WriteOps + extra Events; everything ends up in one
-///   WritePlan and one EventLog.
-/// - Determinism: nodes run in manifest declaration order on ties;
-///   records are processed FIFO within a node.
-pub struct GraphRunner {
+/// Records flow along **per-edge queues** keyed by `(upstream_name,
+/// downstream_name)`. When a node produces output, the runner copies the
+/// output into every outgoing edge's queue (broadcast). When a node runs,
+/// it drains all of its incoming edges' queues, concatenating in upstream
+/// declaration order.
+///
+/// Determinism: nodes execute in topological order, ties broken by
+/// manifest declaration order; records within a node are processed FIFO.
+///
+/// `B` is the record body type chosen by the application — see
+/// `Record<B>` in `record.rs`.
+pub struct GraphRunner<B> {
     manifest: PipelineManifest,
-    nodes: HashMap<String, Node>,
+    nodes: HashMap<String, Node<B>>,
     run_id: RunId,
 }
 
-impl GraphRunner {
+impl<B: Clone> GraphRunner<B> {
     pub fn new(manifest: PipelineManifest, run_id: RunId) -> Self {
         Self { manifest, nodes: HashMap::new(), run_id }
     }
 
-    pub fn register_source(&mut self, name: impl Into<String>, src: impl Source + 'static) {
+    pub fn register_source(&mut self, name: impl Into<String>, src: impl Source<B> + 'static) {
         self.nodes.insert(name.into(), Node::Source(Box::new(src)));
     }
 
-    pub fn register_transform(&mut self, name: impl Into<String>, tx: impl Transform + 'static) {
+    pub fn register_transform(&mut self, name: impl Into<String>, tx: impl Transform<B> + 'static) {
         self.nodes.insert(name.into(), Node::Transform(Box::new(tx)));
     }
 
-    pub fn register_sink(&mut self, name: impl Into<String>, snk: impl Sink + 'static) {
+    pub fn register_sink(&mut self, name: impl Into<String>, snk: impl Sink<B> + 'static) {
         self.nodes.insert(name.into(), Node::Sink(Box::new(snk)));
     }
 
@@ -82,7 +84,14 @@ impl GraphRunner {
         // 2. Resolve topo order.
         let topo = self.manifest.topo_order()?;
 
-        // 3. Build upstream adjacency: who feeds each node?
+        // 3. Build adjacency. `downstream[me]` is the ordered list of nodes me feeds.
+        //    `upstream[me]` is the ordered list of nodes feeding me.
+        let mut downstream: HashMap<String, Vec<String>> = self
+            .manifest
+            .nodes()
+            .iter()
+            .map(|n| (n.clone(), Vec::new()))
+            .collect();
         let mut upstream: HashMap<String, Vec<String>> = self
             .manifest
             .nodes()
@@ -90,6 +99,7 @@ impl GraphRunner {
             .map(|n| (n.clone(), Vec::new()))
             .collect();
         for [from, to] in self.manifest.edges() {
+            downstream.entry(from.clone()).or_default().push(to.clone());
             upstream.entry(to.clone()).or_default().push(from.clone());
         }
 
@@ -116,18 +126,21 @@ impl GraphRunner {
         log.record(run_id.clone(), EventKind::RunStarted);
 
         let mut write_plan = WritePlan::new(run_id.clone());
-        let mut node_output: HashMap<String, Vec<Record>> = HashMap::new();
+        // Per-edge queues: keyed by (from, to). A node's output is
+        // *broadcast* (cloned) into each outgoing edge queue.
+        let mut edge_queue: HashMap<(String, String), Vec<Record<B>>> = HashMap::new();
         let mut records_seen: u64 = 0;
         let mut records_forwarded: u64 = 0;
         let mut records_dropped: u64 = 0;
 
         for name in &topo {
             // Re-take node ownership so we can mutate it while consulting
-            // sibling state (upstream queues live in node_output).
+            // sibling state (the edge queues live alongside).
             let node = self.nodes.remove(name).expect("checked above");
+            let outs = downstream.get(name).cloned().unwrap_or_default();
             match node {
                 Node::Source(mut src) => {
-                    let mut produced: Vec<Record> = Vec::new();
+                    let mut produced: Vec<Record<B>> = Vec::new();
                     loop {
                         match src.produce() {
                             SourceOutput::Records(rs) => {
@@ -138,7 +151,6 @@ impl GraphRunner {
                                     EventKind::SourceProduced { step_id: src.step_id().clone(), count: n },
                                 );
                             }
-                            SourceOutput::Idle => break,
                             SourceOutput::Exhausted => {
                                 log.record(
                                     run_id.clone(),
@@ -159,18 +171,29 @@ impl GraphRunner {
                             }
                         }
                     }
-                    node_output.insert(name.clone(), produced);
+                    broadcast(name, &outs, produced, &mut edge_queue);
                     self.nodes.insert(name.clone(), Node::Source(src));
                 }
                 Node::Transform(mut tx) => {
-                    let inputs = gather_inputs(name, &upstream, &mut node_output);
-                    let mut outputs: Vec<Record> = Vec::new();
+                    let inputs = gather_inputs(name, &upstream, &mut edge_queue);
+                    let mut outputs: Vec<Record<B>> = Vec::new();
                     let mut completed = false;
                     for rec in inputs {
                         if completed {
                             // Transform declared itself done; remaining records
-                            // are dropped silently (this is intentional — completion
-                            // ends the transform's life for the rest of the run).
+                            // for this run are intentionally dropped with an event.
+                            log.record(
+                                run_id.clone(),
+                                EventKind::FilterDropped {
+                                    record_id: rec.id.clone(),
+                                    step_id: tx.step_id().clone(),
+                                    reason: crate::filter::DropReason::new(
+                                        "runner.transform.post_complete",
+                                        "record arrived after transform declared complete",
+                                    ),
+                                },
+                            );
+                            records_dropped += 1;
                             continue;
                         }
                         records_seen += 1;
@@ -227,11 +250,11 @@ impl GraphRunner {
                             }
                         }
                     }
-                    node_output.insert(name.clone(), outputs);
+                    broadcast(name, &outs, outputs, &mut edge_queue);
                     self.nodes.insert(name.clone(), Node::Transform(tx));
                 }
                 Node::Sink(mut snk) => {
-                    let inputs = gather_inputs(name, &upstream, &mut node_output);
+                    let inputs = gather_inputs(name, &upstream, &mut edge_queue);
                     let mut total_ops: u64 = 0;
                     for rec in inputs {
                         records_forwarded += 1;
@@ -281,6 +304,7 @@ impl GraphRunner {
     }
 
     pub fn manifest(&self) -> &PipelineManifest { &self.manifest }
+
     pub fn registered_kinds(&self) -> Vec<(String, &'static str)> {
         let mut v: Vec<(String, &'static str)> = self
             .nodes
@@ -292,23 +316,44 @@ impl GraphRunner {
     }
 }
 
-fn gather_inputs(
+/// Broadcast a node's output into every outgoing edge's queue.
+/// If the node has zero downstream edges (terminal sink), the records are
+/// effectively dropped — that case is only legal for `Sink` nodes, and the
+/// runner relies on the `Sink` having already consumed them.
+fn broadcast<B: Clone>(
+    me: &str,
+    downstream: &[String],
+    output: Vec<Record<B>>,
+    edge_queue: &mut HashMap<(String, String), Vec<Record<B>>>,
+) {
+    if downstream.is_empty() || output.is_empty() {
+        return;
+    }
+    // The last downstream takes the original Vec; earlier ones get clones.
+    // This keeps one allocation in the linear case (1 downstream → 0 clones).
+    let mut iter = downstream.iter();
+    let last = iter.next_back().expect("non-empty");
+    for d in iter {
+        let q = edge_queue.entry((me.to_string(), d.clone())).or_default();
+        q.extend(output.iter().cloned());
+    }
+    let q = edge_queue.entry((me.to_string(), last.clone())).or_default();
+    q.extend(output);
+}
+
+/// Drain all incoming edge queues for `me`, in upstream-declaration order.
+fn gather_inputs<B>(
     me: &str,
     upstream: &HashMap<String, Vec<String>>,
-    node_output: &mut HashMap<String, Vec<Record>>,
-) -> Vec<Record> {
+    edge_queue: &mut HashMap<(String, String), Vec<Record<B>>>,
+) -> Vec<Record<B>> {
     let mut out = Vec::new();
     if let Some(ups) = upstream.get(me) {
         for u in ups {
-            if let Some(q) = node_output.get_mut(u) {
+            if let Some(q) = edge_queue.get_mut(&(u.clone(), me.to_string())) {
                 out.append(q);
             }
         }
     }
     out
 }
-
-// Suppress unused EventTs lint via re-export — we deliberately keep EventTs in
-// the public API for downstream consumers even though the runner uses EventLog.
-#[allow(dead_code)]
-fn _evtts_used(_: EventTs) {}

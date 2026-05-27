@@ -1,0 +1,65 @@
+# Machine-readable contract for article_clean fixture.
+# See notes.md for prose explanation. Test harness in ovp-domain (C) will
+# consume this file directly.
+version: 1
+
+terminal_state: interpretation_produced
+expected_artifacts:
+  - kind: interpretation
+    path_pattern: "20-Areas/AI-Research/Topics/<YYYY-MM>/<YYYY-MM-DD>_<title>_深度解读.md"
+
+must:
+  - field: title
+    op: equals
+    value: "A Guide to Agent-native Product Management"
+  - field: source
+    op: equals
+    value: "https://every.to/guides/ai-product-management-guide"
+    notes: "tracker query (?source=post_button) must be stripped"
+  - field: type
+    op: equals
+    value: article
+  - field: area
+    op: equals
+    value: ai
+  - field: canonical_concepts
+    op: type
+    value: list_of_strings
+  - field: concept_candidates
+    op: type
+    value: list_of_strings
+  - field: concept_candidates
+    op: length_gte
+    value: 10
+  - body_section:
+      op: contains_one_of
+      values: ["一句话定义", "Definition"]
+  - body_section:
+      op: contains_one_of
+      values: ["详细解释", "Explanation"]
+  - body_section:
+      op: contains_one_of
+      values: ["行动建议", "Actionable"]
+
+should:
+  - field: tags
+    op: non_empty
+  - field: canonical_concepts
+    op: length_in_range
+    value: [0, 3]
+    notes: "happy-path case has 0; allow up to 3 if absorb resolves more"
+  - field: concept_candidates
+    op: length_in_range
+    value: [8, 20]
+
+may_break:
+  - field: pipeline_run_id
+  - field: link_resolution_status
+  - field: link_resolution_version
+  - field: original_note_type
+  - field: status
+  - field: author
+    notes: "legacy dropped Marcus Moretti; new system should preserve. Either value passes."
+
+known_anomalies:
+  - "Source raw `author` is `[[Marcus Moretti]]` (wiki-linked); legacy interp dropped it. The new system should preserve as plain string `Marcus Moretti` — this is a bug fix, not a contract break."

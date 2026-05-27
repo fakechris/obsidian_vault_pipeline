@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+/// Stable identifier for a Record within a run. Two records with the
+/// same RecordId in the same run refer to the same logical document.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RecordId(pub String);
 
@@ -36,16 +38,21 @@ pub struct RecordMeta {
     pub seq: u64,
 }
 
+/// A typed envelope around a body. `B` is the domain-specific body type
+/// chosen by the consumer crate — ovp-core itself is body-agnostic.
+///
+/// Domain crates instantiate `Record<DomainBody>`; tests/fakes use
+/// `Record<FakeBody>`. The runner is generic and never inspects `B`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Record {
+pub struct Record<B> {
     pub id: RecordId,
-    pub body: RecordBody,
+    pub body: B,
     pub meta: RecordMeta,
     pub provenance: Vec<Provenance>,
 }
 
-impl Record {
-    pub fn new(id: RecordId, body: RecordBody, meta: RecordMeta) -> Self {
+impl<B> Record<B> {
+    pub fn new(id: RecordId, body: B, meta: RecordMeta) -> Self {
         Self { id, body, meta, provenance: Vec::new() }
     }
 
@@ -53,21 +60,4 @@ impl Record {
         self.provenance.push(Provenance { step_id, note: note.into() });
         self
     }
-}
-
-/// Sealed body of a Record.
-///
-/// v0.1 only contains a `Fake` variant for runner validation.
-/// Real domain variants (SourceDoc, InterpretedDoc, CandidateNote,
-/// CanonicalNote, Query) come in R3+ and live in a separate `ovp-domain` crate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RecordBody {
-    Fake(FakeBody),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FakeBody {
-    pub label: String,
-    pub payload: i64,
 }

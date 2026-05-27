@@ -14,13 +14,46 @@ Every fixture is a directory containing:
 <fixture_name>/
 ├── input.md              # Raw input as the legacy pipeline received it.
 ├── expected/
-│   ├── interpretation.md # Full interp file the legacy pipeline emitted.
-│   ├── frontmatter.yaml  # Just the interp's frontmatter, isolated for assertions.
+│   ├── contract.yaml     # Machine-readable MUST / SHOULD / MAY-break assertions.
+│   ├── interpretation.md # Full interp file the legacy pipeline emitted (when one exists).
+│   ├── frontmatter.yaml  # Just the interp's frontmatter, isolated for human inspection.
 │   └── ...               # Other expected artifacts when applicable.
-└── notes.md              # MUST / SHOULD / MAY break contract for this fixture.
+└── notes.md              # Prose explanation of the contract, why this fixture exists.
 ```
 
-The `expected/` directory is the **target**. The new system's pipeline should be able to take `input.md` and produce something that satisfies the `notes.md` MUST clauses for that fixture, ideally meeting the SHOULD clauses too. MAY-break clauses are explicit permission to diverge.
+The `expected/` directory is the **target**. The new system's pipeline should be able to take `input.md` and produce something that satisfies the `contract.yaml` MUST clauses for that fixture, ideally meeting the SHOULD clauses too. MAY-break clauses are explicit permission to diverge.
+
+`notes.md` is for humans; `contract.yaml` is for the test harness. They should never disagree — if they do, `contract.yaml` is canonical.
+
+### contract.yaml shape
+
+A small schema (the four current contract files are the authoritative examples):
+
+```yaml
+version: 1
+terminal_state: interpretation_produced | terminal_raw
+expected_artifacts:
+  - kind: interpretation
+    path_pattern: "..."
+forbidden_artifacts:
+  - kind: ...
+    path_glob: "..."
+must:
+  - field: <name>
+    op: equals | contains | matches_regex | matches_one_of | type | non_empty | length_gte | length_in_range | gte | not_equals
+    value: ...
+  - body_section: { op: contains_one_of, values: [...] }
+  - body_sections_present: { op: at_least, sections: [...] }
+  - event_emitted: { kind: ... }
+  - source_kind: article | paper | github_repo
+  - writeplan_constraint: { forbidden_path_prefix: ... }
+  - utf8_clean: { paths: [...] }
+should: [ ... ]
+may_break: [ ... ]
+known_anomalies: [ ... ]
+```
+
+The ops above are deliberately limited — fixture tests should be cheap to write and obvious to read. If you need a new op, add it to one fixture, justify it in `notes.md`, and propagate.
 
 ## Contract levels
 

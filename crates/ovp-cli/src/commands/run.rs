@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ovp_core::fakes::{DropZeroes, FakeSource, VaultPlanSink};
+use ovp_core::fakes::{DropZeroes, FakeBody, FakeSource, VaultPlanSink};
 use ovp_core::{GraphRunner, PipelineManifest, RunId};
 
 use crate::CliError;
@@ -15,7 +15,7 @@ pub fn run(manifest_path: PathBuf, run_id_str: String, out_dir: PathBuf) -> Resu
     // v0.1 wiring: registers the in-tree fakes against the three node names
     // declared in `manifests/fake.pipeline.toml`. Real wiring (post-v0.1)
     // will be driven by the manifest itself + a node-kind registry.
-    let mut runner = GraphRunner::new(manifest, run_id.clone());
+    let mut runner: GraphRunner<FakeBody> = GraphRunner::new(manifest, run_id.clone());
     runner.register_source("fake_source", FakeSource::new("fake_source", run_id.clone()));
     runner.register_transform("fake_transform", DropZeroes::new("fake_transform"));
     runner.register_sink("fake_sink", VaultPlanSink::new("fake_sink"));

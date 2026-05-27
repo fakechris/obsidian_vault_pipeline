@@ -1,0 +1,55 @@
+version: 1
+
+terminal_state: interpretation_produced
+expected_artifacts:
+  - kind: interpretation
+    path_pattern: "20-Areas/AI-Research/Topics/<YYYY-MM>/<YYYY-MM-DD>_<title>_深度解读.md"
+
+must:
+  - field: source
+    op: not_equals
+    value: "https://x.com/dotey/status/2051057428075053120"
+    notes: "Twitter clipping must be resolved to the underlying article"
+  - field: source
+    op: matches_one_of
+    values:
+      - "https://danielmiessler.com/blog/most-companies-arent-ready-for-ai"
+      - "https://danielmiessler.com/blog/most-companies-arent-ready-for-ai/"
+  - field: type
+    op: equals
+    value: article
+  - field: canonical_concepts
+    op: type
+    value: list_of_strings
+  - field: canonical_concepts
+    op: length_gte
+    value: 1
+    notes: "two-tier extraction proves the absorb step runs"
+  - field: concept_candidates
+    op: type
+    value: list_of_strings
+  - field: concept_candidates
+    op: length_gte
+    value: 1
+  - event_emitted:
+      kind: source_resolution
+      notes: "the canonical-URL rewrite from Twitter → article must be observable"
+  - utf8_clean:
+      paths: [title, tags, body, filename]
+
+should:
+  - field: title
+    op: non_empty
+    notes: "interp title is a reframing, not a translation — content style is taste"
+
+may_break:
+  - field: pipeline_run_id
+  - field: original_note_type
+  - field: link_resolution_status
+  - field: link_resolution_version
+  - field: status
+  - field: tags
+    notes: "tag set can differ run to run with LLM rewrites; non-empty + thematic is enough"
+
+known_anomalies:
+  - "Legacy interp embeds a Chinese-English subtitle pattern in title (e.g. `<EN>：<ZH>`). New system MAY pick a consistent single-language style."
