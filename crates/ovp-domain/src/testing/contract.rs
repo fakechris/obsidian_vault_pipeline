@@ -1,0 +1,375 @@
+//! Contract assertion engine for fixture-based integration tests.
+//!
+//! Behind the `testing` feature flag — not part of production builds.
+//! Parses a `contract.yaml` (see `fixtures/README.md` for schema) and
+//! asserts MUST / SHOULD / MAY-break clauses against the actual pipeline
+//! output: the produced `InterpretedDoc`, the emitted `WritePlan`, and
+//! the run's event log.
+//!
+//! v1 implements only the op set the `article_clean` fixture needs.
+//! Unknown ops surface as `ContractError::UnknownOp` so the assertion
+//! engine never silently accepts an unimplemented assertion.
+
+use std::path::Path;
+
+use ovp_core::{Event, WriteOp, WritePlan};
+use serde::Deserialize;
+
+use crate::interpreted::InterpretedDoc;
+
+#[derive(Debug, Deserialize)]
+pub struct Contract {
+    pub version: u32,
+    pub terminal_state: TerminalState,
+    #[serde(default)]
+    pub expected_artifacts: Vec<ExpectedArtifact>,
+    #[serde(default)]
+    pub must: Vec<Clause>,
+    #[serde(default)]
+    pub should: Vec<Clause>,
+    #[serde(default)]
+    pub may_break: Vec<Clause>,
+    #[serde(default)]
+    pub known_anomalies: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalState {
+    InterpretationProduced,
+    TerminalRaw,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExpectedArtifact {
+    pub kind: String,
+    pub path_pattern: String,
+}
+
+/// A clause may take one of several heterogeneous shapes; serde
+/// `untagged` discriminates by which fields are populated.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Clause {
+    Field(FieldClause),
+    BodySection { body_section: BodySectionSpec },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FieldClause {
+    pub field: String,
+    /// Optional — `may_break` clauses commonly name a field without an op
+    /// (they're documentation that the field is allowed to differ).
+    /// A clause without an op is always recorded as `passed`.
+    #[serde(default)]
+    pub op: Option<String>,
+    #[serde(default)]
+    pub value: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BodySectionSpec {
+    pub op: String,
+    pub values: Vec<String>,
+}
+
+/// Outcome of asserting a contract: which clauses passed, which failed,
+/// which were skipped (unknown ops). The caller decides what to do with
+/// MUST failures (typically `panic!`) vs SHOULD failures (typically
+/// log + continue).
+#[derive(Debug, Default)]
+pub struct ContractReport {
+    pub must_passed: Vec<String>,
+    pub must_failed: Vec<ClauseFailure>,
+    pub should_passed: Vec<String>,
+    pub should_failed: Vec<ClauseFailure>,
+    pub may_break_passed: Vec<String>,
+    pub may_break_failed: Vec<ClauseFailure>,
+    pub skipped: Vec<String>,
+}
+
+impl ContractReport {
+    pub fn must_clean(&self) -> bool { self.must_failed.is_empty() }
+    pub fn total_clauses(&self) -> usize {
+        self.must_passed.len()
+            + self.must_failed.len()
+            + self.should_passed.len()
+            + self.should_failed.len()
+            + self.may_break_passed.len()
+            + self.may_break_failed.len()
+            + self.skipped.len()
+    }
+}
+
+#[derive(Debug)]
+pub struct ClauseFailure {
+    pub clause: String,
+    pub detail: String,
+}
+
+#[derive(Debug)]
+pub enum ContractError {
+    Io(String),
+    Parse(String),
+    UnknownOp(String),
+}
+
+impl std::fmt::Display for ContractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContractError::Io(s) => write!(f, "contract io: {s}"),
+            ContractError::Parse(s) => write!(f, "contract parse: {s}"),
+            ContractError::UnknownOp(s) => write!(f, "unknown op: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for ContractError {}
+
+pub fn load_contract(path: &Path) -> Result<Contract, ContractError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| ContractError::Io(format!("{}: {e}", path.display())))?;
+    serde_yaml::from_str(&raw).map_err(|e| ContractError::Parse(e.to_string()))
+}
+
+pub fn assert_contract(
+    contract: &Contract,
+    interpreted: Option<&InterpretedDoc>,
+    write_plan: &WritePlan,
+    _events: &[Event],
+) -> ContractReport {
+    let mut report = ContractReport::default();
+    for c in &contract.must {
+        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::Must);
+    }
+    for c in &contract.should {
+        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::Should);
+    }
+    for c in &contract.may_break {
+        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::MayBreak);
+    }
+    report
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ClauseLevel {
+    Must,
+    Should,
+    MayBreak,
+}
+
+fn evaluate_clause(
+    clause: &Clause,
+    interpreted: Option<&InterpretedDoc>,
+    write_plan: &WritePlan,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    match clause {
+        Clause::Field(fc) => evaluate_field_clause(fc, interpreted, report, level),
+        Clause::BodySection { body_section } => {
+            evaluate_body_section(body_section, write_plan, report, level)
+        }
+    }
+}
+
+fn evaluate_field_clause(
+    fc: &FieldClause,
+    interpreted: Option<&InterpretedDoc>,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let op = match &fc.op {
+        Some(o) => o.as_str(),
+        None => {
+            // Documentation-only clause (e.g. `may_break: - field: status`).
+            let label = format!("field `{}` (documentation-only)", fc.field);
+            record_pass(report, level, &label);
+            return;
+        }
+    };
+    let label = format!("field `{}` op `{op}`", fc.field);
+    let interp = match interpreted {
+        Some(d) => d,
+        None => {
+            record_failure(report, level, &label, "no InterpretedDoc produced");
+            return;
+        }
+    };
+    let result = match op {
+        "equals" => op_equals(&fc.field, fc.value.as_ref(), interp),
+        "type" => op_type(&fc.field, fc.value.as_ref(), interp),
+        "length_gte" => op_length_gte(&fc.field, fc.value.as_ref(), interp),
+        "non_empty" => op_non_empty(&fc.field, interp),
+        "length_in_range" => op_length_in_range(&fc.field, fc.value.as_ref(), interp),
+        other => {
+            report.skipped.push(format!("{label} (unknown op `{other}`)"));
+            return;
+        }
+    };
+    match result {
+        Ok(()) => record_pass(report, level, &label),
+        Err(detail) => record_failure(report, level, &label, &detail),
+    }
+}
+
+fn evaluate_body_section(
+    spec: &BodySectionSpec,
+    write_plan: &WritePlan,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let label = format!("body_section op `{}`", spec.op);
+    let body = match find_vault_create_body(write_plan) {
+        Some(b) => b,
+        None => {
+            record_failure(report, level, &label, "no VaultCreate op in write plan");
+            return;
+        }
+    };
+    match spec.op.as_str() {
+        "contains_one_of" => {
+            if spec.values.iter().any(|v| body.contains(v.as_str())) {
+                record_pass(report, level, &label);
+            } else {
+                record_failure(
+                    report,
+                    level,
+                    &label,
+                    &format!("body contained none of {:?}", spec.values),
+                );
+            }
+        }
+        other => {
+            report.skipped.push(format!("{label} (unknown op `{other}`)"));
+        }
+    }
+}
+
+fn find_vault_create_body(plan: &WritePlan) -> Option<&str> {
+    plan.ops.iter().find_map(|op| match op {
+        WriteOp::VaultCreate(o) => Some(o.body.as_str()),
+        _ => None,
+    })
+}
+
+fn record_pass(report: &mut ContractReport, level: ClauseLevel, label: &str) {
+    match level {
+        ClauseLevel::Must => report.must_passed.push(label.to_string()),
+        ClauseLevel::Should => report.should_passed.push(label.to_string()),
+        ClauseLevel::MayBreak => report.may_break_passed.push(label.to_string()),
+    }
+}
+
+fn record_failure(report: &mut ContractReport, level: ClauseLevel, clause: &str, detail: &str) {
+    let f = ClauseFailure { clause: clause.to_string(), detail: detail.to_string() };
+    match level {
+        ClauseLevel::Must => report.must_failed.push(f),
+        ClauseLevel::Should => report.should_failed.push(f),
+        ClauseLevel::MayBreak => report.may_break_failed.push(f),
+    }
+}
+
+// --- field accessors + ops -------------------------------------------------
+
+fn field_value<'a>(name: &str, doc: &'a InterpretedDoc) -> FieldValue<'a> {
+    match name {
+        "title" => FieldValue::Str(&doc.title),
+        "source" => FieldValue::Str(&doc.source_url),
+        "type" => FieldValue::Str(&doc.doc_type),
+        "area" => FieldValue::Str(&doc.area),
+        "date" => FieldValue::Str(&doc.date),
+        "author" => FieldValue::OptStr(doc.author.as_deref()),
+        "tags" => FieldValue::StrList(&doc.tags),
+        "canonical_concepts" => FieldValue::StrList(&doc.canonical_concepts),
+        "concept_candidates" => FieldValue::StrList(&doc.concept_candidates),
+        _ => FieldValue::Unknown,
+    }
+}
+
+enum FieldValue<'a> {
+    Str(&'a str),
+    OptStr(Option<&'a str>),
+    StrList(&'a [String]),
+    Unknown,
+}
+
+fn op_equals(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+    let expected = value
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "equals: missing string value".to_string())?;
+    match field_value(field, doc) {
+        FieldValue::Str(s) => {
+            if s == expected {
+                Ok(())
+            } else {
+                Err(format!("expected `{expected}`, got `{s}`"))
+            }
+        }
+        FieldValue::OptStr(Some(s)) => {
+            if s == expected {
+                Ok(())
+            } else {
+                Err(format!("expected `{expected}`, got `{s}`"))
+            }
+        }
+        FieldValue::OptStr(None) => Err("expected string, field is absent".into()),
+        FieldValue::StrList(_) => Err("equals not valid on list field".into()),
+        FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
+}
+
+fn op_type(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+    let t = value
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "type: missing string value".to_string())?;
+    match (t, field_value(field, doc)) {
+        ("list_of_strings", FieldValue::StrList(_)) => Ok(()),
+        ("list_of_strings", _) => Err(format!("expected list_of_strings, field `{field}` is not a list")),
+        (other, _) => Err(format!("type `{other}` not implemented in v1")),
+    }
+}
+
+fn op_length_gte(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+    let n = value
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "length_gte: missing or non-integer value".to_string())?;
+    let len = list_length(field, doc)?;
+    if len as u64 >= n {
+        Ok(())
+    } else {
+        Err(format!("length {len} < {n}"))
+    }
+}
+
+fn op_non_empty(field: &str, doc: &InterpretedDoc) -> Result<(), String> {
+    let len = list_length(field, doc)?;
+    if len > 0 { Ok(()) } else { Err("list is empty".into()) }
+}
+
+fn op_length_in_range(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+    let pair = value
+        .and_then(|v| v.as_sequence())
+        .ok_or_else(|| "length_in_range: missing [min, max] sequence".to_string())?;
+    if pair.len() != 2 {
+        return Err("length_in_range: need exactly [min, max]".into());
+    }
+    let min = pair[0].as_u64().ok_or("length_in_range: min not u64")? as usize;
+    let max = pair[1].as_u64().ok_or("length_in_range: max not u64")? as usize;
+    let len = list_length(field, doc)?;
+    if len >= min && len <= max {
+        Ok(())
+    } else {
+        Err(format!("length {len} not in [{min}, {max}]"))
+    }
+}
+
+fn list_length(field: &str, doc: &InterpretedDoc) -> Result<usize, String> {
+    match field_value(field, doc) {
+        FieldValue::StrList(l) => Ok(l.len()),
+        FieldValue::Str(_) | FieldValue::OptStr(_) => Err(format!("field `{field}` is not a list")),
+        FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
+}

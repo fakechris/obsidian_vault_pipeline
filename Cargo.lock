@@ -322,6 +322,7 @@ name = "ovp-domain"
 version = "0.1.0"
 dependencies = [
  "ovp-core",
+ "ovp-domain",
  "ovp-llm",
  "serde",
  "serde_json",

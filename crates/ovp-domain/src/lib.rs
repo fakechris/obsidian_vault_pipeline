@@ -14,6 +14,9 @@ pub mod source_doc;
 pub mod sources;
 pub mod transforms;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use body::DomainBody;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
 pub use prompt::{PromptId, PromptRequest};
