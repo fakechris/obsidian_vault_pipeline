@@ -10,9 +10,16 @@ pub mod interpreted;
 pub mod prompt;
 pub mod response;
 pub mod source_doc;
+pub mod sources;
+pub mod transforms;
 
 pub use body::DomainBody;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
 pub use prompt::{PromptId, PromptRequest};
 pub use response::{ModelResponse, ResponseContent};
 pub use source_doc::SourceDoc;
+pub use sources::MarkdownInboxSource;
+pub use transforms::{
+    PromptBuilder, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS,
+    DEFAULT_ARTICLE_MODEL,
+};
