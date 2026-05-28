@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/ovp-core",
     "crates/ovp-cli",
+    "crates/ovp-domain",
     "crates/ovp-llm",
 ]
 
@@ -20,6 +21,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 tempfile = "3"
+serde_yaml = "0.9"
 
 [profile.release]
 opt-level = 3
