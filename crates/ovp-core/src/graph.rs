@@ -396,6 +396,23 @@ fn run_transform_stage<B: Clone>(
                 );
                 outputs.extend(rs);
             }
+            FilterDecision::ForwardWithEvents { records: rs, events } => {
+                // Emit observation events FIRST so RecordForwarded
+                // arrives strictly after any side-band annotations on
+                // the same record. Tests rely on this ordering.
+                for ev in events {
+                    log.record(run_id.clone(), ev);
+                }
+                log.record(
+                    run_id.clone(),
+                    EventKind::RecordForwarded {
+                        record_id: rid,
+                        step_id: tx.step_id().clone(),
+                        fanout: rs.len() as u64,
+                    },
+                );
+                outputs.extend(rs);
+            }
             FilterDecision::Drop(reason) => {
                 dropped += 1;
                 log.record(

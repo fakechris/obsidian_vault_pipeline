@@ -2,9 +2,14 @@ use std::path::PathBuf;
 
 use ovp_core::{GraphRunner, PipelineManifest, RunId};
 use ovp_domain::{
-    ArticleParser, ArticleVaultPlanSink, DomainBody, LLMInvoker, MarkdownInboxSource, PromptBuilder,
-    ARTICLE_PROMPT_ID,
+    ArticleParser, ArticleVaultPlanSink, ConceptResolver, DomainBody, LLMInvoker,
+    MarkdownInboxSource, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
 };
+
+/// v1.1 hardcoded canonical-evergreen inventory used by ConceptResolver.
+/// Future: load from `<vault>/10-Knowledge/Evergreen/` or a registry
+/// file. Two entries seed the article_mixed_lang fixture's MUST clauses.
+const V1_1_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 
 use crate::CliError;
@@ -58,11 +63,16 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
         "markdown_inbox",
         MarkdownInboxSource::new("markdown_inbox", run_id.clone(), &args.input_path),
     );
+    runner.register_transform("source_resolver", SourceResolver::new("source_resolver"));
     runner.register_transform("prompt_builder", PromptBuilder::new("prompt_builder"));
     runner.register_effectful_transform("llm_invoker", LLMInvoker::new("llm_invoker", client));
     runner.register_transform(
         "article_parser",
         ArticleParser::new("article_parser", &args.area, &args.date_stamp),
+    );
+    runner.register_transform(
+        "concept_resolver",
+        ConceptResolver::from_slugs("concept_resolver", V1_1_CANONICAL_SLUGS),
     );
     runner.register_sink(
         "article_vault_plan",

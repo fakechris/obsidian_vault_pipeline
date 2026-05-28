@@ -25,6 +25,6 @@ pub use sinks::ArticleVaultPlanSink;
 pub use source_doc::SourceDoc;
 pub use sources::MarkdownInboxSource;
 pub use transforms::{
-    ArticleParser, LLMInvoker, PromptBuilder, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION,
-    DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
+    ArticleParser, ConceptResolver, LLMInvoker, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
+    ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
 };

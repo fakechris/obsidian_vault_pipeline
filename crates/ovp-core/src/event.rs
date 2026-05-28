@@ -28,6 +28,16 @@ pub enum EventKind {
     FilterErrored { record_id: Option<RecordId>, step_id: StepId, error: FilterError },
     SinkEmitted { step_id: StepId, ops: u64 },
     PlanFinalized { ops: u64 },
+    /// Emitted when a transform rewrites a record's canonical identity
+    /// (e.g. resolving a Twitter clip URL to the underlying article URL).
+    /// `reason` is a stable code like `source_resolver.twitter_to_article`.
+    SourceResolution {
+        record_id: RecordId,
+        step_id: StepId,
+        original_url: String,
+        resolved_url: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

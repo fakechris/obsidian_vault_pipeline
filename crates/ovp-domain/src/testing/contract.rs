@@ -240,6 +240,7 @@ fn event_kind_name(kind: &ovp_core::EventKind) -> &'static str {
         FilterErrored { .. } => "filter_errored",
         SinkEmitted { .. } => "sink_emitted",
         PlanFinalized { .. } => "plan_finalized",
+        SourceResolution { .. } => "source_resolution",
     }
 }
 
@@ -509,8 +510,19 @@ fn op_length_gte(field: &str, value: Option<&serde_yaml::Value>, doc: &Interpret
 }
 
 fn op_non_empty(field: &str, doc: &InterpretedDoc) -> Result<(), String> {
-    let len = list_length(field, doc)?;
-    if len > 0 { Ok(()) } else { Err("list is empty".into()) }
+    match field_value(field, doc) {
+        FieldValue::StrList(l) => {
+            if l.is_empty() { Err("list is empty".into()) } else { Ok(()) }
+        }
+        FieldValue::Str(s) => {
+            if s.is_empty() { Err("string is empty".into()) } else { Ok(()) }
+        }
+        FieldValue::OptStr(Some(s)) => {
+            if s.is_empty() { Err("string is empty".into()) } else { Ok(()) }
+        }
+        FieldValue::OptStr(None) => Err("field is absent".into()),
+        FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
 }
 
 fn op_length_in_range(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {

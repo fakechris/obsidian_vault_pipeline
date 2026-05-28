@@ -74,8 +74,15 @@ impl FilterError {
     }
 }
 
-/// What a transform decided to do with a Record. All five outcomes are
+/// What a transform decided to do with a Record. All outcomes are
 /// first-class; the runner is required to log each one to the event log.
+///
+/// `ForwardWithEvents` lets a transform emit additional observation
+/// events (e.g. `source_resolution`) alongside its forwarded records.
+/// The events are part of the transform's typed return value, not a
+/// side channel — pure transforms can still emit them without violating
+/// invariant #9, since events are pipeline-internal observations rather
+/// than external I/O.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum FilterDecision<B> {
@@ -84,6 +91,10 @@ pub enum FilterDecision<B> {
     FanOut(Vec<Record<B>>),
     Complete(CompleteReason),
     Error(FilterError),
+    ForwardWithEvents {
+        records: Vec<Record<B>>,
+        events: Vec<crate::event::EventKind>,
+    },
 }
 
 /// What a source produced this tick.

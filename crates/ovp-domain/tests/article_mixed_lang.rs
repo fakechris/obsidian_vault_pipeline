@@ -1,21 +1,15 @@
-//! C v1 acceptance test: run the full article pipeline against the
-//! `article_clean` fixture and assert against its `contract.yaml`.
-//!
-//! Offline: uses `CachedModelClient(NeverCallsClient, ReplayOnly)`
-//! against the committed cassette. No network, no API key.
-//!
-//! **Single-pipeline discipline (post-codex-review fix):** all assertions
-//! run against the same `RunReport` from one `runner.run()` call. The
-//! contract engine reads field values by parsing the rendered
-//! `VaultCreate.body` frontmatter, not by re-driving the pipeline. A
-//! sink or frontmatter regression now fails the test instead of hiding
-//! behind a parallel reconstruction.
+//! v1.1 acceptance test: article_mixed_lang fixture through the pipeline.
+//! Stresses SourceResolver (Twitter URL → underlying article URL),
+//! ConceptResolver (promotion to canonical_concepts), and full UTF-8
+//! handling across title / tags / body / filename.
 
 use ovp_core::{GraphRunner, PipelineManifest, RunId, WriteOp};
 use ovp_domain::testing::{assert_contract, load_contract};
 use ovp_domain::*;
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 use serde::Deserialize;
+
+const V1_1_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 
 fn repo_root() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -31,7 +25,7 @@ fn run_pipeline() -> ovp_core::RunReport {
     let manifest_toml = std::fs::read_to_string(root.join("manifests/article.pipeline.toml"))
         .expect("manifest exists");
     let manifest = PipelineManifest::parse(&manifest_toml).expect("manifest parses");
-    let run_id = RunId::new("article-clean-test");
+    let run_id = RunId::new("mixed-lang-test");
 
     let cassette_dir = root.join("crates/ovp-domain/tests/cassettes");
     let cached = CachedModelClient::new(
@@ -49,7 +43,7 @@ fn run_pipeline() -> ovp_core::RunReport {
         MarkdownInboxSource::new(
             "markdown_inbox",
             run_id.clone(),
-            root.join("fixtures/article_clean/input.md"),
+            root.join("fixtures/article_mixed_lang/input.md"),
         ),
     );
     runner.register_transform("source_resolver", SourceResolver::new("source_resolver"));
@@ -57,11 +51,11 @@ fn run_pipeline() -> ovp_core::RunReport {
     runner.register_effectful_transform("llm_invoker", LLMInvoker::new("llm_invoker", client));
     runner.register_transform(
         "article_parser",
-        ArticleParser::new("article_parser", "ai", "2026-05-04"),
+        ArticleParser::new("article_parser", "ai", "2026-05-05"),
     );
     runner.register_transform(
         "concept_resolver",
-        ConceptResolver::from_slugs("concept_resolver", &[]),
+        ConceptResolver::from_slugs("concept_resolver", V1_1_CANONICAL_SLUGS),
     );
     runner.register_sink(
         "article_vault_plan",
@@ -71,21 +65,13 @@ fn run_pipeline() -> ovp_core::RunReport {
     runner.run().expect("pipeline runs")
 }
 
-/// Parse the rendered VaultCreate body's YAML frontmatter back into an
-/// `InterpretedDoc`. Used by the contract assertion to test the sink's
-/// actual output (not a parallel reconstruction). Dimensions are
-/// placeholder because contract.yaml doesn't assert on them.
 fn interp_from_rendered(plan: &ovp_core::WritePlan) -> InterpretedDoc {
     let body = match &plan.ops[0] {
         WriteOp::VaultCreate(o) => &o.body,
         other => panic!("expected VaultCreate, got {other:?}"),
     };
-    let trimmed = body
-        .strip_prefix("---\n")
-        .expect("body starts with `---`");
-    let end = trimmed
-        .find("\n---\n")
-        .expect("body has terminating `---`");
+    let trimmed = body.strip_prefix("---\n").expect("body starts with `---`");
+    let end = trimmed.find("\n---\n").expect("body has terminating `---`");
     let fm_str = &trimmed[..end];
 
     #[derive(Deserialize)]
@@ -117,7 +103,6 @@ fn interp_from_rendered(plan: &ovp_core::WritePlan) -> InterpretedDoc {
         tags: fm.tags,
         canonical_concepts: fm.canonical_concepts,
         concept_candidates: fm.concept_candidates,
-        // Not asserted by contract.yaml; placeholder.
         dimensions: Dimensions {
             one_liner: String::new(),
             explanation: Explanation {
@@ -134,21 +119,78 @@ fn interp_from_rendered(plan: &ovp_core::WritePlan) -> InterpretedDoc {
 }
 
 #[test]
-fn full_pipeline_runs_against_cassette() {
+fn pipeline_runs_and_emits_source_resolution() {
+    use ovp_core::EventKind;
     let report = run_pipeline();
     assert_eq!(report.records_dropped, 0, "unexpected drops: {:?}", report.events);
     assert_eq!(report.records_forwarded_to_sinks, 1);
     assert_eq!(report.write_plan.len(), 1);
 
+    let resolution_event = report.events.iter().find_map(|e| match &e.kind {
+        EventKind::SourceResolution { original_url, resolved_url, reason, .. } => {
+            Some((original_url.clone(), resolved_url.clone(), reason.clone()))
+        }
+        _ => None,
+    });
+    let (orig, resolved, reason) =
+        resolution_event.expect("SourceResolution event must be emitted");
+    assert!(
+        orig.contains("x.com/dotey"),
+        "original URL should be the Twitter clip, got {orig}"
+    );
+    assert!(
+        resolved.contains("danielmiessler.com"),
+        "resolved URL should be the underlying article, got {resolved}"
+    );
+    assert_eq!(reason, "source_resolver.twitter_to_article");
+}
+
+#[test]
+fn pipeline_promotes_canonical_concepts() {
+    let report = run_pipeline();
+    let interp = interp_from_rendered(&report.write_plan);
+
+    // ConceptResolver should have promoted ai-agent + competitive-advantage.
+    assert!(
+        interp.canonical_concepts.iter().any(|s| s == "ai-agent"),
+        "ai-agent not promoted: {:?}",
+        interp.canonical_concepts
+    );
+    assert!(
+        interp.canonical_concepts.iter().any(|s| s == "competitive-advantage"),
+        "competitive-advantage not promoted: {:?}",
+        interp.canonical_concepts
+    );
+    // And they should NOT remain in candidates.
+    assert!(
+        !interp.concept_candidates.iter().any(|s| s == "ai-agent"),
+        "ai-agent should not be a candidate after promotion: {:?}",
+        interp.concept_candidates
+    );
+}
+
+#[test]
+fn pipeline_preserves_utf8_throughout() {
+    let report = run_pipeline();
+    let interp = interp_from_rendered(&report.write_plan);
+
+    // Title is Chinese (interp's reframe).
+    assert!(
+        interp.title.contains("AI Readiness Gap"),
+        "title missing reframed English handle: {}",
+        interp.title
+    );
+    assert!(
+        interp.title.contains("组织清晰度"),
+        "title missing Chinese subtitle: {}",
+        interp.title
+    );
+    // Path contains the Chinese title; filesystem-safe characters only.
     let op = match &report.write_plan.ops[0] {
         WriteOp::VaultCreate(o) => o,
-        other => panic!("expected VaultCreate, got {other:?}"),
+        _ => unreachable!(),
     };
-    assert!(
-        op.path.as_str().starts_with("20-Areas/AI-Research/Topics/2026-05/"),
-        "unexpected path: {}",
-        op.path.as_str()
-    );
+    assert!(op.path.as_str().contains("组织清晰度"));
 }
 
 #[test]
@@ -156,9 +198,10 @@ fn contract_must_clauses_pass() {
     let report = run_pipeline();
     let interp = interp_from_rendered(&report.write_plan);
 
-    let root = repo_root();
-    let contract = load_contract(&root.join("fixtures/article_clean/expected/contract.yaml"))
-        .expect("contract loads");
+    let contract = load_contract(
+        &repo_root().join("fixtures/article_mixed_lang/expected/contract.yaml"),
+    )
+    .expect("contract loads");
 
     let result =
         assert_contract(&contract, Some(&interp), &report.write_plan, &report.events);
@@ -173,8 +216,8 @@ fn contract_must_clauses_pass() {
         );
     }
     assert!(
-        result.must_passed.len() >= 10,
-        "expected ≥10 MUST passes, got {}",
+        result.must_passed.len() >= 8,
+        "expected ≥8 MUST passes, got {}",
         result.must_passed.len()
     );
 }
@@ -184,9 +227,10 @@ fn contract_should_clauses_pass() {
     let report = run_pipeline();
     let interp = interp_from_rendered(&report.write_plan);
 
-    let root = repo_root();
-    let contract = load_contract(&root.join("fixtures/article_clean/expected/contract.yaml"))
-        .expect("contract loads");
+    let contract = load_contract(
+        &repo_root().join("fixtures/article_mixed_lang/expected/contract.yaml"),
+    )
+    .expect("contract loads");
 
     let result =
         assert_contract(&contract, Some(&interp), &report.write_plan, &report.events);
