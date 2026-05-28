@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::source_doc::SourceDoc;
+
 /// Identifier of a versioned prompt asset. Stable string like
 /// `article_interpret/v1`. ArticleParser uses this to refuse responses
 /// whose schema doesn't match what it knows how to parse.
@@ -26,4 +28,9 @@ pub struct PromptRequest {
     pub system: String,
     pub user: String,
     pub max_tokens: u32,
+    /// Upstream context carried alongside the prompt. ArticleParser needs
+    /// `source_url`, `author`, and tags — none of which the LLM returns —
+    /// so the original SourceDoc rides along. LLMInvoker forwards this
+    /// onto the ModelResponse it produces.
+    pub origin: Box<SourceDoc>,
 }

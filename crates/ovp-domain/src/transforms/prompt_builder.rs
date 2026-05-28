@@ -58,6 +58,7 @@ impl PromptBuilder {
             system,
             user,
             max_tokens: self.max_tokens,
+            origin: Box::new(source.clone()),
         }
     }
 }

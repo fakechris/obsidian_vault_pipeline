@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::prompt::PromptId;
+use crate::source_doc::SourceDoc;
 
 /// Domain view of a ModelClient reply. LLMInvoker constructs this from
 /// `ovp_llm::ModelReply`. Preserves prompt provenance (`prompt_id`,
@@ -13,6 +14,10 @@ pub struct ModelResponse {
     pub content: ResponseContent,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Forwarded by LLMInvoker from the upstream PromptRequest. Lets
+    /// ArticleParser populate `source_url`, `author`, area, etc. without
+    /// asking the LLM to echo them back.
+    pub origin: Box<SourceDoc>,
 }
 
 /// Where the response body lives. v1 keeps everything inline. Future

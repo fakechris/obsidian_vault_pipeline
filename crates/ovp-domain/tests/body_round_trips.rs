@@ -23,6 +23,7 @@ fn sample_prompt() -> PromptRequest {
         system: "you are a careful summarizer".into(),
         user: "summarize the following article in six dimensions".into(),
         max_tokens: 4096,
+        origin: Box::new(sample_source()),
     }
 }
 
@@ -34,6 +35,7 @@ fn sample_model_response() -> ModelResponse {
         content: ResponseContent::Inline { text: "model-output".into() },
         input_tokens: 1024,
         output_tokens: 512,
+        origin: Box::new(sample_source()),
     }
 }
 

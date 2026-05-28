@@ -20,6 +20,6 @@ pub use response::{ModelResponse, ResponseContent};
 pub use source_doc::SourceDoc;
 pub use sources::MarkdownInboxSource;
 pub use transforms::{
-    PromptBuilder, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS,
-    DEFAULT_ARTICLE_MODEL,
+    ArticleParser, LLMInvoker, PromptBuilder, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION,
+    DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
 };
