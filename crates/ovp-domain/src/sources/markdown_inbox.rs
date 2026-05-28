@@ -159,7 +159,7 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         None => ClippingFrontmatter::default(),
     };
     let title = fm.title.unwrap_or_else(|| "Untitled".to_string());
-    let source_url = fm.source.unwrap_or_default();
+    let source_url = strip_tracker_params(&fm.source.unwrap_or_default());
     let author = fm.author.map(|a| a.into_string());
     Ok(SourceDoc {
         title,
@@ -169,5 +169,96 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         tags: fm.tags,
         body_markdown: body.to_string(),
     })
+}
+
+/// Strip common tracker query params (`source`, `utm_*`, `ref`, `ref_src`,
+/// `fbclid`, `gclid`, `mc_cid`, `mc_eid`) while preserving substantive
+/// ones. If everything is stripped, also drop the trailing `?`.
+///
+/// Deliberately minimal: no full URL parser dep. Trackers in real-world
+/// clippings overwhelmingly follow `key=value&key=value` query strings
+/// after a single `?`, and that's what this handles. Fragments are kept.
+pub(crate) fn strip_tracker_params(url: &str) -> String {
+    let (prefix, query, fragment) = split_url(url);
+    if query.is_empty() {
+        return url.to_string();
+    }
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !is_tracker_param(pair))
+        .collect();
+    let mut out = prefix.to_string();
+    if !kept.is_empty() {
+        out.push('?');
+        out.push_str(&kept.join("&"));
+    }
+    if !fragment.is_empty() {
+        out.push('#');
+        out.push_str(fragment);
+    }
+    out
+}
+
+fn split_url(url: &str) -> (&str, &str, &str) {
+    let (path_part, fragment) = match url.split_once('#') {
+        Some((p, f)) => (p, f),
+        None => (url, ""),
+    };
+    let (prefix, query) = match path_part.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (path_part, ""),
+    };
+    (prefix, query, fragment)
+}
+
+fn is_tracker_param(pair: &str) -> bool {
+    let key = pair.split('=').next().unwrap_or("");
+    matches!(
+        key,
+        "source" | "ref" | "ref_src" | "fbclid" | "gclid" | "mc_cid" | "mc_eid"
+    ) || key.starts_with("utm_")
+}
+
+#[cfg(test)]
+mod tracker_tests {
+    use super::strip_tracker_params;
+
+    #[test]
+    fn strips_source_param() {
+        assert_eq!(
+            strip_tracker_params("https://every.to/guides/x?source=post_button"),
+            "https://every.to/guides/x"
+        );
+    }
+
+    #[test]
+    fn strips_utm_params() {
+        assert_eq!(
+            strip_tracker_params("https://example.com/?utm_source=newsletter&utm_medium=email"),
+            "https://example.com/"
+        );
+    }
+
+    #[test]
+    fn preserves_substantive_params() {
+        assert_eq!(
+            strip_tracker_params("https://example.com/?id=123&utm_source=x"),
+            "https://example.com/?id=123"
+        );
+    }
+
+    #[test]
+    fn preserves_fragment() {
+        assert_eq!(
+            strip_tracker_params("https://example.com/page?source=x#section"),
+            "https://example.com/page#section"
+        );
+    }
+
+    #[test]
+    fn idempotent_on_clean_url() {
+        let clean = "https://example.com/path";
+        assert_eq!(strip_tracker_params(clean), clean);
+    }
 }
 

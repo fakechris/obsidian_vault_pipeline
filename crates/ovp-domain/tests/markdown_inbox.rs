@@ -36,9 +36,10 @@ fn reads_article_clean_fixture() {
     };
 
     assert_eq!(body.title, "A Guide to Agent-native Product Management");
+    // Tracker query `?source=post_button` must be stripped.
     assert_eq!(
         body.source_url,
-        "https://every.to/guides/ai-product-management-guide?source=post_button"
+        "https://every.to/guides/ai-product-management-guide"
     );
     // Author wikilink should be unwrapped from `[[Marcus Moretti]]` to plain text.
     assert_eq!(body.author.as_deref(), Some("Marcus Moretti"));
