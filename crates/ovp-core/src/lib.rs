@@ -2,6 +2,7 @@
 //!
 //! See `docs/architecture.md` and `docs/invariants.md` at the repo root.
 
+pub mod applier;
 pub mod error;
 pub mod event;
 pub mod filter;
@@ -13,6 +14,9 @@ pub mod record;
 #[cfg(feature = "fakes")]
 pub mod fakes;
 
+pub use applier::{
+    ApplyCounts, ApplyMode, ApplyReport, OpKind, OpOutcome, OpResult, PlanApplier,
+};
 pub use error::{CoreError, GraphError, ManifestError};
 pub use event::{Event, EventKind, EventLog, EventTs};
 pub use filter::{

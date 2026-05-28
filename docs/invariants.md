@@ -53,7 +53,7 @@ CI gate: any file that defines `impl Transform<...> for <T>` and `<T>` has a fie
 
 ## 10. Writes happen only through `WritePlan`
 
-No filter writes directly to any `Store`. The pipeline produces a `WritePlan`; a separate `PlanApplier` step (post-v0.1) executes it.
+No filter writes directly to any `Store`. The pipeline produces a `WritePlan`; a separate `PlanApplier` (in `ovp-core` as a trait, impl in `ovp-stores`) executes it. `VaultFsPlanApplier` is the v1 impl for filesystem vaults. Path safety, hash-matched idempotence, and `before_hash` checks on updates are enforced at the applier — every real write goes through this layer, is recorded in an `ApplyReport`, and is refusable.
 
 ## 11. Derived state is rebuildable
 

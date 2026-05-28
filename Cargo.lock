@@ -306,6 +306,7 @@ dependencies = [
  "ovp-core",
  "ovp-domain",
  "ovp-llm",
+ "ovp-stores",
  "serde_json",
 ]
 
@@ -338,6 +339,20 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-stores"
+version = "0.1.0"
+dependencies = [
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "serde",
+ "serde_json",
+ "serde_yaml",
  "sha2",
  "tempfile",
 ]

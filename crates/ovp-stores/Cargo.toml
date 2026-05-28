@@ -1,0 +1,21 @@
+[package]
+name = "ovp-stores"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next store impls: filesystem vault applier + (future) canonical store, event log"
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+ovp-domain = { path = "../ovp-domain" }
+ovp-llm = { path = "../ovp-llm" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }

@@ -15,5 +15,6 @@ path = "src/main.rs"
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
 ovp-domain = { path = "../ovp-domain" }
 ovp-llm = { path = "../ovp-llm" }
+ovp-stores = { path = "../ovp-stores" }
 clap = { workspace = true }
 serde_json = { workspace = true }

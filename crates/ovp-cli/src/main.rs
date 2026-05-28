@@ -48,6 +48,20 @@ enum Cmd {
         #[arg(long, default_value = ".run")]
         out: PathBuf,
     },
+    /// Apply a serialized WritePlan to a filesystem vault. Reads the
+    /// plan JSON, runs VaultFsPlanApplier, prints the report.
+    ApplyPlan {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Walk the plan without writing anything; report-only.
+        #[arg(long)]
+        dry_run: bool,
+        /// Optional path for an ApplyReport JSON dump.
+        #[arg(long)]
+        report: Option<PathBuf>,
+    },
     /// Interpret a single article from disk through the v1 article pipeline.
     /// Default client is replay-only against `--cache-dir`; no network.
     InterpretArticle {
@@ -83,6 +97,14 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Graph { manifest } => commands::graph::run(manifest),
+        Cmd::ApplyPlan { plan, vault_root, dry_run, report } => {
+            commands::apply_plan::run(commands::apply_plan::ApplyPlanArgs {
+                plan_path: plan,
+                vault_root,
+                dry_run,
+                report_path: report,
+            })
+        }
         Cmd::Run { manifest, fake, run_id, out } => {
             if !fake {
                 eprintln!("ovp-next: v0.1 only supports --fake runs. Pass --fake to proceed.");
