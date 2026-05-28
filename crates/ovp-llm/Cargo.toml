@@ -1,0 +1,23 @@
+[package]
+name = "ovp-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next effect boundary: ModelClient trait + replayable / cached / live impls"
+
+[features]
+default = []
+# Enables the live AnthropicBlockingClient (pulls in reqwest). Tests and the
+# default CLI build do NOT enable this — they use FixtureModelClient or
+# CachedModelClient(NeverCallsClient, ReplayOnly) instead.
+anthropic = []  # placeholder; reqwest dep wired in C9
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
