@@ -230,6 +230,17 @@ SQLITE_ALLOWED_MODULES = {
     # supersede) — same category as the rest of ``synthesis/*``
     # writers; works on the derived knowledge.db projection only.
     "synthesis/identity_match",
+    # BL-117: stale-crystal detector — pure read query over the
+    # derived knowledge.db (community_crystals + ledger +
+    # graph_clusters + contradictions).  Same data-layer category.
+    "synthesis/staleness",
+    # BL-117: CLI wrapper for budgeted re-synthesis — opens the DB
+    # to invoke compute_crystal_staleness, then delegates the actual
+    # writes to ``synthesize_community_crystals``.  Thin projection
+    # client, same category as other ``commands/*`` CLIs in this
+    # allowlist (commands/list_crystals, commands/rerender_crystals,
+    # commands/rescore_crystals).
+    "commands/resynth_stale_crystals",
     "ui/view_models",
     # M23 / BL-094: digest input collector reads evergreen_revisions,
     # audit_events, community_crystals, graph_clusters etc.  Data-

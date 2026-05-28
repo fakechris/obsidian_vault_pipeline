@@ -111,6 +111,17 @@ def run_pipeline_knowledge_index(*, pipeline: Any, dry_run: bool = False, **_: A
     return pipeline.step_knowledge_index(dry_run)
 
 
+def run_pipeline_synthesize(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
+    """BL-117: budgeted re-synthesis of stale community crystals.
+
+    Runs after ``knowledge_index`` (so the graph/cluster snapshot the
+    matcher just produced is current) and before ``ops_state`` (so
+    lifecycle classification sees the fresh crystals).  Skips
+    entirely on ``dry_run`` — same contract as ``step_knowledge_index``.
+    """
+    return pipeline.step_synthesize(dry_run)
+
+
 def run_pipeline_ops_state(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
     """M24.1: rebuild the lifecycle projection over knowledge.db.
 
@@ -162,6 +173,30 @@ def run_autopilot_refine(*, daemon: Any, **_: Any) -> dict[str, Any]:
 def run_autopilot_knowledge_index(*, daemon: Any, **_: Any) -> dict[str, Any]:
     daemon._run_knowledge_index_refresh()
     return {"stage": "knowledge_index"}
+
+
+def run_autopilot_synthesize(*, daemon: Any, **_: Any) -> dict[str, Any]:
+    """BL-117: autopilot ``synthesize`` stage — invokes the same
+    budgeted re-synthesis the pipeline DAG uses.
+
+    Imported lazily so an autopilot run that doesn't reach this stage
+    doesn't pay the import cost.  Failures degrade gracefully — a
+    crystal-resynth blip must not sink the autopilot cycle, the same
+    way ``crystal_scores rebuild skipped`` is best-effort inside
+    ``knowledge_index``.  ``ovp-resynth-stale-crystals`` itself
+    handles the missing-DB / empty-stale-set cases with a 0-return.
+    """
+    from pathlib import Path
+    from .commands.resynth_stale_crystals import resynth_stale_crystals
+
+    try:
+        summary = resynth_stale_crystals(
+            vault_dir=Path(daemon.vault_dir),
+            pack=getattr(daemon, "workflow_pack_name", "research-tech"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"stage": "synthesize", "error": str(exc)}
+    return {"stage": "synthesize", **summary}
 
 
 def run_autopilot_ops_state(*, daemon: Any, **_: Any) -> dict[str, Any]:

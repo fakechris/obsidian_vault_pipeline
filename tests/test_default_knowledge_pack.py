@@ -40,6 +40,11 @@ def test_default_knowledge_full_profile_matches_current_stage_order():
         "registry_sync",
         "moc",
         "knowledge_index",
+        # BL-117: budgeted delta synthesis sits between
+        # knowledge_index and ops_state — reads what knowledge_index
+        # just wrote, feeds the ops_state lifecycle counts that
+        # consume the fresh crystal corpus.
+        "synthesize",
         # M24.1: lifecycle projection step appended after
         # knowledge_index.  M25.6 dogfood pass caught that it was
         # missing from the workflow profile despite being in
