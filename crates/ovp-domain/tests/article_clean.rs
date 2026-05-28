@@ -2,17 +2,20 @@
 //! `article_clean` fixture and assert against its `contract.yaml`.
 //!
 //! Offline: uses `CachedModelClient(NeverCallsClient, ReplayOnly)`
-//! against the cassette committed under tests/cassettes. No network,
-//! no API key.
+//! against the committed cassette. No network, no API key.
 //!
-//! Failure on ANY MUST clause = test fail. SHOULD failures are logged
-//! but don't fail the gate. MAY-break clauses are documentation; they
-//! auto-pass.
+//! **Single-pipeline discipline (post-codex-review fix):** all assertions
+//! run against the same `RunReport` from one `runner.run()` call. The
+//! contract engine reads field values by parsing the rendered
+//! `VaultCreate.body` frontmatter, not by re-driving the pipeline. A
+//! sink or frontmatter regression now fails the test instead of hiding
+//! behind a parallel reconstruction.
 
 use ovp_core::{GraphRunner, PipelineManifest, RunId, WriteOp};
 use ovp_domain::testing::{assert_contract, load_contract};
 use ovp_domain::*;
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
+use serde::Deserialize;
 
 fn repo_root() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -31,8 +34,13 @@ fn run_pipeline() -> ovp_core::RunReport {
     let run_id = RunId::new("article-clean-test");
 
     let cassette_dir = root.join("crates/ovp-domain/tests/cassettes");
-    let cached = CachedModelClient::new(NeverCallsClient, &cassette_dir, CacheMode::ReplayOnly)
-        .expect("open cache");
+    let cached = CachedModelClient::new(
+        NeverCallsClient,
+        &cassette_dir,
+        ARTICLE_PROMPT_ID,
+        CacheMode::ReplayOnly,
+    )
+    .expect("open cache");
     let client: Box<dyn ModelClient> = Box::new(cached);
 
     let mut runner: GraphRunner<DomainBody> = GraphRunner::new(manifest, run_id.clone());
@@ -58,65 +66,65 @@ fn run_pipeline() -> ovp_core::RunReport {
     runner.run().expect("pipeline runs")
 }
 
-fn extract_interpreted_from_plan(plan: &ovp_core::WritePlan) -> Option<InterpretedDoc> {
-    // Reverse-engineer the InterpretedDoc from the rendered body: not
-    // possible without a markdown parser. Instead, the test re-runs the
-    // pipeline at a lower level to grab the InterpretedDoc directly via
-    // a side-channel — but our public Sink trait doesn't expose that.
-    //
-    // Easier: get the InterpretedDoc by running the parser stages
-    // manually below. (See `interp_doc()`.)
-    let _ = plan;
-    None
-}
-
-/// Re-runs the source + first three transforms via the public API to
-/// get the InterpretedDoc that the sink would consume. The full
-/// pipeline above gives us the WritePlan; this gives us the structured
-/// InterpretedDoc for field-level assertion. Yes, it's redundant work;
-/// no, we don't want to leak runtime internals from the sink trait.
-fn interp_doc() -> InterpretedDoc {
-    use ovp_core::{FilterDecision, Source, SourceOutput, Transform};
-
-    let root = repo_root();
-    let mut src = MarkdownInboxSource::new(
-        "md",
-        RunId::new("t"),
-        root.join("fixtures/article_clean/input.md"),
-    );
-    let source_record = match src.produce() {
-        SourceOutput::Records(mut rs) => rs.pop().expect("one record"),
-        other => panic!("source: {other:?}"),
+/// Parse the rendered VaultCreate body's YAML frontmatter back into an
+/// `InterpretedDoc`. Used by the contract assertion to test the sink's
+/// actual output (not a parallel reconstruction). Dimensions are
+/// placeholder because contract.yaml doesn't assert on them.
+fn interp_from_rendered(plan: &ovp_core::WritePlan) -> InterpretedDoc {
+    let body = match &plan.ops[0] {
+        WriteOp::VaultCreate(o) => &o.body,
+        other => panic!("expected VaultCreate, got {other:?}"),
     };
+    let trimmed = body
+        .strip_prefix("---\n")
+        .expect("body starts with `---`");
+    let end = trimmed
+        .find("\n---\n")
+        .expect("body has terminating `---`");
+    let fm_str = &trimmed[..end];
 
-    let mut pb = PromptBuilder::new("pb");
-    let prompt_record = match pb.process(source_record) {
-        FilterDecision::Forward(mut rs) => rs.pop().expect("one record"),
-        other => panic!("prompt builder: {other:?}"),
-    };
+    #[derive(Deserialize)]
+    struct RenderedFm {
+        title: String,
+        source: String,
+        #[serde(default)]
+        author: Option<String>,
+        date: String,
+        #[serde(rename = "type")]
+        doc_type: String,
+        area: String,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        canonical_concepts: Vec<String>,
+        #[serde(default)]
+        concept_candidates: Vec<String>,
+    }
 
-    let cassette_dir = root.join("crates/ovp-domain/tests/cassettes");
-    let cached = CachedModelClient::new(NeverCallsClient, &cassette_dir, CacheMode::ReplayOnly)
-        .expect("open cache");
-    let client: Box<dyn ModelClient> = Box::new(cached);
-    let mut invoker = LLMInvoker::new("llm", client);
-
-    use ovp_core::EffectfulTransform;
-    let model_record = match invoker.process(prompt_record) {
-        FilterDecision::Forward(mut rs) => rs.pop().expect("one record"),
-        other => panic!("invoker: {other:?}"),
-    };
-
-    let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-04");
-    match parser.process(model_record) {
-        FilterDecision::Forward(mut rs) => {
-            let rec = rs.pop().expect("one record");
-            match rec.body {
-                DomainBody::Interpreted(d) => *d,
-                _ => panic!("expected Interpreted variant"),
-            }
-        }
-        other => panic!("parser: {other:?}"),
+    let fm: RenderedFm = serde_yaml::from_str(fm_str).expect("frontmatter parses");
+    InterpretedDoc {
+        title: fm.title,
+        source_url: fm.source,
+        author: fm.author,
+        date: fm.date,
+        doc_type: fm.doc_type,
+        area: fm.area,
+        tags: fm.tags,
+        canonical_concepts: fm.canonical_concepts,
+        concept_candidates: fm.concept_candidates,
+        // Not asserted by contract.yaml; placeholder.
+        dimensions: Dimensions {
+            one_liner: String::new(),
+            explanation: Explanation {
+                what: String::new(),
+                why: String::new(),
+                how: String::new(),
+            },
+            details: vec![],
+            structure: None,
+            actions: vec![],
+            linked_concepts: vec![],
+        },
     }
 }
 
@@ -127,7 +135,6 @@ fn full_pipeline_runs_against_cassette() {
     assert_eq!(report.records_forwarded_to_sinks, 1);
     assert_eq!(report.write_plan.len(), 1);
 
-    // Sanity: the produced VaultCreate op lands at the expected path.
     let op = match &report.write_plan.ops[0] {
         WriteOp::VaultCreate(o) => o,
         other => panic!("expected VaultCreate, got {other:?}"),
@@ -137,13 +144,12 @@ fn full_pipeline_runs_against_cassette() {
         "unexpected path: {}",
         op.path.as_str()
     );
-    let _ = extract_interpreted_from_plan(&report.write_plan); // placeholder helper, unused.
 }
 
 #[test]
 fn contract_must_clauses_pass() {
     let report = run_pipeline();
-    let interp = interp_doc();
+    let interp = interp_from_rendered(&report.write_plan);
 
     let root = repo_root();
     let contract = load_contract(&root.join("fixtures/article_clean/expected/contract.yaml"))
@@ -171,7 +177,7 @@ fn contract_must_clauses_pass() {
 #[test]
 fn contract_should_clauses_pass() {
     let report = run_pipeline();
-    let interp = interp_doc();
+    let interp = interp_from_rendered(&report.write_plan);
 
     let root = repo_root();
     let contract = load_contract(&root.join("fixtures/article_clean/expected/contract.yaml"))
@@ -180,9 +186,6 @@ fn contract_should_clauses_pass() {
     let result =
         assert_contract(&contract, Some(&interp), &report.write_plan, &report.events);
 
-    // SHOULD failures are warnings, not errors — but the v1 cassette
-    // is hand-rolled to satisfy every SHOULD. If this ever starts
-    // failing, the cassette has drifted.
     if !result.should_failed.is_empty() {
         for f in &result.should_failed {
             eprintln!("SHOULD failed — {}: {}", f.clause, f.detail);

@@ -150,17 +150,24 @@ fn render_frontmatter(d: &InterpretedDoc) -> String {
     s.push_str(&format!("date: {}\n", d.date));
     s.push_str(&format!("type: {}\n", d.doc_type));
     s.push_str(&format!("area: {}\n", d.area));
-    s.push_str("tags:\n");
-    for tag in &d.tags {
-        s.push_str(&format!("  - {}\n", yaml_quote(tag)));
+    s.push_str(&yaml_list_field("tags", &d.tags, true));
+    s.push_str(&yaml_list_field("canonical_concepts", &d.canonical_concepts, false));
+    s.push_str(&yaml_list_field("concept_candidates", &d.concept_candidates, false));
+    s
+}
+
+/// Render a YAML list field. Empty lists emit `<name>: []\n` (valid
+/// empty sequence) rather than `<name>:\n` (parses as null and breaks
+/// round-trips through serde). When `quote_values` is true each entry
+/// is run through `yaml_quote`.
+fn yaml_list_field(name: &str, items: &[String], quote_values: bool) -> String {
+    if items.is_empty() {
+        return format!("{name}: []\n");
     }
-    s.push_str("canonical_concepts:\n");
-    for c in &d.canonical_concepts {
-        s.push_str(&format!("  - {}\n", c));
-    }
-    s.push_str("concept_candidates:\n");
-    for c in &d.concept_candidates {
-        s.push_str(&format!("  - {}\n", c));
+    let mut s = format!("{name}:\n");
+    for item in items {
+        let v = if quote_values { yaml_quote(item) } else { item.to_string() };
+        s.push_str(&format!("  - {v}\n"));
     }
     s
 }

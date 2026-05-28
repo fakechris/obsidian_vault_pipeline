@@ -56,7 +56,7 @@ fn cached_record_then_serves_from_memo() {
     inner.insert(&req("hi"), reply("from-inner"));
 
     let tmp = tempfile::tempdir().unwrap();
-    let mut cached = CachedModelClient::new(inner, tmp.path(), CacheMode::Record).unwrap();
+    let mut cached = CachedModelClient::new(inner, tmp.path(), "", CacheMode::Record).unwrap();
 
     // First call hits the inner, records to disk.
     let r1 = cached.call(&req("hi")).expect("first call ok");
@@ -77,7 +77,7 @@ fn cached_record_then_serves_from_memo() {
 fn cached_replay_only_misses_dont_hit_inner() {
     let tmp = tempfile::tempdir().unwrap();
     let mut cached =
-        CachedModelClient::new(NeverCallsClient, tmp.path(), CacheMode::ReplayOnly).unwrap();
+        CachedModelClient::new(NeverCallsClient, tmp.path(), "", CacheMode::ReplayOnly).unwrap();
 
     let result = cached.call(&req("anything"));
     match result {
@@ -94,14 +94,14 @@ fn cached_record_persists_across_instances() {
     {
         let mut inner = FixtureModelClient::new();
         inner.insert(&req("hi"), reply("recorded-value"));
-        let mut cached = CachedModelClient::new(inner, tmp.path(), CacheMode::Record).unwrap();
+        let mut cached = CachedModelClient::new(inner, tmp.path(), "", CacheMode::Record).unwrap();
         cached.call(&req("hi")).unwrap();
     }
 
     // Second instance: replay-only, NeverCallsClient inside. Should still
     // find the recorded reply on disk.
     let mut replay =
-        CachedModelClient::new(NeverCallsClient, tmp.path(), CacheMode::ReplayOnly).unwrap();
+        CachedModelClient::new(NeverCallsClient, tmp.path(), "", CacheMode::ReplayOnly).unwrap();
     let r = replay.call(&req("hi")).expect("replay finds disk cassette");
     assert_eq!(r.text, "recorded-value");
 }

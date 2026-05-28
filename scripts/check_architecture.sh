@@ -58,14 +58,20 @@ check "no pyo3 dep (workspace + crates)" \
     'pyo3' \
     "crates" "Cargo.toml"
 
-# === Invariant #6: no async/futures in v0.1 ===
-# Catches both dep names AND actual usage (async fn, .await, tokio::, futures::).
-check "no tokio/async-std deps (workspace + crates)" \
+# === Invariant #6: no async runtime in ovp-core ===
+# Scoped to ovp-core only. Effect crates (ovp-llm) MAY have async impls
+# behind feature flags — that's invariant #1's "I/O is outside core",
+# not a #6 violation. See docs/invariants.md.
+check "no tokio/async-std deps in ovp-core" \
     '(^|[^a-z_])(tokio|async_std|async-std)([^a-z_]|$)' \
-    "crates" "Cargo.toml"
-check "no async fn / .await / futures:: in source" \
+    "crates/ovp-core/Cargo.toml"
+check "no async fn / .await / futures:: in ovp-core/src" \
     '(async fn |\.await\b|tokio::|futures::|async_trait)' \
-    "crates"
+    "crates/ovp-core/src"
+# At the workspace level: pyo3 stays banned everywhere (#5).
+check "no async runtime in workspace Cargo.toml" \
+    '(^|[^a-z_])(tokio|async_std|async-std)([^a-z_]|$)' \
+    "Cargo.toml"
 
 # === Invariant #7: no legacy ovp_pipeline import/reference ===
 check "no ovp_pipeline / from ovp" \

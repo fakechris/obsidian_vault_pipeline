@@ -3,22 +3,21 @@ use std::path::PathBuf;
 use ovp_core::{GraphRunner, PipelineManifest, RunId};
 use ovp_domain::{
     ArticleParser, ArticleVaultPlanSink, DomainBody, LLMInvoker, MarkdownInboxSource, PromptBuilder,
+    ARTICLE_PROMPT_ID,
 };
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 
 use crate::CliError;
 
 /// Selects which `ModelClient` impl the CLI wires into `LLMInvoker`.
+/// v1 only supports replay-from-cassette; live (`anthropic`) and a real
+/// cassette recorder land with C9/C10 behind the `anthropic` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKind {
     /// `CachedModelClient(NeverCallsClient, ReplayOnly)` — looks up
     /// canned replies from `--cache-dir`; never hits the network.
     /// Used by integration tests and CI.
     Replay,
-    /// `CachedModelClient(NeverCallsClient, Record)` — same lookup path
-    /// but errors loudly if the cache is missing. Used for sanity
-    /// checking that cassettes are present before a CI run.
-    RecordWithoutNetwork,
 }
 
 pub struct InterpretArticleArgs {
@@ -41,11 +40,17 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
 
     let mode = match args.client_kind {
         ClientKind::Replay => CacheMode::ReplayOnly,
-        ClientKind::RecordWithoutNetwork => CacheMode::Record,
     };
-    let cached = CachedModelClient::new(NeverCallsClient, &args.cache_dir, mode).map_err(|e| {
-        CliError::Io(format!("opening cache dir `{}`: {e}", args.cache_dir.display()))
-    })?;
+    // Namespace = ARTICLE_PROMPT_ID = "article_interpret/v1". Schema bump
+    // changes the const → namespace dir changes → old cassettes don't
+    // masquerade as new-schema responses. See invariant docs.
+    let cached = CachedModelClient::new(
+        NeverCallsClient,
+        &args.cache_dir,
+        ARTICLE_PROMPT_ID,
+        mode,
+    )
+    .map_err(|e| CliError::Io(format!("opening cache dir `{}`: {e}", args.cache_dir.display())))?;
     let client: Box<dyn ModelClient> = Box::new(cached);
 
     let mut runner: GraphRunner<DomainBody> = GraphRunner::new(manifest, run_id.clone());

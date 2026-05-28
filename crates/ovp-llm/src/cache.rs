@@ -19,7 +19,13 @@ pub enum CacheMode {
 }
 
 /// File-backed cache layered over another `ModelClient`. Files live at
-/// `<cache_dir>/<sha256-hex>.json`; one cassette per unique request.
+/// `<cache_dir>/<namespace>/<sha256-hex>.json`; one cassette per unique
+/// (prompt asset version, request) pair.
+///
+/// The `namespace` is conventionally `<prompt_id>/v<schema_version>`
+/// (e.g. `article_interpret/v1`). When the prompt asset is revised and
+/// the schema version bumps, the namespace changes, the cassette dir
+/// changes, and old cassettes don't masquerade as new-schema responses.
 ///
 /// In `Record` mode the cache backfills from the inner client and saves
 /// each response as it's recorded. In `ReplayOnly` mode cache misses are
@@ -27,24 +33,45 @@ pub enum CacheMode {
 pub struct CachedModelClient<C: ModelClient> {
     inner: C,
     cache_dir: PathBuf,
+    namespace: String,
     mode: CacheMode,
     memo: HashMap<String, ModelReply>,
 }
 
 impl<C: ModelClient> CachedModelClient<C> {
-    pub fn new(inner: C, cache_dir: impl Into<PathBuf>, mode: CacheMode) -> std::io::Result<Self> {
+    /// Open a cache at `<cache_dir>/<namespace>/`. v1's namespace
+    /// for the article path is `article_interpret/v1`. Empty namespace
+    /// is allowed (`<cache_dir>/<hash>.json` directly) but strongly
+    /// discouraged in production — it's a footgun for schema bumps.
+    pub fn new(
+        inner: C,
+        cache_dir: impl Into<PathBuf>,
+        namespace: impl Into<String>,
+        mode: CacheMode,
+    ) -> std::io::Result<Self> {
         let cache_dir = cache_dir.into();
+        let namespace = namespace.into();
+        let full = if namespace.is_empty() {
+            cache_dir.clone()
+        } else {
+            cache_dir.join(&namespace)
+        };
         if mode == CacheMode::Record {
-            fs::create_dir_all(&cache_dir)?;
+            fs::create_dir_all(&full)?;
         }
-        Ok(Self { inner, cache_dir, mode, memo: HashMap::new() })
+        Ok(Self { inner, cache_dir, namespace, mode, memo: HashMap::new() })
     }
 
     pub fn mode(&self) -> CacheMode { self.mode }
     pub fn cache_dir(&self) -> &PathBuf { &self.cache_dir }
+    pub fn namespace(&self) -> &str { &self.namespace }
 
     fn cassette_path(&self, key: &str) -> PathBuf {
-        self.cache_dir.join(format!("{key}.json"))
+        if self.namespace.is_empty() {
+            self.cache_dir.join(format!("{key}.json"))
+        } else {
+            self.cache_dir.join(&self.namespace).join(format!("{key}.json"))
+        }
     }
 
     fn load(&mut self, key: &str) -> Option<ModelReply> {

@@ -53,6 +53,8 @@ pub struct ExpectedArtifact {
 pub enum Clause {
     Field(FieldClause),
     BodySection { body_section: BodySectionSpec },
+    EventEmitted { event_emitted: EventEmittedSpec },
+    Utf8Clean { utf8_clean: Utf8CleanSpec },
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +68,8 @@ pub struct FieldClause {
     #[serde(default)]
     pub value: Option<serde_yaml::Value>,
     #[serde(default)]
+    pub values: Option<Vec<String>>,
+    #[serde(default)]
     pub notes: Option<String>,
 }
 
@@ -73,6 +77,24 @@ pub struct FieldClause {
 pub struct BodySectionSpec {
     pub op: String,
     pub values: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EventEmittedSpec {
+    /// Snake-case event-kind name to look for in the event log
+    /// (e.g. `source_resolution`, `filter_dropped`).
+    pub kind: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Utf8CleanSpec {
+    /// Field names to UTF-8-validate. v1.1 supports `title` / `tags` /
+    /// `body` / `filename`. Rust strings are utf8 by construction, so
+    /// this op effectively asserts the field is populated.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 /// Outcome of asserting a contract: which clauses passed, which failed,
@@ -138,17 +160,17 @@ pub fn assert_contract(
     contract: &Contract,
     interpreted: Option<&InterpretedDoc>,
     write_plan: &WritePlan,
-    _events: &[Event],
+    events: &[Event],
 ) -> ContractReport {
     let mut report = ContractReport::default();
     for c in &contract.must {
-        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::Must);
+        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::Must);
     }
     for c in &contract.should {
-        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::Should);
+        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::Should);
     }
     for c in &contract.may_break {
-        evaluate_clause(c, interpreted, write_plan, &mut report, ClauseLevel::MayBreak);
+        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::MayBreak);
     }
     report
 }
@@ -164,6 +186,7 @@ fn evaluate_clause(
     clause: &Clause,
     interpreted: Option<&InterpretedDoc>,
     write_plan: &WritePlan,
+    events: &[Event],
     report: &mut ContractReport,
     level: ClauseLevel,
 ) {
@@ -172,7 +195,101 @@ fn evaluate_clause(
         Clause::BodySection { body_section } => {
             evaluate_body_section(body_section, write_plan, report, level)
         }
+        Clause::EventEmitted { event_emitted } => {
+            evaluate_event_emitted(event_emitted, events, report, level)
+        }
+        Clause::Utf8Clean { utf8_clean } => {
+            evaluate_utf8_clean(utf8_clean, interpreted, report, level)
+        }
     }
+}
+
+fn evaluate_event_emitted(
+    spec: &EventEmittedSpec,
+    events: &[Event],
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let label = format!("event_emitted kind `{}`", spec.kind);
+    let found = events.iter().any(|e| event_kind_name(&e.kind) == spec.kind);
+    if found {
+        record_pass(report, level, &label);
+    } else {
+        record_failure(
+            report,
+            level,
+            &label,
+            &format!("no event with kind `{}` was emitted", spec.kind),
+        );
+    }
+}
+
+/// Map an EventKind variant to its snake_case discriminator name
+/// (the same name serde writes when serializing).
+fn event_kind_name(kind: &ovp_core::EventKind) -> &'static str {
+    use ovp_core::EventKind::*;
+    match kind {
+        RunStarted => "run_started",
+        RunCompleted { .. } => "run_completed",
+        SourceProduced { .. } => "source_produced",
+        SourceExhausted { .. } => "source_exhausted",
+        RecordSeen { .. } => "record_seen",
+        RecordForwarded { .. } => "record_forwarded",
+        FilterDropped { .. } => "filter_dropped",
+        FilterCompleted { .. } => "filter_completed",
+        FilterErrored { .. } => "filter_errored",
+        SinkEmitted { .. } => "sink_emitted",
+        PlanFinalized { .. } => "plan_finalized",
+    }
+}
+
+fn evaluate_utf8_clean(
+    spec: &Utf8CleanSpec,
+    interpreted: Option<&InterpretedDoc>,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let label = format!("utf8_clean paths {:?}", spec.paths);
+    // Rust `String` is utf8 by construction. utf8_clean reduces to "is
+    // the named field populated at all". For paths we don't recognize,
+    // mark as skipped rather than passing silently.
+    let interp = match interpreted {
+        Some(d) => d,
+        None => {
+            record_failure(report, level, &label, "no InterpretedDoc to validate");
+            return;
+        }
+    };
+    let mut unknown_paths = Vec::new();
+    for path in &spec.paths {
+        let ok = match path.as_str() {
+            "title" => !interp.title.is_empty(),
+            "tags" => interp.tags.iter().all(|t| !t.is_empty()),
+            "body" | "body_markdown" => true, // dimensions populated by parser is enough
+            "filename" => true, // path generation is internal; can't fail utf8
+            other => {
+                unknown_paths.push(other.to_string());
+                continue;
+            }
+        };
+        if !ok {
+            record_failure(
+                report,
+                level,
+                &label,
+                &format!("path `{path}` is empty or invalid"),
+            );
+            return;
+        }
+    }
+    if !unknown_paths.is_empty() {
+        report.skipped.push(format!(
+            "{label} (unknown path(s) {:?})",
+            unknown_paths
+        ));
+        return;
+    }
+    record_pass(report, level, &label);
 }
 
 fn evaluate_field_clause(
@@ -200,6 +317,8 @@ fn evaluate_field_clause(
     };
     let result = match op {
         "equals" => op_equals(&fc.field, fc.value.as_ref(), interp),
+        "not_equals" => op_not_equals(&fc.field, fc.value.as_ref(), interp),
+        "matches_one_of" => op_matches_one_of(&fc.field, fc.values.as_deref(), interp),
         "type" => op_type(&fc.field, fc.value.as_ref(), interp),
         "length_gte" => op_length_gte(&fc.field, fc.value.as_ref(), interp),
         "non_empty" => op_non_empty(&fc.field, interp),
@@ -318,6 +437,51 @@ fn op_equals(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDo
         FieldValue::OptStr(None) => Err("expected string, field is absent".into()),
         FieldValue::StrList(_) => Err("equals not valid on list field".into()),
         FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
+}
+
+fn op_not_equals(
+    field: &str,
+    value: Option<&serde_yaml::Value>,
+    doc: &InterpretedDoc,
+) -> Result<(), String> {
+    let forbidden = value
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "not_equals: missing string value".to_string())?;
+    match field_value(field, doc) {
+        FieldValue::Str(s) | FieldValue::OptStr(Some(s)) => {
+            if s == forbidden {
+                Err(format!("field equals forbidden value `{forbidden}`"))
+            } else {
+                Ok(())
+            }
+        }
+        FieldValue::OptStr(None) => Ok(()),
+        FieldValue::StrList(_) => Err("not_equals not valid on list field".into()),
+        FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
+}
+
+fn op_matches_one_of(
+    field: &str,
+    values: Option<&[String]>,
+    doc: &InterpretedDoc,
+) -> Result<(), String> {
+    let candidates = values.ok_or_else(|| "matches_one_of: missing `values` list".to_string())?;
+    if candidates.is_empty() {
+        return Err("matches_one_of: empty values list".into());
+    }
+    let s = match field_value(field, doc) {
+        FieldValue::Str(s) => s,
+        FieldValue::OptStr(Some(s)) => s,
+        FieldValue::OptStr(None) => return Err("field absent".into()),
+        FieldValue::StrList(_) => return Err("matches_one_of not valid on list field".into()),
+        FieldValue::Unknown => return Err(format!("unknown field `{field}`")),
+    };
+    if candidates.iter().any(|c| c == s) {
+        Ok(())
+    } else {
+        Err(format!("`{s}` not in {candidates:?}"))
     }
 }
 

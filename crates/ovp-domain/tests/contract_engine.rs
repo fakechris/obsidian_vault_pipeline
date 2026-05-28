@@ -140,3 +140,114 @@ fn no_interpreted_doc_fails_field_clauses() {
         "expected field clauses to fail when no InterpretedDoc is produced"
     );
 }
+
+// --- v1.1 ops: not_equals / matches_one_of / event_emitted / utf8_clean ----
+
+fn mixed_lang_contract_path() -> std::path::PathBuf {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    std::path::Path::new(&manifest_dir)
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join("fixtures/article_mixed_lang/expected/contract.yaml")
+}
+
+#[test]
+fn mixed_lang_contract_parses() {
+    // No assertion run; just confirms the contract.yaml deserializes with
+    // all v1.1 ops in place (not_equals, matches_one_of, event_emitted,
+    // utf8_clean). Catches schema regressions before v1.1 work starts.
+    let contract = load_contract(&mixed_lang_contract_path()).expect("mixed_lang contract loads");
+    assert!(!contract.must.is_empty());
+}
+
+#[test]
+fn not_equals_op() {
+    // Hand-roll a tiny contract with not_equals.
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - field: source
+    op: not_equals
+    value: "https://forbidden.example/"
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+
+    let mut doc = happy_interpreted();
+    doc.source_url = "https://ok.example/".into();
+    let plan = happy_plan(HAPPY_BODY);
+    let report = assert_contract(&contract, Some(&doc), &plan, &[]);
+    assert!(report.must_clean());
+
+    doc.source_url = "https://forbidden.example/".into();
+    let report = assert_contract(&contract, Some(&doc), &plan, &[]);
+    assert!(!report.must_clean());
+}
+
+#[test]
+fn matches_one_of_op() {
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - field: source
+    op: matches_one_of
+    values:
+      - "https://a.example/"
+      - "https://b.example/"
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let plan = happy_plan(HAPPY_BODY);
+
+    let mut doc = happy_interpreted();
+    doc.source_url = "https://a.example/".into();
+    assert!(assert_contract(&contract, Some(&doc), &plan, &[]).must_clean());
+
+    doc.source_url = "https://c.example/".into();
+    assert!(!assert_contract(&contract, Some(&doc), &plan, &[]).must_clean());
+}
+
+#[test]
+fn event_emitted_op() {
+    use ovp_core::{Event, EventKind, EventTs, RunId};
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - event_emitted:
+      kind: run_started
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let plan = happy_plan(HAPPY_BODY);
+    let doc = happy_interpreted();
+
+    // Without the event: fails.
+    let report = assert_contract(&contract, Some(&doc), &plan, &[]);
+    assert!(!report.must_clean());
+
+    // With the event: passes.
+    let events = vec![Event::new(RunId::new("r"), EventTs::new(0), EventKind::RunStarted)];
+    let report = assert_contract(&contract, Some(&doc), &plan, &events);
+    assert!(report.must_clean(), "{:?}", report.must_failed);
+}
+
+#[test]
+fn utf8_clean_op() {
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - utf8_clean:
+      paths: [title, tags]
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let plan = happy_plan(HAPPY_BODY);
+
+    let doc = happy_interpreted();
+    assert!(assert_contract(&contract, Some(&doc), &plan, &[]).must_clean());
+
+    let mut empty_title = happy_interpreted();
+    empty_title.title = String::new();
+    assert!(!assert_contract(&contract, Some(&empty_title), &plan, &[]).must_clean());
+}
