@@ -13,5 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
+ovp-domain = { path = "../ovp-domain" }
+ovp-llm = { path = "../ovp-llm" }
 clap = { workspace = true }
 serde_json = { workspace = true }

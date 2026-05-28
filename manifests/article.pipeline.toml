@@ -1,0 +1,18 @@
+# v1 article pipeline. Effect client wiring (which ModelClient, which
+# cache path, which model) is app-layer — see ovp-cli/src/commands/
+# interpret_article.rs. Per invariant #8 footnote: manifest = topology,
+# app layer = wiring.
+[pipeline]
+nodes = [
+  "markdown_inbox",
+  "prompt_builder",
+  "llm_invoker",
+  "article_parser",
+  "article_vault_plan",
+]
+edges = [
+  ["markdown_inbox", "prompt_builder"],
+  ["prompt_builder", "llm_invoker"],
+  ["llm_invoker", "article_parser"],
+  ["article_parser", "article_vault_plan"],
+]

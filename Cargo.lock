@@ -304,6 +304,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
  "serde_json",
 ]
 
