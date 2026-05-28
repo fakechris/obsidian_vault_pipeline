@@ -16,8 +16,8 @@ pub mod fakes;
 pub use error::{CoreError, GraphError, ManifestError};
 pub use event::{Event, EventKind, EventLog, EventTs};
 pub use filter::{
-    CompleteReason, DropReason, FilterDecision, FilterError, ReasonCode, Sink, SinkOutput, Source,
-    SourceOutput, Transform,
+    CompleteReason, DropReason, EffectfulTransform, FilterDecision, FilterError, ReasonCode, Sink,
+    SinkOutput, Source, SourceOutput, Transform,
 };
 pub use graph::{GraphRunner, RunReport};
 pub use manifest::{PipelineBody, PipelineManifest};

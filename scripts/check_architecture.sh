@@ -91,6 +91,27 @@ else
     fi
 fi
 
+# === Invariant #9: no Transform impl holds an effect client ===
+# Heuristic: any file declaring `impl Transform<...> for <T>` and ALSO
+# containing `Box<dyn (.*Client|.*Store|.*Fetcher)>` is using the wrong
+# trait — must implement `EffectfulTransform` instead.
+echo -n "ok    [no Transform impl holds an effect client] ... "
+violators=""
+# `\bimpl Transform<` so we don't match EffectfulTransform.
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if grep -E 'Box<dyn[^>]*(Client|Store|Fetcher)>' "$f" >/dev/null 2>&1; then
+        violators="${violators}${f}"$'\n'
+    fi
+done < <(grep -rlE '^impl Transform<' crates --include='*.rs' 2>/dev/null || true)
+if [[ -n "$violators" ]]; then
+    echo "FAIL"
+    printf '%s' "$violators"
+    fail=1
+else
+    echo "passed"
+fi
+
 if [[ $fail -ne 0 ]]; then
     echo
     echo "Architecture check FAILED. See docs/invariants.md."
@@ -100,7 +121,8 @@ fi
 echo
 echo "Architecture check passed."
 echo
-echo "Note: invariants #8 (explicit topology), #9 (transforms pure),"
-echo "      #10 (writes via WritePlan), #11 (derived state rebuildable),"
-echo "      and #12 (EventLog append-only) are semantic and cannot be"
-echo "      grep-enforced. They are gated by code review."
+echo "Note: invariants #8 (explicit topology), #10 (writes via WritePlan),"
+echo "      #11 (derived state rebuildable), and #12 (EventLog append-only)"
+echo "      are semantic and cannot be grep-enforced. They are gated by code"
+echo "      review. #9 (Transform purity) is partially gated by the"
+echo "      effect-client heuristic above."

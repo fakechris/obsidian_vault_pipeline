@@ -117,8 +117,33 @@ pub trait Source<B> {
     fn produce(&mut self) -> SourceOutput<B>;
 }
 
-/// Pure: Record in, FilterDecision out. No I/O, no Store access, no spawned processes.
+/// Pure transform: Record in, FilterDecision out. No I/O, no Store access,
+/// no spawned processes, no held effect clients. Same input → same output.
+///
+/// If the node needs to call a network service, a database, the LLM, or
+/// any other effectful client, use [`EffectfulTransform`] instead. The
+/// runner treats both identically; the trait split is a type-system
+/// signal of intent that CI greps for.
 pub trait Transform<B> {
+    fn step_id(&self) -> &StepId;
+    fn process(&mut self, record: Record<B>) -> FilterDecision<B>;
+}
+
+/// Sync facade over an injected effect client. Holds something like a
+/// `Box<dyn ModelClient>`, `Box<dyn Store>`, or `Box<dyn Fetcher>` and
+/// calls it from `process()`. The pipeline sees a sync method; whether
+/// the underlying client is blocking or `Handle::block_on(async)` is
+/// the client's business.
+///
+/// Replayable in tests when the client is a fixture or cached impl.
+/// When the executor becomes async-aware (post-v1), EffectfulTransforms
+/// are candidates for "suspend at this node, drive the effect outside
+/// the pipeline, resume with the response" — not Transforms.
+///
+/// Trait shape is intentionally identical to [`Transform`] — only the
+/// trait identity differs. The split exists for architectural intent +
+/// CI enforcement, not for runtime behavior.
+pub trait EffectfulTransform<B> {
     fn step_id(&self) -> &StepId;
     fn process(&mut self, record: Record<B>) -> FilterDecision<B>;
 }

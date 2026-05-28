@@ -2,15 +2,15 @@
 
 These rules are enforced by `scripts/check_architecture.sh` (CI grep gate) and by code review. They exist because the previous Python system drifted into a god-class + subprocess-self-call + registry-sprawl mess. If you find yourself wanting to violate one of these, **stop and discuss before patching the invariant**.
 
-## 1. `ovp-core` is domain-blind
+## 1. `ovp-core` is domain-blind AND I/O-blind
 
-`ovp-core` knows about `Record`, `Filter`, `WritePlan`, `Event`, `PipelineManifest`. It does **not** know about Obsidian, Markdown, SQLite, LLMs, frontmatter, MOC, six-dimension quality scoring, or any business concept.
+`ovp-core` knows about `Record<B>`, `Filter` traits, `WritePlan`, `Event`, `PipelineManifest`, `GraphRunner`. It does **not** know about Obsidian, Markdown, SQLite, LLMs, frontmatter, MOC, six-dimension quality scoring, or any business concept. It also does **not** know about HTTP clients, file system writes (beyond Source ingestion + Sink-emitted WriteOps), databases, or LLM providers. Effect clients (`ModelClient`, future `Store`, `Fetcher`) live in their own crates.
 
 ## 2. No `serde_json::Value` in core public API
 
-`ovp-core`'s public types must be typed end to end. Dynamic JSON is fine inside test fixtures, plugin protocol boundaries, and debug dumps — not in `RecordBody`, `WriteOp` payloads, or any function signature exported from `ovp-core`.
+`ovp-core`'s public types must be typed end to end. Dynamic JSON is fine inside test fixtures, plugin protocol boundaries, and debug dumps — not in record bodies, `WriteOp` payloads, or any function signature exported from `ovp-core`.
 
-## 3. No `HashMap<String, _>` payloads in `RecordBody` / `WriteOp`
+## 3. No `HashMap<String, _>` payloads in `Record<B>` body / `WriteOp`
 
 Sum types over named structs, not maps. This is the single biggest defense against the legacy system's `Mapping[str, Any]` rot.
 
@@ -22,9 +22,9 @@ Sum types over named structs, not maps. This is the single biggest defense again
 
 Same reason as #4. Distribution must produce a self-contained binary.
 
-## 6. No `async` / `tokio` / `async-std` in v0.1
+## 6. No async runtime in `ovp-core`
 
-Sync only. We add async if and only if a real workload demonstrates it's needed — and not before the core is validated.
+`ovp-core` is sync. Forever. The runner is single-threaded. `async fn` / `.await` / `tokio::` / `futures::` are banned in `crates/ovp-core/src`. Effect-client crates (e.g. `ovp-llm`) MAY have async impls behind feature flags, but their async-ness never leaks into the pipeline trait signatures. The day there's a real concurrency need, the executor (not `ovp-core`) becomes async-aware and lifts the I/O call out of the pipeline at the `EffectfulTransform` boundary.
 
 ## 7. No legacy imports
 
@@ -34,9 +34,22 @@ No `from ovp_pipeline ...`, no Rust binding to `ovp_pipeline.*`. The grep check 
 
 Production pipelines are constructed from a `PipelineManifest` (TOML). Auto-wiring may be useful for diagnostics/visualization, but never for production runs.
 
-## 9. Transforms are pure
+**Footnote**: a manifest describes **topology** (which nodes, which edges). It does NOT describe **wiring** (which `ModelClient` impl, which prompt asset version, which cache path, which model name). Wiring is the app layer's concern. The combined `(manifest topology, app wiring)` is the explicit single source of truth — neither alone is.
 
-A `Transform` impl must not write files, write DB, mutate a `Store`, spawn processes, or do network I/O. It takes a `Record`, returns a `FilterDecision`. Side effects belong to `Sink` (which only produces `WritePlan` fragments) and `PlanApplier` (the only thing allowed to actually write).
+## 9. Transform is pure. EffectfulTransform is the only I/O-bearing node.
+
+A `Transform<B>` impl must be a pure function from `Record<B>` to `FilterDecision<B>`. No file writes, no DB calls, no network, no spawned processes, no held effect clients. Same input → same output, every run.
+
+If a node needs to call a network service, a database, the LLM, or any other effectful client, it implements `EffectfulTransform<B>` instead. EffectfulTransform is a sync facade over an injected effect client (`Box<dyn ModelClient>`, `Box<dyn Store>`, etc.). Replayable in tests when the client is a fixture or cached impl. The runner treats both traits identically; the split exists as a type-system signal of intent.
+
+Side-effect categories by node kind:
+- **`Source<B>`**: ingestion boundary — allowed to read files, poll external systems, anything that brings records INTO the pipeline.
+- **`Transform<B>`**: pure. No I/O of any kind.
+- **`EffectfulTransform<B>`**: sync facade over an effect client. Documented, type-distinguished.
+- **`Sink<B>`**: produces `WriteOp` records ONLY. Does not perform the writes themselves.
+- **`PlanApplier`** (post-v0.1, separate executor stage): the only thing allowed to actually mutate the vault, the canonical store, or the event log.
+
+CI gate: any file that defines `impl Transform<...> for <T>` and `<T>` has a field of type `Box<dyn (.+Client|.+Store|.+Fetcher)>` is rejected. Use `EffectfulTransform` instead.
 
 ## 10. Writes happen only through `WritePlan`
 
@@ -55,15 +68,14 @@ Events record what happened, in order. They are not a business query store.
 These would violate the spirit of #2/#3 if shipped long-term, but are acceptable v0.1 stubs because real domain types don't exist yet:
 
 - **`CanonicalUpsertOp.payload: String`** and **`EventAppendOp.payload: String`** in `crates/ovp-core/src/plan.rs`. The fields are typed-as-string-for-now because there is no domain payload type to put there. Will become generic / sum-typed when `ovp-domain` lands.
-- **No async runtime anywhere.** When the LLM client crate arrives, invariant #6 will be relaxed *for that crate only* (likely via an explicit `[lints]` exception in its `Cargo.toml`), and the gate will be updated. `ovp-core` itself stays sync.
 
-If these stubs are still here three crates from now, the deferral wasn't justified — flag it.
+If this stub is still here three crates from now, the deferral wasn't justified — flag it.
 
 ## File budgets (soft, but enforced by review)
 
-- `ovp-core` total: ≤1200 LOC in v0.1
-- Single file: ≤300 LOC
-- Single function: ≤60 LOC
+- `ovp-core` total: ≤1500 LOC (was 1200 in v0.1; bumped for the EffectfulTransform split + per-edge queue work)
+- Single file: ≤400 LOC (was 300; `graph.rs` is structurally complex)
+- Single function: ≤80 LOC
 - Single type: ≤200 LOC
 
 If a file blows past these, split it before merging.

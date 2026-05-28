@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::error::{CoreError, GraphError};
 use crate::event::{Event, EventKind, EventLog};
 use crate::filter::{
-    FilterDecision, Sink, SinkOutput, Source, SourceOutput, Transform,
+    EffectfulTransform, FilterDecision, Sink, SinkOutput, Source, SourceOutput, Transform,
 };
 use crate::manifest::PipelineManifest;
 use crate::plan::WritePlan;
@@ -13,6 +13,7 @@ use crate::record::{Record, RunId};
 enum Node<B> {
     Source(Box<dyn Source<B>>),
     Transform(Box<dyn Transform<B>>),
+    EffectfulTransform(Box<dyn EffectfulTransform<B>>),
     Sink(Box<dyn Sink<B>>),
 }
 
@@ -21,6 +22,7 @@ impl<B> Node<B> {
         match self {
             Node::Source(_) => "source",
             Node::Transform(_) => "transform",
+            Node::EffectfulTransform(_) => "effectful_transform",
             Node::Sink(_) => "sink",
         }
     }
@@ -69,6 +71,14 @@ impl<B: Clone> GraphRunner<B> {
         self.nodes.insert(name.into(), Node::Transform(Box::new(tx)));
     }
 
+    pub fn register_effectful_transform(
+        &mut self,
+        name: impl Into<String>,
+        tx: impl EffectfulTransform<B> + 'static,
+    ) {
+        self.nodes.insert(name.into(), Node::EffectfulTransform(Box::new(tx)));
+    }
+
     pub fn register_sink(&mut self, name: impl Into<String>, snk: impl Sink<B> + 'static) {
         self.nodes.insert(name.into(), Node::Sink(Box::new(snk)));
     }
@@ -110,7 +120,7 @@ impl<B: Clone> GraphRunner<B> {
             match &self.nodes[n] {
                 Node::Source(_) => source_count += 1,
                 Node::Sink(_) => sink_count += 1,
-                Node::Transform(_) => {}
+                Node::Transform(_) | Node::EffectfulTransform(_) => {}
             }
         }
         if source_count == 0 {
@@ -176,82 +186,33 @@ impl<B: Clone> GraphRunner<B> {
                 }
                 Node::Transform(mut tx) => {
                     let inputs = gather_inputs(name, &upstream, &mut edge_queue);
-                    let mut outputs: Vec<Record<B>> = Vec::new();
-                    let mut completed = false;
-                    for rec in inputs {
-                        if completed {
-                            // Transform declared itself done; remaining records
-                            // for this run are intentionally dropped with an event.
-                            log.record(
-                                run_id.clone(),
-                                EventKind::FilterDropped {
-                                    record_id: rec.id.clone(),
-                                    step_id: tx.step_id().clone(),
-                                    reason: crate::filter::DropReason::new(
-                                        "runner.transform.post_complete",
-                                        "record arrived after transform declared complete",
-                                    ),
-                                },
-                            );
-                            records_dropped += 1;
-                            continue;
-                        }
-                        records_seen += 1;
-                        log.record(
-                            run_id.clone(),
-                            EventKind::RecordSeen {
-                                record_id: rec.id.clone(),
-                                step_id: tx.step_id().clone(),
-                            },
-                        );
-                        let rid = rec.id.clone();
-                        match tx.process(rec) {
-                            FilterDecision::Forward(rs) | FilterDecision::FanOut(rs) => {
-                                log.record(
-                                    run_id.clone(),
-                                    EventKind::RecordForwarded {
-                                        record_id: rid,
-                                        step_id: tx.step_id().clone(),
-                                        fanout: rs.len() as u64,
-                                    },
-                                );
-                                outputs.extend(rs);
-                            }
-                            FilterDecision::Drop(reason) => {
-                                records_dropped += 1;
-                                log.record(
-                                    run_id.clone(),
-                                    EventKind::FilterDropped {
-                                        record_id: rid,
-                                        step_id: tx.step_id().clone(),
-                                        reason,
-                                    },
-                                );
-                            }
-                            FilterDecision::Complete(reason) => {
-                                completed = true;
-                                log.record(
-                                    run_id.clone(),
-                                    EventKind::FilterCompleted {
-                                        step_id: tx.step_id().clone(),
-                                        reason,
-                                    },
-                                );
-                            }
-                            FilterDecision::Error(err) => {
-                                log.record(
-                                    run_id.clone(),
-                                    EventKind::FilterErrored {
-                                        record_id: Some(rid),
-                                        step_id: tx.step_id().clone(),
-                                        error: err,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    broadcast(name, &outs, outputs, &mut edge_queue);
+                    let (seen, dropped) = run_transform_stage(
+                        name,
+                        TxRef::Plain(&mut *tx),
+                        inputs,
+                        &outs,
+                        &run_id,
+                        &mut log,
+                        &mut edge_queue,
+                    );
+                    records_seen += seen;
+                    records_dropped += dropped;
                     self.nodes.insert(name.clone(), Node::Transform(tx));
+                }
+                Node::EffectfulTransform(mut tx) => {
+                    let inputs = gather_inputs(name, &upstream, &mut edge_queue);
+                    let (seen, dropped) = run_transform_stage(
+                        name,
+                        TxRef::Effectful(&mut *tx),
+                        inputs,
+                        &outs,
+                        &run_id,
+                        &mut log,
+                        &mut edge_queue,
+                    );
+                    records_seen += seen;
+                    records_dropped += dropped;
+                    self.nodes.insert(name.clone(), Node::EffectfulTransform(tx));
                 }
                 Node::Sink(mut snk) => {
                     let inputs = gather_inputs(name, &upstream, &mut edge_queue);
@@ -356,4 +317,118 @@ fn gather_inputs<B>(
         }
     }
     out
+}
+
+/// Internal-only wrapper so the runner can dispatch through Transform or
+/// EffectfulTransform with identical code. The trait split is preserved at
+/// registration time (and via CI grep); at execution time they're the same.
+enum TxRef<'a, B> {
+    Plain(&'a mut dyn Transform<B>),
+    Effectful(&'a mut dyn EffectfulTransform<B>),
+}
+
+impl<'a, B> TxRef<'a, B> {
+    fn step_id(&self) -> &crate::record::StepId {
+        match self {
+            TxRef::Plain(t) => t.step_id(),
+            TxRef::Effectful(t) => t.step_id(),
+        }
+    }
+    fn process(&mut self, record: Record<B>) -> FilterDecision<B> {
+        match self {
+            TxRef::Plain(t) => t.process(record),
+            TxRef::Effectful(t) => t.process(record),
+        }
+    }
+}
+
+/// Drive a sequence of records through a (possibly effectful) transform.
+/// Returns `(records_seen, records_dropped)`. Broadcasts outputs into
+/// downstream edge queues. Logs every per-record decision.
+fn run_transform_stage<B: Clone>(
+    me: &str,
+    mut tx: TxRef<'_, B>,
+    inputs: Vec<Record<B>>,
+    outs: &[String],
+    run_id: &RunId,
+    log: &mut EventLog,
+    edge_queue: &mut HashMap<(String, String), Vec<Record<B>>>,
+) -> (u64, u64) {
+    let mut outputs: Vec<Record<B>> = Vec::new();
+    let mut completed = false;
+    let mut seen: u64 = 0;
+    let mut dropped: u64 = 0;
+
+    for rec in inputs {
+        if completed {
+            log.record(
+                run_id.clone(),
+                EventKind::FilterDropped {
+                    record_id: rec.id.clone(),
+                    step_id: tx.step_id().clone(),
+                    reason: crate::filter::DropReason::new(
+                        "runner.transform.post_complete",
+                        "record arrived after transform declared complete",
+                    ),
+                },
+            );
+            dropped += 1;
+            continue;
+        }
+        seen += 1;
+        log.record(
+            run_id.clone(),
+            EventKind::RecordSeen {
+                record_id: rec.id.clone(),
+                step_id: tx.step_id().clone(),
+            },
+        );
+        let rid = rec.id.clone();
+        match tx.process(rec) {
+            FilterDecision::Forward(rs) | FilterDecision::FanOut(rs) => {
+                log.record(
+                    run_id.clone(),
+                    EventKind::RecordForwarded {
+                        record_id: rid,
+                        step_id: tx.step_id().clone(),
+                        fanout: rs.len() as u64,
+                    },
+                );
+                outputs.extend(rs);
+            }
+            FilterDecision::Drop(reason) => {
+                dropped += 1;
+                log.record(
+                    run_id.clone(),
+                    EventKind::FilterDropped {
+                        record_id: rid,
+                        step_id: tx.step_id().clone(),
+                        reason,
+                    },
+                );
+            }
+            FilterDecision::Complete(reason) => {
+                completed = true;
+                log.record(
+                    run_id.clone(),
+                    EventKind::FilterCompleted {
+                        step_id: tx.step_id().clone(),
+                        reason,
+                    },
+                );
+            }
+            FilterDecision::Error(err) => {
+                log.record(
+                    run_id.clone(),
+                    EventKind::FilterErrored {
+                        record_id: Some(rid),
+                        step_id: tx.step_id().clone(),
+                        error: err,
+                    },
+                );
+            }
+        }
+    }
+    broadcast(me, outs, outputs, edge_queue);
+    (seen, dropped)
 }
