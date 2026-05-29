@@ -227,6 +227,46 @@ _INSERT_SQL = (
 )
 
 
+def _resolve_concept_id(conn, *, pack: str, cluster_id: str) -> str:
+    """Return the concept_id that currently OWNS ``cluster_id``.
+
+    BL-115 review (codex P1): when re-synthesizing a stale concept
+    that inherited its identity across a re-cluster, the ledger maps
+    ``concept_id=old`` → ``current_cluster_id=new``.  The synthesis
+    loop used to set ``concept_id = cluster_id`` unconditionally, so a
+    re-synth of cluster ``new`` wrote ``concept_id=new`` — which does
+    NOT supersede the active ``concept_id=old`` crystal (supersede
+    keys on concept_id).  Result: the old crystal stays active, a
+    second concept is minted for the same cluster, and staleness
+    reschedules ``old`` forever.
+
+    Resolve through the ledger instead: find the concept whose
+    ``current_cluster_id`` is this cluster AND still has an active
+    crystal; that's the owner whose version chain we must extend.
+    Fall back to ``cluster_id`` when no such row exists (cold-start
+    synthesis, or a brand-new cluster the ledger hasn't seen) — that
+    preserves the original concept_id==cluster_id seeding.
+    """
+    try:
+        row = conn.execute(
+            """
+            SELECT cil.concept_id
+              FROM concept_identity_ledger cil
+              JOIN community_crystals cc
+                ON cc.pack = cil.pack AND cc.concept_id = cil.concept_id
+               AND cc.superseded_by_synthesized_at = ''
+             WHERE cil.pack = ? AND cil.current_cluster_id = ?
+             ORDER BY cil.last_matched_at DESC
+             LIMIT 1
+            """,
+            (pack, cluster_id),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Ledger table absent (pre-v10 DB) — fall back to identity.
+        return cluster_id
+    return row[0] if row and row[0] else cluster_id
+
+
 def _upsert_concept_ledger(
     conn,
     *,
@@ -510,12 +550,14 @@ def synthesize_community_crystals(
                 )
                 continue
 
-            # BL-114: pre-BL-115 the matcher hasn't landed yet, so a
-            # fresh synthesis is always its own concept (concept_id
-            # == cluster_id).  BL-115 replaces this seed with the
-            # Jaccard-matcher result when an existing concept's
-            # current_cluster_id has shifted.
-            concept_id = cluster_id
+            # BL-115 (codex P1 fix): resolve the OWNING concept_id
+            # through the ledger so a re-synth of an inherited concept
+            # extends its existing version chain instead of forking a
+            # new identity.  Falls back to ``cluster_id`` for cold-start
+            # / brand-new clusters (the original seeding behaviour).
+            concept_id = _resolve_concept_id(
+                conn, pack=pack_name, cluster_id=cluster_id,
+            )
             crystal = CommunityCrystal(
                 pack=pack_name,
                 cluster_id=cluster_id,

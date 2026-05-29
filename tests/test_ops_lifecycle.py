@@ -23,6 +23,7 @@ from ovp_pipeline.ops_lifecycle import (
     STATE_SYNTHESIZED,
     SUBSTATE_PREPARED,
     SUBSTATE_PROJECTED,
+    _crystal_for_cluster,
     lifecycle_counts,
     lifecycle_state_of,
     lifecycle_states_for_kind,
@@ -581,3 +582,63 @@ def test_debug_only_event_does_not_classify_alone():
     # gap rather than hide it.
     assert state.state == STATE_RECEIVED
     assert state.sub_state == SUBSTATE_PREPARED
+
+
+class TestCrystalForClusterLedgerResolution:
+    """Codex P2 regression: ``_crystal_for_cluster`` must resolve the
+    CURRENT cluster_id through the ledger.  An inherited-but-fresh
+    concept's active crystal still carries the synthesis-time
+    cluster_id, so a direct ``WHERE cluster_id = <current>`` lookup
+    misses it and the concept mis-classifies as unsynthesized."""
+
+    def test_inherited_cluster_finds_crystal_via_ledger(self):
+        conn = _make_db()
+        try:
+            # Active crystal keyed on the OLD cluster_id / concept_id.
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version, concept_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (PACK, "cluster::old", "b", "[]",
+                 "2026-05-20T00:00:00+00:00", "m", "v1", "cluster::old"),
+            )
+            # BL-115 inheritance: ledger now maps old → current=new.
+            conn.execute(
+                "UPDATE concept_identity_ledger "
+                "SET current_cluster_id='cluster::new' "
+                "WHERE concept_id='cluster::old'",
+            )
+            # Lifecycle iterates the CURRENT graph_clusters id (new).
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::new")
+            assert latest == "2026-05-20T00:00:00+00:00"
+            assert active is True
+        finally:
+            conn.close()
+
+    def test_direct_cluster_id_still_resolves(self):
+        # Non-inherited concept (concept_id == cluster_id) still works.
+        conn = _make_db()
+        try:
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (PACK, "cluster::z", "b", "[]",
+                 "2026-05-21T00:00:00+00:00", "m", "v1"),
+            )
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::z")
+            assert latest == "2026-05-21T00:00:00+00:00"
+            assert active is True
+        finally:
+            conn.close()
+
+    def test_no_crystal_returns_empty(self):
+        conn = _make_db()
+        try:
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::none")
+            assert latest == ""
+            assert active is False
+        finally:
+            conn.close()

@@ -17,6 +17,7 @@ from ovp_pipeline.synthesis.community_crystal import (
     CRYSTAL_PROMPT_VERSION,
     CommunityCrystal,
     _crystal_filename,
+    _resolve_concept_id,
     _select_top_members,
     render_crystal_markdown,
     synthesize_community_crystals,
@@ -175,6 +176,87 @@ class TestSelectTopMembers:
 
     def test_zero_k_returns_empty(self):
         assert _select_top_members(["a", "b"], top_k=0) == []
+
+
+class TestResolveConceptId:
+    """Codex P1 regression: re-synth of an inherited concept must
+    extend the EXISTING concept's version chain, not fork a new
+    identity keyed on the current cluster_id."""
+
+    def _conn(self, tmp_path):
+        import sqlite3
+        db = tmp_path / "knowledge.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(SCHEMA_CREATE)
+        return conn
+
+    def test_inherited_concept_resolves_to_original_id(self, tmp_path):
+        # Active crystal owns concept_id=old; ledger maps old →
+        # current_cluster_id=new (a re-cluster inherited the identity).
+        conn = self._conn(tmp_path)
+        try:
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version, concept_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("research-tech", "cluster::old", "b", "[]",
+                 "2026-05-20T00:00:00+00:00", "m", "v1", "cluster::old"),
+            )
+            # Simulate BL-115 inheritance: ledger now points old → new.
+            conn.execute(
+                "UPDATE concept_identity_ledger "
+                "SET current_cluster_id='cluster::new', "
+                "    last_matched_at='2026-05-26T00:00:00+00:00' "
+                "WHERE concept_id='cluster::old'",
+            )
+            # Re-synth targets the CURRENT cluster id (new); must
+            # resolve back to the owning concept (old).
+            resolved = _resolve_concept_id(
+                conn, pack="research-tech", cluster_id="cluster::new",
+            )
+            assert resolved == "cluster::old"
+        finally:
+            conn.close()
+
+    def test_unknown_cluster_falls_back_to_cluster_id(self, tmp_path):
+        # Cold-start / brand-new cluster: no ledger mapping → identity.
+        conn = self._conn(tmp_path)
+        try:
+            resolved = _resolve_concept_id(
+                conn, pack="research-tech", cluster_id="cluster::fresh",
+            )
+            assert resolved == "cluster::fresh"
+        finally:
+            conn.close()
+
+    def test_orphaned_concept_not_resolved(self, tmp_path):
+        # A concept whose only crystal is already superseded must NOT
+        # be returned — re-synth of that cluster is a fresh start.
+        conn = self._conn(tmp_path)
+        try:
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version, concept_id,"
+                " superseded_by_synthesized_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("research-tech", "cluster::dead", "b", "[]",
+                 "2026-05-20T00:00:00+00:00", "m", "v1", "cluster::dead",
+                 "2026-05-25T00:00:00+00:00"),
+            )
+            conn.execute(
+                "UPDATE concept_identity_ledger "
+                "SET current_cluster_id='cluster::dead' "
+                "WHERE concept_id='cluster::dead'",
+            )
+            resolved = _resolve_concept_id(
+                conn, pack="research-tech", cluster_id="cluster::dead",
+            )
+            # No ACTIVE crystal → falls back to the cluster_id itself.
+            assert resolved == "cluster::dead"
+        finally:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------

@@ -817,18 +817,56 @@ def _preserve_existing_truth_rows(
     # a placeholder that gets overwritten.
     _INSERT_OR_REPLACE_TABLES = {"concept_identity_ledger"}
 
+    def _source_columns(table_name: str) -> set[str]:
+        """Columns that actually exist in the SOURCE (old) DB.
+
+        BL-115 review (codex P1): the source DB may be an OLDER schema
+        version than the dest temp DB we're preserving INTO — e.g. a
+        forced full rebuild against a v9 DB before the v9→v10 delta
+        migration ran.  Selecting a column that doesn't exist yet
+        (``concept_id``, ``supersede_reason``) raised ``no such column``,
+        the old ``except`` returned ``[]``, and EVERY community_crystal
+        was silently dropped — turning a schema bump into LLM-corpus
+        data loss.  Introspect first so missing columns get a safe
+        default instead of nuking the row set.
+        """
+        try:
+            return {
+                row[1]
+                for row in source_conn.execute(
+                    f"PRAGMA table_info({table_name})"  # noqa: S608 static
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            return set()
+
     def _copy_table(
         table_name: str,
         columns: tuple[str, ...],
         *,
         where_excludes_current: bool,
     ) -> list[tuple[Any, ...]]:
+        present = _source_columns(table_name)
+        if not present:
+            # Table absent in the source DB — nothing to preserve.
+            return []
+        # For any requested column the source lacks, synthesize a
+        # default ('' matches every new column's NOT NULL DEFAULT '').
+        # When ``concept_id`` defaults to '' here, the dest's BL-114
+        # AFTER-INSERT trigger backfills it to ``cluster_id`` and seeds
+        # the ledger — so a v9→full-rebuild now MIGRATES crystals into
+        # the v10 shape instead of dropping them.
+        select_terms = [
+            col if col in present else f"'' AS {col}"
+            for col in columns
+        ]
         column_sql = ", ".join(columns)
+        select_sql = ", ".join(select_terms)
         if where_excludes_current:
-            sql = f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack"
+            sql = f"SELECT {select_sql} FROM {table_name} WHERE pack != ? ORDER BY pack"
             params: tuple[Any, ...] = (exclude_pack,)
         else:
-            sql = f"SELECT {column_sql} FROM {table_name} ORDER BY pack"
+            sql = f"SELECT {select_sql} FROM {table_name} ORDER BY pack"
             params = ()
         try:
             rows = source_conn.execute(sql, params).fetchall()
