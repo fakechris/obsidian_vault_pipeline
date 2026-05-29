@@ -160,6 +160,21 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             description="Rebuild the derived truth and graph projections.",
         ),
         ProcessorContractSpec(
+            name="synthesize",
+            pack=pack_name,
+            stage="synthesize",
+            mode="llm_structured",
+            inputs=("community_crystals", "graph_clusters"),
+            outputs=("community_crystals",),
+            quality_hooks=(),
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_synthesize",
+            description=(
+                "BL-117: budgeted re-synthesis of stale community "
+                "crystals — re-runs LLM only for concepts that fail "
+                "the four-signal staleness test."
+            ),
+        ),
+        ProcessorContractSpec(
             name="ops_state",
             pack=pack_name,
             stage="ops_state",

@@ -1007,7 +1007,9 @@ date: 2026-04-07
     # materialise ``evergreen_revisions`` on existing vaults.
     # BL-085: bumped 7→8 to materialise the ``chats`` projection.
     # PR3: bumped 8→9 for ``page_embeddings.chunk_hash``.
-    assert row[2] == 9
+    # BL-114: bumped 9→10 for ``concept_identity_ledger`` + the
+    # community_crystals.concept_id / supersede_reason columns.
+    assert row[2] == 10
     assert row[3]
 
 
@@ -1076,9 +1078,11 @@ date: 2026-04-07
     # BL-061 bumped KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION 6 → 7 to
     # force a rebuild that materialises the new ``evergreen_revisions``
     # table on existing vaults.  BL-085 bumped 7 → 8 for the ``chats``
-    # projection.  Each future BL that adds a canonical table will
-    # keep bumping this constant; the test should track it.
-    assert markers[-1].projection_schema_version == 9
+    # projection.  PR3 bumped 8 → 9 for ``page_embeddings.chunk_hash``.
+    # BL-114 bumped 9 → 10 for ``concept_identity_ledger``.  Each
+    # future BL that adds a canonical table will keep bumping this
+    # constant; the test should track it.
+    assert markers[-1].projection_schema_version == 10
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
@@ -1090,8 +1094,9 @@ date: 2026-04-07
         ).fetchone()
     # M21 BL-085 bumped projection_schema_version 7 → 8 to ensure
     # vaults rebuild when the chats projection lands.  PR3 bumped
-    # 8 → 9 for page_embeddings.chunk_hash.
-    assert row == (2, 9)
+    # 8 → 9 for page_embeddings.chunk_hash.  BL-114 bumped 9 → 10
+    # for concept_identity_ledger.
+    assert row == (2, 10)
 
 
 def test_ensure_knowledge_db_current_rebuilds_when_projection_schema_version_advances(temp_vault):
@@ -1142,7 +1147,8 @@ date: 2026-04-07
         ).fetchone()
     # BL-061: see version-bump rationale above.  M21 BL-085 bumped
     # to 8.  PR3 bumped to 9 for page_embeddings.chunk_hash.
-    assert row == (1, 9)
+    # BL-114 bumped to 10 for concept_identity_ledger.
+    assert row == (1, 10)
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):

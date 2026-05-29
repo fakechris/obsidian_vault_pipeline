@@ -342,7 +342,21 @@ def _build_latest_digest_info(
         f"/note?path={quote(rel, safe='')}",
         pack_name=requested_pack,
     )
-    return {"date": date_str, "href": href, "teaser": teaser}
+    # BL-119: honest "today" comparison.  Pre-fix the renderer
+    # hardcoded "Today's digest" regardless of whether the latest
+    # file's date actually matched today — so a vault browsed at
+    # 04:00 before the 06:00 LaunchAgent fires showed yesterday's
+    # digest labelled as today's.  Operator-local date matches what
+    # the LaunchAgent uses to filename the file at 06:00 (the file
+    # for ``YYYY-MM-DD`` lands during that day's morning slot).
+    from datetime import datetime
+    today_local = datetime.now().strftime("%Y-%m-%d")
+    return {
+        "date": date_str,
+        "href": href,
+        "teaser": teaser,
+        "is_today": date_str == today_local,
+    }
 
 
 

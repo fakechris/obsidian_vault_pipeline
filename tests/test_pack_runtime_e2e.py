@@ -71,6 +71,10 @@ def test_research_tech_full_profile_runtime_e2e(tmp_path):
     _bind_success_step(pipeline, "registry_sync", calls)
     _bind_success_step(pipeline, "moc", calls)
     _bind_success_step(pipeline, "knowledge_index", calls)
+    # BL-117: budgeted delta synthesis runs between knowledge_index
+    # and ops_state; bind a no-op so the e2e walks the full stages
+    # list (research-tech's full profile now includes ``synthesize``).
+    _bind_success_step(pipeline, "synthesize", calls)
     # M24.1: lifecycle projection step appended after
     # knowledge_index.  Bind a no-op so the e2e walks the full
     # current stages list (research-tech's full profile now
@@ -132,6 +136,8 @@ def test_default_knowledge_compatibility_runtime_from_step_e2e(tmp_path):
     _bind_success_step(pipeline, "registry_sync", calls)
     _bind_success_step(pipeline, "moc", calls)
     _bind_success_step(pipeline, "knowledge_index", calls)
+    # BL-117: same reason as the full-profile test above.
+    _bind_success_step(pipeline, "synthesize", calls)
     # M24.1: same reason as above — default-knowledge reuses the
     # research-tech profile, so the lifecycle step is here too.
     _bind_success_step(pipeline, "ops_state", calls)

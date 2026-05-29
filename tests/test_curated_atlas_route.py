@@ -47,8 +47,45 @@ CREATE TABLE community_crystals (
   source_evergreen_slugs_json TEXT NOT NULL, synthesized_at TEXT NOT NULL,
   llm_model TEXT NOT NULL, prompt_version TEXT NOT NULL,
   superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
+  concept_id TEXT NOT NULL DEFAULT '',
+  supersede_reason TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, cluster_id, synthesized_at)
 );
+
+CREATE TABLE concept_identity_ledger (
+  pack TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  current_cluster_id TEXT NOT NULL DEFAULT '',
+  last_matched_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  lineage_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (pack, concept_id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id = ''
+BEGIN
+  UPDATE community_crystals
+     SET concept_id = NEW.cluster_id
+   WHERE pack = NEW.pack
+     AND cluster_id = NEW.cluster_id
+     AND synthesized_at = NEW.synthesized_at;
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id <> ''
+BEGIN
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
 CREATE TABLE contradiction_crystals (
   pack TEXT NOT NULL, contradiction_id TEXT NOT NULL,
   subject_key TEXT NOT NULL, body_md TEXT NOT NULL,
@@ -90,7 +127,7 @@ def _setup_vault(tmp_path: Path, *, seed: bool = True, pack: str = PACK) -> Path
                  "obj-1", json.dumps(["obj-1", "obj-2"]), 0.0),
             )
             conn.execute(
-                "INSERT INTO community_crystals VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (pack, "cluster::abc123",
                  "## 概念核心\n\nVector search lets agents recall similar memories at low cost.",
                  json.dumps(["evergreen-a", "evergreen-b"]),

@@ -64,7 +64,7 @@ KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
 #
 # See ``ARCHITECTURE.md`` § Projection schema changes for the
 # review-side rules + PR checklist.
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 9
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 10
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -372,6 +372,130 @@ def _migrate_8_to_9_embedding_hash(conn: sqlite3.Connection, vault_dir: Path) ->
     )
 
 
+def _migrate_9_to_10_concept_identity(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """BL-114 — ``concept_identity_ledger`` + ``community_crystals.concept_id``.
+
+    Pure additive: one new table, two new ``NOT NULL DEFAULT ''`` columns
+    on the existing ``community_crystals`` table, and a one-shot seed
+    where each existing ``cluster_id`` becomes its own ``concept_id``
+    (so behaviour is byte-identical until BL-115's Jaccard matcher
+    starts making the two diverge).
+
+    Idempotent: ``IF NOT EXISTS`` on the table+indexes, duplicate-column
+    guard on the ALTERs, and the UPDATE/INSERT both no-op when the
+    seed already ran.  Safe to re-run against a DB already at the v10
+    shape (e.g. built fresh from ``SCHEMA``).
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS concept_identity_ledger (
+          pack TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          current_cluster_id TEXT NOT NULL DEFAULT '',
+          last_matched_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          lineage_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY (pack, concept_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_identity_ledger_current_cluster
+          ON concept_identity_ledger(pack, current_cluster_id);
+        """)
+
+    # Guard against minimal vaults that don't have community_crystals
+    # yet (e.g. v7 DBs in the migration-path tests).  The fresh-DB
+    # build path defines this table via TRUTH_STORE_SCHEMA; this
+    # migration only needs to do work if it already exists.
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='community_crystals'"
+    ).fetchone()
+    if not table_exists:
+        return
+
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(community_crystals)").fetchall()
+    }
+    if "concept_id" not in cols:
+        conn.execute(
+            "ALTER TABLE community_crystals "
+            "ADD COLUMN concept_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "supersede_reason" not in cols:
+        conn.execute(
+            "ALTER TABLE community_crystals "
+            "ADD COLUMN supersede_reason TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_community_crystals_pack_concept "
+        "ON community_crystals(pack, concept_id)"
+    )
+
+    # Seed: every existing crystal becomes its own concept_id.  Skips
+    # rows already backfilled (re-runs become no-ops).
+    conn.execute(
+        "UPDATE community_crystals SET concept_id = cluster_id "
+        "WHERE concept_id = ''"
+    )
+    # Seed the ledger: one row per (pack, cluster_id).  Use the
+    # *latest* synthesized_at of an active crystal as last_matched_at
+    # so BL-115 can compare staleness against it; created_at is the
+    # earliest synthesized_at for that cluster_id so the chain has
+    # a stable origin timestamp.  ``ON CONFLICT DO NOTHING`` makes
+    # the seed idempotent against partial prior runs.
+    conn.execute(
+        """
+        INSERT INTO concept_identity_ledger
+            (pack, concept_id, current_cluster_id, last_matched_at,
+             created_at, lineage_json)
+        SELECT pack,
+               cluster_id AS concept_id,
+               cluster_id AS current_cluster_id,
+               MAX(synthesized_at) AS last_matched_at,
+               MIN(synthesized_at) AS created_at,
+               '[]' AS lineage_json
+          FROM community_crystals
+         GROUP BY pack, cluster_id
+        ON CONFLICT(pack, concept_id) DO NOTHING
+        """
+    )
+
+    # Same auto-seed triggers that fresh DBs get from TRUTH_STORE_SCHEMA.
+    # Adding them here keeps upgraded vaults consistent with the
+    # canonical shape.  ``IF NOT EXISTS`` is idempotent — fresh DBs
+    # (which already ran the SCHEMA script) ignore this; upgrades that
+    # didn't have the triggers now get them.  Two triggers split on
+    # WHEN NEW.concept_id = '' so legacy INSERTs (no concept_id) get
+    # backfilled while BL-115's explicit-concept_id path stays in
+    # control of the ledger row.
+    conn.executescript("""
+        CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+        AFTER INSERT ON community_crystals
+        WHEN NEW.concept_id = ''
+        BEGIN
+          UPDATE community_crystals
+             SET concept_id = NEW.cluster_id
+           WHERE pack = NEW.pack
+             AND cluster_id = NEW.cluster_id
+             AND synthesized_at = NEW.synthesized_at;
+          INSERT OR IGNORE INTO concept_identity_ledger
+              (pack, concept_id, current_cluster_id,
+               last_matched_at, created_at, lineage_json)
+          VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+                  NEW.synthesized_at, NEW.synthesized_at, '[]');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+        AFTER INSERT ON community_crystals
+        WHEN NEW.concept_id <> ''
+        BEGIN
+          INSERT OR IGNORE INTO concept_identity_ledger
+              (pack, concept_id, current_cluster_id,
+               last_matched_at, created_at, lineage_json)
+          VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+                  NEW.synthesized_at, NEW.synthesized_at, '[]');
+        END;
+    """)
+
+
 SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
     6: SchemaMigration(
         from_version=6,
@@ -390,6 +514,12 @@ SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
         kind=SchemaMigrationKind.ADDITIVE,
         reason="PR3 — page_embeddings.chunk_hash for embedding reuse",
         runner=_migrate_8_to_9_embedding_hash,
+    ),
+    9: SchemaMigration(
+        from_version=9,
+        kind=SchemaMigrationKind.ADDITIVE,
+        reason="BL-114 — concept_identity_ledger seeded from community_crystals",
+        runner=_migrate_9_to_10_concept_identity,
     ),
 }
 
@@ -547,6 +677,14 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "llm_model",
         "prompt_version",
         "superseded_by_synthesized_at",
+        # BL-114: stable identity that survives re-clusters; without
+        # preserving it across rebuild every crystal would be re-seeded
+        # via the trigger with concept_id == cluster_id, wiping any
+        # BL-115 inheritance the prior run had recorded.
+        "concept_id",
+        # BL-116: distinguishes orphan-supersede from normal re-synthesis
+        # supersede; preserved so the audit trail survives rebuild too.
+        "supersede_reason",
     ),
     "contradiction_crystals": (
         "pack",
@@ -560,6 +698,22 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "llm_model",
         "prompt_version",
         "superseded_by_synthesized_at",
+    ),
+    # BL-114 / BL-115: concept-identity ledger.  Preserved verbatim
+    # so a re-cluster's BL-115 matcher reads PRIOR ``current_cluster_id``
+    # values from the last run.  Without preservation the BL-114
+    # AFTER-INSERT trigger would re-seed the ledger with
+    # ``current_cluster_id = cluster_id`` for every preserved crystal,
+    # erasing BL-115's inheritance history.  Trigger's
+    # ``INSERT OR IGNORE`` makes this a no-op once the ledger row
+    # exists.
+    "concept_identity_ledger": (
+        "pack",
+        "concept_id",
+        "current_cluster_id",
+        "last_matched_at",
+        "created_at",
+        "lineage_json",
     ),
     # BL-061: prose-level evergreen revision history.  Same
     # treatment as ``provenance`` — an immutable append-only audit
@@ -654,18 +808,65 @@ def _preserve_existing_truth_rows(
     except sqlite3.DatabaseError:
         return
 
+    # BL-114/115: the AFTER-INSERT trigger on community_crystals
+    # auto-seeds ``concept_identity_ledger`` with default values.
+    # When preservation later copies the REAL ledger rows (with
+    # BL-115 lineage_json + current_cluster_id), the plain INSERT
+    # collides on the PK.  REPLACE-on-conflict for this table makes
+    # the preserved row authoritative; the trigger's seed is just
+    # a placeholder that gets overwritten.
+    _INSERT_OR_REPLACE_TABLES = {"concept_identity_ledger"}
+
+    def _source_columns(table_name: str) -> set[str]:
+        """Columns that actually exist in the SOURCE (old) DB.
+
+        BL-115 review (codex P1): the source DB may be an OLDER schema
+        version than the dest temp DB we're preserving INTO — e.g. a
+        forced full rebuild against a v9 DB before the v9→v10 delta
+        migration ran.  Selecting a column that doesn't exist yet
+        (``concept_id``, ``supersede_reason``) raised ``no such column``,
+        the old ``except`` returned ``[]``, and EVERY community_crystal
+        was silently dropped — turning a schema bump into LLM-corpus
+        data loss.  Introspect first so missing columns get a safe
+        default instead of nuking the row set.
+        """
+        try:
+            return {
+                row[1]
+                for row in source_conn.execute(
+                    f"PRAGMA table_info({table_name})"  # noqa: S608 static
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            return set()
+
     def _copy_table(
         table_name: str,
         columns: tuple[str, ...],
         *,
         where_excludes_current: bool,
     ) -> list[tuple[Any, ...]]:
+        present = _source_columns(table_name)
+        if not present:
+            # Table absent in the source DB — nothing to preserve.
+            return []
+        # For any requested column the source lacks, synthesize a
+        # default ('' matches every new column's NOT NULL DEFAULT '').
+        # When ``concept_id`` defaults to '' here, the dest's BL-114
+        # AFTER-INSERT trigger backfills it to ``cluster_id`` and seeds
+        # the ledger — so a v9→full-rebuild now MIGRATES crystals into
+        # the v10 shape instead of dropping them.
+        select_terms = [
+            col if col in present else f"'' AS {col}"
+            for col in columns
+        ]
         column_sql = ", ".join(columns)
+        select_sql = ", ".join(select_terms)
         if where_excludes_current:
-            sql = f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack"
+            sql = f"SELECT {select_sql} FROM {table_name} WHERE pack != ? ORDER BY pack"
             params: tuple[Any, ...] = (exclude_pack,)
         else:
-            sql = f"SELECT {column_sql} FROM {table_name} ORDER BY pack"
+            sql = f"SELECT {select_sql} FROM {table_name} ORDER BY pack"
             params = ()
         try:
             rows = source_conn.execute(sql, params).fetchall()
@@ -677,8 +878,13 @@ def _preserve_existing_truth_rows(
         if not rows:
             return []
         placeholders = ", ".join("?" for _ in columns)
+        verb = (
+            "INSERT OR REPLACE"
+            if table_name in _INSERT_OR_REPLACE_TABLES
+            else "INSERT"
+        )
         dest_conn.executemany(
-            f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            f"{verb} INTO {table_name} ({column_sql}) VALUES ({placeholders})",
             rows,
         )
         return rows
@@ -1594,6 +1800,20 @@ def rebuild_knowledge_index(
         surface_map = _build_surface_map(object_metadata_items)
         known_slugs = {meta.note_id for meta in object_metadata_items}
 
+        # BL-115: snapshot prior graph_clusters BEFORE the temp-DB
+        # build starts.  The match step compares this against the
+        # freshly-inserted clusters so identity continuity survives
+        # Louvain re-clustering.  Helper handles all the "DB doesn't
+        # exist yet / table missing / malformed JSON" edge cases —
+        # returns ``{}`` for any failure mode, which the matcher
+        # treats as "fresh vault" and skips inheritance.
+        from .synthesis.identity_match import (
+            snapshot_prior_graph_clusters as _snapshot_prior_clusters,
+        )
+        prior_graph_clusters = _snapshot_prior_clusters(
+            layout.knowledge_db, pack=truth_pack,
+        )
+
         temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
         _remove_sqlite_artifacts(temp_db_path)
 
@@ -1834,6 +2054,39 @@ def rebuild_knowledge_index(
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.graph_clusters],
+            )
+
+            # BL-115 / BL-116 — concept identity continuity.
+            #
+            # Run the Jaccard matcher in the SAME transaction as the
+            # graph_clusters INSERT so the ledger update + orphan
+            # supersede are atomic with the rebuild.  The matcher
+            # touches three tables already in this transaction:
+            # ``concept_identity_ledger`` (UPDATE current_cluster_id +
+            # lineage_json), and ``community_crystals`` (UPDATE
+            # superseded_by_synthesized_at + supersede_reason for
+            # orphans).  If anything below raises, the whole rebuild
+            # rolls back via the surrounding try/except.
+            new_graph_clusters = {
+                row.cluster_id: list(json.loads(row.member_object_ids_json))
+                for row in truth_projection.graph_clusters
+                if row.cluster_kind == "louvain_community"
+            }
+            from .synthesis.identity_match import (
+                match_concept_identities,
+                emit_identity_audit,
+            )
+            identity_result = match_concept_identities(
+                conn,
+                pack=truth_pack,
+                prior_clusters=prior_graph_clusters,
+                new_clusters=new_graph_clusters,
+                now_ts=datetime.now(timezone.utc).isoformat(
+                    timespec="microseconds",
+                ),
+            )
+            emit_identity_audit(
+                resolved_vault, pack=truth_pack, result=identity_result,
             )
             conn.execute(
                 """

@@ -152,6 +152,7 @@ def _render_reader_home(payload: dict) -> str:
         digest_date = escape(str(digest_info.get("date") or ""))
         digest_href = escape(str(digest_info["href"]))
         digest_teaser = escape(str(digest_info.get("teaser") or "").strip())
+        is_today = bool(digest_info.get("is_today"))
         teaser_html = (
             f"<p class='muted'>{digest_teaser}</p>"
             if digest_teaser
@@ -161,11 +162,27 @@ def _render_reader_home(payload: dict) -> str:
         # operators can step back to prior days without hunting through
         # the file tree.
         all_href = _shell_href("/digests", requested_pack)
+        # BL-119: only label as "Today's digest" when the date
+        # actually matches today.  Pre-fix this header was hardcoded
+        # "Today's digest" so a vault browsed at 04:00 (before the
+        # 06:00 LaunchAgent fires) showed yesterday's file mislabelled
+        # as today's.
+        if is_today:
+            heading = "Today's digest"
+            note_html = ""
+        else:
+            heading = "Latest digest"
+            note_html = (
+                "<p class='muted tiny'>Today's digest hasn't been "
+                "generated yet — the 06:00 LaunchAgent writes it "
+                "during the morning slot.</p>"
+            )
         digest_card = (
-            "<h2>Today's digest"
+            f"<h2>{heading}"
             f"<span class='muted tiny mono' style='margin-left:0.6rem'>{digest_date}</span>"
             "</h2>"
             f"{teaser_html}"
+            f"{note_html}"
             f"<p><a href='{digest_href}'>Open digest →</a>"
             f" · <a href='{escape(all_href)}'>See all digests →</a></p>"
         )

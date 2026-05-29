@@ -211,6 +211,10 @@ def test_build_execution_plan_includes_pinboard_process_for_history():
         "registry_sync",
         "moc",
         "knowledge_index",
+        # BL-117: delta synthesis sits between knowledge_index and
+        # ops_state — reads what knowledge_index just wrote, feeds
+        # the lifecycle projection ops_state computes.
+        "synthesize",
         # M24.1: lifecycle projection runs after knowledge_index.
         "ops_state",
     ]
@@ -231,8 +235,10 @@ def test_build_execution_plan_includes_pinboard_process_for_recent_days():
 
     assert "pinboard_process" in plan["steps"]
     # M24.1: last step is now ops_state (lifecycle projection).
+    # BL-117: ``synthesize`` sits between knowledge_index and ops_state.
     assert plan["steps"][-1] == "ops_state"
-    assert plan["steps"][-2] == "knowledge_index"
+    assert plan["steps"][-2] == "synthesize"
+    assert plan["steps"][-3] == "knowledge_index"
 
 
 def test_build_execution_plan_full_can_insert_refine_before_knowledge_index():
@@ -250,7 +256,8 @@ def test_build_execution_plan_full_can_insert_refine_before_knowledge_index():
 
     # M24.1: refine runs BEFORE knowledge_index (refine writes
     # data knowledge_index indexes); ops_state runs last.
-    assert plan["steps"][-3:] == ["refine", "knowledge_index", "ops_state"]
+    # BL-117: ``synthesize`` sits between knowledge_index and ops_state.
+    assert plan["steps"][-4:] == ["refine", "knowledge_index", "synthesize", "ops_state"]
     assert "absorb" in plan["steps"]
 
 
@@ -270,7 +277,8 @@ def test_build_execution_plan_full_respects_from_step():
     assert plan["steps"][0] == "quality"
     assert "pinboard" not in plan["steps"]
     # M24.1: see comment on the can_insert_refine test above.
-    assert plan["steps"][-3:] == ["refine", "knowledge_index", "ops_state"]
+    # BL-117: ``synthesize`` sits between knowledge_index and ops_state.
+    assert plan["steps"][-4:] == ["refine", "knowledge_index", "synthesize", "ops_state"]
 
 
 def test_build_execution_plan_incremental_includes_pinboard_and_defaults_recent_days():
@@ -290,9 +298,14 @@ def test_build_execution_plan_incremental_includes_pinboard_and_defaults_recent_
     plan = build_execution_plan(args)
 
     assert plan["steps"][:3] == ["pinboard", "pinboard_process", "clippings"]
-    # M24.1: ops_state is the new tail.
+    # M24.1: ops_state is the tail.
+    # BL-118: ``--incremental`` drops ``synthesize`` (the LLM-bounded
+    # delta-resynthesis step) so the nightly run is zero-cost.
+    # knowledge_index is therefore the second-to-last step in the
+    # incremental plan, not third-to-last as in ``--full``.
     assert plan["steps"][-1] == "ops_state"
     assert plan["steps"][-2] == "knowledge_index"
+    assert "synthesize" not in plan["steps"]
     assert plan["pinboard_days"] == 7
     assert plan["description"] == "Incremental pipeline (research-tech/full)"
 

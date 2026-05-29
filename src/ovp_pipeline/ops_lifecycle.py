@@ -383,9 +383,31 @@ def _crystal_for_cluster(
 
     ``has_active_crystal`` is True when the most recent row has
     ``superseded_by_synthesized_at = ''``.
+
+    BL-115 review (codex P2): ``cluster_id`` here is the CURRENT
+    graph_clusters id (what the lifecycle classifier iterates).  After
+    an inherited re-cluster the active crystal still carries the
+    synthesis-time ``cluster_id=old`` while the ledger maps
+    ``concept_id`` → ``current_cluster_id=new``.  A direct
+    ``WHERE cluster_id = new`` lookup therefore misses the fresh
+    crystal and the concept mis-classifies as unsynthesized.  Resolve
+    through the ledger first; fall back to the direct cluster_id query
+    for pre-v10 DBs (no ledger) or clusters the ledger hasn't mapped.
     """
     if not _has_table(conn, "community_crystals"):
         return ("", False)
+    if _has_table(conn, "concept_identity_ledger"):
+        row = conn.execute(
+            "SELECT cc.synthesized_at, cc.superseded_by_synthesized_at "
+            "  FROM concept_identity_ledger cil "
+            "  JOIN community_crystals cc "
+            "    ON cc.pack = cil.pack AND cc.concept_id = cil.concept_id "
+            " WHERE cil.pack = ? AND cil.current_cluster_id = ? "
+            " ORDER BY cc.synthesized_at DESC LIMIT 1",
+            (pack, cluster_id),
+        ).fetchone()
+        if row:
+            return (row[0] or "", not row[1])
     row = conn.execute(
         "SELECT synthesized_at, superseded_by_synthesized_at "
         "  FROM community_crystals "

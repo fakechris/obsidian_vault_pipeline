@@ -2867,6 +2867,61 @@ class EnhancedPipeline:
 
         return _to_typed_step_result("knowledge_index", result)
 
+    def step_synthesize(self, dry_run: bool = False) -> dict[str, Any]:
+        """BL-117: budget-capped re-synthesis of stale community crystals.
+
+        Runs ``ovp-resynth-stale-crystals --max N`` so a quiet vault
+        (no membership shifts, no new contradictions, no aged-out
+        concepts) does zero LLM work, and a busy vault hits its
+        budget cap instead of running away with cost.
+
+        Idempotent: the staleness detector only flags concepts that
+        actually need a refresh; back-to-back runs on the same DB
+        state schedule zero LLM calls the second time.
+        """
+        print("\n" + "=" * 60)
+        print("STEP 11b: BL-117 stale-crystal re-synthesis")
+        print("=" * 60)
+
+        if dry_run:
+            print("✓ synthesize (dry-run skipped)")
+            return {
+                "success": True,
+                "skipped": True,
+                "dry_run": True,
+                "pack": self.workflow_pack_name,
+                "produced": 0,
+            }
+
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.resynth_stale_crystals",
+            "--vault-dir", str(self.vault_dir),
+            "--pack", self.workflow_pack_name,
+            "--json",
+        ]
+        result = self.run_command(
+            cmd, "synthesize",
+            timeout=self._calculate_timeout("synthesize"),
+        )
+        stdout = str(result.get("stdout") or "").strip()
+        if stdout:
+            try:
+                parsed = json.loads(stdout)
+            except (ValueError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                result["evaluated"] = int(parsed.get("evaluated", 0) or 0)
+                result["scheduled"] = int(parsed.get("scheduled", 0) or 0)
+                result["synthesized"] = int(parsed.get("synthesized", 0) or 0)
+                result["signal_breakdown"] = parsed.get("signal_breakdown", {})
+        if result.get("success"):
+            result["output"] = (
+                f"Re-synthesized {result.get('synthesized', 0)}/"
+                f"{result.get('scheduled', 0)} stale concepts "
+                f"(evaluated {result.get('evaluated', 0)})"
+            )
+        return result
+
     def step_ops_state(self, dry_run: bool = False) -> dict[str, Any]:
         """M24.1: rebuild the lifecycle ``ops_state`` projection.
 
@@ -3224,9 +3279,16 @@ def main():
 
     # 运行模式
     parser.add_argument("--full", action="store_true",
-                       help="完整Pipeline（Pinboard+Clippings+Articles+Quality+Absorb+MOC+knowledge.db）")
+                       help=(
+                           "完整 Pipeline (含 synthesize 步骤: BL-117 budgeted "
+                           "delta synthesis, ≈ $1/day LLM cost at default budget)"
+                       ))
     parser.add_argument("--incremental", action="store_true",
-                       help="日常增量流水线（默认包含最近7天 Pinboard + Clippings + 后续步骤）")
+                       help=(
+                           "日常增量流水线 — 跳过 synthesize 步骤, 零 LLM 成本; "
+                           "仍跑 identity match + orphan supersede 保持正确性 "
+                           "(BL-118)"
+                       ))
     parser.add_argument("--step", choices=PIPELINE_STEP_CHOICES,
                        help="运行指定步骤")
     parser.add_argument("--from-step", choices=PIPELINE_STEP_CHOICES,

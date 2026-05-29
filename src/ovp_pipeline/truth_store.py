@@ -167,6 +167,26 @@ CREATE INDEX idx_reuse_events_pack_surface ON reuse_events(pack, surface);
 CREATE INDEX idx_reuse_events_object       ON reuse_events(pack, object_id);
 CREATE INDEX idx_reuse_events_ts           ON reuse_events(ts);
 
+-- BL-114: concept_identity_ledger maps a stable ``concept_id`` to the
+-- current Louvain ``cluster_id``.  Every time the graph re-clusters,
+-- BL-115's Jaccard matcher updates ``current_cluster_id`` so reads
+-- still resolve.  At seed time (BL-114 migration) every existing
+-- ``community_crystals.cluster_id`` becomes its own ``concept_id``
+-- with ``lineage_json='[]'``.  BL-115 records inheritance and BL-116
+-- supersedes orphans here.
+CREATE TABLE concept_identity_ledger (
+  pack TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  current_cluster_id TEXT NOT NULL DEFAULT '',
+  last_matched_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  lineage_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (pack, concept_id)
+);
+
+CREATE INDEX idx_concept_identity_ledger_current_cluster
+  ON concept_identity_ledger(pack, current_cluster_id);
+
 CREATE TABLE community_crystals (
   pack TEXT NOT NULL,
   cluster_id TEXT NOT NULL,
@@ -176,11 +196,57 @@ CREATE TABLE community_crystals (
   llm_model TEXT NOT NULL,
   prompt_version TEXT NOT NULL,
   superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
+  -- BL-114: ``concept_id`` is the stable cross-rebuild identity; at
+  -- seed time it equals ``cluster_id``.  ``supersede_reason`` lets
+  -- BL-116 distinguish orphan-supersede from normal re-synthesis.
+  concept_id TEXT NOT NULL DEFAULT '',
+  supersede_reason TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, cluster_id, synthesized_at)
 );
 
 CREATE INDEX idx_community_crystals_pack_cluster
   ON community_crystals(pack, cluster_id);
+
+CREATE INDEX idx_community_crystals_pack_concept
+  ON community_crystals(pack, concept_id);
+
+-- BL-114: auto-seed concept_identity_ledger + backfill concept_id on
+-- every community_crystals INSERT.  The ledger is a derived projection
+-- of the crystals table; this trigger guarantees it never drifts out
+-- of existence (an active crystal whose concept_id has no ledger row)
+-- and that legacy callers who INSERT without specifying concept_id
+-- end up with concept_id == cluster_id (the BL-114 seed invariant).
+-- BL-115's matcher overrides this default by setting concept_id
+-- explicitly on INSERT, in which case both the UPDATE and the
+-- INSERT OR IGNORE become no-ops.
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id = ''
+BEGIN
+  UPDATE community_crystals
+     SET concept_id = NEW.cluster_id
+   WHERE pack = NEW.pack
+     AND cluster_id = NEW.cluster_id
+     AND synthesized_at = NEW.synthesized_at;
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
+
+-- Second trigger for the explicit-concept_id path (BL-115 onwards).
+-- The two triggers are mutually exclusive via the ``WHEN`` clause.
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id <> ''
+BEGIN
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
 
 CREATE TABLE contradiction_crystals (
   pack TEXT NOT NULL,

@@ -23,6 +23,7 @@ from ovp_pipeline.ops_lifecycle import (
     STATE_SYNTHESIZED,
     SUBSTATE_PREPARED,
     SUBSTATE_PROJECTED,
+    _crystal_for_cluster,
     lifecycle_counts,
     lifecycle_state_of,
     lifecycle_states_for_kind,
@@ -77,8 +78,44 @@ def _make_db() -> sqlite3.Connection:
             llm_model TEXT NOT NULL,
             prompt_version TEXT NOT NULL,
             superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
+          concept_id TEXT NOT NULL DEFAULT '',
+          supersede_reason TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (pack, cluster_id, synthesized_at)
         );
+CREATE TABLE concept_identity_ledger (
+  pack TEXT NOT NULL,
+  concept_id TEXT NOT NULL,
+  current_cluster_id TEXT NOT NULL DEFAULT '',
+  last_matched_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  lineage_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (pack, concept_id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id = ''
+BEGIN
+  UPDATE community_crystals
+     SET concept_id = NEW.cluster_id
+   WHERE pack = NEW.pack
+     AND cluster_id = NEW.cluster_id
+     AND synthesized_at = NEW.synthesized_at;
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.cluster_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_community_crystal_seed_ledger_explicit
+AFTER INSERT ON community_crystals
+WHEN NEW.concept_id <> ''
+BEGIN
+  INSERT OR IGNORE INTO concept_identity_ledger
+      (pack, concept_id, current_cluster_id,
+       last_matched_at, created_at, lineage_json)
+  VALUES (NEW.pack, NEW.concept_id, NEW.cluster_id,
+          NEW.synthesized_at, NEW.synthesized_at, '[]');
+END;
         CREATE TABLE evergreen_revisions (
             pack TEXT NOT NULL,
             object_id TEXT NOT NULL,
@@ -373,7 +410,7 @@ def test_synthesized_fresh_crystal_classifies_as_synthesized():
          "2026-05-10T08:00:00+00:00", ""),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-1", "## crystal body",
          json.dumps(["obj-1"]),
@@ -411,7 +448,7 @@ def test_synthesized_from_crystal_projection_without_audit_event():
          "2026-05-10T08:00:00+00:00", ""),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-noaudit", "## crystal body",
          json.dumps(["obj-1"]),
@@ -439,7 +476,7 @@ def test_synthesized_stale_crystal_demotes_to_accepted():
          "obj-2", json.dumps(["obj-2"]), 0.5),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-2", "## old crystal",
          json.dumps(["obj-2"]),
@@ -473,7 +510,7 @@ def test_synthesized_with_superseded_crystal_demotes_to_accepted():
          "obj-3", json.dumps(["obj-3"]), 0.5),
     )
     conn.execute(
-        "INSERT INTO community_crystals "
+        "INSERT INTO community_crystals (pack, cluster_id, body_md, source_evergreen_slugs_json, synthesized_at, llm_model, prompt_version, superseded_by_synthesized_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (PACK, "cluster-3", "## body",
          json.dumps(["obj-3"]),
@@ -545,3 +582,63 @@ def test_debug_only_event_does_not_classify_alone():
     # gap rather than hide it.
     assert state.state == STATE_RECEIVED
     assert state.sub_state == SUBSTATE_PREPARED
+
+
+class TestCrystalForClusterLedgerResolution:
+    """Codex P2 regression: ``_crystal_for_cluster`` must resolve the
+    CURRENT cluster_id through the ledger.  An inherited-but-fresh
+    concept's active crystal still carries the synthesis-time
+    cluster_id, so a direct ``WHERE cluster_id = <current>`` lookup
+    misses it and the concept mis-classifies as unsynthesized."""
+
+    def test_inherited_cluster_finds_crystal_via_ledger(self):
+        conn = _make_db()
+        try:
+            # Active crystal keyed on the OLD cluster_id / concept_id.
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version, concept_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (PACK, "cluster::old", "b", "[]",
+                 "2026-05-20T00:00:00+00:00", "m", "v1", "cluster::old"),
+            )
+            # BL-115 inheritance: ledger now maps old → current=new.
+            conn.execute(
+                "UPDATE concept_identity_ledger "
+                "SET current_cluster_id='cluster::new' "
+                "WHERE concept_id='cluster::old'",
+            )
+            # Lifecycle iterates the CURRENT graph_clusters id (new).
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::new")
+            assert latest == "2026-05-20T00:00:00+00:00"
+            assert active is True
+        finally:
+            conn.close()
+
+    def test_direct_cluster_id_still_resolves(self):
+        # Non-inherited concept (concept_id == cluster_id) still works.
+        conn = _make_db()
+        try:
+            conn.execute(
+                "INSERT INTO community_crystals "
+                "(pack, cluster_id, body_md, source_evergreen_slugs_json,"
+                " synthesized_at, llm_model, prompt_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (PACK, "cluster::z", "b", "[]",
+                 "2026-05-21T00:00:00+00:00", "m", "v1"),
+            )
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::z")
+            assert latest == "2026-05-21T00:00:00+00:00"
+            assert active is True
+        finally:
+            conn.close()
+
+    def test_no_crystal_returns_empty(self):
+        conn = _make_db()
+        try:
+            latest, active = _crystal_for_cluster(conn, PACK, "cluster::none")
+            assert latest == ""
+            assert active is False
+        finally:
+            conn.close()

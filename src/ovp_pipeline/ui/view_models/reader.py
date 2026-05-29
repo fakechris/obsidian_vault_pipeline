@@ -694,12 +694,18 @@ def build_reader_home_payload(
                 )
                 cutoff = (datetime.now(timezone.utc)
                           - timedelta(days=READER_HOME_RECENT_DAYS)).isoformat(timespec="seconds")
+                # BL-114: resolve label via the ledger so re-clustered
+                # concepts pick up their current Louvain label; emit
+                # ``concept_id`` (stable identity) so downstream URLs
+                # survive re-clusters.
                 recent_rows = conn.execute(
                     """
-                    SELECT cc.cluster_id, cc.synthesized_at, cc.body_md, gc.label
+                    SELECT cc.concept_id, cc.synthesized_at, cc.body_md, gc.label
                       FROM community_crystals cc
+                      JOIN concept_identity_ledger cil
+                        ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
                       JOIN graph_clusters gc
-                        ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+                        ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
                      WHERE cc.pack = ?
                        AND cc.superseded_by_synthesized_at = ''
                        AND cc.synthesized_at > ?

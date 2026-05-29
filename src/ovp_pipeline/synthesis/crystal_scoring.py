@@ -247,32 +247,45 @@ def _evergreen_recency_signal(
 def _load_community_index(
     conn: sqlite3.Connection, pack: str,
 ) -> dict[str, dict]:
-    """Return ``{cluster_id: {label, members, source_slugs}}`` for every
+    """Return ``{concept_id: {label, members, source_slugs}}`` for every
     Louvain community that has at least one current crystal row in
-    ``pack``."""
+    ``pack``.
+
+    BL-114: the JOIN now goes through ``concept_identity_ledger`` so
+    a concept whose underlying ``cluster_id`` shifted across a
+    re-cluster still resolves to its current ``graph_clusters`` row
+    (the ledger keeps ``current_cluster_id`` fresh).  At seed time
+    every concept_id equals its cluster_id so this is byte-identical
+    to the pre-BL-114 INNER JOIN; the divergence kicks in once
+    BL-115's Jaccard matcher lands.  Dict keys are now concept_ids
+    (stable identity) — callers key ``crystal_scores.crystal_id``
+    off this dict so the stable id flows through scoring too.
+    """
     out: dict[str, dict] = {}
     rows = conn.execute(
         """
-        SELECT gc.cluster_id, gc.label, gc.member_object_ids_json,
+        SELECT cc.concept_id, gc.label, gc.member_object_ids_json,
                cc.source_evergreen_slugs_json
-          FROM graph_clusters gc
-          JOIN community_crystals cc
-            ON cc.pack = gc.pack AND cc.cluster_id = gc.cluster_id
-         WHERE gc.pack = ?
+          FROM community_crystals cc
+          JOIN concept_identity_ledger cil
+            ON cil.pack = cc.pack AND cil.concept_id = cc.concept_id
+          JOIN graph_clusters gc
+            ON gc.pack = cil.pack AND gc.cluster_id = cil.current_cluster_id
+         WHERE cc.pack = ?
            AND gc.cluster_kind = 'louvain_community'
            AND cc.superseded_by_synthesized_at = ''
         """,
         (pack,),
     ).fetchall()
-    for cluster_id, label, members_json, slugs_json in rows:
+    for concept_id, label, members_json, slugs_json in rows:
         try:
             members = list(json.loads(members_json))
             slugs = list(json.loads(slugs_json))
         except (TypeError, json.JSONDecodeError):
-            logger.warning("malformed JSON for cluster %s; skipping",
-                           cluster_id)
+            logger.warning("malformed JSON for concept %s; skipping",
+                           concept_id)
             continue
-        out[cluster_id] = {
+        out[concept_id] = {
             "label": label,
             "members": members,
             "source_slugs": slugs,

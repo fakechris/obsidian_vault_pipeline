@@ -90,7 +90,18 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if incremental:
-        requested_steps = slice_from_step(selected_steps)
+        # BL-118: ``--incremental`` is the cheap nightly mode.  It runs
+        # the entire DAG EXCEPT ``synthesize`` — that's the LLM-bounded
+        # delta-resynthesis step BL-117 introduced.  Skipping it keeps
+        # the incremental run zero-cost while still firing the BL-115
+        # identity-match + BL-116 orphan-supersede inside
+        # ``knowledge_index``, so ``/topics`` stays self-consistent.
+        # Pre-BL-118 ``--incremental`` was a no-op alias for ``--full``;
+        # the test ``tests/test_pipeline_plan.py`` pins the new
+        # divergence so a future refactor can't quietly merge them
+        # back together.
+        full_steps = slice_from_step(selected_steps)
+        requested_steps = [s for s in full_steps if s != "synthesize"]
         description = (
             f"Incremental pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
             if normalized_from_step

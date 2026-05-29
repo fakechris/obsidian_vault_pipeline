@@ -146,6 +146,18 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             target_mode="batch",
         ),
         StageHandlerSpec(
+            name="synthesize",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="pipeline_step",
+            stage="synthesize",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_synthesize",
+            description=(
+                "BL-117: budgeted re-synthesis of stale community crystals"
+            ),
+            target_mode="batch",
+        ),
+        StageHandlerSpec(
             name="ops_state",
             pack=pack_name,
             handler_kind="profile_stage",
@@ -231,6 +243,20 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             stage="knowledge_index",
             entrypoint="ovp_pipeline.workflow_handlers:run_autopilot_knowledge_index",
             description="Refresh derived truth after autopilot work",
+            target_mode="single_note",
+            supports_autopilot=True,
+        ),
+        StageHandlerSpec(
+            name="synthesize",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="autopilot_stage",
+            stage="synthesize",
+            entrypoint="ovp_pipeline.workflow_handlers:run_autopilot_synthesize",
+            description=(
+                "BL-117: budgeted re-synthesis of stale community "
+                "crystals after autopilot knowledge_index"
+            ),
             target_mode="single_note",
             supports_autopilot=True,
         ),

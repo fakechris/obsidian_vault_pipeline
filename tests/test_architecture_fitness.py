@@ -31,6 +31,12 @@ KNOWN_OVERSIZED = {
     # per-surface modules), every file < the 3000 default.  Ratchet
     # tightened: the 5000 carve-out is gone, not relocated.
     "unified_pipeline_enhanced.py": 3500,  # target: split (M27 BL-112)
+    # BL-115/116 added ~50 lines of matcher wiring (snapshot helper
+    # call, identity_match invocation, audit emit) inside the
+    # rebuild_knowledge_index body.  Limit raised from 3000 to 3100
+    # as a deliberate ratchet — target: extract preservation + matcher
+    # wiring helpers in a follow-up so this drops back below 3000.
+    "knowledge_index.py": 3100,
 }
 
 
@@ -218,6 +224,23 @@ SQLITE_ALLOWED_MODULES = {
     "synthesis/curated_atlas",
     "synthesis/_shared",
     "synthesis/_versioning",
+    # BL-115/116: Jaccard concept-identity matcher.  Touches
+    # ``concept_identity_ledger`` (UPDATE current_cluster_id +
+    # lineage_json) and ``community_crystals`` (BL-116 orphan
+    # supersede) — same category as the rest of ``synthesis/*``
+    # writers; works on the derived knowledge.db projection only.
+    "synthesis/identity_match",
+    # BL-117: stale-crystal detector — pure read query over the
+    # derived knowledge.db (community_crystals + ledger +
+    # graph_clusters + contradictions).  Same data-layer category.
+    "synthesis/staleness",
+    # BL-117: CLI wrapper for budgeted re-synthesis — opens the DB
+    # to invoke compute_crystal_staleness, then delegates the actual
+    # writes to ``synthesize_community_crystals``.  Thin projection
+    # client, same category as other ``commands/*`` CLIs in this
+    # allowlist (commands/list_crystals, commands/rerender_crystals,
+    # commands/rescore_crystals).
+    "commands/resynth_stale_crystals",
     "ui/view_models",
     # M23 / BL-094: digest input collector reads evergreen_revisions,
     # audit_events, community_crystals, graph_clusters etc.  Data-

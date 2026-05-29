@@ -33,6 +33,7 @@ BASE_PIPELINE_STEPS = [
     "registry_sync",  # 9. 同步Registry与文件系统
     "moc",            # 10. 更新MOC
     "knowledge_index",  # 11. 刷新派生 knowledge.db
+    "synthesize",     # 11b. BL-117: 预算化重合成 stale community crystals
     "ops_state",      # 12. M24.1: rebuild lifecycle projection
 ]
 

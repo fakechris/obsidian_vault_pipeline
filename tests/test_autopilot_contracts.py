@@ -72,8 +72,12 @@ def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_pa
     assert result["success"] is True
     assert result["stages"] == [
         "interpretation", "absorb", "dedup", "moc",
-        "knowledge_index", "ops_state",
+        "knowledge_index", "synthesize", "ops_state",
     ]
+    # ``order`` records the monkeypatched daemon hooks the daemon
+    # called; ``synthesize`` runs via the workflow_handlers function
+    # (not a daemon method), so it doesn't show up here — that's the
+    # contract: BL-117 doesn't add a new daemon hook.
     assert order == ["absorb", "moc", "knowledge_index", "ops_state"]
 
 
@@ -94,6 +98,8 @@ def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
     assert daemon.workflow_profile.stages == [
         "interpretation", "quality", "absorb", "dedup", "moc",
         "knowledge_index",
+        # BL-117: budgeted delta synthesis.
+        "synthesize",
         # M24.1: lifecycle projection.
         "ops_state",
     ]
@@ -116,6 +122,8 @@ def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
     assert daemon.workflow_profile.stages == [
         "interpretation", "quality", "absorb", "dedup", "moc",
         "knowledge_index",
+        # BL-117: budgeted delta synthesis.
+        "synthesize",
         # M24.1: lifecycle projection.
         "ops_state",
     ]
@@ -148,8 +156,10 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     # writes data knowledge_index indexes); ops_state runs after.
     assert result["stages"] == [
         "interpretation", "absorb", "dedup", "moc", "refine",
-        "knowledge_index", "ops_state",
+        "knowledge_index", "synthesize", "ops_state",
     ]
+    # BL-117 ``synthesize`` runs via the workflow_handlers function,
+    # not a daemon hook — so it's absent from this ``order`` capture.
     assert order == ["absorb", "moc", "refine", "knowledge_index", "ops_state"]
 
 
@@ -195,10 +205,12 @@ def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypa
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    # M24.1: ops_state lands at the tail.
+    # M24.1: ops_state lands at the tail.  BL-117: ``synthesize``
+    # sits between knowledge_index and ops_state — same place every
+    # other autopilot/pipeline test pins it.
     assert calls == [
         "interpretation", "quality", "absorb", "dedup", "moc",
-        "knowledge_index", "ops_state",
+        "knowledge_index", "synthesize", "ops_state",
     ]
 
 

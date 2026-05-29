@@ -74,8 +74,17 @@ class CommunityCrystal:
     synthesized_at: str
     llm_model: str
     prompt_version: str
+    # BL-114: ``concept_id`` is the stable cross-rebuild identity.
+    # At seed time and pre-BL-115 it equals ``cluster_id``; BL-115's
+    # Jaccard matcher is what makes the two diverge.
+    concept_id: str = ""
 
-    def as_db_row(self) -> tuple[str, str, str, str, str, str, str]:
+    def as_db_row(self) -> tuple[str, str, str, str, str, str, str, str, str]:
+        # BL-114: ``concept_id`` defaults to ``cluster_id`` so callers
+        # that haven't been updated yet still produce a valid row.
+        # ``supersede_reason`` always inserts as '' — BL-116 writes
+        # this column via the orphan-supersede UPDATE, never INSERT.
+        concept_id = self.concept_id or self.cluster_id
         return (
             self.pack,
             self.cluster_id,
@@ -84,6 +93,8 @@ class CommunityCrystal:
             self.synthesized_at,
             self.llm_model,
             self.prompt_version,
+            concept_id,
+            "",
         )
 
 
@@ -210,9 +221,90 @@ def _load_filtered_clusters(
 _INSERT_SQL = (
     "INSERT INTO community_crystals"
     " (pack, cluster_id, body_md, source_evergreen_slugs_json,"
-    "  synthesized_at, llm_model, prompt_version)"
-    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "  synthesized_at, llm_model, prompt_version,"
+    "  concept_id, supersede_reason)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
+
+
+def _resolve_concept_id(conn, *, pack: str, cluster_id: str) -> str:
+    """Return the concept_id that currently OWNS ``cluster_id``.
+
+    BL-115 review (codex P1): when re-synthesizing a stale concept
+    that inherited its identity across a re-cluster, the ledger maps
+    ``concept_id=old`` → ``current_cluster_id=new``.  The synthesis
+    loop used to set ``concept_id = cluster_id`` unconditionally, so a
+    re-synth of cluster ``new`` wrote ``concept_id=new`` — which does
+    NOT supersede the active ``concept_id=old`` crystal (supersede
+    keys on concept_id).  Result: the old crystal stays active, a
+    second concept is minted for the same cluster, and staleness
+    reschedules ``old`` forever.
+
+    Resolve through the ledger instead: find the concept whose
+    ``current_cluster_id`` is this cluster AND still has an active
+    crystal; that's the owner whose version chain we must extend.
+    Fall back to ``cluster_id`` when no such row exists (cold-start
+    synthesis, or a brand-new cluster the ledger hasn't seen) — that
+    preserves the original concept_id==cluster_id seeding.
+    """
+    try:
+        row = conn.execute(
+            """
+            SELECT cil.concept_id
+              FROM concept_identity_ledger cil
+              JOIN community_crystals cc
+                ON cc.pack = cil.pack AND cc.concept_id = cil.concept_id
+               AND cc.superseded_by_synthesized_at = ''
+             WHERE cil.pack = ? AND cil.current_cluster_id = ?
+             ORDER BY cil.last_matched_at DESC
+             LIMIT 1
+            """,
+            (pack, cluster_id),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Ledger table absent (pre-v10 DB) — fall back to identity.
+        return cluster_id
+    return row[0] if row and row[0] else cluster_id
+
+
+def _upsert_concept_ledger(
+    conn,
+    *,
+    pack: str,
+    concept_id: str,
+    current_cluster_id: str,
+    synthesized_at: str,
+) -> None:
+    """BL-114: keep ``concept_identity_ledger`` in sync with every
+    crystal write.  At seed time + pre-BL-115 the matcher hasn't
+    landed yet, so every new synthesis is its own concept (concept_id
+    == cluster_id) and the ledger row is a straight upsert with
+    ``lineage_json='[]'``.  BL-115 will replace this call with the
+    real matcher.  ``INSERT OR IGNORE`` keeps the seed row from being
+    overwritten with an empty lineage if the migration already
+    populated it; the follow-up UPDATE refreshes ``last_matched_at``
+    + ``current_cluster_id`` so reads tracking the current cluster
+    stay correct.
+    """
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO concept_identity_ledger
+            (pack, concept_id, current_cluster_id,
+             last_matched_at, created_at, lineage_json)
+        VALUES (?, ?, ?, ?, ?, '[]')
+        """,
+        (pack, concept_id, current_cluster_id,
+         synthesized_at, synthesized_at),
+    )
+    conn.execute(
+        """
+        UPDATE concept_identity_ledger
+           SET current_cluster_id = ?,
+               last_matched_at    = ?
+         WHERE pack = ? AND concept_id = ?
+        """,
+        (current_cluster_id, synthesized_at, pack, concept_id),
+    )
 
 
 # ----- Markdown rendering ---------------------------------------------
@@ -370,13 +462,22 @@ def synthesize_community_crystals(
         )
 
         if skip_existing:
-            # One query for the set of cluster_ids that already have
-            # at least one row in community_crystals.  Filter the
-            # cluster list before any LLM cost is incurred.
+            # BL-114: skip clusters whose CURRENT cluster_id already
+            # maps to an active concept via the ledger.  Pre-fix this
+            # filtered by ``community_crystals.cluster_id`` directly,
+            # which post-BL-115 would miss inherited concepts (their
+            # current_cluster_id differs from the historical cluster_id
+            # stored on the crystal row).  Skip-existing should align
+            # with "is there a current concept for this cluster?" not
+            # "has any crystal ever been written for this cluster_id?".
             existing = {
                 row[0] for row in conn.execute(
-                    "SELECT DISTINCT cluster_id FROM community_crystals "
-                    "WHERE pack = ?",
+                    "SELECT DISTINCT cil.current_cluster_id "
+                    "  FROM concept_identity_ledger cil "
+                    "  JOIN community_crystals cc "
+                    "    ON cc.pack = cil.pack AND cc.concept_id = cil.concept_id "
+                    "   AND cc.superseded_by_synthesized_at = '' "
+                    " WHERE cil.pack = ?",
                     (pack_name,),
                 )
             }
@@ -449,6 +550,14 @@ def synthesize_community_crystals(
                 )
                 continue
 
+            # BL-115 (codex P1 fix): resolve the OWNING concept_id
+            # through the ledger so a re-synth of an inherited concept
+            # extends its existing version chain instead of forking a
+            # new identity.  Falls back to ``cluster_id`` for cold-start
+            # / brand-new clusters (the original seeding behaviour).
+            concept_id = _resolve_concept_id(
+                conn, pack=pack_name, cluster_id=cluster_id,
+            )
             crystal = CommunityCrystal(
                 pack=pack_name,
                 cluster_id=cluster_id,
@@ -468,6 +577,7 @@ def synthesize_community_crystals(
                 ),
                 llm_model=llm_model_label,
                 prompt_version=CRYSTAL_PROMPT_VERSION,
+                concept_id=concept_id,
             )
             out.append(crystal)
 
@@ -493,15 +603,29 @@ def synthesize_community_crystals(
             # atomic-replaces the live markdown, then archives the
             # prior content (best-effort).  See ``_versioning.py``
             # for the full failure-mode rationale.
+            #
+            # BL-114: supersede now keys on ``concept_id`` (stable
+            # identity), not ``cluster_id`` (synthesis-time snapshot).
+            # At seed time the two are equal so behaviour is identical;
+            # post-BL-115 keying on concept_id is what lets a re-clustered
+            # community supersede its prior crystal even when the new
+            # cluster_id differs.
             archive_subdir = (
                 vault_dir / ARCHIVE_DIR_REL / _safe_id(cluster_id)
+            )
+            _upsert_concept_ledger(
+                conn,
+                pack=pack_name,
+                concept_id=concept_id,
+                current_cluster_id=cluster_id,
+                synthesized_at=crystal.synthesized_at,
             )
             commit_crystal_version(
                 conn,
                 table="community_crystals",
-                key_column="cluster_id",
+                key_column="concept_id",
                 pack=pack_name,
-                key_value=cluster_id,
+                key_value=concept_id,
                 new_synthesized_at=crystal.synthesized_at,
                 insert_sql=_INSERT_SQL,
                 insert_params=crystal.as_db_row(),
