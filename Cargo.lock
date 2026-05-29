@@ -745,6 +745,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ovp-run"
+version = "0.1.0"
+dependencies = [
+ "ovp-app",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "ovp-stores",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ovp-stores"
 version = "0.1.0"
 dependencies = [
