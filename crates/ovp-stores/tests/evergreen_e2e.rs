@@ -2,18 +2,16 @@
 //! pipeline against article_clean, confirm the WritePlan carries the new
 //! CanonicalUpsert + evergreen VaultCreate write surface, then apply it.
 //!
-//! This is the prerequisite the gated Canonical store task waits on: it
-//! proves a concrete CanonicalUpsert producer now exists. VaultFs applies
-//! the VaultCreates (article note + evergreen stubs) and reports the
-//! CanonicalUpserts as Unsupported (no canonical-store applier yet) — the
-//! documented gap that the next stage closes.
+//! It proves a concrete CanonicalUpsert producer exists, and (closed
+//! loop) applies the full plan via a CompositePlanApplier so vault notes,
+//! evergreen stubs, AND canonical records all land with no Unsupported.
 
 use ovp_core::{
     ApplyMode, GraphRunner, OpKind, OpResult, PipelineManifest, PlanApplier, RunId, WriteOp,
 };
 use ovp_domain::*;
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
-use ovp_stores::VaultFsPlanApplier;
+use ovp_stores::{CanonicalFsStoreApplier, CompositePlanApplier, VaultFsPlanApplier};
 
 fn repo_root() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -139,6 +137,43 @@ fn apply_writes_evergreen_files_and_reports_canonical_unsupported() {
         .outcomes
         .iter()
         .any(|o| matches!(o.result, OpResult::Unsupported)));
+}
+
+#[test]
+fn composite_closes_the_loop_no_unsupported() {
+    // The canonical store now exists: route the full plan through a
+    // composite of (vault + canonical) appliers. Every op is handled by
+    // exactly one backend → zero Unsupported.
+    let report = run_pipeline();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let mut applier = CompositePlanApplier::new(vec![
+        Box::new(VaultFsPlanApplier::new(vault.path())),
+        Box::new(CanonicalFsStoreApplier::new(canon.path())),
+    ]);
+    let apply = applier.apply(&report.write_plan, ApplyMode::Apply);
+    let counts = apply.counts();
+    assert_eq!(counts.unsupported, 0, "composite leaves no Unsupported");
+    assert_eq!(counts.failed, 0);
+    // 14 vault creates + 13 canonical upserts all applied.
+    assert_eq!(counts.applied, 27);
+
+    // Vault side: 13 evergreen stubs + the article note.
+    assert_eq!(
+        std::fs::read_dir(vault.path().join("10-Knowledge/Evergreen")).unwrap().count(),
+        13
+    );
+    // Canonical side: 13 records, each a valid typed CanonicalConcept.
+    let canon_files: Vec<_> = std::fs::read_dir(canon.path()).unwrap().collect();
+    assert_eq!(canon_files.len(), 13, "13 canonical records");
+    for entry in canon_files {
+        let path = entry.unwrap().path();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let concept = CanonicalConcept::from_payload(&raw)
+            .unwrap_or_else(|e| panic!("canonical record {path:?} not a CanonicalConcept: {e}"));
+        assert!(!concept.slug.is_empty());
+        assert!(concept.evergreen_path.starts_with("10-Knowledge/Evergreen/"));
+    }
 }
 
 #[test]

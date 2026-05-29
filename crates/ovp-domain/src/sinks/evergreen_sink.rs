@@ -5,6 +5,7 @@ use ovp_core::{
 use sha2::{Digest, Sha256};
 
 use crate::body::DomainBody;
+use crate::canonical::CanonicalConcept;
 use crate::evergreen::EvergreenConcept;
 use crate::vault_layout::VaultLayout;
 
@@ -71,7 +72,13 @@ impl Sink<DomainBody> for EvergreenSink {
             originating_record: record.id.clone(),
         });
 
-        let payload = canonical_payload_json(&concept, path.as_str());
+        let payload = CanonicalConcept {
+            slug: concept.slug.clone(),
+            title: concept.title.clone(),
+            evergreen_path: path.as_str().to_string(),
+            provenance_source_url: concept.provenance_source_url.clone(),
+        }
+        .to_payload();
         let upsert = WriteOp::CanonicalUpsert(CanonicalUpsertOp {
             op_id: OpId::new(format!("op-canon-{}", concept.slug)),
             key: CanonicalKey::new(concept.slug.clone()),
@@ -98,36 +105,6 @@ fn render_stub(c: &EvergreenConcept) -> String {
     s.push_str(&format!("# {}\n\n", c.title));
     s.push_str("> Stub evergreen. Expand with an atomic definition and links.\n");
     s
-}
-
-/// Minimal JSON payload for the CanonicalUpsert. Hand-built (not serde)
-/// to keep the field order stable for hashing. Typed payload comes with
-/// the canonical store stage.
-fn canonical_payload_json(c: &EvergreenConcept, evergreen_path: &str) -> String {
-    format!(
-        "{{\"slug\":{slug},\"title\":{title},\"evergreen_path\":{path},\"provenance_source_url\":{prov}}}",
-        slug = json_str(&c.slug),
-        title = json_str(&c.title),
-        path = json_str(evergreen_path),
-        prov = json_str(&c.provenance_source_url),
-    )
-}
-
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 fn yaml_quote(s: &str) -> String {

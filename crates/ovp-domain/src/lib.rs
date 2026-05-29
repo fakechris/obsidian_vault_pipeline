@@ -6,6 +6,7 @@
 //! under `testing/` behind the `testing` feature (added in C7).
 
 pub mod body;
+pub mod canonical;
 pub mod concept_registry;
 pub mod evergreen;
 pub mod interpreted;
@@ -22,6 +23,7 @@ pub mod vault_layout;
 pub mod testing;
 
 pub use body::DomainBody;
+pub use canonical::CanonicalConcept;
 pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use evergreen::EvergreenConcept;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};

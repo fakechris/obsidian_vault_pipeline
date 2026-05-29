@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 156 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes known candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan); `EvergreenConceptWriter` mints *new* evergreen concepts, emitting the first real `CanonicalUpsert` + evergreen `VaultCreate` write surface. The live Anthropic client + cassette capture exist behind the `anthropic` feature; the default build / CI are offline.
+Five crates. 169 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes known candidates to canonical via a `ConceptRegistry`; `EvergreenConceptWriter` mints *new* evergreen concepts, emitting `CanonicalUpsert` + evergreen `VaultCreate` ops. A `CompositePlanApplier` over `VaultFsPlanApplier` + `CanonicalFsStoreApplier` applies the full plan — vault notes, evergreen stubs, AND canonical records — closing the raw→note→evergreen→canonical loop with no unsupported ops. The live Anthropic client + cassette capture exist behind the `anthropic` feature; the default build / CI are offline.
 
 Three closed loops:
 
@@ -29,7 +29,7 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | `PipelineManifest` | ovp-core | TOML (nodes + edges). Describes topology only. Wiring (which client, which inventory, which prompt) is app-layer. |
 | `ModelClient` | ovp-llm | Sync trait: `&ModelRequest → Result<ModelReply, CallError>`. Impls: `FixtureModelClient`, `CachedModelClient` (per-request cassette namespacing via `ModelRequest.cache_namespace`), `NeverCallsClient`, `AnthropicBlockingClient` (behind `anthropic`). |
 | `WritePlan` / `WriteOp` | ovp-core | The pipeline's side-effect output. `WriteOp` is a sealed enum: `VaultCreate` \| `VaultUpdate` \| `CanonicalUpsert` \| `EventAppend`. v1 only the first two are applied; the others are `Unsupported`. |
-| `PlanApplier` / `ApplyReport` | ovp-core (trait) / ovp-stores (impl) | The single type allowed to mutate a real store. `VaultFsPlanApplier` is the v1 impl. Every op produces an `OpOutcome` (`Applied` / `Skipped` / `Failed` / `Unsupported`). |
+| `PlanApplier` / `ApplyReport` | ovp-core (trait) / ovp-stores (impls) | The only type allowed to mutate a real store. Impls: `VaultFsPlanApplier` (vault files), `CanonicalFsStoreApplier` (canonical records), `CompositePlanApplier` (routes ops by kind across backends). Every op produces an `OpOutcome` (`Applied` / `Skipped` / `Failed` / `Unsupported`). |
 
 ## Source kinds & routing (v1.2)
 
@@ -104,7 +104,7 @@ Events flow alongside records, recorded by the runner: `RunStarted` → `SourceP
 
 - **`ovp-llm`** — effect-boundary crate for LLM calls. `ModelClient` trait + provider-neutral wire types (`ModelRequest`, `ModelReply`). Impls: `FixtureModelClient` (in-memory map), `NeverCallsClient` (errors on call), `CachedModelClient<C>` (file-backed cassette over an inner client; namespace is chosen per-request from `ModelRequest.cache_namespace`, falling back to the constructor namespace, so one client serves multiple prompt namespaces), and `AnthropicBlockingClient` (live, behind `--features anthropic`). `reqwest` is feature-gated; the default build pulls zero HTTP deps. The request/response mapping is pure and tested offline.
 
-- **`ovp-stores`** — effect-boundary crate for `PlanApplier` impls. Today only `VaultFsPlanApplier` (filesystem markdown vaults). Future siblings: canonical store applier, event log applier. Same shape as `ovp-llm`: sync trait satisfied here, impl details (sha256, filesystem) contained.
+- **`ovp-stores`** — effect-boundary crate for `PlanApplier` impls. `VaultFsPlanApplier` (filesystem markdown vaults), `CanonicalFsStoreApplier` (filesystem canonical-record store; domain-blind — persists the op payload bytes keyed by canonical key, with idempotence + `before_hash` optimistic-concurrency guard), and `CompositePlanApplier` (fans a plan across backends handling disjoint op kinds). Future sibling: an event-log applier. Same shape as `ovp-llm`: sync trait satisfied here, impl details (sha256, filesystem) contained; depends only on `ovp-core`.
 
 - **`ovp-cli`** — thin app layer. Parses args, constructs the right `ModelClient` + transforms + applier, runs the pipeline. No business logic. Three subcommands today: `graph` (manifest inspection), `interpret-article` (the v1 pipeline), `apply-plan` (`WritePlan` → vault). `run --fake` remains from v0.1 for fake-source smoke tests.
 
@@ -139,10 +139,10 @@ The 12 invariants in `invariants.md` are the source of truth + CI-gated where po
 Roadmap is driven by the legacy alignment baseline (see `docs/legacy-alignment.md`). **Landed:** C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), L3 (`ConceptRegistry`). Remaining:
 
 1. **EvergreenConceptWriter** ✅ *(done)*. `EvergreenConceptWriter` (Transform, fans out the article + one `EvergreenConcept` per surviving candidate) + `EvergreenSink` (emits the evergreen `VaultCreate` stub + `CanonicalUpsert`). `manifests/article_evergreen.pipeline.toml` + an e2e test prove the write surface: an article yields its note + N evergreen stubs + N `CanonicalUpsert`s; `VaultFsPlanApplier` applies the VaultCreates and reports the `CanonicalUpsert`s as `Unsupported` (no canonical-store applier yet — the gap step 2 closes). The legacy "absorb" equivalent for the mint-new-evergreen half; L3 already did the candidate→canonical promotion half.
-2. **Canonical store** *(next — now ungated)*. A `PlanApplier` impl that applies `CanonicalUpsert`. The producer now exists (`EvergreenSink`), so the write surface is concrete. As part of this step the `CanonicalUpsertOp.payload: String` stub becomes typed data (`EvergreenSink`'s hand-built JSON payload defines the shape to type).
-3. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 2)*. Derived state, rebuildable from canonical + vault (invariant #11). Implemented against observed canonical/vault state, not guessed shapes. `TxnFsApplier` only if multi-file atomicity is actually required. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge index).
+2. **Canonical store** ✅ *(done)*. `CanonicalFsStoreApplier` applies `CanonicalUpsert` (domain-blind key→payload store; idempotent; `before_hash` optimistic guard; path-safe keys). The payload is now typed: `ovp-domain::CanonicalConcept`, produced by `EvergreenSink` via `to_payload()` and read back via `from_payload()` (core stays domain-blind, transporting the serialized form). `CompositePlanApplier` routes a full plan across vault + canonical backends — the closed loop is tested end-to-end with zero unsupported ops.
+3. **L4/L5 MOC + knowledge index + TxnFsApplier** *(next — now ungated)*. Derived state, rebuildable from canonical + vault (invariant #11). Implemented against observed canonical/vault state, not guessed shapes. `TxnFsApplier` only if multi-file atomicity is actually required. Closes the navigation/query layer over the canonical + vault state now being produced.
 
-After step 3 we have a real cycle; P1 gets re-triaged against observed pain.
+After step 3 we have the full legacy cycle; P1 gets re-triaged against observed pain.
 
 ## What this doc is and isn't
 
