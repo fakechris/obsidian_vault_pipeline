@@ -206,6 +206,19 @@ impl CanonicalFsStoreApplier {
             return Err(format!("key_nested: {key}"));
         }
         let file = format!("{key}.json");
+        // Independent round-trip guard, decoupled from the domain slug rule:
+        // `read_all` recovers a key via `Path::file_stem` over `<key>.json`
+        // and only sees files whose extension is `json`. If this key would
+        // not recover to itself (e.g. a trailing dot, or stem/extension
+        // splitting that eats part of the key), the store would persist a
+        // record it can never read back. Reject so the store's write-set
+        // always equals its read-set, whatever the producer's key rule is.
+        let fname = Path::new(&file);
+        let round_trips = fname.extension().and_then(|e| e.to_str()) == Some("json")
+            && fname.file_stem().and_then(|s| s.to_str()) == Some(key);
+        if !round_trips {
+            return Err(format!("key_not_roundtrippable: {key}"));
+        }
         let resolved = self.store_root.join(&file);
         if resolved.strip_prefix(&self.store_root).is_err() {
             return Err(format!("key_outside_root: {key}"));

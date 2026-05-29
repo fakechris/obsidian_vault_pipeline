@@ -158,6 +158,29 @@ fn rejects_nested_key() {
 }
 
 #[test]
+fn accepted_keys_round_trip_through_read_all() {
+    // The store's contract: every key it accepts for WRITE is recovered
+    // verbatim by read_all (write-set == read-set). Includes tricky but
+    // valid keys: unicode, an interior dot, a leading dot.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = CanonicalFsStoreApplier::new(tmp.path());
+    let keys = ["ai-agent", "v1.2", "a.b", "对话即工作", ".hidden"];
+    for k in keys {
+        let payload = format!(r#"{{"slug":"{k}"}}"#);
+        assert_eq!(
+            a.apply(&plan_with(upsert(k, &payload, None)), ApplyMode::Apply).counts().applied,
+            1,
+            "key {k} should be accepted"
+        );
+    }
+    let mut recovered: Vec<String> = a.read_all().unwrap().into_iter().map(|(k, _)| k).collect();
+    recovered.sort();
+    let mut expected: Vec<String> = keys.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+    assert_eq!(recovered, expected, "every written key must read back identically");
+}
+
+#[test]
 fn dry_run_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let mut a = CanonicalFsStoreApplier::new(tmp.path());

@@ -1,29 +1,42 @@
 use std::fmt;
 
+/// Characters that `VaultLayout::sanitize_filename` rewrites to a space.
+/// A slug containing any of these would render differently in the evergreen
+/// page path (sanitized) than in the canonical store key (verbatim) —
+/// exactly the divergence this type exists to prevent. `/` and `\` are also
+/// in that sanitized set but are reported separately as
+/// [`SlugError::PathSeparator`] (they additionally enable nesting/traversal).
+const FILENAME_RESERVED: [char; 7] = [':', '*', '?', '"', '<', '>', '|'];
+
 /// The single canonical-slug rule for the whole domain.
 ///
-/// A concept's slug is used in three coupled places that MUST agree:
+/// A concept's slug is used in coupled places that MUST agree byte-for-byte:
 /// - the canonical store key (`<store>/<slug>.json`),
-/// - the evergreen page path (`10-Knowledge/Evergreen/<slug>.md`),
+/// - the evergreen page path (`10-Knowledge/Evergreen/<slug>.md`, built by
+///   `VaultLayout::evergreen_note`, which runs the slug through
+///   `sanitize_filename`),
 /// - the in-pipeline record id (`evg-<slug>`).
 ///
-/// If those diverge, a concept written under one key becomes invisible
-/// under another — e.g. a `/` in the slug nests the canonical file in a
-/// subdirectory where `CanonicalFsStoreApplier::read_all` (top-level
-/// `*.json` only) can never see it, silently dropping the concept from
-/// every derived rebuild. This type is the one gate that guarantees a slug
-/// is exactly ONE safe path segment, so the three uses can never diverge.
+/// If those diverge, a concept written under one key becomes invisible under
+/// another — e.g. a `/` nests the canonical file where
+/// `CanonicalFsStoreApplier::read_all` (top-level `*.json` only) can't see
+/// it, and a `:` (or any reserved char) is sanitized to a space in the
+/// evergreen filename but left intact in the canonical key. This type is the
+/// one gate guaranteeing a slug is exactly ONE filename-safe path segment
+/// that survives `VaultLayout` sanitization unchanged, so the uses agree.
 ///
-/// Validation rejects rather than silently mangles (the one normalization
-/// is trimming surrounding ASCII whitespace):
+/// Validation rejects rather than silently mangles (the one normalization is
+/// trimming surrounding whitespace):
 /// - empty after trim → [`SlugError::Empty`]
-/// - contains `/` or `\` (path separators) → [`SlugError::PathSeparator`]
-/// - contains `..` (parent traversal) → [`SlugError::ParentDir`]
-/// - contains interior whitespace → [`SlugError::Whitespace`]
-/// - contains an ASCII control char → [`SlugError::Control`]
+/// - `/` or `\` (path separators) → [`SlugError::PathSeparator`]
+/// - `..` (parent traversal) → [`SlugError::ParentDir`]
+/// - dot-only (`.`) → [`SlugError::DotOnly`]
+/// - any of `: * ? " < > |` (VaultLayout-sanitized) → [`SlugError::FilenameReserved`]
+/// - interior whitespace → [`SlugError::Whitespace`]
+/// - ASCII control char → [`SlugError::Control`]
 ///
-/// Unicode letters are allowed (e.g. `对话即工作`); the rule is about path
-/// safety and single-segment integrity, not an ASCII restriction.
+/// Unicode letters are allowed (e.g. `对话即工作`); the rule is about
+/// filename safety and single-segment integrity, not an ASCII restriction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalSlug(String);
 
@@ -33,6 +46,8 @@ pub enum SlugError {
     Empty,
     PathSeparator,
     ParentDir,
+    DotOnly,
+    FilenameReserved,
     Whitespace,
     Control,
 }
@@ -44,6 +59,8 @@ impl SlugError {
             SlugError::Empty => "slug.empty",
             SlugError::PathSeparator => "slug.path_separator",
             SlugError::ParentDir => "slug.parent_dir",
+            SlugError::DotOnly => "slug.dot_only",
+            SlugError::FilenameReserved => "slug.filename_reserved",
             SlugError::Whitespace => "slug.whitespace",
             SlugError::Control => "slug.control_char",
         }
@@ -56,6 +73,10 @@ impl fmt::Display for SlugError {
             SlugError::Empty => "empty slug",
             SlugError::PathSeparator => "slug contains a path separator (`/` or `\\`)",
             SlugError::ParentDir => "slug contains `..`",
+            SlugError::DotOnly => "slug is dot-only",
+            SlugError::FilenameReserved => {
+                "slug contains a filename-reserved character (one of `: * ? \" < > |`)"
+            }
             SlugError::Whitespace => "slug contains interior whitespace",
             SlugError::Control => "slug contains a control character",
         };
@@ -68,7 +89,8 @@ impl std::error::Error for SlugError {}
 impl CanonicalSlug {
     /// Validate + normalize a raw candidate into a canonical slug. The only
     /// normalization is trimming surrounding whitespace; anything that would
-    /// make the slug unsafe or multi-segment is rejected.
+    /// make the slug unsafe, multi-segment, or VaultLayout-divergent is
+    /// rejected.
     pub fn parse(raw: &str) -> Result<Self, SlugError> {
         let s = raw.trim();
         if s.is_empty() {
@@ -80,12 +102,21 @@ impl CanonicalSlug {
         if s.contains("..") {
             return Err(SlugError::ParentDir);
         }
+        // A key made only of `.` confuses filename stem/extension splitting
+        // and maps to a nonsense vault path. (`..`/`...` are already rejected
+        // as ParentDir above; this catches the lone `.`.)
+        if s.chars().all(|c| c == '.') {
+            return Err(SlugError::DotOnly);
+        }
         for c in s.chars() {
             if c.is_whitespace() {
                 return Err(SlugError::Whitespace);
             }
             if c.is_control() {
                 return Err(SlugError::Control);
+            }
+            if FILENAME_RESERVED.contains(&c) {
+                return Err(SlugError::FilenameReserved);
             }
         }
         Ok(Self(s.to_string()))
@@ -130,6 +161,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_single_dot_inside_segment() {
+        // A dot that isn't dot-only and isn't `..` is fine (it round-trips
+        // through `<key>.json` and isn't sanitized by VaultLayout).
+        assert_eq!(CanonicalSlug::parse("v1.2").unwrap().as_str(), "v1.2");
+    }
+
+    #[test]
     fn trims_surrounding_whitespace() {
         assert_eq!(CanonicalSlug::parse("  rag\n").unwrap().as_str(), "rag");
     }
@@ -149,7 +187,25 @@ mod tests {
     #[test]
     fn rejects_parent_dir() {
         assert_eq!(CanonicalSlug::parse(".."), Err(SlugError::ParentDir));
+        assert_eq!(CanonicalSlug::parse("..."), Err(SlugError::ParentDir));
         assert_eq!(CanonicalSlug::parse("a..b"), Err(SlugError::ParentDir));
+    }
+
+    #[test]
+    fn rejects_dot_only() {
+        assert_eq!(CanonicalSlug::parse("."), Err(SlugError::DotOnly));
+    }
+
+    #[test]
+    fn rejects_filename_reserved_chars() {
+        // Every char VaultLayout::sanitize_filename would rewrite.
+        for raw in ["a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b"] {
+            assert_eq!(
+                CanonicalSlug::parse(raw),
+                Err(SlugError::FilenameReserved),
+                "expected {raw} rejected as filename-reserved"
+            );
+        }
     }
 
     #[test]
@@ -162,5 +218,7 @@ mod tests {
         assert_eq!(SlugError::Empty.code(), "slug.empty");
         assert_eq!(SlugError::PathSeparator.code(), "slug.path_separator");
         assert_eq!(SlugError::ParentDir.code(), "slug.parent_dir");
+        assert_eq!(SlugError::DotOnly.code(), "slug.dot_only");
+        assert_eq!(SlugError::FilenameReserved.code(), "slug.filename_reserved");
     }
 }

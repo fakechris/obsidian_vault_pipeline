@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::canonical_slug::CanonicalSlug;
+
 /// The typed canonical record for an evergreen concept — the data a
 /// `CanonicalUpsert` op carries. `EvergreenSink` builds one and serializes
 /// it into the op's payload; a canonical-store reader deserializes it
@@ -31,11 +33,19 @@ impl CanonicalConcept {
     }
 
     /// Parse `(key, payload)` pairs into concepts, **failing loudly** on the
-    /// first record that doesn't parse — returning a [`CanonicalParseError`]
+    /// first record that is unsound — returning a [`CanonicalParseError`]
     /// that names the offending key. This is the parser for derived-state
-    /// rebuilds (MOC, knowledge index): a corrupt canonical record must
-    /// abort the rebuild, not silently shrink the index (which would drop a
-    /// real concept from every downstream view, invariant #11).
+    /// rebuilds (MOC, knowledge index): an unsound canonical record must
+    /// abort the rebuild, not silently shrink or misdirect the index
+    /// (invariant #11).
+    ///
+    /// A record is sound iff:
+    /// 1. its payload parses as a `CanonicalConcept`;
+    /// 2. `payload.slug` is itself a valid [`CanonicalSlug`] — a rebuild must
+    ///    never propagate an unsafe/divergent slug into derived views;
+    /// 3. the store `key` equals `payload.slug` — identity discipline, since
+    ///    rebuilds key off the slug; a divergent key would point
+    ///    backlinks/MOC entries at an identity the store can't resolve.
     pub fn try_parse_pairs<I, S>(pairs: I) -> Result<Vec<CanonicalConcept>, CanonicalParseError>
     where
         I: IntoIterator<Item = (S, S)>,
@@ -43,15 +53,30 @@ impl CanonicalConcept {
     {
         let mut out = Vec::new();
         for (key, payload) in pairs {
-            match Self::from_payload(payload.as_ref()) {
-                Ok(c) => out.push(c),
-                Err(e) => {
-                    return Err(CanonicalParseError {
-                        key: key.as_ref().to_string(),
-                        message: e.to_string(),
-                    });
-                }
+            let key = key.as_ref();
+            let concept = Self::from_payload(payload.as_ref()).map_err(|e| CanonicalParseError {
+                key: key.to_string(),
+                message: e.to_string(),
+            })?;
+            if let Err(e) = CanonicalSlug::parse(&concept.slug) {
+                return Err(CanonicalParseError {
+                    key: key.to_string(),
+                    message: format!(
+                        "payload slug `{}` is not a valid canonical slug: {e}",
+                        concept.slug
+                    ),
+                });
             }
+            if concept.slug != key {
+                return Err(CanonicalParseError {
+                    key: key.to_string(),
+                    message: format!(
+                        "key/slug mismatch: store key `{key}` != payload slug `{}`",
+                        concept.slug
+                    ),
+                });
+            }
+            out.push(concept);
         }
         Ok(out)
     }
@@ -133,13 +158,38 @@ mod tests {
     #[test]
     fn try_parse_pairs_fails_loudly_on_corrupt_payload() {
         let pairs = vec![
-            ("ai-agent".to_string(), sample().to_payload()),
+            // First record is sound (key == slug); the second is corrupt.
+            ("agent-native-pm".to_string(), sample().to_payload()),
             ("broken".to_string(), "not json".to_string()),
         ];
         let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
         assert_eq!(err.key, "broken", "names the offending key");
         // No silent shrink: the error short-circuits the whole rebuild.
         assert!(err.to_string().contains("corrupt canonical record `broken`"));
+    }
+
+    #[test]
+    fn try_parse_pairs_rejects_key_slug_mismatch() {
+        // Payload is valid, but it's filed under the wrong key.
+        let pairs = vec![("wrong-key".to_string(), sample().to_payload())];
+        let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
+        assert_eq!(err.key, "wrong-key");
+        assert!(err.to_string().contains("key/slug mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn try_parse_pairs_rejects_invalid_slug_in_payload() {
+        // A payload whose own slug is not a valid canonical slug.
+        let bad = CanonicalConcept {
+            slug: "a/b".into(),
+            title: "x".into(),
+            evergreen_path: "10-Knowledge/Evergreen/a b.md".into(),
+            provenance_source_url: "u".into(),
+        };
+        let pairs = vec![("a/b".to_string(), bad.to_payload())];
+        let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
+        assert_eq!(err.key, "a/b");
+        assert!(err.to_string().contains("not a valid canonical slug"), "got: {err}");
     }
 
     #[test]

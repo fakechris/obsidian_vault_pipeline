@@ -1,12 +1,12 @@
 # OVP Next
 
-Clean-core Rust rewrite of the Obsidian Vault Pipeline. **Status: article + paper paths real on disk; routed unified pipeline; live LLM behind a feature flag.**
+Clean-core Rust rewrite of the Obsidian Vault Pipeline. **Status: full legacy cycle closed — raw → note → evergreen → canonical → MOC + knowledge index, all derived state rebuildable; routed unified pipeline; live LLM behind a feature flag.**
 
 This repo intentionally has zero dependency on the legacy Python `ovp_pipeline` package — no import, no subprocess, no embedded runtime. The old system is a frozen oracle for fixtures and contracts, not a runtime dependency.
 
 ## What works today
 
-Five crates, 144 tests. Three acceptance fixtures (`article_clean`, `article_mixed_lang`, `paper_arxiv`) run through the pipeline offline against committed cassettes; the resulting `WritePlan` is applied to a tempdir vault and the round-trip fields match. A unified pipeline routes a mixed inbox (articles + papers) to the right interpreter by source kind. Concept promotion is driven by a loadable `ConceptRegistry`, not hardcoded constants. The live Anthropic client + cassette capture exist behind the `anthropic` feature (`docs/live-capture.md`); the default build and CI are offline and need no API key.
+Five crates, 216 tests. Three acceptance fixtures (`article_clean`, `article_mixed_lang`, `paper_arxiv`) run through the pipeline offline against committed cassettes; the resulting `WritePlan` is applied to a tempdir vault and the round-trip fields match. A unified pipeline routes a mixed inbox (articles + papers) to the right interpreter by source kind. Concept promotion is driven by a loadable `ConceptRegistry`, not hardcoded constants. New evergreen concepts mint through a single hardened `CanonicalSlug` rule, land in a canonical store, and rebuild derived MOC + knowledge-index artifacts. The live Anthropic client + cassette capture exist behind the `anthropic` feature (`docs/live-capture.md`); the default build and CI are offline and need no API key.
 
 ```
 ovp-next interpret-article \
