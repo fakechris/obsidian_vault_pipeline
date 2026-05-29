@@ -683,10 +683,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "ovp-app"
+version = "0.1.0"
+dependencies = [
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "ovp-stores",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "ovp-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "ovp-app",
  "ovp-core",
  "ovp-domain",
  "ovp-llm",

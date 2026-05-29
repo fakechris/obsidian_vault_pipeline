@@ -22,5 +22,6 @@ ovp-core = { path = "../ovp-core", features = ["fakes"] }
 ovp-domain = { path = "../ovp-domain" }
 ovp-llm = { path = "../ovp-llm" }
 ovp-stores = { path = "../ovp-stores" }
+ovp-app = { path = "../ovp-app" }
 clap = { workspace = true }
 serde_json = { workspace = true }

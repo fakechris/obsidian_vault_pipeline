@@ -20,3 +20,30 @@ edges = [
   ["article_parser", "concept_resolver"],
   ["concept_resolver", "article_vault_plan"],
 ]
+
+# Assembly overlay (ignored by ovp-core's topology-only PipelineManifest
+# parser; read by ovp-app's DomainPipelineSpec). Maps each node id to its
+# NodeKind + static config. Runtime deps (run_id, date, area, input path, the
+# ModelClient, the ConceptRegistry) come from AppWiring, bound here by name.
+[assembly.markdown_inbox]
+kind = "source.markdown_inbox"
+
+[assembly.source_resolver]
+kind = "transform.source_resolver"
+
+[assembly.prompt_builder]
+kind = "transform.prompt_builder"
+
+[assembly.llm_invoker]
+kind = "effect.llm_invoker"
+config = { client = "default_llm" }
+
+[assembly.article_parser]
+kind = "transform.article_parser"
+
+[assembly.concept_resolver]
+kind = "transform.concept_resolver"
+config = { registry = "default" }
+
+[assembly.article_vault_plan]
+kind = "sink.article_vault_plan"

@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use ovp_core::{GraphRunner, PipelineManifest, RunId};
-use ovp_domain::{
-    ArticleParser, ArticleVaultPlanSink, ConceptRegistry, ConceptResolver, DomainBody, LLMInvoker,
-    MarkdownInboxSource, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
-};
+use ovp_app::{AppWiring, DomainPipelineSpec, GraphAssembler};
+use ovp_core::RunId;
+use ovp_domain::{ConceptRegistry, ARTICLE_PROMPT_ID};
 
 /// Default canonical-evergreen seed used when no `--concept-registry`
 /// file is supplied. Two entries cover the article_mixed_lang MUST
@@ -92,7 +90,7 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
     let toml_str = std::fs::read_to_string(&args.manifest_path).map_err(|e| {
         CliError::Io(format!("reading manifest `{}`: {e}", args.manifest_path.display()))
     })?;
-    let manifest = PipelineManifest::parse(&toml_str).map_err(|e| CliError::Core(e.into()))?;
+    let spec = DomainPipelineSpec::parse(&toml_str).map_err(CliError::Assembly)?;
     let run_id = RunId::new(&args.run_id);
 
     // Namespace = ARTICLE_PROMPT_ID = "article_interpret/v1". Schema bump
@@ -100,18 +98,6 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
     // masquerade as new-schema responses. See invariant docs.
     let client: Box<dyn ModelClient> = build_client(args.client_kind, &args.cache_dir)?;
 
-    let mut runner: GraphRunner<DomainBody> = GraphRunner::new(manifest, run_id.clone());
-    runner.register_source(
-        "markdown_inbox",
-        MarkdownInboxSource::new("markdown_inbox", run_id.clone(), &args.input_path),
-    );
-    runner.register_transform("source_resolver", SourceResolver::new("source_resolver"));
-    runner.register_transform("prompt_builder", PromptBuilder::new("prompt_builder"));
-    runner.register_effectful_transform("llm_invoker", LLMInvoker::new("llm_invoker", client));
-    runner.register_transform(
-        "article_parser",
-        ArticleParser::new("article_parser", &args.area, &args.date_stamp),
-    );
     // ConceptResolver consumes a ConceptRegistry (not raw CLI constants):
     // loaded from --concept-registry if given, else a default seed.
     let registry = match &args.concept_registry {
@@ -119,14 +105,20 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
             .map_err(|e| CliError::Io(format!("loading concept registry: {e}")))?,
         None => ConceptRegistry::from_slugs(DEFAULT_CANONICAL_SLUGS),
     };
-    runner.register_transform(
-        "concept_resolver",
-        ConceptResolver::new("concept_resolver", registry),
-    );
-    runner.register_sink(
-        "article_vault_plan",
-        ArticleVaultPlanSink::new("article_vault_plan", run_id.clone()),
-    );
+
+    // Topology + node kinds come from the manifest; the live ModelClient,
+    // ConceptRegistry, run id, dates, and input path come from AppWiring,
+    // bound by the names the manifest's [assembly] config references.
+    let wiring = AppWiring::new(run_id)
+        .with_date_stamp(&args.date_stamp)
+        .with_area(&args.area)
+        .with_input_path(&args.input_path)
+        .with_client("default_llm", client)
+        .with_registry("default", registry);
+
+    let runner = GraphAssembler::with_domain_nodes()
+        .assemble(&spec, wiring)
+        .map_err(CliError::Assembly)?;
 
     let report = runner.run().map_err(CliError::Core)?;
 

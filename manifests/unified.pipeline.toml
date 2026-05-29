@@ -33,3 +33,41 @@ edges = [
   ["concept_resolver", "article_vault_plan"],
   ["paper_parser", "paper_vault_plan"],
 ]
+
+# Assembly overlay — see article.pipeline.toml for the convention. Note that
+# node id ≠ kind: both `article_prompt_builder` and `prompt_builder` map to the
+# same `transform.prompt_builder` kind; the manifest id is just the graph label.
+[assembly.markdown_inbox]
+kind = "source.markdown_inbox"
+
+[assembly.source_resolver]
+kind = "transform.source_resolver"
+
+[assembly.route_by_source_kind]
+kind = "transform.route_by_source_kind"
+
+[assembly.article_prompt_builder]
+kind = "transform.prompt_builder"
+
+[assembly.paper_prompt_builder]
+kind = "transform.paper_prompt_builder"
+
+[assembly.llm_invoker]
+kind = "effect.llm_invoker"
+config = { client = "default_llm" }
+
+[assembly.article_parser]
+kind = "transform.article_parser"
+
+[assembly.paper_parser]
+kind = "transform.paper_parser"
+
+[assembly.concept_resolver]
+kind = "transform.concept_resolver"
+config = { registry = "default" }
+
+[assembly.article_vault_plan]
+kind = "sink.article_vault_plan"
+
+[assembly.paper_vault_plan]
+kind = "sink.paper_vault_plan"

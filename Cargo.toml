@@ -6,6 +6,7 @@ members = [
     "crates/ovp-domain",
     "crates/ovp-llm",
     "crates/ovp-stores",
+    "crates/ovp-app",
 ]
 
 [workspace.package]

@@ -78,6 +78,14 @@ check "no ovp_pipeline / from ovp" \
     '(ovp_pipeline|from ovp)' \
     "crates"
 
+# === Graph Assembly Layer: the main CLI path assembles, it does not hand-wire ===
+# Prevents regression to a wiring god-object: `interpret-article` must build its
+# pipeline through ovp-app's GraphAssembler, never via direct register_* calls.
+# (The v0.1 fake runner in run.rs is exempt — it predates the assembly layer.)
+check "interpret-article assembles (no hand-wired register_*)" \
+    'register_(source|transform|effectful_transform|sink)' \
+    "crates/ovp-cli/src/commands/interpret_article.rs"
+
 # === Invariant #1: ovp-core has no deps on higher-level crates ===
 # Inspects ovp-core/Cargo.toml directly. The forbidden list catches anything
 # that would smuggle CLI / domain / LLM concerns into core.

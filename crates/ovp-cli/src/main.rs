@@ -9,6 +9,7 @@ mod commands;
 pub enum CliError {
     Io(String),
     Core(ovp_core::CoreError),
+    Assembly(ovp_app::AssemblyError),
 }
 
 impl std::fmt::Display for CliError {
@@ -16,6 +17,7 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::Io(s) => write!(f, "io: {s}"),
             CliError::Core(e) => write!(f, "{e}"),
+            CliError::Assembly(e) => write!(f, "assembly: {e}"),
         }
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "ovp-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next application/assembly layer: builds a GraphRunner from a declarative manifest + app wiring"
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-llm = { path = "../ovp-llm" }
+toml = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+ovp-stores = { path = "../ovp-stores" }
+tempfile = { workspace = true }
+serde_json = { workspace = true }

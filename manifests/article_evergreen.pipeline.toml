@@ -27,3 +27,33 @@ edges = [
   ["evergreen_concept_writer", "article_vault_plan"],
   ["evergreen_concept_writer", "evergreen_sink"],
 ]
+
+# Assembly overlay — see article.pipeline.toml for the convention.
+[assembly.markdown_inbox]
+kind = "source.markdown_inbox"
+
+[assembly.source_resolver]
+kind = "transform.source_resolver"
+
+[assembly.prompt_builder]
+kind = "transform.prompt_builder"
+
+[assembly.llm_invoker]
+kind = "effect.llm_invoker"
+config = { client = "default_llm" }
+
+[assembly.article_parser]
+kind = "transform.article_parser"
+
+[assembly.concept_resolver]
+kind = "transform.concept_resolver"
+config = { registry = "default" }
+
+[assembly.evergreen_concept_writer]
+kind = "transform.evergreen_concept_writer"
+
+[assembly.article_vault_plan]
+kind = "sink.article_vault_plan"
+
+[assembly.evergreen_sink]
+kind = "sink.evergreen_sink"
