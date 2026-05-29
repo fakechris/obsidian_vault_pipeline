@@ -27,6 +27,20 @@ impl CanonicalConcept {
     pub fn from_payload(s: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(s)
     }
+
+    /// Parse `(key, payload)` pairs (e.g. a canonical store's `read_all`)
+    /// into concepts, skipping any record that fails to parse. Used by
+    /// derived-state rebuilds (MOC, knowledge index).
+    pub fn parse_pairs<I, S>(pairs: I) -> Vec<CanonicalConcept>
+    where
+        I: IntoIterator<Item = (S, S)>,
+        S: AsRef<str>,
+    {
+        pairs
+            .into_iter()
+            .filter_map(|(_key, payload)| Self::from_payload(payload.as_ref()).ok())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -47,6 +61,17 @@ mod tests {
         let c = sample();
         let payload = c.to_payload();
         assert_eq!(CanonicalConcept::from_payload(&payload).unwrap(), c);
+    }
+
+    #[test]
+    fn parse_pairs_skips_bad_payloads() {
+        let pairs = vec![
+            ("ai-agent".to_string(), sample().to_payload()),
+            ("broken".to_string(), "not json".to_string()),
+        ];
+        let concepts = CanonicalConcept::parse_pairs(pairs);
+        assert_eq!(concepts.len(), 1, "bad payload skipped");
+        assert_eq!(concepts[0].slug, "agent-native-pm");
     }
 
     #[test]

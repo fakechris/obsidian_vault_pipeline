@@ -33,6 +33,29 @@ impl CanonicalFsStoreApplier {
     pub fn store_root(&self) -> &Path {
         &self.store_root
     }
+
+    /// Read every canonical record as `(key, payload)` pairs, sorted by
+    /// key for determinism. Domain-blind: payloads are returned verbatim;
+    /// the caller parses them (e.g. into `ovp-domain::CanonicalConcept`).
+    /// Used by derived-state rebuilds (MOC, knowledge index). A missing
+    /// store root yields an empty list, not an error.
+    pub fn read_all(&self) -> std::io::Result<Vec<(String, String)>> {
+        if !self.store_root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<(String, String)> = Vec::new();
+        for entry in fs::read_dir(&self.store_root)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    let payload = fs::read_to_string(&path)?;
+                    out.push((stem.to_string(), payload));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
 }
 
 impl PlanApplier for CanonicalFsStoreApplier {
