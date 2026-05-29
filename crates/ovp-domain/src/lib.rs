@@ -7,6 +7,7 @@
 
 pub mod body;
 pub mod interpreted;
+pub mod paper_doc;
 pub mod prompt;
 pub mod response;
 pub mod sinks;
@@ -20,13 +21,16 @@ pub mod testing;
 
 pub use body::DomainBody;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
+pub use paper_doc::{PaperDoc, PaperSections};
 pub use prompt::{PromptId, PromptRequest};
 pub use response::{ModelResponse, ResponseContent};
-pub use sinks::ArticleVaultPlanSink;
-pub use source_doc::SourceDoc;
+pub use sinks::{ArticleVaultPlanSink, PaperVaultPlanSink};
+pub use source_doc::{PaperMeta, SourceDoc, SourceKind};
 pub use sources::{InboxScanSource, MarkdownInboxSource};
 pub use vault_layout::VaultLayout;
 pub use transforms::{
-    ArticleParser, ConceptResolver, LLMInvoker, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
-    ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
+    ArticleParser, ConceptResolver, LLMInvoker, PaperParser, PaperPromptBuilder, PromptBuilder,
+    RouteBySourceKind, SourceResolver, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION,
+    DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL, DEFAULT_PAPER_MAX_TOKENS,
+    DEFAULT_PAPER_MODEL, PAPER_PROMPT_ID, PAPER_SCHEMA_VERSION,
 };

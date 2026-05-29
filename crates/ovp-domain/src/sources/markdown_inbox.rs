@@ -6,7 +6,7 @@ use ovp_core::{
 use serde::Deserialize;
 
 use crate::body::DomainBody;
-use crate::source_doc::SourceDoc;
+use crate::source_doc::{PaperMeta, SourceDoc, SourceKind};
 
 /// Reads a single Obsidian-style markdown clipping (YAML frontmatter +
 /// body) from disk and emits it as one `Record<DomainBody::Source(...)>`.
@@ -113,6 +113,19 @@ struct ClippingFrontmatter {
     published: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    // --- source-kind classification fields ---
+    /// `arxiv-paper`, `github-project`, ... Absent → article.
+    #[serde(default)]
+    source_type: Option<String>,
+    #[serde(default)]
+    arxiv_id: Option<String>,
+    #[serde(default)]
+    source_authors: Vec<String>,
+    /// Legacy emits this as a comma-joined string (`cs.IR, cs.AI`).
+    #[serde(default)]
+    arxiv_categories: Option<String>,
+    #[serde(default)]
+    source_published_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +187,13 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
     let title = fm.title.unwrap_or_else(|| "Untitled".to_string());
     let source_url = strip_tracker_params(&fm.source.unwrap_or_default());
     let author = fm.author.map(|a| a.into_string());
+    let kind = classify_kind(
+        fm.source_type.as_deref(),
+        fm.arxiv_id,
+        fm.source_authors,
+        fm.arxiv_categories,
+        fm.source_published_at,
+    );
     Ok(SourceDoc {
         title,
         source_url,
@@ -181,7 +201,43 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         published: fm.published,
         tags: fm.tags,
         body_markdown: body.to_string(),
+        source_kind: kind,
     })
+}
+
+/// Classify a clipping's `SourceKind` from its frontmatter. `arxiv-paper`
+/// → `Paper`; everything else (absent, github, website, ...) → `Article`.
+/// GitHub is intentionally not yet its own variant (terminal-raw routing
+/// is a later stage); it falls through to `Article` for now.
+fn classify_kind(
+    source_type: Option<&str>,
+    arxiv_id: Option<String>,
+    source_authors: Vec<String>,
+    arxiv_categories: Option<String>,
+    source_published_at: Option<String>,
+) -> SourceKind {
+    match source_type {
+        Some("arxiv-paper") => SourceKind::Paper(PaperMeta {
+            arxiv_id: arxiv_id.unwrap_or_default(),
+            authors: source_authors,
+            categories: split_categories(arxiv_categories.as_deref()),
+            published: source_published_at,
+        }),
+        _ => SourceKind::Article,
+    }
+}
+
+/// Split a comma-separated category string (`"cs.IR, cs.AI"`) into a
+/// trimmed list. Empty/absent → empty vec.
+fn split_categories(s: Option<&str>) -> Vec<String> {
+    match s {
+        None => Vec::new(),
+        Some(raw) => raw
+            .split(',')
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect(),
+    }
 }
 
 /// Strip common tracker query params (`source`, `utm_*`, `ref`, `ref_src`,

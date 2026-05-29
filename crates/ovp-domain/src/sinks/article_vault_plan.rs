@@ -248,14 +248,7 @@ mod tests {
         let mut sink = ArticleVaultPlanSink::new("article_vault_plan", RunId::new("run"));
         let rec = Record::new(
             RecordId::new("r-x"),
-            DomainBody::Source(Box::new(SourceDoc {
-                title: "T".into(),
-                source_url: "u".into(),
-                author: None,
-                published: None,
-                tags: vec![],
-                body_markdown: "".into(),
-            })),
+            DomainBody::Source(Box::new(SourceDoc::article("T", "u", None, None, vec![], ""))),
             RecordMeta { run_id: RunId::new("run"), seq: 0 },
         );
         let out = sink.consume(rec);

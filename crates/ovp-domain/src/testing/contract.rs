@@ -16,6 +16,55 @@ use ovp_core::{Event, WriteOp, WritePlan};
 use serde::Deserialize;
 
 use crate::interpreted::InterpretedDoc;
+use crate::paper_doc::PaperDoc;
+
+/// The fields a contract clause can read, abstracted over the concrete
+/// interpreted shape (article `InterpretedDoc` or `PaperDoc`). Lets the
+/// one assertion engine drive both kinds' contracts.
+pub trait ContractFields {
+    fn field(&self, name: &str) -> FieldValue<'_>;
+    /// The source kind label this subject represents (`article`/`paper`).
+    fn source_kind_name(&self) -> &str;
+}
+
+impl ContractFields for InterpretedDoc {
+    fn field(&self, name: &str) -> FieldValue<'_> {
+        match name {
+            "title" => FieldValue::Str(&self.title),
+            "source" => FieldValue::Str(&self.source_url),
+            "type" => FieldValue::Str(&self.doc_type),
+            "area" => FieldValue::Str(&self.area),
+            "date" => FieldValue::Str(&self.date),
+            "author" => FieldValue::OptStr(self.author.as_deref()),
+            "tags" => FieldValue::StrList(&self.tags),
+            "canonical_concepts" => FieldValue::StrList(&self.canonical_concepts),
+            "concept_candidates" => FieldValue::StrList(&self.concept_candidates),
+            _ => FieldValue::Unknown,
+        }
+    }
+    fn source_kind_name(&self) -> &str {
+        "article"
+    }
+}
+
+impl ContractFields for PaperDoc {
+    fn field(&self, name: &str) -> FieldValue<'_> {
+        match name {
+            "title" => FieldValue::Str(&self.title),
+            "source" => FieldValue::Str(&self.source_url),
+            "arxiv_id" => FieldValue::Str(&self.arxiv_id),
+            "date" => FieldValue::Str(&self.date),
+            "type" => FieldValue::Str("paper"),
+            "authors" => FieldValue::StrList(&self.authors),
+            "categories" => FieldValue::StrList(&self.categories),
+            "tags" => FieldValue::StrList(&self.tags),
+            _ => FieldValue::Unknown,
+        }
+    }
+    fn source_kind_name(&self) -> &str {
+        "paper"
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Contract {
@@ -53,8 +102,17 @@ pub struct ExpectedArtifact {
 pub enum Clause {
     Field(FieldClause),
     BodySection { body_section: BodySectionSpec },
+    BodySectionsPresent { body_sections_present: BodySectionsPresentSpec },
     EventEmitted { event_emitted: EventEmittedSpec },
     Utf8Clean { utf8_clean: Utf8CleanSpec },
+    /// `- source_kind: paper` — asserts the subject's kind label.
+    SourceKind { source_kind: String },
+    /// Catch-all for documentation-only clauses whose key the engine
+    /// doesn't implement yet (e.g. `may_break: - absorb_skipped: true`,
+    /// or github-only `forbidden_artifacts` / `writeplan_constraint`).
+    /// Always records as a documentation-only pass. MUST be the last
+    /// untagged variant so specific shapes match first.
+    Other(serde_yaml::Value),
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +135,12 @@ pub struct FieldClause {
 pub struct BodySectionSpec {
     pub op: String,
     pub values: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BodySectionsPresentSpec {
+    pub op: String,
+    pub sections: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,21 +220,52 @@ pub fn load_contract(path: &Path) -> Result<Contract, ContractError> {
     serde_yaml::from_str(&raw).map_err(|e| ContractError::Parse(e.to_string()))
 }
 
+/// Assert a contract against an article `InterpretedDoc`.
 pub fn assert_contract(
     contract: &Contract,
     interpreted: Option<&InterpretedDoc>,
     write_plan: &WritePlan,
     events: &[Event],
 ) -> ContractReport {
+    assert_contract_subject(
+        contract,
+        interpreted.map(|d| d as &dyn ContractFields),
+        write_plan,
+        events,
+    )
+}
+
+/// Assert a contract against a `PaperDoc`.
+pub fn assert_contract_paper(
+    contract: &Contract,
+    paper: Option<&PaperDoc>,
+    write_plan: &WritePlan,
+    events: &[Event],
+) -> ContractReport {
+    assert_contract_subject(
+        contract,
+        paper.map(|d| d as &dyn ContractFields),
+        write_plan,
+        events,
+    )
+}
+
+/// Core engine: assert a contract against any `ContractFields` subject.
+pub fn assert_contract_subject(
+    contract: &Contract,
+    subject: Option<&dyn ContractFields>,
+    write_plan: &WritePlan,
+    events: &[Event],
+) -> ContractReport {
     let mut report = ContractReport::default();
     for c in &contract.must {
-        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::Must);
+        evaluate_clause(c, subject, write_plan, events, &mut report, ClauseLevel::Must);
     }
     for c in &contract.should {
-        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::Should);
+        evaluate_clause(c, subject, write_plan, events, &mut report, ClauseLevel::Should);
     }
     for c in &contract.may_break {
-        evaluate_clause(c, interpreted, write_plan, events, &mut report, ClauseLevel::MayBreak);
+        evaluate_clause(c, subject, write_plan, events, &mut report, ClauseLevel::MayBreak);
     }
     report
 }
@@ -184,23 +279,84 @@ enum ClauseLevel {
 
 fn evaluate_clause(
     clause: &Clause,
-    interpreted: Option<&InterpretedDoc>,
+    subject: Option<&dyn ContractFields>,
     write_plan: &WritePlan,
     events: &[Event],
     report: &mut ContractReport,
     level: ClauseLevel,
 ) {
     match clause {
-        Clause::Field(fc) => evaluate_field_clause(fc, interpreted, report, level),
+        Clause::Field(fc) => evaluate_field_clause(fc, subject, report, level),
         Clause::BodySection { body_section } => {
             evaluate_body_section(body_section, write_plan, report, level)
+        }
+        Clause::BodySectionsPresent { body_sections_present } => {
+            evaluate_body_sections_present(body_sections_present, write_plan, report, level)
         }
         Clause::EventEmitted { event_emitted } => {
             evaluate_event_emitted(event_emitted, events, report, level)
         }
         Clause::Utf8Clean { utf8_clean } => {
-            evaluate_utf8_clean(utf8_clean, interpreted, report, level)
+            evaluate_utf8_clean(utf8_clean, subject, report, level)
         }
+        Clause::SourceKind { source_kind } => {
+            evaluate_source_kind(source_kind, subject, report, level)
+        }
+        Clause::Other(v) => {
+            // Documentation-only clause whose key isn't a known op.
+            // Record as skipped so it's visible but never fails a level.
+            report.skipped.push(format!("documentation-only clause: {v:?}"));
+        }
+    }
+}
+
+fn evaluate_source_kind(
+    expected: &str,
+    subject: Option<&dyn ContractFields>,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let label = format!("source_kind `{expected}`");
+    match subject {
+        Some(s) if s.source_kind_name() == expected => record_pass(report, level, &label),
+        Some(s) => record_failure(
+            report,
+            level,
+            &label,
+            &format!("subject kind is `{}`, expected `{expected}`", s.source_kind_name()),
+        ),
+        None => record_failure(report, level, &label, "no interpreted subject produced"),
+    }
+}
+
+fn evaluate_body_sections_present(
+    spec: &BodySectionsPresentSpec,
+    write_plan: &WritePlan,
+    report: &mut ContractReport,
+    level: ClauseLevel,
+) {
+    let label = format!("body_sections_present op `{}`", spec.op);
+    if spec.op != "at_least" {
+        report.skipped.push(format!("{label} (unknown op)"));
+        return;
+    }
+    let body = match find_vault_create_body(write_plan) {
+        Some(b) => b,
+        None => {
+            record_failure(report, level, &label, "no VaultCreate op in write plan");
+            return;
+        }
+    };
+    let missing: Vec<&str> = spec
+        .sections
+        .iter()
+        .filter(|sec| !body.contains(sec.as_str()))
+        .map(|s| s.as_str())
+        .collect();
+    if missing.is_empty() {
+        record_pass(report, level, &label);
+    } else {
+        record_failure(report, level, &label, &format!("missing sections: {missing:?}"));
     }
 }
 
@@ -241,12 +397,13 @@ fn event_kind_name(kind: &ovp_core::EventKind) -> &'static str {
         SinkEmitted { .. } => "sink_emitted",
         PlanFinalized { .. } => "plan_finalized",
         SourceResolution { .. } => "source_resolution",
+        SourceRouted { .. } => "source_routed",
     }
 }
 
 fn evaluate_utf8_clean(
     spec: &Utf8CleanSpec,
-    interpreted: Option<&InterpretedDoc>,
+    subject: Option<&dyn ContractFields>,
     report: &mut ContractReport,
     level: ClauseLevel,
 ) {
@@ -254,18 +411,18 @@ fn evaluate_utf8_clean(
     // Rust `String` is utf8 by construction. utf8_clean reduces to "is
     // the named field populated at all". For paths we don't recognize,
     // mark as skipped rather than passing silently.
-    let interp = match interpreted {
+    let interp = match subject {
         Some(d) => d,
         None => {
-            record_failure(report, level, &label, "no InterpretedDoc to validate");
+            record_failure(report, level, &label, "no interpreted subject to validate");
             return;
         }
     };
     let mut unknown_paths = Vec::new();
     for path in &spec.paths {
         let ok = match path.as_str() {
-            "title" => !interp.title.is_empty(),
-            "tags" => interp.tags.iter().all(|t| !t.is_empty()),
+            "title" => matches!(interp.field("title"), FieldValue::Str(s) if !s.is_empty()),
+            "tags" => matches!(interp.field("tags"), FieldValue::StrList(l) if l.iter().all(|t| !t.is_empty())),
             "body" | "body_markdown" => true, // dimensions populated by parser is enough
             "filename" => true, // path generation is internal; can't fail utf8
             other => {
@@ -295,7 +452,7 @@ fn evaluate_utf8_clean(
 
 fn evaluate_field_clause(
     fc: &FieldClause,
-    interpreted: Option<&InterpretedDoc>,
+    subject: Option<&dyn ContractFields>,
     report: &mut ContractReport,
     level: ClauseLevel,
 ) {
@@ -309,16 +466,17 @@ fn evaluate_field_clause(
         }
     };
     let label = format!("field `{}` op `{op}`", fc.field);
-    let interp = match interpreted {
+    let interp = match subject {
         Some(d) => d,
         None => {
-            record_failure(report, level, &label, "no InterpretedDoc produced");
+            record_failure(report, level, &label, "no interpreted subject produced");
             return;
         }
     };
     let result = match op {
         "equals" => op_equals(&fc.field, fc.value.as_ref(), interp),
         "not_equals" => op_not_equals(&fc.field, fc.value.as_ref(), interp),
+        "contains" => op_contains(&fc.field, fc.value.as_ref(), interp),
         "matches_one_of" => op_matches_one_of(&fc.field, fc.values.as_deref(), interp),
         "type" => op_type(&fc.field, fc.value.as_ref(), interp),
         "length_gte" => op_length_gte(&fc.field, fc.value.as_ref(), interp),
@@ -394,29 +552,20 @@ fn record_failure(report: &mut ContractReport, level: ClauseLevel, clause: &str,
 
 // --- field accessors + ops -------------------------------------------------
 
-fn field_value<'a>(name: &str, doc: &'a InterpretedDoc) -> FieldValue<'a> {
-    match name {
-        "title" => FieldValue::Str(&doc.title),
-        "source" => FieldValue::Str(&doc.source_url),
-        "type" => FieldValue::Str(&doc.doc_type),
-        "area" => FieldValue::Str(&doc.area),
-        "date" => FieldValue::Str(&doc.date),
-        "author" => FieldValue::OptStr(doc.author.as_deref()),
-        "tags" => FieldValue::StrList(&doc.tags),
-        "canonical_concepts" => FieldValue::StrList(&doc.canonical_concepts),
-        "concept_candidates" => FieldValue::StrList(&doc.concept_candidates),
-        _ => FieldValue::Unknown,
-    }
-}
-
-enum FieldValue<'a> {
+/// A field's value as seen by the contract engine. Returned by
+/// `ContractFields::field`.
+pub enum FieldValue<'a> {
     Str(&'a str),
     OptStr(Option<&'a str>),
     StrList(&'a [String]),
     Unknown,
 }
 
-fn op_equals(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+fn field_value<'a>(name: &str, doc: &'a dyn ContractFields) -> FieldValue<'a> {
+    doc.field(name)
+}
+
+fn op_equals(field: &str, value: Option<&serde_yaml::Value>, doc: &dyn ContractFields) -> Result<(), String> {
     let expected = value
         .and_then(|v| v.as_str())
         .ok_or_else(|| "equals: missing string value".to_string())?;
@@ -441,10 +590,32 @@ fn op_equals(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDo
     }
 }
 
+fn op_contains(
+    field: &str,
+    value: Option<&serde_yaml::Value>,
+    doc: &dyn ContractFields,
+) -> Result<(), String> {
+    let needle = value
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "contains: missing string value".to_string())?;
+    match field_value(field, doc) {
+        FieldValue::Str(s) | FieldValue::OptStr(Some(s)) => {
+            if s.contains(needle) {
+                Ok(())
+            } else {
+                Err(format!("`{s}` does not contain `{needle}`"))
+            }
+        }
+        FieldValue::OptStr(None) => Err("field absent".into()),
+        FieldValue::StrList(_) => Err("contains not valid on list field".into()),
+        FieldValue::Unknown => Err(format!("unknown field `{field}`")),
+    }
+}
+
 fn op_not_equals(
     field: &str,
     value: Option<&serde_yaml::Value>,
-    doc: &InterpretedDoc,
+    doc: &dyn ContractFields,
 ) -> Result<(), String> {
     let forbidden = value
         .and_then(|v| v.as_str())
@@ -466,7 +637,7 @@ fn op_not_equals(
 fn op_matches_one_of(
     field: &str,
     values: Option<&[String]>,
-    doc: &InterpretedDoc,
+    doc: &dyn ContractFields,
 ) -> Result<(), String> {
     let candidates = values.ok_or_else(|| "matches_one_of: missing `values` list".to_string())?;
     if candidates.is_empty() {
@@ -486,7 +657,7 @@ fn op_matches_one_of(
     }
 }
 
-fn op_type(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+fn op_type(field: &str, value: Option<&serde_yaml::Value>, doc: &dyn ContractFields) -> Result<(), String> {
     let t = value
         .and_then(|v| v.as_str())
         .ok_or_else(|| "type: missing string value".to_string())?;
@@ -497,7 +668,7 @@ fn op_type(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc)
     }
 }
 
-fn op_length_gte(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+fn op_length_gte(field: &str, value: Option<&serde_yaml::Value>, doc: &dyn ContractFields) -> Result<(), String> {
     let n = value
         .and_then(|v| v.as_u64())
         .ok_or_else(|| "length_gte: missing or non-integer value".to_string())?;
@@ -509,7 +680,7 @@ fn op_length_gte(field: &str, value: Option<&serde_yaml::Value>, doc: &Interpret
     }
 }
 
-fn op_non_empty(field: &str, doc: &InterpretedDoc) -> Result<(), String> {
+fn op_non_empty(field: &str, doc: &dyn ContractFields) -> Result<(), String> {
     match field_value(field, doc) {
         FieldValue::StrList(l) => {
             if l.is_empty() { Err("list is empty".into()) } else { Ok(()) }
@@ -525,7 +696,7 @@ fn op_non_empty(field: &str, doc: &InterpretedDoc) -> Result<(), String> {
     }
 }
 
-fn op_length_in_range(field: &str, value: Option<&serde_yaml::Value>, doc: &InterpretedDoc) -> Result<(), String> {
+fn op_length_in_range(field: &str, value: Option<&serde_yaml::Value>, doc: &dyn ContractFields) -> Result<(), String> {
     let pair = value
         .and_then(|v| v.as_sequence())
         .ok_or_else(|| "length_in_range: missing [min, max] sequence".to_string())?;
@@ -542,7 +713,7 @@ fn op_length_in_range(field: &str, value: Option<&serde_yaml::Value>, doc: &Inte
     }
 }
 
-fn list_length(field: &str, doc: &InterpretedDoc) -> Result<usize, String> {
+fn list_length(field: &str, doc: &dyn ContractFields) -> Result<usize, String> {
     match field_value(field, doc) {
         FieldValue::StrList(l) => Ok(l.len()),
         FieldValue::Str(_) | FieldValue::OptStr(_) => Err(format!("field `{field}` is not a list")),

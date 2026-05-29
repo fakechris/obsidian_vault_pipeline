@@ -5,7 +5,7 @@ use crate::body::DomainBody;
 use crate::interpreted::{Dimensions, Explanation, InterpretedDoc};
 use crate::response::ModelResponse;
 
-use super::prompt_builder::ARTICLE_SCHEMA_VERSION;
+use super::prompt_builder::{ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION};
 
 /// Parses a `ModelResponse` body containing the JSON spec our prompt
 /// asked for, validating the schema version and producing an
@@ -51,6 +51,20 @@ impl Transform<DomainBody> for ArticleParser {
                 ));
             }
         };
+
+        // In the unified pipeline this parser is broadcast every Model
+        // record; it only claims article-prompt responses and lets the
+        // paper parser claim paper-prompt ones.
+        if model.prompt_id.as_str() != ARTICLE_PROMPT_ID {
+            return FilterDecision::Drop(DropReason::new(
+                "transform.article_parser.wrong_prompt",
+                format!(
+                    "model response carries prompt_id={}, parser expects {}",
+                    model.prompt_id.as_str(),
+                    ARTICLE_PROMPT_ID
+                ),
+            ));
+        }
 
         if model.schema_version != ARTICLE_SCHEMA_VERSION {
             return FilterDecision::Drop(DropReason::new(
@@ -214,14 +228,14 @@ mod tests {
 }"#;
 
     fn source() -> SourceDoc {
-        SourceDoc {
-            title: "Source Title".into(),
-            source_url: "https://example.com/article".into(),
-            author: Some("Author".into()),
-            published: None,
-            tags: vec![],
-            body_markdown: String::new(),
-        }
+        SourceDoc::article(
+            "Source Title",
+            "https://example.com/article",
+            Some("Author".into()),
+            None,
+            vec![],
+            "",
+        )
     }
 
     fn model_record(json: &str, schema_version: u32) -> Record<DomainBody> {

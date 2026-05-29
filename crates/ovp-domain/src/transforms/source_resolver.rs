@@ -160,14 +160,7 @@ mod tests {
     use ovp_core::{RecordId, RecordMeta, RunId};
 
     fn source_record(source_url: &str, body: &str) -> Record<DomainBody> {
-        let doc = SourceDoc {
-            title: "T".into(),
-            source_url: source_url.into(),
-            author: None,
-            published: None,
-            tags: vec![],
-            body_markdown: body.into(),
-        };
+        let doc = SourceDoc::article("T", source_url, None, None, vec![], body);
         Record::new(
             RecordId::new("r-1"),
             DomainBody::Source(Box::new(doc)),

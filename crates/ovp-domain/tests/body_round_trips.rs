@@ -5,14 +5,14 @@
 use ovp_domain::*;
 
 fn sample_source() -> SourceDoc {
-    SourceDoc {
-        title: "A Guide".into(),
-        source_url: "https://example.com/guide".into(),
-        author: Some("Marcus Moretti".into()),
-        published: Some("2026-04-27".into()),
-        tags: vec!["clippings".into()],
-        body_markdown: "# Heading\n\nbody\n".into(),
-    }
+    SourceDoc::article(
+        "A Guide",
+        "https://example.com/guide",
+        Some("Marcus Moretti".into()),
+        Some("2026-04-27".into()),
+        vec!["clippings".into()],
+        "# Heading\n\nbody\n",
+    )
 }
 
 fn sample_prompt() -> PromptRequest {

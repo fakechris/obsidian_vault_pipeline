@@ -2,7 +2,7 @@ use ovp_core::{DropReason, FilterDecision, Record, StepId, Transform};
 
 use crate::body::DomainBody;
 use crate::prompt::{PromptId, PromptRequest};
-use crate::source_doc::SourceDoc;
+use crate::source_doc::{SourceDoc, SourceKind};
 
 const ARTICLE_PROMPT_TEMPLATE: &str = include_str!("../../prompts/article_interpret.md");
 
@@ -77,6 +77,16 @@ impl Transform<DomainBody> for PromptBuilder {
             }
         };
 
+        // In the unified pipeline this builder is broadcast every Source
+        // record; it only handles articles and lets the paper builder
+        // claim papers.
+        if !matches!(source_doc.source_kind, SourceKind::Article) {
+            return FilterDecision::Drop(DropReason::new(
+                "transform.prompt_builder.wrong_kind",
+                format!("expected article, got {}", source_doc.source_kind.name()),
+            ));
+        }
+
         let request = self.build_request(&source_doc);
         let next = Record {
             id: record.id,
@@ -111,14 +121,14 @@ mod tests {
     use super::*;
 
     fn sample_source() -> SourceDoc {
-        SourceDoc {
-            title: "Test Title".into(),
-            source_url: "https://example.com/test".into(),
-            author: None,
-            published: None,
-            tags: vec![],
-            body_markdown: "Body content here.\n".into(),
-        }
+        SourceDoc::article(
+            "Test Title",
+            "https://example.com/test",
+            None,
+            None,
+            vec![],
+            "Body content here.\n",
+        )
     }
 
     #[test]

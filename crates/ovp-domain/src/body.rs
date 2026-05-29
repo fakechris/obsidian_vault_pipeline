@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::interpreted::InterpretedDoc;
+use crate::paper_doc::PaperDoc;
 use crate::prompt::PromptRequest;
 use crate::response::ModelResponse;
 use crate::source_doc::SourceDoc;
@@ -23,7 +24,10 @@ pub enum DomainBody {
     Source(Box<SourceDoc>),
     Prompt(Box<PromptRequest>),
     Model(Box<ModelResponse>),
+    /// Article interpretation (six dimensions).
     Interpreted(Box<InterpretedDoc>),
+    /// Paper interpretation (ten sections). Distinct shape, distinct sink.
+    InterpretedPaper(Box<PaperDoc>),
 }
 
 impl DomainBody {
@@ -34,6 +38,7 @@ impl DomainBody {
             DomainBody::Prompt(_) => "prompt",
             DomainBody::Model(_) => "model",
             DomainBody::Interpreted(_) => "interpreted",
+            DomainBody::InterpretedPaper(_) => "interpreted_paper",
         }
     }
 }

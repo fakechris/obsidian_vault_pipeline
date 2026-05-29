@@ -173,14 +173,7 @@ mod tests {
         let mut r = ConceptResolver::from_slugs("cr", &["x"]);
         let rec = Record::new(
             RecordId::new("r"),
-            DomainBody::Source(Box::new(SourceDoc {
-                title: "".into(),
-                source_url: "".into(),
-                author: None,
-                published: None,
-                tags: vec![],
-                body_markdown: "".into(),
-            })),
+            DomainBody::Source(Box::new(SourceDoc::article("", "", None, None, vec![], ""))),
             RecordMeta { run_id: RunId::new("run"), seq: 0 },
         );
         match r.process(rec) {

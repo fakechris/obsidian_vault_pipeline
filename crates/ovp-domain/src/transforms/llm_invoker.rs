@@ -112,14 +112,7 @@ mod tests {
     use crate::source_doc::SourceDoc;
 
     fn source() -> SourceDoc {
-        SourceDoc {
-            title: "T".into(),
-            source_url: "https://x.example/a".into(),
-            author: None,
-            published: None,
-            tags: vec![],
-            body_markdown: "body".into(),
-        }
+        SourceDoc::article("T", "https://x.example/a", None, None, vec![], "body")
     }
 
     fn prompt_record() -> Record<DomainBody> {

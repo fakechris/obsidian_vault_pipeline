@@ -4,6 +4,7 @@
 pub mod contract;
 
 pub use contract::{
-    assert_contract, load_contract, Clause, Contract, ContractError, ContractReport,
-    ExpectedArtifact, TerminalState,
+    assert_contract, assert_contract_paper, assert_contract_subject, load_contract, Clause,
+    Contract, ContractError, ContractFields, ContractReport, ExpectedArtifact, FieldValue,
+    TerminalState,
 };

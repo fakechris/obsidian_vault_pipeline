@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 117 tests. Two fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic.
+Five crates. 132 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind.
 
 Three closed loops:
 
@@ -19,7 +19,7 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | Primitive | Crate | One-line definition |
 |---|---|---|
 | `Record<B>` | ovp-core | Typed envelope carrying a body `B` through the pipeline. Generic over body so domain types don't leak into core. |
-| `DomainBody` | ovp-domain | Sealed enum: `Source` \| `Prompt` \| `Model` \| `Interpreted`. The body type the v1 article pipeline uses. |
+| `DomainBody` | ovp-domain | Sealed enum: `Source` \| `Prompt` \| `Model` \| `Interpreted` (article) \| `InterpretedPaper`. The body type the domain pipeline uses. `Source` carries a typed `SourceKind` (see below). |
 | `Source<B>` | ovp-core | Node that brings records INTO the pipeline. Impls in ovp-domain: `MarkdownInboxSource` (single file), `InboxScanSource` (directory sweep, one record per file per tick). |
 | `Transform<B>` | ovp-core | Pure node. `Record<B>` → `FilterDecision<B>`. No I/O, no held effect clients, deterministic. |
 | `EffectfulTransform<B>` | ovp-core | Sync facade over an injected effect client (e.g. `Box<dyn ModelClient>`). Same signature as `Transform<B>`; distinct trait identity. |
@@ -30,6 +30,14 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | `ModelClient` | ovp-llm | Sync trait: `&ModelRequest → Result<ModelReply, CallError>`. Impls: `FixtureModelClient`, `CachedModelClient`, `NeverCallsClient` (`AnthropicBlockingClient` lands in C9). |
 | `WritePlan` / `WriteOp` | ovp-core | The pipeline's side-effect output. `WriteOp` is a sealed enum: `VaultCreate` \| `VaultUpdate` \| `CanonicalUpsert` \| `EventAppend`. v1 only the first two are applied; the others are `Unsupported`. |
 | `PlanApplier` / `ApplyReport` | ovp-core (trait) / ovp-stores (impl) | The single type allowed to mutate a real store. `VaultFsPlanApplier` is the v1 impl. Every op produces an `OpOutcome` (`Applied` / `Skipped` / `Failed` / `Unsupported`). |
+
+## Source kinds & routing (v1.2)
+
+`RouteBySourceKind` and `SourceKind` were deprecated placeholders in v1 ("don't anticipate paper routing that doesn't exist yet"). v1.2 makes them real — the deprecation's premise (no second source kind) has expired. Why the existing primitives don't cover it: a mixed inbox (articles + papers) needs each record dispatched to the interpreter that matches its kind, and `DomainBody::Source(SourceDoc)` alone carries no typed discriminator to dispatch on. Sniffing frontmatter fields at every downstream node would be exactly the untyped rot invariant #3 forbids.
+
+- **`SourceKind`** (ovp-domain): a field on `SourceDoc`. `Article` | `Paper(PaperMeta)`. `PaperMeta` carries the paper-specific frontmatter (`arxiv_id`, `authors`, `categories`, `published`) as named fields — a sum type over structs, not optional grab-bag fields. `MarkdownInboxSource` classifies by the clipping's `source_type` (`arxiv-paper` → `Paper`, absent/other → `Article`). GitHub (terminal-raw) is a later stage and not yet a variant.
+- **`RouteBySourceKind`** (ovp-domain, pure `Transform`): classifies the `Source` record, emits a `source_routed` event recording the chosen route, and forwards unchanged. The actual kind-filtering is done by the kind-specific prompt builders / parsers (each drops records whose kind or prompt id it doesn't handle), since the runner broadcasts a node's output to all downstream edges. `RouteBySourceKind` is the observable, auditable routing decision point.
+- **`InterpretedPaper`** (`PaperDoc`, ovp-domain): papers have a different output shape than articles (10 sections vs. the 6 article dimensions), so they get their own `DomainBody` variant + sink rather than overloading `InterpretedDoc`. The article path (`Interpreted`) is untouched.
 
 ## Data flow (current real pipeline)
 
@@ -109,9 +117,8 @@ Don't use these in new code or docs. They were considered or used early but are 
 | `Interpreter` (as a code type) | `PromptBuilder` + `LLMInvoker` + `ArticleParser` | "Interpreter" packs three different jobs into one word. Spoken use ("the interpreter pipeline") is fine; in code/types, name the actual node. |
 | `Store` (as a code type) | `PlanApplier` (the trait); a specific applier struct (`VaultFsPlanApplier`) for the impl | The thing that mutates a backend isn't a "Store" — Stores are the backends. The thing that talks to them via `WritePlan` is an applier. |
 | `VaultStore` | `VaultFsPlanApplier` | Pre-Stage-D placeholder name. The current concrete impl has a precise name; use it. |
-| `SourceBody` / `SourceKind` | `DomainBody::Source(SourceDoc)` | These names anticipate paper/github routing that doesn't exist yet. Introducing them now leaks future structure into v1. |
+| `SourceBody` | `DomainBody::Source(SourceDoc)` | A parallel body enum is unnecessary — kind lives as a `SourceKind` field on `SourceDoc`, not as a separate body type. |
 | `Effect` (as an architectural primitive) | `ModelClient` (or the specific client trait) | "Effect" is a category, not a primitive. Each effect boundary has a concrete trait name. |
-| `RouteBySourceKind` | (don't name it yet) | Will exist when v1.2 (paper) lands. Premature now. |
 | `Absorb` (as a stage/transform name) | `ConceptResolver` | The legacy Python system used "absorb"; our v1.1 implementation is more limited. Adopt the legacy name only if/when we match its semantics. |
 | `Quality gate`, `MOC writer`, `Identity resolver` | (don't introduce until needed) | Speculative names from the original design doc. Each one is its own design problem when its fixture lands. |
 
@@ -133,8 +140,8 @@ Roadmap is now driven by the legacy alignment baseline (see `docs/legacy-alignme
 
 1. **C9 + C10** — live `AnthropicBlockingClient` + real cassette capture. Unchanged. Unblocks any stage that calls a model from doing real work.
 2. **L0/L1 intake + VaultLayout port** *(new)*. P0 gaps `L1 article/github intake` + `VaultLayout port`. The first real Source filters land here; without them the rest of the pipeline is fixture-fed. Bringing intake in before paper forces the Source contract to settle.
-3. **v1.2 — paper deep-dive transform**. Same scope as before, now slotted after intake so it has a real upstream.
-4. **L3 absorb + ConceptRegistry data model** *(new)*. P0 gaps `L3 absorb` + `ConceptRegistry data model`. The single highest-cognitive-load legacy step; surfacing it before canonical store gives the store a concrete consumer to validate against.
+3. **v1.2 — paper deep-dive transform** ✅ *(done)*. `RouteBySourceKind` + `PaperPromptBuilder` / `PaperParser` / `PaperVaultPlanSink` + `PaperDoc`; `paper_arxiv` acceptance gate green via the unified manifest.
+4. **L3 absorb + ConceptRegistry data model** *(next)*. P0 gaps `L3 absorb` + `ConceptRegistry data model`. The single highest-cognitive-load legacy step; surfacing it before canonical store gives the store a concrete consumer to validate against.
 5. **Canonical store**. Same intent, now informed by absorb's actual write surface. `CanonicalUpsertOp` gets real producers (absorb) and a real reader (MOC + index, next).
 6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(new)*. P0 gaps `MOC generation` + `Knowledge index rebuild` + `TransactionManager`. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db) and unlocks the bulk of P1 readers (query, lint, ops_state, doctor).
 

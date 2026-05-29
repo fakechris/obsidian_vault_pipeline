@@ -1,0 +1,35 @@
+# Unified pipeline: routes a mixed inbox (articles + papers) by source
+# kind. RouteBySourceKind broadcasts to both prompt builders; each
+# kind-specific builder/parser self-filters (drops the other kind), so
+# an article record yields an article note and a paper record yields a
+# paper note from the same topology.
+#
+# The article-only manifest (article.pipeline.toml) remains for the
+# article acceptance tests; this one exercises routing.
+[pipeline]
+nodes = [
+  "markdown_inbox",
+  "source_resolver",
+  "route_by_source_kind",
+  "article_prompt_builder",
+  "paper_prompt_builder",
+  "llm_invoker",
+  "article_parser",
+  "paper_parser",
+  "concept_resolver",
+  "article_vault_plan",
+  "paper_vault_plan",
+]
+edges = [
+  ["markdown_inbox", "source_resolver"],
+  ["source_resolver", "route_by_source_kind"],
+  ["route_by_source_kind", "article_prompt_builder"],
+  ["route_by_source_kind", "paper_prompt_builder"],
+  ["article_prompt_builder", "llm_invoker"],
+  ["paper_prompt_builder", "llm_invoker"],
+  ["llm_invoker", "article_parser"],
+  ["llm_invoker", "paper_parser"],
+  ["article_parser", "concept_resolver"],
+  ["concept_resolver", "article_vault_plan"],
+  ["paper_parser", "paper_vault_plan"],
+]

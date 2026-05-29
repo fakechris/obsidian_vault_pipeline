@@ -38,6 +38,18 @@ pub enum EventKind {
         resolved_url: String,
         reason: String,
     },
+    /// Emitted by a routing node when it classifies a record and picks a
+    /// downstream path. `kind` is an opaque label (e.g. `article`,
+    /// `paper`) — ovp-core stays domain-blind; the meaning lives in the
+    /// domain crate that emits it.
+    SourceRouted {
+        record_id: RecordId,
+        step_id: StepId,
+        /// Opaque route label (e.g. `article`, `paper`). Named
+        /// `source_kind` to avoid colliding with EventKind's internal
+        /// `kind` tag.
+        source_kind: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
