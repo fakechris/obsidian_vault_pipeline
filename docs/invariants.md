@@ -63,13 +63,13 @@ Any future search index, embedding store, or denormalized cache must be reconstr
 
 Events record what happened, in order. They are not a business query store.
 
-## Known v0.1 stubs (NOT invariants — explicit deferrals)
+## Known stubs (NOT invariants — explicit deferrals)
 
-These would violate the spirit of #2/#3 if shipped long-term, but are acceptable v0.1 stubs because real domain types don't exist yet:
+These would violate the spirit of #2/#3 if shipped long-term, but are acceptable stubs because no real *producer* of these ops exists yet:
 
-- **`CanonicalUpsertOp.payload: String`** and **`EventAppendOp.payload: String`** in `crates/ovp-core/src/plan.rs`. The fields are typed-as-string-for-now because there is no domain payload type to put there. Will become generic / sum-typed when `ovp-domain` lands.
+- **`CanonicalUpsertOp.payload: String`** and **`EventAppendOp.payload: String`** in `crates/ovp-core/src/plan.rs`. The fields are typed-as-string-for-now because nothing emits these ops yet — the article + paper pipelines only produce `VaultCreate`. `VaultFsPlanApplier` reports both as `Unsupported`, and `ovp-cli apply-plan` warns loudly if a plan contains them (so the stub can't pass silently).
 
-If this stub is still here three crates from now, the deferral wasn't justified — flag it.
+**Flag, raised E1 (2026-05):** we now have three crates past core (`ovp-domain`, `ovp-llm`, `ovp-stores`) and the stub is still here, which the original note said to flag. The deferral remains justified *for a specific, named reason*: typing the payload requires a concrete `CanonicalUpsert` producer to validate the shape against, and that producer is the **L3 absorb + canonical store** stage (see `docs/architecture.md` "What comes next", step 5). Resolving it before then would be guessing at the write surface. When the canonical store stage lands, this stub is converted to a typed payload as part of that work, not before.
 
 ## File budgets (soft, but enforced by review)
 

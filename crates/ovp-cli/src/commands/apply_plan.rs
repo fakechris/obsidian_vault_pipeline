@@ -47,6 +47,22 @@ pub fn run(args: ApplyPlanArgs) -> Result<(), CliError> {
         println!("wrote {}", path.display());
     }
 
+    // Unsupported ops are not hard failures, but they must never pass
+    // silently: this applier was handed an op kind it can't perform, so
+    // that work did NOT happen. Surface it loudly so an operator routing
+    // CanonicalUpsert/EventAppend to a vault-only applier notices.
+    if report.has_unsupported() {
+        for o in &report.outcomes {
+            if matches!(o.result, ovp_core::OpResult::Unsupported) {
+                eprintln!(
+                    "WARNING unsupported {} ({:?}): VaultFsPlanApplier does not handle this op kind; nothing was written for it",
+                    o.op_id.as_str(),
+                    o.kind
+                );
+            }
+        }
+    }
+
     if !report.all_ok() {
         for o in &report.outcomes {
             if let ovp_core::OpResult::Failed { reason } = &o.result {

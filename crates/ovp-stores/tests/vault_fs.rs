@@ -169,6 +169,39 @@ fn rejects_parent_dir_traversal() {
 }
 
 #[test]
+fn rejects_nested_parent_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut applier = VaultFsPlanApplier::new(tmp.path());
+
+    // Multiple `..` buried mid-path must still be rejected.
+    let plan = plan_with(create_op("notes/../../etc/passwd", "x"));
+    let report = applier.apply(&plan, ApplyMode::Apply);
+    assert_eq!(report.counts().failed, 1);
+    match &report.outcomes[0].result {
+        OpResult::Failed { reason } => assert!(reason.starts_with("path_escape")),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn report_has_unsupported_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut applier = VaultFsPlanApplier::new(tmp.path());
+    let plan = plan_with(WriteOp::CanonicalUpsert(CanonicalUpsertOp {
+        op_id: OpId::new("c1"),
+        key: CanonicalKey::new("foo"),
+        before_hash: None,
+        after_hash: ContentHash::new("h"),
+        payload: "{}".into(),
+        reason: "test".into(),
+        originating_record: RecordId::new("r"),
+    }));
+    let report = applier.apply(&plan, ApplyMode::Apply);
+    assert!(report.has_unsupported());
+    assert!(report.all_ok(), "unsupported is not a hard failure");
+}
+
+#[test]
 fn rejects_absolute_path() {
     let tmp = tempfile::tempdir().unwrap();
     let mut applier = VaultFsPlanApplier::new(tmp.path());

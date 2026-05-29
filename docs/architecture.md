@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 97 tests. Two fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic.
+Five crates. 99 tests. Two fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic.
 
 Three closed loops:
 

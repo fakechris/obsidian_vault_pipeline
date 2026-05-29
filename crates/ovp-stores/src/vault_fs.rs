@@ -177,16 +177,20 @@ impl VaultFsPlanApplier {
                 Component::Normal(_) | Component::CurDir => {}
             }
         }
-        // Defensive: also reject backslash-prefixed components on
-        // platforms where Path doesn't catch them, and verify the
-        // resolved target sits under vault_root by string check.
         let resolved = self.vault_root.join(p);
-        // Best-effort containment check: compare root prefix as strings
-        // *before* any filesystem normalization (canonicalize would
-        // require the target to exist).
-        let root_str = self.vault_root.to_string_lossy();
-        let resolved_str = resolved.to_string_lossy();
-        if !resolved_str.starts_with(root_str.as_ref()) {
+        // Component-wise containment (NOT string-prefix, which would
+        // false-accept a sibling dir sharing a name prefix, e.g.
+        // `/v/vault-evil` under `/v/vault`). `Path::strip_prefix` compares
+        // by path component, so it rejects siblings. Given the component
+        // check above already forbids `..`/absolute/root, this always
+        // succeeds today — it's the correct strict guard for the day the
+        // base or join logic changes.
+        //
+        // Out of scope (trusted-producer threat model): symlink TOCTOU,
+        // where `<root>/sub` is a symlink pointing outside. Plans come
+        // from our own sinks, not untrusted input, so we do not
+        // canonicalize (which would also require the target to exist).
+        if resolved.strip_prefix(&self.vault_root).is_err() {
             return Err(format!("path_outside_root: {raw}"));
         }
         Ok(resolved)

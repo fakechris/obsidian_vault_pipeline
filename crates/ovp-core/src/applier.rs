@@ -55,9 +55,22 @@ impl ApplyReport {
         c
     }
 
-    /// True iff no `Failed` outcomes. `Unsupported` does not fail a report.
+    /// True iff no `Failed` outcomes. `Unsupported` does not fail a report —
+    /// an op kind this applier doesn't handle is not a hard error, but it
+    /// IS something the operator must see (the work silently didn't happen).
+    /// Callers that route ops to the wrong applier should consult
+    /// [`Self::has_unsupported`] and surface it; see `ovp-cli apply-plan`.
     pub fn all_ok(&self) -> bool {
         !self.outcomes.iter().any(|o| matches!(o.result, OpResult::Failed { .. }))
+    }
+
+    /// True if any op was `Unsupported` (this applier doesn't handle that
+    /// kind). Distinct from failure: the plan was well-formed, but this
+    /// applier skipped ops it can't perform. Operators should never see
+    /// this pass silently — once a producer of `CanonicalUpsert` /
+    /// `EventAppend` lands, those ops need an applier that handles them.
+    pub fn has_unsupported(&self) -> bool {
+        self.outcomes.iter().any(|o| matches!(o.result, OpResult::Unsupported))
     }
 }
 
