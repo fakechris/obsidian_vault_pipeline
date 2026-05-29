@@ -61,9 +61,9 @@ fn moc_rebuilt_from_canonical_store() {
     let builder = MocBuilder::new();
     let mut vault_applier = VaultFsPlanApplier::new(vault.path());
 
-    // Rebuild: read canonical → parse → plan → apply.
+    // Rebuild: read canonical → parse (strict) → plan → apply.
     let pairs = store.read_all().unwrap();
-    let concepts = CanonicalConcept::parse_pairs(pairs);
+    let concepts = CanonicalConcept::try_parse_pairs(pairs).unwrap();
     assert_eq!(concepts.len(), 2);
     let plan = builder.plan_rebuild(RunId::new("moc-1"), &concepts, current_moc(vault.path(), &builder).as_deref());
     let report = vault_applier.apply(&plan, ApplyMode::Apply);
@@ -84,7 +84,7 @@ fn rebuild_is_idempotent_when_unchanged() {
 
     let builder = MocBuilder::new();
     let mut vault_applier = VaultFsPlanApplier::new(vault.path());
-    let concepts = CanonicalConcept::parse_pairs(store.read_all().unwrap());
+    let concepts = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
 
     // First rebuild creates the MOC.
     let plan1 = builder.plan_rebuild(RunId::new("a"), &concepts, current_moc(vault.path(), &builder).as_deref());
@@ -106,13 +106,13 @@ fn rebuild_updates_when_concept_added() {
     let mut vault_applier = VaultFsPlanApplier::new(vault.path());
 
     // Build v1.
-    let c1 = CanonicalConcept::parse_pairs(store.read_all().unwrap());
+    let c1 = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
     let p1 = builder.plan_rebuild(RunId::new("a"), &c1, None);
     vault_applier.apply(&p1, ApplyMode::Apply);
 
     // Add a concept, rebuild → VaultUpdate against the current MOC hash.
     seed_concept(&mut store, "y", "Y");
-    let c2 = CanonicalConcept::parse_pairs(store.read_all().unwrap());
+    let c2 = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
     let p2 = builder.plan_rebuild(RunId::new("b"), &c2, current_moc(vault.path(), &builder).as_deref());
     assert_eq!(p2.len(), 1);
     let report = vault_applier.apply(&p2, ApplyMode::Apply);
@@ -122,4 +122,19 @@ fn rebuild_updates_when_concept_added() {
     assert!(moc.contains("[[x]]"));
     assert!(moc.contains("[[y]]"));
     assert!(moc.contains("concept_count: 2"));
+}
+
+#[test]
+fn rebuild_fails_loudly_on_corrupt_canonical_record() {
+    let canon = tempfile::tempdir().unwrap();
+    let mut store = CanonicalFsStoreApplier::new(canon.path());
+    seed_concept(&mut store, "ai-agent", "Ai Agent");
+    // Corrupt the store out-of-band (manual edit / disk rot).
+    std::fs::write(canon.path().join("broken.json"), "not valid json").unwrap();
+
+    // The strict rebuild parser must fail loudly, naming the bad key —
+    // never silently shrink the MOC by dropping the unparseable record.
+    let pairs = store.read_all().unwrap();
+    let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
+    assert_eq!(err.key, "broken");
 }

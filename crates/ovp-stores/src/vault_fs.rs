@@ -65,6 +65,19 @@ impl VaultFsPlanApplier {
             Err(reason) => return outcome(OpResult::Failed { reason }),
         };
 
+        // Declared-hash integrity: the body must hash to `after_hash` before
+        // we touch disk. Catches a corrupt/mislabeled op without writing it,
+        // and keeps the idempotence check below trustworthy.
+        let computed = sha256_hex(op.body.as_bytes());
+        if computed != op.after_hash.as_str() {
+            return outcome(OpResult::Failed {
+                reason: format!(
+                    "after_hash mismatch (declared={}, computed={computed})",
+                    op.after_hash.as_str()
+                ),
+            });
+        }
+
         if abs.exists() {
             let current = match fs::read(&abs) {
                 Ok(b) => b,
@@ -118,6 +131,18 @@ impl VaultFsPlanApplier {
             Ok(p) => p,
             Err(reason) => return outcome(OpResult::Failed { reason }),
         };
+
+        // Declared-hash integrity: the new body must hash to `after_hash`
+        // before we touch disk (same guard as create).
+        let computed = sha256_hex(op.body.as_bytes());
+        if computed != op.after_hash.as_str() {
+            return outcome(OpResult::Failed {
+                reason: format!(
+                    "after_hash mismatch (declared={}, computed={computed})",
+                    op.after_hash.as_str()
+                ),
+            });
+        }
 
         if !abs.exists() {
             return outcome(OpResult::Failed {

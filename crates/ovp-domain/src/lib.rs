@@ -7,6 +7,7 @@
 
 pub mod body;
 pub mod canonical;
+pub mod canonical_slug;
 pub mod concept_registry;
 pub mod evergreen;
 pub mod interpreted;
@@ -25,7 +26,8 @@ pub mod vault_layout;
 pub mod testing;
 
 pub use body::DomainBody;
-pub use canonical::CanonicalConcept;
+pub use canonical::{CanonicalConcept, CanonicalParseError};
+pub use canonical_slug::{CanonicalSlug, SlugError};
 pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use evergreen::EvergreenConcept;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};

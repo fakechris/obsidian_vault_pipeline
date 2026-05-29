@@ -73,6 +73,15 @@ Events record what happened, in order. They are not a business query store.
 
 The earlier "stub, flag if still here in three crates" note is resolved: the canonical payload now has a concrete typed producer (`EvergreenSink` → `CanonicalConcept`) and consumer round-trip, with core staying domain-blind by design.
 
+## Canonical-store integrity (apply ordering + rebuild discipline)
+
+The canonical store and its derived rebuilds (MOC, knowledge index) carry three correctness guarantees beyond payload typing. They are not new invariants — they are how invariants #10 and #11 are kept honest at the canonical boundary:
+
+- **One slug rule, single segment.** A concept's slug keys three coupled places — the canonical store file (`<store>/<slug>.json`), the evergreen page (`10-Knowledge/Evergreen/<slug>.md`), and the record id (`evg-<slug>`). `ovp-domain::CanonicalSlug` is the *one* gate that validates a slug is a single safe path segment (no `/`, `\`, `..`, empty, interior whitespace, or control chars; Unicode segments allowed). `EvergreenConceptWriter` drops candidates that fail it with an observable `FilterDropped` event rather than minting a divergent concept. `CanonicalFsStoreApplier` independently rejects keys with a separator (`key_nested`), so every key the store can *write* is a key `read_all` can *read back* — a record can never hide in a subdirectory the rebuild never scans. (This is the legacy `canonicalize_note_id` slug rule; it landed domain-owned, not in core, because the slug is a domain concept.)
+- **Declared-hash integrity before I/O.** Both appliers verify `sha256(body|payload) == after_hash` *before* touching disk. A corrupt or mislabeled op `Failed`s without writing, and the idempotence/`before_hash` checks downstream stay trustworthy.
+- **Apply ordering is load-bearing.** `CompositePlanApplier` applies ops one at a time in plan order and routes each to the first backend that handles it. The first `Failed` op HALTS the run — later ops record `Skipped { reason: "previous op failed" }` and perform no I/O. This is what stops an evergreen's `CanonicalUpsert` from registering identity for a page whose paired `VaultCreate` just failed. Recovery is re-apply (every op is idempotent).
+- **Rebuilds fail loudly.** `CanonicalConcept::try_parse_pairs` (the `Result`-returning parser) is the rebuild path: a corrupt canonical record aborts the rebuild and names the offending key, so a derived index never silently shrinks. The permissive `parse_pairs` survives for diagnostics only — never call it from a rebuild.
+
 ## File budgets (soft, but enforced by review)
 
 - `ovp-core` total: ≤1500 LOC (was 1200 in v0.1; bumped for the EffectfulTransform split + per-edge queue work)

@@ -1,4 +1,6 @@
-use ovp_core::{FilterDecision, Record, RecordId, RecordMeta, StepId, Transform};
+use ovp_core::{
+    DropReason, EventKind, FilterDecision, Record, RecordId, RecordMeta, StepId, Transform,
+};
 
 use crate::body::DomainBody;
 use crate::evergreen::EvergreenConcept;
@@ -44,19 +46,39 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
         };
 
         // One EvergreenConcept per surviving candidate, deterministic order.
+        // Candidates that aren't a valid canonical slug are DROPPED here
+        // (not minted) with an observable `FilterDropped` event — a divergent
+        // slug would write the canonical record where rebuilds can't find it
+        // (see `CanonicalSlug`).
         let source_url = interp.source_url.clone();
         let meta = record.meta.clone();
         let provenance = record.provenance.clone();
-        let concepts: Vec<EvergreenConcept> = interp
-            .concept_candidates
-            .iter()
-            .map(|slug| EvergreenConcept::from_candidate(slug.clone(), source_url.clone()))
-            .collect();
+        let record_id = record.id.clone();
+        let mut concepts: Vec<EvergreenConcept> = Vec::new();
+        let mut drop_events: Vec<EventKind> = Vec::new();
+        for raw in &interp.concept_candidates {
+            match EvergreenConcept::try_from_candidate(raw, source_url.clone()) {
+                Ok(c) => concepts.push(c),
+                Err(e) => drop_events.push(EventKind::FilterDropped {
+                    record_id: record_id.clone(),
+                    step_id: self.step.clone(),
+                    reason: DropReason::new(
+                        "transform.evergreen.invalid_slug",
+                        format!("dropped concept candidate `{raw}` ({}): {e}", e.code()),
+                    ),
+                }),
+            }
+        }
 
         if concepts.is_empty() {
-            // Nothing new to mint; just forward the article record.
+            // Nothing new to mint; just forward the article record. If we
+            // dropped any candidates, carry the drop events so the skip is
+            // observable.
             let next = record.with_step(self.step.clone(), "no new evergreen concepts");
-            return FilterDecision::Forward(vec![next]);
+            if drop_events.is_empty() {
+                return FilterDecision::Forward(vec![next]);
+            }
+            return FilterDecision::ForwardWithEvents { records: vec![next], events: drop_events };
         }
 
         let mut out: Vec<Record<DomainBody>> = Vec::with_capacity(concepts.len() + 1);
@@ -76,7 +98,13 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
                 .with_step(self.step.clone(), "proposed evergreen");
             out.push(rec);
         }
-        FilterDecision::FanOut(out)
+        // FanOut when every candidate was valid; ForwardWithEvents when we
+        // also need to report dropped candidates alongside the fan-out.
+        if drop_events.is_empty() {
+            FilterDecision::FanOut(out)
+        } else {
+            FilterDecision::ForwardWithEvents { records: out, events: drop_events }
+        }
     }
 }
 
@@ -136,6 +164,47 @@ mod tests {
         // Provenance source URL is carried.
         if let DomainBody::EvergreenConcept(c) = &out[1].body {
             assert_eq!(c.provenance_source_url, "https://example.com/post");
+        }
+    }
+
+    #[test]
+    fn drops_invalid_slug_candidates_observably() {
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        // `bad/slug` (separator) and `  ` (empty) are invalid; `good` mints.
+        let out = match w.process(record(interp(vec!["good", "bad/slug", "  "]))) {
+            FilterDecision::ForwardWithEvents { records, events } => (records, events),
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        };
+        let (records, events) = out;
+        // Article + the one valid evergreen only.
+        assert_eq!(records.len(), 2, "article + 1 valid evergreen");
+        assert!(matches!(records[0].body, DomainBody::Interpreted(_)));
+        match &records[1].body {
+            DomainBody::EvergreenConcept(c) => assert_eq!(c.slug, "good"),
+            other => panic!("expected EvergreenConcept, got {other:?}"),
+        }
+        // Two dropped candidates → two observable FilterDropped events.
+        assert_eq!(events.len(), 2);
+        for ev in &events {
+            match ev {
+                EventKind::FilterDropped { reason, .. } => {
+                    assert_eq!(reason.code.as_str(), "transform.evergreen.invalid_slug");
+                }
+                other => panic!("expected FilterDropped, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn all_invalid_candidates_forwards_article_with_events() {
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        match w.process(record(interp(vec!["a/b"]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                assert_eq!(records.len(), 1);
+                assert!(matches!(records[0].body, DomainBody::Interpreted(_)));
+                assert_eq!(events.len(), 1);
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
         }
     }
 

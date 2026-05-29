@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::canonical_slug::{CanonicalSlug, SlugError};
+
 /// A proposal to mint a NEW evergreen concept — a `concept_candidate`
 /// that `ConceptResolver` did not promote (no canonical page exists yet).
 /// `EvergreenConceptWriter` emits one per new candidate; `EvergreenSink`
@@ -21,12 +23,32 @@ pub struct EvergreenConcept {
 }
 
 impl EvergreenConcept {
-    /// Build from a candidate slug + the proposing document's URL.
-    /// The title is a readable rendering of the slug.
+    /// Build from a raw candidate slug + the proposing document's URL,
+    /// validating the slug through [`CanonicalSlug`]. Returns `Err` if the
+    /// candidate is not a safe single-segment slug — the caller
+    /// (`EvergreenConceptWriter`) drops invalid candidates with an
+    /// observable reason rather than minting a divergent concept. The
+    /// stored slug is the normalized form (surrounding whitespace trimmed).
+    pub fn try_from_candidate(
+        raw_slug: &str,
+        provenance_source_url: impl Into<String>,
+    ) -> Result<Self, SlugError> {
+        let slug = CanonicalSlug::parse(raw_slug)?;
+        let title = title_from_slug(slug.as_str());
+        Ok(Self {
+            slug: slug.into_string(),
+            title,
+            provenance_source_url: provenance_source_url.into(),
+        })
+    }
+
+    /// Build from a known-valid slug (tests, fixtures, seeding). Panics on
+    /// an invalid slug — production minting must use [`Self::try_from_candidate`]
+    /// so invalid candidates are dropped, not aborted.
     pub fn from_candidate(slug: impl Into<String>, provenance_source_url: impl Into<String>) -> Self {
         let slug = slug.into();
-        let title = title_from_slug(&slug);
-        Self { slug, title, provenance_source_url: provenance_source_url.into() }
+        Self::try_from_candidate(&slug, provenance_source_url)
+            .unwrap_or_else(|e| panic!("invalid evergreen slug `{slug}`: {e}"))
     }
 }
 
@@ -74,5 +96,21 @@ mod tests {
     fn title_mixed_underscore_and_dash() {
         let c = EvergreenConcept::from_candidate("rag_vs-graphrag", "u");
         assert_eq!(c.title, "Rag Vs Graphrag");
+    }
+
+    #[test]
+    fn try_from_candidate_rejects_invalid_slug() {
+        assert_eq!(
+            EvergreenConcept::try_from_candidate("a/b", "u"),
+            Err(SlugError::PathSeparator)
+        );
+        assert_eq!(EvergreenConcept::try_from_candidate("  ", "u"), Err(SlugError::Empty));
+    }
+
+    #[test]
+    fn try_from_candidate_normalizes_whitespace() {
+        let c = EvergreenConcept::try_from_candidate("  rag\n", "u").unwrap();
+        assert_eq!(c.slug, "rag");
+        assert_eq!(c.title, "Rag");
     }
 }

@@ -118,6 +118,46 @@ fn rejects_key_traversal() {
 }
 
 #[test]
+fn rejects_payload_hash_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = CanonicalFsStoreApplier::new(tmp.path());
+    // Declared after_hash does NOT match the payload → fail before I/O.
+    let op = WriteOp::CanonicalUpsert(CanonicalUpsertOp {
+        op_id: OpId::new("op-x"),
+        key: CanonicalKey::new("x"),
+        before_hash: None,
+        after_hash: ContentHash::new(sha(b"SOMETHING ELSE")),
+        payload: r#"{"slug":"x"}"#.into(),
+        reason: "test".into(),
+        originating_record: RecordId::new("r"),
+    });
+    let report = a.apply(&plan_with(op), ApplyMode::Apply);
+    assert_eq!(report.counts().failed, 1);
+    match &report.outcomes[0].result {
+        OpResult::Failed { reason } => assert!(reason.contains("after_hash mismatch")),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(!tmp.path().join("x.json").exists(), "nothing written on hash mismatch");
+}
+
+#[test]
+fn rejects_nested_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = CanonicalFsStoreApplier::new(tmp.path());
+    // `a/b` would nest the record where read_all can't see it.
+    let report = a.apply(&plan_with(upsert("a/b", r#"{"v":1}"#, None)), ApplyMode::Apply);
+    assert_eq!(report.counts().failed, 1);
+    match &report.outcomes[0].result {
+        OpResult::Failed { reason } => assert!(reason.starts_with("key_nested")),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(!tmp.path().join("a").exists(), "no nested directory created");
+    // Confirm the store stays self-consistent: read_all sees every key the
+    // store accepted (here: none).
+    assert!(a.read_all().unwrap().is_empty());
+}
+
+#[test]
 fn dry_run_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let mut a = CanonicalFsStoreApplier::new(tmp.path());

@@ -109,6 +109,28 @@ fn create_fails_on_existing_different_content() {
 }
 
 #[test]
+fn create_rejects_body_hash_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut applier = VaultFsPlanApplier::new(tmp.path());
+    // Declared after_hash does not match the body → fail before I/O.
+    let op = WriteOp::VaultCreate(VaultCreateOp {
+        op_id: OpId::new("op-x"),
+        path: VaultPath::new("a.md"),
+        after_hash: ContentHash::new(sha256_hex(b"OTHER")),
+        body: "real body".into(),
+        reason: "t".into(),
+        originating_record: RecordId::new("r"),
+    });
+    let report = applier.apply(&plan_with(op), ApplyMode::Apply);
+    assert_eq!(report.counts().failed, 1);
+    match &report.outcomes[0].result {
+        OpResult::Failed { reason } => assert!(reason.contains("after_hash mismatch")),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(!tmp.path().join("a.md").exists(), "nothing written on hash mismatch");
+}
+
+#[test]
 fn update_succeeds_when_before_hash_matches() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.md"), "v1").unwrap();

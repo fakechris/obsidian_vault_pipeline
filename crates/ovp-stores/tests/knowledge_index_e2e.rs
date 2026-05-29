@@ -87,9 +87,9 @@ fn knowledge_index_rebuilt_from_canonical_and_vault() {
     ]);
     assert_eq!(applier.apply(&report.write_plan, ApplyMode::Apply).counts().failed, 0);
 
-    // Rebuild the index from BOTH derived inputs.
+    // Rebuild the index from BOTH derived inputs (strict parse).
     let store = CanonicalFsStoreApplier::new(canon.path());
-    let concepts = CanonicalConcept::parse_pairs(store.read_all().unwrap());
+    let concepts = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
     assert_eq!(concepts.len(), 13);
     let backlinks = scan_backlinks(vault.path());
     let index = KnowledgeIndex::build(&concepts, &backlinks);
@@ -139,7 +139,7 @@ fn index_rebuild_is_idempotent() {
     applier.apply(&report.write_plan, ApplyMode::Apply);
 
     let store = CanonicalFsStoreApplier::new(canon.path());
-    let concepts = CanonicalConcept::parse_pairs(store.read_all().unwrap());
+    let concepts = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
     let backlinks = scan_backlinks(vault.path());
     let index = KnowledgeIndex::build(&concepts, &backlinks);
 
@@ -151,4 +151,25 @@ fn index_rebuild_is_idempotent() {
     // Unchanged inputs → empty rebuild plan.
     let p2 = builder.plan_rebuild(RunId::new("b"), &index, read_index(vault.path()).as_deref());
     assert!(p2.is_empty(), "idempotent: unchanged index → no op");
+}
+
+#[test]
+fn index_rebuild_fails_loudly_on_corrupt_canonical_record() {
+    let report = run_article_evergreen();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let mut applier = CompositePlanApplier::new(vec![
+        Box::new(VaultFsPlanApplier::new(vault.path())),
+        Box::new(CanonicalFsStoreApplier::new(canon.path())),
+    ]);
+    applier.apply(&report.write_plan, ApplyMode::Apply);
+
+    // Corrupt the canonical store out-of-band.
+    std::fs::write(canon.path().join("broken.json"), "not valid json").unwrap();
+
+    // A corrupt canonical record must abort the rebuild (naming the key),
+    // not silently drop a concept from the knowledge index.
+    let store = CanonicalFsStoreApplier::new(canon.path());
+    let err = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap_err();
+    assert_eq!(err.key, "broken");
 }

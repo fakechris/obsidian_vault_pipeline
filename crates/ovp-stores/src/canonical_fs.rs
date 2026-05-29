@@ -94,6 +94,20 @@ impl CanonicalFsStoreApplier {
             result,
         };
 
+        // Declared-hash integrity: the payload must actually hash to the
+        // op's `after_hash` before we touch the store. A mismatch means the
+        // op is corrupt or mislabeled — fail before any I/O so a bad write
+        // never lands (and idempotence checks below stay trustworthy).
+        let computed = sha256_hex(op.payload.as_bytes());
+        if computed != op.after_hash.as_str() {
+            return outcome(OpResult::Failed {
+                reason: format!(
+                    "after_hash mismatch (declared={}, computed={computed})",
+                    op.after_hash.as_str()
+                ),
+            });
+        }
+
         let abs = match self.resolve_key_path(op.key.as_str()) {
             Ok(p) => p,
             Err(reason) => return outcome(OpResult::Failed { reason }),
@@ -180,6 +194,16 @@ impl CanonicalFsStoreApplier {
                 }
                 Component::Normal(_) | Component::CurDir => {}
             }
+        }
+        // A canonical key must be exactly ONE path segment so it maps to
+        // `<root>/<key>.json` at the top level. A key with a separator (e.g.
+        // `a/b`) would nest the record in a subdirectory that `read_all`
+        // (top-level `*.json` only) never scans — silently dropping it from
+        // every derived rebuild. Reject so every key the store can WRITE is
+        // a key it can READ back. Checked after the component scan so `..`
+        // still reports `key_escape`.
+        if key.contains('/') || key.contains('\\') {
+            return Err(format!("key_nested: {key}"));
         }
         let file = format!("{key}.json");
         let resolved = self.store_root.join(&file);
