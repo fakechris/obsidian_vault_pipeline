@@ -129,14 +129,18 @@ The 12 invariants in `invariants.md` are the source of truth + CI-gated where po
 
 ## What comes next
 
-Already locked, in order:
+Roadmap is now driven by the legacy alignment baseline (see `docs/legacy-alignment.md` — living gap matrix between this rewrite and the legacy Python `ovp_pipeline`). The previously-locked order holds with two insertions surfaced by the P0 gaps:
 
-1. **Codex review** of Stage D + this consolidation. Catches drift before we widen the system.
-2. **C9 + C10** — live `AnthropicBlockingClient` + real cassette capture. Now genuinely useful because interpretations actually land on disk.
-3. **v1.2 (paper)** — introduces source-kind routing. The `RouteBySourceKind` term gets defined when this lands, not before.
-4. **Canonical store** — a sibling `PlanApplier` impl that makes `CanonicalUpsert` real.
+1. **C9 + C10** — live `AnthropicBlockingClient` + real cassette capture. Unchanged. Unblocks any stage that calls a model from doing real work.
+2. **L0/L1 intake + VaultLayout port** *(new)*. P0 gaps `L1 article/github intake` + `VaultLayout port`. The first real Source filters land here; without them the rest of the pipeline is fixture-fed. Bringing intake in before paper forces the Source contract to settle.
+3. **v1.2 — paper deep-dive transform**. Same scope as before, now slotted after intake so it has a real upstream.
+4. **L3 absorb + ConceptRegistry data model** *(new)*. P0 gaps `L3 absorb` + `ConceptRegistry data model`. The single highest-cognitive-load legacy step; surfacing it before canonical store gives the store a concrete consumer to validate against.
+5. **Canonical store**. Same intent, now informed by absorb's actual write surface. `CanonicalUpsertOp` gets real producers (absorb) and a real reader (MOC + index, next).
+6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(new)*. P0 gaps `MOC generation` + `Knowledge index rebuild` + `TransactionManager`. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db) and unlocks the bulk of P1 readers (query, lint, ops_state, doctor).
 
-The order matters: live LLM with a real applier closes the "actually use it" loop; paper introduces the first routing decision, which is the first time deprecated vocabulary like `SourceKind` becomes appropriate; canonical store unblocks identity / evergreen tracking.
+After step 6 we have a real cycle; P1 gets re-triaged against observed pain.
+
+Codex review of Stage D + the architecture/alignment docs is queued but no longer the gating next step — it runs against whichever stage is in flight when it next makes sense.
 
 ## What this doc is and isn't
 

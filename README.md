@@ -34,6 +34,7 @@ ovp-next apply-plan \
 ## Docs
 
 - `docs/architecture.md` — current authoritative architecture + system primitives + crate responsibilities + deprecated vocabulary.
+- `docs/legacy-alignment.md` — living gap matrix between this rewrite and the legacy Python OVP. Read before scoping any new stage.
 - `docs/invariants.md` — the 12 invariants; CI-gated where possible.
 - `docs/stage-c.md`, `docs/stage-d-plan-applier.md` — historical stage docs.
 - `docs/calibration-r1.md`, `docs/calibration-r2.md` — historical calibration verdicts.
@@ -41,9 +42,13 @@ ovp-next apply-plan \
 
 ## Next
 
-1. Codex review of Stage D + the consolidated architecture doc.
-2. C9 + C10 — live `AnthropicBlockingClient` + real cassette capture.
-3. v1.2 (paper) — introduces source-kind routing.
-4. Canonical store — a sibling `PlanApplier` impl.
+Driven by the legacy alignment baseline (`docs/legacy-alignment.md`). Order:
 
-See `docs/architecture.md` "What comes next" for rationale.
+1. C9 + C10 — live `AnthropicBlockingClient` + real cassette capture.
+2. **L0/L1 intake + VaultLayout** *(new)* — first real Source filters; Inbox + Clippings + GitHub raws.
+3. v1.2 — paper deep-dive transform (now slotted after intake).
+4. **L3 absorb + ConceptRegistry** *(new)* — the highest-cognitive-load legacy step; surfaces the canonical write surface.
+5. Canonical store — `CanonicalUpsert` becomes real with absorb as its producer.
+6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(new)* — closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db).
+
+See `docs/architecture.md` "What comes next" and `docs/legacy-alignment.md` for rationale.
