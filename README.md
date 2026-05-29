@@ -49,10 +49,10 @@ The full legacy cycle is closed: C9/C10 (live Anthropic + capture), L0/L1 (intak
 
 ## Next
 
-Re-triaged from the legacy alignment baseline (`docs/legacy-alignment.md`) P1, against observed pain:
+Work is placed against the target layers (`docs/architecture.md` "Target architecture layers"). The next layer is **L4 Operational Workflow** — it comes *before* the read/health and automation layers:
 
-- `ovp-query` — read surface over the knowledge index.
-- `ovp-lint` — WIGS-style health checks over canonical + vault.
-- autopilot watcher (`InboxScanSource` is already the intake primitive).
+1. **L4 Operational Workflow Layer** (`ovp-run` + a `run-cycle` CLI command): one command assembles a manifest and drives inbox file → vault note + evergreen + canonical + MOC + knowledge index, with a run report and idempotent re-runs. This is the real stress test of the assembly layer.
+2. **L5 Read / health**: `ovp-query` (read surface over the knowledge index), `ovp-lint` (WIGS-style health checks over canonical + vault).
+3. **L6 RAG / automation**: a real retriever + ranking/context + eval; an autopilot watcher that *calls* the L4 run-cycle (it must not duplicate workflow logic).
 
 See `docs/architecture.md` "What comes next" and `docs/legacy-alignment.md` for rationale.

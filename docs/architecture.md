@@ -12,9 +12,25 @@ Three closed loops:
 2. **LLM effect boundary** — `ModelClient` is a sync trait; `LLMInvoker` calls it from inside the pipeline; replay-only test gates have zero network deps; live runs go through `AnthropicBlockingClient` behind the `anthropic` feature (landed C9/C10).
 3. **WritePlan → real stores** — `WritePlan` is dry-run; a `PlanApplier` is the only thing that mutates a store. `VaultFsPlanApplier` (vault files) + `CanonicalFsStoreApplier` (canonical records), composed by `CompositePlanApplier`. Hash-matched idempotence, path/key safety, before-hash checks, declared-hash validation, and ordered halt-on-failure all enforced at the applier layer.
 
+## Target architecture layers
+
+The system is a stack of layers, **one crate per layer**; higher layers depend only on lower ones. This is the north star — new work is placed against these layers, not scattered.
+
+| Layer | Crate | Owns | Must NOT |
+|---|---|---|---|
+| **L0 Kernel** | `ovp-core` | `Record` / `Source` / `Transform` / `EffectfulTransform` / `Sink` / `GraphRunner` / `PipelineManifest` / `WritePlan` / `PlanApplier` trait. Sync. | know any domain type, Obsidian, LLM, HTTP, or filesystem layout |
+| **L1 Domain node catalog** | `ovp-domain` | `DomainBody` + typed bodies; concrete nodes (resolver, prompt builders, parsers, concept resolver, evergreen writer, sinks); `VaultLayout`. | perform real writes; depend on a CLI |
+| **L2 Assembly** | `ovp-app` | `DomainPipelineSpec` / `NodeKind` / `NodeRegistry` / `NodeConfig` / `AppWiring` / `GraphAssembler`. Manifest + wiring → `GraphRunner`. | apply plans; depend on `ovp-stores`; dynamic loading / async / JSON DSL |
+| **L3 Store / apply** | `ovp-stores` | `VaultFsPlanApplier`, `CanonicalFsStoreApplier`, `CompositePlanApplier`, `read_all`, `walk_markdown`. All mutations via `WritePlan` → `PlanApplier`; derived state rebuildable. | own pipeline execution |
+| **L4 Operational workflow** *(next)* | `ovp-run` | the `run-cycle`: assemble → run → apply → rebuild MOC + knowledge index → report; idempotent on re-run. | duplicate node-construction or apply logic |
+| **L5 Read / health** *(future)* | `ovp-query`, `ovp-lint` | read canonical / vault / knowledge index. | own mutation or pipeline execution |
+| **L6 RAG / automation** *(future)* | tbd | retriever + ranking/context builder + eval; an autopilot watcher that *calls* L4. | duplicate L4 workflow logic |
+
+`ovp-cli` is a thin shell over L2/L4 — it parses args and constructs clients/paths, nothing more. Dependency direction (acyclic): `ovp-cli → ovp-run → {ovp-app, ovp-stores, ovp-domain, ovp-core}`; `ovp-app → {ovp-domain, ovp-llm, ovp-core}`; `ovp-stores → ovp-core`; `ovp-domain → {ovp-llm, ovp-core}`. **Why L4 is its own crate (`ovp-run`), not folded into `ovp-app`:** it keeps the crate↔layer mapping 1:1 and L2 pure (assembly never applies plans or depends on L3); the operational workflow is the thing that wires L2+L3 together.
+
 ## System primitives
 
-The twelve nouns the rest of the system must be expressed in. Anything that isn't on this list is either a synonym (use the canonical name), a not-yet-introduced extension (don't anticipate it), or a deprecated term (see below).
+The kernel + domain + effect + store nouns the rest of the system is expressed in (the **assembly** primitives are a separate set — see the subsection below). Anything not on these lists is either a synonym (use the canonical name), a not-yet-introduced extension (don't anticipate it), or a deprecated term (see below).
 
 | Primitive | Crate | One-line definition |
 |---|---|---|
@@ -30,6 +46,20 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | `ModelClient` | ovp-llm | Sync trait: `&ModelRequest → Result<ModelReply, CallError>`. Impls: `FixtureModelClient`, `CachedModelClient` (per-request cassette namespacing via `ModelRequest.cache_namespace`), `NeverCallsClient`, `AnthropicBlockingClient` (behind `anthropic`). |
 | `WritePlan` / `WriteOp` | ovp-core | The pipeline's side-effect output. `WriteOp` is a sealed enum: `VaultCreate` \| `VaultUpdate` \| `CanonicalUpsert` \| `EventAppend`. `VaultCreate`/`VaultUpdate` apply via `VaultFsPlanApplier`, `CanonicalUpsert` via `CanonicalFsStoreApplier`; `EventAppend` has no applier yet (reported `Unsupported`). |
 | `PlanApplier` / `ApplyReport` | ovp-core (trait) / ovp-stores (impls) | The only type allowed to mutate a real store. Impls: `VaultFsPlanApplier` (vault files), `CanonicalFsStoreApplier` (canonical records), `CompositePlanApplier` (routes ops by kind across backends). Every op produces an `OpOutcome` (`Applied` / `Skipped` / `Failed` / `Unsupported`). |
+
+### Assembly primitives (L2 — `ovp-app`)
+
+A **separate** set from the kernel primitives above: they describe how a pipeline is *assembled*, and live entirely in `ovp-app`. `ovp-core` knows none of them (invariant #1).
+
+| Primitive | One-line definition |
+|---|---|
+| `NodeKind` | Stable `<category>.<name>` id for a concrete node factory (e.g. `effect.llm_invoker`). |
+| `NodeCategory` | `Source` / `Transform` / `Effect` / `Sink` — which `register_*` slot a node occupies. |
+| `NodeRegistry` | Compiled-in catalog `NodeKind → factory`. **Assembly-only** — no authority, no runtime reads (see deprecated vocabulary). |
+| `NodeConfig` | Per-node static config: the **names** of the `AppWiring` entries to bind (`client`, `registry`). Not values. |
+| `DomainPipelineSpec` | Enriched manifest = `PipelineManifest` topology (`[pipeline]`) + a `[assembly.<id>]` kind/config overlay the topology parser ignores. |
+| `AppWiring` | Runtime deps a static file can't hold: `run_id`, `date_stamp`, `area`, `input_path`, and named `ModelClient`s + `ConceptRegistry`s bound by config. |
+| `GraphAssembler` | Validates (unknown-kind, category-vs-edges, per-kind config, required wiring, acyclic single-component source→sink shape) **before any build**, then builds a `GraphRunner` from spec + wiring. |
 
 ## Source kinds & routing (v1.2)
 
