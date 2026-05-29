@@ -128,17 +128,43 @@ impl GraphAssembler {
         Ok(())
     }
 
-    /// Required runtime wiring that a static manifest can't carry. Today: any
-    /// graph containing an article/paper parser needs a non-empty,
-    /// `YYYY-MM-DD` `date_stamp` (it stamps the note path + frontmatter).
+    /// Required runtime wiring that a static manifest can't carry — checked here
+    /// **before any node is built**, so a missing dependency fails preflight
+    /// rather than mid-build. Per node:
+    /// - a `source.*` needs `AppWiring::input_path`;
+    /// - an article/paper parser needs a non-empty, calendar-valid `YYYY-MM-DD`
+    ///   `date_stamp`;
+    /// - a node whose config requires a `client` must name a client that exists,
+    ///   and that client must be bound to exactly ONE node (a `ModelClient` is
+    ///   move-only — it cannot be shared);
+    /// - a node whose config requires a `registry` must name one that exists
+    ///   (registries are clonable, so sharing is fine).
     fn validate_runtime_wiring(
         &self,
         spec: &DomainPipelineSpec,
         wiring: &AppWiring,
     ) -> Result<(), AssemblyError> {
+        // Tracks which node first bound each move-only client name.
+        let mut client_owner: HashMap<&str, &str> = HashMap::new();
+
         for node_id in spec.topology().nodes() {
-            let kind = spec.assembly().get(node_id).expect("validated").kind.as_str();
-            if kind == kinds::ARTICLE_PARSER || kind == kinds::PAPER_PARSER {
+            let na = spec.assembly().get(node_id).expect("validated");
+            let kind = NodeKind::new(na.kind.clone());
+            let entry = self.registry.get(&kind).ok_or_else(|| AssemblyError::UnknownKind {
+                node_id: node_id.clone(),
+                kind: na.kind.clone(),
+            })?;
+
+            if entry.category == NodeCategory::Source && wiring.input_path().is_none() {
+                return Err(AssemblyError::MissingWiring {
+                    node_id: node_id.clone(),
+                    name: "input_path".into(),
+                });
+            }
+
+            if na.kind.as_str() == kinds::ARTICLE_PARSER
+                || na.kind.as_str() == kinds::PAPER_PARSER
+            {
                 let date = wiring.date_stamp();
                 if date.is_empty() {
                     return Err(AssemblyError::MissingWiring {
@@ -146,24 +172,57 @@ impl GraphAssembler {
                         name: "date_stamp".into(),
                     });
                 }
-                if !is_iso_date(date) {
+                if !is_valid_iso_date(date) {
                     return Err(AssemblyError::InvalidWiring {
                         node_id: node_id.clone(),
                         name: "date_stamp".into(),
-                        detail: format!("expected YYYY-MM-DD, got `{date}`"),
+                        detail: format!("expected a valid YYYY-MM-DD calendar date, got `{date}`"),
                     });
+                }
+            }
+
+            // Client binding existence + move-only uniqueness. (`validate_config`
+            // already guarantees the field is present when required.)
+            if entry.config.required.contains(&ConfigField::Client) {
+                if let Some(client) = na.config.client.as_deref() {
+                    if !wiring.has_client(client) {
+                        return Err(AssemblyError::MissingWiring {
+                            node_id: node_id.clone(),
+                            name: client.to_string(),
+                        });
+                    }
+                    if let Some(first_node) = client_owner.insert(client, node_id.as_str()) {
+                        return Err(AssemblyError::ClientReused {
+                            client: client.to_string(),
+                            first_node: first_node.to_string(),
+                            second_node: node_id.clone(),
+                        });
+                    }
+                }
+            }
+
+            // Registry binding existence (registries are clonable → shareable).
+            if entry.config.required.contains(&ConfigField::Registry) {
+                if let Some(registry) = na.config.registry.as_deref() {
+                    if !wiring.has_registry(registry) {
+                        return Err(AssemblyError::MissingWiring {
+                            node_id: node_id.clone(),
+                            name: registry.to_string(),
+                        });
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    /// The graph must be an **acyclic, connected source→sink pipeline**: no
-    /// cycles, at least one source and one sink, and every node both reachable
-    /// from some source AND able to reach some sink. This catches cycles and
-    /// self-loops, sources with no outbound edge, sinks with no inbound edge,
-    /// transforms missing an edge, and floating/dead-end nodes — all of which
-    /// would otherwise assemble and then either fail at `run()` or silently drop
+    /// The graph must be a **single, acyclic, connected source→sink pipeline**:
+    /// no cycles, exactly one weakly-connected component, at least one source and
+    /// one sink, and every node both reachable from some source AND able to reach
+    /// some sink. This catches cycles and self-loops, multi-island graphs,
+    /// sources with no outbound edge, sinks with no inbound edge, transforms
+    /// missing an edge, and floating/dead-end nodes — all of which would
+    /// otherwise assemble and then either fail at `run()` or silently drop
     /// records (or emit an empty plan) at runtime.
     fn validate_graph_shape(&self, spec: &DomainPipelineSpec) -> Result<(), AssemblyError> {
         let nodes = spec.topology().nodes();
@@ -194,6 +253,28 @@ impl GraphAssembler {
         }
         if sinks.is_empty() {
             return Err(AssemblyError::Manifest(GraphError::NoSink.into()));
+        }
+
+        // Single weakly-connected component: treat edges as undirected, flood
+        // from the first node; any node not reached is a separate island. One
+        // manifest is one pipeline — multi-island graphs are rejected.
+        if let Some(first) = nodes.first() {
+            let mut undirected: HashMap<&str, Vec<&str>> = HashMap::new();
+            for [from, to] in edges {
+                undirected.entry(from.as_str()).or_default().push(to.as_str());
+                undirected.entry(to.as_str()).or_default().push(from.as_str());
+            }
+            let connected = reachable(&undirected, &[first.as_str()]);
+            for node_id in nodes {
+                if !connected.contains(node_id.as_str()) {
+                    return Err(AssemblyError::DisconnectedGraph {
+                        node_id: node_id.clone(),
+                        detail: format!(
+                            "in a separate component from `{first}` (one manifest must be one connected pipeline)"
+                        ),
+                    });
+                }
+            }
         }
 
         let mut fwd: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -238,16 +319,39 @@ fn reachable<'a>(adj: &HashMap<&'a str, Vec<&'a str>>, seeds: &[&'a str]) -> Has
     seen
 }
 
-/// Cheap `YYYY-MM-DD` shape check (digits + dashes at the right spots). Not a
-/// calendar-validity check — just enough to reject obviously-wrong date stamps.
-fn is_iso_date(s: &str) -> bool {
+/// Calendar-valid `YYYY-MM-DD` check: right shape AND a real date (month 1–12,
+/// day within that month, leap years honored). No `chrono` dependency — the
+/// pipeline forbids extra deps in this layer.
+fn is_valid_iso_date(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() == 10
+    let shape_ok = b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
         && b[..4].iter().all(u8::is_ascii_digit)
         && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..10].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit);
+    if !shape_ok {
+        return false;
+    }
+    // Safe to parse: every relevant byte is an ASCII digit.
+    let year: i32 = s[0..4].parse().expect("4 ascii digits");
+    let month: u32 = s[5..7].parse().expect("2 ascii digits");
+    let day: u32 = s[8..10].parse().expect("2 ascii digits");
+    (1..=12).contains(&month) && day >= 1 && day <= days_in_month(year, month)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 #[cfg(test)]
@@ -255,12 +359,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn iso_date_shape() {
-        assert!(is_iso_date("2026-05-29"));
-        assert!(!is_iso_date(""));
-        assert!(!is_iso_date("2026-5-9"));
-        assert!(!is_iso_date("2026/05/29"));
-        assert!(!is_iso_date("not-a-date"));
-        assert!(!is_iso_date("2026-05-29T00")); // too long
+    fn iso_date_calendar_valid() {
+        // Shape failures.
+        assert!(!is_valid_iso_date(""));
+        assert!(!is_valid_iso_date("2026-5-9"));
+        assert!(!is_valid_iso_date("2026/05/29"));
+        assert!(!is_valid_iso_date("not-a-date"));
+        assert!(!is_valid_iso_date("2026-05-29T00"));
+        // Real dates.
+        assert!(is_valid_iso_date("2026-05-29"));
+        assert!(is_valid_iso_date("2026-01-31"));
+        assert!(is_valid_iso_date("2024-02-29")); // leap year
+        // Calendar failures the old shape-only check would have ACCEPTED.
+        assert!(!is_valid_iso_date("2026-13-01")); // month 13
+        assert!(!is_valid_iso_date("2026-00-10")); // month 0
+        assert!(!is_valid_iso_date("2026-02-30")); // Feb 30
+        assert!(!is_valid_iso_date("2026-02-29")); // 2026 not a leap year
+        assert!(!is_valid_iso_date("2026-04-31")); // April has 30
+        assert!(!is_valid_iso_date("2026-05-00")); // day 0
     }
 }

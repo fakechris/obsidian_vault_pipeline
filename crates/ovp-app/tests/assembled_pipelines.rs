@@ -445,6 +445,121 @@ fn malformed_date_stamp_is_invalid_wiring() {
 }
 
 #[test]
+fn missing_input_path_fails_before_build() {
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article.pipeline.toml");
+    // Everything but the source's input_path.
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_date_stamp("2026-05-04")
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::MissingWiring { node_id, name } => {
+            assert_eq!(node_id, "markdown_inbox");
+            assert_eq!(name, "input_path");
+        }
+        other => panic!("expected MissingWiring(input_path), got {other:?}"),
+    }
+}
+
+#[test]
+fn duplicate_client_binding_fails_before_build() {
+    // Two effect.llm_invoker nodes bind the same move-only client.
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "llm1", "llm2", "snk"]
+        edges = [["src", "llm1"], ["llm1", "llm2"], ["llm2", "snk"]]
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        [assembly.llm1]
+        kind = "effect.llm_invoker"
+        config = { client = "shared" }
+        [assembly.llm2]
+        kind = "effect.llm_invoker"
+        config = { client = "shared" }
+        [assembly.snk]
+        kind = "sink.article_vault_plan"
+    "#;
+    let root = repo_root();
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_input_path("/tmp/x.md")
+        .with_client("shared", cassette_client(&root));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::ClientReused { client, first_node, second_node } => {
+            assert_eq!(client, "shared");
+            assert_eq!(first_node, "llm1");
+            assert_eq!(second_node, "llm2");
+        }
+        other => panic!("expected ClientReused, got {other:?}"),
+    }
+}
+
+#[test]
+fn missing_registry_fails_before_build() {
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article.pipeline.toml");
+    // No registry registered under "default".
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_date_stamp("2026-05-04")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::MissingWiring { node_id, name } => {
+            assert_eq!(node_id, "concept_resolver");
+            assert_eq!(name, "default");
+        }
+        other => panic!("expected MissingWiring(default registry), got {other:?}"),
+    }
+}
+
+#[test]
+fn two_island_graph_is_rejected() {
+    // Two independent source→sink pipelines in one manifest. Each island is
+    // internally well-formed, so only the weak-connectivity check catches it.
+    let toml = r#"
+        [pipeline]
+        nodes = ["s1", "k1", "s2", "k2"]
+        edges = [["s1", "k1"], ["s2", "k2"]]
+        [assembly.s1]
+        kind = "source.markdown_inbox"
+        [assembly.k1]
+        kind = "sink.article_vault_plan"
+        [assembly.s2]
+        kind = "source.markdown_inbox"
+        [assembly.k2]
+        kind = "sink.article_vault_plan"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x")).with_input_path("/tmp/x.md");
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    assert!(matches!(err, AssemblyError::DisconnectedGraph { .. }), "got {err:?}");
+}
+
+#[test]
+fn calendar_invalid_date_is_invalid_wiring() {
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article.pipeline.toml");
+    // Shape-valid but not a real date (Feb 30).
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_date_stamp("2026-02-30")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::InvalidWiring { node_id, name, .. } => {
+            assert_eq!(node_id, "article_parser");
+            assert_eq!(name, "date_stamp");
+        }
+        other => panic!("expected InvalidWiring, got {other:?}"),
+    }
+}
+
+#[test]
 fn source_with_inbound_edge_is_category_mismatch() {
     // `a` is declared a source but the topology gives it an inbound edge.
     let toml = r#"

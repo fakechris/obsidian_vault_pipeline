@@ -34,8 +34,12 @@ pub enum AssemblyError {
     /// e.g. `client` on a source). Silently-ignored config is forbidden.
     UnexpectedConfig { node_id: String, kind: String, field: &'static str },
     /// A required runtime wiring value is present but malformed (e.g. a
-    /// `date_stamp` that is not `YYYY-MM-DD`).
+    /// `date_stamp` that is not a valid calendar date).
     InvalidWiring { node_id: String, name: String, detail: String },
+    /// Two nodes bind the same client name. A `ModelClient` is move-only — it
+    /// can be bound to exactly one node. (Registries are clonable and may be
+    /// shared.)
+    ClientReused { client: String, first_node: String, second_node: String },
 }
 
 impl fmt::Display for AssemblyError {
@@ -65,6 +69,11 @@ impl fmt::Display for AssemblyError {
             AssemblyError::InvalidWiring { node_id, name, detail } => {
                 write!(f, "node `{node_id}` has invalid wiring `{name}`: {detail}")
             }
+            AssemblyError::ClientReused { client, first_node, second_node } => write!(
+                f,
+                "client `{client}` is bound by both `{first_node}` and `{second_node}`, but a \
+                 ModelClient is move-only and can be bound to only one node"
+            ),
         }
     }
 }

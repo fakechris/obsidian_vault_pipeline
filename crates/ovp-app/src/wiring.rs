@@ -83,9 +83,19 @@ impl AppWiring {
         self.input_path.as_deref()
     }
 
+    /// Non-mutating existence check (preflight validation, before any client is
+    /// moved out).
+    pub(crate) fn has_client(&self, name: &str) -> bool {
+        self.clients.contains_key(name)
+    }
+
     /// Move the named client out of the wiring (bound once per assembly).
     pub(crate) fn take_client(&mut self, name: &str) -> Option<Box<dyn ModelClient>> {
         self.clients.remove(name)
+    }
+
+    pub(crate) fn has_registry(&self, name: &str) -> bool {
+        self.registries.contains_key(name)
     }
 
     pub(crate) fn registry(&self, name: &str) -> Option<&ConceptRegistry> {
