@@ -2,14 +2,15 @@ use std::path::{Path, PathBuf};
 
 use ovp_core::{GraphRunner, PipelineManifest, RunId};
 use ovp_domain::{
-    ArticleParser, ArticleVaultPlanSink, ConceptResolver, DomainBody, LLMInvoker,
+    ArticleParser, ArticleVaultPlanSink, ConceptRegistry, ConceptResolver, DomainBody, LLMInvoker,
     MarkdownInboxSource, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
 };
 
-/// v1.1 hardcoded canonical-evergreen inventory used by ConceptResolver.
-/// Future: load from `<vault>/10-Knowledge/Evergreen/` or a registry
-/// file. Two entries seed the article_mixed_lang fixture's MUST clauses.
-const V1_1_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
+/// Default canonical-evergreen seed used when no `--concept-registry`
+/// file is supplied. Two entries cover the article_mixed_lang MUST
+/// clauses. Real runs point `--concept-registry` at a registry JSON or
+/// (future) scan the vault's evergreen dir.
+const DEFAULT_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 
 use crate::CliError;
@@ -82,6 +83,9 @@ pub struct InterpretArticleArgs {
     pub client_kind: ClientKind,
     pub area: String,
     pub date_stamp: String,
+    /// Optional path to a ConceptRegistry JSON. When absent, a small
+    /// default seed is used.
+    pub concept_registry: Option<PathBuf>,
 }
 
 pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
@@ -108,9 +112,16 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
         "article_parser",
         ArticleParser::new("article_parser", &args.area, &args.date_stamp),
     );
+    // ConceptResolver consumes a ConceptRegistry (not raw CLI constants):
+    // loaded from --concept-registry if given, else a default seed.
+    let registry = match &args.concept_registry {
+        Some(path) => ConceptRegistry::load_from_file(path)
+            .map_err(|e| CliError::Io(format!("loading concept registry: {e}")))?,
+        None => ConceptRegistry::from_slugs(DEFAULT_CANONICAL_SLUGS),
+    };
     runner.register_transform(
         "concept_resolver",
-        ConceptResolver::from_slugs("concept_resolver", V1_1_CANONICAL_SLUGS),
+        ConceptResolver::new("concept_resolver", registry),
     );
     runner.register_sink(
         "article_vault_plan",

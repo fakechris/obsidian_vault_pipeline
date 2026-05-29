@@ -87,6 +87,10 @@ enum Cmd {
         /// ISO-8601 date stamped onto the InterpretedDoc. Defaults to today.
         #[arg(long)]
         date: Option<String>,
+        /// Path to a ConceptRegistry JSON ({canonical:[...],aliases:{...}}).
+        /// Absent → a small default seed.
+        #[arg(long)]
+        concept_registry: Option<PathBuf>,
     },
 }
 
@@ -124,6 +128,7 @@ fn main() -> ExitCode {
             client,
             area,
             date,
+            concept_registry,
         } => {
             use commands::interpret_article::{ClientKind, InterpretArticleArgs};
             let client_kind = match client {
@@ -140,6 +145,7 @@ fn main() -> ExitCode {
                 client_kind,
                 area,
                 date_stamp,
+                concept_registry,
             })
         }
     };

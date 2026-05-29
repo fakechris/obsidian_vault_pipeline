@@ -6,6 +6,7 @@
 //! under `testing/` behind the `testing` feature (added in C7).
 
 pub mod body;
+pub mod concept_registry;
 pub mod interpreted;
 pub mod paper_doc;
 pub mod prompt;
@@ -20,6 +21,7 @@ pub mod vault_layout;
 pub mod testing;
 
 pub use body::DomainBody;
+pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
 pub use paper_doc::{PaperDoc, PaperSections};
 pub use prompt::{PromptId, PromptRequest};

@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 132 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind.
+Five crates. 138 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan), not hardcoded constants.
 
 Three closed loops:
 
@@ -72,7 +72,7 @@ fixtures/<case>/input.md
     │  Record<DomainBody::Interpreted>
     ▼
 ┌────────────────────┐
-│  ConceptResolver   │   promotes linked_concepts → canonical_concepts via inventory
+│  ConceptResolver   │   promotes candidates → canonical via ConceptRegistry (alias-aware)
 └────────────────────┘
     │  Record<DomainBody::Interpreted>
     ▼
@@ -141,9 +141,9 @@ Roadmap is now driven by the legacy alignment baseline (see `docs/legacy-alignme
 1. **C9 + C10** — live `AnthropicBlockingClient` + real cassette capture. Unchanged. Unblocks any stage that calls a model from doing real work.
 2. **L0/L1 intake + VaultLayout port** *(new)*. P0 gaps `L1 article/github intake` + `VaultLayout port`. The first real Source filters land here; without them the rest of the pipeline is fixture-fed. Bringing intake in before paper forces the Source contract to settle.
 3. **v1.2 — paper deep-dive transform** ✅ *(done)*. `RouteBySourceKind` + `PaperPromptBuilder` / `PaperParser` / `PaperVaultPlanSink` + `PaperDoc`; `paper_arxiv` acceptance gate green via the unified manifest.
-4. **L3 absorb + ConceptRegistry data model** *(next)*. P0 gaps `L3 absorb` + `ConceptRegistry data model`. The single highest-cognitive-load legacy step; surfacing it before canonical store gives the store a concrete consumer to validate against.
-5. **Canonical store**. Same intent, now informed by absorb's actual write surface. `CanonicalUpsertOp` gets real producers (absorb) and a real reader (MOC + index, next).
-6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(new)*. P0 gaps `MOC generation` + `Knowledge index rebuild` + `TransactionManager`. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db) and unlocks the bulk of P1 readers (query, lint, ops_state, doctor).
+4. **L3 ConceptRegistry** ✅ *(done, partial)*. The focused `ConceptRegistry` (canonical set + alias resolution, loadable from JSON / evergreen-dir scan) + `ConceptResolver` consuming it are landed. The **larger "absorb" piece** — extracting *new* evergreen concepts and writing new evergreen files — is NOT yet built; that's the part that produces a `CanonicalUpsert` write surface, and it's the prerequisite for step 5.
+5. **Canonical store** *(gated)*. Deliberately deferred: it has no producer until the absorb evergreen-writer (the rest of step 4) exists. Building it now would be guessing at the write surface (invariant + epic constraint). Sequence: finish absorb evergreen-writer → it emits `CanonicalUpsert` → then the canonical store applier.
+6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 5)*. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db).
 
 After step 6 we have a real cycle; P1 gets re-triaged against observed pain.
 
