@@ -89,21 +89,35 @@ on the second run.
 |---|---|---|
 | assembly fails | `Err(RunCycleError::Assemble)` | none |
 | graph run errors | `Err(RunCycleError::GraphRun)` | none (plan never applied) |
-| main apply has a failed op | `Ok(report)` with `derived_skipped_reason` set, `moc`/`index` = `None` | only the ops that applied before the halt (composite halts on first failure) |
+| main apply not clean — any **failed OR unsupported** op | `Ok(report)` with `derived_skipped_reason` set, `moc`/`index` = `None` | whatever the composite applied before a halt; **no derived state** |
 | canonical strict parse fails | `Ok(report)` with `derived_skipped_reason` set, `moc`/`index` = `None` | main plan applied; no MOC/index written |
-| derived rebuild has a failed op | `Ok(report)` with `moc`/`index` carrying `failed > 0` | partial |
+| vault backlink scan I/O error | `Ok(report)` with `derived_skipped_reason` set, `moc`/`index` = `None` | main plan applied; no MOC/index written |
+| derived rebuild has a failed op | `Ok(report)` with `moc`/`index` carrying `failed > 0` | partial (derived only; rebuildable) |
 
-`RunCycleReport::succeeded()` is true only when nothing failed and nothing was
-skipped-for-failure. The CLI exits non-zero when `!succeeded()` and prints the
-reason, so failures are loud.
+**Unsupported is treated as failure.** A `WriteOp` no applier handled (e.g. an
+`EventAppend` once a producer exists, with no event applier wired) is not a
+silent success — it blocks the derived rebuild and fails `succeeded()`, exactly
+like a `Failed` op. A "completed operational cycle" means *every* emitted op was
+applied.
+
+**All derived reads happen before any derived write.** The canonical read+parse
+and the backlink scan complete, and *both* rebuild plans are built, before the
+MOC or the index is applied — so a read failure leaves zero partial derived
+state.
+
+`RunCycleReport::succeeded()` is true only when nothing failed, nothing was left
+unsupported, and nothing was skipped-for-failure. The CLI exits non-zero when
+`!succeeded()` and prints the reason, so failures are loud.
 
 ## `--dry-run`
 
 Uses `ApplyMode::DryRun` for every apply (main + MOC + index): nothing is
-written; the report shows what *would* happen. Caveat: because the main apply's
-canonical writes are not performed, the derived-rebuild previews reflect the
-**current on-disk** canonical store, not the would-be-applied state. Dry-run is a
-preview, not a simulation.
+written; the report shows what *would* happen and sets `RunCycleReport.dry_run =
+true`. **Semantics, pinned:** dry-run is a **preview, not a simulation**. Because
+the main apply's canonical writes are not performed, the derived-rebuild previews
+reflect the **current on-disk** canonical store + vault, NOT a speculative "as if
+the main plan had applied" state. (On a fresh vault, a dry-run therefore previews
+empty/placeholder derived artifacts even though a real run would populate them.)
 
 ## Boundaries held
 
@@ -122,7 +136,14 @@ preview, not a simulation.
    (`applied == 0` everywhere).
 2. **paper smoke**: run-cycle with `unified` manifest + `paper_arxiv` writes a
    paper note; derived artifacts stay consistent.
-3. **failure: bad manifest** (unknown kind) → `Err(Assemble)`, no writes.
-4. **failure: corrupt canonical before rebuild** → derived rebuild is skipped
+3. **dry-run writes nothing**: `--dry-run` over `article_clean` leaves both roots
+   empty and reports `dry_run == true`.
+4. **failure: bad manifest** (unknown kind) → `Err(Assemble)`, no writes.
+5. **failure: corrupt canonical before rebuild** → derived rebuild is skipped
    loudly (`derived_skipped_reason` set, `succeeded() == false`) and the existing
    MOC/index are not overwritten.
+6. **unit: unsupported = failure** — `main_apply_block` flags both `Failed` and
+   `Unsupported` main-apply ops (so derived rebuild is skipped), and
+   `succeeded()` returns false for an unsupported main op. (A full e2e producing
+   an unsupported op awaits a `WriteOp` producer no applier handles — e.g. an
+   `EventAppend` source — which does not exist yet.)

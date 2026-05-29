@@ -89,18 +89,30 @@ pub fn run(args: RunCycleArgs) -> Result<(), CliError> {
 
 fn print_report(r: &RunCycleReport) {
     println!("run_id:            {}", r.run_id);
+    if r.dry_run {
+        println!("mode:              dry-run (nothing written; derived previews reflect current on-disk state)");
+    }
     println!("records_seen:      {}", r.records_seen);
     println!("records_forwarded: {}", r.records_forwarded_to_sinks);
     println!("records_dropped:   {}", r.records_dropped);
     println!("plan ops:          {}", r.ops_emitted);
     let a = r.apply.counts();
-    println!("main apply:        applied={} skipped={} failed={}", a.applied, a.skipped, a.failed);
+    println!(
+        "main apply:        applied={} skipped={} failed={} unsupported={}",
+        a.applied, a.skipped, a.failed, a.unsupported
+    );
     match &r.moc {
-        Some(m) => println!("moc:               applied={} skipped={} failed={}", m.applied, m.skipped, m.failed),
+        Some(m) => println!(
+            "moc:               applied={} skipped={} failed={} unsupported={}",
+            m.applied, m.skipped, m.failed, m.unsupported
+        ),
         None => println!("moc:               (skipped)"),
     }
     match &r.knowledge_index {
-        Some(k) => println!("knowledge_index:   applied={} skipped={} failed={}", k.applied, k.skipped, k.failed),
+        Some(k) => println!(
+            "knowledge_index:   applied={} skipped={} failed={} unsupported={}",
+            k.applied, k.skipped, k.failed, k.unsupported
+        ),
         None => println!("knowledge_index:   (skipped)"),
     }
     if let Some(reason) = &r.derived_skipped_reason {

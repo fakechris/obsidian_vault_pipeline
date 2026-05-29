@@ -132,6 +132,43 @@ fn run_cycle_paper_smoke() {
 }
 
 #[test]
+fn run_cycle_dry_run_writes_nothing() {
+    // --dry-run is a PREVIEW: ApplyMode::DryRun for every apply, so nothing is
+    // written to either root. The report records dry_run = true.
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    let toml =
+        std::fs::read_to_string(root.join("manifests/article_evergreen.pipeline.toml")).unwrap();
+    let spec = DomainPipelineSpec::parse(&toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp("2026-05-04")
+        .with_area("ai")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.path().to_path_buf(),
+        canonical_root: canon.path().to_path_buf(),
+        mode: ApplyMode::DryRun,
+    };
+    let report = RunCycle::new().execute(inputs).unwrap();
+
+    assert!(report.dry_run, "report must record dry-run mode");
+    assert!(report.succeeded(), "a clean dry-run reports success");
+    // Nothing written to either root.
+    assert!(std::fs::read_dir(vault.path()).unwrap().next().is_none(), "vault must be empty");
+    assert!(std::fs::read_dir(canon.path()).unwrap().next().is_none(), "canonical must be empty");
+    // Every main op was skipped (dry-run), none failed or left unsupported.
+    assert_eq!(report.apply.counts().applied, 0);
+    assert_eq!(report.apply.counts().failed, 0);
+    assert_eq!(report.apply.counts().unsupported, 0);
+}
+
+#[test]
 fn run_cycle_bad_manifest_writes_nothing() {
     let root = repo_root();
     let vault = tempfile::tempdir().unwrap();
