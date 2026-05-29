@@ -11,6 +11,12 @@ description = "OVP Next CLI"
 name = "ovp-next"
 path = "src/main.rs"
 
+[features]
+default = []
+# Forwards to ovp-llm/anthropic so `ovp-next interpret-article --client live`
+# can make real API calls. Default build is replay-only + HTTP-free.
+anthropic = ["ovp-llm/anthropic"]
+
 [dependencies]
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
 ovp-domain = { path = "../ovp-domain" }

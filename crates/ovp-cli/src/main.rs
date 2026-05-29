@@ -75,8 +75,10 @@ enum Cmd {
         cache_dir: PathBuf,
         #[arg(long, default_value = "demo-article")]
         run_id: String,
-        /// Which ModelClient to wire. v1 only supports `replay` against
-        /// the committed cassettes. Live runs land with C9 (Anthropic).
+        /// Which ModelClient to wire. `replay` (default) reads committed
+        /// cassettes, no network. `live` calls Anthropic and captures the
+        /// reply into --cache-dir; requires `--features anthropic` +
+        /// ANTHROPIC_API_KEY (errors with guidance otherwise).
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
         /// PARA area to stamp on the InterpretedDoc. `ai` for article_clean.
@@ -91,6 +93,7 @@ enum Cmd {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum ClientKindArg {
     Replay,
+    Live,
 }
 
 fn main() -> ExitCode {
@@ -125,6 +128,7 @@ fn main() -> ExitCode {
             use commands::interpret_article::{ClientKind, InterpretArticleArgs};
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
             };
             let date_stamp = date.unwrap_or_else(today_iso);
             commands::interpret_article::run(InterpretArticleArgs {

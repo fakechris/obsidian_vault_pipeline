@@ -35,6 +35,7 @@ ovp-next apply-plan \
 
 - `docs/architecture.md` — current authoritative architecture + system primitives + crate responsibilities + deprecated vocabulary.
 - `docs/legacy-alignment.md` — living gap matrix between this rewrite and the legacy Python OVP. Read before scoping any new stage.
+- `docs/live-capture.md` — how to make live Anthropic calls + capture cassettes (`--features anthropic`, `--client live`).
 - `docs/invariants.md` — the 12 invariants; CI-gated where possible.
 - `docs/stage-c.md`, `docs/stage-d-plan-applier.md` — historical stage docs.
 - `docs/calibration-r1.md`, `docs/calibration-r2.md` — historical calibration verdicts.
