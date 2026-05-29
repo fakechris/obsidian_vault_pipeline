@@ -35,19 +35,32 @@ impl MarkdownInboxSource {
     }
 
     fn read_and_parse(path: &Path) -> Result<SourceDoc, FilterError> {
-        let raw = std::fs::read_to_string(path).map_err(|e| {
-            FilterError::new(
-                "source.markdown_inbox.io",
-                format!("read {}: {e}", path.display()),
-            )
-        })?;
-        parse_clipping(&raw).map_err(|e| {
-            FilterError::new(
-                "source.markdown_inbox.parse",
-                format!("{}: {}", path.display(), e),
-            )
-        })
+        read_source_doc(path)
     }
+}
+
+/// Read a single clipping file from disk and parse it into a `SourceDoc`.
+/// Shared by `MarkdownInboxSource` (single file) and `InboxScanSource`
+/// (directory sweep) so both agree on IO + parse error codes.
+pub(crate) fn read_source_doc(path: &Path) -> Result<SourceDoc, FilterError> {
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        FilterError::new(
+            "source.markdown_inbox.io",
+            format!("read {}: {e}", path.display()),
+        )
+    })?;
+    parse_clipping(&raw).map_err(|e| {
+        FilterError::new(
+            "source.markdown_inbox.parse",
+            format!("{}: {}", path.display(), e),
+        )
+    })
+}
+
+/// Stable record id derived from a clipping file's stem (`src-<stem>`).
+/// Shared so single-file and directory-sweep sources produce matching ids.
+pub(crate) fn record_id_for(path: &Path) -> String {
+    source_doc_record_id(path)
 }
 
 impl Source<DomainBody> for MarkdownInboxSource {

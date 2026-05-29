@@ -13,6 +13,7 @@ pub mod sinks;
 pub mod source_doc;
 pub mod sources;
 pub mod transforms;
+pub mod vault_layout;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -23,7 +24,8 @@ pub use prompt::{PromptId, PromptRequest};
 pub use response::{ModelResponse, ResponseContent};
 pub use sinks::ArticleVaultPlanSink;
 pub use source_doc::SourceDoc;
-pub use sources::MarkdownInboxSource;
+pub use sources::{InboxScanSource, MarkdownInboxSource};
+pub use vault_layout::VaultLayout;
 pub use transforms::{
     ArticleParser, ConceptResolver, LLMInvoker, PromptBuilder, SourceResolver, ARTICLE_PROMPT_ID,
     ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,

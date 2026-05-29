@@ -1,11 +1,12 @@
 use ovp_core::{
     ContentHash, Event, EventKind, OpId, Record, RunId, Sink, SinkOutput, StepId, VaultCreateOp,
-    VaultPath, WriteOp,
+    WriteOp,
 };
 use sha2::{Digest, Sha256};
 
 use crate::body::DomainBody;
 use crate::interpreted::InterpretedDoc;
+use crate::vault_layout::VaultLayout;
 
 /// Renders an `InterpretedDoc` into a `VaultCreate` write op. The path
 /// follows the legacy convention `20-Areas/<area>/Topics/<YYYY-MM>/
@@ -19,11 +20,12 @@ use crate::interpreted::InterpretedDoc;
 pub struct ArticleVaultPlanSink {
     step: StepId,
     run_id: RunId,
+    layout: VaultLayout,
 }
 
 impl ArticleVaultPlanSink {
     pub fn new(step: impl Into<String>, run_id: RunId) -> Self {
-        Self { step: StepId::new(step.into()), run_id }
+        Self { step: StepId::new(step.into()), run_id, layout: VaultLayout::new() }
     }
 }
 
@@ -51,7 +53,7 @@ impl Sink<DomainBody> for ArticleVaultPlanSink {
         };
 
         let body_md = render_article(&interp);
-        let path = article_vault_path(&interp);
+        let path = self.layout.area_topic_note(&interp.area, &interp.date, &interp.title);
         let after_hash = ContentHash::new(hex_sha256(body_md.as_bytes()));
 
         let op = WriteOp::VaultCreate(VaultCreateOp {
@@ -65,29 +67,6 @@ impl Sink<DomainBody> for ArticleVaultPlanSink {
 
         SinkOutput { plan_ops: vec![op], extra_events: vec![] }
     }
-}
-
-fn article_vault_path(d: &InterpretedDoc) -> VaultPath {
-    let month = d.date.get(..7).unwrap_or(&d.date); // YYYY-MM
-    let area_dir = match d.area.as_str() {
-        "ai" => "AI-Research",
-        "tools" => "Tools",
-        "investing" => "Investing",
-        "programming" => "Programming",
-        other => other,
-    };
-    let safe_title = d
-        .title
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
-        .collect::<String>();
-    VaultPath::new(format!(
-        "20-Areas/{area_dir}/Topics/{month}/{date}_{title}_深度解读.md",
-        area_dir = area_dir,
-        month = month,
-        date = d.date,
-        title = safe_title.trim(),
-    ))
 }
 
 fn render_article(d: &InterpretedDoc) -> String {
