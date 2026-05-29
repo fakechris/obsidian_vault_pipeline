@@ -153,8 +153,22 @@ bound exactly once; binding the same client to two nodes errors. `ConceptRegistr
 | edge references a missing node | `Manifest(CoreError)` (reused from `PipelineManifest::validate`) |
 | `[pipeline]`/`[assembly]` node sets disagree | `SpecMismatch { detail }` |
 | required config field absent (e.g. `effect.llm_invoker` with no `client`) | `MissingConfig { node_id, field }` |
+| a node carries a config field its kind doesn't accept (typo trap) | `UnexpectedConfig { node_id, kind, field }` |
 | named wiring absent (e.g. `client = "x"` but no such client; or a source with no `input_path`) | `MissingWiring { node_id, name }` |
+| required runtime value malformed (e.g. `date_stamp` not `YYYY-MM-DD`) | `InvalidWiring { node_id, name, detail }` |
 | category vs topology mismatch: a `source.*` with an inbound edge, or a `sink.*` with an outbound edge | `CategoryMismatch { node_id, kind, detail }` |
+| graph is not a connected source→sink pipeline (unreachable, dead-end, or floating node) | `DisconnectedGraph { node_id, detail }` |
+| no source / no sink at all | `Manifest(CoreError::Graph(NoSource\|NoSink))` |
+
+Each `NodeKind` declares a **config contract** (`allowed` + `required` fields) so
+config validation is per-kind, not global — a `client` on a source is a hard
+error, not a silently-ignored field. Required runtime wiring is pre-checked by
+kind: a graph containing `transform.article_parser`/`paper_parser` requires a
+non-empty `YYYY-MM-DD` `date_stamp`; sources require `input_path`; the effect/
+resolver nodes require their named client/registry. Graph-shape validation
+computes forward-reachability from every source and backward-reachability from
+every sink, and rejects any node not in both sets. All of this runs **before any
+node is built**, so a bad manifest fails loudly and never half-wires a runner.
 
 We deliberately **do not** statically type-check `DomainBody` variant
 compatibility across edges in v1 (e.g. that a `Prompt`-emitting node only feeds a

@@ -38,9 +38,57 @@ pub(crate) struct NodeBuildArgs<'a> {
 /// runner under `node_id` via the matching `register_*` method.
 pub(crate) type NodeFactory = Box<dyn Fn(&mut NodeBuildArgs<'_>) -> Result<(), AssemblyError>>;
 
-struct RegisteredNode {
-    category: NodeCategory,
-    factory: NodeFactory,
+/// A `NodeConfig` field, named so the assembler can validate per-kind that only
+/// accepted fields are present (and required ones are not missing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigField {
+    Client,
+    Registry,
+}
+
+impl ConfigField {
+    /// Every field — iterate this so the unexpected-config check stays exhaustive
+    /// as `NodeConfig` grows.
+    pub(crate) const ALL: &'static [ConfigField] = &[ConfigField::Client, ConfigField::Registry];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            ConfigField::Client => "client",
+            ConfigField::Registry => "registry",
+        }
+    }
+
+    pub(crate) fn is_set(self, cfg: &NodeConfig) -> bool {
+        match self {
+            ConfigField::Client => cfg.client.is_some(),
+            ConfigField::Registry => cfg.registry.is_some(),
+        }
+    }
+}
+
+/// A kind's config contract: which `NodeConfig` fields it accepts and which it
+/// requires. Lets the assembler reject typo'd/ignored config loudly instead of
+/// silently dropping it.
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigContract {
+    pub(crate) allowed: &'static [ConfigField],
+    pub(crate) required: &'static [ConfigField],
+}
+
+impl ConfigContract {
+    /// A node that takes no config at all.
+    const NONE: ConfigContract = ConfigContract { allowed: &[], required: &[] };
+}
+
+const CLIENT_REQUIRED: ConfigContract =
+    ConfigContract { allowed: &[ConfigField::Client], required: &[ConfigField::Client] };
+const REGISTRY_REQUIRED: ConfigContract =
+    ConfigContract { allowed: &[ConfigField::Registry], required: &[ConfigField::Registry] };
+
+pub(crate) struct RegisteredNode {
+    pub(crate) category: NodeCategory,
+    pub(crate) config: ConfigContract,
+    pub(crate) factory: NodeFactory,
 }
 
 /// Catalog of node factories keyed by `NodeKind`.
@@ -54,23 +102,30 @@ impl NodeRegistry {
     }
 
     /// Register a factory under `kind`. The kind's `<category>.` prefix must
-    /// match `category` (debug-asserted — a registration-time hygiene check).
-    /// Crate-private: the node set is compiled in via `with_domain_nodes`.
-    pub(crate) fn register(&mut self, kind: NodeKind, category: NodeCategory, factory: NodeFactory) {
+    /// match `category`, and every required config field must be allowed
+    /// (debug-asserted hygiene). Crate-private: the node set is compiled in via
+    /// `with_domain_nodes`.
+    pub(crate) fn register(
+        &mut self,
+        kind: NodeKind,
+        category: NodeCategory,
+        config: ConfigContract,
+        factory: NodeFactory,
+    ) {
         debug_assert_eq!(
             kind.category(),
             Some(category),
             "NodeKind `{kind}` prefix does not match its category"
         );
-        self.nodes.insert(kind, RegisteredNode { category, factory });
+        debug_assert!(
+            config.required.iter().all(|f| config.allowed.contains(f)),
+            "NodeKind `{kind}` requires a config field it does not allow"
+        );
+        self.nodes.insert(kind, RegisteredNode { category, config, factory });
     }
 
-    pub(crate) fn category_of(&self, kind: &NodeKind) -> Option<NodeCategory> {
-        self.nodes.get(kind).map(|n| n.category)
-    }
-
-    pub(crate) fn factory_of(&self, kind: &NodeKind) -> Option<&NodeFactory> {
-        self.nodes.get(kind).map(|n| &n.factory)
+    pub(crate) fn get(&self, kind: &NodeKind) -> Option<&RegisteredNode> {
+        self.nodes.get(kind)
     }
 
     /// The compiled-in domain node set. Every kind the three shipped manifests
@@ -82,6 +137,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::MARKDOWN_INBOX),
             NodeCategory::Source,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let input = require_input(a)?;
                 let src = MarkdownInboxSource::new(a.node_id, a.wiring.run_id().clone(), input);
@@ -92,6 +148,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::INBOX_SCAN),
             NodeCategory::Source,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let input = require_input(a)?;
                 let src = InboxScanSource::new(a.node_id, a.wiring.run_id().clone(), input);
@@ -104,6 +161,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::SOURCE_RESOLVER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 a.runner.register_transform(a.node_id, SourceResolver::new(a.node_id));
                 Ok(())
@@ -112,6 +170,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::ROUTE_BY_SOURCE_KIND),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 a.runner.register_transform(a.node_id, RouteBySourceKind::new(a.node_id));
                 Ok(())
@@ -120,6 +179,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::PROMPT_BUILDER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 a.runner.register_transform(a.node_id, PromptBuilder::new(a.node_id));
                 Ok(())
@@ -128,6 +188,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::PAPER_PROMPT_BUILDER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 a.runner.register_transform(a.node_id, PaperPromptBuilder::new(a.node_id));
                 Ok(())
@@ -136,6 +197,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::ARTICLE_PARSER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let parser = ArticleParser::new(a.node_id, a.wiring.area(), a.wiring.date_stamp());
                 a.runner.register_transform(a.node_id, parser);
@@ -145,6 +207,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::PAPER_PARSER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let parser = PaperParser::new(a.node_id, a.wiring.date_stamp());
                 a.runner.register_transform(a.node_id, parser);
@@ -154,6 +217,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::CONCEPT_RESOLVER),
             NodeCategory::Transform,
+            REGISTRY_REQUIRED,
             Box::new(|a| {
                 let name = a.config.registry.as_deref().ok_or_else(|| {
                     AssemblyError::MissingConfig { node_id: a.node_id.to_string(), field: "registry" }
@@ -171,6 +235,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::EVERGREEN_CONCEPT_WRITER),
             NodeCategory::Transform,
+            ConfigContract::NONE,
             Box::new(|a| {
                 a.runner
                     .register_transform(a.node_id, EvergreenConceptWriter::new(a.node_id));
@@ -182,6 +247,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::LLM_INVOKER),
             NodeCategory::Effect,
+            CLIENT_REQUIRED,
             Box::new(|a| {
                 let name = a.config.client.as_deref().ok_or_else(|| {
                     AssemblyError::MissingConfig { node_id: a.node_id.to_string(), field: "client" }
@@ -200,6 +266,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::ARTICLE_VAULT_PLAN),
             NodeCategory::Sink,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let sink = ArticleVaultPlanSink::new(a.node_id, a.wiring.run_id().clone());
                 a.runner.register_sink(a.node_id, sink);
@@ -209,6 +276,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::PAPER_VAULT_PLAN),
             NodeCategory::Sink,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let sink = PaperVaultPlanSink::new(a.node_id, a.wiring.run_id().clone());
                 a.runner.register_sink(a.node_id, sink);
@@ -218,6 +286,7 @@ impl NodeRegistry {
         r.register(
             NodeKind::new(kinds::EVERGREEN_SINK),
             NodeCategory::Sink,
+            ConfigContract::NONE,
             Box::new(|a| {
                 let sink = EvergreenSink::new(a.node_id, a.wiring.run_id().clone());
                 a.runner.register_sink(a.node_id, sink);
@@ -268,13 +337,26 @@ mod tests {
             kinds::PAPER_VAULT_PLAN,
             kinds::EVERGREEN_SINK,
         ] {
-            assert!(r.category_of(&NodeKind::new(k)).is_some(), "missing factory for {k}");
+            assert!(r.get(&NodeKind::new(k)).is_some(), "missing factory for {k}");
         }
     }
 
     #[test]
     fn unknown_kind_has_no_factory() {
         let r = NodeRegistry::with_domain_nodes();
-        assert!(r.factory_of(&NodeKind::new("transform.nonexistent")).is_none());
+        assert!(r.get(&NodeKind::new("transform.nonexistent")).is_none());
+    }
+
+    #[test]
+    fn config_contracts_match_factory_expectations() {
+        let r = NodeRegistry::with_domain_nodes();
+        // The two kinds that bind wiring by name require exactly that field.
+        let llm = r.get(&NodeKind::new(kinds::LLM_INVOKER)).unwrap();
+        assert_eq!(llm.config.required, &[ConfigField::Client]);
+        let cr = r.get(&NodeKind::new(kinds::CONCEPT_RESOLVER)).unwrap();
+        assert_eq!(cr.config.required, &[ConfigField::Registry]);
+        // A pure node accepts no config.
+        let sr = r.get(&NodeKind::new(kinds::SOURCE_RESOLVER)).unwrap();
+        assert!(sr.config.allowed.is_empty());
     }
 }

@@ -3,6 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::canonical_slug::CanonicalSlug;
+use crate::vault_layout::VaultLayout;
 
 /// The typed canonical record for an evergreen concept — the data a
 /// `CanonicalUpsert` op carries. `EvergreenSink` builds one and serializes
@@ -45,7 +46,10 @@ impl CanonicalConcept {
     ///    never propagate an unsafe/divergent slug into derived views;
     /// 3. the store `key` equals `payload.slug` — identity discipline, since
     ///    rebuilds key off the slug; a divergent key would point
-    ///    backlinks/MOC entries at an identity the store can't resolve.
+    ///    backlinks/MOC entries at an identity the store can't resolve;
+    /// 4. `payload.evergreen_path` is exactly the slug's canonical path
+    ///    (`VaultLayout::evergreen_note(slug)`) — a stray path would be
+    ///    propagated into the knowledge index.
     pub fn try_parse_pairs<I, S>(pairs: I) -> Result<Vec<CanonicalConcept>, CanonicalParseError>
     where
         I: IntoIterator<Item = (S, S)>,
@@ -73,6 +77,20 @@ impl CanonicalConcept {
                     message: format!(
                         "key/slug mismatch: store key `{key}` != payload slug `{}`",
                         concept.slug
+                    ),
+                });
+            }
+            // The evergreen page this concept owns must be the slug's canonical
+            // path — otherwise a derived rebuild (knowledge index) would
+            // propagate a backlink/path pointing at the wrong note.
+            let expected_path = VaultLayout::new().evergreen_note(&concept.slug);
+            if concept.evergreen_path != expected_path.as_str() {
+                return Err(CanonicalParseError {
+                    key: key.to_string(),
+                    message: format!(
+                        "evergreen_path `{}` does not match the slug's canonical path `{}`",
+                        concept.evergreen_path,
+                        expected_path.as_str()
                     ),
                 });
             }
@@ -190,6 +208,21 @@ mod tests {
         let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
         assert_eq!(err.key, "a/b");
         assert!(err.to_string().contains("not a valid canonical slug"), "got: {err}");
+    }
+
+    #[test]
+    fn try_parse_pairs_rejects_evergreen_path_mismatch() {
+        // Valid slug, key == slug, but evergreen_path points at the wrong note.
+        let bad = CanonicalConcept {
+            slug: "ai-agent".into(),
+            title: "Ai Agent".into(),
+            evergreen_path: "10-Knowledge/Evergreen/something-else.md".into(),
+            provenance_source_url: "u".into(),
+        };
+        let pairs = vec![("ai-agent".to_string(), bad.to_payload())];
+        let err = CanonicalConcept::try_parse_pairs(pairs).unwrap_err();
+        assert_eq!(err.key, "ai-agent");
+        assert!(err.to_string().contains("evergreen_path"), "got: {err}");
     }
 
     #[test]

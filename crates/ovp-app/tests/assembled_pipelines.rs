@@ -296,7 +296,9 @@ fn missing_wiring_is_a_clear_error() {
     let root = repo_root();
     let spec = read_spec(&root, "manifests/article.pipeline.toml");
     // No client registered under "default_llm" → llm_invoker can't bind.
+    // (date_stamp is set so we get past the runtime-wiring date check.)
     let wiring = AppWiring::new(RunId::new("x"))
+        .with_date_stamp("2026-05-04")
         .with_input_path(root.join("fixtures/article_clean/input.md"))
         .with_registry("default", ConceptRegistry::from_slugs(&[]));
     let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
@@ -306,6 +308,139 @@ fn missing_wiring_is_a_clear_error() {
             assert_eq!(name, "default_llm");
         }
         other => panic!("expected MissingWiring, got {other:?}"),
+    }
+}
+
+#[test]
+fn floating_node_is_disconnected_graph() {
+    // `floating` is a valid transform but wired to nothing — it would silently
+    // never run. Assembly must reject it.
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "a", "snk", "floating"]
+        edges = [["src", "a"], ["a", "snk"]]
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        [assembly.a]
+        kind = "transform.source_resolver"
+        [assembly.snk]
+        kind = "sink.article_vault_plan"
+        [assembly.floating]
+        kind = "transform.source_resolver"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x")).with_input_path("/tmp/x.md");
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::DisconnectedGraph { node_id, .. } => assert_eq!(node_id, "floating"),
+        other => panic!("expected DisconnectedGraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn source_with_no_outbound_is_disconnected_graph() {
+    // A source that reaches no sink (and a sink fed by nothing): both halves of
+    // the pipeline are dead.
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "snk"]
+        edges = []
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        [assembly.snk]
+        kind = "sink.article_vault_plan"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x")).with_input_path("/tmp/x.md");
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    assert!(matches!(err, AssemblyError::DisconnectedGraph { .. }), "got {err:?}");
+}
+
+#[test]
+fn cyclic_graph_is_rejected_at_assembly() {
+    // a↔b is a cycle. Every node is still source-reachable and sink-reaching,
+    // so the reachability check alone would pass — the topo_order pass must
+    // catch the cycle at assembly time, not defer it to run().
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "a", "b", "snk"]
+        edges = [["src", "a"], ["a", "b"], ["b", "a"], ["b", "snk"]]
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        [assembly.a]
+        kind = "transform.source_resolver"
+        [assembly.b]
+        kind = "transform.source_resolver"
+        [assembly.snk]
+        kind = "sink.article_vault_plan"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x")).with_input_path("/tmp/x.md");
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    assert!(matches!(err, AssemblyError::Manifest(_)), "expected a cycle/Manifest error, got {err:?}");
+}
+
+#[test]
+fn config_on_wrong_kind_is_unexpected_config() {
+    // `client` is meaningful only on effect.llm_invoker; on a source it would
+    // be silently ignored — a typo trap. Assembly must reject it.
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "snk"]
+        edges = [["src", "snk"]]
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        config = { client = "default_llm" }
+        [assembly.snk]
+        kind = "sink.article_vault_plan"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("x")).with_input_path("/tmp/x.md");
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::UnexpectedConfig { node_id, field, .. } => {
+            assert_eq!(node_id, "src");
+            assert_eq!(field, "client");
+        }
+        other => panic!("expected UnexpectedConfig, got {other:?}"),
+    }
+}
+
+#[test]
+fn missing_date_stamp_is_a_clear_error() {
+    // The article manifest has article_parser, which needs a date_stamp.
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article.pipeline.toml");
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::MissingWiring { node_id, name } => {
+            assert_eq!(node_id, "article_parser");
+            assert_eq!(name, "date_stamp");
+        }
+        other => panic!("expected MissingWiring(date_stamp), got {other:?}"),
+    }
+}
+
+#[test]
+fn malformed_date_stamp_is_invalid_wiring() {
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article.pipeline.toml");
+    let wiring = AppWiring::new(RunId::new("x"))
+        .with_date_stamp("May 4 2026")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let err = GraphAssembler::with_domain_nodes().assemble(&spec, wiring).err().expect("expected assembly to fail");
+    match err {
+        AssemblyError::InvalidWiring { node_id, name, .. } => {
+            assert_eq!(node_id, "article_parser");
+            assert_eq!(name, "date_stamp");
+        }
+        other => panic!("expected InvalidWiring(date_stamp), got {other:?}"),
     }
 }
 
