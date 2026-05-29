@@ -6,6 +6,7 @@
 //! types (`PromptRequest` / `ModelResponse`) onto this crate's wire types
 //! (`ModelRequest` / `ModelReply`) at the I/O boundary.
 
+pub mod anthropic;
 pub mod cache;
 pub mod client;
 pub mod fixture;
@@ -19,3 +20,6 @@ pub use fixture::FixtureModelClient;
 pub use key::request_key;
 pub use reply::{ModelReply, StopReason, Usage};
 pub use request::{ModelMessage, ModelRequest};
+
+#[cfg(feature = "anthropic")]
+pub use anthropic::AnthropicBlockingClient;

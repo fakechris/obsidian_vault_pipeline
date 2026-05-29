@@ -11,13 +11,16 @@ description = "OVP Next effect boundary: ModelClient trait + replayable / cached
 default = []
 # Enables the live AnthropicBlockingClient (pulls in reqwest). Tests and the
 # default CLI build do NOT enable this — they use FixtureModelClient or
-# CachedModelClient(NeverCallsClient, ReplayOnly) instead.
-anthropic = []  # placeholder; reqwest dep wired in C9
+# CachedModelClient(NeverCallsClient, ReplayOnly) instead. The provider
+# request/response *mapping* is pure and always compiled (and tested in the
+# default offline gauntlet); only the HTTP call needs this feature.
+anthropic = ["dep:reqwest"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -23,6 +23,10 @@ clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 tempfile = "3"
 serde_yaml = "0.9"
+# Live LLM transport. Only compiled when a crate opts in via its own
+# `anthropic`-style feature (optional dep). Blocking + rustls so there is
+# no async runtime and no system OpenSSL dependency.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3
