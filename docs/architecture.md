@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 144 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan), not hardcoded constants. The live Anthropic client + cassette capture exist behind the `anthropic` feature; the default build / CI are offline.
+Five crates. 156 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes known candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan); `EvergreenConceptWriter` mints *new* evergreen concepts, emitting the first real `CanonicalUpsert` + evergreen `VaultCreate` write surface. The live Anthropic client + cassette capture exist behind the `anthropic` feature; the default build / CI are offline.
 
 Three closed loops:
 
@@ -19,7 +19,7 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | Primitive | Crate | One-line definition |
 |---|---|---|
 | `Record<B>` | ovp-core | Typed envelope carrying a body `B` through the pipeline. Generic over body so domain types don't leak into core. |
-| `DomainBody` | ovp-domain | Sealed enum: `Source` \| `Prompt` \| `Model` \| `Interpreted` (article) \| `InterpretedPaper`. The body type the domain pipeline uses. `Source` carries a typed `SourceKind` (see below). |
+| `DomainBody` | ovp-domain | Sealed enum: `Source` \| `Prompt` \| `Model` \| `Interpreted` (article) \| `InterpretedPaper` \| `EvergreenConcept` (a new evergreen to mint). The body type the domain pipeline uses. `Source` carries a typed `SourceKind` (see below). |
 | `Source<B>` | ovp-core | Node that brings records INTO the pipeline. Impls in ovp-domain: `MarkdownInboxSource` (single file), `InboxScanSource` (directory sweep, one record per file per tick). |
 | `Transform<B>` | ovp-core | Pure node. `Record<B>` → `FilterDecision<B>`. No I/O, no held effect clients, deterministic. |
 | `EffectfulTransform<B>` | ovp-core | Sync facade over an injected effect client (e.g. `Box<dyn ModelClient>`). Same signature as `Transform<B>`; distinct trait identity. |
@@ -138,8 +138,8 @@ The 12 invariants in `invariants.md` are the source of truth + CI-gated where po
 
 Roadmap is driven by the legacy alignment baseline (see `docs/legacy-alignment.md`). **Landed:** C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), L3 (`ConceptRegistry`). Remaining:
 
-1. **EvergreenConceptWriter** *(next)*. Extracts *new* evergreen candidates — `concept_candidates` that the `ConceptRegistry` does **not** yet know — and emits the first real `CanonicalUpsert` + evergreen `VaultCreate` write surface. This is the legacy "absorb" equivalent for the **mint-new-evergreen** half (L3 already does the candidate→canonical promotion half). It's a pure transform that decides what to write; the `WriteOp`s land through the existing sink/applier boundary. Prerequisite for the canonical store.
-2. **Canonical store** *(gated on 1)*. A `PlanApplier` impl that applies `CanonicalUpsert`. Until `EvergreenConceptWriter` defines the concrete payload, the store has no producer and building it would be guessing at the write surface (invariant + alignment constraint). When (1) lands, the `CanonicalUpsertOp.payload: String` stub becomes typed data as part of this step.
+1. **EvergreenConceptWriter** ✅ *(done)*. `EvergreenConceptWriter` (Transform, fans out the article + one `EvergreenConcept` per surviving candidate) + `EvergreenSink` (emits the evergreen `VaultCreate` stub + `CanonicalUpsert`). `manifests/article_evergreen.pipeline.toml` + an e2e test prove the write surface: an article yields its note + N evergreen stubs + N `CanonicalUpsert`s; `VaultFsPlanApplier` applies the VaultCreates and reports the `CanonicalUpsert`s as `Unsupported` (no canonical-store applier yet — the gap step 2 closes). The legacy "absorb" equivalent for the mint-new-evergreen half; L3 already did the candidate→canonical promotion half.
+2. **Canonical store** *(next — now ungated)*. A `PlanApplier` impl that applies `CanonicalUpsert`. The producer now exists (`EvergreenSink`), so the write surface is concrete. As part of this step the `CanonicalUpsertOp.payload: String` stub becomes typed data (`EvergreenSink`'s hand-built JSON payload defines the shape to type).
 3. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 2)*. Derived state, rebuildable from canonical + vault (invariant #11). Implemented against observed canonical/vault state, not guessed shapes. `TxnFsApplier` only if multi-file atomicity is actually required. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge index).
 
 After step 3 we have a real cycle; P1 gets re-triaged against observed pain.

@@ -7,6 +7,7 @@
 
 pub mod body;
 pub mod concept_registry;
+pub mod evergreen;
 pub mod interpreted;
 pub mod paper_doc;
 pub mod prompt;
@@ -22,17 +23,18 @@ pub mod testing;
 
 pub use body::DomainBody;
 pub use concept_registry::{ConceptRegistry, RegistryError};
+pub use evergreen::EvergreenConcept;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
 pub use paper_doc::{PaperDoc, PaperSections};
 pub use prompt::{PromptId, PromptRequest};
 pub use response::{ModelResponse, ResponseContent};
-pub use sinks::{ArticleVaultPlanSink, PaperVaultPlanSink};
+pub use sinks::{ArticleVaultPlanSink, EvergreenSink, PaperVaultPlanSink};
 pub use source_doc::{PaperMeta, SourceDoc, SourceKind};
 pub use sources::{InboxScanSource, MarkdownInboxSource};
 pub use vault_layout::VaultLayout;
 pub use transforms::{
-    ArticleParser, ConceptResolver, LLMInvoker, PaperParser, PaperPromptBuilder, PromptBuilder,
-    RouteBySourceKind, SourceResolver, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION,
-    DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL, DEFAULT_PAPER_MAX_TOKENS,
-    DEFAULT_PAPER_MODEL, PAPER_PROMPT_ID, PAPER_SCHEMA_VERSION,
+    ArticleParser, ConceptResolver, EvergreenConceptWriter, LLMInvoker, PaperParser,
+    PaperPromptBuilder, PromptBuilder, RouteBySourceKind, SourceResolver, ARTICLE_PROMPT_ID,
+    ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
+    DEFAULT_PAPER_MAX_TOKENS, DEFAULT_PAPER_MODEL, PAPER_PROMPT_ID, PAPER_SCHEMA_VERSION,
 };

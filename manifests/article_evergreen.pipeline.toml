@@ -1,0 +1,29 @@
+# Article pipeline + evergreen minting. EvergreenConceptWriter fans the
+# interpreted article out into the article record (→ article_vault_plan)
+# plus one EvergreenConcept per surviving candidate (→ evergreen_sink),
+# which emits the evergreen VaultCreate + CanonicalUpsert write surface.
+#
+# Kept separate from article.pipeline.toml (which the article acceptance
+# tests use) so existing gates stay untouched.
+[pipeline]
+nodes = [
+  "markdown_inbox",
+  "source_resolver",
+  "prompt_builder",
+  "llm_invoker",
+  "article_parser",
+  "concept_resolver",
+  "evergreen_concept_writer",
+  "article_vault_plan",
+  "evergreen_sink",
+]
+edges = [
+  ["markdown_inbox", "source_resolver"],
+  ["source_resolver", "prompt_builder"],
+  ["prompt_builder", "llm_invoker"],
+  ["llm_invoker", "article_parser"],
+  ["article_parser", "concept_resolver"],
+  ["concept_resolver", "evergreen_concept_writer"],
+  ["evergreen_concept_writer", "article_vault_plan"],
+  ["evergreen_concept_writer", "evergreen_sink"],
+]

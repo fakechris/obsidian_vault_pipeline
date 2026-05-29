@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::evergreen::EvergreenConcept;
 use crate::interpreted::InterpretedDoc;
 use crate::paper_doc::PaperDoc;
 use crate::prompt::PromptRequest;
@@ -28,6 +29,9 @@ pub enum DomainBody {
     Interpreted(Box<InterpretedDoc>),
     /// Paper interpretation (ten sections). Distinct shape, distinct sink.
     InterpretedPaper(Box<PaperDoc>),
+    /// A new evergreen concept to mint (proposed by EvergreenConceptWriter,
+    /// written by EvergreenSink).
+    EvergreenConcept(Box<EvergreenConcept>),
 }
 
 impl DomainBody {
@@ -39,6 +43,7 @@ impl DomainBody {
             DomainBody::Model(_) => "model",
             DomainBody::Interpreted(_) => "interpreted",
             DomainBody::InterpretedPaper(_) => "interpreted_paper",
+            DomainBody::EvergreenConcept(_) => "evergreen_concept",
         }
     }
 }

@@ -1,5 +1,6 @@
 pub mod article_parser;
 pub mod concept_resolver;
+pub mod evergreen_concept_writer;
 pub mod llm_invoker;
 pub mod paper_parser;
 pub mod paper_prompt_builder;
@@ -9,6 +10,7 @@ pub mod source_resolver;
 
 pub use article_parser::ArticleParser;
 pub use concept_resolver::ConceptResolver;
+pub use evergreen_concept_writer::EvergreenConceptWriter;
 pub use llm_invoker::LLMInvoker;
 pub use paper_parser::PaperParser;
 pub use paper_prompt_builder::{
