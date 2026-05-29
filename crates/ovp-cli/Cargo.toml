@@ -23,5 +23,6 @@ ovp-domain = { path = "../ovp-domain" }
 ovp-llm = { path = "../ovp-llm" }
 ovp-stores = { path = "../ovp-stores" }
 ovp-app = { path = "../ovp-app" }
+ovp-run = { path = "../ovp-run" }
 clap = { workspace = true }
 serde_json = { workspace = true }

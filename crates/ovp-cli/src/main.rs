@@ -94,6 +94,36 @@ enum Cmd {
         #[arg(long)]
         concept_registry: Option<PathBuf>,
     },
+    /// Run one full operational cycle (L4): assemble + run the manifest, apply
+    /// the plan (vault + canonical), then rebuild the MOC and knowledge index.
+    /// Idempotent on re-run. Default client is replay-only; no network.
+    RunCycle {
+        #[arg(long, default_value = "manifests/article_evergreen.pipeline.toml")]
+        manifest: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        #[arg(long, default_value = "crates/ovp-domain/tests/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long)]
+        concept_registry: Option<PathBuf>,
+        #[arg(long, default_value = "run-cycle")]
+        run_id: String,
+        /// ISO-8601 date stamped onto interpreted docs. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Preview only: apply nothing, report what would happen.
+        #[arg(long)]
+        dry_run: bool,
+        /// Optional path to dump the RunCycleReport JSON.
+        #[arg(long)]
+        report: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -132,7 +162,8 @@ fn main() -> ExitCode {
             date,
             concept_registry,
         } => {
-            use commands::interpret_article::{ClientKind, InterpretArticleArgs};
+            use commands::client::ClientKind;
+            use commands::interpret_article::InterpretArticleArgs;
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
                 ClientKindArg::Live => ClientKind::Live,
@@ -148,6 +179,40 @@ fn main() -> ExitCode {
                 area,
                 date_stamp,
                 concept_registry,
+            })
+        }
+        Cmd::RunCycle {
+            manifest,
+            input,
+            vault_root,
+            canonical_root,
+            cache_dir,
+            concept_registry,
+            run_id,
+            date,
+            client,
+            dry_run,
+            report,
+        } => {
+            use commands::client::ClientKind;
+            use commands::run_cycle::RunCycleArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let date_stamp = date.unwrap_or_else(today_iso);
+            commands::run_cycle::run(RunCycleArgs {
+                manifest_path: manifest,
+                input_path: input,
+                vault_root,
+                canonical_root,
+                cache_dir,
+                concept_registry,
+                run_id,
+                date_stamp,
+                client_kind,
+                dry_run,
+                report_path: report,
             })
         }
     };

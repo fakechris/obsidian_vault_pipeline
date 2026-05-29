@@ -705,6 +705,7 @@ dependencies = [
  "ovp-core",
  "ovp-domain",
  "ovp-llm",
+ "ovp-run",
  "ovp-stores",
  "serde_json",
 ]

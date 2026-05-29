@@ -1,76 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ovp_app::{AppWiring, DomainPipelineSpec, GraphAssembler};
 use ovp_core::RunId;
-use ovp_domain::{ConceptRegistry, ARTICLE_PROMPT_ID};
+use ovp_domain::ConceptRegistry;
+use ovp_llm::ModelClient;
+
+use crate::commands::client::{build_client, ClientKind};
+use crate::CliError;
 
 /// Default canonical-evergreen seed used when no `--concept-registry`
 /// file is supplied. Two entries cover the article_mixed_lang MUST
 /// clauses. Real runs point `--concept-registry` at a registry JSON or
 /// (future) scan the vault's evergreen dir.
 const DEFAULT_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
-use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
-
-use crate::CliError;
-
-/// Selects which `ModelClient` impl the CLI wires into `LLMInvoker`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientKind {
-    /// `CachedModelClient(NeverCallsClient, ReplayOnly)` — looks up
-    /// canned replies from `--cache-dir`; never hits the network.
-    /// Used by integration tests and CI. The default.
-    Replay,
-    /// `CachedModelClient(AnthropicBlockingClient, Record)` — calls the
-    /// live API and captures each reply into `--cache-dir` so future
-    /// replay runs hit the cassette. Requires building with
-    /// `--features anthropic` and `ANTHROPIC_API_KEY` set. On a default
-    /// build this errors with guidance rather than silently degrading.
-    Live,
-}
-
-/// Build the `ModelClient` for the requested mode. Replay never touches
-/// the network. Live is the capture path (record-on-miss into the
-/// cassette dir); it's only real when the `anthropic` feature is built.
-fn build_client(kind: ClientKind, cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError> {
-    match kind {
-        ClientKind::Replay => {
-            let cached = CachedModelClient::new(
-                NeverCallsClient,
-                cache_dir,
-                ARTICLE_PROMPT_ID,
-                CacheMode::ReplayOnly,
-            )
-            .map_err(|e| {
-                CliError::Io(format!("opening cache dir `{}`: {e}", cache_dir.display()))
-            })?;
-            Ok(Box::new(cached))
-        }
-        ClientKind::Live => build_live_client(cache_dir),
-    }
-}
-
-#[cfg(feature = "anthropic")]
-fn build_live_client(cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError> {
-    use ovp_llm::AnthropicBlockingClient;
-    let live = AnthropicBlockingClient::from_env()
-        .map_err(|e| CliError::Io(format!("anthropic client: {e}")))?;
-    // Record mode: cache-hit replays, cache-miss calls live + persists.
-    // Same namespace (ARTICLE_PROMPT_ID) the replay path reads from, so a
-    // capture run leaves a cassette future replay runs will find.
-    let cached = CachedModelClient::new(live, cache_dir, ARTICLE_PROMPT_ID, CacheMode::Record)
-        .map_err(|e| CliError::Io(format!("opening cache dir `{}`: {e}", cache_dir.display())))?;
-    Ok(Box::new(cached))
-}
-
-#[cfg(not(feature = "anthropic"))]
-fn build_live_client(_cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError> {
-    Err(CliError::Io(
-        "--client live requires building with `--features anthropic` and a set \
-         ANTHROPIC_API_KEY; the default build is replay-only. Rebuild: \
-         `cargo run -p ovp-cli --features anthropic -- interpret-article --client live ...`"
-            .into(),
-    ))
-}
 
 pub struct InterpretArticleArgs {
     pub manifest_path: PathBuf,
