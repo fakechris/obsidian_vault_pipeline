@@ -10,6 +10,7 @@ pub mod canonical;
 pub mod concept_registry;
 pub mod evergreen;
 pub mod interpreted;
+pub mod knowledge_index;
 pub mod moc;
 pub mod paper_doc;
 pub mod prompt;
@@ -28,6 +29,9 @@ pub use canonical::CanonicalConcept;
 pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use evergreen::EvergreenConcept;
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
+pub use knowledge_index::{
+    extract_wikilinks, KnowledgeIndex, KnowledgeIndexBuilder, KnowledgeIndexEntry,
+};
 pub use moc::MocBuilder;
 pub use paper_doc::{PaperDoc, PaperSections};
 pub use prompt::{PromptId, PromptRequest};

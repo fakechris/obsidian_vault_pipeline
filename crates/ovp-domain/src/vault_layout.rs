@@ -82,6 +82,12 @@ impl VaultLayout {
     pub fn processed_dir(&self, month: &str) -> String {
         format!("50-Inbox/03-Processed/{month}")
     }
+
+    /// Derived knowledge-index artifact (vault-relative). Lives under the
+    /// logs tree because it is rebuildable, not authoritative.
+    pub fn knowledge_index(&self) -> VaultPath {
+        VaultPath::new("60-Logs/knowledge-index.json")
+    }
 }
 
 /// Extract the `YYYY-MM` prefix from a `YYYY-MM-DD` date string. Falls

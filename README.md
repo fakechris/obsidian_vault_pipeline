@@ -43,14 +43,14 @@ ovp-next apply-plan \
 
 ## Landed
 
-C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), and L3 (`ConceptRegistry` + `ConceptResolver` consuming it) are all done.
+The full legacy cycle is closed: C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), L3 (`ConceptRegistry`), EvergreenConceptWriter (mints new evergreens + `CanonicalUpsert`), canonical store (`CanonicalFsStoreApplier` + typed `CanonicalConcept` payload), and L4/L5 (`MocBuilder` + `KnowledgeIndexBuilder`, derived + rebuildable). `TxnFsApplier` was assessed and deferred — every op is idempotent, so multi-file atomicity isn't required (re-apply recovers a partial run).
 
 ## Next
 
-Driven by the legacy alignment baseline (`docs/legacy-alignment.md`). Order:
+Re-triaged from the legacy alignment baseline (`docs/legacy-alignment.md`) P1, against observed pain:
 
-1. **EvergreenConceptWriter** *(next)* — extract *new* evergreen candidates (concepts not yet in the `ConceptRegistry`) and emit the first real `CanonicalUpsert` + evergreen `VaultCreate` write surface. This is the legacy "absorb" equivalent (the part beyond candidate→canonical promotion) and the prerequisite for the canonical store.
-2. **Canonical store** *(gated on 1)* — a `PlanApplier` impl that applies `CanonicalUpsert`; convert the `CanonicalUpsertOp` string payload stub to typed data once `EvergreenConceptWriter` defines the concrete payload.
-3. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 2)* — derived state rebuildable from canonical + vault; `TxnFsApplier` only if multi-file atomicity is actually required. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge index).
+- `ovp-query` — read surface over the knowledge index.
+- `ovp-lint` — WIGS-style health checks over canonical + vault.
+- autopilot watcher (`InboxScanSource` is already the intake primitive).
 
 See `docs/architecture.md` "What comes next" and `docs/legacy-alignment.md` for rationale.
