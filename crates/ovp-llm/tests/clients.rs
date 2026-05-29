@@ -16,6 +16,7 @@ fn req(text: &str) -> ModelRequest {
         messages: vec![ModelMessage::User { content: text.into() }],
         max_tokens: 100,
         temperature: None,
+        cache_namespace: None,
     }
 }
 
@@ -26,6 +27,50 @@ fn reply(text: &str) -> ModelReply {
         stop_reason: StopReason::EndTurn,
         usage: Usage { input_tokens: 5, output_tokens: 10 },
     }
+}
+
+/// A request tagged with a per-request cache namespace + distinct content.
+fn req_ns(text: &str, namespace: &str) -> ModelRequest {
+    req(text).with_cache_namespace(namespace)
+}
+
+#[test]
+fn one_client_namespaces_article_and_paper_without_collision() {
+    // Regression for the unified-pipeline bug: a single CachedModelClient
+    // (shared by one LLMInvoker) must file article and paper cassettes
+    // under their own prompt namespaces, from the per-request hint, not
+    // the fixed constructor namespace.
+    let article = req_ns("article body", "article_interpret/v1");
+    let paper = req_ns("paper body", "paper_interpret/v1");
+
+    let mut inner = FixtureModelClient::new();
+    inner.insert(&article, reply("article-reply"));
+    inner.insert(&paper, reply("paper-reply"));
+
+    let tmp = tempfile::tempdir().unwrap();
+    // Constructor namespace is a deliberately-wrong fallback; the
+    // per-request hint must win.
+    {
+        let mut cached =
+            CachedModelClient::new(inner, tmp.path(), "fallback", CacheMode::Record).unwrap();
+        assert_eq!(cached.call(&article).unwrap().text, "article-reply");
+        assert_eq!(cached.call(&paper).unwrap().text, "paper-reply");
+    }
+
+    // Each landed under its own prompt namespace, not "fallback".
+    let article_dir = tmp.path().join("article_interpret/v1");
+    let paper_dir = tmp.path().join("paper_interpret/v1");
+    assert_eq!(std::fs::read_dir(&article_dir).unwrap().count(), 1, "article cassette");
+    assert_eq!(std::fs::read_dir(&paper_dir).unwrap().count(), 1, "paper cassette");
+    assert!(!tmp.path().join("fallback").exists(), "fallback dir must be unused");
+
+    // A fresh replay-only client (NeverCalls inside) replays BOTH from
+    // their namespaced dirs with no network and no collision.
+    let mut replay =
+        CachedModelClient::new(NeverCallsClient, tmp.path(), "fallback", CacheMode::ReplayOnly)
+            .unwrap();
+    assert_eq!(replay.call(&article).unwrap().text, "article-reply");
+    assert_eq!(replay.call(&paper).unwrap().text, "paper-reply");
 }
 
 #[test]

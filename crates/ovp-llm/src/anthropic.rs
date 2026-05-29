@@ -225,6 +225,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "hi".into() }],
             max_tokens: 1024,
             temperature: None,
+            cache_namespace: None,
         }
     }
 

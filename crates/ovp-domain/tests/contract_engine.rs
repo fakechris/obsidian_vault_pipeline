@@ -251,3 +251,69 @@ must:
     empty_title.title = String::new();
     assert!(!assert_contract(&contract, Some(&empty_title), &plan, &[]).must_clean());
 }
+
+// --- unknown-clause hardening (F2) -----------------------------------------
+
+#[test]
+fn unknown_op_at_must_fails_loudly() {
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - field: title
+    op: some_unimplemented_op
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let report = assert_contract(&contract, Some(&happy_interpreted()), &happy_plan(HAPPY_BODY), &[]);
+    assert!(!report.must_clean(), "unknown MUST op must fail, not skip");
+}
+
+#[test]
+fn unknown_op_at_should_fails_loudly() {
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+should:
+  - field: title
+    op: some_unimplemented_op
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let report = assert_contract(&contract, Some(&happy_interpreted()), &happy_plan(HAPPY_BODY), &[]);
+    assert!(report.must_clean(), "no MUST clauses");
+    assert!(!report.should_failed.is_empty(), "unknown SHOULD op must fail, not skip");
+}
+
+#[test]
+fn unknown_clause_shape_at_must_fails_loudly() {
+    // A github-style clause we haven't implemented (e.g. writeplan_constraint)
+    // arriving as a MUST must fail, never silently pass.
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+must:
+  - writeplan_constraint:
+      forbidden_path_prefix: "20-Areas/"
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let report = assert_contract(&contract, Some(&happy_interpreted()), &happy_plan(HAPPY_BODY), &[]);
+    assert!(!report.must_clean(), "unknown MUST clause shape must fail");
+}
+
+#[test]
+fn unknown_clause_at_may_break_is_documentation_only() {
+    let yaml = r#"
+version: 1
+terminal_state: interpretation_produced
+may_break:
+  - absorb_skipped: true
+  - field: pipeline_run_id
+"#;
+    let contract: ovp_domain::testing::Contract = serde_yaml::from_str(yaml).unwrap();
+    let report = assert_contract(&contract, Some(&happy_interpreted()), &happy_plan(HAPPY_BODY), &[]);
+    // No hard failures: may-break unknowns are documentation-only.
+    assert!(report.must_clean());
+    assert!(report.should_failed.is_empty());
+    assert!(report.may_break_failed.is_empty());
+    // The unknown clause shows up as skipped (visible, not silently gone).
+    assert!(!report.skipped.is_empty(), "may-break unknown should be recorded as skipped");
+}

@@ -303,9 +303,10 @@ fn evaluate_clause(
             evaluate_source_kind(source_kind, subject, report, level)
         }
         Clause::Other(v) => {
-            // Documentation-only clause whose key isn't a known op.
-            // Record as skipped so it's visible but never fails a level.
-            report.skipped.push(format!("documentation-only clause: {v:?}"));
+            // An unrecognized clause shape. Loud at MUST/SHOULD (an
+            // unimplemented assertion can't pass as green); documentation
+            // -only at MAY-break (e.g. `absorb_skipped: true`).
+            record_unsupported(report, level, "unknown clause", &format!("{v:?}"));
         }
     }
 }
@@ -337,7 +338,7 @@ fn evaluate_body_sections_present(
 ) {
     let label = format!("body_sections_present op `{}`", spec.op);
     if spec.op != "at_least" {
-        report.skipped.push(format!("{label} (unknown op)"));
+        record_unsupported(report, level, &label, "unknown op");
         return;
     }
     let body = match find_vault_create_body(write_plan) {
@@ -441,10 +442,7 @@ fn evaluate_utf8_clean(
         }
     }
     if !unknown_paths.is_empty() {
-        report.skipped.push(format!(
-            "{label} (unknown path(s) {:?})",
-            unknown_paths
-        ));
+        record_unsupported(report, level, &label, &format!("unknown path(s) {unknown_paths:?}"));
         return;
     }
     record_pass(report, level, &label);
@@ -483,7 +481,7 @@ fn evaluate_field_clause(
         "non_empty" => op_non_empty(&fc.field, interp),
         "length_in_range" => op_length_in_range(&fc.field, fc.value.as_ref(), interp),
         other => {
-            report.skipped.push(format!("{label} (unknown op `{other}`)"));
+            record_unsupported(report, level, &label, &format!("unknown op `{other}`"));
             return;
         }
     };
@@ -521,7 +519,7 @@ fn evaluate_body_section(
             }
         }
         other => {
-            report.skipped.push(format!("{label} (unknown op `{other}`)"));
+            record_unsupported(report, level, &label, &format!("unknown op `{other}`"));
         }
     }
 }
@@ -547,6 +545,19 @@ fn record_failure(report: &mut ContractReport, level: ClauseLevel, clause: &str,
         ClauseLevel::Must => report.must_failed.push(f),
         ClauseLevel::Should => report.should_failed.push(f),
         ClauseLevel::MayBreak => report.may_break_failed.push(f),
+    }
+}
+
+/// An unknown clause shape or unimplemented op. At MUST/SHOULD this FAILS
+/// loudly (an unsupported assertion must never be silently green — e.g. a
+/// github-style clause we haven't implemented). At MAY-break it stays
+/// documentation-only (recorded as skipped).
+fn record_unsupported(report: &mut ContractReport, level: ClauseLevel, clause: &str, detail: &str) {
+    match level {
+        ClauseLevel::Must | ClauseLevel::Should => record_failure(report, level, clause, detail),
+        ClauseLevel::MayBreak => {
+            report.skipped.push(format!("{clause} (may-break documentation-only: {detail})"))
+        }
     }
 }
 

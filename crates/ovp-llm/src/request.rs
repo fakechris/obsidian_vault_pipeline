@@ -13,6 +13,22 @@ pub struct ModelRequest {
     pub messages: Vec<ModelMessage>,
     pub max_tokens: u32,
     pub temperature: Option<f32>,
+    /// Per-request cache namespace hint (e.g. `article_interpret/v1`).
+    /// A deliberate, provider-neutral hint at the request boundary so one
+    /// `CachedModelClient` can file article vs. paper cassettes under the
+    /// right prompt namespace. `#[serde(skip)]` so it is NOT part of the
+    /// request hash — cassette keys stay stable, the namespace only
+    /// chooses the directory. Providers (Anthropic) ignore it entirely.
+    #[serde(skip)]
+    pub cache_namespace: Option<String>,
+}
+
+impl ModelRequest {
+    /// Set the per-request cache namespace hint (builder style).
+    pub fn with_cache_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.cache_namespace = Some(namespace.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,7 +4,7 @@ This doc describes the system as it actually exists today (post Stage D). It sup
 
 ## Status
 
-Five crates. 138 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan), not hardcoded constants.
+Five crates. 144 tests. Three fixture-driven acceptance gates green (`article_clean`, `article_mixed_lang`, `paper_arxiv`). The CLI can read an Obsidian-style clipping from disk, run it through the real domain pipeline, and write the resulting note to a vault directory — all offline, all deterministic. A unified pipeline routes a mixed inbox (articles + papers) by source kind. `ConceptResolver` promotes candidates to canonical via a `ConceptRegistry` (loadable from a JSON file or an evergreen-dir scan), not hardcoded constants. The live Anthropic client + cassette capture exist behind the `anthropic` feature; the default build / CI are offline.
 
 Three closed loops:
 
@@ -27,7 +27,7 @@ The twelve nouns the rest of the system must be expressed in. Anything that isn'
 | `FilterDecision<B>` | ovp-core | Sealed enum: `Forward` \| `Drop` \| `FanOut` \| `Complete` \| `Error` \| `ForwardWithEvents`. Every per-record outcome is first-class. |
 | `Event` / `EventKind` | ovp-core | Append-only observation log entries. Discriminator is snake_case (`source_resolution`, `filter_dropped`, ...). |
 | `PipelineManifest` | ovp-core | TOML (nodes + edges). Describes topology only. Wiring (which client, which inventory, which prompt) is app-layer. |
-| `ModelClient` | ovp-llm | Sync trait: `&ModelRequest → Result<ModelReply, CallError>`. Impls: `FixtureModelClient`, `CachedModelClient`, `NeverCallsClient` (`AnthropicBlockingClient` lands in C9). |
+| `ModelClient` | ovp-llm | Sync trait: `&ModelRequest → Result<ModelReply, CallError>`. Impls: `FixtureModelClient`, `CachedModelClient` (per-request cassette namespacing via `ModelRequest.cache_namespace`), `NeverCallsClient`, `AnthropicBlockingClient` (behind `anthropic`). |
 | `WritePlan` / `WriteOp` | ovp-core | The pipeline's side-effect output. `WriteOp` is a sealed enum: `VaultCreate` \| `VaultUpdate` \| `CanonicalUpsert` \| `EventAppend`. v1 only the first two are applied; the others are `Unsupported`. |
 | `PlanApplier` / `ApplyReport` | ovp-core (trait) / ovp-stores (impl) | The single type allowed to mutate a real store. `VaultFsPlanApplier` is the v1 impl. Every op produces an `OpOutcome` (`Applied` / `Skipped` / `Failed` / `Unsupported`). |
 
@@ -102,7 +102,7 @@ Events flow alongside records, recorded by the runner: `RunStarted` → `SourceP
 
 - **`ovp-domain`** — typed bodies + the transforms / sources / sinks for the v1 article pipeline. Owns `DomainBody`, `SourceDoc`, `PromptRequest`, `ModelResponse`, `InterpretedDoc`, and the concrete transforms/sources/sinks above. Also owns **`VaultLayout`** — the single source of vault path conventions (PARA directory layout + `_深度解读.md` filename rules). It's a pure, root-agnostic value type returning vault-*relative* `VaultPath`s; it lives here rather than `ovp-core` precisely because the layout is Obsidian/domain knowledge that invariant #1 keeps out of the kernel. Sinks call `VaultLayout` instead of hardcoding paths. Also hosts the contract-assertion engine (behind the `testing` feature). Depends on `ovp-core` + `ovp-llm`. Article-shaped today; paper/github will eventually live here or in sibling domain crates.
 
-- **`ovp-llm`** — effect-boundary crate for LLM calls. `ModelClient` trait + provider-neutral wire types (`ModelRequest`, `ModelReply`). Three impls: `FixtureModelClient` (in-memory map), `NeverCallsClient` (errors on call), `CachedModelClient<C>` (file-backed namespaced cassette over an inner client). `AnthropicBlockingClient` will land behind `--features anthropic` in C9. `reqwest` is feature-gated; the default build pulls zero HTTP deps.
+- **`ovp-llm`** — effect-boundary crate for LLM calls. `ModelClient` trait + provider-neutral wire types (`ModelRequest`, `ModelReply`). Impls: `FixtureModelClient` (in-memory map), `NeverCallsClient` (errors on call), `CachedModelClient<C>` (file-backed cassette over an inner client; namespace is chosen per-request from `ModelRequest.cache_namespace`, falling back to the constructor namespace, so one client serves multiple prompt namespaces), and `AnthropicBlockingClient` (live, behind `--features anthropic`). `reqwest` is feature-gated; the default build pulls zero HTTP deps. The request/response mapping is pure and tested offline.
 
 - **`ovp-stores`** — effect-boundary crate for `PlanApplier` impls. Today only `VaultFsPlanApplier` (filesystem markdown vaults). Future siblings: canonical store applier, event log applier. Same shape as `ovp-llm`: sync trait satisfied here, impl details (sha256, filesystem) contained.
 
@@ -136,18 +136,13 @@ The 12 invariants in `invariants.md` are the source of truth + CI-gated where po
 
 ## What comes next
 
-Roadmap is now driven by the legacy alignment baseline (see `docs/legacy-alignment.md` — living gap matrix between this rewrite and the legacy Python `ovp_pipeline`). The previously-locked order holds with two insertions surfaced by the P0 gaps:
+Roadmap is driven by the legacy alignment baseline (see `docs/legacy-alignment.md`). **Landed:** C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), L3 (`ConceptRegistry`). Remaining:
 
-1. **C9 + C10** — live `AnthropicBlockingClient` + real cassette capture. Unchanged. Unblocks any stage that calls a model from doing real work.
-2. **L0/L1 intake + VaultLayout port** *(new)*. P0 gaps `L1 article/github intake` + `VaultLayout port`. The first real Source filters land here; without them the rest of the pipeline is fixture-fed. Bringing intake in before paper forces the Source contract to settle.
-3. **v1.2 — paper deep-dive transform** ✅ *(done)*. `RouteBySourceKind` + `PaperPromptBuilder` / `PaperParser` / `PaperVaultPlanSink` + `PaperDoc`; `paper_arxiv` acceptance gate green via the unified manifest.
-4. **L3 ConceptRegistry** ✅ *(done, partial)*. The focused `ConceptRegistry` (canonical set + alias resolution, loadable from JSON / evergreen-dir scan) + `ConceptResolver` consuming it are landed. The **larger "absorb" piece** — extracting *new* evergreen concepts and writing new evergreen files — is NOT yet built; that's the part that produces a `CanonicalUpsert` write surface, and it's the prerequisite for step 5.
-5. **Canonical store** *(gated)*. Deliberately deferred: it has no producer until the absorb evergreen-writer (the rest of step 4) exists. Building it now would be guessing at the write surface (invariant + epic constraint). Sequence: finish absorb evergreen-writer → it emits `CanonicalUpsert` → then the canonical store applier.
-6. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 5)*. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge.db).
+1. **EvergreenConceptWriter** *(next)*. Extracts *new* evergreen candidates — `concept_candidates` that the `ConceptRegistry` does **not** yet know — and emits the first real `CanonicalUpsert` + evergreen `VaultCreate` write surface. This is the legacy "absorb" equivalent for the **mint-new-evergreen** half (L3 already does the candidate→canonical promotion half). It's a pure transform that decides what to write; the `WriteOp`s land through the existing sink/applier boundary. Prerequisite for the canonical store.
+2. **Canonical store** *(gated on 1)*. A `PlanApplier` impl that applies `CanonicalUpsert`. Until `EvergreenConceptWriter` defines the concrete payload, the store has no producer and building it would be guessing at the write surface (invariant + alignment constraint). When (1) lands, the `CanonicalUpsertOp.payload: String` stub becomes typed data as part of this step.
+3. **L4/L5 MOC + knowledge index + TxnFsApplier** *(gated on 2)*. Derived state, rebuildable from canonical + vault (invariant #11). Implemented against observed canonical/vault state, not guessed shapes. `TxnFsApplier` only if multi-file atomicity is actually required. Closes the first end-to-end cycle (raw → Evergreen → MOC → knowledge index).
 
-After step 6 we have a real cycle; P1 gets re-triaged against observed pain.
-
-Codex review of Stage D + the architecture/alignment docs is queued but no longer the gating next step — it runs against whichever stage is in flight when it next makes sense.
+After step 3 we have a real cycle; P1 gets re-triaged against observed pain.
 
 ## What this doc is and isn't
 

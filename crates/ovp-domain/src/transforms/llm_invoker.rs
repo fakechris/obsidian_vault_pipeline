@@ -44,12 +44,17 @@ impl EffectfulTransform<DomainBody> for LLMInvoker {
             }
         };
 
+        // Tag the request with its prompt namespace so a shared cache
+        // (one CachedModelClient behind a unified pipeline's single
+        // LLMInvoker) files this cassette under the right prompt dir
+        // (e.g. article_interpret/v1 vs paper_interpret/v1).
         let wire_request = ModelRequest {
             model: prompt.model.clone(),
             system: Some(prompt.system.clone()),
             messages: vec![ModelMessage::User { content: prompt.user.clone() }],
             max_tokens: prompt.max_tokens,
             temperature: None,
+            cache_namespace: Some(prompt.prompt_id.as_str().to_string()),
         };
 
         let reply = match self.client.call(&wire_request) {
@@ -151,6 +156,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "user".into() }],
             max_tokens: 100,
             temperature: None,
+            cache_namespace: None,
         };
         f.insert(&req, reply);
         f

@@ -25,10 +25,10 @@ fn run_pipeline() -> ovp_core::RunReport {
     let run_id = RunId::new("paper-arxiv-test");
 
     let cassette_dir = root.join("crates/ovp-domain/tests/cassettes");
-    // Single-kind input (a paper) → only paper prompts reach the model,
-    // so the PAPER_PROMPT_ID namespace is correct for this run. (A mixed
-    // inbox would file both kinds under one namespace; request keys still
-    // differ by the full request hash, so no collision.)
+    // The constructor namespace is just a fallback now: LLMInvoker tags
+    // each request with its own prompt namespace (cache_namespace), so a
+    // mixed inbox files article vs. paper cassettes under their own dirs
+    // regardless of this value. PAPER_PROMPT_ID here is incidental.
     let cached = CachedModelClient::new(
         NeverCallsClient,
         &cassette_dir,

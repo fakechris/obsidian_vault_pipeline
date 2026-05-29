@@ -33,6 +33,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "hi".into() }],
             max_tokens: 100,
             temperature: None,
+            cache_namespace: None,
         }
     }
 
@@ -48,6 +49,16 @@ mod tests {
         let mut b = req();
         b.messages = vec![ModelMessage::User { content: "different".into() }];
         assert_ne!(request_key(&a), request_key(&b));
+    }
+
+    #[test]
+    fn cache_namespace_does_not_affect_key() {
+        // cache_namespace is #[serde(skip)] — it picks the cassette dir,
+        // never the hash. Two requests differing only in namespace must
+        // share a key (so existing cassettes stay valid).
+        let a = req();
+        let b = req().with_cache_namespace("article_interpret/v1");
+        assert_eq!(request_key(&a), request_key(&b));
     }
 
     #[test]
