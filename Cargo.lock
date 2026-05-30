@@ -697,6 +697,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ovp-auto"
+version = "0.1.0"
+dependencies = [
+ "ovp-app",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-lint",
+ "ovp-llm",
+ "ovp-run",
+ "ovp-stores",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "ovp-cli"
 version = "0.1.0"
 dependencies = [

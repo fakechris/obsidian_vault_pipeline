@@ -11,6 +11,7 @@ members = [
     "crates/ovp-query",
     "crates/ovp-lint",
     "crates/ovp-rag",
+    "crates/ovp-auto",
 ]
 
 [workspace.package]
