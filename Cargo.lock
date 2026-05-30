@@ -705,8 +705,10 @@ dependencies = [
  "ovp-core",
  "ovp-domain",
  "ovp-llm",
+ "ovp-query",
  "ovp-run",
  "ovp-stores",
+ "serde",
  "serde_json",
 ]
 
@@ -739,6 +741,22 @@ name = "ovp-llm"
 version = "0.1.0"
 dependencies = [
  "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-query"
+version = "0.1.0"
+dependencies = [
+ "ovp-app",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "ovp-run",
+ "ovp-stores",
  "serde",
  "serde_json",
  "sha2",

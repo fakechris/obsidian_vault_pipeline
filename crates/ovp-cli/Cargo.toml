@@ -24,5 +24,7 @@ ovp-llm = { path = "../ovp-llm" }
 ovp-stores = { path = "../ovp-stores" }
 ovp-app = { path = "../ovp-app" }
 ovp-run = { path = "../ovp-run" }
+ovp-query = { path = "../ovp-query" }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }

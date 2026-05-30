@@ -1,0 +1,24 @@
+[package]
+name = "ovp-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next L5 read layer: a read-only KnowledgeView + queries over the canonical store + knowledge index"
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-stores = { path = "../ovp-stores" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The round-trip e2e runs a real run-cycle, then queries its output. Test-only;
+# no dependency cycle (ovp-run does not depend on ovp-query).
+ovp-app = { path = "../ovp-app" }
+ovp-run = { path = "../ovp-run" }
+ovp-llm = { path = "../ovp-llm" }
+sha2 = { workspace = true }
+tempfile = { workspace = true }

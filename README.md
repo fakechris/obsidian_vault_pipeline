@@ -6,7 +6,7 @@ This repo intentionally has zero dependency on the legacy Python `ovp_pipeline` 
 
 ## What works today
 
-Seven crates, 255 tests. Three acceptance fixtures (`article_clean`, `article_mixed_lang`, `paper_arxiv`) run through the pipeline offline against committed cassettes; the resulting `WritePlan` is applied to a tempdir vault and the round-trip fields match. Pipelines are **assembled** from a declarative manifest (node id + kind + config + edges) plus app `AppWiring` — the CLI and tests no longer hand-wire `register_*`. A single **`run-cycle`** command drives the whole thing — inbox file → vault note + evergreen + canonical + MOC + knowledge index — with a run report and idempotent re-runs. A unified pipeline routes a mixed inbox (articles + papers) to the right interpreter by source kind. Concept promotion is driven by a loadable `ConceptRegistry`, not hardcoded constants. New evergreen concepts mint through a single hardened `CanonicalSlug` rule, land in a canonical store, and rebuild derived MOC + knowledge-index artifacts. The live Anthropic client + cassette capture exist behind the `anthropic` feature (`docs/live-capture.md`); the default build and CI are offline and need no API key.
+Eight crates, 260 tests. Three acceptance fixtures (`article_clean`, `article_mixed_lang`, `paper_arxiv`) run through the pipeline offline against committed cassettes; the resulting `WritePlan` is applied to a tempdir vault and the round-trip fields match. Pipelines are **assembled** from a declarative manifest (node id + kind + config + edges) plus app `AppWiring` — the CLI and tests no longer hand-wire `register_*`. A single **`run-cycle`** command drives the whole thing — inbox file → vault note + evergreen + canonical + MOC + knowledge index — with a run report and idempotent re-runs. A read-only **`query`** command reads the result back (list / get / search / backlinks / stats). A unified pipeline routes a mixed inbox (articles + papers) to the right interpreter by source kind. Concept promotion is driven by a loadable `ConceptRegistry`, not hardcoded constants. New evergreen concepts mint through a single hardened `CanonicalSlug` rule, land in a canonical store, and rebuild derived MOC + knowledge-index artifacts. The live Anthropic client + cassette capture exist behind the `anthropic` feature (`docs/live-capture.md`); the default build and CI are offline and need no API key.
 
 ```
 ovp-next interpret-article \
@@ -31,7 +31,8 @@ ovp-next apply-plan \
 | `ovp-stores` | `PlanApplier` impls: `VaultFsPlanApplier` (vault files), `CanonicalFsStoreApplier` (canonical records), `CompositePlanApplier` (routes ops by kind, halts on first failure); `walk_markdown` for backlink scans. |
 | `ovp-app` | Assembly layer (L2): `GraphAssembler` builds a `GraphRunner` from a `DomainPipelineSpec` (node id + kind + config + edges) + `AppWiring`, via a compiled-in `NodeRegistry`. DirectShow-like, not a plugin system. |
 | `ovp-run` | Operational workflow layer (L4): `RunCycle` drives one full cycle — assemble → run → apply → rebuild MOC + knowledge index → report — idempotent on re-run. |
-| `ovp-cli` | Thin arg-parsing layer: builds `ModelClient` + `ConceptRegistry` + `AppWiring`, delegates assembly to `ovp-app` and the cycle to `ovp-run`. Subcommands: `run-cycle`, `interpret-article` (`--client replay|live`), `apply-plan`, `graph`. |
+| `ovp-query` | Read layer (L5): a read-only `KnowledgeView` over the canonical store (authority) + knowledge index (backlinks) — list / get / search / backlinks / stats. No mutation. |
+| `ovp-cli` | Thin arg-parsing layer: builds `ModelClient` + `ConceptRegistry` + `AppWiring`, delegates assembly to `ovp-app`, the cycle to `ovp-run`, reads to `ovp-query`. Subcommands: `run-cycle`, `query`, `interpret-article` (`--client replay|live`), `apply-plan`, `graph`. |
 
 ## Docs
 
@@ -40,6 +41,8 @@ ovp-next apply-plan \
 - `docs/live-capture.md` — how to make live Anthropic calls + capture cassettes (`--features anthropic`, `--client live`).
 - `docs/invariants.md` — the 12 invariants; CI-gated where possible.
 - `docs/stage-graph-assembly.md` — the Graph Assembly Layer (`ovp-app`): manifest shape, primitives, validation, acceptance.
+- `docs/stage-operational-workflow.md` — the L4 `run-cycle` (`ovp-run`): flow, idempotence, fail-closed semantics, dry-run.
+- `docs/stage-read-health.md` — the L5 read/health layer (`ovp-query` + `ovp-lint`): `KnowledgeView`, queries, planned lint checks.
 - `docs/stage-c.md`, `docs/stage-d-plan-applier.md` — historical stage docs.
 - `docs/calibration-r1.md`, `docs/calibration-r2.md` — historical calibration verdicts.
 - `fixtures/` — frozen contracts captured from the legacy system.
@@ -50,9 +53,9 @@ The full legacy cycle is closed: C9/C10 (live Anthropic + capture), L0/L1 (intak
 
 ## Next
 
-Work is placed against the target layers (`docs/architecture.md` "Target architecture layers"). L0–L4 are landed; next are the read/health and automation layers:
+Work is placed against the target layers (`docs/architecture.md` "Target architecture layers"). L0–L4 are landed; L5 is in progress:
 
-1. **L5 Read / health**: `ovp-query` (read surface over the knowledge index), `ovp-lint` (WIGS-style health checks over canonical + vault). They read; they do not own mutation or pipeline execution.
+1. **L5 Read / health** *(in progress)*: `ovp-query` ✅ (read-only `KnowledgeView` + `query` CLI) is landed; `ovp-lint` (WIGS-style health checks over canonical + vault: missing notes, stale index/MOC, broken wikilinks, orphan canonical) is next. They read; they do not own mutation or pipeline execution.
 2. **L6 RAG / automation**: a real retriever + ranking/context + eval; an autopilot watcher that *calls* the L4 `run-cycle` (it must not duplicate workflow logic).
 
 See `docs/architecture.md` "What comes next" and `docs/legacy-alignment.md` for rationale.

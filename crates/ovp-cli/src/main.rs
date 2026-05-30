@@ -124,6 +124,30 @@ enum Cmd {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// Read-only query (L5) over the canonical store + knowledge index.
+    /// `list` / `get <slug>` / `search <term>` / `backlinks <slug>` / `stats`.
+    Query {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        #[arg(value_enum)]
+        kind: QueryKindArg,
+        /// Slug (get/backlinks) or substring (search). Ignored for list/stats.
+        term: Option<String>,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum QueryKindArg {
+    List,
+    Get,
+    Search,
+    Backlinks,
+    Stats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -214,6 +238,17 @@ fn main() -> ExitCode {
                 dry_run,
                 report_path: report,
             })
+        }
+        Cmd::Query { vault_root, canonical_root, kind, term, json } => {
+            use commands::query::{QueryArgs, QueryKind};
+            let kind = match kind {
+                QueryKindArg::List => QueryKind::List,
+                QueryKindArg::Get => QueryKind::Get,
+                QueryKindArg::Search => QueryKind::Search,
+                QueryKindArg::Backlinks => QueryKind::Backlinks,
+                QueryKindArg::Stats => QueryKind::Stats,
+            };
+            commands::query::run(QueryArgs { vault_root, canonical_root, kind, term, json })
         }
     };
     match result {
