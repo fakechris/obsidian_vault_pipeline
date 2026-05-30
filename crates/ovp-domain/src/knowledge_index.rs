@@ -7,10 +7,17 @@ use sha2::{Digest, Sha256};
 use crate::canonical::CanonicalConcept;
 use crate::vault_layout::VaultLayout;
 
-/// Extract `[[wikilink]]` targets from markdown. Returns the inner slug
-/// for `[[slug]]` and `[[slug|alias]]` (the part before `|`). Image
-/// embeds (`![[...]]`) are skipped — those are attachments, not concept
-/// references. Pure.
+/// Extract `[[wikilink]]` **targets** from markdown — the concept/note a link
+/// points at, normalized to its slug:
+/// - `[[slug]]` → `slug`
+/// - `[[slug|alias]]` → `slug` (display alias dropped)
+/// - `[[slug#heading]]` / `[[slug^block]]` → `slug` (Obsidian anchors dropped —
+///   a link to a section of a note is still a reference to that note)
+/// - `![[...]]` image/attachment embeds are skipped (not concept references)
+///
+/// Pure. Used both to build the backlink graph (a link counts as a backlink to
+/// its target concept) and by `ovp-lint` to resolve `[[...]]` against known
+/// concepts/notes; both must agree, so anchor stripping lives here.
 pub fn extract_wikilinks(md: &str) -> Vec<String> {
     let bytes = md.as_bytes();
     let mut out = Vec::new();
@@ -24,7 +31,10 @@ pub fn extract_wikilinks(md: &str) -> Vec<String> {
             }
             if let Some(end) = md[i + 2..].find("]]") {
                 let inner = &md[i + 2..i + 2 + end];
-                let target = inner.split('|').next().unwrap_or("").trim();
+                // Drop the display alias (everything from `|`), then the anchor
+                // (everything from the first `#` or `^`), leaving the target note.
+                let before_alias = inner.split('|').next().unwrap_or("");
+                let target = before_alias.split(['#', '^']).next().unwrap_or("").trim();
                 if !target.is_empty() {
                     out.push(target.to_string());
                 }
@@ -182,6 +192,13 @@ mod tests {
     #[test]
     fn extract_ignores_unclosed() {
         assert!(extract_wikilinks("[[oops").is_empty());
+    }
+
+    #[test]
+    fn extract_strips_heading_and_block_anchors() {
+        // A link to a section of a note is still a reference to that note.
+        let md = "[[ai-agent#architecture]] and [[rag^para-3]] and [[x#sec|Alias]]";
+        assert_eq!(extract_wikilinks(md), vec!["ai-agent", "rag", "x"]);
     }
 
     #[test]

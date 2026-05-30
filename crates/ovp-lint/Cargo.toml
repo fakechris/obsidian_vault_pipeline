@@ -1,0 +1,22 @@
+[package]
+name = "ovp-lint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next L5 health layer: read-only WIGS-style checks over the canonical store + vault + derived index"
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-stores = { path = "../ovp-stores" }
+ovp-query = { path = "../ovp-query" }
+serde = { workspace = true }
+
+[dev-dependencies]
+ovp-app = { path = "../ovp-app" }
+ovp-run = { path = "../ovp-run" }
+ovp-llm = { path = "../ovp-llm" }
+sha2 = { workspace = true }
+tempfile = { workspace = true }

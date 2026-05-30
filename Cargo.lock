@@ -704,6 +704,7 @@ dependencies = [
  "ovp-app",
  "ovp-core",
  "ovp-domain",
+ "ovp-lint",
  "ovp-llm",
  "ovp-query",
  "ovp-run",
@@ -732,6 +733,22 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-lint"
+version = "0.1.0"
+dependencies = [
+ "ovp-app",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "ovp-query",
+ "ovp-run",
+ "ovp-stores",
+ "serde",
  "sha2",
  "tempfile",
 ]

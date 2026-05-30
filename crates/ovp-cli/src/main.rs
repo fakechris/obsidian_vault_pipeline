@@ -139,6 +139,20 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only health checks (L5) over the canonical store + vault + index.
+    /// Reports findings; never fixes. Exits non-zero at/above `--max-severity`.
+    Lint {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        /// Fail (non-zero exit) if any finding is at or above this severity.
+        #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
+        max_severity: SeverityArg,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -148,6 +162,13 @@ enum QueryKindArg {
     Search,
     Backlinks,
     Stats,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum SeverityArg {
+    Info,
+    Warning,
+    Error,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -249,6 +270,15 @@ fn main() -> ExitCode {
                 QueryKindArg::Stats => QueryKind::Stats,
             };
             commands::query::run(QueryArgs { vault_root, canonical_root, kind, term, json })
+        }
+        Cmd::Lint { vault_root, canonical_root, max_severity, json } => {
+            use commands::lint::{LintArgs, SeverityArg as LintSeverity};
+            let max_severity = match max_severity {
+                SeverityArg::Info => LintSeverity::Info,
+                SeverityArg::Warning => LintSeverity::Warning,
+                SeverityArg::Error => LintSeverity::Error,
+            };
+            commands::lint::run(LintArgs { vault_root, canonical_root, max_severity, json })
         }
     };
     match result {

@@ -9,6 +9,7 @@ members = [
     "crates/ovp-app",
     "crates/ovp-run",
     "crates/ovp-query",
+    "crates/ovp-lint",
 ]
 
 [workspace.package]

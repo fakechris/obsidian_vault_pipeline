@@ -1,9 +1,9 @@
 # Stage: L5 Read / Health Layer (`ovp-query`, `ovp-lint`)
 
-> Status: design + first implementation (`ovp-query` lands first; `ovp-lint`
-> follows). The read/health layer over the canonical store + knowledge index +
-> vault. Read-only: it never mutates, never assembles, never runs a pipeline.
-> This is the layer RAG (L6) reads from.
+> Status: **landed** — both `ovp-query` and `ovp-lint`. The read/health layer
+> over the canonical store + knowledge index + vault. Read-only: it never
+> mutates, never assembles, never runs a pipeline. This is the layer RAG (L6)
+> reads from.
 
 ## The problem
 
