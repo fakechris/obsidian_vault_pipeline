@@ -707,6 +707,7 @@ dependencies = [
  "ovp-lint",
  "ovp-llm",
  "ovp-query",
+ "ovp-rag",
  "ovp-run",
  "ovp-stores",
  "serde",

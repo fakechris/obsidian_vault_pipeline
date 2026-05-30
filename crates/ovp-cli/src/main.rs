@@ -153,6 +153,24 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
+    /// evergreen notes. Scores the query, ranks, and prints a bounded context.
+    /// Read-only — never assembles, runs, applies, or writes.
+    Rag {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        /// The retrieval query.
+        #[arg(long)]
+        query: String,
+        /// Max concepts to return.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -279,6 +297,10 @@ fn main() -> ExitCode {
                 SeverityArg::Error => LintSeverity::Error,
             };
             commands::lint::run(LintArgs { vault_root, canonical_root, max_severity, json })
+        }
+        Cmd::Rag { vault_root, canonical_root, query, limit, json } => {
+            use commands::rag::RagArgs;
+            commands::rag::run(RagArgs { vault_root, canonical_root, query, limit, json })
         }
     };
     match result {
