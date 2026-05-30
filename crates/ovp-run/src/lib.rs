@@ -5,7 +5,6 @@
 //! no domain logic of its own; it wires L1–L3 together. See
 //! `docs/stage-operational-workflow.md`.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -14,7 +13,7 @@ use ovp_core::{ApplyMode, ApplyReport, CoreError, PlanApplier};
 use ovp_domain::{
     extract_wikilinks, CanonicalConcept, KnowledgeIndex, KnowledgeIndexBuilder, MocBuilder,
 };
-use ovp_stores::{walk_markdown, CanonicalFsStoreApplier, CompositePlanApplier, VaultFsPlanApplier};
+use ovp_stores::{scan_backlinks, CanonicalFsStoreApplier, CompositePlanApplier, VaultFsPlanApplier};
 use serde::Serialize;
 
 /// What a run-cycle needs: a parsed spec, the runtime wiring (which owns the
@@ -192,13 +191,14 @@ impl RunCycle {
         //    rebuild the index into an empty reference graph.
         let moc_builder = MocBuilder::new();
         let ki_builder = KnowledgeIndexBuilder::new();
-        let backlinks = match scan_backlinks(&vault_root, moc_builder.moc_path().as_str()) {
-            Ok(b) => b,
-            Err(e) => {
-                out.derived_skipped_reason = Some(format!("scanning vault backlinks: {e}"));
-                return Ok(out);
-            }
-        };
+        let backlinks =
+            match scan_backlinks(&vault_root, moc_builder.moc_path().as_str(), extract_wikilinks) {
+                Ok(b) => b,
+                Err(e) => {
+                    out.derived_skipped_reason = Some(format!("scanning vault backlinks: {e}"));
+                    return Ok(out);
+                }
+            };
 
         // 6. Read current derived artifacts + build BOTH rebuild plans. No writes
         //    yet — all derived inputs are validated above before anything lands.
@@ -243,28 +243,6 @@ impl Default for RunCycle {
 /// Read a vault-relative file's current content, if present (for rebuild diffs).
 fn read_vault_file(vault_root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(vault_root.join(rel)).ok()
-}
-
-/// Scan the vault for `[[slug]]` backlinks → `slug → sorted note paths`,
-/// excluding `exclude_rel` (the derived MOC, which links every concept and must
-/// not count as a backlink source). Propagates I/O errors — a scan failure must
-/// NOT be silently turned into an empty backlink graph (that would rebuild the
-/// knowledge index into a wrong, empty reference set). A missing vault is not an
-/// error: `walk_markdown` returns an empty list.
-fn scan_backlinks(
-    vault_root: &Path,
-    exclude_rel: &str,
-) -> std::io::Result<BTreeMap<String, Vec<String>>> {
-    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (path, content) in walk_markdown(vault_root)? {
-        if path == exclude_rel {
-            continue;
-        }
-        for slug in extract_wikilinks(&content) {
-            map.entry(slug).or_default().push(path.clone());
-        }
-    }
-    Ok(map)
 }
 
 #[cfg(test)]

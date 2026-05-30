@@ -36,8 +36,12 @@ pub struct KnowledgeView {
 ```
 
 Load path (read-only, fail-loud on corruption):
-1. `CanonicalFsStoreApplier::read_all(canonical_root)` → `CanonicalConcept::try_parse_pairs` (strict: bad payload / key≠slug / invalid slug / wrong evergreen_path → `QueryError`).
-2. Read `<vault>/60-Logs/knowledge-index.json` if it exists → `serde_json::from_str::<KnowledgeIndex>` → `QueryError` on parse failure; absent → `None` (an un-rebuilt vault is queryable, just backlink-less).
+1. `CanonicalFsStoreApplier::read_all(canonical_root)` → `CanonicalConcept::try_parse_pairs` (strict: bad payload / key≠slug / invalid slug / wrong evergreen_path → `QueryError::CanonicalParse`; an I/O read error → `QueryError::CanonicalRead`).
+2. Read `<vault>/60-Logs/knowledge-index.json`:
+   - present + parses → `Some(index)`;
+   - **absent** (`ErrorKind::NotFound`) → `None` (an un-rebuilt vault is queryable, just backlink-less);
+   - present but **unreadable** (any other I/O error — permission, transient) → `QueryError::IndexRead` (loud — *unreadable ≠ absent*);
+   - present but **unparseable** → `QueryError::IndexParse`.
 
 The **canonical store is the authority** for which concepts exist; the index is a
 derived convenience for backlinks. `KnowledgeView` lives in `ovp-query`;
@@ -71,15 +75,21 @@ loud; a successful query with zero results exits 0.
 Each check yields zero or more `LintFinding { severity, code, detail, location }`.
 Read-only. Planned v1 checks:
 
-| Code | What |
-|---|---|
-| `canonical.unparseable` | a canonical record fails strict parse (already fatal at load; lint surfaces it as a finding instead of aborting) |
-| `evergreen.missing_note` | a canonical concept's `evergreen_path` does not exist on disk |
-| `index.stale` | the persisted knowledge index ≠ a freshly-built one (canonical/backlinks drifted) |
-| `index.absent` | no knowledge index exists yet |
-| `wikilink.broken` | a `[[slug]]` in a vault note resolves to no canonical concept |
-| `canonical.orphan` | a canonical concept with zero backlinks (nothing references it) |
-| `moc.stale` | the persisted MOC ≠ a freshly-rendered one |
+| Code | Severity | What |
+|---|---|---|
+| `canonical.unreadable` / `canonical.unparseable` | error | the canonical store can't be read / a record fails strict parse (a load failure surfaced as a finding, not an abort) |
+| `index.unreadable` / `index.unparseable` | error | the persisted index exists but can't be read / doesn't parse (load failure → finding) |
+| `vault.scan_failed` | error | walking the vault for markdown failed — the health gate must NOT pass on an unreadable vault (never silently "no backlinks / no broken links") |
+| `evergreen.missing_note` | error | a canonical concept's `evergreen_path` does not exist on disk |
+| `index.stale` | warning | the persisted knowledge index ≠ a freshly-built one (structural comparison; whitespace edits are not "stale") |
+| `index.absent` / `moc.absent` | warning | no knowledge index / MOC exists yet |
+| `moc.stale` | warning | the persisted MOC ≠ a freshly-rendered one |
+| `wikilink.broken` | warning | a `[[target]]` resolving to no canonical concept or vault note |
+| `canonical.orphan` | info | a canonical concept with zero backlinks (nothing references it) |
+
+The vault is walked **once** per lint pass (shared by the staleness + broken-link
+checks); the backlink map is built with `ovp-stores::backlinks_from_files` — the
+**same** helper the run-cycle's `scan_backlinks` uses, so L4 and L5 can't diverge.
 
 `ovp-lint` exits non-zero if any finding is at/above a severity threshold
 (`--max-severity`, default `error`), so it can gate CI. It proposes no fixes;
@@ -110,12 +120,15 @@ Dependency direction stays acyclic and matches the layer model:
 
 `ovp-query`:
 1. load a seeded canonical store + index → `concepts()`/`get()`/`search()`/`backlinks()`/`stats()` return the expected values.
-2. corrupt canonical store → `load` returns `QueryError` (loud).
+2. corrupt canonical store → `load` returns `QueryError::CanonicalParse` (loud).
 3. canonical store present, no index → loads, `backlinks()` empty, `stats().index_present == false`.
-4. round-trip through a real `run-cycle` output: query the vault a `run-cycle` just produced and confirm a known concept + its article backlink.
+4. **unreadable** index (present but not a readable file) → `QueryError::IndexRead` — *unreadable ≠ absent*.
+5. round-trip through a real `run-cycle` output: query the vault a `run-cycle` just produced and confirm a known concept + its article backlink.
 
-`ovp-lint` (next):
-5. a vault with a missing evergreen note → `evergreen.missing_note` finding.
-6. a stale index (concept added to canonical, index not rebuilt) → `index.stale`.
-7. a broken `[[wikilink]]` → `wikilink.broken`.
-8. a clean `run-cycle` output → zero findings at/above `error`.
+`ovp-lint`:
+6. a vault with a missing evergreen note → `evergreen.missing_note` (error).
+7. a stale index (a concept added to canonical, index not rebuilt) → `index.stale`.
+8. a broken `[[wikilink]]` → `wikilink.broken`.
+9. a corrupt canonical store → a single `canonical.unparseable` finding (no abort/panic).
+10. an **unreadable vault** (unreadable subdirectory) → `vault.scan_failed` (error) — the gate does NOT pass.
+11. a clean `run-cycle` output → zero findings at/above `error`.

@@ -1,4 +1,46 @@
+use std::collections::BTreeMap;
 use std::path::Path;
+
+/// Build a backlink map `target → note paths` from already-walked `(path,
+/// content)` pairs, skipping `exclude_rel`. Domain-blind: the caller supplies
+/// `extract` (e.g. `ovp-domain::extract_wikilinks`) so this crate never learns
+/// what a wikilink is. Pure — no I/O. The single source of backlink-scan logic
+/// shared by the run-cycle (L4) and lint (L5), so they can't diverge.
+pub fn backlinks_from_files<F>(
+    files: &[(String, String)],
+    exclude_rel: &str,
+    extract: F,
+) -> BTreeMap<String, Vec<String>>
+where
+    F: Fn(&str) -> Vec<String>,
+{
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (path, content) in files {
+        if path == exclude_rel {
+            continue;
+        }
+        for target in extract(content) {
+            map.entry(target).or_default().push(path.clone());
+        }
+    }
+    map
+}
+
+/// Scan a vault for backlinks: walk `root` for `*.md`, then
+/// [`backlinks_from_files`]. Propagates I/O errors (a scan failure must not be
+/// silently treated as "no backlinks"). A missing root yields an empty map
+/// (nothing to scan), not an error.
+pub fn scan_backlinks<F>(
+    root: &Path,
+    exclude_rel: &str,
+    extract: F,
+) -> std::io::Result<BTreeMap<String, Vec<String>>>
+where
+    F: Fn(&str) -> Vec<String>,
+{
+    let files = walk_markdown(root)?;
+    Ok(backlinks_from_files(&files, exclude_rel, extract))
+}
 
 /// Recursively walk `root` for `*.md` files, returning `(vault-relative
 /// path, content)` pairs sorted by path. Domain-blind I/O — used by

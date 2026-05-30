@@ -5,12 +5,12 @@
 //! through L3/L4, not here). Built on `ovp-query::KnowledgeView`. See
 //! `docs/stage-read-health.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use ovp_domain::{extract_wikilinks, KnowledgeIndex, KnowledgeIndexBuilder, MocBuilder, VaultLayout};
+use ovp_domain::{extract_wikilinks, KnowledgeIndex, MocBuilder, VaultLayout};
 use ovp_query::{KnowledgeView, QueryError};
-use ovp_stores::walk_markdown;
+use ovp_stores::{backlinks_from_files, walk_markdown};
 use serde::Serialize;
 
 /// Finding severity, ordered `Info < Warning < Error` so a threshold compares
@@ -91,11 +91,28 @@ impl Lint {
             }
         };
 
+        // Walk-independent checks (filesystem stat / in-memory only).
         check_evergreen_notes(&view, vault_root, &mut findings);
         check_orphan_concepts(&view, &mut findings);
-        check_index_freshness(&view, vault_root, &mut findings);
         check_moc_freshness(&view, vault_root, &mut findings);
-        check_broken_wikilinks(&view, vault_root, &mut findings);
+        check_index_presence(&view, &mut findings);
+
+        // Walk-dependent checks share ONE vault scan. A scan failure is a LOUD
+        // `error` finding — never silently "no broken links / no backlinks"
+        // (the health gate must not pass on an unreadable vault). Mirrors the
+        // run-cycle's fail-loud backlink scan.
+        match walk_markdown(vault_root) {
+            Ok(files) => {
+                check_index_staleness(&view, &files, &mut findings);
+                check_broken_wikilinks(&view, &files, &mut findings);
+            }
+            Err(e) => findings.push(LintFinding::new(
+                Severity::Error,
+                "vault.scan_failed",
+                format!("scanning vault for markdown failed: {e}"),
+                Some(vault_root.display().to_string()),
+            )),
+        }
 
         // Deterministic order: by (code, location).
         findings.sort_by(|a, b| (a.code.as_str(), &a.location).cmp(&(b.code.as_str(), &b.location)));
@@ -107,6 +124,7 @@ fn load_error_finding(e: &QueryError) -> LintFinding {
     let (code, detail) = match e {
         QueryError::CanonicalRead(m) => ("canonical.unreadable", m.clone()),
         QueryError::CanonicalParse(p) => ("canonical.unparseable", p.to_string()),
+        QueryError::IndexRead(m) => ("index.unreadable", m.clone()),
         QueryError::IndexParse(m) => ("index.unparseable", m.clone()),
     };
     LintFinding::new(Severity::Error, code, detail, None)
@@ -144,30 +162,39 @@ fn check_orphan_concepts(view: &KnowledgeView, out: &mut Vec<LintFinding>) {
     }
 }
 
-/// The persisted knowledge index must match one freshly built from canonical +
-/// a live backlink scan. Absent → warn; drifted → warn (run `run-cycle`).
-fn check_index_freshness(view: &KnowledgeView, vault_root: &Path, out: &mut Vec<LintFinding>) {
-    let builder = KnowledgeIndexBuilder::new();
-    let index_path = builder.index_path();
-    let current = std::fs::read_to_string(vault_root.join(index_path.as_str())).ok();
-    if current.is_none() {
+/// Warn when no knowledge index has been built yet. (An *unreadable* or
+/// *unparseable* index is loud at load — it fails `KnowledgeView::load` and is
+/// reported as `index.unreadable` / `index.unparseable` — so reaching here with
+/// `index() == None` means genuinely absent.)
+fn check_index_presence(view: &KnowledgeView, out: &mut Vec<LintFinding>) {
+    if view.index().is_none() {
         out.push(LintFinding::new(
             Severity::Warning,
             "index.absent",
             "no knowledge index has been built yet (run `run-cycle`)".into(),
-            Some(index_path.as_str().to_string()),
+            Some(VaultLayout::new().knowledge_index().as_str().to_string()),
         ));
-        return;
     }
+}
+
+/// When an index is present, it must equal one freshly built from canonical +
+/// the (already-walked) vault backlinks. Structural comparison (re-serializing
+/// both is byte-identical for a `run-cycle`-produced index). Drifted → warn.
+fn check_index_staleness(
+    view: &KnowledgeView,
+    files: &[(String, String)],
+    out: &mut Vec<LintFinding>,
+) {
+    let Some(persisted) = view.index() else { return };
     let moc_rel = MocBuilder::new().moc_path().as_str().to_string();
-    let backlinks = scan_backlinks(vault_root, &moc_rel);
-    let fresh = KnowledgeIndex::build(view.concepts(), &backlinks).to_json();
-    if current.as_deref() != Some(fresh.as_str()) {
+    let backlinks = backlinks_from_files(files, &moc_rel, extract_wikilinks);
+    let fresh = KnowledgeIndex::build(view.concepts(), &backlinks);
+    if *persisted != fresh {
         out.push(LintFinding::new(
             Severity::Warning,
             "index.stale",
             "persisted knowledge index differs from a fresh rebuild (run `run-cycle`)".into(),
-            Some(index_path.as_str().to_string()),
+            Some(VaultLayout::new().knowledge_index().as_str().to_string()),
         ));
     }
 }
@@ -197,21 +224,22 @@ fn check_moc_freshness(view: &KnowledgeView, vault_root: &Path, out: &mut Vec<Li
 
 /// A `[[target]]` that resolves to neither a canonical concept nor an existing
 /// vault note is broken. The derived MOC (which links every concept) is excluded
-/// as a *source* — its links are mechanical, not authored references.
-fn check_broken_wikilinks(view: &KnowledgeView, vault_root: &Path, out: &mut Vec<LintFinding>) {
-    let files = match walk_markdown(vault_root) {
-        Ok(f) => f,
-        Err(_) => return, // a scan failure isn't a wikilink finding
-    };
+/// as a *source* — its links are mechanical, not authored references. Operates
+/// on the already-walked `files` (the single vault scan).
+fn check_broken_wikilinks(
+    view: &KnowledgeView,
+    files: &[(String, String)],
+    out: &mut Vec<LintFinding>,
+) {
     // Resolvable set: canonical slugs ∪ every note's file stem.
     let mut resolvable: BTreeSet<String> = view.concepts().iter().map(|c| c.slug.clone()).collect();
-    for (path, _) in &files {
+    for (path, _) in files {
         if let Some(stem) = Path::new(path).file_stem().and_then(|s| s.to_str()) {
             resolvable.insert(stem.to_string());
         }
     }
     let moc_rel = MocBuilder::new().moc_path().as_str().to_string();
-    for (path, content) in &files {
+    for (path, content) in files {
         if *path == moc_rel {
             continue;
         }
@@ -227,22 +255,6 @@ fn check_broken_wikilinks(view: &KnowledgeView, vault_root: &Path, out: &mut Vec
             }
         }
     }
-}
-
-/// Local backlink scan (mirrors the run-cycle's): `slug → sorted note paths`,
-/// excluding the derived MOC. Kept local rather than depending on `ovp-run`
-/// (lint must not depend on the run layer).
-fn scan_backlinks(vault_root: &Path, exclude_rel: &str) -> BTreeMap<String, Vec<String>> {
-    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (path, content) in walk_markdown(vault_root).unwrap_or_default() {
-        if path == exclude_rel {
-            continue;
-        }
-        for slug in extract_wikilinks(&content) {
-            map.entry(slug).or_default().push(path.clone());
-        }
-    }
-    map
 }
 
 /// The knowledge-index artifact path, for callers that want to display it.

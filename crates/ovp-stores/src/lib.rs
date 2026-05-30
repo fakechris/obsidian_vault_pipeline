@@ -13,4 +13,4 @@ pub mod vault_scan;
 pub use canonical_fs::CanonicalFsStoreApplier;
 pub use composite::CompositePlanApplier;
 pub use vault_fs::VaultFsPlanApplier;
-pub use vault_scan::walk_markdown;
+pub use vault_scan::{backlinks_from_files, scan_backlinks, walk_markdown};

@@ -20,7 +20,11 @@ pub enum QueryError {
     /// A canonical record failed strict parse (bad payload / key≠slug / invalid
     /// slug / wrong evergreen_path).
     CanonicalParse(CanonicalParseError),
-    /// The persisted knowledge index exists but did not parse.
+    /// The persisted knowledge index exists but could not be read (a non-
+    /// `NotFound` I/O error — permission denied, transient failure, …). Distinct
+    /// from "absent" (a missing index is fine; an unreadable one is not).
+    IndexRead(String),
+    /// The persisted knowledge index was read but did not parse.
     IndexParse(String),
 }
 
@@ -29,6 +33,7 @@ impl std::fmt::Display for QueryError {
         match self {
             QueryError::CanonicalRead(e) => write!(f, "reading canonical store: {e}"),
             QueryError::CanonicalParse(e) => write!(f, "canonical store: {e}"),
+            QueryError::IndexRead(e) => write!(f, "reading knowledge index: {e}"),
             QueryError::IndexParse(e) => write!(f, "parsing knowledge index: {e}"),
         }
     }
@@ -63,7 +68,10 @@ impl KnowledgeView {
                 serde_json::from_str::<KnowledgeIndex>(&raw)
                     .map_err(|e| QueryError::IndexParse(e.to_string()))?,
             ),
-            Err(_) => None, // absent (or unreadable) → no derived backlinks yet
+            // Absent is fine (not rebuilt yet → backlink-less but queryable);
+            // any OTHER I/O error (permission, transient) is loud, not "absent".
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(QueryError::IndexRead(e.to_string())),
         };
 
         Ok(Self { concepts, index, vault_root: vault_root.to_path_buf() })
@@ -259,5 +267,20 @@ mod tests {
 
         let err = KnowledgeView::load(vault.path(), canon.path()).unwrap_err();
         assert!(matches!(err, QueryError::IndexParse(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn unreadable_index_is_loud_not_absent() {
+        // The index *path* exists but is not a readable file (here: a directory),
+        // so read_to_string errors with a non-NotFound kind. That must be loud
+        // (IndexRead), not silently treated as "no index yet".
+        let vault = tempfile::tempdir().unwrap();
+        let canon = tempfile::tempdir().unwrap();
+        seed_canonical(canon.path(), &[concept("ai-agent", "Ai Agent")]);
+        let path = vault.path().join("60-Logs/knowledge-index.json");
+        std::fs::create_dir_all(&path).unwrap(); // a directory where the file should be
+
+        let err = KnowledgeView::load(vault.path(), canon.path()).unwrap_err();
+        assert!(matches!(err, QueryError::IndexRead(_)), "got {err:?}");
     }
 }

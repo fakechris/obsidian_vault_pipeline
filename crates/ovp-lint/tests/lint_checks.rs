@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use ovp_app::{AppWiring, DomainPipelineSpec};
 use ovp_core::{ApplyMode, RunId};
-use ovp_domain::{ConceptRegistry, ARTICLE_PROMPT_ID};
+use ovp_domain::{CanonicalConcept, ConceptRegistry, ARTICLE_PROMPT_ID};
 use ovp_lint::{Lint, Severity};
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 use ovp_run::{RunCycle, RunCycleInputs};
@@ -108,11 +108,22 @@ fn stale_index_is_flagged() {
     let canon = tempfile::tempdir().unwrap();
     seed_run_cycle(&root, vault.path(), canon.path());
 
-    // Drift the persisted index without rebuilding it.
-    let index_path = vault.path().join("60-Logs/knowledge-index.json");
-    let mut raw = std::fs::read_to_string(&index_path).unwrap();
-    raw.push('\n'); // any byte change makes it differ from a fresh rebuild
-    std::fs::write(&index_path, raw).unwrap();
+    // Introduce SEMANTIC drift: add a canonical concept (+ its evergreen note)
+    // the persisted index doesn't know about. A fresh index would include it, so
+    // the persisted one is now stale. (A pure whitespace edit is NOT stale —
+    // staleness is a structural comparison.)
+    let extra = CanonicalConcept {
+        slug: "extra-concept".into(),
+        title: "Extra Concept".into(),
+        evergreen_path: "10-Knowledge/Evergreen/extra-concept.md".into(),
+        provenance_source_url: "https://example.com/extra".into(),
+    };
+    std::fs::write(canon.path().join("extra-concept.json"), extra.to_payload()).unwrap();
+    std::fs::write(
+        vault.path().join("10-Knowledge/Evergreen/extra-concept.md"),
+        "# Extra Concept\n",
+    )
+    .unwrap();
 
     let report = Lint::check(vault.path(), canon.path());
     assert!(codes(&report).contains(&"index.stale"), "got: {:?}", report.findings);
@@ -134,6 +145,37 @@ fn broken_wikilink_is_flagged() {
         report.findings.iter().filter(|f| f.code == "wikilink.broken").collect();
     assert_eq!(broken.len(), 1, "got: {:?}", report.findings);
     assert!(broken[0].detail.contains("totally-nonexistent-concept"));
+}
+
+#[cfg(unix)]
+#[test]
+fn vault_scan_failure_is_a_loud_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Canonical store is fine and EMPTY (so load succeeds, no missing-note
+    // noise). The vault is readable at the root but contains an unreadable
+    // subdirectory, so walk_markdown fails while loading the (absent) index
+    // still succeeds — isolating the vault-scan failure.
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let bad = vault.path().join("10-Knowledge/Evergreen");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let report = Lint::check(vault.path(), canon.path());
+
+    // Restore perms so the tempdir can be cleaned up.
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        !report.passed(Severity::Error),
+        "an unreadable vault must NOT pass the error gate, got: {:?}",
+        report.findings
+    );
+    let scan_failed: Vec<_> =
+        report.findings.iter().filter(|f| f.code == "vault.scan_failed").collect();
+    assert_eq!(scan_failed.len(), 1, "got: {:?}", report.findings);
+    assert_eq!(scan_failed[0].severity, Severity::Error);
 }
 
 #[test]
