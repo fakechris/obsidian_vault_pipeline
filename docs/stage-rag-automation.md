@@ -1,8 +1,8 @@
 # Stage: L6 RAG read path + automation path (`ovp-rag`, `ovp-auto`)
 
-> Status: **planned** (this doc) → implemented in small commits. Two separate
-> surfaces at L6, each on its own crate, built **on top of** the landed L4/L5
-> layers and weakening none of L0–L5:
+> Status: **landed** — both `ovp-rag` and `ovp-auto`, exposed as the `rag` and
+> `auto-run` CLI commands. Two separate surfaces at L6, each on its own crate,
+> built **on top of** the landed L4/L5 layers and weakening none of L0–L5:
 >
 > - **`ovp-rag`** — a read-only retrieval surface over `ovp-query::KnowledgeView`.
 >   It never assembles, runs, applies, or writes. Retriever + Ranker +
@@ -203,6 +203,12 @@ client by default — offline), lints the result, prints the operational report
 (text or `--json`). Exits **non-zero** if any cycle failed or lint failed at
 `--max-severity`. The CLI builds the per-input `make_inputs` factory; `ovp-auto`
 runs the sweep.
+
+`--dry-run` makes each cycle `ApplyMode::DryRun` (nothing is written); the
+post-sweep lint then reports on the **current on-disk state**, *not* a simulation
+of "as if the whole batch had applied". This mirrors the L4 run-cycle's dry-run
+(a preview, not a what-if), so the lint findings describe what is actually on
+disk today.
 
 ## Boundaries held
 

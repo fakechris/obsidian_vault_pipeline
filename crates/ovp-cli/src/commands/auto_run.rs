@@ -16,11 +16,8 @@ use ovp_lint::Severity;
 use ovp_run::RunCycleInputs;
 
 use crate::commands::client::{build_client, ClientKind};
+use crate::commands::defaults::DEFAULT_CANONICAL_SLUGS;
 use crate::CliError;
-
-/// Default canonical-evergreen seed when no `--concept-registry` is supplied
-/// (matches `run-cycle`).
-const DEFAULT_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 
 pub struct AutoRunArgs {
     pub inbox_root: PathBuf,

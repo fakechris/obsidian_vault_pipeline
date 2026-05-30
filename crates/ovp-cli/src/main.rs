@@ -180,7 +180,8 @@ enum Cmd {
         /// Fail (non-zero exit) if lint reports any finding at or above this.
         #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
         max_severity: SeverityArg,
-        /// Preview only: apply nothing, report what would happen.
+        /// Preview only: each cycle applies nothing (dry-run). The lint pass
+        /// then checks the CURRENT on-disk state, not a post-apply simulation.
         #[arg(long)]
         dry_run: bool,
         /// Emit JSON instead of text.

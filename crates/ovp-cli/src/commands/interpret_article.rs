@@ -6,13 +6,8 @@ use ovp_domain::ConceptRegistry;
 use ovp_llm::ModelClient;
 
 use crate::commands::client::{build_client, ClientKind};
+use crate::commands::defaults::DEFAULT_CANONICAL_SLUGS;
 use crate::CliError;
-
-/// Default canonical-evergreen seed used when no `--concept-registry`
-/// file is supplied. Two entries cover the article_mixed_lang MUST
-/// clauses. Real runs point `--concept-registry` at a registry JSON or
-/// (future) scan the vault's evergreen dir.
-const DEFAULT_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 
 pub struct InterpretArticleArgs {
     pub manifest_path: PathBuf,
