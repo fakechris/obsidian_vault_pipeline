@@ -51,10 +51,15 @@ impl EvalReport {
 pub struct Eval;
 
 impl Eval {
-    /// Run every case through `retriever` + `ranker`, take the top-`k` slugs, and
-    /// score recall (`|expected ∩ retrieved| / |expected|`; an empty `expected`
-    /// counts as recall 1.0). Deterministic; no I/O beyond the corpus already in
-    /// memory.
+    /// Run every case through `retriever` + `ranker` at the top-`k`, and score
+    /// recall (`|distinct expected ∩ retrieved| / |distinct expected|`; an empty
+    /// `expected` counts as recall 1.0). Deterministic; no I/O beyond the corpus
+    /// already in memory.
+    ///
+    /// The harness is **authoritative over `k`**: it ranks with the ranker's
+    /// `limit` overridden to `k` (preserving its other config, e.g. `min_score`),
+    /// so recall@k is truly measured at `k` and is never silently shadowed by a
+    /// smaller `ranker.limit`.
     pub fn run(
         corpus: &RagCorpus,
         retriever: &Retriever,
@@ -62,17 +67,22 @@ impl Eval {
         cases: &[EvalCase],
         k: usize,
     ) -> EvalReport {
+        let topk = Ranker { limit: k, ..*ranker };
         let mut outcomes = Vec::with_capacity(cases.len());
         for case in cases {
             let scored = retriever.score(corpus, &case.query);
-            let ranked = ranker.rank(scored);
             let retrieved: Vec<String> =
-                ranked.iter().take(k).map(|s| s.slug.clone()).collect();
-            let hits = case.expected.iter().filter(|e| retrieved.contains(e)).count();
-            let recall = if case.expected.is_empty() {
+                topk.rank(scored).into_iter().map(|s| s.slug).collect();
+            // Recall over DISTINCT expected slugs — a duplicate in a case must
+            // not inflate (or deflate) the denominator.
+            let mut expected = case.expected.clone();
+            expected.sort();
+            expected.dedup();
+            let hits = expected.iter().filter(|e| retrieved.contains(e)).count();
+            let recall = if expected.is_empty() {
                 1.0
             } else {
-                hits as f64 / case.expected.len() as f64
+                hits as f64 / expected.len() as f64
             };
             outcomes.push(EvalOutcome {
                 query: case.query.clone(),
@@ -144,5 +154,35 @@ mod tests {
         assert_eq!(report.outcomes[0].hits, 0);
         assert!((report.mean_recall - 0.0).abs() < f64::EPSILON);
         assert!(!report.passed(0.5));
+    }
+
+    #[test]
+    fn k_overrides_a_smaller_ranker_limit() {
+        // A query matching three distinct concepts, expecting all three. A ranker
+        // whose own limit is 1 must NOT shadow k=3 — recall@3 is truly @3.
+        let report = Eval::run(
+            &corpus(),
+            &Retriever::new(),
+            &Ranker { min_score: 1, limit: 1 },
+            &[EvalCase::new("agent retrieval transformer", &["ai-agent", "rag", "transformer"])],
+            3,
+        );
+        assert_eq!(report.outcomes[0].retrieved.len(), 3, "k must win over ranker.limit");
+        assert!(report.passed(1.0), "all three expected are within top-3");
+    }
+
+    #[test]
+    fn duplicate_expected_does_not_skew_recall() {
+        // Only `ai-agent` is retrievable for "agent"; distinct expected is
+        // {ai-agent, rag} → recall 0.5, NOT 2/3 from counting the duplicate.
+        let report = Eval::run(
+            &corpus(),
+            &Retriever::new(),
+            &Ranker::new(),
+            &[EvalCase::new("agent", &["ai-agent", "ai-agent", "rag"])],
+            3,
+        );
+        assert_eq!(report.outcomes[0].hits, 1);
+        assert!((report.outcomes[0].recall - 0.5).abs() < f64::EPSILON, "recall = {}", report.outcomes[0].recall);
     }
 }
