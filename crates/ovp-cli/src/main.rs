@@ -153,6 +153,59 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Automation sweep (L6): discover markdown under `--inbox-root`, run the L4
+    /// run-cycle on each input, then the L5 lint gate; print an operational
+    /// report. Exits non-zero if any cycle failed or lint failed at
+    /// `--max-severity`. Default client is replay-only; no network.
+    AutoRun {
+        #[arg(long)]
+        inbox_root: PathBuf,
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        #[arg(long, default_value = "manifests/article_evergreen.pipeline.toml")]
+        manifest: PathBuf,
+        #[arg(long, default_value = "crates/ovp-domain/tests/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long)]
+        concept_registry: Option<PathBuf>,
+        #[arg(long, default_value = "auto-run")]
+        run_id: String,
+        /// ISO-8601 date stamped onto interpreted docs. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Fail (non-zero exit) if lint reports any finding at or above this.
+        #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
+        max_severity: SeverityArg,
+        /// Preview only: each cycle applies nothing (dry-run). The lint pass
+        /// then checks the CURRENT on-disk state, not a post-apply simulation.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
+    /// evergreen notes. Scores the query, ranks, and prints a bounded context.
+    /// Read-only — never assembles, runs, applies, or writes.
+    Rag {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        /// The retrieval query.
+        #[arg(long)]
+        query: String,
+        /// Max concepts to return.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -279,6 +332,51 @@ fn main() -> ExitCode {
                 SeverityArg::Error => LintSeverity::Error,
             };
             commands::lint::run(LintArgs { vault_root, canonical_root, max_severity, json })
+        }
+        Cmd::AutoRun {
+            inbox_root,
+            vault_root,
+            canonical_root,
+            manifest,
+            cache_dir,
+            concept_registry,
+            run_id,
+            date,
+            client,
+            max_severity,
+            dry_run,
+            json,
+        } => {
+            use commands::auto_run::AutoRunArgs;
+            use commands::client::ClientKind;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let lint_threshold = match max_severity {
+                SeverityArg::Info => ovp_lint::Severity::Info,
+                SeverityArg::Warning => ovp_lint::Severity::Warning,
+                SeverityArg::Error => ovp_lint::Severity::Error,
+            };
+            let date_stamp = date.unwrap_or_else(today_iso);
+            commands::auto_run::run(AutoRunArgs {
+                inbox_root,
+                vault_root,
+                canonical_root,
+                manifest_path: manifest,
+                cache_dir,
+                concept_registry,
+                run_id,
+                date_stamp,
+                client_kind,
+                lint_threshold,
+                dry_run,
+                json,
+            })
+        }
+        Cmd::Rag { vault_root, canonical_root, query, limit, json } => {
+            use commands::rag::RagArgs;
+            commands::rag::run(RagArgs { vault_root, canonical_root, query, limit, json })
         }
     };
     match result {

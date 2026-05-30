@@ -697,16 +697,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "ovp-cli"
+name = "ovp-auto"
 version = "0.1.0"
 dependencies = [
- "clap",
  "ovp-app",
  "ovp-core",
  "ovp-domain",
  "ovp-lint",
  "ovp-llm",
+ "ovp-run",
+ "ovp-stores",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ovp-app",
+ "ovp-auto",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-lint",
+ "ovp-llm",
  "ovp-query",
+ "ovp-rag",
  "ovp-run",
  "ovp-stores",
  "serde",
@@ -776,6 +793,19 @@ dependencies = [
  "ovp-stores",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-rag"
+version = "0.1.0"
+dependencies = [
+ "ovp-core",
+ "ovp-domain",
+ "ovp-query",
+ "ovp-stores",
+ "serde",
  "sha2",
  "tempfile",
 ]

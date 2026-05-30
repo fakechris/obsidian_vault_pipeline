@@ -11,10 +11,8 @@ use ovp_domain::ConceptRegistry;
 use ovp_run::{RunCycle, RunCycleInputs, RunCycleReport};
 
 use crate::commands::client::{build_client, ClientKind};
+use crate::commands::defaults::DEFAULT_CANONICAL_SLUGS;
 use crate::CliError;
-
-/// Default canonical-evergreen seed when no `--concept-registry` is supplied.
-const DEFAULT_CANONICAL_SLUGS: &[&str] = &["ai-agent", "competitive-advantage"];
 
 pub struct RunCycleArgs {
     pub manifest_path: PathBuf,
