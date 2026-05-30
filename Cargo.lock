@@ -717,6 +717,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ovp-app",
+ "ovp-auto",
  "ovp-core",
  "ovp-domain",
  "ovp-lint",

@@ -27,6 +27,7 @@ ovp-run = { path = "../ovp-run" }
 ovp-query = { path = "../ovp-query" }
 ovp-lint = { path = "../ovp-lint" }
 ovp-rag = { path = "../ovp-rag" }
+ovp-auto = { path = "../ovp-auto" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

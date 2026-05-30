@@ -1,4 +1,5 @@
 pub mod apply_plan;
+pub mod auto_run;
 pub mod client;
 pub mod graph;
 pub mod interpret_article;
