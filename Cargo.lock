@@ -781,6 +781,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ovp-rag"
+version = "0.1.0"
+dependencies = [
+ "ovp-core",
+ "ovp-domain",
+ "ovp-query",
+ "ovp-stores",
+ "serde",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "ovp-run"
 version = "0.1.0"
 dependencies = [

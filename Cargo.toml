@@ -10,6 +10,7 @@ members = [
     "crates/ovp-run",
     "crates/ovp-query",
     "crates/ovp-lint",
+    "crates/ovp-rag",
 ]
 
 [workspace.package]
