@@ -10,6 +10,19 @@
 > should be, and to draw the absorb boundary precisely before anyone builds on
 > top of it.
 
+> **Update (M12a — landed):** the headline finding below — that
+> `EvergreenConceptWriter` + `EvergreenSink` mint a **stub only** — has been
+> *partially* addressed. M12a "rich evergreen minting" now renders a grounded
+> note body (one-line definition + 2-5 source-backed claims + source link +
+> related wikilinks, selected deterministically from the interpreted article),
+> so RAG retrieves over real content, not the "Expand with an atomic
+> definition…" placeholder. The grounding lives in the vault note body only;
+> the canonical store / MOC / knowledge index are unchanged. **Still open**
+> (the rest of the absorb boundary, M12b+): enrichment of *existing* notes,
+> mint/enrich/escalate/reject policy lanes, cross-document merge/dedup of a
+> shared slug, and crystal materialization. See
+> `docs/stage-m12a-rich-evergreen-minting.md`.
+
 ## Scope
 
 Audited: the three real manifests (`article`, `article_evergreen`, `unified`),
