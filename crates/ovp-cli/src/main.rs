@@ -255,6 +255,68 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// External E2E comparator (M8): run ONE input through both the ovp-next
+    /// pipeline (via the review harness) and the external Nowledge Mem HTTP
+    /// service, normalize both, and write a deterministic comparison pack
+    /// (concept overlap, claim diff, grounding, structure, retrieval). Nowledge
+    /// Mem is an external reference system; nothing in the trunk depends on it.
+    /// Real-LLM + the network call are explicit, manual operations.
+    CompareRun {
+        /// Remote URL to ingest on the Nowledge side (the service fetches it).
+        #[arg(long)]
+        url: Option<String>,
+        /// Local markdown — drives the ovp side, and the Nowledge side when no
+        /// --url is given. The ovp trunk cannot fetch URLs, so a URL-only run
+        /// leaves the ovp side unavailable (loudly noted in the pack).
+        #[arg(long)]
+        input: Option<PathBuf>,
+        #[arg(long, default_value = "http://127.0.0.1:14242")]
+        nowledge_base_url: String,
+        #[arg(long, default_value_t = 30)]
+        nowledge_timeout_secs: u64,
+        #[arg(long, default_value = "manifests/article_evergreen.pipeline.toml")]
+        manifest: PathBuf,
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        #[arg(long, default_value = "crates/ovp-domain/tests/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long)]
+        concept_registry: Option<PathBuf>,
+        #[arg(long, default_value = "compare")]
+        case_id: String,
+        #[arg(long, default_value = "compare")]
+        run_id: String,
+        /// ISO-8601 date stamped onto interpreted docs. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long, default_value = ".run/eval/compare")]
+        out: PathBuf,
+        /// Fixed retrieval query (repeatable). Defaults to a 3-query probe set.
+        #[arg(long = "query")]
+        queries: Vec<String>,
+        #[arg(long, default_value_t = 5)]
+        rag_limit: usize,
+        #[arg(long, default_value_t = 10)]
+        search_limit: usize,
+        #[arg(long, default_value = "default")]
+        space_id: String,
+        /// Token-overlap ratio above which a claim counts as grounded.
+        #[arg(long, default_value_t = 0.5)]
+        grounding_threshold: f64,
+        #[arg(long, default_value_t = 3)]
+        poll_interval_secs: u64,
+        #[arg(long, default_value_t = 100)]
+        poll_max_attempts: u32,
+        /// Strict same-input mode: materialize Nowledge's parsed content to a
+        /// shared markdown artifact and feed THAT to the ovp side, so both
+        /// systems analyze byte-identical text (a URL becomes source metadata).
+        #[arg(long)]
+        materialize_from_nowledge: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -465,6 +527,62 @@ fn main() -> ExitCode {
                 rag_limit,
                 expected_dir,
                 dry_run,
+            })
+        }
+        Cmd::CompareRun {
+            url,
+            input,
+            nowledge_base_url,
+            nowledge_timeout_secs,
+            manifest,
+            vault_root,
+            canonical_root,
+            cache_dir,
+            concept_registry,
+            case_id,
+            run_id,
+            date,
+            client,
+            out,
+            queries,
+            rag_limit,
+            search_limit,
+            space_id,
+            grounding_threshold,
+            poll_interval_secs,
+            poll_max_attempts,
+            materialize_from_nowledge,
+        } => {
+            use commands::client::ClientKind;
+            use commands::compare_run::CompareRunArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let date_stamp = date.unwrap_or_else(today_iso);
+            commands::compare_run::run(CompareRunArgs {
+                case_id,
+                url,
+                markdown_input: input,
+                nowledge_base_url,
+                nowledge_timeout_secs,
+                manifest_path: manifest,
+                vault_root,
+                canonical_root,
+                cache_dir,
+                concept_registry,
+                run_id,
+                date_stamp,
+                client_kind,
+                out_dir: out,
+                queries,
+                rag_limit,
+                search_limit,
+                space_id,
+                grounding_threshold,
+                poll_interval_secs,
+                poll_max_attempts,
+                materialize_from_nowledge,
             })
         }
     };

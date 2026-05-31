@@ -63,6 +63,10 @@ Any future search index, embedding store, or denormalized cache must be reconstr
 
 Events record what happened, in order. They are not a business query store.
 
+## 13. The eval layer never re-enters the trunk
+
+`ovp-eval` (the M8 external comparator) is an evaluation/orchestration layer **above** the trunk: it calls the M7 review harness and reaches an *external* Nowledge Mem service over HTTP. It may depend on trunk crates; **no trunk crate may depend on `ovp-eval`**. Nowledge Mem is a comparator, not legacy OVP and not a runtime dependency of the pipeline — all of its access is isolated behind the `NowledgeClient` HTTP adapter inside `ovp-eval`, which is the only place `reqwest` is used outside `ovp-llm`. CI gate: `check_architecture.sh` rejects any `^ovp-eval =` line in a trunk crate's `Cargo.toml`. (Same direction-of-dependency discipline as #1, applied at the top of the stack instead of the bottom.)
+
 ## Payload typing at the WriteOp boundary
 
 `CanonicalUpsertOp.payload` and `EventAppendOp.payload` are `String` in `crates/ovp-core/src/plan.rs`. This is **not** an untyped stub — it is a deliberate serialization boundary, the same kind invariant #2 permits for protocol/cassette boundaries:

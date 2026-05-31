@@ -105,6 +105,31 @@ else
     fi
 fi
 
+# === Boundary: the eval layer (ovp-eval) is not a trunk dependency ===
+# ovp-eval is an evaluation/orchestration layer ABOVE the trunk (it calls the
+# review harness + an external HTTP comparator). It may depend on the trunk;
+# nothing in the trunk may depend on it. Guard against a reverse edge.
+echo -n "ok    [no trunk crate depends on ovp-eval] ... "
+eval_bad=$(grep -lE '^ovp-eval *=' \
+    crates/ovp-core/Cargo.toml \
+    crates/ovp-domain/Cargo.toml \
+    crates/ovp-app/Cargo.toml \
+    crates/ovp-run/Cargo.toml \
+    crates/ovp-rag/Cargo.toml \
+    crates/ovp-review/Cargo.toml \
+    crates/ovp-stores/Cargo.toml \
+    crates/ovp-llm/Cargo.toml \
+    crates/ovp-query/Cargo.toml \
+    crates/ovp-lint/Cargo.toml \
+    crates/ovp-auto/Cargo.toml 2>/dev/null || true)
+if [[ -n "$eval_bad" ]]; then
+    echo "FAIL — these trunk crates depend on ovp-eval:"
+    echo "$eval_bad"
+    fail=1
+else
+    echo "passed"
+fi
+
 # === Invariant #9: no Transform impl holds an effect client ===
 # Heuristic: any file declaring `impl Transform<...> for <T>` and ALSO
 # containing `Box<dyn (.*Client|.*Store|.*Fetcher)>` is using the wrong

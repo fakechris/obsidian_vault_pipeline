@@ -720,6 +720,7 @@ dependencies = [
  "ovp-auto",
  "ovp-core",
  "ovp-domain",
+ "ovp-eval",
  "ovp-lint",
  "ovp-llm",
  "ovp-query",
@@ -752,6 +753,22 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-eval"
+version = "0.1.0"
+dependencies = [
+ "ovp-app",
+ "ovp-core",
+ "ovp-domain",
+ "ovp-llm",
+ "ovp-rag",
+ "ovp-review",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
