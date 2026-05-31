@@ -91,6 +91,14 @@ impl DomainPipelineSpec {
         &self.topology
     }
 
+    /// The build `kind` declared for a node id (e.g. `"source.markdown_inbox"`),
+    /// read from its `[assembly.<id>]` overlay entry; `None` if the id is not in
+    /// the spec. Read-only accessor for diagnostics (the M7 review harness's
+    /// processor-chain capture). Does not affect assembly or any invariant.
+    pub fn node_kind(&self, id: &str) -> Option<&str> {
+        self.assembly.get(id).map(|a| a.kind.as_str())
+    }
+
     pub(crate) fn assembly(&self) -> &BTreeMap<String, NodeAssembly> {
         &self.assembly
     }

@@ -7,5 +7,6 @@ pub mod interpret_article;
 pub mod lint;
 pub mod query;
 pub mod rag;
+pub mod review_run;
 pub mod run;
 pub mod run_cycle;

@@ -206,6 +206,55 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run one full cycle (L4) on a single input and produce a deterministic,
+    /// human-inspectable review pack: processor chain, run report, apply
+    /// summary, files written, canonical summary, L5 query stats + lint, and
+    /// (optionally) an L6 RAG context and an `--expected-dir` comparison.
+    /// Acts as a quality gate: exits non-zero if the cycle failed OR the output
+    /// violates its `--expected-dir` contract MUST clauses (the pack is written
+    /// either way). Read / orchestrate only — the only vault/canonical content
+    /// writes go through the cycle; this writes just the pack (+ empty store
+    /// roots). Default client is replay-only; no network.
+    ReviewRun {
+        #[arg(long, default_value = "manifests/article_evergreen.pipeline.toml")]
+        manifest: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        canonical_root: PathBuf,
+        #[arg(long, default_value = "crates/ovp-domain/tests/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long)]
+        concept_registry: Option<PathBuf>,
+        #[arg(long, default_value = "review")]
+        run_id: String,
+        /// ISO-8601 date stamped onto interpreted docs. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Where to write the review pack.
+        #[arg(long, default_value = ".run/review-pack")]
+        out: PathBuf,
+        /// Optional RAG query to retrieve over the result.
+        #[arg(long)]
+        rag_query: Option<String>,
+        /// Max concepts in the RAG context.
+        #[arg(long, default_value_t = 5)]
+        rag_limit: usize,
+        /// Optional directory of frozen expected artifacts to compare against.
+        /// A contract.yaml here is evaluated by the contract engine; a MUST
+        /// failure fails the review (non-zero exit) even if the cycle succeeded.
+        #[arg(long)]
+        expected_dir: Option<PathBuf>,
+        /// Preview only: the cycle applies nothing. Read-back / lint /
+        /// comparison reflect the CURRENT on-disk state, not a post-apply
+        /// simulation.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -377,6 +426,46 @@ fn main() -> ExitCode {
         Cmd::Rag { vault_root, canonical_root, query, limit, json } => {
             use commands::rag::RagArgs;
             commands::rag::run(RagArgs { vault_root, canonical_root, query, limit, json })
+        }
+        Cmd::ReviewRun {
+            manifest,
+            input,
+            vault_root,
+            canonical_root,
+            cache_dir,
+            concept_registry,
+            run_id,
+            date,
+            client,
+            out,
+            rag_query,
+            rag_limit,
+            expected_dir,
+            dry_run,
+        } => {
+            use commands::client::ClientKind;
+            use commands::review_run::ReviewRunArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let date_stamp = date.unwrap_or_else(today_iso);
+            commands::review_run::run(ReviewRunArgs {
+                manifest_path: manifest,
+                input_path: input,
+                vault_root,
+                canonical_root,
+                cache_dir,
+                concept_registry,
+                run_id,
+                date_stamp,
+                client_kind,
+                out_dir: out,
+                rag_query,
+                rag_limit,
+                expected_dir,
+                dry_run,
+            })
         }
     };
     match result {
