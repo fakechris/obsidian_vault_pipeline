@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use ovp_app::{AppWiring, DomainPipelineSpec};
 use ovp_core::{ApplyMode, RunId};
-use ovp_domain::{CanonicalConcept, ConceptRegistry, ARTICLE_PROMPT_ID};
+use ovp_domain::{
+    CanonicalConcept, ConceptRegistry, EvergreenConcept, EvergreenNote, ARTICLE_PROMPT_ID,
+};
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 use ovp_run::{RunCycle, RunCycleError, RunCycleInputs, RunCycleReport};
 use ovp_stores::CanonicalFsStoreApplier;
@@ -156,6 +158,89 @@ fn run_cycle_article_is_idempotent() {
     assert_eq!(r2.apply.counts().failed, 0);
     assert_eq!(r2.moc.as_ref().unwrap().applied, 0, "MOC unchanged on re-run");
     assert_eq!(r2.knowledge_index.as_ref().unwrap().applied, 0, "index unchanged on re-run");
+}
+
+#[test]
+fn run_cycle_enriches_a_preexisting_same_slug_note() {
+    // M12b: a concept slug whose evergreen note already exists on disk with
+    // DIFFERENT grounding (as if a prior article minted it) must ENRICH — not
+    // fail the apply. Pre-M12b the re-minted VaultCreate would collide
+    // (different hash, same path) → Failed → halt → !succeeded().
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    // Run 1: mint article_clean's evergreen notes.
+    let r1 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r1.succeeded(), "run1 should succeed: {:?}", r1.derived_skipped_reason);
+
+    // Pick one minted note and capture one of its source-backed claims.
+    let evergreen_dir = vault.path().join("10-Knowledge/Evergreen");
+    let note_path = std::fs::read_dir(&evergreen_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "md"))
+        .expect("article_clean mints at least one evergreen note");
+    let slug = note_path.file_stem().unwrap().to_string_lossy().to_string();
+    let clean_body = std::fs::read_to_string(&note_path).unwrap();
+    let this_articles_claim = clean_body
+        .lines()
+        .find(|l| l.starts_with("- ") && !l.starts_with("- ["))
+        .map(|l| l.trim_start_matches("- ").to_string())
+        .expect("the minted note carries a source-backed claim");
+
+    // Simulate a DIFFERENT prior document having minted the same slug: overwrite
+    // the note with a distinct grounded body (valid evergreen format).
+    let mut prior = EvergreenConcept::from_candidate(&slug, "https://prior-doc.example/x");
+    prior.definition = "Definition from a prior document.".into();
+    prior.source_claims = vec!["PRIOR-DOC unique claim.".into()];
+    prior.source_title = "Prior Doc".into();
+    std::fs::write(&note_path, EvergreenNote::from_concept(&prior).render()).unwrap();
+
+    // Run 2: same article again. The clashing slug must enrich, not fail.
+    let r2 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(
+        r2.succeeded(),
+        "a pre-existing different-grounding note for the same slug must enrich, not fail: {:?}",
+        r2.derived_skipped_reason
+    );
+    assert_eq!(r2.apply.counts().failed, 0, "no op may fail");
+
+    // The note now carries BOTH groundings (union; first definition kept).
+    let merged = std::fs::read_to_string(&note_path).unwrap();
+    assert!(merged.contains("PRIOR-DOC unique claim."), "prior document's claim preserved");
+    assert!(merged.contains(&this_articles_claim), "this article's claim merged in:\n{merged}");
+    assert!(merged.contains("https://prior-doc.example/x"), "prior source link preserved");
+
+    // Run 3: idempotent — nothing new to merge, the note is unchanged.
+    let before3 = std::fs::read_to_string(&note_path).unwrap();
+    let r3 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r3.succeeded());
+    assert_eq!(std::fs::read_to_string(&note_path).unwrap(), before3, "third run is idempotent");
 }
 
 #[test]

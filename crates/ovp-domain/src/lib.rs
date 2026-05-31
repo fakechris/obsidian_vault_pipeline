@@ -10,6 +10,7 @@ pub mod canonical;
 pub mod canonical_slug;
 pub mod concept_registry;
 pub mod evergreen;
+pub mod evergreen_note;
 pub mod interpreted;
 pub mod knowledge_index;
 pub mod moc;
@@ -30,6 +31,7 @@ pub use canonical::{CanonicalConcept, CanonicalParseError};
 pub use canonical_slug::{CanonicalSlug, SlugError};
 pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use evergreen::EvergreenConcept;
+pub use evergreen_note::{content_hash, reconcile_evergreen_write, EvergreenNote};
 pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
 pub use knowledge_index::{
     extract_wikilinks, KnowledgeIndex, KnowledgeIndexBuilder, KnowledgeIndexEntry,

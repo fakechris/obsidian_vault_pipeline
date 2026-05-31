@@ -7,11 +7,31 @@
 //! evergreen stubs, AND canonical records all land with no Unsupported.
 
 use ovp_core::{
-    ApplyMode, GraphRunner, OpKind, OpResult, PipelineManifest, PlanApplier, RunId, WriteOp,
+    ApplyMode, GraphRunner, OpKind, OpResult, PipelineManifest, PlanApplier, Record, RecordId,
+    RecordMeta, RunId, Sink, VaultCreateOp, WriteOp, WritePlan,
 };
 use ovp_domain::*;
 use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
 use ovp_stores::{CanonicalFsStoreApplier, CompositePlanApplier, VaultFsPlanApplier};
+
+/// Build the evergreen `VaultCreate` a grounded concept renders to (the first
+/// op the sink emits), as if minted from a specific source document.
+fn grounded_create(slug: &str, definition: &str, source_url: &str) -> VaultCreateOp {
+    let mut c = EvergreenConcept::from_candidate(slug, source_url);
+    c.definition = definition.into();
+    c.source_claims = vec![format!("Claim from {source_url}.")];
+    c.source_title = "Doc".into();
+    let mut sink = EvergreenSink::new("evergreen_sink", RunId::new("r"));
+    let out = sink.consume(Record::new(
+        RecordId::new(format!("evg-{slug}")),
+        DomainBody::EvergreenConcept(Box::new(c)),
+        RecordMeta { run_id: RunId::new("r"), seq: 0 },
+    ));
+    match out.plan_ops.into_iter().find(|o| matches!(o, WriteOp::VaultCreate(_))) {
+        Some(WriteOp::VaultCreate(o)) => o,
+        _ => unreachable!("sink emits a VaultCreate"),
+    }
+}
 
 fn repo_root() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -185,10 +205,111 @@ fn applying_twice_is_idempotent_for_evergreen_stubs() {
     let first = applier.apply(&report.write_plan, ApplyMode::Apply);
     assert_eq!(first.counts().applied, 14);
 
-    // Stub bodies are provenance-free + deterministic, so a second apply
-    // skips all VaultCreates as idempotent.
+    // Rich bodies are deterministic from the (cassette-fixed) interpretation,
+    // so a second apply still skips all VaultCreates as idempotent.
     let second = applier.apply(&report.write_plan, ApplyMode::Apply);
     assert_eq!(second.counts().applied, 0, "nothing re-written");
     assert_eq!(second.counts().skipped, 14, "all VaultCreates idempotent-skip");
     assert_eq!(second.counts().failed, 0);
+}
+
+#[test]
+fn minted_evergreen_notes_are_grounded_not_stub() {
+    // M12a: notes minted from a real interpreted article carry a definition +
+    // source-backed claims + a source link, not the bare stub placeholder.
+    let report = run_pipeline();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let mut applier = CompositePlanApplier::new(vec![
+        Box::new(VaultFsPlanApplier::new(vault.path())),
+        Box::new(CanonicalFsStoreApplier::new(canon.path())),
+    ]);
+    let apply = applier.apply(&report.write_plan, ApplyMode::Apply);
+    assert_eq!(apply.counts().failed, 0);
+
+    let evergreen_dir = vault.path().join("10-Knowledge/Evergreen");
+    let mut files = 0;
+    let mut with_claims = 0;
+    for entry in std::fs::read_dir(&evergreen_dir).unwrap() {
+        let body = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        files += 1;
+        assert!(
+            !body.contains("Stub evergreen. Expand"),
+            "minted note must not be a stub:\n{body}"
+        );
+        // Every minted note is grounded: a definition and a source link.
+        assert!(body.contains("status: minted"), "note marked minted:\n{body}");
+        assert!(body.contains("## Source"), "note links its source:\n{body}");
+        if body.contains("## Source-backed claims") {
+            with_claims += 1;
+        }
+    }
+    assert_eq!(files, 13, "13 minted evergreen notes");
+    assert!(with_claims >= 1, "at least one note carries source-backed claims");
+}
+
+#[test]
+fn raw_applier_rejects_a_conflicting_vaultcreate() {
+    // Low-level safety net: the vault applier never silently overwrites. Two
+    // DISTINCT grounded notes for the same slug have different hashes, so a
+    // second raw VaultCreate to the same path FAILS (and the composite halts).
+    // In a run-cycle this never reaches the applier — the M12b reconcile
+    // (see `run_cycle_enriches_a_preexisting_same_slug_note`) converts the
+    // conflicting VaultCreate into a merge VaultUpdate first. This test pins the
+    // applier's fail-loud behavior as the backstop.
+    let vault = tempfile::tempdir().unwrap();
+    let mut applier =
+        CompositePlanApplier::new(vec![Box::new(VaultFsPlanApplier::new(vault.path()))]);
+
+    let mut plan = WritePlan::new(RunId::new("two-docs"));
+    plan.push(WriteOp::VaultCreate(grounded_create("rag", "Definition A.", "https://a/x")));
+    plan.push(WriteOp::VaultCreate(grounded_create("rag", "Definition B.", "https://b/y")));
+    plan.push(WriteOp::VaultCreate(grounded_create("vector-db", "A vector db.", "https://c/z")));
+
+    let counts = applier.apply(&plan, ApplyMode::Apply).counts();
+    assert_eq!(counts.applied, 1, "only the first grounded note lands");
+    assert_eq!(counts.failed, 1, "second distinct same-slug body fails loud (no overwrite)");
+    assert!(counts.skipped >= 1, "composite halts after the failure; later ops are skipped");
+}
+
+#[test]
+fn reconcile_enriches_same_slug_across_documents() {
+    // M12b: route each document's evergreen VaultCreate through the reconcile,
+    // then apply. Document A mints; document B (same slug, different grounding)
+    // enriches via VaultUpdate; re-running B is a no-op.
+    let vault = tempfile::tempdir().unwrap();
+
+    let apply_one = |op: WriteOp| {
+        let mut applier = VaultFsPlanApplier::new(vault.path());
+        let mut plan = WritePlan::new(RunId::new("doc"));
+        plan.push(op);
+        applier.apply(&plan, ApplyMode::Apply)
+    };
+    let note_on_disk = || {
+        std::fs::read_to_string(vault.path().join("10-Knowledge/Evergreen/rag.md")).unwrap()
+    };
+
+    // Document A: no note yet → MintNew.
+    let a = grounded_create("rag", "Definition from A.", "https://a/x");
+    let wa = reconcile_evergreen_write(&a, None).expect("mint new");
+    assert!(matches!(wa, WriteOp::VaultCreate(_)));
+    assert_eq!(apply_one(wa).counts().applied, 1);
+
+    // Document B: same slug, different grounding → EnrichExisting (VaultUpdate).
+    let b = grounded_create("rag", "Definition from B.", "https://b/y");
+    let wb = reconcile_evergreen_write(&b, Some(&note_on_disk())).expect("enrich");
+    assert!(matches!(wb, WriteOp::VaultUpdate(_)), "second doc enriches, not fails");
+    assert_eq!(apply_one(wb).counts().applied, 1, "the enrich update applies cleanly");
+
+    let merged = note_on_disk();
+    assert!(merged.contains("https://a/x") && merged.contains("https://b/y"), "both sources present");
+    assert!(
+        merged.contains("Claim from https://a/x.") && merged.contains("Claim from https://b/y."),
+        "both documents' claims present"
+    );
+    assert!(merged.contains("Definition from A."), "keeps the first definition");
+
+    // Re-running document B is idempotent: nothing new to add → skip (no write).
+    let again = reconcile_evergreen_write(&b, Some(&note_on_disk()));
+    assert!(again.is_none(), "re-enriching with the same document is a no-op");
 }

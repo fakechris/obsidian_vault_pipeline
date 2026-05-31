@@ -14,9 +14,12 @@ use crate::evergreen::EvergreenConcept;
 ///
 /// Pure: same `InterpretedDoc` → same fan-out. This is the legacy
 /// "absorb" equivalent for the mint-new-evergreen half. v1 policy is
-/// AUTO-all (mint every surviving candidate); the legacy AUTO/ESCALATE/
-/// REJECT lanes are a later refinement. Cross-document dedup of the same
-/// slug is the canonical store's job, not this transform's.
+/// AUTO-all (mint every surviving candidate); mint/enrich/escalate/reject
+/// policy lanes are a later refinement. When the same slug recurs across
+/// documents, `RunCycle`'s reconcile (`ovp_domain::reconcile_evergreen_write`,
+/// a pure merge) enriches the existing note before apply; the canonical store
+/// keeps the first writer's provenance and does NOT merge. Semantic dedup of
+/// near-duplicate claims is still future.
 pub struct EvergreenConceptWriter {
     step: StepId,
 }
@@ -46,18 +49,19 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
         };
 
         // One EvergreenConcept per surviving candidate, deterministic order.
-        // Candidates that aren't a valid canonical slug are DROPPED here
-        // (not minted) with an observable `FilterDropped` event — a divergent
-        // slug would write the canonical record where rebuilds can't find it
-        // (see `CanonicalSlug`).
-        let source_url = interp.source_url.clone();
+        // Each is minted *rich* from the interpreted article (definition +
+        // source-backed claims + related + provenance) so the evergreen note
+        // is a grounded knowledge unit, not a bare stub (M12a). Candidates that
+        // aren't a valid canonical slug are DROPPED here (not minted) with an
+        // observable `FilterDropped` event — a divergent slug would write the
+        // canonical record where rebuilds can't find it (see `CanonicalSlug`).
         let meta = record.meta.clone();
         let provenance = record.provenance.clone();
         let record_id = record.id.clone();
         let mut concepts: Vec<EvergreenConcept> = Vec::new();
         let mut drop_events: Vec<EventKind> = Vec::new();
         for raw in &interp.concept_candidates {
-            match EvergreenConcept::try_from_candidate(raw, source_url.clone()) {
+            match EvergreenConcept::try_mint(raw, interp) {
                 Ok(c) => concepts.push(c),
                 Err(e) => drop_events.push(EventKind::FilterDropped {
                     record_id: record_id.clone(),
@@ -165,6 +169,30 @@ mod tests {
         if let DomainBody::EvergreenConcept(c) = &out[1].body {
             assert_eq!(c.provenance_source_url, "https://example.com/post");
         }
+    }
+
+    #[test]
+    fn minted_concepts_carry_definition_and_claims() {
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let mut d = interp(vec!["rag"]);
+        d.dimensions.one_liner = "RAG augments generation with retrieval.".into();
+        d.dimensions.details = vec![
+            "RAG retrieves documents before generation.".into(),
+            "It reduces hallucination.".into(),
+        ];
+        let out = match w.process(record(d)) {
+            FilterDecision::FanOut(rs) => rs,
+            other => panic!("expected FanOut, got {other:?}"),
+        };
+        let c = match &out[1].body {
+            DomainBody::EvergreenConcept(c) => c,
+            other => panic!("expected EvergreenConcept, got {other:?}"),
+        };
+        // The writer threads the interpreted article's grounding onto the mint.
+        assert_eq!(c.definition, "RAG augments generation with retrieval.");
+        assert!(!c.source_claims.is_empty(), "source-backed claims attached");
+        assert!(c.source_claims.iter().any(|s| s.contains("retrieves documents")));
+        assert_eq!(c.source_title, "T");
     }
 
     #[test]

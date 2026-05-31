@@ -9,7 +9,9 @@ use crate::concept_registry::ConceptRegistry;
 /// Promotion is alias-aware: a candidate that's an alias of a canonical
 /// slug is promoted to the *canonical* spelling, and duplicates collapse.
 /// Unknown candidates stay candidates — minting a new evergreen is a
-/// separate human-reviewed step (the legacy "absorb" stage), not this.
+/// separate path (`EvergreenConceptWriter`, currently AUTO-all minting), not
+/// this. (The legacy "absorb" stage was human-reviewed; the mint/enrich/reject
+/// policy lanes are still future.)
 pub struct ConceptResolver {
     step: StepId,
     registry: ConceptRegistry,
