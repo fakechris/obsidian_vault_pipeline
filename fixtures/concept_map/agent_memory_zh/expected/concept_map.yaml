@@ -1,0 +1,196 @@
+case: agent-memory-zh
+must_have:
+  - id: agent-memory-taxonomy
+    title: Agent Memory Taxonomy (Episodic / Semantic / Procedural)
+    aliases: [memory-taxonomy, three-type-memory, episodic-semantic-procedural]
+    concept_type: taxonomy
+    expected_meaning: A cognitive-science-derived classification dividing agent memory into episodic (what happened), semantic (stable facts about you), and procedural (how to do things) memory.
+    required_evidence:
+      - "Google 在 2025 年 11 月发表了一篇论文，标题叫《Context Engineering, Sessions and Memory》... 把Agent的记忆分为三类"
+      - "情景记忆：昨天发生了啥；语义记忆：你叫什么、喜欢什么；程序性记忆：怎么完成一件事"
+    acceptable_claims:
+      - The Google 2025-11 paper "Context Engineering, Sessions and Memory" classifies agent memory into three types echoing cognitive science.
+      - Episodic = recent events, semantic = stable identity/preferences, procedural = how-to/process knowledge.
+    may_merge_with: [episodic-memory, semantic-memory, procedural-memory]
+    must_not_confuse_with: [everos-six-type-taxonomy, memory-system-framework]
+  - id: memory-system-framework
+    title: Two-Question Memory-System Framework (Classify + Extract/Update/Retrieve)
+    aliases: [two-question-framework, extract-update-retrieve, three-stage-mechanism]
+    concept_type: principle
+    expected_meaning: An analytical lens for understanding any agent memory system by answering two questions - how memory is classified, and how it is extracted, updated, and retrieved.
+    required_evidence:
+      - "1. 记忆有多少种分类，每种存什么的？ 2. 记忆是如何抽取，更新，检索？"
+      - "还有一步是检索...关键词检索，语义检索，融合检索，用大模型来检索"
+    acceptable_claims:
+      - Any memory system can be understood via two questions - its memory classification and its extract/update/retrieve mechanism.
+      - Update merges contradictory entries (e.g. user moved from Dali to Chengdu) so memory stays consistent.
+    may_merge_with: []
+    must_not_confuse_with: [agent-memory-taxonomy, semantic-consolidation]
+  - id: context-compression
+    title: Context Compression (Single-Session Memory)
+    aliases: [conversation-compression, 上下文压缩, single-session-memory]
+    concept_type: procedure
+    expected_meaning: Summarizing/condensing the running chat history and re-injecting it into the prompt so a single long conversation stays within the context window.
+    required_evidence:
+      - "当聊天记录很多，以至于超过大模型接受聊天历史最大值时。它就会压缩聊天记录，就是把当前回话对话历史总结提炼一下，然后又塞回提示词"
+      - "上面就是模型如何在单个冗长对话中保持记忆的原理"
+    acceptable_claims:
+      - LLM API calls are stateless; the chat history is resent each turn to preserve recent memory.
+      - When history exceeds the context window it is summarized and re-injected to free space.
+    may_merge_with: []
+    must_not_confuse_with: [openclaw-memory-system, agent-memory-taxonomy]
+  - id: openclaw-memory-system
+    title: OpenClaw Three-Store Memory System
+    aliases: [openclaw, openclaw-memory, memory-md-daily-logs-snapshots]
+    concept_type: system
+    expected_meaning: OpenClaw's long-term memory built from three markdown stores - memory.md (semantic), daily logs (episodic), and session snapshots (episodic) - with extraction on compression / session reset / explicit request.
+    required_evidence:
+      - "memory.md（记忆）：属于语义记忆... daily logs（每日日志）：属于情景记忆... session snapshots（会话快照）：属于情景层记忆"
+      - "抽取发生在三种情况下: 对话即将被压缩... 你用 /new 或 /reset 命令开启一个新会话... 用户要求记忆时候"
+      - "OpenClaw 的记忆系统问题不少：1. 很费Token 2. Markdown 没了记忆就消失 3. 经常遗忘东西"
+    acceptable_claims:
+      - OpenClaw stores long-term memory in memory.md (semantic), daily logs (episodic, append-only), and session snapshots (last 15 meaningful messages on /new or /reset).
+      - Extraction triggers on impending compression, session reset, or explicit user request.
+      - On a new conversation memory.md plus today/yesterday's daily logs are auto-injected; memory search uses fusion (keyword + vector) then memory get.
+      - Known limitations - token-heavy, fragile (lost markdown = lost memory), and forgetful.
+    may_merge_with: []
+    must_not_confuse_with: [everos-system, context-compression]
+  - id: everos-system
+    title: EverOS Enterprise Memory System
+    aliases: [everos, evermind, enterprise-memory-system]
+    concept_type: system
+    expected_meaning: An open-source (Apache 2.0) enterprise-grade agent memory system by EverMind that refines the basic 3-type model into 6 types and adds consolidation, multi-mode retrieval, and skill evolution.
+    required_evidence:
+      - "我挑一个叫 EverOS 的开源方案来拆解"
+      - "原本 3 类，EverOS 拆成 6 种，能装的东西更精细"
+      - "整个项目 Apache 2.0 开源，目前 4500+ stars... EverMind 是盛大下面的 AI Native 公司"
+    acceptable_claims:
+      - EverOS is an Apache-2.0 open-source enterprise memory system (4500+ stars) from EverMind, a Shanda AI-native company.
+      - It offers a free Cloud API (everos.evermind.ai), a pip-installable SDK, and a repo with 20 real use cases.
+      - It ships official plugins - Claude Code Plugin, OpenClaw Plugin, and an OpenClaw Skill.
+    may_merge_with: [everos-six-type-taxonomy]
+    must_not_confuse_with: [openclaw-memory-system]
+  - id: everos-six-type-taxonomy
+    title: EverOS Six-Type Memory Taxonomy
+    aliases: [everos-6-type, six-type-memory, episode-eventlog-foresight]
+    concept_type: taxonomy
+    expected_meaning: EverOS's finer-grained refinement of the 3-type model into 6 categories - semantic (stable traits / temporary states), episodic (Episode / EventLog / Foresight), and procedural (Agent Case / Agent Skill).
+    required_evidence:
+      - "EverOS 在每一类下面又分得更细"
+      - "Episode（剧情记忆）... EventLog（事件日志）... Foresight（未来记）"
+      - "Agent Case（任务档案）... Agent Skill（蒸馏技能）... 稳定特质... 临时状态"
+    acceptable_claims:
+      - Semantic splits into Stable Traits (long-term attributes) and Temporary States (transient conditions).
+      - Episodic splits into Episode (condensed task/conversation summary), EventLog (timestamped key facts), and Foresight (time-bound future items).
+      - Procedural splits into Agent Case (single-task archive with quality score) and Agent Skill (distilled reusable pattern).
+    may_merge_with: [everos-system]
+    must_not_confuse_with: [agent-memory-taxonomy, skill-self-evolution]
+  - id: semantic-consolidation
+    title: Semantic Consolidation (Memory Update / Conflict Resolution)
+    aliases: [semantic-consolidation, 语义巩固, profile-evolution]
+    concept_type: procedure
+    expected_meaning: EverOS's update mechanism that resolves contradictory memories by keeping the latest, merging duplicates, and maintaining a user profile that separates stable preferences from temporary states.
+    required_evidence:
+      - "EverOS 靠的是「语义巩固（Semantic Consolidation）」，做三件事"
+      - "自动判断哪条是最新的... 重复的、说的是同一件事的，合到一起... 把稳定偏好和临时状态分开存（这一步官方叫 Profile Evolution）"
+    acceptable_claims:
+      - Semantic Consolidation auto-selects the latest version of contradictory facts, merges duplicates, and maintains a user profile (Profile Evolution) separating stable from temporary.
+    may_merge_with: []
+    must_not_confuse_with: [memory-system-framework, skill-self-evolution]
+  - id: skill-self-evolution
+    title: Skill Self-Evolution (Agent Case to Skill Distillation)
+    aliases: [skill-self-evolution, skill-自进化, case-to-skill, agent-skill-distillation]
+    concept_type: procedure
+    expected_meaning: EverOS distilling repeated task archives (Agent Cases) into reusable Agent Skills with a maturity score, exposed via the agent.add -> flush -> mems.get three-API pipeline.
+    required_evidence:
+      - "Agent 反复做同类任务，EverOS 自动把经验蒸馏成可复用的 skill"
+      - "第一次喂轨迹只生成 case... 跑过几次同类任务后端才聚类蒸馏出 skill"
+      - "agent.add(...) ... agent.flush(...) ... mems.get(..., memory_type=\"agent_skill\") ... maturity_score >= 0.7"
+    acceptable_claims:
+      - First trajectory creates a Case; after several similar tasks EverOS clusters and distills a reusable Skill with a maturity score.
+      - The pipeline is agent.add -> agent.flush -> mems.get, filtering skills with maturity_score >= 0.7, and requires the /memories/agent endpoint.
+    may_merge_with: []
+    must_not_confuse_with: [everos-six-type-taxonomy, semantic-consolidation]
+  - id: active-retrieval
+    title: Active Context Reconstruction Retrieval
+    aliases: [active-retrieval, 主动重建上下文, retrieval-modes, agentic-retrieval]
+    concept_type: principle
+    expected_meaning: EverOS retrieval that actively rebuilds context by analyzing intent, activating relevant topics, filtering expired info, and iterating until enough is found - contrasted with passive single-pass search.
+    required_evidence:
+      - "EverOS 是主动重建上下文：先分析你这次想干什么... 激活相关的主题场景... 过滤过期信息... 一直迭代搜索，直到信息够用为止"
+      - "普通方案是被动匹配... EverOS会反复换角度去找"
+      - "EverOS 给你 4 种检索方式...关键词...向量搜索...混合...Agentic"
+    acceptable_claims:
+      - EverOS offers four retrieval modes - keyword, vector, hybrid (keyword+vector+rerank, the default), and agentic (LLM-driven multi-step).
+      - Unlike passive top-k matching, EverOS actively reconstructs context - analyze intent, activate topics, filter expired info, iterate until sufficient.
+    may_merge_with: [hybrid-retrieval]
+    must_not_confuse_with: [semantic-consolidation]
+must_not_mint:
+  - slug: episodic-memory
+    reason: synonym-of-X (should merge into agent-memory-taxonomy) - one of the three taxonomy types, not a standalone differentiated concept in this article
+  - slug: semantic-memory
+    reason: synonym-of-X (should merge into agent-memory-taxonomy) - one of the three taxonomy types; article does not develop it as an independent concept
+  - slug: procedural-memory
+    reason: synonym-of-X (should merge into agent-memory-taxonomy) - one of the three taxonomy types; carries no procedural-specific body content
+  - slug: hybrid-retrieval
+    reason: synonym-of-X (should merge into active-retrieval) - hybrid is just one of EverOS's four modes; the article's retrieval point is active vs passive, not hybrid as its own concept
+  - slug: locomo-benchmark
+    reason: unsupported as standalone concept - a single passing evaluation number (93.05% vs Zep 85.22%); belongs as a claim under everos-system, not its own evergreen
+  - slug: foresight-memory
+    reason: synonym-of-X (should merge into everos-six-type-taxonomy) - Foresight is one of EverOS's six memory subtypes, defined only inside that taxonomy
+  - slug: vector-database
+    reason: umbrella label - listed in the intro as jargon the article deliberately avoids explaining; never developed
+  - slug: rag
+    reason: umbrella label - named only in the intro jargon list as a term, never explained or used as a concept
+  - slug: working-memory
+    reason: unsupported by body - mentioned only as a one-line human analogy (工作记忆和长期记忆), not developed
+  - slug: agent-long-term-memory
+    reason: article thesis / umbrella - this is the article's overall subject, not a discrete concept
+coverage:
+  primary_note_should_cover:
+    - single-session vs cross-session memory and context compression
+    - the two-question framework (classify + extract/update/retrieve)
+    - OpenClaw three stores plus its limitations and trigger model
+    - EverOS 6-type taxonomy, consolidation, retrieval modes, skill self-evolution
+    - EverOS ecosystem (API, plugins, use cases) and LoCoMo result
+  evergreen_should_cover:
+    - agent-memory-taxonomy
+    - memory-system-framework
+    - context-compression
+    - openclaw-memory-system
+    - everos-system
+    - everos-six-type-taxonomy
+    - semantic-consolidation
+    - skill-self-evolution
+    - active-retrieval
+  primary_only_ok:
+    - LoCoMo 93.05% vs Zep 85.22% benchmark number
+    - Foresight subtype example (proposal-by-next-Friday)
+    - EverOS free Cloud API / pip install / 20 use cases (MemoCare, Game of Thrones, OpenHer)
+    - EverMind being a Shanda AI-native company and 4500+ stars
+    - the human working-memory / long-term-memory analogy
+known_disagreements_with_nowledge:
+  - item: "M6 LoCoMo 93.05% vs Zep 85.22% benchmark"
+    decision: primary-note-only
+    why: The article states it as a single supporting metric for EverOS; it is a claim about everos-system, not a concept warranting its own evergreen.
+  - item: "M7 Foresight memory (time-bound future predictions)"
+    decision: merge-into-X
+    why: Foresight is defined only as one of EverOS's six subtypes; merge into everos-six-type-taxonomy rather than minting standalone.
+  - item: "M2 EverOS 6-type taxonomy"
+    decision: mint-as-evergreen
+    why: The article devotes a full section to the 6-type refinement with distinct subtypes; it is a genuine taxonomy concept distinct from the basic 3-type model.
+  - item: "M11 OpenClaw three-trigger extraction model"
+    decision: merge-into-X
+    why: Real article content but it is a property of openclaw-memory-system; fold it in as a claim rather than minting a separate concept.
+  - item: "M12 active vs passive retrieval + M4 four retrieval modes"
+    decision: mint-as-evergreen
+    why: The article's stated point is the active-reconstruction retrieval logic (with the four modes as detail); captured as the single active-retrieval concept, not a separate hybrid-retrieval note.
+  - item: "M1 two-question framework"
+    decision: mint-as-evergreen
+    why: The article explicitly frames it as the reusable lens for understanding any memory system; it is a genuine principle (memory-system-framework).
+  - item: "M14 EverOS ecosystem / plugins / use cases"
+    decision: primary-note-only
+    why: Ecosystem facts (plugins, MemoCare, etc.) support everos-system but are mention-level detail, not a distinct concept.
+  - item: "OVP episodic-memory / semantic-memory / procedural-memory trio"
+    decision: merge-into-X
+    why: The article presents these only as the three buckets of the Google taxonomy with no slug-specific body; they collapse into agent-memory-taxonomy.
