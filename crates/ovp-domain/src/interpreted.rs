@@ -24,6 +24,14 @@ pub struct InterpretedDoc {
     pub canonical_concepts: Vec<String>,
     pub concept_candidates: Vec<String>,
     pub dimensions: Dimensions,
+    /// Which interpretation schema produced this doc (M13.3). The
+    /// `EvergreenConceptWriter` branches on THIS, never on `concepts.is_empty()`,
+    /// so a v2 doc whose concept map gates to empty fails LOUD instead of
+    /// silently falling back to the v1 candidate / shared-`one_liner` path.
+    /// `#[serde(default)]` → ArticleV1, so pre-marker serialized docs and the v1
+    /// path keep their meaning.
+    #[serde(default)]
+    pub schema: InterpretationSchema,
     /// M13 v2 concept map: source-grounded concepts each carrying their OWN
     /// definition + claims + evidence. **Empty for v1 responses** (the legacy
     /// `concept_candidates` + shared-`one_liner` path still applies). Populated
@@ -32,6 +40,22 @@ pub struct InterpretedDoc {
     /// from its concept's own fields instead of the article one-liner.
     #[serde(default)]
     pub concepts: Vec<ExtractedConcept>,
+}
+
+/// Which interpretation prompt/schema produced an [`InterpretedDoc`]. An
+/// EXPLICIT marker — not inferred from whether `concepts` is empty — so the
+/// writer can tell "v1 doc" apart from "v2 doc whose map gated to empty" and
+/// fail loud on the latter rather than silently mint the v1 candidate path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InterpretationSchema {
+    /// Legacy `article_interpret/v1`: flat `concept_candidates` + a shared
+    /// article-level `one_liner` definition.
+    #[default]
+    ArticleV1,
+    /// `article_concept_map/v2`: per-concept `concepts` with their own
+    /// definitions / claims / evidence.
+    ConceptMapV2,
 }
 
 /// What kind of thing a concept is. Small, closed vocabulary (no Nowledge

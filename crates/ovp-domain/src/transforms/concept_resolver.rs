@@ -253,7 +253,7 @@ fn norm_key(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreted::{Dimensions, Explanation, InterpretedDoc};
+    use crate::interpreted::{Dimensions, Explanation, InterpretationSchema, InterpretedDoc};
     use ovp_core::{RecordId, RecordMeta, RunId};
 
     fn interp(candidates: Vec<&str>) -> InterpretedDoc {
@@ -275,6 +275,7 @@ mod tests {
                 actions: vec![],
                 linked_concepts: vec![],
             },
+            schema: InterpretationSchema::ArticleV1,
             concepts: Vec::new(),
         }
     }
@@ -426,6 +427,7 @@ mod tests {
 
     fn doc_with_concepts(cs: Vec<ExtractedConcept>) -> InterpretedDoc {
         let mut d = interp(vec![]);
+        d.schema = InterpretationSchema::ConceptMapV2;
         d.concepts = cs;
         d
     }
@@ -600,6 +602,26 @@ mod tests {
                 assert!(!cs.contains(&"transform.concept_resolver.merged".to_string()));
             }
             other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolver_preserves_v2_schema_marker_through_the_gate() {
+        // Phase 1 (M13.3): the resolver may gate concepts but must NOT touch the
+        // schema marker — the writer relies on it to fail loud on an empty map.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let doc = doc_with_concepts(vec![concept("kept-a", true), concept("kept-b", true)]);
+        assert_eq!(doc.schema, InterpretationSchema::ConceptMapV2);
+        let out = match r.process(record(doc)) {
+            FilterDecision::Forward(rs) => rs,
+            FilterDecision::ForwardWithEvents { records, .. } => records,
+            other => panic!("unexpected: {other:?}"),
+        };
+        match &out[0].body {
+            DomainBody::Interpreted(d) => {
+                assert_eq!(d.schema, InterpretationSchema::ConceptMapV2, "marker preserved");
+            }
+            _ => unreachable!(),
         }
     }
 

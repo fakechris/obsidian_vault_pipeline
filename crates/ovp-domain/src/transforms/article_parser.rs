@@ -2,7 +2,9 @@ use ovp_core::{DropReason, FilterDecision, Record, StepId, Transform};
 use serde::Deserialize;
 
 use crate::body::DomainBody;
-use crate::interpreted::{Dimensions, Explanation, ExtractedConcept, InterpretedDoc};
+use crate::interpreted::{
+    Dimensions, Explanation, ExtractedConcept, InterpretationSchema, InterpretedDoc,
+};
 use crate::response::ModelResponse;
 
 use super::prompt_builder::{
@@ -192,6 +194,10 @@ fn parse_into_interpreted(
         // canonical happens in a separate absorb stage (not in v1).
         canonical_concepts: Vec::new(),
         concept_candidates: dims.linked_concepts.clone(),
+        // Explicit schema marker: set by the prompt the response came from, NOT
+        // by whether `concepts` is empty — so a v2 map gated to empty downstream
+        // still reads as v2 and fails loud instead of falling back to v1.
+        schema: if is_v2 { InterpretationSchema::ConceptMapV2 } else { InterpretationSchema::ArticleV1 },
         dimensions: Dimensions {
             one_liner: dims.one_liner,
             explanation: Explanation {
@@ -417,6 +423,7 @@ mod tests {
                     DomainBody::Interpreted(d) => d,
                     other => panic!("expected Interpreted, got {}", other.variant_name()),
                 };
+                assert_eq!(d.schema, InterpretationSchema::ConceptMapV2, "v2 marker set");
                 assert_eq!(d.concepts.len(), 2);
                 assert_eq!(d.concepts[0].slug, "idea-block");
                 assert_eq!(d.concepts[0].aliases, vec!["qa-packet"]);
@@ -482,7 +489,10 @@ mod tests {
         let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-27");
         match parser.process(model_record(HAPPY_JSON, 1)) {
             FilterDecision::Forward(rs) => match &rs[0].body {
-                DomainBody::Interpreted(d) => assert!(d.concepts.is_empty()),
+                DomainBody::Interpreted(d) => {
+                    assert!(d.concepts.is_empty());
+                    assert_eq!(d.schema, InterpretationSchema::ArticleV1, "v1 marker set");
+                }
                 other => panic!("expected Interpreted, got {}", other.variant_name()),
             },
             other => panic!("expected Forward, got {other:?}"),

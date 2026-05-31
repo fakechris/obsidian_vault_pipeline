@@ -1,9 +1,11 @@
 use ovp_core::{
-    DropReason, EventKind, FilterDecision, Record, RecordId, RecordMeta, StepId, Transform,
+    DropReason, EventKind, FilterDecision, FilterError, Record, RecordId, RecordMeta, StepId,
+    Transform,
 };
 
 use crate::body::DomainBody;
 use crate::evergreen::EvergreenConcept;
+use crate::interpreted::InterpretationSchema;
 
 /// Mints new evergreen concepts from an article's surviving
 /// `concept_candidates` — the ones `ConceptResolver` did NOT promote, so
@@ -60,29 +62,50 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
         let record_id = record.id.clone();
         let mut concepts: Vec<EvergreenConcept> = Vec::new();
         let mut drop_events: Vec<EventKind> = Vec::new();
-        if !interp.concepts.is_empty() {
-            // v2 (M13.2): mint each note from its OWN gated concept — the
-            // concept's definition + owned claims + related, NOT the article
-            // one_liner or token-matched article claims. The ConceptResolver
-            // already validated/filtered these concepts, so no per-slug drops
-            // happen here.
-            for c in &interp.concepts {
-                concepts.push(EvergreenConcept::from_extracted(c, &interp.title, &interp.source_url));
-            }
-        } else {
-            // v1 legacy: mint from candidates (shared one_liner definition +
-            // token-matched article claims). Invalid slugs drop observably.
-            for raw in &interp.concept_candidates {
-                match EvergreenConcept::try_mint(raw, interp) {
-                    Ok(c) => concepts.push(c),
-                    Err(e) => drop_events.push(EventKind::FilterDropped {
-                        record_id: record_id.clone(),
-                        step_id: self.step.clone(),
-                        reason: DropReason::new(
-                            "transform.evergreen.invalid_slug",
-                            format!("dropped concept candidate `{raw}` ({}): {e}", e.code()),
+        // Branch on the EXPLICIT schema marker (M13.3), never on
+        // `concepts.is_empty()`. That distinction is what lets a v2 doc whose
+        // map gated to empty fail loud here instead of silently minting the v1
+        // candidate path.
+        match interp.schema {
+            InterpretationSchema::ConceptMapV2 => {
+                // v2 (M13.2): mint each note from its OWN gated concept — the
+                // concept's definition + owned claims + related, NOT the article
+                // one_liner or token-matched article claims. The ConceptResolver
+                // already validated/filtered these concepts.
+                if interp.concepts.is_empty() {
+                    // The model produced a concept map but the gate dropped /
+                    // merged every concept. This is a FAILED extraction, not a
+                    // v1 doc — error LOUD (records_errored++ → run-cycle /
+                    // review-run report the run as not clean) rather than fall
+                    // back to v1 candidate minting.
+                    return FilterDecision::Error(FilterError::new(
+                        "transform.evergreen.empty_concept_map",
+                        format!(
+                            "v2 concept-map doc `{}` produced zero mintable concepts after \
+                             gating; refusing to fall back to the v1 candidate path",
+                            interp.title
                         ),
-                    }),
+                    ));
+                }
+                for c in &interp.concepts {
+                    concepts.push(EvergreenConcept::from_extracted(c, &interp.title, &interp.source_url));
+                }
+            }
+            InterpretationSchema::ArticleV1 => {
+                // v1 legacy: mint from candidates (shared one_liner definition +
+                // token-matched article claims). Invalid slugs drop observably.
+                for raw in &interp.concept_candidates {
+                    match EvergreenConcept::try_mint(raw, interp) {
+                        Ok(c) => concepts.push(c),
+                        Err(e) => drop_events.push(EventKind::FilterDropped {
+                            record_id: record_id.clone(),
+                            step_id: self.step.clone(),
+                            reason: DropReason::new(
+                                "transform.evergreen.invalid_slug",
+                                format!("dropped concept candidate `{raw}` ({}): {e}", e.code()),
+                            ),
+                        }),
+                    }
                 }
             }
         }
@@ -150,6 +173,7 @@ mod tests {
                 actions: vec![],
                 linked_concepts: vec![],
             },
+            schema: InterpretationSchema::ArticleV1,
             concepts: Vec::new(),
         }
     }
@@ -235,6 +259,7 @@ mod tests {
         // another.
         let mut w = EvergreenConceptWriter::new("evg_writer");
         let mut d = interp(vec![]);
+        d.schema = InterpretationSchema::ConceptMapV2;
         // A shared article thesis the writer must NOT fall back to.
         d.dimensions.one_liner = "An article-level synthesis line.".into();
         d.concepts = vec![
@@ -290,6 +315,7 @@ mod tests {
         // not used — the v2 map is authoritative.
         let mut w = EvergreenConceptWriter::new("evg_writer");
         let mut d = interp(vec!["legacy-candidate"]);
+        d.schema = InterpretationSchema::ConceptMapV2;
         d.concepts = vec![ec("real-concept", "A real definition.", &[], &[])];
         let out = match w.process(record(d)) {
             FilterDecision::FanOut(rs) => rs,
@@ -309,6 +335,7 @@ mod tests {
     fn v2_concept_with_blank_title_derives_from_slug() {
         let mut w = EvergreenConceptWriter::new("evg_writer");
         let mut d = interp(vec![]);
+        d.schema = InterpretationSchema::ConceptMapV2;
         d.concepts = vec![ec("vector-database", "A store for embeddings.", &[], &[])];
         let out = match w.process(record(d)) {
             FilterDecision::FanOut(rs) => rs,
@@ -317,6 +344,44 @@ mod tests {
         match &out[1].body {
             DomainBody::EvergreenConcept(c) => assert_eq!(c.title, "Vector Database"),
             other => panic!("expected EvergreenConcept, got {other:?}"),
+        }
+    }
+
+    // ---- M13.3 empty-map fallback guard (branch on the schema marker) ----
+
+    #[test]
+    fn v2_empty_after_gate_errors_does_not_mint_v1_candidates() {
+        // A v2 doc whose concept map gated to empty must FAIL LOUD
+        // (FilterDecision::Error → records_errored++ → run-cycle/review-run
+        // report not-clean), NEVER silently fall back to minting the leftover
+        // v1 `concept_candidates`.
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let mut d = interp(vec!["should-not-mint"]); // a stray v1 candidate present
+        d.schema = InterpretationSchema::ConceptMapV2;
+        d.concepts = vec![]; // gated to empty upstream
+        match w.process(record(d)) {
+            FilterDecision::Error(e) => {
+                assert_eq!(e.code.as_str(), "transform.evergreen.empty_concept_map");
+            }
+            other => panic!("expected Error (loud), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v1_empty_concepts_still_uses_legacy_candidate_path() {
+        // The default (v1) schema must keep minting from candidates exactly as
+        // before — the marker, not concepts.is_empty(), is what gates v2.
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let d = interp(vec!["legacy-a"]); // schema defaults to ArticleV1; concepts empty
+        match w.process(record(d)) {
+            FilterDecision::FanOut(rs) => {
+                assert_eq!(rs.len(), 2, "article + 1 legacy-minted evergreen");
+                match &rs[1].body {
+                    DomainBody::EvergreenConcept(c) => assert_eq!(c.slug, "legacy-a"),
+                    other => panic!("expected EvergreenConcept, got {other:?}"),
+                }
+            }
+            other => panic!("expected FanOut, got {other:?}"),
         }
     }
 

@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn non_source_variant_passes_through() {
-        use crate::interpreted::{Dimensions, Explanation, InterpretedDoc};
+        use crate::interpreted::{Dimensions, Explanation, InterpretationSchema, InterpretedDoc};
         let mut r = SourceResolver::new("source_resolver");
         let interp = InterpretedDoc {
             title: "T".into(),
@@ -291,6 +291,7 @@ mod tests {
                 actions: vec![],
                 linked_concepts: vec![],
             },
+            schema: InterpretationSchema::ArticleV1,
             concepts: Vec::new(),
         };
         let rec: Record<DomainBody> = Record::new(

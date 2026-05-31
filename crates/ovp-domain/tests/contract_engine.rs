@@ -42,6 +42,7 @@ fn happy_interpreted() -> InterpretedDoc {
             actions: vec!["a1".into()],
             linked_concepts: vec![],
         },
+        schema: InterpretationSchema::ArticleV1,
         concepts: Vec::new(),
     }
 }

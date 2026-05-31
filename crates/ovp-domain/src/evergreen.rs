@@ -315,7 +315,7 @@ mod tests {
 
     // ---- M12a: rich minting ----
 
-    use crate::interpreted::{Dimensions, Explanation};
+    use crate::interpreted::{Dimensions, Explanation, InterpretationSchema};
 
     fn interp(
         one_liner: &str,
@@ -341,6 +341,7 @@ mod tests {
                 actions: actions.into_iter().map(String::from).collect(),
                 linked_concepts: linked.into_iter().map(String::from).collect(),
             },
+            schema: InterpretationSchema::ArticleV1,
             concepts: Vec::new(),
         }
     }

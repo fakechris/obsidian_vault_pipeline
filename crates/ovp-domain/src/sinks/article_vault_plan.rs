@@ -179,7 +179,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreted::{Dimensions, Explanation};
+    use crate::interpreted::{Dimensions, Explanation, InterpretationSchema};
     use crate::source_doc::SourceDoc;
     use ovp_core::{RecordId, RecordMeta};
 
@@ -206,6 +206,7 @@ mod tests {
                 actions: vec!["short-term: try it".into()],
                 linked_concepts: vec!["agent-native-pm".into()],
             },
+            schema: InterpretationSchema::ArticleV1,
             concepts: Vec::new(),
         }
     }

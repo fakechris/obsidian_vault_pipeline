@@ -182,7 +182,8 @@ fn corrupt_read_model_is_loud() {
 fn rag_snippet_from_minted_evergreen_is_grounded_not_stub() {
     use ovp_core::{Record, RecordId, RecordMeta, Sink};
     use ovp_domain::{
-        Dimensions, DomainBody, EvergreenConcept, EvergreenSink, Explanation, InterpretedDoc,
+        Dimensions, DomainBody, EvergreenConcept, EvergreenSink, Explanation, InterpretationSchema,
+        InterpretedDoc,
     };
 
     let vault = tempfile::tempdir().unwrap();
@@ -211,6 +212,7 @@ fn rag_snippet_from_minted_evergreen_is_grounded_not_stub() {
             actions: vec![],
             linked_concepts: vec!["vector-db".into()],
         },
+        schema: InterpretationSchema::ArticleV1,
         concepts: Vec::new(),
     };
     let minted = EvergreenConcept::try_mint("rag", &interp).unwrap();
