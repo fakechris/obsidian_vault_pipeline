@@ -1,11 +1,13 @@
 pub mod apply_plan;
 pub mod auto_run;
 pub mod client;
+pub mod compare_run;
 pub mod defaults;
 pub mod graph;
 pub mod interpret_article;
 pub mod lint;
 pub mod query;
 pub mod rag;
+pub mod review_run;
 pub mod run;
 pub mod run_cycle;
