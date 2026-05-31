@@ -5,6 +5,7 @@ use crate::prompt::{PromptId, PromptRequest};
 use crate::source_doc::{SourceDoc, SourceKind};
 
 const ARTICLE_PROMPT_TEMPLATE: &str = include_str!("../../prompts/article_interpret.md");
+const CONCEPT_MAP_PROMPT_TEMPLATE: &str = include_str!("../../prompts/article_concept_map.md");
 
 /// `PROMPT_ID/SCHEMA_VERSION` for the article interpretation prompt. Bump
 /// `ARTICLE_SCHEMA_VERSION` when you change the prompt asset in a way that
@@ -26,6 +27,18 @@ pub const CONCEPT_MAP_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_ARTICLE_MODEL: &str = "claude-sonnet-4-6";
 pub const DEFAULT_ARTICLE_MAX_TOKENS: u32 = 4096;
 
+/// Which article prompt this builder emits. v1 = the legacy six-dimension
+/// interpretation (`article_interpret/v1`); ConceptMapV2 = the M13 concept-map
+/// prompt (`article_concept_map/v2`). Same `SourceDoc` placeholders + split
+/// marker either way; only the asset + prompt_id/schema_version differ, so the
+/// v2 path gets its own cassette namespace and the parser routes it to the
+/// concept-map handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptVariant {
+    ArticleV1,
+    ConceptMapV2,
+}
+
 /// Builds a `PromptRequest` from a `SourceDoc`. Pure: same `SourceDoc`
 /// always produces the same `PromptRequest` (modulo construction-time
 /// `model` / `max_tokens` overrides on the builder itself).
@@ -33,6 +46,7 @@ pub struct PromptBuilder {
     step: StepId,
     model: String,
     max_tokens: u32,
+    variant: PromptVariant,
 }
 
 impl PromptBuilder {
@@ -41,7 +55,16 @@ impl PromptBuilder {
             step: StepId::new(step.into()),
             model: DEFAULT_ARTICLE_MODEL.to_string(),
             max_tokens: DEFAULT_ARTICLE_MAX_TOKENS,
+            variant: PromptVariant::ArticleV1,
         }
+    }
+
+    /// Build the **v2 concept-map** prompt (`article_concept_map/v2`) instead of
+    /// the v1 interpretation prompt. Distinct prompt_id + schema_version → its
+    /// own cassette namespace; the parser routes the response to the
+    /// concept-map path (M13.3).
+    pub fn concept_map(step: impl Into<String>) -> Self {
+        Self { variant: PromptVariant::ConceptMapV2, ..Self::new(step) }
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
@@ -58,10 +81,18 @@ impl PromptBuilder {
     /// can verify prompt content directly without going through the
     /// trait machinery.
     pub fn build_request(&self, source: &SourceDoc) -> PromptRequest {
-        let (system, user) = split_prompt_template(ARTICLE_PROMPT_TEMPLATE, source);
+        let (template, prompt_id, schema_version) = match self.variant {
+            PromptVariant::ArticleV1 => {
+                (ARTICLE_PROMPT_TEMPLATE, ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION)
+            }
+            PromptVariant::ConceptMapV2 => {
+                (CONCEPT_MAP_PROMPT_TEMPLATE, CONCEPT_MAP_PROMPT_ID, CONCEPT_MAP_SCHEMA_VERSION)
+            }
+        };
+        let (system, user) = split_prompt_template(template, source);
         PromptRequest {
-            prompt_id: PromptId::new(ARTICLE_PROMPT_ID),
-            schema_version: ARTICLE_SCHEMA_VERSION,
+            prompt_id: PromptId::new(prompt_id),
+            schema_version,
             model: self.model.clone(),
             system,
             user,
@@ -175,5 +206,37 @@ mod tests {
         let req = pb.build_request(&sample_source());
         assert_eq!(req.model, "claude-opus-4-7");
         assert_eq!(req.max_tokens, 8192);
+    }
+
+    #[test]
+    fn concept_map_builder_emits_v2_prompt_and_schema() {
+        let pb = PromptBuilder::concept_map("prompt_builder");
+        let req = pb.build_request(&sample_source());
+        assert_eq!(req.prompt_id.as_str(), "article_concept_map/v2");
+        assert_eq!(req.schema_version, 2);
+    }
+
+    #[test]
+    fn concept_map_prompt_carries_concepts_schema_and_article() {
+        let pb = PromptBuilder::concept_map("prompt_builder");
+        let req = pb.build_request(&sample_source());
+        // System message carries the v2 concept-map schema instructions.
+        assert!(req.system.contains("concept map"), "names the concept map");
+        assert!(req.system.contains("\"concepts\""), "concepts[] schema");
+        assert!(req.system.contains("\"definition\""), "per-concept definition");
+        assert!(req.system.contains("\"merge_with\"") && req.system.contains("\"promote\""));
+        // User message carries the actual article content + URL + title.
+        assert!(req.user.contains("Test Title"));
+        assert!(req.user.contains("https://example.com/test"));
+        assert!(req.user.contains("Body content here."));
+    }
+
+    #[test]
+    fn v1_builder_unchanged_by_v2_addition() {
+        let pb = PromptBuilder::new("prompt_builder");
+        let req = pb.build_request(&sample_source());
+        assert_eq!(req.prompt_id.as_str(), "article_interpret/v1");
+        assert_eq!(req.schema_version, 1);
+        assert!(req.system.contains("six-dimension"));
     }
 }

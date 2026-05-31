@@ -269,6 +269,28 @@ fn assembled_evergreen_pipeline_applies_through_composite() {
 }
 
 #[test]
+fn assembled_concept_map_v2_pipeline_builds() {
+    // Phase 3 (M13.3): the v2 concept-map manifest assembles — the
+    // `transform.concept_map_prompt_builder` node kind resolves and the graph
+    // (markdown_inbox → source_resolver → concept_map_prompt_builder →
+    // llm_invoker → article_parser → concept_resolver → evergreen_concept_writer
+    // → article_vault_plan / evergreen_sink) is valid. A LIVE run is exercised
+    // once v2 cassettes are recorded (Phase 4); assembly does not call the model,
+    // so it needs no v2 cassette.
+    let root = repo_root();
+    let spec = read_spec(&root, "manifests/article_concept_map.pipeline.toml");
+    let wiring = AppWiring::new(RunId::new("asm-cm"))
+        .with_date_stamp("2026-05-31")
+        .with_area("ai")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+
+    let runner = GraphAssembler::with_domain_nodes().assemble(&spec, wiring);
+    assert!(runner.is_ok(), "v2 concept-map pipeline must assemble: {:?}", runner.err());
+}
+
+#[test]
 fn unknown_kind_is_a_clear_error() {
     let toml = r#"
         [pipeline]

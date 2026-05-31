@@ -186,6 +186,15 @@ impl NodeRegistry {
             }),
         );
         r.register(
+            NodeKind::new(kinds::CONCEPT_MAP_PROMPT_BUILDER),
+            NodeCategory::Transform,
+            ConfigContract::NONE,
+            Box::new(|a| {
+                a.runner.register_transform(a.node_id, PromptBuilder::concept_map(a.node_id));
+                Ok(())
+            }),
+        );
+        r.register(
             NodeKind::new(kinds::PAPER_PROMPT_BUILDER),
             NodeCategory::Transform,
             ConfigContract::NONE,
@@ -327,6 +336,7 @@ mod tests {
             kinds::SOURCE_RESOLVER,
             kinds::ROUTE_BY_SOURCE_KIND,
             kinds::PROMPT_BUILDER,
+            kinds::CONCEPT_MAP_PROMPT_BUILDER,
             kinds::PAPER_PROMPT_BUILDER,
             kinds::LLM_INVOKER,
             kinds::ARTICLE_PARSER,

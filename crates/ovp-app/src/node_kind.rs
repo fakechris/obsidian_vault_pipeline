@@ -67,6 +67,9 @@ pub mod kinds {
     pub const SOURCE_RESOLVER: &str = "transform.source_resolver";
     pub const ROUTE_BY_SOURCE_KIND: &str = "transform.route_by_source_kind";
     pub const PROMPT_BUILDER: &str = "transform.prompt_builder";
+    /// v2 concept-map prompt builder (M13.3): same article pipeline, emits
+    /// `article_concept_map/v2` instead of `article_interpret/v1`.
+    pub const CONCEPT_MAP_PROMPT_BUILDER: &str = "transform.concept_map_prompt_builder";
     pub const PAPER_PROMPT_BUILDER: &str = "transform.paper_prompt_builder";
     pub const LLM_INVOKER: &str = "effect.llm_invoker";
     pub const ARTICLE_PARSER: &str = "transform.article_parser";
@@ -100,6 +103,7 @@ mod tests {
             kinds::SOURCE_RESOLVER,
             kinds::ROUTE_BY_SOURCE_KIND,
             kinds::PROMPT_BUILDER,
+            kinds::CONCEPT_MAP_PROMPT_BUILDER,
             kinds::PAPER_PROMPT_BUILDER,
             kinds::LLM_INVOKER,
             kinds::ARTICLE_PARSER,
