@@ -165,6 +165,15 @@ impl RunCycle {
         // error count — a node that ended in `FilterDecision::Error` (e.g. the
         // live LLM call failing transport/decode) must NOT pass as an empty
         // success. Skip derived rebuild and report the first error.
+        //
+        // NOTE on multi-input semantics: this check runs AFTER the main apply.
+        // For a single input (the only shape the article/paper pipelines process
+        // today) a failed extraction emits zero ops, so nothing was written. If a
+        // future run processed several inputs and one errored, the SUCCEEDED
+        // inputs' write ops may already be on disk — this is deliberately
+        // "partial main apply + loud failure" (re-apply is idempotent), NOT
+        // "any record error ⇒ no writes". Derived rebuild is still skipped so no
+        // derived state is built atop a partially-applied, error-tainted run.
         if report.records_errored > 0 {
             let detail = report
                 .first_error

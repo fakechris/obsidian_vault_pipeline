@@ -96,13 +96,43 @@ impl LiveClientConfig {
                 }
             },
         };
-        Ok(Self {
-            base_url: nonempty("ANTHROPIC_BASE_URL"),
-            model: nonempty("OVP_LLM_MODEL"),
-            max_tokens,
-            no_proxy,
-        })
+        let base_url = match nonempty("ANTHROPIC_BASE_URL") {
+            None => None,
+            Some(u) => {
+                validate_messages_endpoint(&u)?;
+                Some(u)
+            }
+        };
+        Ok(Self { base_url, model: nonempty("OVP_LLM_MODEL"), max_tokens, no_proxy })
     }
+}
+
+/// Validate that `ANTHROPIC_BASE_URL` is the FULL Messages endpoint (its path
+/// ends in `/messages`), not a root/base URL — so a misconfig fails loud at
+/// startup rather than on the first live call. Lightweight (no `url` dep): the
+/// client POSTs directly to this URL, so the contract is just "http(s) + a
+/// `/messages` path".
+#[cfg(feature = "anthropic")]
+fn validate_messages_endpoint(url: &str) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("ANTHROPIC_BASE_URL must be an http(s) URL, got `{url}`"));
+    }
+    let after_scheme = url.split_once("://").map(|x| x.1).unwrap_or("");
+    // The path starts at the first '/' after the host; strip any query/fragment
+    // and a trailing slash before checking the final segment.
+    let path = match after_scheme.find('/') {
+        Some(i) => &after_scheme[i..],
+        None => "",
+    };
+    let path = path.split(['?', '#']).next().unwrap_or(path).trim_end_matches('/');
+    if !path.ends_with("/messages") {
+        return Err(format!(
+            "ANTHROPIC_BASE_URL must be the full Messages endpoint ending in `/messages` \
+             (e.g. https://api.anthropic.com/v1/messages or \
+             https://api.minimaxi.com/anthropic/v1/messages), got `{url}`"
+        ));
+    }
+    Ok(())
 }
 
 /// Bounded retry budget for transient live failures (transport / 429 / 5xx).
@@ -185,6 +215,17 @@ mod live_config_tests {
         let c = cfg(&[("ANTHROPIC_BASE_URL", "   "), ("OVP_LLM_MODEL", "")]).unwrap();
         assert_eq!(c.base_url, None);
         assert_eq!(c.model, None);
+    }
+
+    #[test]
+    fn base_url_must_be_a_full_messages_endpoint() {
+        // Root / base URLs are rejected at startup (the doc promise).
+        assert!(cfg(&[("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")]).is_err());
+        assert!(cfg(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]).is_err());
+        assert!(cfg(&[("ANTHROPIC_BASE_URL", "api.anthropic.com/v1/messages")]).is_err(), "missing scheme");
+        // Full Messages endpoints (with/without trailing slash) are accepted.
+        assert!(cfg(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages")]).is_ok());
+        assert!(cfg(&[("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic/v1/messages/")]).is_ok());
     }
 
     #[test]
