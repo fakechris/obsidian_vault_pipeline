@@ -14,9 +14,12 @@ use crate::evergreen::EvergreenConcept;
 ///
 /// Pure: same `InterpretedDoc` → same fan-out. This is the legacy
 /// "absorb" equivalent for the mint-new-evergreen half. v1 policy is
-/// AUTO-all (mint every surviving candidate); the legacy AUTO/ESCALATE/
-/// REJECT lanes are a later refinement. Cross-document dedup of the same
-/// slug is the canonical store's job, not this transform's.
+/// AUTO-all (mint every surviving candidate); mint/enrich/escalate/reject
+/// policy lanes are a later refinement. When the same slug recurs across
+/// documents, `RunCycle`'s reconcile (`ovp_domain::reconcile_evergreen_write`,
+/// a pure merge) enriches the existing note before apply; the canonical store
+/// keeps the first writer's provenance and does NOT merge. Semantic dedup of
+/// near-duplicate claims is still future.
 pub struct EvergreenConceptWriter {
     step: StepId,
 }

@@ -11,18 +11,20 @@ use crate::interpreted::InterpretedDoc;
 ///
 /// **M12a — rich minting.** A concept minted from an interpreted article
 /// carries grounding pulled deterministically from that article: a one-line
-/// `definition`, 2-5 `source_claims`, the `source_title`, and `related`
+/// `definition`, up to five `source_claims`, the `source_title`, and `related`
 /// slugs. `EvergreenSink` renders these into a grounded note body, so a
 /// freshly minted note is a usable knowledge unit, not a bare stub. The body
-/// is a pure function of these fields, so re-minting the *same* concept is
-/// still an idempotent `VaultCreate` (same content → same hash). The
-/// cross-document boundary moved versus the old provenance-free stub: because
-/// the grounded body is per-document, two *distinct* articles surfacing the
-/// same new slug render *different* bodies, so the second `VaultCreate` is
-/// reported `OpResult::Failed` (fail-loud, no overwrite) and halts the apply —
-/// it no longer idempotent-skips the way a content-free stub did. Merging /
-/// skipping a shared slug is deliberately out of scope here (M12b); the
-/// limitation is pinned by an ovp-stores e2e test.
+/// is a pure function of these fields, so re-minting the *same* concept is an
+/// idempotent `VaultCreate` (same content → same hash).
+///
+/// **M12b — same-slug reconcile.** The grounded body is per-document, so two
+/// *distinct* articles surfacing the same slug render *different* bodies. A raw
+/// `VaultCreate` to an existing path with a different hash fails loud (the
+/// applier never overwrites), but `RunCycle` reconciles before applying: an
+/// already-present note is enriched via a merge `VaultUpdate` (see
+/// [`crate::reconcile_evergreen_write`]), so a repeat slug enriches rather than
+/// failing the run. Still future: semantic dedup of near-duplicate claims,
+/// concept-specific definitions, and mint/enrich/reject policy lanes.
 ///
 /// The thin constructors ([`Self::try_from_candidate`] / [`Self::from_candidate`])
 /// leave the rich fields empty; `EvergreenSink` then falls back to the legacy

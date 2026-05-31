@@ -19,13 +19,14 @@ use crate::vault_layout::VaultLayout;
 /// M12a minting content, else the legacy provenance-free `stub`. Either way the
 /// body is a pure function of the `EvergreenConcept` fields, so re-minting the
 /// *same* concept is an idempotent `VaultCreate` (the applier skips on matching
-/// hash). **Cross-document caveat (M12a):** the grounded body intentionally
-/// carries per-document grounding (definition, claims, source link), so two
-/// *distinct* articles surfacing the same new slug render *different* bodies —
-/// the second `VaultCreate` then hits an existing path with a different hash and
-/// is reported `OpResult::Failed` (fail-loud, no overwrite), which halts a
-/// `CompositePlanApplier` cycle. Cross-document merge/skip of a shared slug is
-/// deferred to M12b; the limitation is pinned by an ovp-stores e2e test.
+/// hash). **Same-slug across documents:** the grounded body is per-document, so
+/// two *distinct* articles surfacing the same slug render *different* bodies. A
+/// raw `VaultCreate` straight to the applier still fails loud on an existing
+/// path with a different hash (the applier never overwrites — the backstop for
+/// anything bypassing the run-cycle). On the normal path `RunCycle` reconciles
+/// the plan *before* apply (M12b): an already-present note is rewritten to an
+/// enrich `VaultUpdate`, so a repeat slug enriches instead of failing. See
+/// `docs/stage-m12b-same-slug-reconcile.md`.
 ///
 /// The CanonicalUpsert payload carries only canonical identity (slug, title,
 /// path, provenance) — the rich grounding lives in the vault note body, not the
