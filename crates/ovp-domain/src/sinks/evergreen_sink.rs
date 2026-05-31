@@ -2,11 +2,11 @@ use ovp_core::{
     CanonicalKey, CanonicalUpsertOp, ContentHash, Event, EventKind, OpId, Record, RunId, Sink,
     SinkOutput, StepId, VaultCreateOp, WriteOp,
 };
-use sha2::{Digest, Sha256};
 
 use crate::body::DomainBody;
 use crate::canonical::CanonicalConcept;
 use crate::evergreen::EvergreenConcept;
+use crate::evergreen_note::{content_hash, frontmatter, EvergreenNote};
 use crate::vault_layout::VaultLayout;
 
 /// Writes a minted `EvergreenConcept` to the vault: a `VaultCreate` for the
@@ -74,7 +74,7 @@ impl Sink<DomainBody> for EvergreenSink {
         let create = WriteOp::VaultCreate(VaultCreateOp {
             op_id: OpId::new(format!("op-evergreen-{}", concept.slug)),
             path: path.clone(),
-            after_hash: ContentHash::new(hex_sha256(body_md.as_bytes())),
+            after_hash: ContentHash::new(content_hash(body_md.as_bytes())),
             body: body_md,
             reason: "mint evergreen concept".into(),
             originating_record: record.id.clone(),
@@ -91,7 +91,7 @@ impl Sink<DomainBody> for EvergreenSink {
             op_id: OpId::new(format!("op-canon-{}", concept.slug)),
             key: CanonicalKey::new(concept.slug.clone()),
             before_hash: None,
-            after_hash: ContentHash::new(hex_sha256(payload.as_bytes())),
+            after_hash: ContentHash::new(content_hash(payload.as_bytes())),
             payload,
             reason: "register canonical concept".into(),
             originating_record: record.id.clone(),
@@ -104,98 +104,22 @@ impl Sink<DomainBody> for EvergreenSink {
 /// Choose the body: a grounded note when the concept carries minting content
 /// (M12a — definition or source-backed claims), else the legacy provenance-free
 /// stub (thin concepts: fixtures, seeding). Both are pure functions of the
-/// concept, so re-minting the same concept is an idempotent `VaultCreate`.
+/// concept, so re-minting the same concept is an idempotent `VaultCreate`. The
+/// grounded body is rendered via [`EvergreenNote`], the single home of the
+/// note format (so the same-slug reconcile in `ovp-run` can parse + merge it).
 fn render_body(c: &EvergreenConcept) -> String {
     if c.definition.trim().is_empty() && c.source_claims.is_empty() {
         render_stub(c)
     } else {
-        render_rich(c)
+        EvergreenNote::from_concept(c).render()
     }
-}
-
-/// M12a grounded note: definition + source-backed claims + a source link +
-/// related wikilinks. A pure function of the `EvergreenConcept`, so the body
-/// (and its content hash) is deterministic — same mint → idempotent re-apply.
-/// Unlike the stub, this intentionally carries the source link in the body;
-/// cross-document merge of the same slug is deferred to a later stage.
-fn render_rich(c: &EvergreenConcept) -> String {
-    let mut s = frontmatter(c, "minted");
-    s.push_str(&format!("# {}\n\n", c.title));
-    if !c.definition.trim().is_empty() {
-        s.push_str(&format!("> {}\n", c.definition.trim()));
-    }
-    if !c.source_claims.is_empty() {
-        s.push_str("\n## Source-backed claims\n\n");
-        for claim in &c.source_claims {
-            s.push_str(&format!("- {}\n", claim.trim()));
-        }
-    }
-    let source_line = if !c.provenance_source_url.trim().is_empty() {
-        let url = c.provenance_source_url.trim();
-        let label = if c.source_title.trim().is_empty() { url } else { c.source_title.trim() };
-        Some(format!("- [{label}]({url})\n"))
-    } else if !c.source_title.trim().is_empty() {
-        Some(format!("- {}\n", c.source_title.trim()))
-    } else {
-        None
-    };
-    if let Some(line) = source_line {
-        s.push_str("\n## Source\n\n");
-        s.push_str(&line);
-    }
-    if !c.related.is_empty() {
-        s.push_str("\n## Related\n\n");
-        for r in &c.related {
-            s.push_str(&format!("- [[{}]]\n", r.trim()));
-        }
-    }
-    s
 }
 
 fn render_stub(c: &EvergreenConcept) -> String {
     // Deterministic from slug/title only (no provenance) → idempotent.
-    let mut s = frontmatter(c, "stub");
+    let mut s = frontmatter(&c.title, &c.slug, "stub");
     s.push_str(&format!("# {}\n\n", c.title));
     s.push_str("> Stub evergreen. Expand with an atomic definition and links.\n");
-    s
-}
-
-/// The shared YAML frontmatter for an evergreen note. `status` distinguishes a
-/// grounded `minted` note from a bare `stub`.
-fn frontmatter(c: &EvergreenConcept, status: &str) -> String {
-    let mut s = String::new();
-    s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_quote(&c.title)));
-    s.push_str("type: evergreen\n");
-    s.push_str(&format!("slug: {}\n", c.slug));
-    s.push_str(&format!("status: {status}\n"));
-    s.push_str("---\n\n");
-    s
-}
-
-fn yaml_quote(s: &str) -> String {
-    let needs = s.is_empty()
-        || s.starts_with([
-            '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%',
-            '@', '`',
-        ])
-        || s.contains(": ")
-        || s.contains(" #")
-        || s.contains('\n');
-    if needs {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    let hash = Sha256::digest(bytes);
-    let mut s = String::with_capacity(64);
-    use std::fmt::Write;
-    for b in hash.iter() {
-        write!(s, "{:02x}", b).expect("infallible");
-    }
     s
 }
 

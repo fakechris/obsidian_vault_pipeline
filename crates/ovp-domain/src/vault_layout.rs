@@ -62,7 +62,13 @@ impl VaultLayout {
     /// Evergreen atomic note: `10-Knowledge/Evergreen/<slug>.md`.
     /// Consumed by the absorb/evergreen writer (L3).
     pub fn evergreen_note(&self, slug: &str) -> VaultPath {
-        VaultPath::new(format!("10-Knowledge/Evergreen/{}.md", sanitize_filename(slug)))
+        VaultPath::new(format!("{}/{}.md", self.evergreen_dir(), sanitize_filename(slug)))
+    }
+
+    /// Directory (vault-relative) holding evergreen notes. Used to recognize an
+    /// evergreen `VaultCreate` for same-slug reconcile (L4).
+    pub fn evergreen_dir(&self) -> &'static str {
+        "10-Knowledge/Evergreen"
     }
 
     /// Atlas MOC file: `10-Knowledge/Atlas/<name>.md`.

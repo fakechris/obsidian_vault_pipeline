@@ -5,13 +5,15 @@
 //! no domain logic of its own; it wires L1–L3 together. See
 //! `docs/stage-operational-workflow.md`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 use ovp_app::{AppWiring, AssemblyError, DomainPipelineSpec, GraphAssembler};
-use ovp_core::{ApplyMode, ApplyReport, CoreError, PlanApplier};
+use ovp_core::{ApplyMode, ApplyReport, CoreError, PlanApplier, RunId, RunReport, WriteOp, WritePlan};
 use ovp_domain::{
-    extract_wikilinks, CanonicalConcept, KnowledgeIndex, KnowledgeIndexBuilder, MocBuilder,
+    content_hash, extract_wikilinks, reconcile_evergreen_write, CanonicalConcept, KnowledgeIndex,
+    KnowledgeIndexBuilder, MocBuilder, VaultLayout,
 };
 use ovp_stores::{scan_backlinks, CanonicalFsStoreApplier, CompositePlanApplier, VaultFsPlanApplier};
 use serde::Serialize;
@@ -140,26 +142,36 @@ impl RunCycle {
         // 2. Run the graph. On failure: the plan is never applied.
         let report = runner.run().map_err(RunCycleError::GraphRun)?;
 
-        // 3. Apply the main plan via the composite (vault + canonical).
+        // 2b. Same-slug reconcile (M12b): a concept slug already minted by a
+        // PRIOR article (or earlier in THIS plan) must enrich its note, not
+        // hard-fail this run. A minted evergreen `VaultCreate` whose path
+        // already holds a different note is rewritten to a merge `VaultUpdate`;
+        // a `CanonicalUpsert` that would overwrite an existing identity with a
+        // different one is dropped (first-writer-wins — the original provenance
+        // is kept, and the merged note body carries every source). Without this,
+        // the second document surfacing a common slug (`rag`, `ai-agent`, ...)
+        // would fail the apply and halt the run. See
+        // `ovp_domain::reconcile_evergreen_write`. Fail-closed: a canonical read
+        // failure here means we can't safely decide first-writer-wins, so apply
+        // NOTHING rather than risk a blind overwrite of canonical provenance.
+        let plan = match reconcile_same_slug(&report.write_plan, &vault_root, &canonical_root) {
+            Ok(p) => p,
+            Err(reason) => {
+                let mut out =
+                    base_report(&run_id, &report, mode, ApplyReport::new(run_id.clone(), mode));
+                out.derived_skipped_reason = Some(format!("reconcile: {reason}"));
+                return Ok(out);
+            }
+        };
+
+        // 3. Apply the (reconciled) main plan via the composite (vault + canonical).
         let mut composite = CompositePlanApplier::new(vec![
             Box::new(VaultFsPlanApplier::new(vault_root.clone())),
             Box::new(CanonicalFsStoreApplier::new(canonical_root.clone())),
         ]);
-        let apply = composite.apply(&report.write_plan, mode);
+        let apply = composite.apply(&plan, mode);
 
-        let mut out = RunCycleReport {
-            run_id: run_id.as_str().to_string(),
-            records_seen: report.records_seen,
-            records_forwarded_to_sinks: report.records_forwarded_to_sinks,
-            records_dropped: report.records_dropped,
-            records_errored: report.records_errored,
-            ops_emitted: report.write_plan.len(),
-            apply,
-            moc: None,
-            knowledge_index: None,
-            derived_skipped_reason: None,
-            dry_run: matches!(mode, ApplyMode::DryRun),
-        };
+        let mut out = base_report(&run_id, &report, mode, apply);
 
         // Fail loud on a failed extraction. ROOT CAUSE: propagate the graph's
         // error count — a node that ended in `FilterDecision::Error` (e.g. the
@@ -291,6 +303,118 @@ fn read_vault_file(vault_root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(vault_root.join(rel)).ok()
 }
 
+/// Build the base run-cycle report (before any derived rebuild) from the graph
+/// report + the main apply outcome. `ops_emitted` is the PIPELINE's emission
+/// (`report.write_plan.len()`), not the reconciled plan's, so the fail-loud
+/// backstops still see what the pipeline produced.
+fn base_report(
+    run_id: &RunId,
+    report: &RunReport,
+    mode: ApplyMode,
+    apply: ApplyReport,
+) -> RunCycleReport {
+    RunCycleReport {
+        run_id: run_id.as_str().to_string(),
+        records_seen: report.records_seen,
+        records_forwarded_to_sinks: report.records_forwarded_to_sinks,
+        records_dropped: report.records_dropped,
+        records_errored: report.records_errored,
+        ops_emitted: report.write_plan.len(),
+        apply,
+        moc: None,
+        knowledge_index: None,
+        derived_skipped_reason: None,
+        dry_run: matches!(mode, ApplyMode::DryRun),
+    }
+}
+
+/// Reconcile a freshly-emitted plan against on-disk state **and the ops already
+/// folded earlier in this same plan**, so a repeated concept slug enriches
+/// instead of failing the apply (M12b). Evergreen `VaultCreate` ops are routed
+/// through [`reconcile_evergreen_write`] (MintNew / keep / EnrichExisting
+/// `VaultUpdate` / skip); a `CanonicalUpsert` that would re-register an existing
+/// identity with a *different* payload is dropped (first-writer-wins, preserving
+/// the original provenance). The in-plan state makes this robust even when one
+/// run emits several documents that surface the same new slug (a multi-document
+/// source), not just the cross-run case. Everything else — the article/paper
+/// note `VaultCreate`, brand-new identities, identical re-registers — passes
+/// through unchanged, so the same-input idempotent re-run is preserved.
+///
+/// **Fail-closed:** if the canonical store can't be read, returns `Err` so the
+/// caller applies nothing rather than risk a blind overwrite of canonical
+/// provenance (a `CanonicalUpsert` carries `before_hash: None`, so the reconcile
+/// drop is the *only* guard for an existing identity).
+fn reconcile_same_slug(
+    plan: &WritePlan,
+    vault_root: &Path,
+    canonical_root: &Path,
+) -> Result<WritePlan, String> {
+    let evergreen_prefix = format!("{}/", VaultLayout::new().evergreen_dir());
+    // Existing canonical identities, keyed slug → payload content hash. Read
+    // strictly (matches the derived-rebuild read): a fresh/absent store is
+    // `Ok(empty)`, but a genuine I/O/corruption fault is fail-closed.
+    let existing_canon: HashMap<String, String> = CanonicalFsStoreApplier::new(canonical_root)
+        .read_all()
+        .map_err(|e| format!("reading canonical store: {e}"))?
+        .into_iter()
+        .map(|(k, payload)| (k, content_hash(payload.as_bytes())))
+        .collect();
+
+    // In-plan state: the body each evergreen path will hold after the ops
+    // already emitted, and the canonical keys already registered, in THIS plan.
+    let mut in_plan_notes: HashMap<String, String> = HashMap::new();
+    let mut in_plan_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let mut out = WritePlan::new(plan.run_id.clone());
+    for op in &plan.ops {
+        match op {
+            WriteOp::VaultCreate(c) if c.path.as_str().starts_with(&evergreen_prefix) => {
+                let path = c.path.as_str();
+                // Effective existing = what an earlier op in this plan will
+                // write to the path, else what is on disk.
+                let existing = in_plan_notes
+                    .get(path)
+                    .cloned()
+                    .or_else(|| read_vault_file(vault_root, path));
+                match reconcile_evergreen_write(c, existing.as_deref()) {
+                    Some(write) => {
+                        let landed = match &write {
+                            WriteOp::VaultCreate(o) => o.body.clone(),
+                            WriteOp::VaultUpdate(o) => o.body.clone(),
+                            _ => existing.clone().unwrap_or_default(),
+                        };
+                        in_plan_notes.insert(path.to_string(), landed);
+                        out.push(write);
+                    }
+                    None => {
+                        // Skipped (nothing new / unknown-format): the path's body
+                        // is unchanged, so remember it for later ops in the plan.
+                        if let Some(body) = existing {
+                            in_plan_notes.insert(path.to_string(), body);
+                        }
+                    }
+                }
+            }
+            WriteOp::CanonicalUpsert(u) => {
+                let key = u.key.as_str();
+                let disk_conflict =
+                    matches!(existing_canon.get(key), Some(h) if h != u.after_hash.as_str());
+                // An earlier op in this plan already registered this identity →
+                // first-writer-wins (drop), regardless of payload.
+                let in_plan_conflict = in_plan_keys.contains(key);
+                if disk_conflict || in_plan_conflict {
+                    // drop: preserve the first registration's provenance.
+                } else {
+                    in_plan_keys.insert(key.to_string());
+                    out.push(op.clone());
+                }
+            }
+            other => out.push(other.clone()),
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +498,124 @@ mod tests {
         // An errored record fails the cycle even when every applied op is clean.
         let errored = RunCycleReport { records_errored: 1, ..clean_report() };
         assert!(!errored.succeeded(), "a cycle with an errored record must not succeed");
+    }
+
+    // ---- M12b: reconcile_same_slug ----
+
+    use ovp_core::{CanonicalKey, CanonicalUpsertOp, ContentHash, RecordId, VaultPath};
+    use ovp_domain::{CanonicalConcept, EvergreenConcept, EvergreenNote};
+
+    fn ev_create(slug: &str, def: &str, src_url: &str) -> WriteOp {
+        let mut c = EvergreenConcept::from_candidate(slug, src_url);
+        c.definition = def.into();
+        c.source_claims = vec![format!("Claim from {src_url}.")];
+        c.source_title = "Doc".into();
+        let body = EvergreenNote::from_concept(&c).render();
+        WriteOp::VaultCreate(ovp_core::VaultCreateOp {
+            op_id: OpId::new(format!("op-ev-{slug}")),
+            path: VaultPath::new(format!("10-Knowledge/Evergreen/{slug}.md")),
+            after_hash: ContentHash::new(content_hash(body.as_bytes())),
+            body,
+            reason: "mint".into(),
+            originating_record: RecordId::new("r"),
+        })
+    }
+
+    fn canon_upsert(slug: &str, provenance: &str) -> WriteOp {
+        let payload = CanonicalConcept {
+            slug: slug.into(),
+            title: "T".into(),
+            evergreen_path: format!("10-Knowledge/Evergreen/{slug}.md"),
+            provenance_source_url: provenance.into(),
+        }
+        .to_payload();
+        WriteOp::CanonicalUpsert(CanonicalUpsertOp {
+            op_id: OpId::new(format!("op-canon-{slug}")),
+            key: CanonicalKey::new(slug),
+            before_hash: None,
+            after_hash: ContentHash::new(content_hash(payload.as_bytes())),
+            payload,
+            reason: "register".into(),
+            originating_record: RecordId::new("r"),
+        })
+    }
+
+    #[test]
+    fn reconcile_fails_closed_on_unreadable_canonical_store() {
+        let vault = tempfile::tempdir().unwrap();
+        let canon = tempfile::tempdir().unwrap();
+        // A non-UTF-8 *.json record makes read_all() err → reconcile must NOT
+        // proceed (a blind apply could overwrite canonical provenance).
+        std::fs::write(canon.path().join("bad.json"), [0xff, 0xfe, 0x00, 0x9f]).unwrap();
+        let mut plan = WritePlan::new(RunId::new("r"));
+        plan.push(ev_create("rag", "Def.", "https://a/x"));
+        let res = reconcile_same_slug(&plan, vault.path(), canon.path());
+        assert!(res.is_err(), "a corrupt canonical store must fail-close the reconcile");
+    }
+
+    #[test]
+    fn reconcile_folds_two_same_slug_docs_within_one_plan() {
+        // Two DIFFERENT documents surfacing the same NEW slug in ONE plan: the
+        // first mints, the second must fold to an enrich VaultUpdate (not a
+        // second colliding VaultCreate that would fail the apply).
+        let vault = tempfile::tempdir().unwrap();
+        let canon = tempfile::tempdir().unwrap();
+        let mut plan = WritePlan::new(RunId::new("r"));
+        plan.push(ev_create("rag", "Definition A.", "https://a/x"));
+        plan.push(canon_upsert("rag", "https://a/x"));
+        plan.push(ev_create("rag", "Definition B.", "https://b/y"));
+        plan.push(canon_upsert("rag", "https://b/y"));
+
+        let out = reconcile_same_slug(&plan, vault.path(), canon.path()).unwrap();
+        let kinds: Vec<&str> = out
+            .ops
+            .iter()
+            .map(|o| match o {
+                WriteOp::VaultCreate(_) => "create",
+                WriteOp::VaultUpdate(_) => "update",
+                WriteOp::CanonicalUpsert(_) => "canon",
+                _ => "other",
+            })
+            .collect();
+        // doc A: create + canon ; doc B: update (folded) ; doc B canon dropped.
+        assert_eq!(kinds, vec!["create", "canon", "update"], "got {kinds:?}");
+        // The enrich VaultUpdate's before_hash matches doc A's body (in-plan).
+        let a_body = match &out.ops[0] {
+            WriteOp::VaultCreate(o) => o.body.clone(),
+            _ => unreachable!(),
+        };
+        let merged = match &out.ops[2] {
+            WriteOp::VaultUpdate(o) => o,
+            _ => unreachable!(),
+        };
+        assert_eq!(merged.before_hash.as_str(), content_hash(a_body.as_bytes()));
+        assert!(merged.body.contains("https://a/x") && merged.body.contains("https://b/y"));
+    }
+
+    #[test]
+    fn reconcile_drops_conflicting_disk_canonical_but_keeps_identical() {
+        let vault = tempfile::tempdir().unwrap();
+        let canon = tempfile::tempdir().unwrap();
+        // Seed an existing canonical record for `rag` with provenance P1.
+        let mut store = CanonicalFsStoreApplier::new(canon.path());
+        let mut seed = WritePlan::new(RunId::new("seed"));
+        seed.push(canon_upsert("rag", "https://first/doc"));
+        store.apply(&seed, ApplyMode::Apply);
+
+        // A second document re-registers `rag` with a DIFFERENT provenance →
+        // dropped (first-writer-wins); an identical re-register → kept.
+        let mut plan = WritePlan::new(RunId::new("r"));
+        plan.push(canon_upsert("rag", "https://second/doc")); // conflict → drop
+        plan.push(canon_upsert("other", "https://x")); // new identity → keep
+        let out = reconcile_same_slug(&plan, vault.path(), canon.path()).unwrap();
+        let keys: Vec<&str> = out
+            .ops
+            .iter()
+            .filter_map(|o| match o {
+                WriteOp::CanonicalUpsert(u) => Some(u.key.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys, vec!["other"], "conflicting rag dropped, new other kept: {keys:?}");
     }
 }
