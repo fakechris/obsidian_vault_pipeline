@@ -22,7 +22,7 @@ The system is a stack of layers, **one crate per layer**; higher layers depend o
 | **L1 Domain node catalog** | `ovp-domain` | `DomainBody` + typed bodies; concrete nodes (resolver, prompt builders, parsers, concept resolver, evergreen writer, sinks); `VaultLayout`. | perform real writes; depend on a CLI |
 | **L2 Assembly** | `ovp-app` | `DomainPipelineSpec` / `NodeKind` / `NodeRegistry` / `NodeConfig` / `AppWiring` / `GraphAssembler`. Manifest + wiring → `GraphRunner`. | apply plans; depend on `ovp-stores`; dynamic loading / async / JSON DSL |
 | **L3 Store / apply** | `ovp-stores` | `VaultFsPlanApplier`, `CanonicalFsStoreApplier`, `CompositePlanApplier`, `read_all`, `walk_markdown`. All mutations via `WritePlan` → `PlanApplier`; derived state rebuildable. | own pipeline execution |
-| **L4 Operational workflow** | `ovp-run` | the `run-cycle`: assemble → run → apply → rebuild MOC + knowledge index → report; idempotent on re-run. | duplicate node-construction or apply logic |
+| **L4 Operational workflow** | `ovp-run` | the `run-cycle`: assemble → run → apply → rebuild MOC + knowledge index *as derived artifacts post-apply (not pipeline nodes)* → report; idempotent on re-run, fail-closed. | duplicate node-construction or apply logic |
 | **L5 Read / health** | `ovp-query`, `ovp-lint` | read canonical / vault / knowledge index; report health. | own mutation or pipeline execution |
 | **L6 RAG / automation** | `ovp-rag`, `ovp-auto` | RAG read path (`RagCorpus` + `Retriever` + `Ranker` + `ContextBuilder` + `Eval`) over the L5 read model; a one-shot automation sweep (`AutoRun`) that *calls* L4 `RunCycle` then L5 `Lint`. | mutate (RAG is read-only); duplicate L4 workflow logic; add async / a watcher daemon (v1) |
 
@@ -188,6 +188,8 @@ The full legacy cycle (raw → note → evergreen → canonical → MOC + knowle
 L5 read/health is complete: `ovp-query` (a read-only `KnowledgeView` + `query` CLI) and `ovp-lint` (`Lint::check` + `lint` CLI with a severity gate).
 
 L6 RAG/automation is landed: `ovp-rag` (a read-only `RagCorpus` → `Retriever` → `Ranker` → `ContextBuilder` + offline `Eval`, exposed as `rag`) and `ovp-auto` (`AutoRun::sweep` — a one-shot inbox sweep that *calls* L4 `RunCycle` + L5 `Lint`, exposed as `auto-run`). RAG stays read-only; automation owns no workflow logic. See `docs/stage-rag-automation.md`. **Genuine future work (explicit non-goals of v1):** an embedding/semantic ranker (a future `RetrievalWeights`-shaped extension — v1 is deterministic lexical scoring); a `--watch` polling daemon wrapping `sweep` (v1 is one-shot, sync, no async runtime); frontmatter-stripped RAG snippets. Re-triaged from `docs/legacy-alignment.md` against observed pain.
+
+**Recommended next stage: M12 — Absorb Boundary v1, before RAG v1.1 (the semantic ranker).** The M11 necessity audit (`docs/processing-pipeline-audit.md`) found that `EvergreenConceptWriter` + `EvergreenSink` are canonical-identity *minting*, not absorb: every surviving candidate is AUTO-minted as a provenance-free **stub** ("Expand with an atomic definition and links"), with no enrichment, no policy lanes (mint/enrich/escalate/reject), and no cross-document dedup. Because RAG retrieves over evergreen note *bodies*, a semantic ranker built first would rank over empty stubs — retrieval quality is bottlenecked on note content, not the ranking algorithm. So the absorb boundary (real note bodies + decision lanes + dedup) should precede the embedding/semantic ranker above.
 
 ## What this doc is and isn't
 
