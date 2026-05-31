@@ -291,6 +291,7 @@ mod tests {
                 actions: vec![],
                 linked_concepts: vec![],
             },
+            concepts: Vec::new(),
         };
         let rec: Record<DomainBody> = Record::new(
             RecordId::new("r-1"),

@@ -137,6 +137,7 @@ mod tests {
                 actions: vec![],
                 linked_concepts: vec![],
             },
+            concepts: Vec::new(),
         }
     }
 

@@ -62,6 +62,7 @@ fn sample_interpreted() -> InterpretedDoc {
             actions: vec!["short-term: …".into()],
             linked_concepts: vec!["agent-native-product-management".into()],
         },
+        concepts: Vec::new(),
     }
 }
 

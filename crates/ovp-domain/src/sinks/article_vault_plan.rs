@@ -206,6 +206,7 @@ mod tests {
                 actions: vec!["short-term: try it".into()],
                 linked_concepts: vec!["agent-native-pm".into()],
             },
+            concepts: Vec::new(),
         }
     }
 

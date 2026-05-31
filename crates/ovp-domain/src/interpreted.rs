@@ -24,6 +24,55 @@ pub struct InterpretedDoc {
     pub canonical_concepts: Vec<String>,
     pub concept_candidates: Vec<String>,
     pub dimensions: Dimensions,
+    /// M13 v2 concept map: source-grounded concepts each carrying their OWN
+    /// definition + claims + evidence. **Empty for v1 responses** (the legacy
+    /// `concept_candidates` + shared-`one_liner` path still applies). Populated
+    /// only by the v2 `article_concept_map` prompt; when non-empty,
+    /// `ConceptResolver` gates it and `EvergreenConceptWriter` mints each note
+    /// from its concept's own fields instead of the article one-liner.
+    #[serde(default)]
+    pub concepts: Vec<ExtractedConcept>,
+}
+
+/// What kind of thing a concept is. Small, closed vocabulary (no Nowledge
+/// terms). Drives nothing structural in v2 beyond being recorded on the note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConceptKind {
+    Concept,
+    Principle,
+    Procedure,
+    Taxonomy,
+    System,
+    Claim,
+}
+
+/// A single source-grounded concept extracted from an article (v2 concept
+/// map). Unlike v1 — where a flat `linked_concepts` slug list forced the
+/// writer to fabricate per-concept content from article-level fields — each
+/// `ExtractedConcept` owns its `definition`, `claims`, and `evidence`. The
+/// `merge_with` / `reject_reason` / `promote` hints feed the `ConceptResolver`
+/// gate; `evidence` is the grounding the gate requires before minting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractedConcept {
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub kind: ConceptKind,
+    pub definition: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub claims: Vec<String>,
+    #[serde(default)]
+    pub related: Vec<String>,
+    #[serde(default)]
+    pub merge_with: Vec<String>,
+    #[serde(default)]
+    pub reject_reason: Option<String>,
+    #[serde(default)]
+    pub promote: bool,
 }
 
 /// The six dimensions the article contract requires. Each field is a

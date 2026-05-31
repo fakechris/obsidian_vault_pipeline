@@ -130,6 +130,7 @@ fn interp_from_rendered(plan: &ovp_core::WritePlan) -> InterpretedDoc {
             actions: vec![],
             linked_concepts: vec![],
         },
+        concepts: Vec::new(),
     }
 }
 

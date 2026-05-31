@@ -32,7 +32,7 @@ pub use canonical_slug::{CanonicalSlug, SlugError};
 pub use concept_registry::{ConceptRegistry, RegistryError};
 pub use evergreen::EvergreenConcept;
 pub use evergreen_note::{content_hash, reconcile_evergreen_write, EvergreenNote};
-pub use interpreted::{Dimensions, Explanation, InterpretedDoc};
+pub use interpreted::{ConceptKind, Dimensions, ExtractedConcept, Explanation, InterpretedDoc};
 pub use knowledge_index::{
     extract_wikilinks, KnowledgeIndex, KnowledgeIndexBuilder, KnowledgeIndexEntry,
 };

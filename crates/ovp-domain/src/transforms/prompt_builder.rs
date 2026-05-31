@@ -13,6 +13,14 @@ const ARTICLE_PROMPT_TEMPLATE: &str = include_str!("../../prompts/article_interp
 pub const ARTICLE_PROMPT_ID: &str = "article_interpret/v1";
 pub const ARTICLE_SCHEMA_VERSION: u32 = 1;
 
+/// `PROMPT_ID/SCHEMA_VERSION` for the M13 v2 concept-map prompt
+/// (`prompts/article_concept_map.md`). A distinct id + version so v2 responses
+/// can never replay against v1 cassettes and vice-versa. `ArticleParser` parses
+/// either; the v2 path additionally requires a non-empty `concepts[]`. The v2
+/// prompt-builder + manifest wiring + live cassettes land in M13.3.
+pub const CONCEPT_MAP_PROMPT_ID: &str = "article_concept_map/v2";
+pub const CONCEPT_MAP_SCHEMA_VERSION: u32 = 2;
+
 /// Default model + max_tokens for v1. Production wiring may override
 /// either via CLI flags or config.
 pub const DEFAULT_ARTICLE_MODEL: &str = "claude-sonnet-4-6";

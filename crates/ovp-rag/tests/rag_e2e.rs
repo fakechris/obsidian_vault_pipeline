@@ -211,6 +211,7 @@ fn rag_snippet_from_minted_evergreen_is_grounded_not_stub() {
             actions: vec![],
             linked_concepts: vec!["vector-db".into()],
         },
+        concepts: Vec::new(),
     };
     let minted = EvergreenConcept::try_mint("rag", &interp).unwrap();
 

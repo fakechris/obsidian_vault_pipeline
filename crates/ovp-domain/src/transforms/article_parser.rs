@@ -2,10 +2,12 @@ use ovp_core::{DropReason, FilterDecision, Record, StepId, Transform};
 use serde::Deserialize;
 
 use crate::body::DomainBody;
-use crate::interpreted::{Dimensions, Explanation, InterpretedDoc};
+use crate::interpreted::{Dimensions, Explanation, ExtractedConcept, InterpretedDoc};
 use crate::response::ModelResponse;
 
-use super::prompt_builder::{ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION};
+use super::prompt_builder::{
+    ARTICLE_PROMPT_ID, ARTICLE_SCHEMA_VERSION, CONCEPT_MAP_PROMPT_ID, CONCEPT_MAP_SCHEMA_VERSION,
+};
 
 /// Parses a `ModelResponse` body containing the JSON spec our prompt
 /// asked for, validating the schema version and producing an
@@ -53,30 +55,34 @@ impl Transform<DomainBody> for ArticleParser {
         };
 
         // In the unified pipeline this parser is broadcast every Model
-        // record; it only claims article-prompt responses and lets the
-        // paper parser claim paper-prompt ones.
-        if model.prompt_id.as_str() != ARTICLE_PROMPT_ID {
-            return FilterDecision::Drop(DropReason::new(
-                "transform.article_parser.wrong_prompt",
-                format!(
-                    "model response carries prompt_id={}, parser expects {}",
-                    model.prompt_id.as_str(),
-                    ARTICLE_PROMPT_ID
-                ),
-            ));
-        }
+        // record; it only claims article-prompt responses (v1 or the v2
+        // concept-map prompt) and lets the paper parser claim paper-prompt
+        // ones. `is_v2` selects the concept-map handling below.
+        let (expected_version, is_v2) = match model.prompt_id.as_str() {
+            ARTICLE_PROMPT_ID => (ARTICLE_SCHEMA_VERSION, false),
+            CONCEPT_MAP_PROMPT_ID => (CONCEPT_MAP_SCHEMA_VERSION, true),
+            other => {
+                return FilterDecision::Drop(DropReason::new(
+                    "transform.article_parser.wrong_prompt",
+                    format!(
+                        "model response carries prompt_id={other}, parser expects {ARTICLE_PROMPT_ID} or {CONCEPT_MAP_PROMPT_ID}"
+                    ),
+                ));
+            }
+        };
 
-        if model.schema_version != ARTICLE_SCHEMA_VERSION {
+        if model.schema_version != expected_version {
             return FilterDecision::Drop(DropReason::new(
                 "transform.article_parser.schema_mismatch",
                 format!(
-                    "model response carries schema_version={}, parser expects {}",
-                    model.schema_version, ARTICLE_SCHEMA_VERSION
+                    "model response carries schema_version={}, parser expects {expected_version} for {}",
+                    model.schema_version,
+                    model.prompt_id.as_str()
                 ),
             ));
         }
 
-        let interpreted = match parse_into_interpreted(&model, &self.area, &self.date_stamp) {
+        let interpreted = match parse_into_interpreted(&model, &self.area, &self.date_stamp, is_v2) {
             Ok(d) => d,
             Err(reason) => return FilterDecision::Drop(reason),
         };
@@ -102,6 +108,9 @@ struct ModelJsonPayload {
     #[allow(dead_code)] // top-level mirror of dimensions.linked_concepts; kept for prompt symmetry
     linked_concepts: Vec<String>,
     dimensions: DimensionsJson,
+    /// v2 concept map. Absent/empty for v1 responses; required non-empty for v2.
+    #[serde(default)]
+    concepts: Vec<ExtractedConcept>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +138,7 @@ fn parse_into_interpreted(
     model: &ModelResponse,
     area: &str,
     date_stamp: &str,
+    is_v2: bool,
 ) -> Result<InterpretedDoc, DropReason> {
     let text = model.content.text();
     let raw_json = strip_code_fence(text);
@@ -158,6 +168,17 @@ fn parse_into_interpreted(
         ));
     }
 
+    // v2 must carry a concept map. Fail LOUD on a v2 response with no
+    // concepts[] — never silently fall back to the v1 shared-one_liner path.
+    // (The ConceptResolver gate decides per-concept promotion/rejection later;
+    // the parser only guards the envelope.)
+    if is_v2 && payload.concepts.is_empty() {
+        return Err(DropReason::new(
+            "transform.article_parser.empty_concepts",
+            "v2 concept-map response carried no concepts[]",
+        ));
+    }
+
     let dims = payload.dimensions;
     Ok(InterpretedDoc {
         title: payload.title,
@@ -183,6 +204,8 @@ fn parse_into_interpreted(
             actions: dims.actions,
             linked_concepts: dims.linked_concepts,
         },
+        // v2 carries the concept map; v1 leaves it empty (legacy candidate path).
+        concepts: if is_v2 { payload.concepts } else { Vec::new() },
     })
 }
 
@@ -341,6 +364,106 @@ mod tests {
                 assert_eq!(reason.code.as_str(), "transform.article_parser.wrong_variant");
             }
             other => panic!("expected Drop, got {other:?}"),
+        }
+    }
+
+    // ---- M13 v2 concept map ----
+
+    const V2_JSON: &str = r#"{
+  "title": "RAG, rebuilt",
+  "tags": ["RAG"],
+  "dimensions": {
+    "one_liner": "An article-level synthesis line for the primary note.",
+    "explanation": { "what": "w", "why": "y", "how": "h" },
+    "details": ["d1", "d2", "d3"],
+    "structure": null,
+    "actions": ["a1"]
+  },
+  "concepts": [
+    { "slug": "idea-block", "title": "IdeaBlock", "aliases": ["qa-packet"], "kind": "concept",
+      "definition": "A question-answer packet that replaces a prose chunk as the unit.",
+      "evidence": ["validated answer"], "claims": ["2.29x better retrieval"],
+      "related": ["chunking-problem"], "promote": true },
+    { "slug": "chunking-problem", "title": "Chunking Problem", "kind": "principle",
+      "definition": "The chunk is a structurally neutral container with no idea boundary.",
+      "evidence": ["no idea boundary"], "claims": ["half a table loses its meaning"],
+      "promote": true }
+  ]
+}"#;
+
+    fn model_record_v2(json: &str, schema_version: u32) -> Record<DomainBody> {
+        let resp = ModelResponse {
+            prompt_id: PromptId::new("article_concept_map/v2"),
+            schema_version,
+            model: "fake".into(),
+            content: ResponseContent::Inline { text: json.into() },
+            input_tokens: 0,
+            output_tokens: 0,
+            origin: Box::new(source()),
+        };
+        Record::new(
+            RecordId::new("r"),
+            DomainBody::Model(Box::new(resp)),
+            RecordMeta { run_id: RunId::new("run"), seq: 0 },
+        )
+    }
+
+    #[test]
+    fn v2_parses_concept_map_with_distinct_definitions() {
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-31");
+        match parser.process(model_record_v2(V2_JSON, 2)) {
+            FilterDecision::Forward(rs) => {
+                let d = match &rs[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    other => panic!("expected Interpreted, got {}", other.variant_name()),
+                };
+                assert_eq!(d.concepts.len(), 2);
+                assert_eq!(d.concepts[0].slug, "idea-block");
+                assert_eq!(d.concepts[0].aliases, vec!["qa-packet"]);
+                assert_eq!(d.concepts[1].slug, "chunking-problem");
+                // Each concept owns its OWN definition (not the article one_liner).
+                assert_ne!(d.concepts[0].definition, d.concepts[1].definition);
+                assert_ne!(d.concepts[0].definition, d.dimensions.one_liner);
+                assert!(d.concepts[0].claims.iter().any(|c| c.contains("2.29x")));
+            }
+            other => panic!("expected Forward, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_missing_concepts_drops_loud() {
+        // A v2 response with no concepts[] must fail loud, never fall back to v1.
+        let no_concepts = V2_JSON.replace("\"concepts\"", "\"concepts_absent\"");
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-31");
+        match parser.process(model_record_v2(&no_concepts, 2)) {
+            FilterDecision::Drop(reason) => {
+                assert_eq!(reason.code.as_str(), "transform.article_parser.empty_concepts");
+            }
+            other => panic!("expected Drop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_wrong_schema_version_drops() {
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-31");
+        match parser.process(model_record_v2(V2_JSON, 1)) {
+            FilterDecision::Drop(reason) => {
+                assert_eq!(reason.code.as_str(), "transform.article_parser.schema_mismatch");
+            }
+            other => panic!("expected Drop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v1_response_has_empty_concepts() {
+        // v1 path is untouched: no concept map, never synthesized from one_liner.
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-27");
+        match parser.process(model_record(HAPPY_JSON, 1)) {
+            FilterDecision::Forward(rs) => match &rs[0].body {
+                DomainBody::Interpreted(d) => assert!(d.concepts.is_empty()),
+                other => panic!("expected Interpreted, got {}", other.variant_name()),
+            },
+            other => panic!("expected Forward, got {other:?}"),
         }
     }
 }

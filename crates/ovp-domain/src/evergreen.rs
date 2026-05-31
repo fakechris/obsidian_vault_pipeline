@@ -304,6 +304,7 @@ mod tests {
                 actions: actions.into_iter().map(String::from).collect(),
                 linked_concepts: linked.into_iter().map(String::from).collect(),
             },
+            concepts: Vec::new(),
         }
     }
 
