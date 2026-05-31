@@ -56,6 +56,10 @@ pub struct RunCycleReport {
     pub records_seen: u64,
     pub records_forwarded_to_sinks: u64,
     pub records_dropped: u64,
+    /// Records that ended in `FilterDecision::Error` (e.g. an LLM call failed).
+    /// Non-zero ⇒ the run did NOT complete cleanly; see `derived_skipped_reason`
+    /// for the first error. Distinct from a legitimate `Drop`.
+    pub records_errored: u64,
     pub ops_emitted: usize,
     /// The main composite apply (vault notes + evergreen stubs + canonical).
     pub apply: ApplyReport,
@@ -80,7 +84,8 @@ impl RunCycleReport {
     /// unsupported op means a `WriteOp` no applier handled — the cycle did NOT
     /// fully apply, so it is not a success.
     pub fn succeeded(&self) -> bool {
-        self.derived_skipped_reason.is_none()
+        self.records_errored == 0
+            && self.derived_skipped_reason.is_none()
             && self.apply.counts().failed == 0
             && self.apply.counts().unsupported == 0
             && self.moc.as_ref().is_none_or(|m| m.failed == 0 && m.unsupported == 0)
@@ -147,6 +152,7 @@ impl RunCycle {
             records_seen: report.records_seen,
             records_forwarded_to_sinks: report.records_forwarded_to_sinks,
             records_dropped: report.records_dropped,
+            records_errored: report.records_errored,
             ops_emitted: report.write_plan.len(),
             apply,
             moc: None,
@@ -154,6 +160,37 @@ impl RunCycle {
             derived_skipped_reason: None,
             dry_run: matches!(mode, ApplyMode::DryRun),
         };
+
+        // Fail loud on a failed extraction. ROOT CAUSE: propagate the graph's
+        // error count — a node that ended in `FilterDecision::Error` (e.g. the
+        // live LLM call failing transport/decode) must NOT pass as an empty
+        // success. Skip derived rebuild and report the first error.
+        if report.records_errored > 0 {
+            let detail = report
+                .first_error
+                .as_ref()
+                .map(|e| format!("{}: {}", e.code.as_str(), e.detail))
+                .unwrap_or_else(|| "unknown".to_string());
+            out.derived_skipped_reason = Some(format!(
+                "{} record(s) errored in the pipeline (first: {detail})",
+                report.records_errored
+            ));
+            return Ok(out);
+        }
+
+        // SECONDARY BACKSTOP: a non-dry-run that saw input but produced zero
+        // write ops generated nothing usable (e.g. a record silently dropped
+        // after a degenerate LLM response). Every real article/paper run emits
+        // at least its note's `VaultCreate`, so treat 0 ops here as a failure,
+        // not an empty success. (Not relied on alone — the error count above is
+        // the primary signal.)
+        if !out.dry_run && report.records_seen > 0 && out.ops_emitted == 0 {
+            out.derived_skipped_reason = Some(
+                "pipeline saw input but produced no write ops (likely a failed or empty LLM extraction)"
+                    .to_string(),
+            );
+            return Ok(out);
+        }
 
         // If the main apply was not clean — any FAILED or UNSUPPORTED op — do NOT
         // rebuild derived state (fail-closed). An unsupported op means a WriteOp
@@ -281,6 +318,28 @@ mod tests {
         assert!(main_apply_block(&clean).is_none(), "applied/skipped is clean");
     }
 
+    fn clean_report() -> RunCycleReport {
+        let mut apply = ApplyReport::new(RunId::new("t"), ApplyMode::Apply);
+        apply.push(OpOutcome {
+            op_id: OpId::new("op"),
+            kind: OpKind::VaultCreate,
+            result: OpResult::Applied,
+        });
+        RunCycleReport {
+            run_id: "t".into(),
+            records_seen: 1,
+            records_forwarded_to_sinks: 1,
+            records_dropped: 0,
+            records_errored: 0,
+            ops_emitted: 1,
+            apply,
+            moc: Some(DerivedRebuild { artifact: "moc".into(), applied: 1, skipped: 0, failed: 0, unsupported: 0 }),
+            knowledge_index: Some(DerivedRebuild { artifact: "knowledge_index".into(), applied: 1, skipped: 0, failed: 0, unsupported: 0 }),
+            derived_skipped_reason: None,
+            dry_run: false,
+        }
+    }
+
     #[test]
     fn succeeded_treats_unsupported_as_failure() {
         let report = RunCycleReport {
@@ -288,6 +347,7 @@ mod tests {
             records_seen: 0,
             records_forwarded_to_sinks: 0,
             records_dropped: 0,
+            records_errored: 0,
             ops_emitted: 1,
             apply: apply_with(OpResult::Unsupported, OpKind::EventAppend),
             moc: None,
@@ -296,5 +356,14 @@ mod tests {
             dry_run: false,
         };
         assert!(!report.succeeded(), "a cycle with an unsupported main op has not succeeded");
+    }
+
+    #[test]
+    fn succeeded_requires_zero_errored_records() {
+        let clean = clean_report();
+        assert!(clean.succeeded(), "baseline clean report should succeed");
+        // An errored record fails the cycle even when every applied op is clean.
+        let errored = RunCycleReport { records_errored: 1, ..clean_report() };
+        assert!(!errored.succeeded(), "a cycle with an errored record must not succeed");
     }
 }

@@ -37,6 +37,22 @@ pub struct RunReport {
     pub records_seen: u64,
     pub records_forwarded_to_sinks: u64,
     pub records_dropped: u64,
+    /// Records a transform/effect node ended in `FilterDecision::Error`. Unlike
+    /// a `Drop` (a legitimate refusal), an `Error` is a failure — a non-zero
+    /// count means the run did NOT complete cleanly and callers must treat it as
+    /// a failure rather than an empty success. (Distinct from `records_dropped`.)
+    pub records_errored: u64,
+    /// The first `FilterError` seen, for diagnostics. `None` iff
+    /// `records_errored == 0`.
+    pub first_error: Option<crate::filter::FilterError>,
+}
+
+impl RunReport {
+    /// True iff no node errored. A clean run still may have legitimately
+    /// dropped records (e.g. an empty input) — only `Error` outcomes count here.
+    pub fn is_clean(&self) -> bool {
+        self.records_errored == 0
+    }
 }
 
 /// In-memory single-threaded GraphRunner.
@@ -142,6 +158,8 @@ impl<B: Clone> GraphRunner<B> {
         let mut records_seen: u64 = 0;
         let mut records_forwarded: u64 = 0;
         let mut records_dropped: u64 = 0;
+        let mut records_errored: u64 = 0;
+        let mut first_error: Option<crate::filter::FilterError> = None;
 
         for name in &topo {
             // Re-take node ownership so we can mutate it while consulting
@@ -169,6 +187,10 @@ impl<B: Clone> GraphRunner<B> {
                                 break;
                             }
                             SourceOutput::Error(e) => {
+                                records_errored += 1;
+                                if first_error.is_none() {
+                                    first_error = Some(e.clone());
+                                }
                                 log.record(
                                     run_id.clone(),
                                     EventKind::FilterErrored {
@@ -186,7 +208,7 @@ impl<B: Clone> GraphRunner<B> {
                 }
                 Node::Transform(mut tx) => {
                     let inputs = gather_inputs(name, &upstream, &mut edge_queue);
-                    let (seen, dropped) = run_transform_stage(
+                    let stage = run_transform_stage(
                         name,
                         TxRef::Plain(&mut *tx),
                         inputs,
@@ -195,13 +217,17 @@ impl<B: Clone> GraphRunner<B> {
                         &mut log,
                         &mut edge_queue,
                     );
-                    records_seen += seen;
-                    records_dropped += dropped;
+                    records_seen += stage.seen;
+                    records_dropped += stage.dropped;
+                    records_errored += stage.errored;
+                    if first_error.is_none() {
+                        first_error = stage.first_error;
+                    }
                     self.nodes.insert(name.clone(), Node::Transform(tx));
                 }
                 Node::EffectfulTransform(mut tx) => {
                     let inputs = gather_inputs(name, &upstream, &mut edge_queue);
-                    let (seen, dropped) = run_transform_stage(
+                    let stage = run_transform_stage(
                         name,
                         TxRef::Effectful(&mut *tx),
                         inputs,
@@ -210,8 +236,12 @@ impl<B: Clone> GraphRunner<B> {
                         &mut log,
                         &mut edge_queue,
                     );
-                    records_seen += seen;
-                    records_dropped += dropped;
+                    records_seen += stage.seen;
+                    records_dropped += stage.dropped;
+                    records_errored += stage.errored;
+                    if first_error.is_none() {
+                        first_error = stage.first_error;
+                    }
                     self.nodes.insert(name.clone(), Node::EffectfulTransform(tx));
                 }
                 Node::Sink(mut snk) => {
@@ -261,6 +291,8 @@ impl<B: Clone> GraphRunner<B> {
             records_seen,
             records_forwarded_to_sinks: records_forwarded,
             records_dropped,
+            records_errored,
+            first_error,
         })
     }
 
@@ -342,9 +374,18 @@ impl<'a, B> TxRef<'a, B> {
     }
 }
 
+/// Per-stage tally returned by [`run_transform_stage`].
+struct StageCounts {
+    seen: u64,
+    dropped: u64,
+    errored: u64,
+    first_error: Option<crate::filter::FilterError>,
+}
+
 /// Drive a sequence of records through a (possibly effectful) transform.
-/// Returns `(records_seen, records_dropped)`. Broadcasts outputs into
-/// downstream edge queues. Logs every per-record decision.
+/// Broadcasts outputs into downstream edge queues and logs every per-record
+/// decision. Returns the seen/dropped/errored tally; an `Error` decision is
+/// counted distinctly from a `Drop` so callers can fail the run.
 fn run_transform_stage<B: Clone>(
     me: &str,
     mut tx: TxRef<'_, B>,
@@ -353,11 +394,13 @@ fn run_transform_stage<B: Clone>(
     run_id: &RunId,
     log: &mut EventLog,
     edge_queue: &mut HashMap<(String, String), Vec<Record<B>>>,
-) -> (u64, u64) {
+) -> StageCounts {
     let mut outputs: Vec<Record<B>> = Vec::new();
     let mut completed = false;
     let mut seen: u64 = 0;
     let mut dropped: u64 = 0;
+    let mut errored: u64 = 0;
+    let mut first_error: Option<crate::filter::FilterError> = None;
 
     for rec in inputs {
         if completed {
@@ -435,6 +478,10 @@ fn run_transform_stage<B: Clone>(
                 );
             }
             FilterDecision::Error(err) => {
+                errored += 1;
+                if first_error.is_none() {
+                    first_error = Some(err.clone());
+                }
                 log.record(
                     run_id.clone(),
                     EventKind::FilterErrored {
@@ -447,5 +494,5 @@ fn run_transform_stage<B: Clone>(
         }
     }
     broadcast(me, outs, outputs, edge_queue);
-    (seen, dropped)
+    StageCounts { seen, dropped, errored, first_error }
 }
