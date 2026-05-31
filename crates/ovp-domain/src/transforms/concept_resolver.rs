@@ -1,17 +1,25 @@
-use ovp_core::{DropReason, FilterDecision, Record, StepId, Transform};
+use std::collections::HashSet;
+
+use ovp_core::{DropReason, EventKind, FilterDecision, Record, StepId, Transform};
 
 use crate::body::DomainBody;
+use crate::canonical_slug::CanonicalSlug;
 use crate::concept_registry::ConceptRegistry;
+use crate::interpreted::ExtractedConcept;
 
-/// Promotes candidate concepts to canonical when the `ConceptRegistry`
-/// knows them. Pure: same input + same registry → same output.
+/// Promotes v1 candidate concepts to canonical when the `ConceptRegistry`
+/// knows them, AND (v2) gates the extracted concept map. Pure: same input +
+/// same registry → same output.
 ///
-/// Promotion is alias-aware: a candidate that's an alias of a canonical
+/// v1 promotion is alias-aware: a candidate that's an alias of a canonical
 /// slug is promoted to the *canonical* spelling, and duplicates collapse.
-/// Unknown candidates stay candidates — minting a new evergreen is a
-/// separate path (`EvergreenConceptWriter`, currently AUTO-all minting), not
-/// this. (The legacy "absorb" stage was human-reviewed; the mint/enrich/reject
-/// policy lanes are still future.)
+///
+/// v2 gate (when `doc.concepts` is non-empty): drops, with observable events,
+/// concepts that are invalid-slug / `promote=false` / carry a `reject_reason` /
+/// lack a definition, evidence, or owned claims; collapses duplicate slugs and
+/// `merge_with` targets (first survivor wins, deterministic). It encodes ONLY
+/// general rules — no benchmark slugs, no Nowledge rules, no article specifics.
+/// What to mint is the prompt's judgment; the benchmark validates it.
 pub struct ConceptResolver {
     step: StepId,
     registry: ConceptRegistry,
@@ -66,6 +74,21 @@ impl Transform<DomainBody> for ConceptResolver {
         doc.canonical_concepts.extend(promoted);
         doc.concept_candidates = remaining;
 
+        // v2 gate: filter/merge the extracted concept map in place. No-op when
+        // `concepts` is empty (v1), so v1 behavior is untouched.
+        let mut drop_events: Vec<EventKind> = Vec::new();
+        if !doc.concepts.is_empty() {
+            let (kept, drops) = gate_concepts(std::mem::take(&mut doc.concepts));
+            doc.concepts = kept;
+            for reason in drops {
+                drop_events.push(EventKind::FilterDropped {
+                    record_id: record.id.clone(),
+                    step_id: self.step.clone(),
+                    reason,
+                });
+            }
+        }
+
         let next = Record {
             id: record.id,
             body: DomainBody::Interpreted(Box::new(doc)),
@@ -73,8 +96,77 @@ impl Transform<DomainBody> for ConceptResolver {
             provenance: record.provenance,
         }
         .with_step(self.step.clone(), "concept resolution applied");
-        FilterDecision::Forward(vec![next])
+        if drop_events.is_empty() {
+            FilterDecision::Forward(vec![next])
+        } else {
+            FilterDecision::ForwardWithEvents { records: vec![next], events: drop_events }
+        }
     }
+}
+
+/// Gate an extracted v2 concept map with GENERAL rules only. Returns the
+/// surviving concepts and a `DropReason` per rejected/merged concept (the
+/// caller turns each into an observable `FilterDropped` event). Deterministic
+/// and order-stable: the first survivor of a duplicate/merge wins.
+fn gate_concepts(concepts: Vec<ExtractedConcept>) -> (Vec<ExtractedConcept>, Vec<DropReason>) {
+    let mut kept: Vec<ExtractedConcept> = Vec::new();
+    let mut kept_slugs: HashSet<String> = HashSet::new();
+    let mut drops: Vec<DropReason> = Vec::new();
+    for c in concepts {
+        let slug = match CanonicalSlug::parse(&c.slug) {
+            Ok(s) => s.into_string(),
+            Err(e) => {
+                drops.push(DropReason::new(
+                    "transform.concept_resolver.invalid_slug",
+                    format!("`{}`: {e}", c.slug),
+                ));
+                continue;
+            }
+        };
+        if !c.promote {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.not_promoted",
+                format!("`{slug}`: {}", c.reject_reason.as_deref().unwrap_or("promote=false")),
+            ));
+            continue;
+        }
+        if let Some(reason) = c.reject_reason.as_deref().filter(|r| !r.trim().is_empty()) {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.rejected",
+                format!("`{slug}`: {reason}"),
+            ));
+            continue;
+        }
+        if c.definition.trim().is_empty() || c.evidence.is_empty() || c.claims.is_empty() {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.low_evidence",
+                format!("`{slug}`: missing definition, evidence, or claims"),
+            ));
+            continue;
+        }
+        if kept_slugs.contains(&slug) {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.duplicate",
+                format!("`{slug}`: duplicate slug"),
+            ));
+            continue;
+        }
+        if let Some(target) = c.merge_with.iter().find(|t| kept_slugs.contains(*t)) {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.merged",
+                format!("`{slug}`: merged into `{target}`"),
+            ));
+            continue;
+        }
+        let mut c = c;
+        c.slug = slug.clone();
+        kept_slugs.insert(slug);
+        for a in &c.aliases {
+            kept_slugs.insert(a.clone());
+        }
+        kept.push(c);
+    }
+    (kept, drops)
 }
 
 #[cfg(test)]
@@ -228,6 +320,116 @@ mod tests {
                 assert_eq!(body.concept_candidates, vec!["still-candidate"]);
             }
             other => panic!("expected Forward, got {other:?}"),
+        }
+    }
+
+    // ---- M13.2 v2 concept-map gate ----
+
+    use crate::interpreted::{ConceptKind, ExtractedConcept};
+
+    fn concept(slug: &str, promote: bool) -> ExtractedConcept {
+        ExtractedConcept {
+            slug: slug.into(),
+            title: slug.into(),
+            aliases: vec![],
+            kind: ConceptKind::Concept,
+            definition: format!("{slug} is a specific thing."),
+            evidence: vec![format!("evidence for {slug}")],
+            claims: vec![format!("{slug} owned claim")],
+            related: vec![],
+            merge_with: vec![],
+            reject_reason: None,
+            promote,
+        }
+    }
+
+    fn doc_with_concepts(cs: Vec<ExtractedConcept>) -> InterpretedDoc {
+        let mut d = interp(vec![]);
+        d.concepts = cs;
+        d
+    }
+
+    fn codes(events: &[EventKind]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                EventKind::FilterDropped { reason, .. } => Some(reason.code.as_str().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn v2_gate_drops_bad_concepts_with_events() {
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let good = concept("idea-block", true);
+        let not_promoted = concept("data-pipeline", false);
+        let mut rejected = concept("knowledge-unit", true);
+        rejected.reject_reason = Some("synonym of idea-block".into());
+        let mut low = concept("vector-geometry", true);
+        low.claims = vec![];
+        let bad_slug = concept("a/b", true);
+        let doc = doc_with_concepts(vec![good, not_promoted, rejected, low, bad_slug]);
+        match r.process(record(doc)) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                let body = match &records[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    body.concepts.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
+                    vec!["idea-block"],
+                    "only the valid promoted concept survives"
+                );
+                let cs = codes(&events);
+                assert!(cs.contains(&"transform.concept_resolver.not_promoted".to_string()));
+                assert!(cs.contains(&"transform.concept_resolver.rejected".to_string()));
+                assert!(cs.contains(&"transform.concept_resolver.low_evidence".to_string()));
+                assert!(cs.contains(&"transform.concept_resolver.invalid_slug".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_gate_merges_and_dedups() {
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let a = concept("idea-block", true);
+        let mut syn = concept("qa-packet", true);
+        syn.merge_with = vec!["idea-block".into()];
+        let dup = concept("idea-block", true);
+        let doc = doc_with_concepts(vec![a, syn, dup]);
+        match r.process(record(doc)) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                let body = match &records[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    body.concepts.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
+                    vec!["idea-block"]
+                );
+                let cs = codes(&events);
+                assert!(cs.contains(&"transform.concept_resolver.merged".to_string()));
+                assert!(cs.contains(&"transform.concept_resolver.duplicate".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_gate_all_valid_no_events() {
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let doc = doc_with_concepts(vec![concept("a-concept", true), concept("b-concept", true)]);
+        match r.process(record(doc)) {
+            FilterDecision::Forward(rs) => {
+                let body = match &rs[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(body.concepts.len(), 2, "both valid concepts kept, no drop events");
+            }
+            other => panic!("expected Forward (no drops), got {other:?}"),
         }
     }
 }

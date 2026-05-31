@@ -60,17 +60,30 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
         let record_id = record.id.clone();
         let mut concepts: Vec<EvergreenConcept> = Vec::new();
         let mut drop_events: Vec<EventKind> = Vec::new();
-        for raw in &interp.concept_candidates {
-            match EvergreenConcept::try_mint(raw, interp) {
-                Ok(c) => concepts.push(c),
-                Err(e) => drop_events.push(EventKind::FilterDropped {
-                    record_id: record_id.clone(),
-                    step_id: self.step.clone(),
-                    reason: DropReason::new(
-                        "transform.evergreen.invalid_slug",
-                        format!("dropped concept candidate `{raw}` ({}): {e}", e.code()),
-                    ),
-                }),
+        if !interp.concepts.is_empty() {
+            // v2 (M13.2): mint each note from its OWN gated concept — the
+            // concept's definition + owned claims + related, NOT the article
+            // one_liner or token-matched article claims. The ConceptResolver
+            // already validated/filtered these concepts, so no per-slug drops
+            // happen here.
+            for c in &interp.concepts {
+                concepts.push(EvergreenConcept::from_extracted(c, &interp.title, &interp.source_url));
+            }
+        } else {
+            // v1 legacy: mint from candidates (shared one_liner definition +
+            // token-matched article claims). Invalid slugs drop observably.
+            for raw in &interp.concept_candidates {
+                match EvergreenConcept::try_mint(raw, interp) {
+                    Ok(c) => concepts.push(c),
+                    Err(e) => drop_events.push(EventKind::FilterDropped {
+                        record_id: record_id.clone(),
+                        step_id: self.step.clone(),
+                        reason: DropReason::new(
+                            "transform.evergreen.invalid_slug",
+                            format!("dropped concept candidate `{raw}` ({}): {e}", e.code()),
+                        ),
+                    }),
+                }
             }
         }
 
@@ -115,7 +128,7 @@ impl Transform<DomainBody> for EvergreenConceptWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreted::{Dimensions, Explanation, InterpretedDoc};
+    use crate::interpreted::{ConceptKind, Dimensions, ExtractedConcept, Explanation, InterpretedDoc};
     use ovp_core::RunId;
 
     fn interp(candidates: Vec<&str>) -> InterpretedDoc {
@@ -194,6 +207,117 @@ mod tests {
         assert!(!c.source_claims.is_empty(), "source-backed claims attached");
         assert!(c.source_claims.iter().any(|s| s.contains("retrieves documents")));
         assert_eq!(c.source_title, "T");
+    }
+
+    // ---- M13.2 v2 concept-map path ----
+
+    fn ec(slug: &str, definition: &str, claims: &[&str], related: &[&str]) -> ExtractedConcept {
+        ExtractedConcept {
+            slug: slug.into(),
+            title: String::new(),
+            aliases: vec![],
+            kind: ConceptKind::Concept,
+            definition: definition.into(),
+            evidence: vec!["e".into()],
+            claims: claims.iter().map(|s| s.to_string()).collect(),
+            related: related.iter().map(|s| s.to_string()).collect(),
+            merge_with: vec![],
+            reject_reason: None,
+            promote: true,
+        }
+    }
+
+    #[test]
+    fn v2_concepts_carry_their_own_definition_and_claims() {
+        // Two concepts from the SAME article must produce two DIFFERENT
+        // definitions — proving the writer no longer synthesizes from the
+        // article one_liner, and does not recycle one concept's claims onto
+        // another.
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let mut d = interp(vec![]);
+        // A shared article thesis the writer must NOT fall back to.
+        d.dimensions.one_liner = "An article-level synthesis line.".into();
+        d.concepts = vec![
+            ec(
+                "idea-block",
+                "A question-answer packet that replaces a prose chunk as the unit.",
+                &["IdeaBlocks gave 2.29x better retrieval."],
+                &["chunking-problem"],
+            ),
+            ec(
+                "chunking-problem",
+                "The chunk is a structurally neutral container with no idea boundary.",
+                &["Half a table loses its meaning when split."],
+                &[],
+            ),
+        ];
+        let out = match w.process(record(d)) {
+            FilterDecision::FanOut(rs) => rs,
+            other => panic!("expected FanOut, got {other:?}"),
+        };
+        assert_eq!(out.len(), 3, "article + 2 evergreens");
+        let a = match &out[1].body {
+            DomainBody::EvergreenConcept(c) => c,
+            other => panic!("expected EvergreenConcept, got {other:?}"),
+        };
+        let b = match &out[2].body {
+            DomainBody::EvergreenConcept(c) => c,
+            other => panic!("expected EvergreenConcept, got {other:?}"),
+        };
+        // Per-concept definitions, distinct, and NOT the article one_liner.
+        assert_eq!(a.slug, "idea-block");
+        assert_eq!(
+            a.definition,
+            "A question-answer packet that replaces a prose chunk as the unit."
+        );
+        assert_ne!(a.definition, b.definition);
+        assert_ne!(a.definition, "An article-level synthesis line.");
+        // Claims are owned, not recycled across concepts.
+        assert!(a.source_claims.iter().any(|s| s.contains("2.29x")));
+        assert!(!b.source_claims.iter().any(|s| s.contains("2.29x")));
+        assert!(b.source_claims.iter().any(|s| s.contains("Half a table")));
+        // Related is concept-owned and carried through.
+        assert_eq!(a.related, vec!["chunking-problem"]);
+        assert!(b.related.is_empty());
+        // Provenance still threads the article source.
+        assert_eq!(a.provenance_source_url, "https://example.com/post");
+        assert_eq!(a.source_title, "T");
+    }
+
+    #[test]
+    fn v2_path_ignores_v1_candidates() {
+        // When concepts[] is present, the legacy concept_candidates list is
+        // not used — the v2 map is authoritative.
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let mut d = interp(vec!["legacy-candidate"]);
+        d.concepts = vec![ec("real-concept", "A real definition.", &[], &[])];
+        let out = match w.process(record(d)) {
+            FilterDecision::FanOut(rs) => rs,
+            other => panic!("expected FanOut, got {other:?}"),
+        };
+        let slugs: Vec<&str> = out[1..]
+            .iter()
+            .map(|r| match &r.body {
+                DomainBody::EvergreenConcept(c) => c.slug.as_str(),
+                _ => panic!("expected EvergreenConcept"),
+            })
+            .collect();
+        assert_eq!(slugs, vec!["real-concept"], "v1 candidate ignored under v2");
+    }
+
+    #[test]
+    fn v2_concept_with_blank_title_derives_from_slug() {
+        let mut w = EvergreenConceptWriter::new("evg_writer");
+        let mut d = interp(vec![]);
+        d.concepts = vec![ec("vector-database", "A store for embeddings.", &[], &[])];
+        let out = match w.process(record(d)) {
+            FilterDecision::FanOut(rs) => rs,
+            other => panic!("expected FanOut, got {other:?}"),
+        };
+        match &out[1].body {
+            DomainBody::EvergreenConcept(c) => assert_eq!(c.title, "Vector Database"),
+            other => panic!("expected EvergreenConcept, got {other:?}"),
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::canonical_slug::{CanonicalSlug, SlugError};
-use crate::interpreted::InterpretedDoc;
+use crate::interpreted::{ExtractedConcept, InterpretedDoc};
 
 /// A proposal to mint a NEW evergreen concept — a `concept_candidate`
 /// that `ConceptResolver` did not promote (no canonical page exists yet).
@@ -101,6 +101,43 @@ impl EvergreenConcept {
             title,
             slug,
         })
+    }
+
+    /// Mint from a v2 [`ExtractedConcept`] — using the concept's OWN
+    /// `definition`, `claims`, and `related` (M13.2), NOT the article
+    /// `one_liner` or token-matched article claims. The slug is assumed valid:
+    /// the `ConceptResolver` gate validated + normalized it (and dropped
+    /// invalid/low-evidence concepts) before this point, so the only path to a
+    /// minted note is through a gated concept.
+    pub fn from_extracted(
+        c: &ExtractedConcept,
+        source_title: impl Into<String>,
+        source_url: impl Into<String>,
+    ) -> Self {
+        let title = if c.title.trim().is_empty() {
+            title_from_slug(&c.slug)
+        } else {
+            c.title.trim().to_string()
+        };
+        Self {
+            slug: c.slug.clone(),
+            title,
+            provenance_source_url: source_url.into(),
+            definition: c.definition.trim().to_string(),
+            source_claims: c
+                .claims
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            source_title: source_title.into(),
+            related: c
+                .related
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        }
     }
 }
 
