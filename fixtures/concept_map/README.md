@@ -26,10 +26,18 @@ Each `<case>/`:
   (concept|procedure|claim|taxonomy|system|principle), `expected_meaning` (a
   **concept-specific** definition, never the article thesis), `required_evidence`
   (article quotes/locations), `acceptable_claims` (claims that legitimately
-  belong to this concept), `may_merge_with`, `must_not_confuse_with`.
+  belong to this concept), `may_merge_with`, `must_not_confuse_with`. Plus
+  **content guards** (the hardening that resists fake-green): per concept,
+  `definition_must_include_any` / `definition_must_not_include_any` (output-language
+  phrases — a correct definition uses this concept's own wording and not a
+  confused sibling's signature), `claims_must_include_any` /
+  `claims_must_not_include_any`, and `evidence_must_include_any`.
 - `must_not_mint[]` — slugs that must NOT become evergreen notes
   (umbrella labels, synonyms that should merge, article/author metadata,
   body-unsupported claims) with a `reason`.
+- `forbidden_phrases_anywhere[]` — case-level phrases that must not appear in ANY
+  note's definition/claims (author/client metadata; body-unsupported marketing
+  numbers, e.g. `40x` for rag-wrong, which is frontmatter-only).
 - `coverage` — what the primary note should cover, what should become evergreen,
   and what may stay primary-note-only.
 - `known_disagreements_with_nowledge` — where the article (ground truth) says to
@@ -52,10 +60,21 @@ python3 scripts/concept_map_bench.py --ovp-root <out>            # all cases
 python3 scripts/concept_map_bench.py --ovp-root <out> --case rag_wrong
 ```
 
-Checks (fact-based, not a vanity score): must-have coverage (by id or alias),
-must-not-mint rejection, **shared-definition** detection (one article one-liner
-reused across notes = wrong), **claim ownership** (a note must own ≥1 claim not
-shared verbatim with another note), forbidden/redundant mints.
+Checks (fact-based, not a vanity score):
+1. **must-have coverage** by id/alias (a match via a `must_not_mint` slug is
+   reported as `covered_by_forbidden_alias`, NOT clean coverage);
+2. **must-not-mint** rejection;
+3. **shared-definition** detection (one article one-liner reused across notes);
+4. **claim ownership** (a note owns ≥1 claim not shared verbatim elsewhere);
+5. **definition correctness** (`definition_must_include_any` /
+   `definition_must_not_include_any`);
+6. **claim correctness** (`claims_must_include_any` / `claims_must_not_include_any`);
+7. **evidence grounding** (`evidence_must_include_any`);
+8. **confusion guard** — a concept's definition must not carry a
+   `must_not_confuse_with` concept's signature;
+9. **forbidden phrases** (`forbidden_phrases_anywhere`).
+
+Exit code is non-zero unless every case passes.
 
 It is **offline but not CI-gated**: scoring needs an OVP output, which needs the
 article's model cassette, and live cassettes are not committed. Produce the

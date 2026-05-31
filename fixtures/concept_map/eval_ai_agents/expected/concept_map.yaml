@@ -1,202 +1,482 @@
 case: eval-ai-agents
 must_have:
-  - id: floor-raising
-    title: Floor Raising
-    aliases: [floor-raise, raise-the-floor]
-    concept_type: principle
-    expected_meaning: An evaluation orientation that makes an agent reliable where reliability matters most (the workflows users actually run, the moments mistakes are expensive), rather than maximizing a pass-rate.
-    required_evidence:
-      - "lines 46: 'most product teams should think in terms of floor raising: making the agent reliable where reliability matters, in the workflows users actually run, in the moments where mistakes are expensive'"
-      - "lines 78: 'If your first question is which 1% fails?, you are thinking like someone raising the floor.'"
-      - "lines 292 (short version): 'Floor raising is for agents used in-place of humans.'"
-    acceptable_claims:
-      - "Floor raising targets reliability in high-stakes user workflows, not abstract coverage; for products replacing humans, trust matters more than capability demonstration (lines 82)."
-      - "A floor-raising eval suite is 'a memory of bugs you refuse to reintroduce' — targeted evals that lock in lessons from real failures (lines 56)."
-    may_merge_with: []
-    must_not_confuse_with: [benchmark-maxxing, error-analysis]
-  - id: benchmark-maxxing
-    title: Benchmark Maxxing
-    aliases: [benchmark-maxx, benchmark-maxxer]
-    concept_type: principle
-    expected_meaning: An evaluation orientation focused on chasing higher benchmark/leaderboard pass-rates, appropriate for augmenting experts but mismatched for most products replacing humans.
-    required_evidence:
-      - "lines 36: 'you can benchmark maxx, or you can raise the floor ... copy the shapes of benchmarks, and end up chasing a goal that was never made for them'"
-      - "lines 78: 'If you could ship with a 90% pass rate or a 99% pass rate ... If your instinct is 99%, obviously, you are still thinking like a benchmarker'"
-      - "lines 292 (short version): 'Benchmark maxxing is for augmenting experts.'"
-    acceptable_claims:
-      - "Benchmark maxxers optimize pass-rate and dislike refusal because saying 'I don't know' lowers the score (lines 82)."
-      - "Benchmark maxxing borrows the language and shapes of lab benchmarks; it is the right frame for augmenting experts, not for in-place-of-human agents (lines 36, 292)."
-    may_merge_with: []
-    must_not_confuse_with: [floor-raising]
-  - id: error-analysis
-    title: Error Analysis
-    aliases: [detective-work, failure-classification]
-    concept_type: procedure
-    expected_meaning: The detective-work process of reviewing real traces (user messages, agent responses, full trajectory) to locate the first real failure, classify failure patterns, and decide which deserve engineering effort.
-    required_evidence:
-      - "lines 50: 'You are doing detective work. You are finding the places where the system bends, classifying them, and deciding which ones deserve engineering effort.'"
-      - "lines 52: 'Review user messages, agent responses, and the trajectory ... what was the last successful step? What was the first real failure? Did retrieval miss?'"
-      - "lines 156: 'Error analysis [is] the single most valuable activity in AI development and consistently the highest-ROI activity.'"
-    acceptable_claims:
-      - "Use AI to scale the number of traces reviewed — filter, cluster, summarize — then fix the pattern, not just the incident (lines 52, 54)."
-      - "Read raw interactions until saturation (the same patterns recur); skip it and you automate the wrong metrics (lines 154, 158)."
-    may_merge_with: []
-    must_not_confuse_with: [floor-raising, trajectory-inspection]
-  - id: golden-cases
-    title: Golden Cases
-    aliases: [golden-case, critical-path-cases]
-    concept_type: procedure
-    expected_meaning: A small hand-picked set of 5-10 critical-path test cases the agent must always pass; if it starts failing them, you do not ship.
-    required_evidence:
-      - "lines 90: 'Pick 5 to 10 cases that represent your critical paths and write them down ... If your agent starts failing your golden cases, you do not ship.'"
-      - "lines 282 (what stays constant): 'Golden cases work. A small set of high-signal tests beats a large set of low-signal ones.'"
-    acceptable_claims:
-      - "Start with the simplest version — a single common user question the agent should always handle — and grow complexity over time (lines 90)."
-      - "Newly reproduced production failures get added as golden cases before fixing, to guarantee against regression (lines 222)."
-    may_merge_with: []
-    must_not_confuse_with: [eval-suite-pruning, trajectory-inspection]
-  - id: code-aware-evals
-    title: Code-Aware Offline Evals
-    aliases: [offline-evals, harness-backed-evals, macro-evals]
-    concept_type: procedure
-    expected_meaning: Offline evals that run the real agent path through a software-style test harness (Vitest/pytest/jest) and assert on the full result — output, tool calls, files changed, structured data, and final state — not on a prompt string.
-    required_evidence:
-      - "lines 110: 'A good offline eval takes an input, runs the real agent path, and asserts on the result: output, tool calls, files changed, structured data, or final state.'"
-      - "lines 112-114: Sentry's 'harness-backed' vitest-evals and OpenAI's 'macro evals' both drive the real agent loop and grade the full trajectory."
-      - "lines 116: 'you're evaluating the agent, not an LLM call.'"
-    acceptable_claims:
-      - "Testing prompts by themselves makes no sense once the agent is entangled with code, tools, retrieval, permissions, and product state (lines 108)."
-      - "Evals can be stored in a markdown file and run by Codex; a hosted eval dashboard is discouraged because the report UI should be tightly coupled to your product (lines 142, 144-146)."
-    may_merge_with: []
-    must_not_confuse_with: [production-monitoring-tiers]
-  - id: production-monitoring-tiers
-    title: Production Monitoring Tiers (Stumbles to Experiments)
-    aliases: [production-monitoring, stumbles-issues-signals-experiments, monitoring-ladder, learning-from-production]
-    concept_type: procedure
-    expected_meaning: A volume-scaled production-review ladder — Stumbles (1-100 runs/day), Issues (100-1,000), Signals (1,000+), Experiments (5,000+) — where the workflow machinery escalates with traffic.
-    required_evidence:
-      - "lines 162: 'The workflow should scale with your traffic. At ten agent runs a day, you can read everything. At ten thousand, you need the system to tell you what deserves attention.'"
-      - "lines 166-186: Stumbles / Issues / Signals / Experiments tiers with their run/day thresholds."
-    acceptable_claims:
-      - "Stumbles use raw logs as a firehose for confusion/frustration/near-misses; recurring stumbles become Issues; long-horizon behaviors become Signals; Experiments ship a fix behind a flag and compare Issues/Signals (lines 168-186)."
-      - "The mistake is reaching for high-volume machinery before you have enough raw texture to know what to look for (lines 162)."
-    may_merge_with: [production-ab-experiments]
-    must_not_confuse_with: [code-aware-evals]
-  - id: self-diagnostics
-    title: Self Diagnostics
-    aliases: [agent-self-reporting, hidden-tool-reporting]
-    concept_type: system
-    expected_meaning: A monitoring technique that injects a hidden tool into the agent run so the agent can report its own problems (missing context, capability gaps, broken tools, task failure) as a signal on the same event.
-    required_evidence:
-      - "lines 190: 'this injects a hidden tool into the agent run. When the agent thinks it is missing context, hitting a capability gap, dealing with a broken tool, or failing the task outright, it can call that tool and Raindrop records the report as a signal'"
-      - "lines 196-204: the __raindrop_report({ category, summary, severity }) shape."
-    acceptable_claims:
-      - "Enabling it is roughly one line on the AI SDK wrapper: raindrop.wrap(ai, { selfDiagnostics: { enabled: true } }) (lines 192)."
-      - "In practice it is less useful than it first seemed — treat it like Stumbles, sensitivity is hard to tune, wording biases reporting, and at bottom it is a binary-classification problem (lines 206)."
-    may_merge_with: []
-    must_not_confuse_with: [production-monitoring-tiers]
-  - id: refusal
-    title: "Refusal (\"I don't know\")"
-    aliases: [teach-the-agent-to-refuse, i-dont-know]
-    concept_type: principle
-    expected_meaning: "A named floor-raising technique of teaching the agent to say \"I don't know\" when confidence is low, the query is out of domain, or retrieved context is insufficient — accepting a lower pass-rate to avoid confident wrong answers."
-    required_evidence:
-      - "lines 80: 'teaching your agent to refuse. If confidence is below a threshold, say I don't know. If the query is outside your domain, say I don't know.'"
-      - "lines 82: 'a confident wrong answer is worse than an honest I don't know ... trust is more important than capability demonstration.'"
-    acceptable_claims:
-      - "Refusal is one of the lowest-hanging floor-raising techniques and also one of the most frustrating for users (lines 80)."
-      - "Benchmark maxxers hate refusal because it lowers their pass rate (lines 82)."
-    may_merge_with: []
-    must_not_confuse_with: [trajectory-inspection, floor-raising]
-  - id: eval-suite-pruning
-    title: Eval-Suite Pruning (Diminishing Returns)
-    aliases: [eval-suite-bloat-trap, ruthless-pruning, eval-hygiene]
-    concept_type: principle
-    expected_meaning: The discipline of not adding every found bug as an eval case and ruthlessly pruning the suite, because bloated suites (500 cases, most never failing) slow CI and erode trust — 20 high-signal cases beat 200 low-signal ones.
-    required_evidence:
-      - "lines 226: 'Six months later, you have 500 cases, 400 of which are weird edge cases that never happen ... Your team starts ignoring eval failures'"
-      - "lines 228: 'Be ruthless about pruning your eval suite. 20 high-signal cases beats 200 low-signal ones.'"
-      - "lines 230: 'if an eval case has not failed in 3 months ... question whether it needs to be there.'"
-    acceptable_claims:
-      - "Ask whether a bug is a critical path, could regress, and is representative of a class versus truly one-off before adding it as an eval (lines 228)."
-      - "Not every bug deserves an eval case; the suite should stay grounded in reality, not front-load all possible test cases (lines 228, 252)."
-    may_merge_with: []
-    must_not_confuse_with: [golden-cases]
-  - id: trajectory-inspection
-    title: Trajectory Inspection
-    aliases: [inspect-the-trajectory, trajectory-matters, full-path-inspection]
-    concept_type: procedure
-    expected_meaning: Inspecting the agent's full path (user message, tool calls, retrieved context, reasoning chain) rather than just the final output, because how the agent got there is as diagnostic as the answer.
-    required_evidence:
-      - "lines 94: 'do not just check the final output. Inspect the full trajectory: the user message, the tool calls, the retrieved context, the reasoning chain. The path matters as much as the answer.'"
-      - "lines 281 (what stays constant): 'Trajectory matters. Whether explicit (tool calls) or implicit (reasoning), how an agent got there is diagnostic.'"
-    acceptable_claims:
-      - "Raindrop Workshop lets you capture real agent traces locally, inspect every tool call, and replay scenarios before production (lines 94)."
-      - "Even as harnesses collapse, trajectory may become implicit/opaque, raising the importance of end-to-end inspection of inputs and outputs (lines 268, 281)."
-    may_merge_with: [agent-trace-interrogation]
-    must_not_confuse_with: [error-analysis, golden-cases, refusal]
+- id: floor-raising
+  title: Floor Raising
+  aliases:
+  - floor-raise
+  - raise-the-floor
+  concept_type: principle
+  expected_meaning: An evaluation orientation that makes an agent reliable where reliability matters most (the workflows users actually run, the moments mistakes are expensive), rather than maximizing a pass-rate.
+  required_evidence:
+  - 'lines 46: ''most product teams should think in terms of floor raising: making the agent reliable where reliability matters, in the workflows users actually run, in the moments where mistakes are expensive'''
+  - 'lines 78: ''If your first question is which 1% fails?, you are thinking like someone raising the floor.'''
+  - 'lines 292 (short version): ''Floor raising is for agents used in-place of humans.'''
+  acceptable_claims:
+  - Floor raising targets reliability in high-stakes user workflows, not abstract coverage; for products replacing humans, trust matters more than capability demonstration (lines 82).
+  - A floor-raising eval suite is 'a memory of bugs you refuse to reintroduce' — targeted evals that lock in lessons from real failures (lines 56).
+  may_merge_with: []
+  must_not_confuse_with:
+  - benchmark-maxxing
+  - error-analysis
+  definition_must_include_any:
+  - reliability where
+  - workflows users actually run
+  - mistakes are expensive
+  - raising the floor
+  - reliable where reliability matters
+  definition_must_not_include_any:
+  - chasing benchmark scores
+  - pass rate
+  - augmenting experts
+  - benchmark maxx
+  claims_must_include_any:
+  - memory of bugs
+  - trust
+  - high-stakes
+  - reliability
+  evidence_must_include_any:
+  - floor raising
+  - reliability where
+  - workflows users actually run
+- id: benchmark-maxxing
+  title: Benchmark Maxxing
+  aliases:
+  - benchmark-maxx
+  - benchmark-maxxer
+  concept_type: principle
+  expected_meaning: An evaluation orientation focused on chasing higher benchmark/leaderboard pass-rates, appropriate for augmenting experts but mismatched for most products replacing humans.
+  required_evidence:
+  - 'lines 36: ''you can benchmark maxx, or you can raise the floor ... copy the shapes of benchmarks, and end up chasing a goal that was never made for them'''
+  - 'lines 78: ''If you could ship with a 90% pass rate or a 99% pass rate ... If your instinct is 99%, obviously, you are still thinking like a benchmarker'''
+  - 'lines 292 (short version): ''Benchmark maxxing is for augmenting experts.'''
+  acceptable_claims:
+  - Benchmark maxxers optimize pass-rate and dislike refusal because saying 'I don't know' lowers the score (lines 82).
+  - Benchmark maxxing borrows the language and shapes of lab benchmarks; it is the right frame for augmenting experts, not for in-place-of-human agents (lines 36, 292).
+  may_merge_with: []
+  must_not_confuse_with:
+  - floor-raising
+  definition_must_include_any:
+  - benchmark
+  - pass rate
+  - augmenting experts
+  - leaderboard
+  - chasing
+  - score
+  definition_must_not_include_any:
+  - floor raising is
+  - reliability where
+  - workflows users actually run
+  claims_must_include_any:
+  - pass rate
+  - augmenting experts
+  - 99%
+  - benchmarker
+  - leaderboard
+  evidence_must_include_any:
+  - benchmark maxx
+  - augmenting experts
+  - 99%
+- id: error-analysis
+  title: Error Analysis
+  aliases:
+  - detective-work
+  - failure-classification
+  concept_type: procedure
+  expected_meaning: The detective-work process of reviewing real traces (user messages, agent responses, full trajectory) to locate the first real failure, classify failure patterns, and decide which deserve engineering effort.
+  required_evidence:
+  - 'lines 50: ''You are doing detective work. You are finding the places where the system bends, classifying them, and deciding which ones deserve engineering effort.'''
+  - 'lines 52: ''Review user messages, agent responses, and the trajectory ... what was the last successful step? What was the first real failure? Did retrieval miss?'''
+  - 'lines 156: ''Error analysis [is] the single most valuable activity in AI development and consistently the highest-ROI activity.'''
+  acceptable_claims:
+  - Use AI to scale the number of traces reviewed — filter, cluster, summarize — then fix the pattern, not just the incident (lines 52, 54).
+  - Read raw interactions until saturation (the same patterns recur); skip it and you automate the wrong metrics (lines 154, 158).
+  may_merge_with: []
+  must_not_confuse_with:
+  - floor-raising
+  - trajectory-inspection
+  definition_must_include_any:
+  - detective work
+  - first real failure
+  - classify
+  - failure patterns
+  - review
+  - traces
+  definition_must_not_include_any:
+  - floor raising is
+  - 5 to 10 cases
+  - golden cases
+  claims_must_include_any:
+  - detective work
+  - first real failure
+  - saturation
+  - highest-ROI
+  - cluster
+  - patterns
+  evidence_must_include_any:
+  - detective work
+  - error analysis
+  - first real failure
+- id: golden-cases
+  title: Golden Cases
+  aliases:
+  - golden-case
+  - critical-path-cases
+  concept_type: procedure
+  expected_meaning: A small hand-picked set of 5-10 critical-path test cases the agent must always pass; if it starts failing them, you do not ship.
+  required_evidence:
+  - 'lines 90: ''Pick 5 to 10 cases that represent your critical paths and write them down ... If your agent starts failing your golden cases, you do not ship.'''
+  - 'lines 282 (what stays constant): ''Golden cases work. A small set of high-signal tests beats a large set of low-signal ones.'''
+  acceptable_claims:
+  - Start with the simplest version — a single common user question the agent should always handle — and grow complexity over time (lines 90).
+  - Newly reproduced production failures get added as golden cases before fixing, to guarantee against regression (lines 222).
+  may_merge_with: []
+  must_not_confuse_with:
+  - eval-suite-pruning
+  - trajectory-inspection
+  definition_must_include_any:
+  - 5 to 10
+  - 5-10
+  - critical path
+  - must always pass
+  - golden cases
+  - do not ship
+  definition_must_not_include_any:
+  - floor raising is
+  - diminishing returns
+  - 500 cases
+  - prune
+  claims_must_include_any:
+  - 5 to 10
+  - critical path
+  - do not ship
+  - simplest
+  - regression
+  evidence_must_include_any:
+  - golden cases
+  - critical path
+  - 5 to 10
+  - 5-10
+- id: code-aware-evals
+  title: Code-Aware Offline Evals
+  aliases:
+  - offline-evals
+  - harness-backed-evals
+  - macro-evals
+  concept_type: procedure
+  expected_meaning: Offline evals that run the real agent path through a software-style test harness (Vitest/pytest/jest) and assert on the full result — output, tool calls, files changed, structured data, and final state — not on a prompt string.
+  required_evidence:
+  - 'lines 110: ''A good offline eval takes an input, runs the real agent path, and asserts on the result: output, tool calls, files changed, structured data, or final state.'''
+  - 'lines 112-114: Sentry''s ''harness-backed'' vitest-evals and OpenAI''s ''macro evals'' both drive the real agent loop and grade the full trajectory.'
+  - 'lines 116: ''you''re evaluating the agent, not an LLM call.'''
+  acceptable_claims:
+  - Testing prompts by themselves makes no sense once the agent is entangled with code, tools, retrieval, permissions, and product state (lines 108).
+  - Evals can be stored in a markdown file and run by Codex; a hosted eval dashboard is discouraged because the report UI should be tightly coupled to your product (lines 142, 144-146).
+  may_merge_with: []
+  must_not_confuse_with:
+  - production-monitoring-tiers
+  definition_must_include_any:
+  - real agent path
+  - asserts on
+  - tool calls
+  - files changed
+  - final state
+  - harness
+  - vitest
+  - pytest
+  definition_must_not_include_any:
+  - floor raising is
+  - Stumbles
+  - tiers
+  - golden cases
+  claims_must_include_any:
+  - vitest
+  - pytest
+  - real agent path
+  - tool calls
+  - files changed
+  - final state
+  - harness-backed
+  - macro evals
+  evidence_must_include_any:
+  - real agent path
+  - asserts on
+  - tool calls
+- id: production-monitoring-tiers
+  title: Production Monitoring Tiers (Stumbles to Experiments)
+  aliases:
+  - production-monitoring
+  - stumbles-issues-signals-experiments
+  - monitoring-ladder
+  - learning-from-production
+  concept_type: procedure
+  expected_meaning: A volume-scaled production-review ladder — Stumbles (1-100 runs/day), Issues (100-1,000), Signals (1,000+), Experiments (5,000+) — where the workflow machinery escalates with traffic.
+  required_evidence:
+  - 'lines 162: ''The workflow should scale with your traffic. At ten agent runs a day, you can read everything. At ten thousand, you need the system to tell you what deserves attention.'''
+  - 'lines 166-186: Stumbles / Issues / Signals / Experiments tiers with their run/day thresholds.'
+  acceptable_claims:
+  - Stumbles use raw logs as a firehose for confusion/frustration/near-misses; recurring stumbles become Issues; long-horizon behaviors become Signals; Experiments ship a fix behind a flag and compare Issues/Signals (lines 168-186).
+  - The mistake is reaching for high-volume machinery before you have enough raw texture to know what to look for (lines 162).
+  may_merge_with:
+  - production-ab-experiments
+  must_not_confuse_with:
+  - code-aware-evals
+  definition_must_include_any:
+  - Stumbles
+  - Issues
+  - Signals
+  - Experiments
+  - scale with your traffic
+  - runs a day
+  - tiers
+  definition_must_not_include_any:
+  - floor raising is
+  - real agent path
+  - vitest
+  - golden cases
+  claims_must_include_any:
+  - Stumbles
+  - Issues
+  - Signals
+  - Experiments
+  - 1-100
+  - 100-1,000
+  - 1,000+
+  - 5,000+
+  - raw logs
+  - flag
+  evidence_must_include_any:
+  - Stumbles
+  - Signals
+  - Experiments
+  - scale with your traffic
+- id: self-diagnostics
+  title: Self Diagnostics
+  aliases:
+  - agent-self-reporting
+  - hidden-tool-reporting
+  concept_type: system
+  expected_meaning: A monitoring technique that injects a hidden tool into the agent run so the agent can report its own problems (missing context, capability gaps, broken tools, task failure) as a signal on the same event.
+  required_evidence:
+  - 'lines 190: ''this injects a hidden tool into the agent run. When the agent thinks it is missing context, hitting a capability gap, dealing with a broken tool, or failing the task outright, it can call that tool and Raindrop records the report as a signal'''
+  - 'lines 196-204: the __raindrop_report({ category, summary, severity }) shape.'
+  acceptable_claims:
+  - 'Enabling it is roughly one line on the AI SDK wrapper: raindrop.wrap(ai, { selfDiagnostics: { enabled: true } }) (lines 192).'
+  - In practice it is less useful than it first seemed — treat it like Stumbles, sensitivity is hard to tune, wording biases reporting, and at bottom it is a binary-classification problem (lines 206).
+  may_merge_with: []
+  must_not_confuse_with:
+  - production-monitoring-tiers
+  definition_must_include_any:
+  - hidden tool
+  - report its own
+  - missing context
+  - capability gap
+  - broken tool
+  - agent can call
+  definition_must_not_include_any:
+  - floor raising is
+  - Stumbles
+  - golden cases
+  - trajectory
+  claims_must_include_any:
+  - hidden tool
+  - __raindrop_report
+  - selfDiagnostics
+  - binary-classification
+  - less useful
+  - severity
+  evidence_must_include_any:
+  - hidden tool
+  - self-diagnostics
+  - report
+- id: refusal
+  title: Refusal ("I don't know")
+  aliases:
+  - teach-the-agent-to-refuse
+  - i-dont-know
+  concept_type: principle
+  expected_meaning: A named floor-raising technique of teaching the agent to say "I don't know" when confidence is low, the query is out of domain, or retrieved context is insufficient — accepting a lower pass-rate to avoid confident wrong answers.
+  required_evidence:
+  - 'lines 80: ''teaching your agent to refuse. If confidence is below a threshold, say I don''t know. If the query is outside your domain, say I don''t know.'''
+  - 'lines 82: ''a confident wrong answer is worse than an honest I don''t know ... trust is more important than capability demonstration.'''
+  acceptable_claims:
+  - Refusal is one of the lowest-hanging floor-raising techniques and also one of the most frustrating for users (lines 80).
+  - Benchmark maxxers hate refusal because it lowers their pass rate (lines 82).
+  may_merge_with: []
+  must_not_confuse_with:
+  - trajectory-inspection
+  - floor-raising
+  definition_must_include_any:
+  - I don't know
+  - refuse
+  - confidence is below
+  - outside your domain
+  definition_must_not_include_any:
+  - floor raising is
+  - trajectory
+  - tool calls
+  - golden cases
+  claims_must_include_any:
+  - I don't know
+  - confident wrong answer
+  - trust is more important
+  - lowers their pass rate
+  - refuse
+  evidence_must_include_any:
+  - I don't know
+  - refuse
+  - confident wrong answer
+- id: eval-suite-pruning
+  title: Eval-Suite Pruning (Diminishing Returns)
+  aliases:
+  - eval-suite-bloat-trap
+  - ruthless-pruning
+  - eval-hygiene
+  concept_type: principle
+  expected_meaning: The discipline of not adding every found bug as an eval case and ruthlessly pruning the suite, because bloated suites (500 cases, most never failing) slow CI and erode trust — 20 high-signal cases beat 200 low-signal ones.
+  required_evidence:
+  - 'lines 226: ''Six months later, you have 500 cases, 400 of which are weird edge cases that never happen ... Your team starts ignoring eval failures'''
+  - 'lines 228: ''Be ruthless about pruning your eval suite. 20 high-signal cases beats 200 low-signal ones.'''
+  - 'lines 230: ''if an eval case has not failed in 3 months ... question whether it needs to be there.'''
+  acceptable_claims:
+  - Ask whether a bug is a critical path, could regress, and is representative of a class versus truly one-off before adding it as an eval (lines 228).
+  - Not every bug deserves an eval case; the suite should stay grounded in reality, not front-load all possible test cases (lines 228, 252).
+  may_merge_with: []
+  must_not_confuse_with:
+  - golden-cases
+  definition_must_include_any:
+  - prune
+  - diminishing returns
+  - 500 cases
+  - 20 high-signal
+  - ruthless
+  - bloat
+  definition_must_not_include_any:
+  - floor raising is
+  - golden cases work
+  - critical path
+  - 5 to 10
+  claims_must_include_any:
+  - 500 cases
+  - 20 high-signal
+  - 200 low-signal
+  - 3 months
+  - ruthless
+  - ignoring eval failures
+  evidence_must_include_any:
+  - prune
+  - diminishing returns
+  - 20 high-signal
+- id: trajectory-inspection
+  title: Trajectory Inspection
+  aliases:
+  - inspect-the-trajectory
+  - trajectory-matters
+  - full-path-inspection
+  concept_type: procedure
+  expected_meaning: Inspecting the agent's full path (user message, tool calls, retrieved context, reasoning chain) rather than just the final output, because how the agent got there is as diagnostic as the answer.
+  required_evidence:
+  - 'lines 94: ''do not just check the final output. Inspect the full trajectory: the user message, the tool calls, the retrieved context, the reasoning chain. The path matters as much as the answer.'''
+  - 'lines 281 (what stays constant): ''Trajectory matters. Whether explicit (tool calls) or implicit (reasoning), how an agent got there is diagnostic.'''
+  acceptable_claims:
+  - Raindrop Workshop lets you capture real agent traces locally, inspect every tool call, and replay scenarios before production (lines 94).
+  - Even as harnesses collapse, trajectory may become implicit/opaque, raising the importance of end-to-end inspection of inputs and outputs (lines 268, 281).
+  may_merge_with:
+  - agent-trace-interrogation
+  must_not_confuse_with:
+  - error-analysis
+  - golden-cases
+  - refusal
+  definition_must_include_any:
+  - full trajectory
+  - tool calls
+  - retrieved context
+  - reasoning chain
+  - path matters
+  - not just the final output
+  definition_must_not_include_any:
+  - floor raising is
+  - I don't know
+  - refuse
+  - golden cases
+  claims_must_include_any:
+  - tool calls
+  - retrieved context
+  - reasoning chain
+  - path matters
+  - full trajectory
+  - replay
+  evidence_must_include_any:
+  - full trajectory
+  - tool calls
+  - path matters
+  - retrieved context
 must_not_mint:
-  - slug: raindrop
-    reason: article/author metadata - Raindrop and Raindrop Workshop are the author's own products mentioned for promotion (line 28), not a distinct evaluable concept
-  - slug: raindrop-clients
-    reason: "article/author metadata - \"Framer, Clay, Vercel, GC.AI\" (line 26) is provenance about the author's employer, repeatedly mis-attached as a per-concept claim by OVP (FI-5)"
-  - slug: agent-definition
-    reason: "unsupported by body - the Foreword musing on what an \"agent\" is (lines 14-20) is framing/rhetoric, not an evaluable concept the guide develops"
-  - slug: eval-tooling
-    reason: "umbrella label - \"tools like Raindrop, LangChain, Braintrust\" (frontmatter) is a grab-bag; LangChain/Braintrust never appear in the body, so no distinct concept"
-  - slug: agent-evaluation
-    reason: article thesis - this is the overall subject of the guide, not an atomic concept; would be a synonym for the primary note itself
-  - slug: reliability
-    reason: synonym-of-X (should merge into floor-raising) - reliability is the goal floor-raising optimizes for, not a separate concept in the article
-  - slug: ten-to-twenty-percent-budget
-    reason: "unsupported as standalone - the \"spend 10-20% of dev time on eval\" figure (line 256) is a single action bullet, primary-note material, not a distinct concept"
-  - slug: from-app-to-mcp
-    reason: "unsupported by body - the \"From app to MCP\" section is literally \"Coming soon.\" (lines 272-274) with no content"
+- slug: raindrop
+  reason: article/author metadata - Raindrop and Raindrop Workshop are the author's own products mentioned for promotion (line 28), not a distinct evaluable concept
+- slug: raindrop-clients
+  reason: article/author metadata - "Framer, Clay, Vercel, GC.AI" (line 26) is provenance about the author's employer, repeatedly mis-attached as a per-concept claim by OVP (FI-5)
+- slug: agent-definition
+  reason: unsupported by body - the Foreword musing on what an "agent" is (lines 14-20) is framing/rhetoric, not an evaluable concept the guide develops
+- slug: eval-tooling
+  reason: umbrella label - "tools like Raindrop, LangChain, Braintrust" (frontmatter) is a grab-bag; LangChain/Braintrust never appear in the body, so no distinct concept
+- slug: agent-evaluation
+  reason: article thesis - this is the overall subject of the guide, not an atomic concept; would be a synonym for the primary note itself
+- slug: reliability
+  reason: synonym-of-X (should merge into floor-raising) - reliability is the goal floor-raising optimizes for, not a separate concept in the article
+- slug: ten-to-twenty-percent-budget
+  reason: unsupported as standalone - the "spend 10-20% of dev time on eval" figure (line 256) is a single action bullet, primary-note material, not a distinct concept
+- slug: from-app-to-mcp
+  reason: unsupported by body - the "From app to MCP" section is literally "Coming soon." (lines 272-274) with no content
 coverage:
   primary_note_should_cover:
-    - the floor-raising vs benchmark-maxxing choice as the opening frame
-    - "the full ship -> watch -> understand -> fix -> regress loop (\"rinse, wash, repeat\")"
-    - the 10-20% eval/monitoring time budget
-    - "the \"Sometimes direct\" vs \"Repro, then fix\" decision for making fixes"
-    - "forward-looking trends (harness collapse, end-to-end eval) under \"Looking forward\""
-    - "the \"what stays constant\" fundamentals (real user contact, trajectory, golden cases, production monitoring, ongoing work)"
+  - the floor-raising vs benchmark-maxxing choice as the opening frame
+  - the full ship -> watch -> understand -> fix -> regress loop ("rinse, wash, repeat")
+  - the 10-20% eval/monitoring time budget
+  - the "Sometimes direct" vs "Repro, then fix" decision for making fixes
+  - forward-looking trends (harness collapse, end-to-end eval) under "Looking forward"
+  - the "what stays constant" fundamentals (real user contact, trajectory, golden cases, production monitoring, ongoing work)
   evergreen_should_cover:
-    - floor-raising
-    - benchmark-maxxing
-    - error-analysis
-    - golden-cases
-    - code-aware-evals
-    - production-monitoring-tiers
-    - self-diagnostics
-    - refusal
-    - eval-suite-pruning
-    - trajectory-inspection
+  - floor-raising
+  - benchmark-maxxing
+  - error-analysis
+  - golden-cases
+  - code-aware-evals
+  - production-monitoring-tiers
+  - self-diagnostics
+  - refusal
+  - eval-suite-pruning
+  - trajectory-inspection
   primary_only_ok:
-    - "harness collapse (forward-looking trend in \"Looking forward\", not a settled concept)"
-    - reproduction-before-fix (the find -> repro -> add eval -> fix -> verify pattern; a procedure bullet, borderline but better kept in the primary note unless promoted deliberately)
-    - "production A/B experiments (the GPT-5.3 vs Claude 4.5 example is the \"Experiments\" tier of production-monitoring-tiers; a sub-point, not a standalone concept)"
-    - "agent-trace-interrogation (\"ask your agent\" pro tip, lines 96-104; a debugging tip that may stay in the primary note)"
-    - "the eval-as-regression loop (\"rinse, wash, repeat\") as the article-level synthesis"
-    - direct-vs-bandaid-fix distinction (lines 212-216)
+  - harness collapse (forward-looking trend in "Looking forward", not a settled concept)
+  - reproduction-before-fix (the find -> repro -> add eval -> fix -> verify pattern; a procedure bullet, borderline but better kept in the primary note unless promoted deliberately)
+  - production A/B experiments (the GPT-5.3 vs Claude 4.5 example is the "Experiments" tier of production-monitoring-tiers; a sub-point, not a standalone concept)
+  - agent-trace-interrogation ("ask your agent" pro tip, lines 96-104; a debugging tip that may stay in the primary note)
+  - the eval-as-regression loop ("rinse, wash, repeat") as the article-level synthesis
+  - direct-vs-bandaid-fix distinction (lines 212-216)
 known_disagreements_with_nowledge:
-  - item: "Nowledge M5 (\"Eval suite pruning\") and M13 (\"Eval suite bloat trap\")"
-    decision: merge-into-X
-    why: "both derive from the single section \"Adding as an eval case often has diminishing returns\" (lines 224-230) with identical evidence (500 cases / 20-min CI / 20-beats-200 / prune-if-3-months); the article supports ONE concept (eval-suite-pruning), not two"
-  - item: "Nowledge M7 (\"Harness collapse\") tagged unit_type fact"
-    decision: primary-note-only
-    why: "the article files it under \"Looking forward / Here is what we are watching\" (lines 258-268), so it is a forward-looking prediction/trend, not a settled evaluable concept worth an evergreen note"
-  - item: "Nowledge M11 (\"Production A/B experiments\")"
-    decision: merge-into-X
-    why: "the A/B example (GPT-5.3 vs Claude 4.5, lines 238-246) is the \"Experiments\" rung of the production-monitoring-tiers ladder (lines 184-186); the article presents it as a tier, so it should fold into production-monitoring-tiers rather than mint a separate concept"
-  - item: "Nowledge M12 (\"Reproduction before fix\")"
-    decision: primary-note-only
-    why: "the find -> repro -> add eval -> fix -> verify pattern (lines 218-222) is a procedure tied to the \"Making fixes and changes\" section; legitimate but a borderline mention, better kept in the primary note than promoted (it leans on golden-cases for the \"add to evals\" step)"
-  - item: "Nowledge M14 (\"Agent trace interrogation / ask your agent\")"
-    decision: primary-note-only
-    why: "the \"Pro tip: asking your agent\" section (lines 96-104) is an explicitly tip-flavored debugging trick the author notes is rarely discussed; keep it in the primary note (or merge under trajectory-inspection) rather than mint a standalone evergreen"
-  - item: "Nowledge M10 (\"Refusal as floor-raising\")"
-    decision: mint-as-evergreen
-    why: refusal is an explicitly named floor-raising technique with its own argument (lines 80-82); OVP mis-filed it inside trajectory-inspection, so it deserves a distinct evergreen (refusal), must_not_confuse_with trajectory-inspection
-  - item: "Nowledge M6 (\"The eval loop: ship -> watch -> understand -> fix -> regress\")"
-    decision: primary-note-only
-    why: "\"Rinse, wash, repeat\" (lines 248-256) is the article-level synthesis tying all sections together; it is the thesis-level loop, best captured by the primary note rather than as one more atomic concept"
+- item: Nowledge M5 ("Eval suite pruning") and M13 ("Eval suite bloat trap")
+  decision: merge-into-X
+  why: both derive from the single section "Adding as an eval case often has diminishing returns" (lines 224-230) with identical evidence (500 cases / 20-min CI / 20-beats-200 / prune-if-3-months); the article supports ONE concept (eval-suite-pruning), not two
+- item: Nowledge M7 ("Harness collapse") tagged unit_type fact
+  decision: primary-note-only
+  why: the article files it under "Looking forward / Here is what we are watching" (lines 258-268), so it is a forward-looking prediction/trend, not a settled evaluable concept worth an evergreen note
+- item: Nowledge M11 ("Production A/B experiments")
+  decision: merge-into-X
+  why: the A/B example (GPT-5.3 vs Claude 4.5, lines 238-246) is the "Experiments" rung of the production-monitoring-tiers ladder (lines 184-186); the article presents it as a tier, so it should fold into production-monitoring-tiers rather than mint a separate concept
+- item: Nowledge M12 ("Reproduction before fix")
+  decision: primary-note-only
+  why: the find -> repro -> add eval -> fix -> verify pattern (lines 218-222) is a procedure tied to the "Making fixes and changes" section; legitimate but a borderline mention, better kept in the primary note than promoted (it leans on golden-cases for the "add to evals" step)
+- item: Nowledge M14 ("Agent trace interrogation / ask your agent")
+  decision: primary-note-only
+  why: 'the "Pro tip: asking your agent" section (lines 96-104) is an explicitly tip-flavored debugging trick the author notes is rarely discussed; keep it in the primary note (or merge under trajectory-inspection) rather than mint a standalone evergreen'
+- item: Nowledge M10 ("Refusal as floor-raising")
+  decision: mint-as-evergreen
+  why: refusal is an explicitly named floor-raising technique with its own argument (lines 80-82); OVP mis-filed it inside trajectory-inspection, so it deserves a distinct evergreen (refusal), must_not_confuse_with trajectory-inspection
+- item: 'Nowledge M6 ("The eval loop: ship -> watch -> understand -> fix -> regress")'
+  decision: primary-note-only
+  why: '"Rinse, wash, repeat" (lines 248-256) is the article-level synthesis tying all sections together; it is the thesis-level loop, best captured by the primary note rather than as one more atomic concept'
+forbidden_phrases_anywhere:
+- Framer
+- Clay
+- Vercel
+- GC.AI
