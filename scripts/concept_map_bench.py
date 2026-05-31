@@ -90,7 +90,10 @@ def run_case(fixture, ovp_root):
     covered, covered_forbidden, missing = [], [], []
     note_for = {}  # concept id -> the clean note dict used for content checks
     for c in exp.get("must_have", []):
-        ids = {c["id"], *(c.get("aliases", []) or [])}
+        # Deterministic order (canonical id first, then fixture alias order), so
+        # the note chosen for the content guards (clean[0]) is stable even if a
+        # concept is minted under both its id and an alias.
+        ids = [c["id"], *(c.get("aliases", []) or [])]
         clean = [s for s in ids if s in minted and s not in forbidden]
         forb = [s for s in ids if s in minted and s in forbidden]
         merge_forb = [s for s in (c.get("may_merge_with", []) or []) if s in minted and s in forbidden]
@@ -108,8 +111,8 @@ def run_case(fixture, ovp_root):
     if covered_forbidden:
         r["fail"].append(f"covered only via forbidden alias: {[i for i,_ in covered_forbidden]}")
 
-    # 2. must-not-mint
-    r["forbidden_minted"] = [(s, forbidden[s]) for s in minted if s in forbidden]
+    # 2. must-not-mint  (sorted: `minted` is a set — keep report order stable)
+    r["forbidden_minted"] = [(s, forbidden[s]) for s in sorted(minted) if s in forbidden]
     if r["forbidden_minted"]:
         r["fail"].append(f"forbidden minted: {[s for s,_ in r['forbidden_minted']]}")
 
