@@ -26,8 +26,11 @@ it now threads the article's grounding onto the `EvergreenConcept`, and
 **Output contract — a minted evergreen note carries:**
 
 - title + slug (frontmatter; `status: minted`);
-- a one-line **definition** (the article's `one_liner` dimension);
-- 2-5 **source-backed claims** (a `## Source-backed claims` list);
+- a one-line **definition** (the article's `one_liner` — currently *article-level*,
+  i.e. shared by every concept minted from the same article; concept-specific
+  definitions are future, M12b+);
+- **up to five** source-backed claims (usually 2-5 when the article has material;
+  fewer if its claim pool is thin — a `## Source-backed claims` list);
 - a **source link** (`## Source` → `[source_title](source_url)`);
 - **related** concept wikilinks when available (`## Related` → `[[slug]]`);
 - deterministic rendering, so re-minting the *same* concept is an idempotent
@@ -65,18 +68,25 @@ This keeps the blast radius to three `ovp-domain` source files
 (`evergreen.rs`, `transforms/evergreen_concept_writer.rs`,
 `sinks/evergreen_sink.rs`) plus tests.
 
-## Known limitation (pinned, deferred to M12b)
+## Same-slug handling (resolved in M12b)
 
 The grounded body is **per-document** (it embeds the definition, claims, and
-source link of the specific article). The old stub was deliberately
-provenance-free so that two different articles surfacing the same slug wrote
-byte-identical bodies and the second `VaultCreate` idempotent-*skipped*. With
-M12a, those two documents render *different* bodies, so the second `VaultCreate`
-hits an existing path with a different hash and is reported `OpResult::Failed`
-(fail-loud, no overwrite), which halts that `CompositePlanApplier` cycle. This
-is **first-writer-wins, fail-loud** — not silent corruption — and is pinned by
-`crates/ovp-stores/tests/evergreen_e2e.rs::cross_document_same_slug_different_grounding_fails_loud_until_m12b`.
-Resolving it (merge/skip a shared slug across documents) is **M12b**.
+source link of the specific article), so two different articles surfacing the
+same slug render *different* bodies. At the raw applier this means the second
+`VaultCreate` would hit an existing path with a different hash and fail
+(`OpResult::Failed`) rather than overwrite — correct low-level behavior, but in
+M12a alone it would halt a multi-article run on a common slug (`rag`,
+`ai-agent`, …). **M12b closes this**: before applying, the run-cycle reconciles
+each minted evergreen `VaultCreate` against the on-disk note — MintNew when
+absent, keep (idempotent-skip) when identical, **EnrichExisting** (a merge
+`VaultUpdate`) when a different note already holds the slug, or skip when there
+is nothing new to add. The merge unions source-backed claims / sources / related
+links and keeps the first note's definition; a conflicting `CanonicalUpsert` is
+dropped (first-writer-wins, preserving the original provenance — the merged note
+body still carries every source). See `docs/stage-m12b-same-slug-reconcile.md`.
+Still future (M12b+/M13): concept-specific definitions, mint/enrich/escalate/
+reject policy lanes, semantic dedup of near-duplicate claims, and crystal
+materialization.
 
 ## Out of scope (deliberately not in M12a)
 
@@ -97,13 +107,21 @@ domain-blind + I/O-blind + sync; `EvergreenConceptWriter` stays a pure
 - `evergreen_concept_writer.rs`: minted concepts carry definition + claims.
 - `evergreen_sink.rs`: grounded (non-stub) body with all sections; deterministic
   body + hash; canonical payload stays minimal (no grounding leaks).
-- `ovp-stores` e2e: minted notes are grounded not stub; the cross-document
-  limitation above.
+- `evergreen_note.rs`: parse↔render round-trip; merge unions + idempotence;
+  `reconcile_evergreen_write` (MintNew / keep-identical / EnrichExisting / skip /
+  unparseable-skip).
+- `ovp-stores` e2e: minted notes are grounded not stub; reconcile enriches the
+  same slug across documents; the raw applier still rejects a conflicting
+  `VaultCreate` (the backstop the reconcile sits in front of).
+- `ovp-run` e2e: a run-cycle over a pre-existing different-grounding note for the
+  same slug enriches (succeeds) instead of failing, and is idempotent on re-run.
 - `ovp-rag` e2e: a corpus built from a real minted note returns a grounded
   snippet (not the placeholder), retriever/ranker unchanged.
 
 ## Recommended next stage
 
-**M12b — Absorb Boundary v2**, before RAG v1.1 (the embedding/semantic ranker):
-existing-note enrichment, policy lanes, and cross-document merge/dedup. Crystal
+The same-slug mainline risk is closed (M12b — `docs/stage-m12b-same-slug-reconcile.md`).
+Before RAG v1.1 (the embedding/semantic ranker), the remaining absorb work is:
+concept-specific definitions, mint/enrich/escalate/reject policy lanes, and
+semantic dedup of near-duplicate claims across documents. Crystal
 materialization is a separate later stage.
