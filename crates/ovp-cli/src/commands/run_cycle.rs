@@ -93,6 +93,7 @@ fn print_report(r: &RunCycleReport) {
     println!("records_seen:      {}", r.records_seen);
     println!("records_forwarded: {}", r.records_forwarded_to_sinks);
     println!("records_dropped:   {}", r.records_dropped);
+    println!("records_errored:   {}", r.records_errored);
     println!("plan ops:          {}", r.ops_emitted);
     let a = r.apply.counts();
     println!(

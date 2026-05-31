@@ -57,6 +57,61 @@ fn run(
     RunCycle::new().execute(inputs).unwrap()
 }
 
+/// A replay-only client over an EMPTY cache dir: every LLM call is a miss → the
+/// inner `NeverCallsClient` is reached and errors. Models a live LLM failure
+/// (transport/decode/etc.) with no network.
+fn failing_client(empty_cache: &Path) -> Box<dyn ModelClient> {
+    Box::new(
+        CachedModelClient::new(NeverCallsClient, empty_cache, ARTICLE_PROMPT_ID, CacheMode::ReplayOnly)
+            .unwrap(),
+    )
+}
+
+/// P0 regression: a failed LLM call must fail the cycle, not produce a silent
+/// empty success. The M9 live run exposed exactly this — a transient LLM error
+/// became a 0-concept/0-claim note while the cycle reported "succeeded".
+#[test]
+fn run_cycle_llm_failure_is_not_empty_success() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let empty_cache = tempfile::tempdir().unwrap();
+
+    let toml =
+        std::fs::read_to_string(root.join("manifests/article_evergreen.pipeline.toml")).unwrap();
+    let spec = DomainPipelineSpec::parse(&toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp("2026-05-04")
+        .with_area("ai")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", failing_client(empty_cache.path()))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.path().to_path_buf(),
+        canonical_root: canon.path().to_path_buf(),
+        mode: ApplyMode::Apply,
+    };
+    let report = RunCycle::new().execute(inputs).unwrap();
+
+    // The LLM call failed → the record errored → the cycle is NOT a success.
+    assert!(report.records_errored > 0, "the failed LLM call must be counted as an errored record");
+    assert!(!report.succeeded(), "an LLM failure must not be reported as an empty success");
+    assert_eq!(report.ops_emitted, 0, "no note should have been produced");
+    assert!(report.moc.is_none() && report.knowledge_index.is_none(), "derived rebuild must be skipped");
+    assert!(
+        report.derived_skipped_reason.as_deref().unwrap_or("").contains("errored"),
+        "the failure reason should name the error: {:?}",
+        report.derived_skipped_reason
+    );
+    // Nothing was written to the vault (no empty note, no MOC, no index).
+    assert!(
+        std::fs::read_dir(vault.path()).unwrap().next().is_none(),
+        "vault must be empty on a failed extraction"
+    );
+}
+
 #[test]
 fn run_cycle_article_is_idempotent() {
     let root = repo_root();

@@ -89,9 +89,26 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
         }
     }
     if text.is_empty() {
-        return Err(CallError::Decode {
-            detail: "no text content blocks in response".into(),
-        });
+        // Diagnose the common reasoning-model case: the provider returned only
+        // `thinking` blocks (and no `text`), typically because it exhausted the
+        // token budget while thinking. Make this loud + actionable rather than
+        // a generic decode error — it is NOT a transient failure (retrying with
+        // the same budget won't help; the fix is a larger OVP_LLM_MAX_TOKENS).
+        let thinking_blocks = content
+            .iter()
+            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
+            .count();
+        let stop = v.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("unknown");
+        let detail = if thinking_blocks > 0 {
+            format!(
+                "no_text_content_blocks: response had {thinking_blocks} thinking block(s) and no \
+                 text block (stop_reason={stop}). The provider is likely a reasoning/thinking model \
+                 — raise OVP_LLM_MAX_TOKENS so it can emit text after thinking."
+            )
+        } else {
+            format!("no_text_content_blocks: response had no text content block (stop_reason={stop})")
+        };
+        return Err(CallError::Decode { detail });
     }
 
     let stop_reason = map_stop_reason(v.get("stop_reason").and_then(|s| s.as_str()));
@@ -142,6 +159,15 @@ mod live {
         api_key: String,
         base_url: String,
         version: String,
+        /// When set, overrides the model the domain put on each request — needed
+        /// for Anthropic-compatible providers (e.g. MiniMax) whose model names
+        /// differ from `claude-*`.
+        model_override: Option<String>,
+        /// When set, overrides the request's `max_tokens` on the wire — reasoning
+        /// models (e.g. MiniMax-M2) spend the budget on `thinking` blocks and
+        /// need a larger ceiling to also emit the final `text`. Does not change
+        /// the cached `ModelRequest` (so cassette keys are unaffected).
+        max_tokens_override: Option<u32>,
         http: reqwest::blocking::Client,
     }
 
@@ -152,6 +178,8 @@ mod live {
                 api_key: api_key.into(),
                 base_url: DEFAULT_BASE_URL.to_string(),
                 version: ANTHROPIC_VERSION.to_string(),
+                model_override: None,
+                max_tokens_override: None,
                 http: reqwest::blocking::Client::new(),
             }
         }
@@ -177,11 +205,41 @@ mod live {
             self.base_url = url.into();
             self
         }
+
+        /// Override the request model (for Anthropic-compatible providers).
+        pub fn with_model_override(mut self, model: impl Into<String>) -> Self {
+            self.model_override = Some(model.into());
+            self
+        }
+
+        /// Override `max_tokens` on the wire (for reasoning models that need
+        /// headroom beyond the domain default to emit text after thinking).
+        pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+            self.max_tokens_override = Some(max_tokens);
+            self
+        }
+
+        /// Rebuild the HTTP client to BYPASS any ambient `HTTP(S)_PROXY` — for a
+        /// directly-reachable provider whose endpoint the ambient proxy can't
+        /// tunnel (mirrors the Nowledge adapter). Off by default so setups that
+        /// require a proxy to reach the provider keep working.
+        pub fn with_no_proxy(mut self) -> Self {
+            if let Ok(client) = reqwest::blocking::Client::builder().no_proxy().build() {
+                self.http = client;
+            }
+            self
+        }
     }
 
     impl ModelClient for AnthropicBlockingClient {
         fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError> {
-            let body = anthropic_request_body(request);
+            let mut body = anthropic_request_body(request);
+            if let Some(model) = &self.model_override {
+                body["model"] = serde_json::json!(model);
+            }
+            if let Some(mt) = self.max_tokens_override {
+                body["max_tokens"] = serde_json::json!(mt);
+            }
             let resp = self
                 .http
                 .post(&self.base_url)
@@ -307,6 +365,22 @@ mod tests {
         match parse_anthropic_reply(json) {
             Err(CallError::Decode { .. }) => {}
             other => panic!("expected Decode error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_thinking_only_response_is_diagnosed_decode_error() {
+        // A reasoning model that spent its budget thinking returns only a
+        // `thinking` block and no `text`. This must be a loud, actionable
+        // decode error naming the cause — not a silent empty success.
+        let json = r#"{"model":"MiniMax-M2","content":[{"type":"thinking","thinking":"hmm...","signature":"s"}],"stop_reason":"max_tokens","usage":{"input_tokens":50,"output_tokens":64}}"#;
+        match parse_anthropic_reply(json) {
+            Err(CallError::Decode { detail }) => {
+                assert!(detail.contains("no_text_content_blocks"), "got {detail}");
+                assert!(detail.contains("thinking block"), "should mention thinking blocks: {detail}");
+                assert!(detail.contains("OVP_LLM_MAX_TOKENS"), "should hint the fix: {detail}");
+            }
+            other => panic!("expected diagnosed Decode error, got {other:?}"),
         }
     }
 }

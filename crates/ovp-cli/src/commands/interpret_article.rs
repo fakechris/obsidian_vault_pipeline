@@ -88,11 +88,35 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
     println!("records_seen:      {}", report.records_seen);
     println!("records_forwarded: {}", report.records_forwarded_to_sinks);
     println!("records_dropped:   {}", report.records_dropped);
+    println!("records_errored:   {}", report.records_errored);
     println!("write_plan ops:    {}", report.write_plan.len());
     println!("events:            {}", report.events.len());
     println!();
     println!("wrote {}", plan_path.display());
     println!("wrote {}", events_path.display());
+
+    // Fail loud: a record that errored (e.g. the live LLM call failing) or a run
+    // that saw input yet produced no write ops must NOT exit 0 as an empty
+    // success. The plan/events above are still written for debugging.
+    if report.records_errored > 0 {
+        let detail = report
+            .first_error
+            .as_ref()
+            .map(|e| format!("{}: {}", e.code.as_str(), e.detail))
+            .unwrap_or_else(|| "unknown".to_string());
+        return Err(CliError::Io(format!(
+            "interpret-article: {} record(s) errored (first: {detail}); see {}",
+            report.records_errored,
+            events_path.display()
+        )));
+    }
+    if report.records_seen > 0 && report.write_plan.is_empty() {
+        return Err(CliError::Io(format!(
+            "interpret-article: saw {} record(s) but produced no write ops (likely a failed or empty LLM extraction); see {}",
+            report.records_seen,
+            events_path.display()
+        )));
+    }
 
     Ok(())
 }
