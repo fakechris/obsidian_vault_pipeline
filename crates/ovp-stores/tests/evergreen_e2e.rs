@@ -185,10 +185,98 @@ fn applying_twice_is_idempotent_for_evergreen_stubs() {
     let first = applier.apply(&report.write_plan, ApplyMode::Apply);
     assert_eq!(first.counts().applied, 14);
 
-    // Stub bodies are provenance-free + deterministic, so a second apply
-    // skips all VaultCreates as idempotent.
+    // Rich bodies are deterministic from the (cassette-fixed) interpretation,
+    // so a second apply still skips all VaultCreates as idempotent.
     let second = applier.apply(&report.write_plan, ApplyMode::Apply);
     assert_eq!(second.counts().applied, 0, "nothing re-written");
     assert_eq!(second.counts().skipped, 14, "all VaultCreates idempotent-skip");
     assert_eq!(second.counts().failed, 0);
+}
+
+#[test]
+fn minted_evergreen_notes_are_grounded_not_stub() {
+    // M12a: notes minted from a real interpreted article carry a definition +
+    // source-backed claims + a source link, not the bare stub placeholder.
+    let report = run_pipeline();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let mut applier = CompositePlanApplier::new(vec![
+        Box::new(VaultFsPlanApplier::new(vault.path())),
+        Box::new(CanonicalFsStoreApplier::new(canon.path())),
+    ]);
+    let apply = applier.apply(&report.write_plan, ApplyMode::Apply);
+    assert_eq!(apply.counts().failed, 0);
+
+    let evergreen_dir = vault.path().join("10-Knowledge/Evergreen");
+    let mut files = 0;
+    let mut with_claims = 0;
+    for entry in std::fs::read_dir(&evergreen_dir).unwrap() {
+        let body = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        files += 1;
+        assert!(
+            !body.contains("Stub evergreen. Expand"),
+            "minted note must not be a stub:\n{body}"
+        );
+        // Every minted note is grounded: a definition and a source link.
+        assert!(body.contains("status: minted"), "note marked minted:\n{body}");
+        assert!(body.contains("## Source"), "note links its source:\n{body}");
+        if body.contains("## Source-backed claims") {
+            with_claims += 1;
+        }
+    }
+    assert_eq!(files, 13, "13 minted evergreen notes");
+    assert!(with_claims >= 1, "at least one note carries source-backed claims");
+}
+
+#[test]
+fn cross_document_same_slug_different_grounding_fails_loud_until_m12b() {
+    // KNOWN M12a LIMITATION (pinned). A grounded note carries per-document
+    // content, so two DISTINCT articles surfacing the same new slug render
+    // different bodies. The first lands; the second's VaultCreate hits the
+    // existing path with a different hash -> OpResult::Failed (fail-loud, no
+    // overwrite), which halts the rest of the apply. Cross-document merge/skip
+    // of a shared slug is M12b. (Pre-M12a the provenance-free stub made this an
+    // idempotent skip; the failure mode changed deliberately, so we pin it.)
+    use ovp_core::{Record, RecordId, RecordMeta, Sink, WritePlan};
+
+    // Render a grounded VaultCreate for `slug` from a distinct "document".
+    fn grounded_create(slug: &str, definition: &str, source_url: &str) -> WriteOp {
+        let mut c = EvergreenConcept::from_candidate(slug, source_url);
+        c.definition = definition.into();
+        c.source_claims = vec![format!("Claim from {source_url}.")];
+        c.source_title = "Doc".into();
+        let mut sink = EvergreenSink::new("evergreen_sink", RunId::new("r"));
+        let out = sink.consume(Record::new(
+            RecordId::new(format!("evg-{slug}")),
+            DomainBody::EvergreenConcept(Box::new(c)),
+            RecordMeta { run_id: RunId::new("r"), seq: 0 },
+        ));
+        // The VaultCreate is the first op (CanonicalUpsert is the second).
+        out.plan_ops.into_iter().find(|o| matches!(o, WriteOp::VaultCreate(_))).unwrap()
+    }
+
+    let vault = tempfile::tempdir().unwrap();
+    let mut applier =
+        CompositePlanApplier::new(vec![Box::new(VaultFsPlanApplier::new(vault.path()))]);
+
+    let mut plan = WritePlan::new(RunId::new("two-docs"));
+    plan.push(grounded_create("rag", "Definition from document A.", "https://a.example/post"));
+    plan.push(grounded_create(
+        "rag",
+        "Different definition from document B.",
+        "https://b.example/post",
+    ));
+    // A later op for a different slug — proves the halt skips subsequent work.
+    plan.push(grounded_create("vector-db", "A vector database.", "https://c.example/post"));
+
+    let apply = applier.apply(&plan, ApplyMode::Apply);
+    let counts = apply.counts();
+    assert_eq!(counts.applied, 1, "only the first document's grounded note lands");
+    assert_eq!(counts.failed, 1, "second distinct same-slug body fails loud (no overwrite)");
+    assert!(counts.skipped >= 1, "composite halts after the failure; later ops are skipped");
+
+    // First writer wins: the on-disk note is document A's, not clobbered by B.
+    let body =
+        std::fs::read_to_string(vault.path().join("10-Knowledge/Evergreen/rag.md")).unwrap();
+    assert!(body.contains("Definition from document A."), "first grounding intact");
 }

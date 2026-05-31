@@ -172,3 +172,84 @@ fn corrupt_read_model_is_loud() {
     let err = RagCorpus::load(vault.path(), canon.path()).unwrap_err();
     assert!(matches!(err, ovp_rag::RagError::Load(_)), "got {err:?}");
 }
+
+/// M12a regression: a note minted *rich* (via the real `EvergreenSink`
+/// renderer) yields a retrieval snippet that is grounded content, never the
+/// stub placeholder. Proves the rich body flows end-to-end into the corpus.
+/// The retriever/ranker are UNCHANGED — this only exercises the read path over
+/// a richer body.
+#[test]
+fn rag_snippet_from_minted_evergreen_is_grounded_not_stub() {
+    use ovp_core::{Record, RecordId, RecordMeta, Sink};
+    use ovp_domain::{
+        Dimensions, DomainBody, EvergreenConcept, EvergreenSink, Explanation, InterpretedDoc,
+    };
+
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    // Mint a rich concept from a synthetic interpreted article.
+    let interp = InterpretedDoc {
+        title: "Retrieval Augmented Generation, explained".into(),
+        source_url: "https://example.com/rag".into(),
+        author: None,
+        date: "2026-05-31".into(),
+        doc_type: "article".into(),
+        area: "ai".into(),
+        tags: vec![],
+        canonical_concepts: vec![],
+        concept_candidates: vec!["rag".into()],
+        dimensions: Dimensions {
+            one_liner: "RAG grounds a language model by retrieving documents before generation."
+                .into(),
+            explanation: Explanation { what: "".into(), why: "".into(), how: "".into() },
+            details: vec![
+                "RAG retrieves relevant chunks from a corpus at query time.".into(),
+                "It reduces hallucination by grounding answers in sources.".into(),
+            ],
+            structure: None,
+            actions: vec![],
+            linked_concepts: vec!["vector-db".into()],
+        },
+    };
+    let minted = EvergreenConcept::try_mint("rag", &interp).unwrap();
+
+    // Render the body through the REAL EvergreenSink (the production renderer).
+    let mut sink = EvergreenSink::new("evergreen_sink", RunId::new("mint"));
+    let rec = Record::new(
+        RecordId::new("evg-rag"),
+        DomainBody::EvergreenConcept(Box::new(minted)),
+        RecordMeta { run_id: RunId::new("mint"), seq: 0 },
+    );
+    let out = sink.consume(rec);
+    let body = match &out.plan_ops[0] {
+        WriteOp::VaultCreate(o) => o.body.clone(),
+        other => panic!("expected VaultCreate, got {other:?}"),
+    };
+    assert!(!body.contains("Stub evergreen"), "minted body must not be a stub");
+
+    // Land it on disk + register canonical identity, exactly as an apply would.
+    let c = concept("rag", "Rag");
+    write_note(vault.path(), &c, &body);
+    // A distractor concept whose body shares none of the query tokens, so the
+    // ranking assertion exercises ordering across a multi-concept corpus rather
+    // than being trivially satisfied by a single doc.
+    let other = concept("transformer", "Transformer");
+    write_note(vault.path(), &other, "A transformer is a neural network architecture.");
+    let seeded = vec![c.clone(), other.clone()];
+    seed_canonical(canon.path(), &seeded);
+
+    // Build the corpus + retrieve. Retriever + Ranker are unchanged.
+    let corpus = RagCorpus::load(vault.path(), canon.path()).unwrap();
+    let scored = Retriever::new().score(&corpus, "retrieving documents generation");
+    let ranked = Ranker::new().rank(scored);
+    assert_eq!(ranked.first().unwrap().slug, "rag", "the minted concept is retrievable");
+
+    let ctx = ContextBuilder::new().build(&corpus, &ranked, "retrieving documents generation");
+    let snippet = ctx.selected[0].snippet.as_deref().unwrap();
+    assert!(!snippet.contains("Stub evergreen"), "snippet must not be the stub placeholder");
+    assert!(
+        snippet.contains("RAG grounds a language model"),
+        "snippet carries the real definition:\n{snippet}"
+    );
+}
