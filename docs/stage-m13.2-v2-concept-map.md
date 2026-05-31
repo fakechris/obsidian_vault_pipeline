@@ -28,6 +28,8 @@ A new field carries the concept map alongside the existing interpretation; no
    (serde `default`, so v1 deserializes to empty). `ExtractedConcept` owns its
    `definition`, `evidence`, `claims`, `related`, `merge_with`, `reject_reason`,
    `promote`, plus `slug` / `title` / `aliases` / `kind` (`ConceptKind`).
+   `promote` is **required** (no serde default): a real model omitting it must
+   fail loud at parse, not silently default to `false` and drop every concept.
 2. **Versioned prompt.** `prompts/article_concept_map.md` is a distinct asset
    with its own id + schema version: `article_concept_map/v2`,
    `CONCEPT_MAP_SCHEMA_VERSION = 2`. A v2 response can never replay against a v1
@@ -37,13 +39,23 @@ A new field carries the concept map alongside the existing interpretation; no
    `is_v2`. A v2 envelope with no `concepts[]` drops **loud**
    (`transform.article_parser.empty_concepts`) — it never silently falls back to
    the v1 shared-`one_liner` path. v1 responses still produce `concepts: []`.
-4. **Resolver gate.** When `doc.concepts` is non-empty, `ConceptResolver` gates
-   the map in place (no-op for v1). It drops — with observable `FilterDropped`
+4. **Resolver gate (two-phase, order-independent).** When `doc.concepts` is
+   non-empty, `ConceptResolver` gates the map in place (no-op for v1).
+   **Phase 1 (structural validity):** drop — with observable `FilterDropped`
    events — concepts that are invalid-slug / `promote=false` / carry a
-   `reject_reason` / lack a definition, evidence, *or* an owned claim; and
-   collapses duplicate slugs + `merge_with` targets, **first survivor wins**,
-   deterministic and order-stable. It normalizes the surviving slug back onto the
-   concept, so the writer mints the canonical spelling.
+   `reject_reason` / lack a definition, evidence, *or* an owned claim. The
+   evidence/claim floor is **content-aware** (≥1 non-whitespace entry, matching
+   how `from_extracted` trims), not a bare `Vec` length test, so a model emitting
+   `["   "]` can't sneak an ungrounded note past it. **Phase 2 (dedup + merge):**
+   a survivor whose `merge_with` names *any other surviving* slug/alias is a
+   synonym → drop it, **regardless of emission order**; the first survivor of a
+   duplicate slug wins. Dedup + merge matching compare a normalized key
+   (ASCII case-fold + `_`/space → `-`) so a model that drifts spelling across
+   `slug` / `aliases` / `merge_with` (`Idea-Block`, `idea_block`) still collapses
+   to one identity instead of minting duplicates. Dedup keys are **slugs only**,
+   so a distinct concept whose slug equals another's alias is not a false
+   duplicate. It normalizes the surviving slug back onto the concept, so the
+   writer mints the canonical spelling.
 5. **Writer.** `EvergreenConceptWriter` branches: v2 mints each note from its
    **own** concept (`EvergreenConcept::from_extracted` — definition = the
    concept's definition, claims = its owned claims, related = its related), with
@@ -85,9 +97,37 @@ It does **not** prove the real model emits such a response. A green here is
 **synthetic-green**. The v1 `.run/m12q2` baseline still scores **0/3** —
 unchanged — which is the correct "before" state.
 
+## Post-review adversarial audit (M13.2 follow-up)
+
+After the first cut, a reviewer found two real gate bugs — `merge_with` was
+order-dependent, and `promote` silently defaulted to `false`. Both were fixed
+(two-phase gate; `promote` required). An adversarial audit then found four more
+of the *same class*, all now fixed + regression-tested:
+
+1. **merge-target spelling drift** — byte-exact matching leaked a synonym whose
+   `merge_with` varied case/separator (`Idea-Block` vs `idea-block`). Fixed by the
+   normalized key.
+2. **dedup spelling drift** — `vector-database` vs `Vector_Database` both survived
+   → duplicate identities. Same fix.
+3. **whitespace-only grounding** — `evidence: ["   "]` passed a `Vec`-length check
+   but `from_extracted` trims it to empty → claim-less note. Fixed by the
+   content-aware floor.
+4. **slug == another concept's alias** — wrongly dropped as a "duplicate",
+   order-dependently. Fixed by keying dedup on slugs only.
+
+The audit also **refuted** two non-issues (alias-as-merge-target is designed
+behavior; the `promote`-required whole-article drop is intended loudness).
+
 ## What is still NOT done (deliberately) — M13.3
 
 - **v2 prompt-builder + manifest wiring** — the builder still emits v1 only.
+- **⚠️ Empty-map fallback guard — REQUIRED before the default flip.** The writer
+  selects v1 vs v2 by `interp.concepts.is_empty()`. If a *v2* doc's map gates to
+  empty (all concepts rejected/merged), the writer would silently fall to the v1
+  `concept_candidates` / `one_liner` path. Not reachable today (v2 isn't wired and
+  the v2 prompt emits no `linked_concepts`), but M13.3 must carry an explicit
+  "this is a concept-map doc" marker on `InterpretedDoc` and emit a **loud** event
+  when a v2 map produces zero mintable concepts — never a silent v1 fallback.
 - **Live cassette re-record** under `article_concept_map/v2`.
 - **Default flip** to v2 + a full real-model gauntlet pass.
 - **Real benchmark green** on actual model output (the real test of prompt
@@ -96,11 +136,18 @@ unchanged — which is the correct "before" state.
 ## Tests
 
 - `ovp-domain` (`article_parser.rs`): v2 parses a distinct-definition map; a v2
-  envelope missing `concepts[]` drops loud; wrong schema_version drops; a v1
-  response yields empty `concepts`.
+  envelope missing `concepts[]` drops loud; a concept missing the required
+  `promote` field drops loud (`json_parse`, naming the field); wrong
+  schema_version drops; a v1 response yields empty `concepts`.
 - `ovp-domain` (`concept_resolver.rs`): the gate drops bad concepts with the
   expected event codes; merges + dedups (first survivor wins); an all-valid map
-  forwards with no events; v1 docs are untouched.
+  forwards with no events; v1 docs are untouched. **Order/spelling regression
+  tests:** a synonym emitted *before* its canonical target still collapses; a
+  mutual A↔B merge drops both (never leaks a duplicate); a self-referential
+  merge is ignored; a merge into a Phase-1-dropped target does not merge;
+  case/separator drift on a `merge_with` target and on a duplicate slug both
+  still collapse; whitespace-only evidence/claims drop `low_evidence`; a slug
+  equal to another concept's alias is not a false duplicate (order-independent).
 - `ovp-domain` (`evergreen_concept_writer.rs`): two v2 concepts from one article
   get **distinct** definitions and **non-recycled** claims; the v2 path ignores
   v1 candidates; a blank title derives from the slug.

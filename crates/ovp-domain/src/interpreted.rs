@@ -71,7 +71,13 @@ pub struct ExtractedConcept {
     pub merge_with: Vec<String>,
     #[serde(default)]
     pub reject_reason: Option<String>,
-    #[serde(default)]
+    /// REQUIRED (no serde default). A real model omitting `promote` is a common
+    /// failure mode; defaulting a missing field to `false` would silently drop
+    /// every concept as `not_promoted`, leaving the run "successful" with an
+    /// empty concept map. Keeping it required makes a missing field fail LOUD at
+    /// JSON parse (`transform.article_parser.json_parse`, "missing field
+    /// `promote`") rather than silently. An explicit `false` is still a valid
+    /// "do not mint this" signal the gate honors.
     pub promote: bool,
 }
 

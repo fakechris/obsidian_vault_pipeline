@@ -106,12 +106,38 @@ impl Transform<DomainBody> for ConceptResolver {
 
 /// Gate an extracted v2 concept map with GENERAL rules only. Returns the
 /// surviving concepts and a `DropReason` per rejected/merged concept (the
-/// caller turns each into an observable `FilterDropped` event). Deterministic
-/// and order-stable: the first survivor of a duplicate/merge wins.
+/// caller turns each into an observable `FilterDropped` event).
+///
+/// **Two-phase, so merge is order-independent.** A real model can emit a synonym
+/// *before* the canonical concept it should merge into; a single-pass gate that
+/// only merged against already-kept slugs would then leak the synonym. So:
+///
+/// - **Phase 1 (structural validity):** drop invalid-slug / `promote=false` /
+///   `reject_reason` / no-definition-or-evidence-or-claims concepts. Collect the
+///   survivors and the set of every surviving slug + alias.
+/// - **Phase 2 (dedup + merge):** a survivor whose `merge_with` names ANY OTHER
+///   surviving slug/alias is a synonym → drop it, regardless of emission order.
+///   The first survivor of a duplicate slug wins (deterministic).
+///
+/// A pathological *mutual* merge (`A.merge_with=[B]` and `B.merge_with=[A]`)
+/// drops both — models should point synonyms at a canonical root, not at each
+/// other; we never silently keep a duplicate.
+///
+/// **Spelling-robust.** Dedup + merge matching compare a normalized [`norm_key`]
+/// (ASCII case-fold + `_`/space → `-`, collapsed) rather than raw bytes, so a
+/// model that varies case/separator across `slug` / `aliases` / `merge_with`
+/// (`Idea-Block`, `idea_block`, `idea block`) still collapses to one concept
+/// instead of minting duplicate identities. (CJK fullwidth/halfwidth is NOT
+/// folded — out of scope; ASCII case/separator is the realistic model drift.)
 fn gate_concepts(concepts: Vec<ExtractedConcept>) -> (Vec<ExtractedConcept>, Vec<DropReason>) {
-    let mut kept: Vec<ExtractedConcept> = Vec::new();
-    let mut kept_slugs: HashSet<String> = HashSet::new();
     let mut drops: Vec<DropReason> = Vec::new();
+
+    // Phase 1: structural validity. `present` holds the normalized key of every
+    // surviving slug + alias, so Phase 2 can resolve a `merge_with` target
+    // whether it was emitted before or after the synonym and regardless of
+    // case/separator spelling.
+    let mut survivors: Vec<ExtractedConcept> = Vec::new();
+    let mut present: HashSet<String> = HashSet::new();
     for c in concepts {
         let slug = match CanonicalSlug::parse(&c.slug) {
             Ok(s) => s.into_string(),
@@ -137,36 +163,91 @@ fn gate_concepts(concepts: Vec<ExtractedConcept>) -> (Vec<ExtractedConcept>, Vec
             ));
             continue;
         }
-        if c.definition.trim().is_empty() || c.evidence.is_empty() || c.claims.is_empty() {
+        // Content-aware grounding floor: a non-empty Vec of whitespace-only
+        // entries is NOT grounding. Match how `EvergreenConcept::from_extracted`
+        // consumes these (trim + drop-empty), so the gate never passes a concept
+        // that would mint a claim-less, ungrounded note.
+        let has_evidence = c.evidence.iter().any(|e| !e.trim().is_empty());
+        let has_claim = c.claims.iter().any(|c| !c.trim().is_empty());
+        if c.definition.trim().is_empty() || !has_evidence || !has_claim {
             drops.push(DropReason::new(
                 "transform.concept_resolver.low_evidence",
                 format!("`{slug}`: missing definition, evidence, or claims"),
             ));
             continue;
         }
-        if kept_slugs.contains(&slug) {
-            drops.push(DropReason::new(
-                "transform.concept_resolver.duplicate",
-                format!("`{slug}`: duplicate slug"),
-            ));
-            continue;
-        }
-        if let Some(target) = c.merge_with.iter().find(|t| kept_slugs.contains(*t)) {
-            drops.push(DropReason::new(
-                "transform.concept_resolver.merged",
-                format!("`{slug}`: merged into `{target}`"),
-            ));
-            continue;
+        present.insert(norm_key(&slug));
+        for a in &c.aliases {
+            if !a.trim().is_empty() {
+                present.insert(norm_key(a));
+            }
         }
         let mut c = c;
-        c.slug = slug.clone();
-        kept_slugs.insert(slug);
-        for a in &c.aliases {
-            kept_slugs.insert(a.clone());
+        c.slug = slug;
+        survivors.push(c);
+    }
+
+    // Phase 2: dedup + order-independent merge.
+    let mut kept: Vec<ExtractedConcept> = Vec::new();
+    // Dedup keys are SLUGS ONLY (normalized) — NOT aliases. A distinct concept
+    // whose slug happens to equal a prior concept's alias must not be dropped as
+    // a "duplicate"; alias matching belongs to merge resolution (via `present`).
+    let mut kept_keys: HashSet<String> = HashSet::new();
+    for c in survivors {
+        let slug_key = norm_key(&c.slug);
+        if kept_keys.contains(&slug_key) {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.duplicate",
+                format!("`{}`: duplicate slug", c.slug),
+            ));
+            continue;
         }
+        // A `merge_with` that names another surviving concept (not itself) makes
+        // this a synonym. Self-references are ignored; targets that did not
+        // survive Phase 1 do not count. Compared by normalized key.
+        let own: HashSet<String> = std::iter::once(slug_key.clone())
+            .chain(c.aliases.iter().filter(|a| !a.trim().is_empty()).map(|a| norm_key(a)))
+            .collect();
+        if let Some(target) = c
+            .merge_with
+            .iter()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| norm_key(t))
+            .find(|t| !own.contains(t) && present.contains(t))
+        {
+            drops.push(DropReason::new(
+                "transform.concept_resolver.merged",
+                format!("`{}`: merged into `{target}`", c.slug),
+            ));
+            continue;
+        }
+        kept_keys.insert(slug_key);
         kept.push(c);
     }
     (kept, drops)
+}
+
+/// Normalization key for gate-internal dedup + merge matching ONLY (never the
+/// minted slug — the surviving concept keeps its `CanonicalSlug`-parsed spelling).
+/// Folds the spellings a model realistically varies for the SAME concept: ASCII
+/// case, and `_` / space → `-`, with runs of `-` collapsed. Pure ASCII; CJK is
+/// left intact (lowercasing/`-`-mapping a CJK string is a no-op).
+fn norm_key(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for ch in s.trim().chars() {
+        let c = if ch == '_' || ch == ' ' || ch == '-' { '-' } else { ch.to_ascii_lowercase() };
+        if c == '-' {
+            if prev_dash {
+                continue;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -414,6 +495,214 @@ mod tests {
                 assert!(cs.contains(&"transform.concept_resolver.duplicate".to_string()));
             }
             other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_target_later_still_collapses_synonym() {
+        // Regression (M13.2 follow-up): the synonym is emitted BEFORE the
+        // canonical concept it merges into. A single-pass gate that only merged
+        // against already-kept slugs would leak the synonym; the two-phase gate
+        // collapses it regardless of order.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mut syn = concept("qa-packet", true);
+        syn.merge_with = vec!["idea-block".into()];
+        let canonical = concept("idea-block", true);
+        let doc = doc_with_concepts(vec![syn, canonical]); // synonym FIRST
+        match r.process(record(doc)) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                let body = match &records[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    body.concepts.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
+                    vec!["idea-block"],
+                    "canonical survives, synonym collapses even when emitted first"
+                );
+                assert!(codes(&events).contains(&"transform.concept_resolver.merged".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mutual_merge_drops_both_never_leaks_a_duplicate() {
+        // Pathological: A and B each name the other as their merge target. The
+        // gate never silently keeps a duplicate — it drops both (a model should
+        // point synonyms at a canonical root, not at each other).
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mut a = concept("alpha", true);
+        a.merge_with = vec!["beta".into()];
+        let mut b = concept("beta", true);
+        b.merge_with = vec!["alpha".into()];
+        match r.process(record(doc_with_concepts(vec![a, b]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                let body = match &records[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert!(body.concepts.is_empty(), "mutual merge drops both, no leak");
+                assert_eq!(
+                    codes(&events)
+                        .iter()
+                        .filter(|c| *c == "transform.concept_resolver.merged")
+                        .count(),
+                    2
+                );
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn self_referential_merge_is_ignored() {
+        // A concept naming itself in `merge_with` is not a synonym of anything;
+        // it must be kept, not dropped.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mut c = concept("idea-block", true);
+        c.merge_with = vec!["idea-block".into()];
+        match r.process(record(doc_with_concepts(vec![c]))) {
+            FilterDecision::Forward(rs) => {
+                let body = match &rs[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(body.concepts.len(), 1, "self-merge kept, not dropped");
+            }
+            other => panic!("expected Forward (no drops), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_into_dropped_target_does_not_merge() {
+        // If the merge target did not survive Phase 1 (e.g. it was low-evidence),
+        // the synonym is NOT collapsed into a thing that won't exist — it is
+        // kept (it may be the only carrier of that idea).
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mut target = concept("weak-target", true);
+        target.claims = vec![]; // low-evidence → dropped in Phase 1
+        let mut syn = concept("real-concept", true);
+        syn.merge_with = vec!["weak-target".into()];
+        match r.process(record(doc_with_concepts(vec![target, syn]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                let body = match &records[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    body.concepts.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
+                    vec!["real-concept"],
+                    "synonym kept when its merge target was dropped"
+                );
+                let cs = codes(&events);
+                assert!(cs.contains(&"transform.concept_resolver.low_evidence".to_string()));
+                assert!(!cs.contains(&"transform.concept_resolver.merged".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    fn kept_slugs(records: &[Record<DomainBody>]) -> Vec<String> {
+        match &records[0].body {
+            DomainBody::Interpreted(d) => d.concepts.iter().map(|c| c.slug.clone()).collect(),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn merge_target_case_separator_drift_still_collapses() {
+        // Audit finding #1: a synonym whose `merge_with` names the canonical
+        // concept with case/separator drift (`Idea_Block` vs `idea-block`) must
+        // still collapse — byte-exact matching would leak it as a duplicate.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let canonical = concept("idea-block", true);
+        let mut syn = concept("qa-packet", true);
+        syn.merge_with = vec!["Idea_Block".into()]; // case + `_` drift
+        match r.process(record(doc_with_concepts(vec![canonical, syn]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                assert_eq!(kept_slugs(&records), vec!["idea-block"]);
+                assert!(codes(&events).contains(&"transform.concept_resolver.merged".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_slug_case_separator_variant_collapses() {
+        // Audit finding #2: two spellings of one concept (`vector-database` vs
+        // `Vector_Database`) must collapse to one minted identity, not two.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let a = concept("vector-database", true);
+        let b = concept("Vector_Database", true); // same concept, drifted spelling
+        match r.process(record(doc_with_concepts(vec![a, b]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                assert_eq!(
+                    kept_slugs(&records),
+                    vec!["vector-database"],
+                    "first spelling survives; the variant is a duplicate"
+                );
+                assert!(codes(&events).contains(&"transform.concept_resolver.duplicate".to_string()));
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only_evidence_or_claims_drops_low_evidence() {
+        // Audit finding #3: a non-empty Vec of whitespace-only entries is not
+        // grounding — the gate must drop it (matching how from_extracted trims),
+        // not mint a claim-less note.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mut blank_ev = concept("ev-ghost", true);
+        blank_ev.evidence = vec!["   ".into()];
+        let mut blank_cl = concept("cl-ghost", true);
+        blank_cl.claims = vec!["\n".into()];
+        let good = concept("solid", true);
+        match r.process(record(doc_with_concepts(vec![blank_ev, blank_cl, good]))) {
+            FilterDecision::ForwardWithEvents { records, events } => {
+                assert_eq!(kept_slugs(&records), vec!["solid"]);
+                let n_low = codes(&events)
+                    .iter()
+                    .filter(|c| *c == "transform.concept_resolver.low_evidence")
+                    .count();
+                assert_eq!(n_low, 2, "both whitespace-only concepts drop low_evidence");
+            }
+            other => panic!("expected ForwardWithEvents, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slug_equal_to_another_concepts_alias_is_not_a_duplicate() {
+        // Audit finding #4 (verifier crashed; assessed manually): a DISTINCT
+        // concept whose slug equals a prior concept's alias must NOT be dropped
+        // as a duplicate — dedup keys are slugs only. Order-independent.
+        let mut r = ConceptResolver::from_slugs("cr", &[]);
+        let mk = || {
+            let mut a = concept("idea-block", true);
+            a.aliases = vec!["packet".into()];
+            let b = concept("packet", true); // distinct concept, no merge_with
+            (a, b)
+        };
+        // Forward order.
+        let (a, b) = mk();
+        match r.process(record(doc_with_concepts(vec![a, b]))) {
+            FilterDecision::Forward(rs) => {
+                let mut got = kept_slugs(&rs);
+                got.sort();
+                assert_eq!(got, vec!["idea-block", "packet"], "both kept, no false duplicate");
+            }
+            other => panic!("expected Forward (no drops), got {other:?}"),
+        }
+        // Reverse order — same outcome.
+        let (a, b) = mk();
+        match r.process(record(doc_with_concepts(vec![b, a]))) {
+            FilterDecision::Forward(rs) => {
+                let mut got = kept_slugs(&rs);
+                got.sort();
+                assert_eq!(got, vec!["idea-block", "packet"], "order-independent");
+            }
+            other => panic!("expected Forward (no drops), got {other:?}"),
         }
     }
 

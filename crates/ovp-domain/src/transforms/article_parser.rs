@@ -455,6 +455,28 @@ mod tests {
     }
 
     #[test]
+    fn v2_concept_missing_promote_drops_loud() {
+        // Regression (M13.2 follow-up): `promote` is REQUIRED. A real model
+        // omitting it must fail LOUD at parse — never default to `false`, which
+        // would silently drop every concept as not_promoted and leave the run
+        // "successful" with an empty concept map.
+        let missing = V2_JSON.replacen(", \"promote\": true }", " }", 1);
+        assert_ne!(missing, V2_JSON, "the test fixture must actually drop a promote field");
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-31");
+        match parser.process(model_record_v2(&missing, 2)) {
+            FilterDecision::Drop(reason) => {
+                assert_eq!(reason.code.as_str(), "transform.article_parser.json_parse");
+                assert!(
+                    reason.detail.contains("promote"),
+                    "drop reason should name the missing field, got: {}",
+                    reason.detail
+                );
+            }
+            other => panic!("expected Drop (loud), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn v1_response_has_empty_concepts() {
         // v1 path is untouched: no concept map, never synthesized from one_liner.
         let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-27");
