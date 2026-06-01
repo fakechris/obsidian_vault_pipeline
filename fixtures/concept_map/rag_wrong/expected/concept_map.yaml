@@ -62,6 +62,7 @@ must_have:
   - chunk-as-unit
   - bad-chunk-unit
   - chunking-assumption
+  - chunk-as-unit-assumption
   concept_type: claim
   expected_meaning: A prose chunk is a structurally neutral container with no idea boundary, no version context, and no access state, so it is the wrong unit of knowledge and the upstream source of most downstream retrieval failures.
   required_evidence:
@@ -222,6 +223,7 @@ must_have:
   - governance-fields
   - data-layer-governance
   - auto-tagging
+  - governance-in-data-layer
   concept_type: concept
   expected_meaning: Typed metadata such as clearance level, version state, product line, and access boundary carried as schema fields on each IdeaBlock, moving governance into the data layer instead of as logic bolted onto the orchestrator.
   required_evidence:
