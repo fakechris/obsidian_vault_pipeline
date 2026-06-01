@@ -59,6 +59,11 @@ pub struct LiveClientConfig {
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
     pub no_proxy: bool,
+    /// Request timeout in seconds. `None` means "use the OVP default
+    /// (180s)"; reasoning/thinking models can spend 30-90s on a single
+    /// response, and a too-short timeout surfaces as a useless
+    /// `CallError::Transport` with no underlying chain.
+    pub timeout_secs: Option<u64>,
 }
 
 #[cfg(feature = "anthropic")]
@@ -103,7 +108,16 @@ impl LiveClientConfig {
                 Some(u)
             }
         };
-        Ok(Self { base_url, model: nonempty("OVP_LLM_MODEL"), max_tokens, no_proxy })
+        let timeout_secs = match nonempty("OVP_LLM_TIMEOUT_SECS") {
+            None => None,
+            Some(raw) => {
+                let n: u64 = raw
+                    .parse()
+                    .map_err(|_| format!("OVP_LLM_TIMEOUT_SECS must be a non-negative integer, got `{raw}`"))?;
+                Some(n)
+            }
+        };
+        Ok(Self { base_url, model: nonempty("OVP_LLM_MODEL"), max_tokens, no_proxy, timeout_secs })
     }
 }
 
@@ -161,6 +175,9 @@ fn build_live_client(cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError>
     if cfg.no_proxy {
         live = live.with_no_proxy();
     }
+    if let Some(secs) = cfg.timeout_secs {
+        live = live.with_timeout(secs);
+    }
     // Bounded retry on transient transport/429/5xx faults, INSIDE the cache so
     // a cache hit never retries and only a finally-successful live call records.
     let retrying = RetryingModelClient::new(live, LIVE_MAX_RETRIES, LIVE_RETRY_BACKOFF);
@@ -202,12 +219,28 @@ mod live_config_tests {
             ("OVP_LLM_MODEL", "MiniMax-M2"),
             ("OVP_LLM_MAX_TOKENS", "24000"),
             ("OVP_LLM_NO_PROXY", "1"),
+            ("OVP_LLM_TIMEOUT_SECS", "300"),
         ])
         .unwrap();
         assert_eq!(c.base_url.as_deref(), Some("https://api.minimaxi.com/anthropic/v1/messages"));
         assert_eq!(c.model.as_deref(), Some("MiniMax-M2"));
         assert_eq!(c.max_tokens, Some(24000));
         assert!(c.no_proxy);
+        assert_eq!(c.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn timeout_secs_omitted_means_use_default() {
+        let c = cfg(&[]).unwrap();
+        assert_eq!(c.timeout_secs, None, "absent OVP_LLM_TIMEOUT_SECS falls back to OVP default");
+    }
+
+    #[test]
+    fn timeout_secs_zero_is_an_explicit_choice() {
+        // 0 disables the timeout — local dev against a mock. Must parse,
+        // distinct from "absent".
+        let c = cfg(&[("OVP_LLM_TIMEOUT_SECS", "0")]).unwrap();
+        assert_eq!(c.timeout_secs, Some(0));
     }
 
     #[test]
@@ -240,5 +273,12 @@ mod live_config_tests {
         assert!(cfg(&[("OVP_LLM_NO_PROXY", "maybe")]).is_err());
         // recognized falsey value is fine
         assert!(!cfg(&[("OVP_LLM_NO_PROXY", "false")]).unwrap().no_proxy);
+    }
+
+    #[test]
+    fn invalid_timeout_secs_fails_loud() {
+        assert!(cfg(&[("OVP_LLM_TIMEOUT_SECS", "long")]).is_err());
+        // negative integers are not a thing for u64; the parse error catches them
+        assert!(cfg(&[("OVP_LLM_TIMEOUT_SECS", "-5")]).is_err());
     }
 }

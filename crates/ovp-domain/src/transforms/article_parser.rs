@@ -104,14 +104,14 @@ impl Transform<DomainBody> for ArticleParser {
 #[derive(Debug, Deserialize)]
 struct ModelJsonPayload {
     title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     #[allow(dead_code)] // top-level mirror of dimensions.linked_concepts; kept for prompt symmetry
     linked_concepts: Vec<String>,
     dimensions: DimensionsJson,
     /// v2 concept map. Absent/empty for v1 responses; required non-empty for v2.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     concepts: Vec<ExtractedConcept>,
 }
 
@@ -119,13 +119,13 @@ struct ModelJsonPayload {
 struct DimensionsJson {
     one_liner: String,
     explanation: ExplanationJson,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     details: Vec<String>,
     #[serde(default)]
     structure: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     actions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::interpreted::null_to_default")]
     linked_concepts: Vec<String>,
 }
 
@@ -480,6 +480,62 @@ mod tests {
                 );
             }
             other => panic!("expected Drop (loud), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_concept_vec_fields_tolerate_json_null() {
+        // Regression (M13.3 follow-up): the v2 prompt tells the model "null is
+        // fine" for `merge_with` / `aliases` / `evidence` / `claims` /
+        // `related`; a real LLM routinely emits `"merge_with": null` for
+        // "no merge target". `#[serde(default)]` only handles a MISSING field,
+        // not JSON `null`, so without `null_to_default` the parser fails with
+        // "invalid type: null, expected a sequence" and the whole doc drops.
+        // This regression was caught by the live rag_wrong run, which
+        // produced a healthy concept map (9 promoted concepts) that the
+        // parser threw away because concept #1 had `merge_with: null`.
+        //
+        // The dimension fields `details` / `actions` are NOT null-tolerant in
+        // the test fixture because the parser has a SEPARATE invariant that
+        // `details` and `actions` must be non-empty for any article (v1 or
+        // v2) — that's checked AFTER the deserializer, so null there
+        // deserializes to [] and the invariant fires. Real models that
+        // emit `details: null` for the v2 path should be addressed by
+        // relaxing that invariant for v2 OR by the v2 prompt; this test
+        // isolates the Vec-field deserializer fix.
+        let with_nulls = r#"{
+          "title": "RAG, rebuilt",
+          "tags": null,
+          "dimensions": {
+            "one_liner": "An article-level synthesis line for the primary note.",
+            "explanation": { "what": "w", "why": "y", "how": "h" },
+            "details": ["d1"],
+            "structure": null,
+            "actions": ["a1"]
+          },
+          "concepts": [
+            { "slug": "idea-block", "title": "IdeaBlock", "aliases": null, "kind": "concept",
+              "definition": "A question-answer packet that replaces a prose chunk as the unit.",
+              "evidence": null, "claims": null, "related": null, "merge_with": null, "promote": true }
+          ]
+        }"#;
+        let mut parser = ArticleParser::new("article_parser", "ai", "2026-05-31");
+        match parser.process(model_record_v2(with_nulls, 2)) {
+            FilterDecision::Forward(rs) => {
+                let d = match &rs[0].body {
+                    DomainBody::Interpreted(d) => d,
+                    other => panic!("expected Interpreted, got {}", other.variant_name()),
+                };
+                assert_eq!(d.concepts.len(), 1);
+                let c = &d.concepts[0];
+                assert_eq!(c.slug, "idea-block");
+                assert!(c.aliases.is_empty(), "null aliases -> []");
+                assert!(c.evidence.is_empty(), "null evidence -> []");
+                assert!(c.claims.is_empty(), "null claims -> []");
+                assert!(c.related.is_empty(), "null related -> []");
+                assert!(c.merge_with.is_empty(), "null merge_with -> []");
+            }
+            other => panic!("expected Forward (null-tolerance), got {other:?}"),
         }
     }
 

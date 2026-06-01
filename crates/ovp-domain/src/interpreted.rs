@@ -1,4 +1,19 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserializer that accepts both a missing field AND JSON `null`, treating
+/// either as `Default::default()`. `#[serde(default)]` alone only handles
+/// the missing case — a model that emits `"merge_with": null` would otherwise
+/// fail the parse with "invalid type: null, expected a sequence". A real LLM
+/// does this routinely for "no items here" semantics, so the v2 concept-map
+/// fields use this to match the prompt's "null is fine" promise.
+pub(crate) fn null_to_default<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
 
 /// The structured result of ArticleParser. Frontmatter-shaped envelope
 /// plus a typed six-dimension body. ArticleVaultPlanSink renders this
@@ -81,17 +96,17 @@ pub enum ConceptKind {
 pub struct ExtractedConcept {
     pub slug: String,
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub aliases: Vec<String>,
     pub kind: ConceptKind,
     pub definition: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub evidence: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub claims: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub related: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub merge_with: Vec<String>,
     #[serde(default)]
     pub reject_reason: Option<String>,

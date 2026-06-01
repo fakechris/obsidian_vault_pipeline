@@ -168,19 +168,52 @@ mod live {
         /// need a larger ceiling to also emit the final `text`. Does not change
         /// the cached `ModelRequest` (so cassette keys are unaffected).
         max_tokens_override: Option<u32>,
+        /// Request timeout in seconds. Tracked as state so subsequent
+        /// `with_no_proxy()` rebuilds preserve it. See [`DEFAULT_TIMEOUT_SECS`].
+        timeout_secs: u64,
+        /// Whether the HTTP client should bypass ambient `HTTP(S)_PROXY`. See
+        /// [`Self::with_no_proxy`]. Tracked so the timeout isn't lost when
+        /// the proxy setting changes.
+        no_proxy: bool,
         http: reqwest::blocking::Client,
+    }
+
+    /// Default request timeout for the Anthropic client. Reasoning/thinking
+    /// models (e.g. MiniMax-M2) can spend 30-90s on a single response while
+    /// emitting `thinking` blocks before any text — a request that succeeds
+    /// but takes longer than reqwest's `is_timeout` window fails as a
+    /// `CallError::Transport` with no useful chain. 180s is generous enough
+    /// for those models at the v2 prompt's expected `max_tokens` ceiling,
+    /// and short enough to surface a genuinely-stuck request within an
+    /// operator-driven run-cycle. Override via
+    /// [`AnthropicBlockingClient::with_timeout`] or `OVP_LLM_TIMEOUT_SECS`.
+    pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
+
+    fn build_http_client(timeout_secs: u64, no_proxy: bool) -> reqwest::blocking::Client {
+        let mut b = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs));
+        if no_proxy {
+            b = b.no_proxy();
+        }
+        // Best-effort: a builder refusal (e.g. invalid URL) should not crash
+        // construction; fall back to defaults. Matches the historical
+        // `Client::new()` behavior.
+        b.build().unwrap_or_else(|_| reqwest::blocking::Client::new())
     }
 
     impl AnthropicBlockingClient {
         /// Construct from an explicit API key.
         pub fn new(api_key: impl Into<String>) -> Self {
+            let timeout_secs = DEFAULT_TIMEOUT_SECS;
             Self {
                 api_key: api_key.into(),
                 base_url: DEFAULT_BASE_URL.to_string(),
                 version: ANTHROPIC_VERSION.to_string(),
                 model_override: None,
                 max_tokens_override: None,
-                http: reqwest::blocking::Client::new(),
+                timeout_secs,
+                no_proxy: false,
+                http: build_http_client(timeout_secs, false),
             }
         }
 
@@ -219,14 +252,27 @@ mod live {
             self
         }
 
+        /// Override the request timeout. Reasoning/thinking models can spend
+        /// 30-90s on a single response while emitting `thinking` blocks; a
+        /// request that succeeds in spirit but trips reqwest's
+        /// `is_timeout` window fails as a useless `CallError::Transport`.
+        /// See [`DEFAULT_TIMEOUT_SECS`] for the rationale and the default.
+        /// `0` disables the timeout (use only for local dev against a mock).
+        pub fn with_timeout(mut self, secs: u64) -> Self {
+            self.timeout_secs = secs;
+            self.http = build_http_client(secs, self.no_proxy);
+            self
+        }
+
         /// Rebuild the HTTP client to BYPASS any ambient `HTTP(S)_PROXY` — for a
         /// directly-reachable provider whose endpoint the ambient proxy can't
         /// tunnel (mirrors the Nowledge adapter). Off by default so setups that
         /// require a proxy to reach the provider keep working.
+        ///
+        /// Preserves any timeout previously set via [`Self::with_timeout`].
         pub fn with_no_proxy(mut self) -> Self {
-            if let Ok(client) = reqwest::blocking::Client::builder().no_proxy().build() {
-                self.http = client;
-            }
+            self.no_proxy = true;
+            self.http = build_http_client(self.timeout_secs, true);
             self
         }
     }
