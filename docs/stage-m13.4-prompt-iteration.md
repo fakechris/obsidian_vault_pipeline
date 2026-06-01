@@ -1,13 +1,66 @@
 # Stage M13.4 — v2 Prompt Iteration (slug drift, umbrella over-mint, abstract definitions)
 
-> **Status: not started.** M13.3's live run against `MiniMax-M2.7-highspeed`
-> went 0/3 on the concept-map bench. All three cases completed end-to-end
-> with no transport / parse / resolver / writer errors, and minted healthy
-> sets of promoted concepts (10 / 10 / 15). The 0/3 is a **prompt-quality**
-> outcome, not a framework bug. This stage is the targeted iteration on
-> `crates/ovp-domain/prompts/article_concept_map.md` to fix the three
-> observed failure categories. **No production code change is expected**;
-> if a new failure class shows up that does require code, that's M13.5.
+> **Status: iteration 1 applied (prompt + class-D fixture); NOT yet re-scored
+> live.** M13.3's live run against `MiniMax-M2.7-highspeed` went 0/3. The
+> initial read ("0/3 is purely prompt-quality") is **partly wrong** — an
+> adversarial audit + offline verification (below) shows the 0/3 is a **mix**
+> of prompt-fixable failures AND benchmark/fixture brittleness the prompt
+> cannot touch. Iteration 1 applied: (a) corrected prompt clauses for the
+> genuinely prompt-side failures, and (b) two article-grounded fixture-alias
+> corrections for verified class-D. **The prompt half is UNVERIFIED — it needs
+> an operator live re-record (no live calls are possible from the dev/CI
+> environment).** Still 0/3 until re-recorded; v1 stays default.
+
+## ⚠️ Verified findings (supersede the original "all prompt-side" framing)
+
+Three facts were verified directly (bench source + article body), and they
+change the conclusion:
+
+1. **The bench scores only the `slug`.** `parse_note` reads slug/title/
+   definition/claims; `EvergreenNote` renders **no aliases section**, so a
+   model-emitted alias never reaches disk and is never matched. Any prompt
+   clause asking the model to "supply aliases so a reader's variant resolves"
+   is **inert** against the scorer. (Dropped from the prompt.)
+2. **Several "slug drift" misses are class-D fixture brittleness, not class-A.**
+   The curated `must_have` ids are curator inventions that are **not** the
+   article's words, while the model faithfully used the article's words:
+   - `chunking-problem` is **absent** from the rag_wrong body; the article
+     literally says "the chunk-as-unit assumption is the bug" (line 199) — the
+     model's `chunk-as-unit-assumption` is the article's own term.
+   - `governance-metadata`: the article says "Governance moves into the data
+     layer" (line 180); the model's `governance-in-data-layer` is faithful.
+   No prompt can make a blind model hit a hidden curated slug that isn't in the
+   article. Fixed by alias-widening (commit `797f437`), verified offline.
+3. **A blanket suffix-ban is counterproductive** — banning `-assumption` would
+   steer the model away from the article's literal "chunk-as-unit assumption".
+   (Dropped from the prompt.)
+
+### Honest scorecard for the rag_wrong misses (offline-verified)
+
+| miss | class | fix | verified? |
+|---|---|---|---|
+| `chunk-as-unit-assumption` → `chunking-problem` | **D** (fixture) | alias widened | ✅ offline: now covered |
+| `governance-in-data-layer` → `governance-metadata` | **D** (fixture) | alias widened | ✅ offline: now covered |
+| `pipeline-architecture` → `blockify` | **A** (prompt) | proper-noun clause | ⏳ needs re-record |
+| `distillation-layer` (not minted) | A/E | (no dedicated clause yet) | ⏳ needs re-record |
+| `chunking-problem` / `governance-metadata` / `vector-redundancy` content-guard | **C** (prompt) | mechanism-in-def + anchor clauses | ⏳ needs re-record |
+
+After the class-D widening, rag_wrong is **still 0/1** (blockify +
+distillation-layer missing; 3 content-guard fails now *visible* instead of
+hidden behind "missing"). So the fixture change is honest classification, not
+fitting-to-green.
+
+### The systemic question for the operator (M13.5 candidate)
+
+The bench's exact-match-on-slug-only design penalizes a model that uses the
+article's own terms when the curator's slug differs. Case-by-case alias
+widening (class-D) is a band-aid. The systemic fix is a **scorer change: match
+the model's emitted `aliases` too** (render them on the note + read them in
+`parse_note`/coverage). That is a parser+scorer change, **out of M13.4 scope**
+→ M13.5. Recommendation: decide between (i) keep widening curated aliases per
+case as genuine class-D surfaces, or (ii) make the scorer accept model aliases
+(bigger, fixes the class at the root). Until then, expect a residual class-D
+tail on every new article.
 
 ## Scope — what changes, what does not
 
