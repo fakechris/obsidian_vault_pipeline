@@ -1,14 +1,20 @@
-# Stage M13.3 — Real v2 Concept-Map Loop (wiring complete; live run pending)
+# Stage M13.3 — Real v2 Concept-Map Loop (real run executed, 0/3 bench)
 
-> **Status: wiring-complete + verified offline; real-green PENDING an operator
-> live run.** Everything needed to run the real v2 concept-map loop is now built
-> and tested: the empty-map fail-loud guard, the v2 prompt builder, the assembly
-> node kind, and the `article_concept_map.pipeline.toml` manifest. The one thing
-> this branch could NOT do is the live MiniMax call itself — the build/CI
-> environment has **no network egress** to the model provider (see "Live
-> boundary"). So the milestone is **synthetic-green (unchanged) + wiring-complete**,
-> **NOT real-green**. Real-green requires the operator to run the live command
-> below on a network that can reach the API.
+> **Status: real run EXECUTED, 0/3 on the concept-map bench.** The v2
+> pipeline is now **end-to-end real-model-tested** on all three
+> `fixtures/concept_map/*` cases (no transport / parse / resolver /
+> writer errors; full vault + canonical + MOC + knowledge-index
+> rebuilds landed on disk). The 0/3 result is entirely a
+> **prompt-quality** outcome — slug drift, umbrella over-mint, and
+> abstract definitions, all in the LLM's output, not in the
+> framework. The follow-up is **M13.4 — Prompt Iteration**, scoped
+> strictly to `crates/ovp-domain/prompts/article_concept_map.md` (and
+> the bench's per-case `expected/concept_map.yaml` if a definition
+> must move). **Do not** edit the parser, resolver, writer, or
+> `ConceptResolver` invariants; the live run proved they are correct
+> against real model output. See the per-case breakdown at the
+> bottom of this doc and
+> [stage-m13.4-prompt-iteration.md](stage-m13.4-prompt-iteration.md).
 
 ## What M13.3 was solving
 
@@ -51,27 +57,45 @@ benchmark is still 1/1; the v2 manifest assembles through the same
 `llm_invoker → article_parser → concept_resolver → evergreen_concept_writer →
 sinks` topology.
 
-## Phase 4 — live re-record: BLOCKED by environment network egress
+## Phase 4 — live re-record: RAN (operator action; 0/3 bench)
 
-A live `run-cycle` for `rag_wrong` through the v2 manifest was attempted. It
-reached the provider boundary correctly and failed at **transport**:
+Live `run-cycle` for all 3 `fixtures/concept_map/*` cases through the v2
+manifest. Initial attempt reproduced the
+`transform.llm_invoker.transport` error documented above; a series of
+diagnostic curls isolated the real cause (and the right fix landed in
+the M13.3 follow-up commit):
 
-```
-records_errored: 1
-first error: transform.llm_invoker.transport: send: error sending request for
-url (https://api.minimaxi.com/anthropic/v1/messages)
-```
+- The OVP build/CI sandbox this doc was originally written in had a
+  *different* environment than the TUN-routed host the operator ran on.
+  In the sandbox, `api.minimaxi.com` resolves to `198.18.0.218` and a
+  bare request returns `404` (network intercept). On the TUN host, the
+  same URL resolves to a working IP and a small `curl` returns
+  `HTTP 200` from the real API. **Both observations are correct for
+  their environments**; the sandbox's "the network is intercepted"
+  reading was true, but it was not the cause of the OVP run-cycle
+  failure.
+- On the TUN host, the OVP run-cycle still failed with the same
+  `transform.llm_invoker.transport` error, even though direct
+  `curl` to the same URL with the same auth and the same body
+  shape succeeded. Bisection: the cause was **reqwest's default
+  response timeout**, not the network. The v2 prompt + 10K article +
+  `max_tokens=8000` makes `MiniMax-M2.7-highspeed` spend 58-72s in
+  `thinking` blocks before emitting the first text token. With no
+  explicit timeout, the `is_timeout` error class fires and surfaces
+  as the unhelpful `Transport` chain. The follow-up commit adds
+  `AnthropicBlockingClient::with_timeout(secs)` and surfaces it
+  through `OVP_LLM_TIMEOUT_SECS` (default 180s).
+- A *second* drop surfaced once transport was unblocked: the parser
+  dropped the entire `rag_wrong` doc on a healthy 9-concept
+  response because concept #1 had `"merge_with": null`.
+  `#[serde(default)]` only fills a missing key, not a JSON `null`,
+  even though the v2 prompt explicitly tells the model "null is
+  fine". The follow-up commit adds a `null_to_default` deserializer
+  and applies it to the v2 Vec fields.
 
-Diagnosis (not masked): `api.minimaxi.com` resolves to `198.18.0.218` (the
-RFC-2544 benchmarking range used by network intercepts) and a bare `curl` to it
-returns `404` — the domain is intercepted by this environment's network layer;
-there is no route to the real MiniMax API. This is **environmental**, not a
-wiring bug: the request was built with the right `prompt_id`
-(`article_concept_map/v2`), routed through the assembled v2 graph, and the live
-client POSTed to the configured endpoint. Only the network hop is missing.
-
-**This means real-green cannot be produced in CI/this sandbox.** It is an
-operator action on a network that can reach the API.
+After both fixes, the three cases ran end-to-end on the TUN host.
+The bench verdict is at the bottom of this doc and is the
+starting state for [M13.4](stage-m13.4-prompt-iteration.md).
 
 ## Operator runbook — record v2 cassettes + score (run on a networked host)
 
@@ -113,6 +137,25 @@ Then decide the default flip (Phase 7) and write the
 `.run/m13.3/REAL_V2_SUMMARY.md` Nowledge/M12Q2 comparison (Phase 8, not
 committed).
 
+**Status of the phases (post-live run):**
+
+- **Phase 5 — classify each failure**: done as part of the live run (see
+  per-case breakdown at the bottom of this doc). Verdict: all failures
+  are **A (prompt)** or **D (fixture, narrowly)**; no **B / C** changes
+  are warranted by this run.
+- **Phase 6 — prompt refinement**: deferred to M13.4. The failure modes
+  are concentrated enough that one prompt asset + zero production
+  changes is the right shape. The M13.4 doc pins down exactly which
+  prompt clauses to tighten and which to leave alone.
+- **Phase 7 — default flip**: still deferred. v2 stays
+  explicit-only (`--manifest manifests/article_concept_map.pipeline.toml`).
+  The flip is gated on the bench going green on real v2, which is the
+  M13.4 success criterion.
+- **Phase 8 — M12Q2 comparison**: not done. The 0/3 result on real v2
+  vs the 0/3 baseline on v1 is the wrong axis to compare; both are
+  bench-Failing for different reasons, and a comparison writeup would
+  just restate that. Revisit after M13.4 lands a green pass.
+
 ## Default flip — DEFERRED (correctly)
 
 The article pipeline default is **still v1**. Flipping to v2 requires v2
@@ -127,4 +170,52 @@ real-green.
 |---|---|
 | v1 `.run/m12q2` baseline (the defect) | **0/3** |
 | Synthetic v2 (ideal response, M13.2) | **1/1** (`rag_wrong`), deterministic |
-| **Real v2 (live MiniMax)** | **NOT RUN — blocked by network egress; operator action** |
+| **Real v2 (live MiniMax-M2.7-highspeed)** | **0/3** — 3/3 cases completed cleanly end-to-end (no transport / parse / resolver / writer errors), all 3 fail the bench on prompt-quality grounds. **See follow-up: [stage-m13.4-prompt-iteration.md](stage-m13.4-prompt-iteration.md).** |
+
+### Real v2 per-case detail (M13.3 follow-up commit landed on `main`)
+
+Run executed on a TUN-routed host after three infrastructure fixes that
+were NOT prompt/contract changes:
+
+1. `crates/ovp-llm/src/anthropic.rs` — `AnthropicBlockingClient` now sets
+   an explicit reqwest timeout (180s default) via the new
+   `with_timeout(secs)` builder; the previous `Client::new()` had no
+   timeout and tripped reqwest's default behavior at 30s for the
+   v2-prompt + 10K-article + 8K-max_tokens thinking-stream that takes
+   58-72s end-to-end on this provider.
+2. `crates/ovp-cli/src/commands/client.rs` — `OVP_LLM_TIMEOUT_SECS` env
+   var (parallels `OVP_LLM_MAX_TOKENS` / `OVP_LLM_NO_PROXY`), with
+   `0` for explicit-disable (local dev).
+3. `crates/ovp-domain/src/interpreted.rs` + `article_parser.rs` —
+   `null_to_default` deserializer applied to the v2 `Vec<String>`
+   fields (`aliases` / `evidence` / `claims` / `related` / `merge_with`).
+   The v2 prompt tells the model "null is fine" for these; a real LLM
+   routinely emits `"merge_with": null` for "no merge target", and
+   `#[serde(default)]` only fills a MISSING key, not a JSON `null`, so
+   the parser was dropping the entire doc on otherwise-healthy
+   responses. Live `rag_wrong` cassette reproduced it exactly: 9
+   promoted concepts, parser dropped because concept #1 had
+   `merge_with: null`.
+
+Result of the live run (`python3 scripts/concept_map_bench.py
+--ovp-root .run/m13.3/live`):
+
+| Case | minted | clean | missing | forbidden | content-guard | Verdict |
+|---|---|---|---|---|---|---|
+| `rag_wrong` | 10 | 3 | 4 | 0 | 1 | FAIL |
+| `eval_ai_agents` | 10 | 7 | 3 | 0 | 6 | FAIL |
+| `agent_memory_zh` | 15 | 2 | 6 | 3 | 0 | FAIL |
+
+**0/3 cases pass.** That matches the v1 baseline (0/3) on score
+alone, but the failure mode is qualitatively different: v1 fails
+because the `concept_candidates` + shared-`one_liner` shape cannot
+express a per-concept definition; v2 fails because the prompt lets
+the model invent its own slug vocabulary, mint umbrella concepts
+the article only mentions in passing, and produce definitions that
+miss article-specific phrases. All three failure categories are
+**prompt-side**, not framework-side. The v2 pipeline is now
+end-to-end real-model-tested (parser, resolver, writer, sinks,
+MOC, knowledge index, vault, canonical, plan apply — all green
+across all 3 cases). The remaining work is in
+`crates/ovp-domain/prompts/article_concept_map.md`, and that is
+M13.4.

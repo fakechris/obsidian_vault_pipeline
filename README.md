@@ -49,6 +49,9 @@ ovp-next apply-plan \
 - `docs/stage-operational-workflow.md` — the L4 `run-cycle` (`ovp-run`): flow, idempotence, fail-closed semantics, dry-run.
 - `docs/stage-read-health.md` — the L5 read/health layer (`ovp-query` + `ovp-lint`): `KnowledgeView`, queries, planned lint checks.
 - `docs/stage-rag-automation.md` — the L6 RAG read path (`ovp-rag`) + automation sweep (`ovp-auto`): crate boundaries, public nouns, data flow, acceptance tests, non-goals.
+- `docs/stage-m13.2-v2-concept-map.md` — M13.2: the additive v2 concept-map path (synthetic-green; foundation for real-model work).
+- `docs/stage-m13.3-v2-live-loop.md` — M13.3: real `MiniMax-M2.7-highspeed` run executed; **0/3 bench on real data, all 3 cases complete end-to-end**. Three framework fixes (reqwest timeout, `OVP_LLM_TIMEOUT_SECS`, parser null-tolerance) landed; the remaining gap is prompt-quality, scoped to M13.4.
+- `docs/stage-m13.4-prompt-iteration.md` — M13.4: the prompt-first iteration plan (slug drift, umbrella over-mint, abstract definitions); no production code change expected.
 - `docs/stage-c.md`, `docs/stage-d-plan-applier.md` — historical stage docs.
 - `docs/calibration-r1.md`, `docs/calibration-r2.md` — historical calibration verdicts.
 - `fixtures/` — frozen contracts captured from the legacy system.
