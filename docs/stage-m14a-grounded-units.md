@@ -1,7 +1,8 @@
 # Stage M14a — Grounded Unit Extraction Spike
 
-> **Status: built (offline-verifiable), live run pending operator.** M14a is an
-> experimental, parallel, **deletable** hand-harness that answers ONE question:
+> **Status: built + live run 1 complete (3/3 cases ran); does NOT clear the kill
+> gate as written — decision pending.** M14a is an experimental, parallel,
+> **deletable** hand-harness that answers ONE question:
 >
 > > Given a source, can OVP extract minimal knowledge **Units** each backed by a
 > > verbatim quote found in the source text?
@@ -9,6 +10,41 @@
 > It does NOT write the vault, does NOT touch v1/v2 defaults, does NOT go through
 > GraphAssembler / RunCycle / WritePlan / DomainBody. It produces a human-
 > inspectable **review pack** under `.run/m14/<case>/`.
+
+## Live run 1 (MiniMax-M2.7-highspeed, `unit_extract/v1`)
+
+| case | total | accepted | needs_review | rejected | quote_found | arg_locatable |
+|---|---|---|---|---|---|---|
+| rag_wrong | 15 | 6 | 2 | 7 | **53.3%** | 48.5% |
+| eval_ai_agents | 42 | 21 | 16 | 5 | **88.1%** | 72.1% |
+| agent_memory_zh | 0 | 0 | 0 | 0 | parse error | — |
+
+**The harness mechanism is sound:** `accepted_without_quote == 0` and
+`duplicate_groups == []` on all three (the grounding + dedup invariants hold), and
+the validator's location-derivation / classification worked. But **the model under
+this prompt did not clear the kill gate** (`quote_found_rate ≥ 95%`): on
+`rag_wrong` 9/15 units cited a quote NOT in the article — the model paraphrased in
+`evidence_quote` instead of copying verbatim (the "paraphrase memory" failure the
+gate exists to catch). `agent_memory_zh` fully failed to parse: the model embedded
+**unescaped ASCII `"`** inside a Chinese `evidence_quote`, closing the JSON string
+early — a model-side escaping error, correctly surfaced as a reviewable
+`parse_error` (not a silent drop).
+
+**Both dominant failures are GENERAL and prompt-addressable, not article-specific
+hacks:** (1) verbatim-quote fidelity — strengthen the prompt to copy
+`evidence_quote` character-for-character and omit a unit if no exact span exists;
+(2) JSON-string safety — instruct the model to escape inner quotes / prefer the
+source's own quote characters. The `arg_locatable` softness (eval 16/42
+needs_review) is calibration: arguments are paraphrased topic words that don't
+character-match — candidate to make arguments advisory rather than status-gating.
+
+**Decision (operator's, per the kill gate — NOT auto-iterated to avoid a
+treadmill):** either (a) ONE general prompt iteration targeting verbatim-quote
+fidelity + JSON escaping, then re-record and re-apply the gate; or (b) conclude
+the model can't reliably do verbatim grounding under this approach and kill.
+Recommendation: (a) is warranted once — the fixes are general, the harness is
+proven, and `accepted_without_quote == 0` shows the mechanism is trustworthy. If a
+second iteration still sits far below the gate, kill.
 
 ## Why M14a (and why we stopped patching v2)
 
@@ -78,15 +114,21 @@ work exactly as in M13. No DomainBody variant, no manifest, no GraphAssembler.
 ```
 input.md                  copy of the source body
 source.json               source_id, fingerprint, title/url
-units.raw.json            every unit the model emitted (pre-validation)
+model-reply.txt           the RAW model reply, verbatim (so a parse error /
+                          malformed unit is diagnosable as model- vs parser-side)
+units.all.json            every emitted unit WITH its validation verdict
+                          (accepted ∪ needs_review ∪ rejected)
 units.accepted.json
 units.rejected.json
 units.needs-review.json
-validation-report.json    metrics (below) + per-unit issues
+validation-report.json    metrics (below) + per-unit issues + parse_error
 REVIEW.md                 human-inspectable: each accepted unit with its quote,
                           derived location/line, attribution, modality, arguments;
                           then needs-review and rejected with reasons; duplicates
 ```
+
+(The truly-raw model output lives in `model-reply.txt`; `units.all.json` is the
+structured, verdict-annotated view of the same units.)
 
 ## Evaluation — facts first, no fancy metrics
 

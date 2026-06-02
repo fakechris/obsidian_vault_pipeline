@@ -73,7 +73,7 @@ fn source() -> SourceDoc {
 #[test]
 fn end_to_end_classifies_and_writes_pack() {
     let mut model = FakeModel { reply: REPLY.into() };
-    let ex = run_unit_extraction(&source(), &mut model).expect("client ok");
+    let ex = run_unit_extraction(&source(), &mut model).expect("client ok").extraction;
 
     // 4 emitted: 1 accepted, 1 needs-review (arg drift), 2 rejected (quote-not-found + malformed).
     assert_eq!(ex.report.total, 4);
@@ -109,7 +109,7 @@ fn deterministic_across_runs() {
     let mut m2 = FakeModel { reply: REPLY.into() };
     let a = run_unit_extraction(&source(), &mut m1).unwrap();
     let b = run_unit_extraction(&source(), &mut m2).unwrap();
-    assert_eq!(a, b);
+    assert_eq!(a, b, "extraction + raw reply both deterministic");
 }
 
 #[test]

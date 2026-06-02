@@ -33,18 +33,28 @@ pub fn extract_units(reply_text: &str, source: &SourceDoc) -> SourceExtraction {
     }
 }
 
+/// One end-to-end run: the validated extraction PLUS the raw model reply text.
+/// The raw reply is first-class output — without it, a parse error / malformed
+/// unit / validator drop can't be diagnosed as model-side vs parser-side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitExtractionRun {
+    pub extraction: SourceExtraction,
+    pub raw_reply: String,
+}
+
 /// Full half: call the client (replay cassette or live), then extract. Returns
 /// `Err(CallError)` ONLY for client/transport failures (the operator's network,
-/// a cache miss) — a reply that parses badly still yields an `Ok` extraction
-/// carrying the parse error, because that is a reviewable model-quality outcome,
-/// not an I/O failure.
+/// a cache miss) — a reply that parses badly still yields an `Ok` run carrying
+/// the parse error, because that is a reviewable model-quality outcome, not an
+/// I/O failure. The raw reply is returned so the caller can persist it.
 pub fn run_unit_extraction(
     source: &SourceDoc,
     client: &mut dyn ModelClient,
-) -> Result<SourceExtraction, CallError> {
+) -> Result<UnitExtractionRun, CallError> {
     let request = unit_model_request(source);
     let reply = client.call(&request)?;
-    Ok(extract_units(&reply.text, source))
+    let extraction = extract_units(&reply.text, source);
+    Ok(UnitExtractionRun { extraction, raw_reply: reply.text })
 }
 
 #[cfg(test)]
@@ -87,16 +97,18 @@ mod tests {
            "arguments":[{"surface":"chunk","role":"subject"}]}
         ]}"#;
         let mut client = CannedClient { text: reply.into() };
-        let ex = run_unit_extraction(&source(), &mut client).unwrap();
-        assert_eq!(ex.report.accepted, 1);
-        assert_eq!(ex.report.accepted_without_quote, 0);
+        let run = run_unit_extraction(&source(), &mut client).unwrap();
+        assert_eq!(run.extraction.report.accepted, 1);
+        assert_eq!(run.extraction.report.accepted_without_quote, 0);
+        assert!(run.raw_reply.contains("structurally neutral"), "raw reply captured");
     }
 
     #[test]
     fn bad_json_yields_ok_extraction_with_parse_error() {
         let mut client = CannedClient { text: "not json".into() };
-        let ex = run_unit_extraction(&source(), &mut client).unwrap();
-        assert!(ex.report.parse_error.is_some());
-        assert_eq!(ex.units.len(), 0);
+        let run = run_unit_extraction(&source(), &mut client).unwrap();
+        assert!(run.extraction.report.parse_error.is_some());
+        assert_eq!(run.extraction.units.len(), 0);
+        assert_eq!(run.raw_reply, "not json", "raw reply preserved even on parse error");
     }
 }

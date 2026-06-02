@@ -20,7 +20,7 @@ pub mod prompt;
 pub mod review_pack;
 pub mod validator;
 
-pub use harness::{extract_units, read_source_from_path, run_unit_extraction};
+pub use harness::{extract_units, read_source_from_path, run_unit_extraction, UnitExtractionRun};
 pub use parser::{parse_envelope, ParseError, RawUnit};
 pub use prompt::{build_unit_prompt, unit_model_request, UNIT_PROMPT_ID, UNIT_SCHEMA_VERSION};
 pub use review_pack::write_unit_review_pack;

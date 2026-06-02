@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use ovp_domain::units::{run_unit_extraction, write_unit_review_pack};
+use ovp_domain::units::{run_unit_extraction, write_unit_review_pack, ValidationReport};
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -27,10 +27,13 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
 
     let mut client = build_client(args.client_kind, &args.cache_dir)?;
 
-    let extraction = run_unit_extraction(&source, client.as_mut())
+    let run = run_unit_extraction(&source, client.as_mut())
         .map_err(|e| CliError::Io(format!("unit extraction call failed: {e}")))?;
+    let extraction = run.extraction;
 
-    write_unit_review_pack(&args.out_dir, &source.body_markdown, &extraction, None)
+    // Always write the pack — including the RAW model reply, so a parse error /
+    // malformed unit can be diagnosed as model-side vs parser-side.
+    write_unit_review_pack(&args.out_dir, &source.body_markdown, &extraction, Some(&run.raw_reply))
         .map_err(|e| CliError::Io(format!("writing review pack to {}: {e}", args.out_dir.display())))?;
 
     let r = &extraction.report;
@@ -50,12 +53,69 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
     );
     println!("  review pack: {}", args.out_dir.join("REVIEW.md").display());
 
-    // A non-zero accepted_without_quote breaks the M14a hard invariant — fail loud.
-    if r.accepted_without_quote > 0 {
-        return Err(CliError::Io(format!(
-            "M14a invariant violated: {} accepted unit(s) without a located quote",
-            r.accepted_without_quote
-        )));
+    // The pack is written regardless, but a failed run must EXIT NON-ZERO so the
+    // operator loop never mistakes a parse error / empty / invariant-violating
+    // run for a clean one.
+    if let Some(reason) = extraction_failure(r) {
+        return Err(CliError::Io(format!("extract-units: {reason} (review pack written)")));
     }
     Ok(())
+}
+
+/// `Some(reason)` if the run must be treated as failed (non-zero exit) even
+/// though the review pack was written: the model output did not parse, produced
+/// zero units, or violated the quote-grounding invariant.
+pub(crate) fn extraction_failure(r: &ValidationReport) -> Option<String> {
+    if let Some(e) = &r.parse_error {
+        return Some(format!("model output did not parse: {e}"));
+    }
+    if r.total == 0 {
+        return Some("model produced zero units".into());
+    }
+    if r.accepted_without_quote > 0 {
+        return Some(format!(
+            "{} accepted unit(s) without a located quote — invariant violated",
+            r.accepted_without_quote
+        ));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(total: usize, accepted_without_quote: usize, parse_error: Option<&str>) -> ValidationReport {
+        ValidationReport {
+            total,
+            accepted: 0,
+            rejected: 0,
+            needs_review: 0,
+            quote_found_rate: 1.0,
+            accepted_without_quote,
+            argument_locatable_rate: 1.0,
+            duplicate_groups: vec![],
+            parse_error: parse_error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn parse_error_is_a_failure() {
+        assert!(extraction_failure(&report(0, 0, Some("not JSON"))).is_some());
+    }
+
+    #[test]
+    fn zero_units_is_a_failure() {
+        assert!(extraction_failure(&report(0, 0, None)).is_some());
+    }
+
+    #[test]
+    fn invariant_violation_is_a_failure() {
+        assert!(extraction_failure(&report(5, 1, None)).is_some());
+    }
+
+    #[test]
+    fn a_healthy_run_is_not_a_failure() {
+        assert!(extraction_failure(&report(5, 0, None)).is_none());
+    }
 }
