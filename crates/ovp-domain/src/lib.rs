@@ -21,6 +21,9 @@ pub mod sinks;
 pub mod source_doc;
 pub mod sources;
 pub mod transforms;
+/// M14a experimental Grounded Unit extraction spike (parallel, deletable; not
+/// wired into the typed pipeline). See `docs/stage-m14a-grounded-units.md`.
+pub mod units;
 pub mod vault_layout;
 
 #[cfg(feature = "testing")]
