@@ -1,10 +1,13 @@
 # Stage M14a — Grounded Unit Extraction Spike
 
-> **Status: M14a.1 (evidence-ref hardening) built + live-run on 3/3; JSON
-> transport FIXED and ref mechanism works, but quote-fidelity still does NOT
-> clear the gate — decision pending (kill / change output-format / change model).**
-> M14a is an experimental, parallel, **deletable** hand-harness that answers ONE
-> question:
+> **Status: M14a.RCA done (see `docs/stage-m14a-rca.md`).** Root cause is
+> **our pipeline, not the model**: 68% of quote failures are representation /
+> segmentation / validator (the model copies near-verbatim; we mis-normalized).
+> A faithful-render validator fix recovered the English cases offline (rag
+> 63.6%→77.3%, eval 78.0%→83.1%, zh flat) with **no re-record**; the residual is
+> segmentation + the model compressing Chinese lists. NOT a kill / RLHF / model
+> change. M14a is an experimental, parallel, **deletable** hand-harness that
+> answers ONE question:
 >
 > > Given a source, can OVP extract minimal knowledge **Units** each backed by a
 > > verbatim quote found in the source text?

@@ -103,6 +103,17 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, paras: &[Paragraph]) -> Un
                     match_kind: kind,
                 });
             }
+            // Faithful-render tier: match after rendering BOTH sides to plain
+            // text (link text, smart quotes, fullwidth CJK, emphasis, case).
+            // Paragraph-granular location (sub-offsets lost in the transform).
+            None if rendered_contains(&para.text, &quote) => {
+                location = Some(EvidenceLocation {
+                    byte_start: para.byte_start,
+                    byte_end: para.byte_end,
+                    line: line_of(body, para.byte_start),
+                    match_kind: MatchKind::Rendered,
+                });
+            }
             None => match find_in_any_paragraph(paras, &quote) {
                 Some(other) => {
                     ref_mismatch = true;
@@ -137,15 +148,9 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, paras: &[Paragraph]) -> Un
         ));
     }
 
-    // Status: rejection beats needs_review beats accepted.
+    // Status: rejection beats needs_review beats accepted. Exact / Whitespace /
+    // Rendered are all faithful matches → accepted (modulo argument drift).
     let status = match &location {
-        Some(loc) if loc.match_kind == MatchKind::Relaxed => {
-            issues.push(ValidationIssue::new(
-                "unit.quote_fuzzy_match",
-                "quote matched only after stripping markdown/case — verify it",
-            ));
-            UnitStatus::NeedsReview
-        }
         Some(_) if any_arg_drift => UnitStatus::NeedsReview,
         Some(_) => UnitStatus::Accepted,
         None if ref_mismatch => UnitStatus::NeedsReview,
@@ -197,21 +202,92 @@ fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
 
 // ---- quote matching (UTF-8 safe; Exact → Whitespace → Relaxed) ----
 
-/// Locate `quote` within `hay`, returning byte offsets in `hay` + the match
-/// tier. Tries verbatim, then whitespace-collapsed, then relaxed (whitespace +
-/// lowercase + markdown noise stripped).
+/// Locate `quote` within `hay` with byte-precise offsets: verbatim, then
+/// whitespace-insensitive. The faithful-render tier is handled separately by the
+/// caller (it is paragraph-granular, so it does not return offsets here).
 fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
     if let Some(s) = hay.find(quote) {
         return Some((s, s + quote.len(), MatchKind::Exact));
     }
-    if let Some((s, e)) = normalized_locate(hay, quote, false) {
-        return Some((s, e, MatchKind::Whitespace));
-    }
-    normalized_locate(hay, quote, true).map(|(s, e)| (s, e, MatchKind::Relaxed))
+    normalized_locate(hay, quote).map(|(s, e)| (s, e, MatchKind::Whitespace))
 }
 
 fn find_in_any_paragraph(paras: &[Paragraph], quote: &str) -> Option<String> {
-    paras.iter().find_map(|p| locate(&p.text, quote).map(|_| p.id.clone()))
+    paras
+        .iter()
+        .find_map(|p| (locate(&p.text, quote).is_some() || rendered_contains(&p.text, quote)).then(|| p.id.clone()))
+}
+
+// ---- faithful plain-text render (M14a.RCA fix) ----
+
+/// True if `quote` is contained in `hay` after rendering BOTH to plain text:
+/// markdown link text extracted, smart quotes / dashes / fullwidth-CJK folded to
+/// ASCII, emphasis + whitespace stripped, case-folded. All faithful, reversible
+/// normalizations, so a match here is grounded (the model copied the rendered
+/// form; the source is raw markdown).
+fn rendered_contains(hay: &str, quote: &str) -> bool {
+    let q = render_norm(quote);
+    !q.is_empty() && render_norm(hay).contains(&q)
+}
+
+fn render_norm(s: &str) -> String {
+    let linked = strip_markdown_links(s);
+    let mut out = String::with_capacity(linked.len());
+    for c in linked.chars() {
+        let c = fold_char(c);
+        if c.is_whitespace() || is_markdown_noise(c) {
+            continue;
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// Replace `[text](url)` / `![alt](url)` with just the visible `text`/`alt`.
+fn strip_markdown_links(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if !s.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'[' {
+            if let Some(close) = s[i + 1..].find(']') {
+                let text_end = i + 1 + close;
+                let after = text_end + 1;
+                if after < s.len() && bytes.get(after) == Some(&b'(') {
+                    if let Some(paren) = s[after..].find(')') {
+                        out.push_str(&s[i + 1..text_end]); // the link text
+                        i = after + paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Fold a single char to its ASCII equivalent: fullwidth ASCII (used in CJK
+/// text) → halfwidth, smart quotes/dashes + common CJK punctuation → ASCII.
+fn fold_char(c: char) -> char {
+    match c {
+        // Fullwidth ASCII (common in CJK text) → halfwidth. This already covers
+        // fullwidth ：，；！？＇＂（） etc. via the -0xFEE0 offset.
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        '\u{3000}' => ' ',                                   // ideographic space
+        '\u{2018}' | '\u{2019}' => '\'',                      // smart single quotes
+        '\u{201C}' | '\u{201D}' | '\u{300C}' | '\u{300D}' => '"', // smart / 「」 quotes
+        '\u{2013}' | '\u{2014}' => '-',                       // en / em dash
+        '\u{3001}' => ',',                                    // 、 ideographic comma
+        '\u{3002}' => '.',                                    // 。 ideographic stop
+        _ => c,
+    }
 }
 
 struct Norm {
@@ -219,23 +295,19 @@ struct Norm {
     orig: Vec<usize>,
 }
 
-fn normalize(s: &str, relaxed: bool) -> Norm {
+fn normalize(s: &str) -> Norm {
     // Whitespace-INSENSITIVE: drop whitespace entirely rather than collapse it to
     // a single space. Whitespace is not meaningful for "is this quote a span of
     // the source", and a model — especially in CJK, which has no inter-word
-    // spaces — routinely drops a newline/space the source has. Collapsing to one
-    // space made those mismatch (a real quote scored as not-found); dropping it
-    // matches. `orig[i]` still maps each kept char to its original byte offset.
+    // spaces — routinely drops a newline/space the source has. `orig[i]` still
+    // maps each kept char to its original byte offset (for precise location).
     let mut chars = Vec::new();
     let mut orig = Vec::new();
     for (b, c) in s.char_indices() {
         if c.is_whitespace() {
             continue;
         }
-        if relaxed && is_markdown_noise(c) {
-            continue;
-        }
-        chars.push(if relaxed { c.to_ascii_lowercase() } else { c });
+        chars.push(c);
         orig.push(b);
     }
     Norm { chars, orig }
@@ -245,9 +317,9 @@ fn is_markdown_noise(c: char) -> bool {
     matches!(c, '*' | '_' | '`' | '#' | '>' | '~' | '[' | ']' | '(' | ')')
 }
 
-fn normalized_locate(hay: &str, quote: &str, relaxed: bool) -> Option<(usize, usize)> {
-    let h = normalize(hay, relaxed);
-    let n = normalize(quote, relaxed);
+fn normalized_locate(hay: &str, quote: &str) -> Option<(usize, usize)> {
+    let h = normalize(hay);
+    let n = normalize(quote);
     let i = find_subsequence(&h.chars, &n.chars)?;
     let byte_start = h.orig[i];
     let after = i + n.chars.len();
@@ -429,12 +501,30 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_markdown_match_needs_review() {
+    fn markdown_emphasis_matches_via_render_and_accepts() {
         let body = "# H\n\nThe **chunk** is the wrong unit.";
         let ex = validate(&[raw("p002", "The chunk is the wrong unit.", &[])], &src(body));
         let u = &ex.units[0];
-        assert_eq!(u.evidence.location.as_ref().unwrap().match_kind, MatchKind::Relaxed);
-        assert_eq!(u.status, UnitStatus::NeedsReview);
+        assert_eq!(u.evidence.location.as_ref().unwrap().match_kind, MatchKind::Rendered);
+        assert_eq!(u.status, UnitStatus::Accepted);
+    }
+
+    #[test]
+    fn markdown_link_text_and_smart_quotes_match_via_render() {
+        // Model copies visible link text + ASCII apostrophe; source has the
+        // markdown link syntax + a smart apostrophe. Render tier recovers it.
+        let body = "# H\n\nUse [vitest-evals](https://x/y) when it\u{2019}s offline.";
+        let ex = validate(&[raw("p002", "Use vitest-evals when it's offline.", &[])], &src(body));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
+        assert_eq!(ex.units[0].evidence.location.as_ref().unwrap().match_kind, MatchKind::Rendered);
+    }
+
+    #[test]
+    fn fullwidth_cjk_punctuation_matches_via_render() {
+        // Source has fullwidth colon/comma; model copies ASCII. Fold recovers it.
+        let body = "标题\n\n记忆分为三类：情景、语义、程序。";
+        let ex = validate(&[raw("p002", "记忆分为三类:情景,语义,程序.", &[])], &src(body));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
     }
 
     #[test]

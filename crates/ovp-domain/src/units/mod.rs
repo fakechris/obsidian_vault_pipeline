@@ -91,11 +91,15 @@ pub struct Argument {
 pub enum MatchKind {
     /// Verbatim substring of the source.
     Exact,
-    /// Matches after collapsing whitespace runs.
+    /// Matches after whitespace-insensitive comparison.
     Whitespace,
-    /// Matches only after also stripping markdown emphasis/punctuation — lower
-    /// confidence, routes the unit to `needs_review`.
-    Relaxed,
+    /// Matches after a faithful plain-text render of BOTH sides — markdown link
+    /// text extraction, smart-quote/dash + fullwidth-CJK folding, emphasis strip,
+    /// case-fold. Still grounded (the rendering is faithful + deterministic), so
+    /// accepted; located at paragraph granularity (exact sub-offsets are lost in
+    /// the transform). M14a.RCA showed this is the dominant recoverable failure:
+    /// the model copies the *rendered* text, the source is raw markdown.
+    Rendered,
 }
 
 /// Where the quote was found in the source — derived by the validator, never
