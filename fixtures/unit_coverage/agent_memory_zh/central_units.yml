@@ -1,0 +1,93 @@
+case: agent_memory_zh
+note: Span-anchored central-unit gold (M14a.5). Scored by SOURCE-SPAN OVERLAP / quote containment, NOT by label. Drafted by independent source reading; anchors verified to occur verbatim in the source.
+central_units:
+- label: no_memory_between_api_calls
+  kind: claim
+  required: true
+  expected_point: 大模型在两次API调用之间本身没有记忆——若不把之前的信息附加到提示词，模型就不记得。
+  quote_must_include: 首先对大模型的两次API调用之间是没有记忆的
+  section_hint: 关于Agent记忆系统的一些基础知识
+- label: single_session_memory_via_history_and_compression
+  kind: method
+  required: true
+  expected_point: 单个会话靠把聊天历史一起发送来保持记忆;当历史超过上限时,会压缩(总结提炼旧对话)再塞回提示词以腾出空间。
+  quote_must_include: 它就会压缩聊天记录，就是把当前回话对话历史总结提炼一下，然后又塞回提示词
+  section_hint: 基础知识 - 单会话记忆原理
+- label: long_term_memory_cross_session
+  kind: method
+  required: true
+  expected_point: 跨会话记忆靠长期记忆系统:在压缩或被要求记忆时把重要信息存入存储空间,新对话时在适当时机提取注入提示词,以腾笼换鸟构建记住很多事的假象。
+  quote_must_include: 通过腾笼换鸟，构建出记住很多事情的假象
+  section_hint: 基础知识 - 长期记忆系统登场
+- label: three_memory_types_framework
+  kind: definition
+  required: true
+  expected_point: 援引Google 2025年11月论文,效仿认知科学把Agent记忆分为三类:情景记忆、语义记忆、程序性记忆。
+  quote_must_include: 把Agent的记忆分为三类
+  section_hint: 记忆系统 - 论文拆解
+- label: two_questions_framework
+  kind: method
+  required: true
+  expected_point: 理解任何记忆系统只需搞懂两个方面:记忆有多少种分类(每种存什么),以及记忆如何抽取、更新、检索。
+  quote_must_include: 记忆是如何抽取，更新，检索
+  section_hint: 记忆系统 - 理解框架
+- label: update_resolves_contradictions
+  kind: definition
+  required: false
+  expected_point: 更新这一步是对记忆整理合并以消除矛盾条目(如用户从大理搬到成都后,记忆应更新为用户在成都)。
+  quote_must_include: 记忆中就存在相互矛盾条目
+  section_hint: 记忆系统 - 更新的定义
+- label: openclaw_three_memory_categories
+  kind: observation
+  required: true
+  expected_point: OpenClaw的记忆分三类:memory.md(语义记忆,存身份偏好稳定事实)、daily logs(情景记忆,按天只增不删)、session snapshots(情景层,新会话时总结旧对话最后15条有意义消息)。
+  quote_must_include: 会总结旧对话中最后 15 条"有意义的"消息
+  section_hint: OpenClaw的记忆分类
+- label: openclaw_extract_retrieve
+  kind: method
+  required: true
+  expected_point: OpenClaw抽取发生在三种情况(对话压缩、/new或/reset、用户要求);检索发生在两种情况(新对话自动注入memory.md并读今昨日志、必要时用融合搜索memory search再memory get)。
+  quote_must_include: 通过融合搜索（关键词+向量）找到记忆所在地点
+  section_hint: OpenClaw抽取更新检索
+- label: openclaw_limitations
+  kind: limitation
+  required: true
+  expected_point: OpenClaw记忆系统问题不少:很费Token、Markdown没了记忆就消失、经常遗忘东西。
+  quote_must_include: Markdown 没了记忆就消失
+  section_hint: OpenClaw记忆系统的问题
+- label: everos_six_subtypes
+  kind: observation
+  required: true
+  expected_point: EverOS在通用3类下细分为6种(语义分稳定特质/临时状态、情景分Episode/EventLog/Foresight、程序性分Agent Case/Agent Skill),装的东西更精细且更像人类记忆(会预测未来、会蒸馏技能)。
+  quote_must_include: 原本 3 类，EverOS 拆成 6 种
+  section_hint: 企业级 - EverOS记忆分类
+- label: everos_semantic_consolidation
+  kind: method
+  required: true
+  expected_point: EverOS更新靠语义巩固(Semantic Consolidation)做三件事:自动判断哪条最新、合并重复同义条目、维护用户画像分开存稳定偏好和临时状态(Profile Evolution)。
+  quote_must_include: 而 EverOS 靠的是「语义巩固（Semantic Consolidation）」
+  section_hint: 企业级 - 如何更新记忆
+- label: everos_active_retrieval
+  kind: method
+  required: true
+  expected_point: EverOS提供4种检索方式(关键词/向量/混合(官方推荐默认)/Agentic),但关键是主动重建上下文:分析意图、激活主题、过滤过期信息、迭代搜索直到信息够用,而非普通方案的被动匹配。
+  quote_must_include: EverOS 是**主动重建上下文**
+  section_hint: 企业级 - 如何检索记忆
+- label: everos_locomo_benchmark
+  kind: result
+  required: true
+  expected_point: EverOS在长程记忆评测LoCoMo上用GPT-4.1-mini拿到93.05%总体准确率,比对比方案Zep的85.22%高出近8个百分点。
+  quote_must_include: 在长程记忆评测 LoCoMo 上拿了 93.05% 的总体准确率
+  section_hint: 企业级 - LoCoMo评测结果
+- label: skill_self_evolution_api
+  kind: method
+  required: false
+  expected_point: Skill自进化通过3个API串起来(agent.add喂完整轨迹、agent.flush触发抽取、mems.get拿成熟skill);第一次只生成case,跑过几次同类任务才聚类蒸馏出skill,且必须用/memories/agent端点,成熟度≥0.7才用。
+  quote_must_include: 第一次喂轨迹只生成 **case**
+  section_hint: 实际生产落地 - Skill自进化
+- label: everos_free_api_and_usecases
+  kind: recommendation
+  required: false
+  expected_point: 选EverOS讲落地因为API免费开放且仓库带20个真实案例(如MemoCare、Claude Code Plugin、OpenHer等),项目Apache 2.0开源4500+ stars,是盛大旗下AI Native公司EverMind的产品。
+  quote_must_include: API 免费开放、仓库带 20 个真实案例
+  section_hint: 实际生产落地 - 免费API与用例
