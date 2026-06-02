@@ -64,6 +64,20 @@ enum Cmd {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// M14a (experimental): extract grounded knowledge **Units** from a source
+    /// and write a review pack to `--out`. Hand-harness — does NOT go through a
+    /// manifest / GraphAssembler / RunCycle, writes no vault. Default client is
+    /// replay-only; `--client live` records cassettes under `unit_extract/v1`.
+    ExtractUnits {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = ".run/m14/case")]
+        out: PathBuf,
+        #[arg(long, default_value = ".run/m14/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+    },
     /// Interpret a single article from disk through the v1 article pipeline.
     /// Default client is replay-only against `--cache-dir`; no network.
     InterpretArticle {
@@ -359,6 +373,20 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
             commands::run::run(manifest, run_id, out)
+        }
+        Cmd::ExtractUnits { input, out, cache_dir, client } => {
+            use commands::client::ClientKind;
+            use commands::extract_units::ExtractUnitsArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::extract_units::run(ExtractUnitsArgs {
+                input_path: input,
+                out_dir: out,
+                cache_dir,
+                client_kind,
+            })
         }
         Cmd::InterpretArticle {
             manifest,
