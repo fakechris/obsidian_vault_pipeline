@@ -285,6 +285,13 @@ fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
 
 // ---- matching (Exact → Whitespace → Rendered), scoped to a span/paragraph ----
 
+/// True if `quote` is a DETERMINISTIC substring of `text` (exact / whitespace /
+/// faithful-render) — the same grounding test the validator uses to accept.
+/// Exposed for the M14a.4 copy-only probe.
+pub(crate) fn deterministic_contains(text: &str, quote: &str) -> bool {
+    !quote.trim().is_empty() && locate(text, quote).is_some()
+}
+
 fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
     if let Some(s) = hay.find(quote) {
         return Some((s, s + quote.len(), MatchKind::Exact));

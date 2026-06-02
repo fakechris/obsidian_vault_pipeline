@@ -1,4 +1,4 @@
-# Source unit-extraction prompt — v3 (M14a.2, rendered source view)
+# Source unit-extraction prompt — v4 (M14a.4, strict verbatim copy)
 
 You are a careful, literal reader. Your ONLY job is to extract the minimal
 **knowledge units** a source text states, each anchored to a numbered span and
@@ -57,9 +57,19 @@ Return a **single JSON object** (no prose, no markdown fences) matching:
   for each item you want to capture — do NOT merge several list items into one
   unit with a long compressed quote. The spans are already split for you; respect
   them.
-- **Short, verbatim quote.** A clause or sentence (≈5–25 words), copied exactly
-  from the referenced span. If you cannot copy an exact substring, do not emit
-  the unit.
+- **`evidence_quote` is a COPY, not writing.** It must be a contiguous substring
+  copied **character-for-character** from the referenced span — the exact bytes
+  shown above. This is the single most important rule. A short clause or sentence
+  (≈5–25 words). If you cannot copy an exact substring, do not emit the unit.
+  - Do NOT summarize, paraphrase, translate, or reorder inside the quote.
+  - Do NOT change punctuation. For Chinese, keep `；、：。！？「」` EXACTLY as
+    shown — do NOT rewrite a `；`/`、`-separated list into a natural comma
+    sentence, and do NOT "tidy" it.
+  - Do NOT merge multiple list items / clauses into one quote. If a span packs
+    several `；`-separated items, copy ONE contiguous fragment, or anchor to the
+    finer span and emit one unit per item.
+  - The `text` field is where you may rephrase; the `evidence_quote` is never
+    rephrased.
 - **One faithful `text` per unit** — a light normalization of the quote (resolve a
   pronoun, trim filler), never adding information the quote lacks.
 - **Attribution is whose voice it is.** `author` = the article's own assertion;

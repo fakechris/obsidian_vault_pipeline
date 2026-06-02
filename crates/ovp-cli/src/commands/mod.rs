@@ -2,6 +2,7 @@ pub mod apply_plan;
 pub mod auto_run;
 pub mod client;
 pub mod compare_run;
+pub mod copy_probe;
 pub mod defaults;
 pub mod extract_units;
 pub mod graph;

@@ -21,6 +21,30 @@
 > downgrade or model change. Decision is the operator's.
 >
 > ---
+> **M14a.4 (Verbatim Copy Probe + strict-copy prompt) — quote-grounding gate MET
+> on all 3, English + Chinese.** Step 1 copy-only probe: the model copies
+> verbatim **100%** (rag 20/20, eval 20/20, zh 16/16) — so the Chinese gap was
+> NEVER a verbatim-copy incapacity; it was task coupling (the model tidied
+> Chinese lists *during extraction*). Step 2 prompt v4 (`unit_extract/v4`,
+> prompt-only — validator/schema/accepted unchanged) adds hard "evidence_quote
+> is a COPY, don't tidy `；、：` lists" rules. Live re-record:
+>
+> | case | M14a.3 | **M14a.4** | target |
+> |---|---|---|---|
+> | rag_wrong | 100% | **100%** | 100% ✅ |
+> | eval_ai_agents | 93.3% | **100%** | ≥95% ✅ |
+> | agent_memory_zh | 58.3% | **100%** | ≥70% ✅ |
+>
+> `accepted_without_quote=0`, `ref_found=100%`, `near_match=0`, 0 rejected;
+> deterministic on replay. **Honest scope:** `quote_found=100%` proves
+> *grounding* (every accepted unit's quote deterministically locates in the
+> source) — it does NOT prove *faithfulness* (text↔quote), attribution/modality
+> correctness, or *coverage* (zh emitted 14 units vs 24 raw in v3 — the model may
+> extract fewer; coverage is unmeasured and needs human/gold review). Those are
+> the next layer, not this gate. No fuzzy accept, no model change, no RLHF, no
+> schema downgrade — root cause was prompt task-coupling, fixed at the prompt.
+>
+> ---
 > **M14a.3 (Deterministic Span Window Matching) done.** Validator now: matches a
 > quote in the ref span → a contiguous span WINDOW around it (recovers
 > boundary-straddling verbatim quotes, `MatchKind::RenderedWindow`) → flags a

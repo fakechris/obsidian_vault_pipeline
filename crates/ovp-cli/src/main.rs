@@ -64,6 +64,20 @@ enum Cmd {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// M14a.4 (experimental): copy-only probe — does the model verbatim-copy a
+    /// substring from rendered spans? Diagnostic; writes no vault.
+    CopyProbe {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = ".run/m14/copyprobe")]
+        out: PathBuf,
+        #[arg(long, default_value = ".run/m14/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long, default_value_t = 20)]
+        max_spans: usize,
+    },
     /// M14a (experimental): extract grounded knowledge **Units** from a source
     /// and write a review pack to `--out`. Hand-harness — does NOT go through a
     /// manifest / GraphAssembler / RunCycle, writes no vault. Default client is
@@ -373,6 +387,21 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
             commands::run::run(manifest, run_id, out)
+        }
+        Cmd::CopyProbe { input, out, cache_dir, client, max_spans } => {
+            use commands::client::ClientKind;
+            use commands::copy_probe::CopyProbeArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::copy_probe::run(CopyProbeArgs {
+                input_path: input,
+                out_dir: out,
+                cache_dir,
+                client_kind,
+                max_spans,
+            })
         }
         Cmd::ExtractUnits { input, out, cache_dir, client } => {
             use commands::client::ClientKind;
