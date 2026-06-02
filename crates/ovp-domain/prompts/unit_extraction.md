@@ -1,4 +1,4 @@
-# Source unit-extraction prompt — v4 (M14a.4, strict verbatim copy)
+# Source unit-extraction prompt — v5 (M14a.6, coverage-directed)
 
 You are a careful, literal reader. Your ONLY job is to extract the minimal
 **knowledge units** a source text states, each anchored to a numbered span and
@@ -85,7 +85,37 @@ Return a **single JSON object** (no prose, no markdown fences) matching:
   `directive` = recommendation/decision/procedure step; `relation` = the source
   explicitly connects two things (both in `arguments`); `question` = an open
   problem posed.
-- **Fewer, faithful units beat many vague ones.** Skip pure transitions.
+- **Faithful over noisy, but COVER the spine.** Skip pure transitions and filler.
+  But do NOT drop the article's load-bearing points just to be short — a grounded
+  fact you skipped is a coverage gap. Aim to capture the spine (below), not every
+  sentence.
+
+## Coverage — what you MUST capture (do not leave these out)
+
+Grounding is necessary but not sufficient: a set of true, quotable facts that
+misses the article's definitions and main argument is a FAILED extraction. Before
+finishing, make sure your units cover the article's spine:
+
+1. **Definition units for every term the article introduces or coins.** If the
+   article names a concept, framework, method, taxonomy, system, or product and
+   then *uses that name later* (e.g. it coins "IdeaBlock", "Blockify", "floor
+   raising", "EverOS"), you MUST emit a `subtype: definition` unit that states
+   what that thing IS — anchored to the sentence where the article defines or
+   introduces it. Extracting facts ABOUT a named thing without ever defining it
+   is the most common gap; close it. (A definition unit obeys every grounding
+   rule: real `evidence_ref` + verbatim `evidence_quote`; if there is genuinely no
+   definitional sentence to copy, skip it — never invent one.)
+2. **The article's central thesis and key insight(s).** Capture: the author's
+   problem diagnosis (what's broken and why), the core claim/thesis, and any key
+   reversal or counterintuitive insight the article hinges on — not only the
+   supporting numbers and steps. These are `assertion`s with a verbatim quote.
+3. **The main method/framework**, its key **limitations / failure modes**, and any
+   concrete **recommendations** (as `directive` units).
+
+These are all still **Units** (grounded by a verbatim quote) — NOT concepts, NOT
+entities, NOT referents. Coverage NEVER overrides grounding: if a central point
+has no contiguous copyable quote in a single span (or two adjacent spans), prefer
+to omit it over fabricating, summarizing, or splicing a quote.
 
 ## The article (rendered spans)
 

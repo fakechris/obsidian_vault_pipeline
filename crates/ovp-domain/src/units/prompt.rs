@@ -11,14 +11,14 @@ use super::source_map::{annotate_rendered, rendered_view};
 
 const UNIT_PROMPT_TEMPLATE: &str = include_str!("../../prompts/unit_extraction.md");
 
-/// Cassette namespace + schema marker for the M14a unit prompt. `v4` is the
-/// M14a.4 strict-verbatim-copy prompt (same rendered span view + output schema
-/// as v3; hardened rules that `evidence_quote` is a character-for-character COPY,
-/// never a tidied/rewritten Chinese list). Bumped from `v3` so the new prompt
-/// re-records rather than replaying older cassettes. The OUTPUT schema is
-/// unchanged (validator still stamps schema_version 3).
-pub const UNIT_PROMPT_ID: &str = "unit_extract/v4";
-pub const UNIT_SCHEMA_VERSION: u32 = 4;
+/// Cassette namespace + schema marker for the M14a unit prompt. `v5` is the
+/// M14a.6 coverage-directed prompt (same rendered span view + output schema +
+/// strict verbatim-copy rules as v4; adds a Coverage section requiring a
+/// definition unit per coined term + the article's thesis/insight spine, WITHOUT
+/// relaxing grounding). Bumped from `v4` so the new prompt re-records. The OUTPUT
+/// schema is unchanged (validator still stamps schema_version 3).
+pub const UNIT_PROMPT_ID: &str = "unit_extract/v5";
+pub const UNIT_SCHEMA_VERSION: u32 = 5;
 
 /// Default model + token budget. The live client overrides the model via
 /// `OVP_LLM_MODEL` (as in M13.3), so this is just the offline/default value.
@@ -93,16 +93,20 @@ mod tests {
     }
 
     #[test]
-    fn request_uses_unit_v4_namespace() {
+    fn request_uses_unit_v5_namespace() {
         let req = unit_model_request(&src());
-        assert_eq!(req.cache_namespace.as_deref(), Some("unit_extract/v4"));
+        assert_eq!(req.cache_namespace.as_deref(), Some("unit_extract/v5"));
         assert!(req.system.is_some());
         assert_eq!(req.messages.len(), 1);
     }
 
     #[test]
-    fn prompt_demands_verbatim_copy() {
+    fn prompt_demands_verbatim_copy_and_coverage() {
         let (system, _user) = build_unit_prompt(&src());
         assert!(system.contains("COPY, not writing") || system.contains("character-for-character"));
+        // M14a.6 coverage discipline: definitions of coined terms + the spine.
+        assert!(system.contains("Definition units") || system.contains("definition unit"));
+        assert!(system.to_lowercase().contains("thesis"));
+        assert!(system.contains("NEVER overrides grounding") || system.contains("never override"));
     }
 }
