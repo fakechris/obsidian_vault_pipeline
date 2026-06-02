@@ -1,11 +1,17 @@
-# Source unit-extraction prompt — v1 (M14a)
+# Source unit-extraction prompt — v2 (M14a.1, evidence-ref hardened)
 
 You are a careful, literal reader. Your ONLY job is to extract the minimal
-**knowledge units** a source text states, each backed by a **verbatim quote**
-copied from the source body.
+**knowledge units** a source text states, each anchored to the paragraph it
+comes from and backed by a short verbatim quote.
 
 You are NOT building a knowledge base. Do **not** output concepts, evergreen
 pages, entities, a knowledge graph, a concept map, or a summary. Output units.
+
+## The body is paragraph-tagged
+
+Every paragraph in the article below is prefixed with a marker like `[p001]`,
+`[p002]`, … Use those ids to anchor your evidence. The marker itself is NOT part
+of the paragraph text — never include `[pNNN]` inside a quote.
 
 ## Output requirements
 
@@ -18,7 +24,8 @@ Return a **single JSON object** (no prose, no markdown fences) matching:
       "kind": "assertion | directive | relation | question",
       "subtype": "definition | observation | result | limitation | recommendation | decision | procedure_step | null",
       "text": "<one faithful sentence stating THIS single point>",
-      "evidence_quote": "<a span copied VERBATIM from the article body that supports this unit>",
+      "evidence_ref": "<the pNNN id of the paragraph this unit comes from>",
+      "evidence_quote": "<a SHORT verbatim substring copied from that paragraph>",
       "attribution": "author | quoted_person | system_interpretation",
       "modality": "asserted | suggested | uncertain | contested | negated",
       "arguments": [
@@ -31,40 +38,39 @@ Return a **single JSON object** (no prose, no markdown fences) matching:
 
 ## The rules that matter
 
-- **Verbatim quote, or no unit.** `evidence_quote` MUST be a contiguous span
-  copied character-for-character from the article *body* (not the title,
-  frontmatter, or your own words). If you cannot copy a supporting quote, do NOT
-  emit the unit. Keep the quote long enough to be locatable (a clause or
-  sentence), not a single word.
+- **Anchor every unit to one paragraph.** `evidence_ref` is the `pNNN` id of the
+  paragraph the unit is drawn from. `evidence_quote` MUST be a contiguous span
+  copied character-for-character from THAT paragraph. If the point spans two
+  paragraphs, pick the one paragraph that most directly states it and quote from
+  there; emit a second unit for the other if needed.
+- **Keep the quote SHORT and exact.** A single clause or sentence (roughly 5–25
+  words) is ideal — long enough to locate, short enough to copy without error.
+  Do not paraphrase the quote; do not stitch together non-adjacent fragments. If
+  you cannot copy an exact short span, do not emit the unit.
+- **JSON-safe quotes.** The quote is a JSON string: escape any inner double
+  quote as `\"`. If the source uses typographic quotes (“ ” 「 」), keep them
+  as-is; never put a bare ASCII `"` inside the quote without escaping it.
 - **One point per unit.** `text` states exactly ONE claim/directive/relation/
-  question. Do not merge several points into one unit. Do not synthesise across
-  distant sentences. `text` is a *light normalization* of the quote (resolve a
-  pronoun to its referent, trim filler) — never an interpretation that adds
-  information the quote does not contain.
-- **Attribution is about whose voice it is.**
-  - `author` — the article's own assertion, in its own voice.
-  - `quoted_person` — a statement the article attributes to someone else (a cited
-    source, an interviewee, "critics say…", a position the article reports).
-  - `system_interpretation` — your inference that the source does not state
-    outright. Use sparingly; pair with `modality: uncertain`.
-- **Modality is about how strongly it is held.**
-  - `asserted` — stated as fact by the attributed voice.
-  - `suggested` — proposed, recommended, hedged ("you might", "consider").
-  - `uncertain` — explicitly tentative or speculative.
-  - `contested` — a view the author argues **against** or presents as disputed.
-  - `negated` — a statement that something is NOT the case.
-  - **Critical:** a claim the author disputes must be `contested` (and/or
-    `attribution: quoted_person`) — NEVER `author` + `asserted`. Do not put the
-    article's straw-man or the "wrong" view into the author's mouth.
-- **Arguments are what the unit is about.** List the concrete objects/terms the
-  unit concerns, each `surface` copied as it appears in the text. These are NOT
-  concepts to mint — just the things this unit talks about.
-- **Kinds.** `assertion` = a fact/claim/definition/observation/result/limitation.
-  `directive` = a recommendation/decision/procedure step. `relation` = the source
-  explicitly connects two things (put both in `arguments`). `question` = an open
-  problem the source poses.
-- **Fewer, faithful units beat many vague ones.** Prefer the load-bearing points
-  the source actually develops. Skip throat-clearing and pure transitions.
+  question — a *light* normalization of the quote (resolve a pronoun, trim
+  filler), never an interpretation that adds information the quote lacks.
+- **Attribution is whose voice it is.** `author` = the article's own assertion;
+  `quoted_person` = a view the article attributes to someone else / reports;
+  `system_interpretation` = your inference the source does not state (rare; pair
+  with `modality: uncertain`).
+- **Modality is how strongly it is held.** `asserted` = stated as fact;
+  `suggested` = proposed/hedged; `uncertain` = explicitly tentative; `contested`
+  = a view the author argues **against**; `negated` = states something is NOT so.
+  **Critical:** a claim the author disputes must be `contested` (and/or
+  `quoted_person`) — NEVER `author` + `asserted`.
+- **Arguments are what the unit is about** — concrete objects/terms, each
+  `surface` copied as it appears. Not concepts to mint; just what this unit
+  concerns.
+- **Kinds.** `assertion` = fact/claim/definition/observation/result/limitation;
+  `directive` = recommendation/decision/procedure step; `relation` = the source
+  explicitly connects two things (both in `arguments`); `question` = an open
+  problem posed.
+- **Fewer, faithful units beat many vague ones.** Skip throat-clearing and pure
+  transitions; keep the load-bearing points.
 
 ## The article
 

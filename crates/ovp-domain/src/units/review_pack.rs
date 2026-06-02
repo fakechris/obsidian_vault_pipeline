@@ -114,6 +114,7 @@ fn section<'a>(s: &mut String, title: &str, units: impl Iterator<Item = &'a Unit
         };
         s.push_str(&format!("### `{}` — {}\n\n", u.id, kind.to_lowercase()));
         s.push_str(&format!("> {}\n\n", u.text));
+        s.push_str(&format!("- **ref**: `{}`\n", u.evidence.paragraph_ref));
         s.push_str(&format!("- **quote**: \"{}\"\n", u.evidence.quote));
         match &u.evidence.location {
             Some(loc) => s.push_str(&format!(
@@ -125,7 +126,7 @@ fn section<'a>(s: &mut String, title: &str, units: impl Iterator<Item = &'a Unit
                     MatchKind::Relaxed => "relaxed — verify",
                 }
             )),
-            None => s.push_str("- **location**: NOT FOUND in source\n"),
+            None => s.push_str("- **location**: NOT located in ref paragraph\n"),
         }
         s.push_str(&format!("- **attribution**: {:?}  ·  **modality**: {:?}\n", u.attribution, u.modality));
         if !u.arguments.is_empty() {
@@ -153,6 +154,7 @@ mod tests {
         let body = "A chunk is a structurally neutral container.";
         let raw = serde_json::json!({
             "kind": "assertion", "text": "A chunk is neutral.",
+            "evidence_ref": "p001",
             "evidence_quote": "A chunk is a structurally neutral container.",
             "attribution": "author", "modality": "asserted",
             "arguments": [{"surface":"chunk","role":"subject"}]

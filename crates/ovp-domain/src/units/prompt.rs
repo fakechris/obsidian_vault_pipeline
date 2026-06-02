@@ -7,12 +7,16 @@ use ovp_llm::{ModelMessage, ModelRequest};
 
 use crate::source_doc::SourceDoc;
 
+use super::source_map::annotate;
+
 const UNIT_PROMPT_TEMPLATE: &str = include_str!("../../prompts/unit_extraction.md");
 
-/// Cassette namespace + schema marker for the M14a unit prompt. Distinct from
-/// every v1/v2 prompt id so unit cassettes never collide with article ones.
-pub const UNIT_PROMPT_ID: &str = "unit_extract/v1";
-pub const UNIT_SCHEMA_VERSION: u32 = 1;
+/// Cassette namespace + schema marker for the M14a unit prompt. `v2` is the
+/// M14a.1 evidence-ref-hardened prompt (paragraph markers + `evidence_ref`);
+/// bumped from `v1` so the new prompt re-records rather than replaying the old
+/// free-quote cassettes. Distinct from every article prompt id.
+pub const UNIT_PROMPT_ID: &str = "unit_extract/v2";
+pub const UNIT_SCHEMA_VERSION: u32 = 2;
 
 /// Default model + token budget. The live client overrides the model via
 /// `OVP_LLM_MODEL` (as in M13.3), so this is just the offline/default value.
@@ -27,10 +31,12 @@ pub fn build_unit_prompt(source: &SourceDoc) -> (String, String) {
         Some((sys, rest)) => (sys.trim_end().to_string(), rest.to_string()),
         None => (UNIT_PROMPT_TEMPLATE.to_string(), String::new()),
     };
+    // The model is shown the paragraph-tagged body so it can anchor each unit's
+    // evidence_ref to a `[pNNN]` id (validator re-derives the same ids).
     let user = user_template
         .replace("{{TITLE}}", &source.title)
         .replace("{{SOURCE_URL}}", &source.source_url)
-        .replace("{{BODY_MARKDOWN}}", &source.body_markdown);
+        .replace("{{BODY_MARKDOWN}}", &annotate(&source.body_markdown));
     (system, format!("{marker}{user}"))
 }
 
@@ -67,17 +73,25 @@ mod tests {
     }
 
     #[test]
-    fn user_message_carries_the_article() {
+    fn user_message_carries_the_paragraph_tagged_article() {
         let (_system, user) = build_unit_prompt(&src());
         assert!(user.contains("My Title"));
         assert!(user.contains("https://e/x"));
-        assert!(user.contains("Body text here."));
+        // Body is annotated with a paragraph marker the model anchors evidence to.
+        assert!(user.contains("[p001] Body text here."));
     }
 
     #[test]
-    fn request_uses_unit_namespace() {
+    fn system_requires_evidence_ref() {
+        let (system, _user) = build_unit_prompt(&src());
+        assert!(system.contains("evidence_ref"));
+        assert!(system.contains("[p001]") || system.contains("pNNN"));
+    }
+
+    #[test]
+    fn request_uses_unit_v2_namespace() {
         let req = unit_model_request(&src());
-        assert_eq!(req.cache_namespace.as_deref(), Some("unit_extract/v1"));
+        assert_eq!(req.cache_namespace.as_deref(), Some("unit_extract/v2"));
         assert!(req.system.is_some());
         assert_eq!(req.messages.len(), 1);
     }

@@ -1,8 +1,10 @@
 # Stage M14a — Grounded Unit Extraction Spike
 
-> **Status: built + live run 1 complete (3/3 cases ran); does NOT clear the kill
-> gate as written — decision pending.** M14a is an experimental, parallel,
-> **deletable** hand-harness that answers ONE question:
+> **Status: M14a.1 (evidence-ref hardening) built + live-run on 3/3; JSON
+> transport FIXED and ref mechanism works, but quote-fidelity still does NOT
+> clear the gate — decision pending (kill / change output-format / change model).**
+> M14a is an experimental, parallel, **deletable** hand-harness that answers ONE
+> question:
 >
 > > Given a source, can OVP extract minimal knowledge **Units** each backed by a
 > > verbatim quote found in the source text?
@@ -11,7 +13,69 @@
 > GraphAssembler / RunCycle / WritePlan / DomainBody. It produces a human-
 > inspectable **review pack** under `.run/m14/<case>/`.
 
-## Live run 1 (MiniMax-M2.7-highspeed, `unit_extract/v1`)
+## Live run 2 — M14a.1 evidence-ref hardening (`unit_extract/v2`, MiniMax-M2.7-highspeed)
+
+The model is shown a paragraph-tagged body (`[pNNN]`) and must emit
+`evidence_ref` (the paragraph id) + a short `evidence_quote` from that paragraph;
+the validator scopes quote matching to the referenced paragraph.
+
+| case | total | accepted | needs_review | rejected | quote_found | arg_locatable |
+|---|---|---|---|---|---|---|
+| rag_wrong | 22 | 9 | 5 | 8 | **63.6%** | 45.2% |
+| eval_ai_agents | 59 | 5 | 45 | 9 | **78.0%** | 24.5% |
+| agent_memory_zh | 22 | 1 | 5 | 16 | **27.3%** | 11.8% |
+
+(quote_found numbers are after a validator fix found mid-run — see below.)
+
+**Two real wins:**
+- **JSON transport fixed.** `agent_memory_zh` previously failed to parse (the
+  model embedded unescaped ASCII `"` in a long Chinese quote). With short,
+  paragraph-anchored, escape-instructed quotes it now parses cleanly (0 parse
+  errors). Evidence-ref hardening did what it was for.
+- **The ref mechanism works.** `ref_mismatch` ≈ 0 across all cases (rag 0, eval 4,
+  zh 0): when the model cites a real quote it gets the *paragraph* right. The
+  model can **locate**.
+
+**But the gate is not met — and the root cause is now precisely isolated.** The
+misses are not ref errors; they are `quote_not_found` — the model picks the right
+paragraph then **paraphrases the quote text instead of copying it verbatim**
+(rag 8/22, eval 8/59, zh ~15/22). The model can locate but cannot reliably
+**transcribe**. Issue histogram: rag = 8 quote_not_found + 5 arg_drift; eval = 41
+arg_drift + 8 quote_not_found + 5 fuzzy + 4 ref_mismatch; zh = 16 quote_not_found
++ 4 arg_drift.
+
+**Integrity note — matcher bug found + fixed mid-run.** Spot-checking zh
+"not found" quotes showed some WERE in the article modulo whitespace. The
+`normalize()` step collapsed whitespace to a single space, but the model (esp. in
+CJK, which has no inter-word spaces) drops whitespace the source has → real quotes
+scored as not-found. Fixed to whitespace-INSENSITIVE matching and re-measured
+offline by replaying the recorded cassettes (zh 22.7% → 27.3%; rag/eval
+unchanged, confirming their misses are genuine paraphrase, not whitespace). The
+numbers above are post-fix and honest.
+
+**`arg_locatable` over-gating** is now the dominant needs_review driver (eval
+41/59): arguments are paraphrased topic words that don't character-match. This is
+validator calibration, NOT a grounding failure, and is orthogonal to the
+quote_found verdict — recommend making `arguments` advisory (not status-gating)
+to de-noise the review pack regardless of the decision below.
+
+### Verdict + decision (operator's call, per the kill gate)
+
+Acceptance after M14a.1: ✅ `agent_memory_zh` parse_error = none · ✅
+`accepted_without_quote = 0` (all 3) · ✅ `model-reply.txt` present · ✅ CLI
+non-zero on parse/empty · ❌ `rag_wrong ≥ 90%` (63.6%) · ❌ `eval_ai_agents ≥ 95%`
+(78.0%). **The quote-fidelity bar is not met.** Per the gate ("if still far below,
+kill or change model/output-format"), and given the now-isolated cause (locate-ok,
+transcribe-unreliable), the evidence points to the **output-format** branch the
+plan foreshadowed: make `evidence_quote` an **optional preview** and promote
+`evidence_ref` to the primary grounding anchor (validate "ref exists + the unit is
+supported by that paragraph"; keep the quote as a relaxed, non-gating hint). That
+directly fits "the model can point at the paragraph but not free-copy the string."
+Alternatives: try a non-reasoning model (may transcribe better), or kill
+`Source → Unit`. **NOT auto-iterated** — this is the schema decision the plan
+reserved for the operator now that ref-round evidence exists.
+
+## Live run 1 (MiniMax-M2.7-highspeed, `unit_extract/v1`) — superseded by run 2
 
 | case | total | accepted | needs_review | rejected | quote_found | arg_locatable |
 |---|---|---|---|---|---|---|

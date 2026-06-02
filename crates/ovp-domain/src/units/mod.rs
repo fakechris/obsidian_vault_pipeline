@@ -18,12 +18,14 @@ pub mod harness;
 pub mod parser;
 pub mod prompt;
 pub mod review_pack;
+pub mod source_map;
 pub mod validator;
 
 pub use harness::{extract_units, read_source_from_path, run_unit_extraction, UnitExtractionRun};
 pub use parser::{parse_envelope, ParseError, RawUnit};
 pub use prompt::{build_unit_prompt, unit_model_request, UNIT_PROMPT_ID, UNIT_SCHEMA_VERSION};
 pub use review_pack::write_unit_review_pack;
+pub use source_map::{annotate, find_paragraph, paragraphs, Paragraph};
 pub use validator::validate;
 
 /// What kind of thing a Unit states. Deliberately tiny — classification beyond
@@ -107,11 +109,15 @@ pub struct EvidenceLocation {
     pub match_kind: MatchKind,
 }
 
-/// The quote a Unit is grounded on, plus its derived location (if found).
+/// The quote a Unit is grounded on, the paragraph it was anchored to, and its
+/// derived location (if the quote was found within that paragraph).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitEvidence {
+    /// The `pNNN` id the model declared the quote came from (M14a.1).
+    pub paragraph_ref: String,
     pub quote: String,
-    /// `None` ⇒ the quote was not found in the source (the unit is rejected).
+    /// `None` ⇒ the quote was not found in the referenced paragraph (the unit is
+    /// rejected, or — if found in a *different* paragraph — needs review).
     pub location: Option<EvidenceLocation>,
 }
 

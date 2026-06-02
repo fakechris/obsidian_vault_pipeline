@@ -19,6 +19,9 @@ pub struct RawUnit {
     #[serde(default)]
     pub subtype: Option<String>,
     pub text: String,
+    /// The `pNNN` paragraph id the unit is anchored to (M14a.1). Required — a
+    /// missing ref fails this unit's deserialize → a rejected (malformed) unit.
+    pub evidence_ref: String,
     pub evidence_quote: String,
     pub attribution: Attribution,
     pub modality: Modality,
@@ -119,19 +122,20 @@ mod tests {
     #[test]
     fn raw_unit_tolerates_null_arguments() {
         let v: serde_json::Value = serde_json::from_str(
-            r#"{"kind":"assertion","text":"t","evidence_quote":"q","attribution":"author","modality":"asserted","arguments":null}"#,
+            r#"{"kind":"assertion","text":"t","evidence_ref":"p001","evidence_quote":"q","attribution":"author","modality":"asserted","arguments":null}"#,
         )
         .unwrap();
         let u: RawUnit = serde_json::from_value(v).unwrap();
         assert!(u.arguments.is_empty());
+        assert_eq!(u.evidence_ref, "p001");
     }
 
     #[test]
-    fn raw_unit_missing_required_field_fails_that_unit() {
-        // No `attribution` → this single unit's deserialize fails (the validator
-        // turns that into a rejected unit; the envelope still parses).
+    fn raw_unit_missing_evidence_ref_fails_that_unit() {
+        // No `evidence_ref` → this single unit's deserialize fails (the validator
+        // turns that into a rejected/malformed unit; the envelope still parses).
         let v: serde_json::Value = serde_json::from_str(
-            r#"{"kind":"assertion","text":"t","evidence_quote":"q","modality":"asserted"}"#,
+            r#"{"kind":"assertion","text":"t","evidence_quote":"q","attribution":"author","modality":"asserted"}"#,
         )
         .unwrap();
         assert!(serde_json::from_value::<RawUnit>(v).is_err());

@@ -92,6 +92,7 @@ mod tests {
     fn run_extraction_end_to_end() {
         let reply = r#"{"units":[
           {"kind":"assertion","text":"A chunk is structurally neutral.",
+           "evidence_ref":"p001",
            "evidence_quote":"A chunk is a structurally neutral container.",
            "attribution":"author","modality":"asserted",
            "arguments":[{"surface":"chunk","role":"subject"}]}

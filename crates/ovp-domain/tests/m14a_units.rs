@@ -39,6 +39,7 @@ const REPLY: &str = r#"{
     {
       "kind": "assertion", "subtype": "observation",
       "text": "A chunk is a structurally neutral container.",
+      "evidence_ref": "p002",
       "evidence_quote": "A chunk of text is a structurally neutral container.",
       "attribution": "author", "modality": "asserted",
       "arguments": [{"surface": "chunk", "role": "subject"}]
@@ -46,6 +47,7 @@ const REPLY: &str = r#"{
     {
       "kind": "assertion",
       "text": "Vectors should be stored in Pinecone.",
+      "evidence_ref": "p002",
       "evidence_quote": "You should always use Pinecone for vector storage.",
       "attribution": "author", "modality": "asserted",
       "arguments": []
@@ -53,6 +55,7 @@ const REPLY: &str = r#"{
     {
       "kind": "relation",
       "text": "Blockify converts documents into IdeaBlocks.",
+      "evidence_ref": "p003",
       "evidence_quote": "Blockify, a preprocessing layer from Iternal Technologies, converts documents\ninto IdeaBlocks.",
       "attribution": "author", "modality": "asserted",
       "arguments": [{"surface": "Azure AI Search", "role": "instrument"}]
@@ -60,6 +63,7 @@ const REPLY: &str = r#"{
     {
       "kind": "assertion",
       "text": "missing required modality",
+      "evidence_ref": "p002",
       "evidence_quote": "A chunk of text is a structurally neutral container.",
       "attribution": "author"
     }
