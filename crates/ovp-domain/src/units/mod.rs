@@ -102,6 +102,11 @@ pub enum MatchKind {
     /// the transform). M14a.RCA showed this is the dominant recoverable failure:
     /// the model copies the *rendered* text, the source is raw markdown.
     Rendered,
+    /// Deterministic (exact/rendered) substring match within a contiguous WINDOW
+    /// of spans around the ref — the quote straddles span/paragraph boundaries
+    /// but is still a verbatim contiguous span of the source (M14a.3). Accepted;
+    /// NOT a similarity match. Located at the window's source range.
+    RenderedWindow,
 }
 
 /// Where the quote was found in the source — derived by the validator, never
@@ -190,6 +195,12 @@ pub struct ValidationReport {
     pub accepted_without_quote: usize,
     /// Quote real but in a DIFFERENT span/paragraph than declared (needs review).
     pub ref_mismatch: usize,
+    /// Deterministic matches that required a contiguous multi-span window
+    /// (quote straddled span boundaries). Accepted, but surfaced.
+    pub span_window_matches: usize,
+    /// Quote is only a SIMILARITY match (≥0.95, no deterministic substring) —
+    /// routed to needs_review, NEVER accepted (grounding must stay deterministic).
+    pub near_match_needs_review: usize,
     /// Quote not found anywhere in the rendered view (rejected).
     pub quote_not_found: usize,
     /// Arguments that did not locate — ADVISORY only (does NOT gate accepted).

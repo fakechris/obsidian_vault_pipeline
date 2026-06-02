@@ -128,6 +128,7 @@ fn section<'a>(s: &mut String, title: &str, units: impl Iterator<Item = &'a Unit
                     MatchKind::Exact => "exact",
                     MatchKind::Whitespace => "whitespace-normalized",
                     MatchKind::Rendered => "rendered (plain-text)",
+                    MatchKind::RenderedWindow => "rendered window (spans boundary)",
                 }
             )),
             None => s.push_str("- **location**: NOT located in ref paragraph\n"),

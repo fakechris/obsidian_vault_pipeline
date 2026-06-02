@@ -21,6 +21,24 @@
 > downgrade or model change. Decision is the operator's.
 >
 > ---
+> **M14a.3 (Deterministic Span Window Matching) done.** Validator now: matches a
+> quote in the ref span → a contiguous span WINDOW around it (recovers
+> boundary-straddling verbatim quotes, `MatchKind::RenderedWindow`) → flags a
+> non-verbatim ≥0.95 similarity match as `near_match` **needs_review (NEVER
+> accepted)** → else rejected. No fuzzy grounding. Replay (validator-only, no
+> re-record): rag **100%**, eval **93.3%** (2 window + 1 near→review), zh
+> **41.7%→58.3%** (6 window). `accepted_without_quote=0`, `ref_found=100%`.
+>
+> **Honest ceiling finding:** the deterministic rate is below the 95/70 targets
+> because the MODEL edits quotes — eval's 1 miss is ≥0.95-similar-but-not-verbatim
+> (→ needs_review), and zh's ~10 rejects are 0.85–0.95 similar model edits (it
+> "tidies" Chinese). Per the no-fuzzy-accept rule (followed), those can't be
+> accepted. So 95/70 conflict with strict grounding GIVEN this model's edit
+> behavior. The principled path to a higher *accepted* rate is source-side — a
+> prompt that makes the model copy the span **character-for-character** (no
+> tidying), re-recorded — NOT loosening the validator. Operator's call.
+>
+> ---
 > **Earlier: M14a.RCA (see `docs/stage-m14a-rca.md`).** Root cause is
 > **our pipeline, not the model**: 68% of quote failures are representation /
 > segmentation / validator (the model copies near-verbatim; we mis-normalized).

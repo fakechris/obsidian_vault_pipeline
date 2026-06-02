@@ -52,8 +52,8 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
         r.accepted_without_quote,
     );
     println!(
-        "  ref_mismatch={}  quote_not_found={}  arg_drift(advisory)={}",
-        r.ref_mismatch, r.quote_not_found, r.argument_drift_advisory
+        "  span_window={}  ref_mismatch={}  near_match(review)={}  quote_not_found={}  arg_drift(advisory)={}",
+        r.span_window_matches, r.ref_mismatch, r.near_match_needs_review, r.quote_not_found, r.argument_drift_advisory
     );
     println!("  review pack: {}", args.out_dir.join("REVIEW.md").display());
 
@@ -100,6 +100,8 @@ mod tests {
             quote_maps_to_original: 0,
             accepted_without_quote,
             ref_mismatch: 0,
+            span_window_matches: 0,
+            near_match_needs_review: 0,
             quote_not_found: 0,
             argument_drift_advisory: 0,
             duplicate_groups: vec![],

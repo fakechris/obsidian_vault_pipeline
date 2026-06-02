@@ -28,44 +28,21 @@ use super::{
 
 const SCHEMA_VERSION: u32 = 3;
 
-/// A paragraph rolled up from its rendered spans, for the "ref a bare paragraph
-/// id" case and the cross-span fallback.
-struct ParaGroup {
-    id: String,
-    text: String,
-    src_start: usize,
-    src_end: usize,
-}
-
-fn paragraph_groups(spans: &[RenderedSpan]) -> Vec<ParaGroup> {
-    let mut out: Vec<ParaGroup> = Vec::new();
-    for sp in spans {
-        match out.last_mut() {
-            Some(g) if g.id == sp.para_id => {
-                g.text.push(' ');
-                g.text.push_str(&sp.text);
-                g.src_end = sp.src_end;
-            }
-            _ => out.push(ParaGroup {
-                id: sp.para_id.clone(),
-                text: sp.text.clone(),
-                src_start: sp.src_start,
-                src_end: sp.src_end,
-            }),
-        }
-    }
-    out
-}
+/// Max radius (in spans) the deterministic window expands on each side of the
+/// ref. Bounded so a match stays NEAR the ref (never a whole-article accept).
+const WINDOW_RADIUS: usize = 6;
+/// Similarity at/above which a non-deterministic match is flagged for review
+/// (never accepted). High on purpose — only genuinely near-verbatim quotes.
+const NEAR_MATCH_THRESHOLD: f64 = 0.95;
 
 pub fn validate(raw_values: &[serde_json::Value], source: &SourceDoc) -> SourceExtraction {
     let body = &source.body_markdown;
     let spans = rendered_view(body);
-    let paras = paragraph_groups(&spans);
     let mut units: Vec<Unit> = Vec::with_capacity(raw_values.len());
 
     for (idx, value) in raw_values.iter().enumerate() {
         match serde_json::from_value::<RawUnit>(value.clone()) {
-            Ok(raw) => units.push(validate_one(idx, raw, body, &spans, &paras)),
+            Ok(raw) => units.push(validate_one(idx, raw, body, &spans)),
             Err(e) => units.push(malformed_unit(idx, value, &e.to_string())),
         }
     }
@@ -95,76 +72,77 @@ pub fn extraction_parse_failed(source: &SourceDoc, detail: String) -> SourceExtr
     }
 }
 
-fn validate_one(
-    idx: usize,
-    raw: RawUnit,
-    body: &str,
-    spans: &[RenderedSpan],
-    paras: &[ParaGroup],
-) -> Unit {
+fn validate_one(idx: usize, raw: RawUnit, body: &str, spans: &[RenderedSpan]) -> Unit {
     let id = unit_id(idx, &raw.evidence_quote);
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
     let quote = raw.evidence_quote.trim().to_string();
     let reff = raw.evidence_ref.trim().to_string();
 
-    // Resolve the ref: a span id (p017.s002) or a bare paragraph id (p017).
-    let span = spans.iter().find(|s| s.id == reff);
-    let para = paras.iter().find(|p| p.id == reff);
-    let (ref_text, ref_range): (Option<&str>, Option<(usize, usize)>) = match (span, para) {
-        (Some(s), _) => (Some(&s.text), Some((s.src_start, s.src_end))),
-        (None, Some(p)) => (Some(&p.text), Some((p.src_start, p.src_end))),
-        (None, None) => (None, None),
-    };
-    // The parent paragraph of a span ref, for the cross-span fallback.
-    let parent = span.and_then(|s| paras.iter().find(|p| p.id == s.para_id));
+    // Resolve the ref to a contiguous span-index range [lo..=hi] in the flat
+    // span list: a span id (p017.s002) is one span; a bare paragraph id (p017)
+    // is all its spans. ref_text/ref_range describe that exact ref region.
+    let ref_idx = resolve_ref(spans, &reff);
 
     let mut location: Option<EvidenceLocation> = None;
     let mut ref_mismatch = false;
+    let mut near_match = false;
 
     if quote.is_empty() {
         issues.push(ValidationIssue::new("unit.no_evidence", "empty evidence_quote"));
-    } else if ref_text.is_none() {
+    } else if ref_idx.is_none() {
         issues.push(ValidationIssue::new(
             "unit.ref_not_found",
             format!("evidence_ref `{reff}` is not a span or paragraph id"),
         ));
-    } else if let Some((_, _, kind)) = locate(ref_text.unwrap(), &quote) {
-        location = Some(loc_at(body, ref_range.unwrap(), kind));
-    } else if let Some(p) = parent {
-        // Cross-span: quote not in the named span but in its paragraph.
-        if let Some((_, _, kind)) = locate(&p.text, &quote) {
+    } else {
+        let (lo, hi) = ref_idx.unwrap();
+        // Tier A: exact/rendered substring inside the ref region itself.
+        let ref_text = concat_spans(spans, lo, hi);
+        if let Some((_, _, kind)) = locate(&ref_text, &quote) {
+            location = Some(loc_at(body, (spans[lo].src_start, spans[hi].src_end), kind));
+        } else if let Some((wlo, whi, kind)) = window_match(spans, lo, hi, &quote) {
+            // Tier B: deterministic match in a contiguous window around the ref
+            // (the quote straddles span/paragraph boundaries). Still verbatim.
             issues.push(ValidationIssue::new(
-                "unit.spans_paragraph",
-                format!("quote spans beyond `{reff}`; matched in paragraph `{}`", p.id),
+                "unit.spans_window",
+                format!("quote spans a window `{}`..`{}` around the ref", spans[wlo].id, spans[whi].id),
             ));
-            location = Some(loc_at(body, (p.src_start, p.src_end), kind));
-        }
-    }
-
-    // Not found in ref/parent → is it anywhere in the view? (ref_mismatch).
-    if location.is_none() && !quote.is_empty() && ref_text.is_some() {
-        match find_anywhere(spans, paras, &quote) {
-            Some(other) => {
-                ref_mismatch = true;
-                issues.push(ValidationIssue::new(
-                    "unit.ref_mismatch",
-                    format!("quote found in `{other}`, not the declared `{reff}`"),
-                ));
-            }
-            None => issues.push(ValidationIssue::new(
+            location = Some(loc_at(
+                body,
+                (spans[wlo].src_start, spans[whi].src_end),
+                MatchKind::RenderedWindow,
+            ));
+            let _ = kind;
+        } else if let Some(other) = find_anywhere(spans, &quote) {
+            // Tier C: real quote, but far from the ref → ref_mismatch.
+            ref_mismatch = true;
+            issues.push(ValidationIssue::new(
+                "unit.ref_mismatch",
+                format!("quote found near `{other}`, not the declared `{reff}`"),
+            ));
+        } else if best_similarity(&ref_text, &quote) >= NEAR_MATCH_THRESHOLD {
+            // Tier D: SIMILARITY only (no deterministic substring) → needs_review,
+            // NEVER accepted. Grounding must stay deterministic.
+            near_match = true;
+            issues.push(ValidationIssue::new(
+                "unit.near_match",
+                "quote is a close-but-not-verbatim match in the ref — verify (not auto-accepted)",
+            ));
+        } else {
+            issues.push(ValidationIssue::new(
                 "unit.quote_not_found",
-                format!("quote not found in `{reff}` or anywhere in the rendered view"),
-            )),
+                format!("quote not found in `{reff}`, a window around it, or elsewhere"),
+            ));
         }
     }
 
     // Arguments are ADVISORY: compute locatability + warn, but never gate status.
+    let ctx = ref_idx.map(|(lo, hi)| concat_spans(spans, lo, hi)).unwrap_or_default();
     let mut arguments: Vec<Argument> = Vec::with_capacity(raw.arguments.len());
     let mut drift = 0usize;
     for mut arg in raw.arguments {
-        arg.locatable = location.is_some()
-            && ref_text.map(|t| arg_in(&arg.surface, &quote, t)).unwrap_or(false);
+        arg.locatable = location.is_some() && arg_in(&arg.surface, &quote, &ctx);
         if !arg.locatable && location.is_some() {
             drift += 1;
         }
@@ -177,12 +155,14 @@ fn validate_one(
         ));
     }
 
-    // Status: located → accepted; located-elsewhere → needs_review; else rejected.
-    // Argument drift does NOT change status (advisory).
-    let status = match (&location, ref_mismatch) {
-        (Some(_), _) => UnitStatus::Accepted,
-        (None, true) => UnitStatus::NeedsReview,
-        (None, false) => UnitStatus::Rejected,
+    // Status: deterministic match → accepted; located-elsewhere or near-match →
+    // needs_review; else rejected. Argument drift does NOT gate (advisory).
+    let status = if location.is_some() {
+        UnitStatus::Accepted
+    } else if ref_mismatch || near_match {
+        UnitStatus::NeedsReview
+    } else {
+        UnitStatus::Rejected
     };
 
     Unit {
@@ -207,6 +187,79 @@ fn validate_one(
 fn loc_at(body: &str, range: (usize, usize), kind: MatchKind) -> EvidenceLocation {
     let (rs, re) = range;
     EvidenceLocation { byte_start: rs, byte_end: re, line: line_of(body, rs), match_kind: kind }
+}
+
+/// Resolve `reff` to a contiguous span-index range `[lo..=hi]`: a span id
+/// (`p017.s002`) → one span; a bare paragraph id (`p017`) → all its spans.
+fn resolve_ref(spans: &[RenderedSpan], reff: &str) -> Option<(usize, usize)> {
+    if let Some(i) = spans.iter().position(|s| s.id == reff) {
+        return Some((i, i));
+    }
+    let first = spans.iter().position(|s| s.para_id == reff)?;
+    let last = spans.iter().rposition(|s| s.para_id == reff)?;
+    Some((first, last))
+}
+
+/// Rendered text of spans `[lo..=hi]` joined by a space (whitespace-insensitive
+/// matching ignores the join).
+fn concat_spans(spans: &[RenderedSpan], lo: usize, hi: usize) -> String {
+    spans[lo..=hi].iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ")
+}
+
+/// Deterministic match in a contiguous WINDOW around the ref region, expanding
+/// symmetrically up to [`WINDOW_RADIUS`]. Returns the matched window's span
+/// bounds. Bounded so the match stays near the ref — never the whole article.
+fn window_match(
+    spans: &[RenderedSpan],
+    lo: usize,
+    hi: usize,
+    quote: &str,
+) -> Option<(usize, usize, MatchKind)> {
+    for r in 1..=WINDOW_RADIUS {
+        let wlo = lo.saturating_sub(r);
+        let whi = (hi + r).min(spans.len() - 1);
+        let text = concat_spans(spans, wlo, whi);
+        if let Some((_, _, kind)) = locate(&text, quote) {
+            return Some((wlo, whi, kind));
+        }
+        if wlo == 0 && whi == spans.len() - 1 {
+            break;
+        }
+    }
+    None
+}
+
+/// A real (deterministic) match somewhere far from the ref → ref_mismatch.
+fn find_anywhere(spans: &[RenderedSpan], quote: &str) -> Option<String> {
+    spans.iter().find_map(|s| locate(&s.text, quote).map(|_| s.id.clone()))
+}
+
+/// Char-bigram Dice coefficient (0..1) between `quote` and the best same-length
+/// window of `hay`, both render-normalized. Diagnostic ONLY (→ needs_review).
+fn best_similarity(hay: &str, quote: &str) -> f64 {
+    let h: Vec<char> = render_norm(hay).chars().collect();
+    let q: Vec<char> = render_norm(quote).chars().collect();
+    if q.len() < 2 || h.len() < q.len() {
+        return 0.0;
+    }
+    let qb = bigrams(&q);
+    let step = (q.len() / 4).max(1);
+    let mut best = 0.0f64;
+    let mut i = 0;
+    while i + q.len() <= h.len() {
+        let wb = bigrams(&h[i..i + q.len()]);
+        let inter = qb.iter().filter(|b| wb.contains(b)).count();
+        let dice = 2.0 * inter as f64 / (qb.len() + wb.len()) as f64;
+        if dice > best {
+            best = dice;
+        }
+        i += step;
+    }
+    best
+}
+
+fn bigrams(cs: &[char]) -> Vec<(char, char)> {
+    cs.windows(2).map(|w| (w[0], w[1])).collect()
 }
 
 fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
@@ -245,13 +298,6 @@ fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
         return Some((0, hay.len(), MatchKind::Rendered));
     }
     None
-}
-
-fn find_anywhere(spans: &[RenderedSpan], paras: &[ParaGroup], quote: &str) -> Option<String> {
-    spans
-        .iter()
-        .find_map(|s| locate(&s.text, quote).map(|_| s.id.clone()))
-        .or_else(|| paras.iter().find_map(|p| locate(&p.text, quote).map(|_| p.id.clone())))
 }
 
 fn rendered_contains(hay: &str, quote: &str) -> bool {
@@ -368,6 +414,8 @@ fn build_report(
         quote_maps_to_original: located,
         accepted_without_quote,
         ref_mismatch: has("unit.ref_mismatch"),
+        span_window_matches: has("unit.spans_window"),
+        near_match_needs_review: has("unit.near_match"),
         quote_not_found: has("unit.quote_not_found"),
         argument_drift_advisory: has("unit.argument_drift_advisory"),
         duplicate_groups,
@@ -450,17 +498,52 @@ mod tests {
     }
 
     #[test]
-    fn cross_span_quote_matches_parent_paragraph() {
-        // Quote spans both sentences of p002 but refs only the first span.
+    fn cross_span_quote_matches_via_window() {
+        // Quote spans both sentences of p002 but refs only the first span →
+        // deterministic window match (RenderedWindow), accepted.
         let q = "A chunk is a structurally neutral container. It knows nothing about ownership.";
         let ex = validate(&[raw("p002.s001", q, &[])], &src(BODY));
         assert_eq!(ex.units[0].status, UnitStatus::Accepted);
-        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.spans_paragraph"));
+        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.spans_window"));
+        assert_eq!(ex.units[0].evidence.location.as_ref().unwrap().match_kind, MatchKind::RenderedWindow);
+        assert_eq!(ex.report.span_window_matches, 1);
     }
 
     #[test]
-    fn wrong_ref_but_real_quote_is_ref_mismatch() {
+    fn non_verbatim_quote_is_never_accepted() {
+        // The core M14a.3 invariant: a quote that is not a deterministic
+        // substring (even rendered/windowed) is NEVER accepted — no fuzzy
+        // grounding. It is needs_review (near) or rejected, never accepted.
+        let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutral box.", &[])], &src(BODY));
+        assert_ne!(ex.units[0].status, UnitStatus::Accepted, "non-verbatim must not be accepted");
+        assert!(ex.units[0].evidence.location.is_none(), "no location for a non-deterministic match");
+        assert_eq!(ex.report.accepted, 0);
+    }
+
+    #[test]
+    fn near_verbatim_typo_is_needs_review_not_accepted() {
+        // A 1-char typo (≥0.95 similar, NOT a substring) → near_match needs_review.
+        let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutrai container.", &[])], &src(BODY));
+        assert_ne!(ex.units[0].status, UnitStatus::Accepted);
+        assert!(ex.units[0].evidence.location.is_none());
+    }
+
+    #[test]
+    fn adjacent_wrong_ref_recovered_by_window() {
+        // Quote is in p002.s002 but ref'd p003.s001 (adjacent) → deterministic
+        // window match near the ref → accepted (grounded), flagged spans_window.
         let ex = validate(&[raw("p003.s001", "It knows nothing about ownership.", &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
+        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.spans_window"));
+    }
+
+    #[test]
+    fn distant_wrong_ref_is_ref_mismatch() {
+        // 12 single-sentence paragraphs; ref p001 but quote from p012 — far
+        // beyond the window radius → ref_mismatch (needs_review), not accepted.
+        let body: String =
+            (1..=12).map(|i| format!("Distinct sentence number {i} alpha.")).collect::<Vec<_>>().join("\n\n");
+        let ex = validate(&[raw("p001.s001", "Distinct sentence number 12 alpha.", &[])], &src(&body));
         assert_eq!(ex.units[0].status, UnitStatus::NeedsReview);
         assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.ref_mismatch"));
         assert_eq!(ex.report.ref_mismatch, 1);
