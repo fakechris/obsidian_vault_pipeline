@@ -1,6 +1,27 @@
 # Stage M14a — Grounded Unit Extraction Spike
 
-> **Status: M14a.RCA done (see `docs/stage-m14a-rca.md`).** Root cause is
+> **M14a.2 (Rendered Source View + span ids) done — big English win, Chinese
+> improved, residual is pipeline not model.** The model is shown the rendered
+> plain-text span view (`[p017.s002] text`) and the validator matches the SAME
+> view; arguments are advisory (non-gating); metrics split (ref_found /
+> quote_found / ref_mismatch / quote_not_found / arg_drift_advisory). Live v3:
+>
+> | case | M14a.1 | **M14a.2** | target | met |
+> |---|---|---|---|---|
+> | rag_wrong | 63.6% | **100%** | ≥90% | ✅ |
+> | eval_ai_agents | 78.0% | **93.3%** | ≥95% | ✗ (1 unit) |
+> | agent_memory_zh | 27.3% | **41.7%** | ≥70% | ✗ |
+>
+> `accepted_without_quote=0` all; `needs_review=0` (args no longer gate); zh
+> parses cleanly. The eval + zh residual is **near-verbatim quotes that straddle
+> segmentation boundaries** (similarity 0.85–0.97 to source; the model starts
+> mid-span / ends in the next) — NOT model paraphrase/compression and NOT a
+> transcription limit. So the next step is segmentation/matching granularity (a
+> paragraph-spanning / conservative near-match), still pipeline — not a schema
+> downgrade or model change. Decision is the operator's.
+>
+> ---
+> **Earlier: M14a.RCA (see `docs/stage-m14a-rca.md`).** Root cause is
 > **our pipeline, not the model**: 68% of quote failures are representation /
 > segmentation / validator (the model copies near-verbatim; we mis-normalized).
 > A faithful-render validator fix recovered the English cases offline (rag

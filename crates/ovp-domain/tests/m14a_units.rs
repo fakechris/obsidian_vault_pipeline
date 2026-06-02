@@ -79,30 +79,27 @@ fn end_to_end_classifies_and_writes_pack() {
     let mut model = FakeModel { reply: REPLY.into() };
     let ex = run_unit_extraction(&source(), &mut model).expect("client ok").extraction;
 
-    // 4 emitted: 1 accepted, 1 needs-review (arg drift), 2 rejected (quote-not-found + malformed).
+    // 4 emitted. M14a.2: argument drift is ADVISORY (does not gate), so the
+    // grounded unit with a drifting arg is ACCEPTED, not needs-review.
+    // → 2 accepted (both grounded), 0 needs-review, 2 rejected (quote-not-found
+    //   + malformed).
     assert_eq!(ex.report.total, 4);
-    assert_eq!(ex.report.accepted, 1, "the verbatim-grounded unit");
-    assert_eq!(ex.report.needs_review, 1, "the argument-drift unit");
+    assert_eq!(ex.report.accepted, 2, "both grounded units (arg drift is advisory)");
+    assert_eq!(ex.report.needs_review, 0);
     assert_eq!(ex.report.rejected, 2, "absent-quote + malformed");
     assert_eq!(ex.report.accepted_without_quote, 0, "hard invariant");
     assert!(ex.report.parse_error.is_none());
 
-    // The accepted unit is grounded and located.
-    let accepted: Vec<_> = ex.accepted().collect();
-    assert_eq!(accepted.len(), 1);
-    assert!(accepted[0].evidence.location.is_some());
-
-    // The only needs-review is the Azure-arg-drift unit whose quote DID match
-    // but whose `Azure AI Search` argument is absent from the source.
-    let nr: Vec<_> = ex.needs_review().collect();
-    assert_eq!(nr.len(), 1);
-    assert!(nr[0].issues.iter().any(|i| i.code == "unit.argument_drift"));
+    // The arg-drift unit is accepted but carries an advisory.
+    assert_eq!(ex.report.argument_drift_advisory, 1);
+    let drifted = ex.accepted().find(|u| u.text.starts_with("Blockify")).unwrap();
+    assert!(drifted.issues.iter().any(|i| i.code == "unit.argument_drift_advisory"));
 
     // Write the pack and confirm REVIEW.md surfaces the grounding.
     let dir = tempfile::tempdir().unwrap();
     write_unit_review_pack(dir.path(), BODY, &ex, Some(REPLY)).unwrap();
     let review = std::fs::read_to_string(dir.path().join("REVIEW.md")).unwrap();
-    assert!(review.contains("Accepted units (1)"));
+    assert!(review.contains("Accepted units (2)"));
     assert!(review.contains("structurally neutral container"));
     assert!(review.contains("invariant holds"));
 }

@@ -25,7 +25,9 @@ pub use harness::{extract_units, read_source_from_path, run_unit_extraction, Uni
 pub use parser::{parse_envelope, ParseError, RawUnit};
 pub use prompt::{build_unit_prompt, unit_model_request, UNIT_PROMPT_ID, UNIT_SCHEMA_VERSION};
 pub use review_pack::write_unit_review_pack;
-pub use source_map::{annotate, find_paragraph, paragraphs, Paragraph};
+pub use source_map::{
+    annotate, annotate_rendered, find_paragraph, paragraphs, rendered_view, Paragraph, RenderedSpan,
+};
 pub use validator::validate;
 
 /// What kind of thing a Unit states. Deliberately tiny — classification beyond
@@ -117,11 +119,12 @@ pub struct EvidenceLocation {
 /// derived location (if the quote was found within that paragraph).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitEvidence {
-    /// The `pNNN` id the model declared the quote came from (M14a.1).
-    pub paragraph_ref: String,
+    /// The span/paragraph id the model declared the quote came from — a rendered
+    /// span id like `p017.s002` or a bare paragraph id `p017` (M14a.2).
+    pub ref_id: String,
     pub quote: String,
-    /// `None` ⇒ the quote was not found in the referenced paragraph (the unit is
-    /// rejected, or — if found in a *different* paragraph — needs review).
+    /// `None` ⇒ the quote was not located in the referenced span/paragraph or the
+    /// view (rejected, or `ref_mismatch` → needs review if found elsewhere).
     pub location: Option<EvidenceLocation>,
 }
 
@@ -175,14 +178,23 @@ pub struct ValidationReport {
     pub accepted: usize,
     pub rejected: usize,
     pub needs_review: usize,
-    /// Units whose quote was found in source / total units (0.0 if total == 0).
+    /// Units whose `evidence_ref` resolved to a known span/paragraph / total.
+    pub ref_found_rate: f64,
+    /// Units whose quote was located in the rendered view / total (the headline
+    /// grounding metric; 0.0 if total == 0).
     pub quote_found_rate: f64,
+    /// Located units that also carry an original-source byte range (should equal
+    /// the located count — every span maps back to the raw source).
+    pub quote_maps_to_original: usize,
     /// HARD INVARIANT: must be 0. An accepted unit always has a located quote.
     pub accepted_without_quote: usize,
-    /// Locatable arguments / total arguments (1.0 if there are no arguments).
-    pub argument_locatable_rate: f64,
-    /// Groups of accepted units sharing a normalized text or quote (each group is
-    /// a list of unit ids). Surfaced, not auto-resolved.
+    /// Quote real but in a DIFFERENT span/paragraph than declared (needs review).
+    pub ref_mismatch: usize,
+    /// Quote not found anywhere in the rendered view (rejected).
+    pub quote_not_found: usize,
+    /// Arguments that did not locate — ADVISORY only (does NOT gate accepted).
+    pub argument_drift_advisory: usize,
+    /// Groups of accepted/needs-review units sharing a normalized text.
     pub duplicate_groups: Vec<Vec<String>>,
     /// Set when the model output could not be parsed as the unit envelope.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -46,10 +46,14 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
         r.total, r.accepted, r.needs_review, r.rejected
     );
     println!(
-        "  quote_found_rate={:.1}%  accepted_without_quote={}  arg_locatable={:.1}%",
+        "  ref_found={:.1}%  quote_found={:.1}%  accepted_without_quote={}",
+        r.ref_found_rate * 100.0,
         r.quote_found_rate * 100.0,
         r.accepted_without_quote,
-        r.argument_locatable_rate * 100.0
+    );
+    println!(
+        "  ref_mismatch={}  quote_not_found={}  arg_drift(advisory)={}",
+        r.ref_mismatch, r.quote_not_found, r.argument_drift_advisory
     );
     println!("  review pack: {}", args.out_dir.join("REVIEW.md").display());
 
@@ -91,9 +95,13 @@ mod tests {
             accepted: 0,
             rejected: 0,
             needs_review: 0,
+            ref_found_rate: 1.0,
             quote_found_rate: 1.0,
+            quote_maps_to_original: 0,
             accepted_without_quote,
-            argument_locatable_rate: 1.0,
+            ref_mismatch: 0,
+            quote_not_found: 0,
+            argument_drift_advisory: 0,
             duplicate_groups: vec![],
             parse_error: parse_error.map(str::to_string),
         }

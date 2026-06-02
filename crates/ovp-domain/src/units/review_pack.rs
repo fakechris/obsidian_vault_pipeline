@@ -79,13 +79,17 @@ pub fn render_review_md(ex: &SourceExtraction) -> String {
         "- total: {}  ·  accepted: {}  ·  needs-review: {}  ·  rejected: {}\n",
         r.total, r.accepted, r.needs_review, r.rejected
     ));
+    s.push_str(&format!("- ref_found_rate: {:.1}%\n", r.ref_found_rate * 100.0));
     s.push_str(&format!("- quote_found_rate: {:.1}%\n", r.quote_found_rate * 100.0));
     s.push_str(&format!(
         "- accepted_without_quote: {} {}\n",
         r.accepted_without_quote,
         if r.accepted_without_quote == 0 { "(invariant holds)" } else { "(**INVARIANT VIOLATED**)" }
     ));
-    s.push_str(&format!("- argument_locatable_rate: {:.1}%\n", r.argument_locatable_rate * 100.0));
+    s.push_str(&format!(
+        "- ref_mismatch: {}  ·  quote_not_found: {}  ·  argument_drift (advisory): {}\n",
+        r.ref_mismatch, r.quote_not_found, r.argument_drift_advisory
+    ));
     if !r.duplicate_groups.is_empty() {
         s.push_str(&format!("- **duplicate groups**: {}\n", r.duplicate_groups.len()));
         for g in &r.duplicate_groups {
@@ -114,7 +118,7 @@ fn section<'a>(s: &mut String, title: &str, units: impl Iterator<Item = &'a Unit
         };
         s.push_str(&format!("### `{}` — {}\n\n", u.id, kind.to_lowercase()));
         s.push_str(&format!("> {}\n\n", u.text));
-        s.push_str(&format!("- **ref**: `{}`\n", u.evidence.paragraph_ref));
+        s.push_str(&format!("- **ref**: `{}`\n", u.evidence.ref_id));
         s.push_str(&format!("- **quote**: \"{}\"\n", u.evidence.quote));
         match &u.evidence.location {
             Some(loc) => s.push_str(&format!(
@@ -154,7 +158,7 @@ mod tests {
         let body = "A chunk is a structurally neutral container.";
         let raw = serde_json::json!({
             "kind": "assertion", "text": "A chunk is neutral.",
-            "evidence_ref": "p001",
+            "evidence_ref": "p001.s001",
             "evidence_quote": "A chunk is a structurally neutral container.",
             "attribution": "author", "modality": "asserted",
             "arguments": [{"surface":"chunk","role":"subject"}]

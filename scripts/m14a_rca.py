@@ -150,7 +150,7 @@ def main():
         cats, examples = {}, {}
         for u in failed:
             q = u["evidence"]["quote"]
-            ref = u["evidence"]["paragraph_ref"]
+            ref = u["evidence"].get("ref_id") or u["evidence"].get("paragraph_ref", "")
             m = re.match(r"p0*(\d+)", ref or "")
             ref_text = paras[int(m.group(1)) - 1] if m and 0 < int(m.group(1)) <= len(paras) else None
             c = classify(q, article, paras, ref_text)

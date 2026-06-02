@@ -76,6 +76,172 @@ pub fn annotate(body: &str) -> String {
     out
 }
 
+// ---- M14a.2: rendered source view + finer span ids ----
+
+/// A finest-grain source span the model anchors evidence to. `text` is the
+/// RENDERED plain text (the model sees exactly this); `src_*` map back to the
+/// original raw-markdown byte range for the review pack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSpan {
+    pub id: String,       // e.g. "p017.s002"
+    pub para_id: String,  // e.g. "p017"
+    pub text: String,     // rendered plain text
+    pub src_start: usize,
+    pub src_end: usize,
+}
+
+/// Render the body into the flat list of finest spans the model is shown and the
+/// validator checks against — the SAME text on both sides (the core M14a.2 fix).
+/// Paragraphs (blank-line blocks) are sub-split into sentences / list items.
+pub fn rendered_view(body: &str) -> Vec<RenderedSpan> {
+    let mut spans = Vec::new();
+    for (pi, p) in paragraphs(body).iter().enumerate() {
+        let para_id = format!("p{:03}", pi + 1);
+        let mut si = 0usize;
+        for (s, e) in split_units(&p.text) {
+            let raw_sub = &p.text[s..e];
+            let text = render_plain(raw_sub);
+            if text.is_empty() {
+                continue;
+            }
+            si += 1;
+            spans.push(RenderedSpan {
+                id: format!("{para_id}.s{si:03}"),
+                para_id: para_id.clone(),
+                text,
+                src_start: p.byte_start + s,
+                src_end: p.byte_start + e,
+            });
+        }
+    }
+    spans
+}
+
+/// The model-facing body: one `[id] rendered text` line per span.
+pub fn annotate_rendered(spans: &[RenderedSpan]) -> String {
+    let mut out = String::new();
+    for sp in spans {
+        out.push('[');
+        out.push_str(&sp.id);
+        out.push_str("] ");
+        out.push_str(&sp.text);
+        out.push('\n');
+    }
+    out
+}
+
+/// Split one paragraph's RAW text into byte ranges at sentence / clause / line
+/// boundaries (deterministic). CJK enders `。！？；`, a newline, or an ASCII
+/// `.!?` followed by whitespace/end. The ender stays with the preceding unit.
+fn split_units(raw: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<(usize, char)> = raw.char_indices().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for k in 0..chars.len() {
+        let (idx, c) = chars[k];
+        let end = idx + c.len_utf8();
+        let cjk = matches!(c, '。' | '！' | '？' | '；' | '\n');
+        let en = matches!(c, '.' | '!' | '?')
+            && chars.get(k + 1).is_none_or(|(_, n)| n.is_whitespace());
+        if cjk || en {
+            out.push((start, end));
+            start = end;
+        }
+    }
+    if start < raw.len() {
+        out.push((start, raw.len()));
+    }
+    out
+}
+
+/// Render one raw fragment to readable plain text: drop a leading heading/list
+/// marker, extract markdown link text, strip emphasis markers, collapse
+/// whitespace. Keeps case + punctuation + unicode (the matcher folds those).
+pub(crate) fn render_plain(raw: &str) -> String {
+    let stripped = strip_leading_marker(raw.trim());
+    let linked = strip_markdown_links(stripped);
+    let mut out = String::with_capacity(linked.len());
+    let mut prev_ws = false;
+    for c in linked.chars() {
+        if matches!(c, '*' | '_' | '`' | '~') {
+            continue;
+        }
+        if c.is_whitespace() {
+            if !prev_ws && !out.is_empty() {
+                out.push(' ');
+                prev_ws = true;
+            }
+            continue;
+        }
+        out.push(c);
+        prev_ws = false;
+    }
+    out.trim().to_string()
+}
+
+fn strip_leading_marker(s: &str) -> &str {
+    let t = s.trim_start().trim_start_matches('#').trim_start_matches('>').trim_start();
+    for m in ["- ", "* ", "+ "] {
+        if let Some(r) = t.strip_prefix(m) {
+            return r.trim_start();
+        }
+    }
+    // ordered list "12. "
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        if let Some(r) = t[digits.len()..].strip_prefix(". ") {
+            return r.trim_start();
+        }
+    }
+    t
+}
+
+/// Replace `[text](url)` / `![alt](url)` with just the visible `text`/`alt`.
+pub(crate) fn strip_markdown_links(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if !s.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'[' {
+            if let Some(close) = s[i + 1..].find(']') {
+                let text_end = i + 1 + close;
+                let after = text_end + 1;
+                if bytes.get(after) == Some(&b'(') {
+                    if let Some(paren) = s[after..].find(')') {
+                        out.push_str(&s[i + 1..text_end]);
+                        i = after + paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Fold a char to ASCII: fullwidth ASCII (CJK) → halfwidth, plus smart
+/// quotes/dashes and CJK punctuation → ASCII. Used by the matcher so a model
+/// copying ASCII still matches a source with fullwidth/smart punctuation.
+pub(crate) fn fold_char(c: char) -> char {
+    match c {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        '\u{3000}' => ' ',
+        '\u{2018}' | '\u{2019}' => '\'',
+        '\u{201C}' | '\u{201D}' | '\u{300C}' | '\u{300D}' => '"',
+        '\u{2013}' | '\u{2014}' => '-',
+        '\u{3001}' => ',',
+        '\u{3002}' => '.',
+        _ => c,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +294,50 @@ mod tests {
         assert_eq!(paras.len(), 2);
         assert_eq!(&body[paras[0].byte_start..paras[0].byte_end], paras[0].text);
         assert_eq!(&body[paras[1].byte_start..paras[1].byte_end], "这是第二段。");
+    }
+
+    #[test]
+    fn rendered_view_splits_english_sentences() {
+        let body = "# H\n\nA chunk is neutral. It knows nothing. The fix is upstream.";
+        let v = rendered_view(body);
+        // heading p001.s001 + three sentence spans under p002.
+        let p2: Vec<_> = v.iter().filter(|s| s.para_id == "p002").collect();
+        assert_eq!(p2.len(), 3);
+        assert_eq!(p2[0].text, "A chunk is neutral.");
+        assert_eq!(p2[1].text, "It knows nothing.");
+        assert_eq!(p2[0].id, "p002.s001");
+    }
+
+    #[test]
+    fn rendered_view_splits_cjk_semicolon_lists() {
+        let body = "情景记忆：昨天发生了啥；语义记忆：你叫什么；程序性记忆：怎么完成";
+        let v = rendered_view(body);
+        assert_eq!(v.len(), 3, "one span per ；-separated item");
+        assert!(v[0].text.starts_with("情景记忆"));
+        assert!(v[1].text.starts_with("语义记忆"));
+    }
+
+    #[test]
+    fn rendered_view_renders_markdown_and_maps_to_source() {
+        let body = "Use [vitest-evals](https://x/y) and **bold** here.";
+        let v = rendered_view(body);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].text, "Use vitest-evals and bold here.");
+        // src range still points into the ORIGINAL raw markdown.
+        assert!(body[v[0].src_start..v[0].src_end].contains("vitest-evals]("));
+    }
+
+    #[test]
+    fn render_plain_strips_list_marker_and_link() {
+        assert_eq!(render_plain("- **First** point [see](u)"), "First point see");
+        assert_eq!(render_plain("1. Ordered item"), "Ordered item");
+    }
+
+    #[test]
+    fn fold_char_folds_fullwidth_and_smart() {
+        assert_eq!(fold_char('：'), ':');
+        assert_eq!(fold_char('，'), ',');
+        assert_eq!(fold_char('\u{2019}'), '\'');
+        assert_eq!(fold_char('a'), 'a');
     }
 }

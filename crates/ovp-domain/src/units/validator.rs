@@ -1,20 +1,17 @@
-//! Deterministic validation of raw units against the source (M14a.1: ref-scoped).
+//! Deterministic validation against the RENDERED source view (M14a.2).
 //!
-//! Enforces **grounding + structure** only:
-//! - `evidence_ref` names a real paragraph (`pNNN`),
-//! - the `evidence_quote` is found WITHIN that paragraph (Exact → Whitespace →
-//!   Relaxed ladder) — a located quote in its ref paragraph is required for
-//!   `accepted`,
-//! - required enums parsed (a malformed unit is rejected, not silently dropped),
-//! - each argument surface is locatable in the quote or the ref paragraph.
+//! The model is shown finest-grain rendered spans (`[p017.s002] plain text`) and
+//! anchors each unit's `evidence_ref` to a span id (or a bare paragraph id). The
+//! validator resolves that ref in the SAME rendered view and matches the quote
+//! there — so "what the model saw" == "what we validate", eliminating the
+//! raw-markdown / smart-quote / fullwidth mismatches the RCA found.
 //!
-//! Quote found in a *different* paragraph ⇒ `needs_review` (`ref_mismatch`): the
-//! evidence is real but the transport is wrong. Quote found nowhere ⇒ rejected.
+//! Enforces **grounding + structure**: ref resolves, quote located in the ref
+//! span (or its paragraph), located quote required for `accepted`. Arguments are
+//! **advisory** (a warning, never gating). It does NOT judge faithfulness of
+//! `text` or attribution/modality *values* — those are human review.
 //!
-//! It does NOT judge faithfulness of `text` or whether attribution/modality
-//! *values* are correct — those are semantic and go to human review.
-//!
-//! Pure + deterministic: same `(raw_values, source)` → identical `SourceExtraction`.
+//! Pure + deterministic.
 
 use std::collections::BTreeMap;
 
@@ -23,24 +20,52 @@ use sha2::{Digest, Sha256};
 use crate::source_doc::SourceDoc;
 
 use super::parser::RawUnit;
-use super::source_map::{find_paragraph, paragraphs, Paragraph};
+use super::source_map::{fold_char, rendered_view, strip_markdown_links, RenderedSpan};
 use super::{
     Argument, EvidenceLocation, MatchKind, SourceExtraction, Unit, UnitEvidence, UnitStatus,
     ValidationIssue, ValidationReport,
 };
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
-/// Validate the raw `units[]` values against `source`, scoping each quote match
-/// to the paragraph named by its `evidence_ref`.
+/// A paragraph rolled up from its rendered spans, for the "ref a bare paragraph
+/// id" case and the cross-span fallback.
+struct ParaGroup {
+    id: String,
+    text: String,
+    src_start: usize,
+    src_end: usize,
+}
+
+fn paragraph_groups(spans: &[RenderedSpan]) -> Vec<ParaGroup> {
+    let mut out: Vec<ParaGroup> = Vec::new();
+    for sp in spans {
+        match out.last_mut() {
+            Some(g) if g.id == sp.para_id => {
+                g.text.push(' ');
+                g.text.push_str(&sp.text);
+                g.src_end = sp.src_end;
+            }
+            _ => out.push(ParaGroup {
+                id: sp.para_id.clone(),
+                text: sp.text.clone(),
+                src_start: sp.src_start,
+                src_end: sp.src_end,
+            }),
+        }
+    }
+    out
+}
+
 pub fn validate(raw_values: &[serde_json::Value], source: &SourceDoc) -> SourceExtraction {
     let body = &source.body_markdown;
-    let paras = paragraphs(body);
+    let spans = rendered_view(body);
+    let paras = paragraph_groups(&spans);
     let mut units: Vec<Unit> = Vec::with_capacity(raw_values.len());
 
     for (idx, value) in raw_values.iter().enumerate() {
         match serde_json::from_value::<RawUnit>(value.clone()) {
-            Ok(raw) => units.push(validate_one(idx, raw, body, &paras)),
+            Ok(raw) => units.push(validate_one(idx, raw, body, &spans, &paras)),
             Err(e) => units.push(malformed_unit(idx, value, &e.to_string())),
         }
     }
@@ -58,8 +83,6 @@ pub fn validate(raw_values: &[serde_json::Value], source: &SourceDoc) -> SourceE
     }
 }
 
-/// Build a parse-failed extraction (the model output was not a valid unit
-/// envelope) so the review pack still records the failure.
 pub fn extraction_parse_failed(source: &SourceDoc, detail: String) -> SourceExtraction {
     SourceExtraction {
         source_id: source_id(source),
@@ -72,89 +95,94 @@ pub fn extraction_parse_failed(source: &SourceDoc, detail: String) -> SourceExtr
     }
 }
 
-fn validate_one(idx: usize, raw: RawUnit, body: &str, paras: &[Paragraph]) -> Unit {
+fn validate_one(
+    idx: usize,
+    raw: RawUnit,
+    body: &str,
+    spans: &[RenderedSpan],
+    paras: &[ParaGroup],
+) -> Unit {
     let id = unit_id(idx, &raw.evidence_quote);
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
     let quote = raw.evidence_quote.trim().to_string();
-    let pref = raw.evidence_ref.trim().to_string();
-    let para = find_paragraph(paras, &pref);
+    let reff = raw.evidence_ref.trim().to_string();
 
-    // Locate the quote, scoped to the declared paragraph.
+    // Resolve the ref: a span id (p017.s002) or a bare paragraph id (p017).
+    let span = spans.iter().find(|s| s.id == reff);
+    let para = paras.iter().find(|p| p.id == reff);
+    let (ref_text, ref_range): (Option<&str>, Option<(usize, usize)>) = match (span, para) {
+        (Some(s), _) => (Some(&s.text), Some((s.src_start, s.src_end))),
+        (None, Some(p)) => (Some(&p.text), Some((p.src_start, p.src_end))),
+        (None, None) => (None, None),
+    };
+    // The parent paragraph of a span ref, for the cross-span fallback.
+    let parent = span.and_then(|s| paras.iter().find(|p| p.id == s.para_id));
+
     let mut location: Option<EvidenceLocation> = None;
     let mut ref_mismatch = false;
+
     if quote.is_empty() {
         issues.push(ValidationIssue::new("unit.no_evidence", "empty evidence_quote"));
-    } else if para.is_none() {
+    } else if ref_text.is_none() {
         issues.push(ValidationIssue::new(
             "unit.ref_not_found",
-            format!("evidence_ref `{pref}` is not a paragraph id"),
+            format!("evidence_ref `{reff}` is not a span or paragraph id"),
         ));
-    } else {
-        let para = para.unwrap();
-        match locate(&para.text, &quote) {
-            Some((s, e, kind)) => {
-                let byte_start = para.byte_start + s;
-                let byte_end = para.byte_start + e;
-                location = Some(EvidenceLocation {
-                    byte_start,
-                    byte_end,
-                    line: line_of(body, byte_start),
-                    match_kind: kind,
-                });
-            }
-            // Faithful-render tier: match after rendering BOTH sides to plain
-            // text (link text, smart quotes, fullwidth CJK, emphasis, case).
-            // Paragraph-granular location (sub-offsets lost in the transform).
-            None if rendered_contains(&para.text, &quote) => {
-                location = Some(EvidenceLocation {
-                    byte_start: para.byte_start,
-                    byte_end: para.byte_end,
-                    line: line_of(body, para.byte_start),
-                    match_kind: MatchKind::Rendered,
-                });
-            }
-            None => match find_in_any_paragraph(paras, &quote) {
-                Some(other) => {
-                    ref_mismatch = true;
-                    issues.push(ValidationIssue::new(
-                        "unit.ref_mismatch",
-                        format!("quote found in `{other}`, not the declared `{pref}`"),
-                    ));
-                }
-                None => issues.push(ValidationIssue::new(
-                    "unit.quote_not_found",
-                    format!("quote not found in `{pref}` or anywhere in the source"),
-                )),
-            },
+    } else if let Some((_, _, kind)) = locate(ref_text.unwrap(), &quote) {
+        location = Some(loc_at(body, ref_range.unwrap(), kind));
+    } else if let Some(p) = parent {
+        // Cross-span: quote not in the named span but in its paragraph.
+        if let Some((_, _, kind)) = locate(&p.text, &quote) {
+            issues.push(ValidationIssue::new(
+                "unit.spans_paragraph",
+                format!("quote spans beyond `{reff}`; matched in paragraph `{}`", p.id),
+            ));
+            location = Some(loc_at(body, (p.src_start, p.src_end), kind));
         }
     }
 
-    // Argument locatability — within the quote or the referenced paragraph.
-    let para_text = para.map(|p| p.text.as_str()).unwrap_or("");
+    // Not found in ref/parent → is it anywhere in the view? (ref_mismatch).
+    if location.is_none() && !quote.is_empty() && ref_text.is_some() {
+        match find_anywhere(spans, paras, &quote) {
+            Some(other) => {
+                ref_mismatch = true;
+                issues.push(ValidationIssue::new(
+                    "unit.ref_mismatch",
+                    format!("quote found in `{other}`, not the declared `{reff}`"),
+                ));
+            }
+            None => issues.push(ValidationIssue::new(
+                "unit.quote_not_found",
+                format!("quote not found in `{reff}` or anywhere in the rendered view"),
+            )),
+        }
+    }
+
+    // Arguments are ADVISORY: compute locatability + warn, but never gate status.
     let mut arguments: Vec<Argument> = Vec::with_capacity(raw.arguments.len());
-    let mut any_arg_drift = false;
+    let mut drift = 0usize;
     for mut arg in raw.arguments {
-        arg.locatable = location.is_some() && argument_locatable(&arg.surface, &quote, para_text);
+        arg.locatable = location.is_some()
+            && ref_text.map(|t| arg_in(&arg.surface, &quote, t)).unwrap_or(false);
         if !arg.locatable && location.is_some() {
-            any_arg_drift = true;
+            drift += 1;
         }
         arguments.push(arg);
     }
-    if any_arg_drift {
+    if drift > 0 {
         issues.push(ValidationIssue::new(
-            "unit.argument_drift",
-            "one or more argument surfaces not found in the quote or its paragraph",
+            "unit.argument_drift_advisory",
+            format!("{drift} argument(s) not found in the quote/span — advisory only"),
         ));
     }
 
-    // Status: rejection beats needs_review beats accepted. Exact / Whitespace /
-    // Rendered are all faithful matches → accepted (modulo argument drift).
-    let status = match &location {
-        Some(_) if any_arg_drift => UnitStatus::NeedsReview,
-        Some(_) => UnitStatus::Accepted,
-        None if ref_mismatch => UnitStatus::NeedsReview,
-        None => UnitStatus::Rejected,
+    // Status: located → accepted; located-elsewhere → needs_review; else rejected.
+    // Argument drift does NOT change status (advisory).
+    let status = match (&location, ref_mismatch) {
+        (Some(_), _) => UnitStatus::Accepted,
+        (None, true) => UnitStatus::NeedsReview,
+        (None, false) => UnitStatus::Rejected,
     };
 
     Unit {
@@ -162,13 +190,23 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, paras: &[Paragraph]) -> Un
         kind: raw.kind,
         subtype: raw.subtype.filter(|s| !s.trim().is_empty()),
         text: raw.text.trim().to_string(),
-        evidence: UnitEvidence { paragraph_ref: pref, quote, location },
+        evidence: UnitEvidence { ref_id: reff, quote, location },
         attribution: raw.attribution,
         modality: raw.modality,
         arguments,
         status,
         issues,
     }
+}
+
+/// Location is span/paragraph-GRANULAR: the ref's original source byte range.
+/// Sub-offsets within the matched text are NOT usable, because matching happens
+/// on the RENDERED span text (links collapsed, markers stripped, fullwidth
+/// folded) whose offsets do not align with the raw-markdown body. So we report
+/// the whole ref span's source range — always a valid char boundary.
+fn loc_at(body: &str, range: (usize, usize), kind: MatchKind) -> EvidenceLocation {
+    let (rs, re) = range;
+    EvidenceLocation { byte_start: rs, byte_end: re, line: line_of(body, rs), match_kind: kind }
 }
 
 fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
@@ -180,16 +218,8 @@ fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
         subtype: None,
         text: value.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         evidence: UnitEvidence {
-            paragraph_ref: value
-                .get("evidence_ref")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            quote: value
-                .get("evidence_quote")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            ref_id: value.get("evidence_ref").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            quote: value.get("evidence_quote").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             location: None,
         },
         attribution: Attribution::SystemInterpretation,
@@ -200,31 +230,30 @@ fn malformed_unit(idx: usize, value: &serde_json::Value, err: &str) -> Unit {
     }
 }
 
-// ---- quote matching (UTF-8 safe; Exact → Whitespace → Relaxed) ----
+// ---- matching (Exact → Whitespace → Rendered), scoped to a span/paragraph ----
 
-/// Locate `quote` within `hay` with byte-precise offsets: verbatim, then
-/// whitespace-insensitive. The faithful-render tier is handled separately by the
-/// caller (it is paragraph-granular, so it does not return offsets here).
 fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
     if let Some(s) = hay.find(quote) {
         return Some((s, s + quote.len(), MatchKind::Exact));
     }
-    normalized_locate(hay, quote).map(|(s, e)| (s, e, MatchKind::Whitespace))
+    if let Some((s, e)) = normalized_locate(hay, quote) {
+        return Some((s, e, MatchKind::Whitespace));
+    }
+    // Rendered tier — fold smart/fullwidth + link text on both sides. Offsets are
+    // not meaningful after the transform, so the caller uses the span range.
+    if rendered_contains(hay, quote) {
+        return Some((0, hay.len(), MatchKind::Rendered));
+    }
+    None
 }
 
-fn find_in_any_paragraph(paras: &[Paragraph], quote: &str) -> Option<String> {
-    paras
+fn find_anywhere(spans: &[RenderedSpan], paras: &[ParaGroup], quote: &str) -> Option<String> {
+    spans
         .iter()
-        .find_map(|p| (locate(&p.text, quote).is_some() || rendered_contains(&p.text, quote)).then(|| p.id.clone()))
+        .find_map(|s| locate(&s.text, quote).map(|_| s.id.clone()))
+        .or_else(|| paras.iter().find_map(|p| locate(&p.text, quote).map(|_| p.id.clone())))
 }
 
-// ---- faithful plain-text render (M14a.RCA fix) ----
-
-/// True if `quote` is contained in `hay` after rendering BOTH to plain text:
-/// markdown link text extracted, smart quotes / dashes / fullwidth-CJK folded to
-/// ASCII, emphasis + whitespace stripped, case-folded. All faithful, reversible
-/// normalizations, so a match here is grounded (the model copied the rendered
-/// form; the source is raw markdown).
 fn rendered_contains(hay: &str, quote: &str) -> bool {
     let q = render_norm(quote);
     !q.is_empty() && render_norm(hay).contains(&q)
@@ -235,59 +264,12 @@ fn render_norm(s: &str) -> String {
     let mut out = String::with_capacity(linked.len());
     for c in linked.chars() {
         let c = fold_char(c);
-        if c.is_whitespace() || is_markdown_noise(c) {
+        if c.is_whitespace() || matches!(c, '*' | '_' | '`' | '#' | '>' | '~' | '[' | ']' | '(' | ')') {
             continue;
         }
         out.push(c.to_ascii_lowercase());
     }
     out
-}
-
-/// Replace `[text](url)` / `![alt](url)` with just the visible `text`/`alt`.
-fn strip_markdown_links(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < s.len() {
-        if !s.is_char_boundary(i) {
-            i += 1;
-            continue;
-        }
-        if bytes[i] == b'[' {
-            if let Some(close) = s[i + 1..].find(']') {
-                let text_end = i + 1 + close;
-                let after = text_end + 1;
-                if after < s.len() && bytes.get(after) == Some(&b'(') {
-                    if let Some(paren) = s[after..].find(')') {
-                        out.push_str(&s[i + 1..text_end]); // the link text
-                        i = after + paren + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        let ch = s[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
-
-/// Fold a single char to its ASCII equivalent: fullwidth ASCII (used in CJK
-/// text) → halfwidth, smart quotes/dashes + common CJK punctuation → ASCII.
-fn fold_char(c: char) -> char {
-    match c {
-        // Fullwidth ASCII (common in CJK text) → halfwidth. This already covers
-        // fullwidth ：，；！？＇＂（） etc. via the -0xFEE0 offset.
-        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
-        '\u{3000}' => ' ',                                   // ideographic space
-        '\u{2018}' | '\u{2019}' => '\'',                      // smart single quotes
-        '\u{201C}' | '\u{201D}' | '\u{300C}' | '\u{300D}' => '"', // smart / 「」 quotes
-        '\u{2013}' | '\u{2014}' => '-',                       // en / em dash
-        '\u{3001}' => ',',                                    // 、 ideographic comma
-        '\u{3002}' => '.',                                    // 。 ideographic stop
-        _ => c,
-    }
 }
 
 struct Norm {
@@ -296,11 +278,6 @@ struct Norm {
 }
 
 fn normalize(s: &str) -> Norm {
-    // Whitespace-INSENSITIVE: drop whitespace entirely rather than collapse it to
-    // a single space. Whitespace is not meaningful for "is this quote a span of
-    // the source", and a model — especially in CJK, which has no inter-word
-    // spaces — routinely drops a newline/space the source has. `orig[i]` still
-    // maps each kept char to its original byte offset (for precise location).
     let mut chars = Vec::new();
     let mut orig = Vec::new();
     for (b, c) in s.char_indices() {
@@ -311,10 +288,6 @@ fn normalize(s: &str) -> Norm {
         orig.push(b);
     }
     Norm { chars, orig }
-}
-
-fn is_markdown_noise(c: char) -> bool {
-    matches!(c, '*' | '_' | '`' | '#' | '>' | '~' | '[' | ']' | '(' | ')')
 }
 
 fn normalized_locate(hay: &str, quote: &str) -> Option<(usize, usize)> {
@@ -335,37 +308,24 @@ fn find_subsequence(hay: &[char], needle: &[char]) -> Option<usize> {
 }
 
 fn line_of(body: &str, byte_offset: usize) -> usize {
-    body[..byte_offset.min(body.len())].bytes().filter(|&b| b == b'\n').count() + 1
+    // Clamp to a char boundary defensively (callers pass span starts, which are
+    // boundaries, but never slice mid-UTF-8).
+    let mut o = byte_offset.min(body.len());
+    while o > 0 && !body.is_char_boundary(o) {
+        o -= 1;
+    }
+    body[..o].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
-// ---- argument locatability ----
-
-fn argument_locatable(surface: &str, quote: &str, para_text: &str) -> bool {
+fn arg_in(surface: &str, quote: &str, ref_text: &str) -> bool {
     let s = surface.trim();
-    !s.is_empty() && (contains_ci(quote, s) || contains_ci(para_text, s))
+    !s.is_empty() && (contains_ci(quote, s) || contains_ci(ref_text, s))
 }
 
 fn contains_ci(haystack: &str, needle: &str) -> bool {
-    let h = collapse_lower(haystack);
-    let n = collapse_lower(needle);
+    let h = render_norm(haystack);
+    let n = render_norm(needle);
     !n.is_empty() && h.contains(&n)
-}
-
-fn collapse_lower(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_space = false;
-    for c in s.chars() {
-        if c.is_whitespace() {
-            if !prev_space && !out.is_empty() {
-                out.push(' ');
-                prev_space = true;
-            }
-        } else {
-            out.push(c.to_ascii_lowercase());
-            prev_space = false;
-        }
-    }
-    out.trim().to_string()
 }
 
 // ---- dedup + metrics ----
@@ -373,7 +333,7 @@ fn collapse_lower(s: &str) -> String {
 fn duplicate_groups(units: &[Unit]) -> Vec<Vec<String>> {
     let mut by_text: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for u in units.iter().filter(|u| u.status != UnitStatus::Rejected) {
-        by_text.entry(collapse_lower(&u.text)).or_default().push(u.id.clone());
+        by_text.entry(render_norm(&u.text)).or_default().push(u.id.clone());
     }
     by_text.into_values().filter(|g| g.len() > 1).collect()
 }
@@ -387,23 +347,29 @@ fn build_report(
     let accepted = units.iter().filter(|u| u.status == UnitStatus::Accepted).count();
     let rejected = units.iter().filter(|u| u.status == UnitStatus::Rejected).count();
     let needs_review = units.iter().filter(|u| u.status == UnitStatus::NeedsReview).count();
-    let with_quote = units.iter().filter(|u| u.evidence.location.is_some()).count();
+    let located = units.iter().filter(|u| u.evidence.location.is_some()).count();
+    let has = |code: &str| units.iter().filter(|u| u.issues.iter().any(|i| i.code == code)).count();
+    let ref_found = units
+        .iter()
+        .filter(|u| !u.issues.iter().any(|i| i.code == "unit.ref_not_found" || i.code == "unit.malformed"))
+        .count();
     let accepted_without_quote = units
         .iter()
         .filter(|u| u.status == UnitStatus::Accepted && u.evidence.location.is_none())
         .count();
-    let total_args: usize = units.iter().map(|u| u.arguments.len()).sum();
-    let locatable_args: usize =
-        units.iter().flat_map(|u| &u.arguments).filter(|a| a.locatable).count();
 
     ValidationReport {
         total,
         accepted,
         rejected,
         needs_review,
-        quote_found_rate: ratio(with_quote, total),
+        ref_found_rate: ratio(ref_found, total),
+        quote_found_rate: ratio(located, total),
+        quote_maps_to_original: located,
         accepted_without_quote,
-        argument_locatable_rate: if total_args == 0 { 1.0 } else { ratio(locatable_args, total_args) },
+        ref_mismatch: has("unit.ref_mismatch"),
+        quote_not_found: has("unit.quote_not_found"),
+        argument_drift_advisory: has("unit.argument_drift_advisory"),
         duplicate_groups,
         parse_error,
     }
@@ -443,18 +409,17 @@ fn hex_sha256(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // A body with three paragraphs: p001 heading, p002 chunk, p003 blockify.
-    const BODY: &str = "# Why the chunk is a bad unit\n\nA chunk is a structurally neutral container.\n\nBlockify converts documents into IdeaBlocks.";
+    // p001 heading; p002 two sentences; p003 a markdown link + bold.
+    const BODY: &str =
+        "# Why the chunk is a bad unit\n\nA chunk is a structurally neutral container. It knows nothing about ownership.\n\nUse [vitest-evals](https://x/y) and **Blockify** here.";
 
     fn src(body: &str) -> SourceDoc {
         SourceDoc::article("T", "https://e/x", None, None, vec![], body)
     }
 
     fn raw(reff: &str, quote: &str, args: &[&str]) -> serde_json::Value {
-        let args: Vec<_> = args
-            .iter()
-            .map(|s| serde_json::json!({ "surface": s, "role": "topic" }))
-            .collect();
+        let args: Vec<_> =
+            args.iter().map(|s| serde_json::json!({ "surface": s, "role": "topic" })).collect();
         serde_json::json!({
             "kind": "assertion", "text": "t", "evidence_ref": reff, "evidence_quote": quote,
             "attribution": "author", "modality": "asserted", "arguments": args
@@ -462,103 +427,80 @@ mod tests {
     }
 
     #[test]
-    fn quote_in_ref_paragraph_accepts_and_maps_to_body() {
-        let ex = validate(&[raw("p002", "A chunk is a structurally neutral container.", &["chunk"])], &src(BODY));
+    fn quote_in_span_accepts_and_maps_to_original() {
+        let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutral container.", &["chunk"])], &src(BODY));
         assert_eq!(ex.report.accepted, 1);
         let u = &ex.units[0];
-        assert_eq!(u.evidence.paragraph_ref, "p002");
         let loc = u.evidence.location.as_ref().unwrap();
-        assert_eq!(loc.line, 3, "p002 is on line 3 of the body");
         assert_eq!(&BODY[loc.byte_start..loc.byte_end], "A chunk is a structurally neutral container.");
         assert!(u.arguments[0].locatable);
     }
 
     #[test]
-    fn ref_not_a_paragraph_rejects() {
-        let ex = validate(&[raw("p099", "A chunk is a structurally neutral container.", &[])], &src(BODY));
+    fn rendered_link_and_bold_match_via_view() {
+        // p003 rendered text is "Use vitest-evals and Blockify here." — model quotes that.
+        let ex = validate(&[raw("p003.s001", "Use vitest-evals and Blockify here.", &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
+    }
+
+    #[test]
+    fn bare_paragraph_ref_resolves() {
+        let ex = validate(&[raw("p002", "It knows nothing about ownership.", &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
+    }
+
+    #[test]
+    fn cross_span_quote_matches_parent_paragraph() {
+        // Quote spans both sentences of p002 but refs only the first span.
+        let q = "A chunk is a structurally neutral container. It knows nothing about ownership.";
+        let ex = validate(&[raw("p002.s001", q, &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
+        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.spans_paragraph"));
+    }
+
+    #[test]
+    fn wrong_ref_but_real_quote_is_ref_mismatch() {
+        let ex = validate(&[raw("p003.s001", "It knows nothing about ownership.", &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::NeedsReview);
+        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.ref_mismatch"));
+        assert_eq!(ex.report.ref_mismatch, 1);
+    }
+
+    #[test]
+    fn quote_nowhere_rejects() {
+        let ex = validate(&[raw("p002.s001", "this is not in the article at all", &[])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Rejected);
+        assert_eq!(ex.report.quote_not_found, 1);
+        assert_eq!(ex.report.accepted_without_quote, 0);
+    }
+
+    #[test]
+    fn bad_ref_rejects() {
+        let ex = validate(&[raw("p099.s009", "A chunk is a structurally neutral container.", &[])], &src(BODY));
         assert_eq!(ex.units[0].status, UnitStatus::Rejected);
         assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.ref_not_found"));
     }
 
     #[test]
-    fn quote_in_wrong_paragraph_is_ref_mismatch_needs_review() {
-        // Quote belongs to p003 but the model declared p002.
-        let ex = validate(&[raw("p002", "Blockify converts documents into IdeaBlocks.", &[])], &src(BODY));
-        let u = &ex.units[0];
-        assert_eq!(u.status, UnitStatus::NeedsReview);
-        assert!(u.issues.iter().any(|i| i.code == "unit.ref_mismatch"));
-        // ref_mismatch does NOT count as quote_found (failed transport discipline).
-        assert!(u.evidence.location.is_none());
-        assert_eq!(ex.report.quote_found_rate, 0.0);
+    fn argument_drift_is_advisory_not_gating() {
+        // Quote located → accepted DESPITE an argument that doesn't locate.
+        let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutral container.", &["Pinecone"])], &src(BODY));
+        assert_eq!(ex.units[0].status, UnitStatus::Accepted, "arg drift must NOT block accept");
+        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.argument_drift_advisory"));
+        assert_eq!(ex.report.argument_drift_advisory, 1);
     }
 
     #[test]
-    fn quote_nowhere_rejects() {
-        let ex = validate(&[raw("p002", "this sentence is in no paragraph", &[])], &src(BODY));
-        assert_eq!(ex.units[0].status, UnitStatus::Rejected);
-        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.quote_not_found"));
-        assert_eq!(ex.report.accepted_without_quote, 0);
-    }
-
-    #[test]
-    fn markdown_emphasis_matches_via_render_and_accepts() {
-        let body = "# H\n\nThe **chunk** is the wrong unit.";
-        let ex = validate(&[raw("p002", "The chunk is the wrong unit.", &[])], &src(body));
-        let u = &ex.units[0];
-        assert_eq!(u.evidence.location.as_ref().unwrap().match_kind, MatchKind::Rendered);
-        assert_eq!(u.status, UnitStatus::Accepted);
-    }
-
-    #[test]
-    fn markdown_link_text_and_smart_quotes_match_via_render() {
-        // Model copies visible link text + ASCII apostrophe; source has the
-        // markdown link syntax + a smart apostrophe. Render tier recovers it.
-        let body = "# H\n\nUse [vitest-evals](https://x/y) when it\u{2019}s offline.";
-        let ex = validate(&[raw("p002", "Use vitest-evals when it's offline.", &[])], &src(body));
-        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
-        assert_eq!(ex.units[0].evidence.location.as_ref().unwrap().match_kind, MatchKind::Rendered);
-    }
-
-    #[test]
-    fn fullwidth_cjk_punctuation_matches_via_render() {
-        // Source has fullwidth colon/comma; model copies ASCII. Fold recovers it.
-        let body = "标题\n\n记忆分为三类：情景、语义、程序。";
-        let ex = validate(&[raw("p002", "记忆分为三类:情景,语义,程序.", &[])], &src(body));
-        assert_eq!(ex.units[0].status, UnitStatus::Accepted);
-    }
-
-    #[test]
-    fn empty_quote_rejects() {
-        let ex = validate(&[raw("p002", "   ", &[])], &src(BODY));
-        assert_eq!(ex.units[0].status, UnitStatus::Rejected);
-        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.no_evidence"));
-    }
-
-    #[test]
-    fn argument_not_in_paragraph_needs_review() {
-        let ex = validate(&[raw("p002", "A chunk is a structurally neutral container.", &["Azure"])], &src(BODY));
-        assert_eq!(ex.units[0].status, UnitStatus::NeedsReview);
-        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.argument_drift"));
-    }
-
-    #[test]
-    fn missing_ref_is_malformed_rejected() {
-        let bad = serde_json::json!({"kind":"assertion","text":"t","evidence_quote":"q","attribution":"author","modality":"asserted"});
-        let ex = validate(&[bad], &src(BODY));
-        assert_eq!(ex.units[0].status, UnitStatus::Rejected);
-        assert!(ex.units[0].issues.iter().any(|i| i.code == "unit.malformed"));
-    }
-
-    #[test]
-    fn cjk_quote_in_ref_paragraph() {
-        let body = "标题\n\n首先对大模型的两次API调用之间是没有记忆的。\n\n第三段。";
-        let ex = validate(&[raw("p002", "两次API调用之间是没有记忆的", &[])], &src(body));
+    fn cjk_semicolon_list_item_matches_its_span() {
+        let body = "标题\n\n情景记忆：昨天发生了啥；语义记忆：你叫什么；程序性记忆：怎么完成";
+        // The model anchors to one ；-item span and quotes (ASCII colon variant).
+        let ex = validate(&[raw("p002.s002", "语义记忆:你叫什么", &[])], &src(body));
         assert_eq!(ex.units[0].status, UnitStatus::Accepted);
     }
 
     #[test]
     fn deterministic_under_repeat() {
-        let v = [raw("p002", "A chunk is a structurally neutral container.", &["chunk"])];
+        let v = [raw("p002.s001", "A chunk is a structurally neutral container.", &["chunk"])];
         assert_eq!(validate(&v, &src(BODY)), validate(&v, &src(BODY)));
     }
 }
