@@ -9,7 +9,10 @@
 
 use std::path::PathBuf;
 
-use ovp_domain::units::{run_unit_extraction, write_unit_review_pack, ValidationReport};
+use ovp_domain::units::{
+    run_unit_extraction, run_unit_extraction_repaired, write_unit_review_pack, RepairedRun,
+    ValidationReport,
+};
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -19,9 +22,16 @@ pub struct ExtractUnitsArgs {
     pub out_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub client_kind: ClientKind,
+    /// M14a.8 critic-assisted bounded repair (frozen-v5 base + critic + repair).
+    pub repair: bool,
+    /// Cassette root for the critic call (`unit_critic/v1`).
+    pub critic_cache_dir: PathBuf,
 }
 
 pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
+    if args.repair {
+        return run_repaired(args);
+    }
     let source = ovp_domain::units::read_source_from_path(&args.input_path)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.input_path.display())))?;
 
@@ -62,6 +72,61 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
     // run for a clean one.
     if let Some(reason) = extraction_failure(r) {
         return Err(CliError::Io(format!("extract-units: {reason} (review pack written)")));
+    }
+    Ok(())
+}
+
+/// M14a.8 critic-assisted bounded repair. Base = frozen v5 (ALWAYS replay over
+/// `--cache-dir`, so the baseline is deterministic); critic = `--client` over
+/// `--critic-cache-dir` (live records `unit_critic/v1`). Writes the repaired
+/// review pack PLUS critic-reply.txt + repairs.json + a base-vs-repaired summary.
+fn run_repaired(args: ExtractUnitsArgs) -> Result<(), CliError> {
+    let source = ovp_domain::units::read_source_from_path(&args.input_path)
+        .map_err(|e| CliError::Io(format!("reading {}: {e}", args.input_path.display())))?;
+
+    // Base ALWAYS replays (frozen v5); only the critic call may go live.
+    let mut base_client = build_client(ClientKind::Replay, &args.cache_dir)?;
+    let mut critic_client = build_client(args.client_kind, &args.critic_cache_dir)?;
+
+    let run: RepairedRun =
+        run_unit_extraction_repaired(&source, base_client.as_mut(), critic_client.as_mut())
+            .map_err(|e| CliError::Io(format!("repaired extraction call failed: {e}")))?;
+
+    write_unit_review_pack(&args.out_dir, &source.body_markdown, &run.extraction, Some(&run.base_reply))
+        .map_err(|e| CliError::Io(format!("writing review pack to {}: {e}", args.out_dir.display())))?;
+    // Repair-specific sidecars (all deterministic given the two replies).
+    let w = |name: &str, body: &str| {
+        std::fs::write(args.out_dir.join(name), body)
+            .map_err(|e| CliError::Io(format!("writing {name}: {e}")))
+    };
+    w("critic-reply.txt", &run.critic_reply)?;
+    let repairs = serde_json::to_string_pretty(&run.repair_log)
+        .map_err(|e| CliError::Io(e.to_string()))?;
+    w("repairs.json", &format!("{repairs}\n"))?;
+
+    let b = &run.base.report;
+    let r = &run.extraction.report;
+    println!("extract-units --repair: {}", source.title);
+    if let Some(err) = &r.parse_error {
+        println!("  PARSE ERROR (base): {err}");
+    }
+    println!(
+        "  base:     accepted={} needs_review={} rejected={}",
+        b.accepted, b.needs_review, b.rejected
+    );
+    println!(
+        "  repaired: accepted={} needs_review={} rejected={}  (trims={} adds_proposed={} unmatched_defects={})",
+        r.accepted, r.needs_review, r.rejected,
+        run.repair_log.trims, run.repair_log.adds_proposed, run.repair_log.defects_unmatched,
+    );
+    println!(
+        "  quote_found={:.1}%  accepted_without_quote={}  near_match(review)={}  quote_not_found={}",
+        r.quote_found_rate * 100.0, r.accepted_without_quote, r.near_match_needs_review, r.quote_not_found,
+    );
+    println!("  review pack: {}", args.out_dir.join("REVIEW.md").display());
+
+    if let Some(reason) = extraction_failure(r) {
+        return Err(CliError::Io(format!("extract-units --repair: {reason} (review pack written)")));
     }
     Ok(())
 }

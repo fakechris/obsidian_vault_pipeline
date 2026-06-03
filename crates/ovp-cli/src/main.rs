@@ -91,6 +91,16 @@ enum Cmd {
         cache_dir: PathBuf,
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
+        /// M14a.8: after the frozen-v5 base extract, run the independent critic
+        /// (`unit_critic/v1`) + bounded TRIM/ADD repair, re-validated once. The
+        /// base ALWAYS replays from `--cache-dir` (frozen v5); `--client live`
+        /// applies to the CRITIC call only (records under `--critic-cache-dir`).
+        #[arg(long)]
+        repair: bool,
+        /// Where the critic cassette lives. Defaults to `--cache-dir` so the v5
+        /// base and the `unit_critic/v1` critic share one cassette root.
+        #[arg(long)]
+        critic_cache_dir: Option<PathBuf>,
     },
     /// Interpret a single article from disk through the v1 article pipeline.
     /// Default client is replay-only against `--cache-dir`; no network.
@@ -403,18 +413,21 @@ fn main() -> ExitCode {
                 max_spans,
             })
         }
-        Cmd::ExtractUnits { input, out, cache_dir, client } => {
+        Cmd::ExtractUnits { input, out, cache_dir, client, repair, critic_cache_dir } => {
             use commands::client::ClientKind;
             use commands::extract_units::ExtractUnitsArgs;
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
                 ClientKindArg::Live => ClientKind::Live,
             };
+            let critic_cache = critic_cache_dir.unwrap_or_else(|| cache_dir.clone());
             commands::extract_units::run(ExtractUnitsArgs {
                 input_path: input,
                 out_dir: out,
                 cache_dir,
                 client_kind,
+                repair,
+                critic_cache_dir: critic_cache,
             })
         }
         Cmd::InterpretArticle {

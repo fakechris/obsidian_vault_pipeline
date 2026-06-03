@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod copy_probe;
+pub mod critic;
 pub mod harness;
 pub mod parser;
 pub mod prompt;
@@ -23,7 +24,14 @@ pub mod source_map;
 pub mod validator;
 
 pub use copy_probe::{run_copy_probe, CopyProbeReport};
-pub use harness::{extract_units, read_source_from_path, run_unit_extraction, UnitExtractionRun};
+pub use critic::{
+    apply_repairs, build_critic_prompt, critic_model_request, parse_critic_reply, run_unit_critique,
+    CoverageGap, CriticReply, FaithDefect, RepairAction, RepairLog, CRITIC_PROMPT_ID,
+};
+pub use harness::{
+    extract_units, read_source_from_path, run_unit_extraction, run_unit_extraction_repaired,
+    RepairedRun, UnitExtractionRun,
+};
 pub use parser::{parse_envelope, ParseError, RawUnit};
 pub use prompt::{build_unit_prompt, unit_model_request, UNIT_PROMPT_ID, UNIT_SCHEMA_VERSION};
 pub use review_pack::write_unit_review_pack;

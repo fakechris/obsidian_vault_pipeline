@@ -10,6 +10,7 @@ use ovp_llm::{CallError, ModelClient};
 
 use crate::source_doc::SourceDoc;
 
+use super::critic::{apply_repairs, run_unit_critique, CriticReply, RepairLog};
 use super::parser::parse_envelope;
 use super::prompt::unit_model_request;
 use super::validator::{extraction_parse_failed, validate};
@@ -55,6 +56,69 @@ pub fn run_unit_extraction(
     let reply = client.call(&request)?;
     let extraction = extract_units(&reply.text, source);
     Ok(UnitExtractionRun { extraction, raw_reply: reply.text })
+}
+
+/// One end-to-end critic-repaired run (M14a.8). The `base` is the frozen v5
+/// extraction (its raw reply parsed + validated, unchanged); `extraction` is the
+/// merged set after bounded TRIM/ADD repairs, re-validated by the SAME validator.
+/// All four raw texts are first-class output for the inspectable pack.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepairedRun {
+    /// The frozen-v5 extraction (no repairs) — the conservative-floor baseline.
+    pub base: SourceExtraction,
+    /// The repaired extraction (base ∪ repairs, re-validated). Equals `base` when
+    /// the critic found nothing.
+    pub extraction: SourceExtraction,
+    pub repair_log: RepairLog,
+    pub critic: CriticReply,
+    pub base_reply: String,
+    pub critic_reply: String,
+}
+
+/// Critic-assisted bounded repair: run the FROZEN v5 extractor on `base_client`
+/// (a replay client over the committed v5 cassette → deterministic baseline),
+/// run the independent critic on `critic_client` (live/record under
+/// `unit_critic/v1`), apply bounded TRIM/ADD repairs, and re-validate the merged
+/// raw set ONCE. Grounding/accept rules are the validator's — unchanged.
+///
+/// `Err(CallError)` only for a client/transport failure on either call. A base
+/// reply that parses badly still yields an `Ok` run whose `base`/`extraction`
+/// carry the parse error (a reviewable outcome, not an I/O failure).
+pub fn run_unit_extraction_repaired(
+    source: &SourceDoc,
+    base_client: &mut dyn ModelClient,
+    critic_client: &mut dyn ModelClient,
+) -> Result<RepairedRun, CallError> {
+    // 1. Frozen v5 base (replay). Keep the exact RAW values so re-validation of
+    //    the no-repair case is byte-identical (the conservative floor).
+    let base_request = unit_model_request(source);
+    let base_reply = base_client.call(&base_request)?;
+    let base_raw = parse_envelope(&base_reply.text).unwrap_or_default();
+    let base = if base_raw.is_empty() {
+        extract_units(&base_reply.text, source) // surfaces the parse error
+    } else {
+        validate(&base_raw, source)
+    };
+
+    // 2. Independent critic (live/record) over the base accepted units.
+    let (critic, critic_reply) = run_unit_critique(source, &base.units, critic_client)?;
+
+    // 3. Bounded repairs → re-validate the merged raw set exactly once.
+    let (merged_raw, repair_log) = apply_repairs(&base_raw, &base.units, &critic);
+    let extraction = if merged_raw.is_empty() {
+        base.clone()
+    } else {
+        validate(&merged_raw, source)
+    };
+
+    Ok(RepairedRun {
+        base,
+        extraction,
+        repair_log,
+        critic,
+        base_reply: base_reply.text,
+        critic_reply,
+    })
 }
 
 #[cfg(test)]
