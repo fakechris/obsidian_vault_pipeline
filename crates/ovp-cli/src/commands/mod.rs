@@ -4,6 +4,7 @@ pub mod client;
 pub mod compare_run;
 pub mod copy_probe;
 pub mod defaults;
+pub mod extract_referents;
 pub mod extract_units;
 pub mod graph;
 pub mod interpret_article;

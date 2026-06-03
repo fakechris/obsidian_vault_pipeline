@@ -24,6 +24,9 @@ pub mod transforms;
 /// M14a experimental Grounded Unit extraction spike (parallel, deletable; not
 /// wired into the typed pipeline). See `docs/stage-m14a-grounded-units.md`.
 pub mod units;
+/// M14b experimental local-ReferentCandidate spike (parallel, deletable; consumes
+/// M14a.8 accepted units; NOT canonicalization). See `docs/stage-m14b-referent-candidates.md`.
+pub mod referents;
 pub mod vault_layout;
 
 #[cfg(feature = "testing")]

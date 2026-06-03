@@ -19,8 +19,9 @@ use sha2::{Digest, Sha256};
 
 use crate::source_doc::SourceDoc;
 
+use super::normalize::{contains_ci, render_norm};
 use super::parser::RawUnit;
-use super::source_map::{fold_char, rendered_view, strip_markdown_links, RenderedSpan};
+use super::source_map::{rendered_view, RenderedSpan};
 use super::{
     Argument, EvidenceLocation, MatchKind, SourceExtraction, Unit, UnitEvidence, UnitStatus,
     ValidationIssue, ValidationReport,
@@ -312,19 +313,6 @@ fn rendered_contains(hay: &str, quote: &str) -> bool {
     !q.is_empty() && render_norm(hay).contains(&q)
 }
 
-fn render_norm(s: &str) -> String {
-    let linked = strip_markdown_links(s);
-    let mut out = String::with_capacity(linked.len());
-    for c in linked.chars() {
-        let c = fold_char(c);
-        if c.is_whitespace() || matches!(c, '*' | '_' | '`' | '#' | '>' | '~' | '[' | ']' | '(' | ')') {
-            continue;
-        }
-        out.push(c.to_ascii_lowercase());
-    }
-    out
-}
-
 struct Norm {
     chars: Vec<char>,
     orig: Vec<usize>,
@@ -373,12 +361,6 @@ fn line_of(body: &str, byte_offset: usize) -> usize {
 fn arg_in(surface: &str, quote: &str, ref_text: &str) -> bool {
     let s = surface.trim();
     !s.is_empty() && (contains_ci(quote, s) || contains_ci(ref_text, s))
-}
-
-fn contains_ci(haystack: &str, needle: &str) -> bool {
-    let h = render_norm(haystack);
-    let n = render_norm(needle);
-    !n.is_empty() && h.contains(&n)
 }
 
 // ---- dedup + metrics ----

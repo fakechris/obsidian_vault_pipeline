@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub mod copy_probe;
 pub mod critic;
 pub mod harness;
+pub(crate) mod normalize;
 pub mod parser;
 pub mod prompt;
 pub mod review_pack;
