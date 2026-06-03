@@ -197,32 +197,57 @@ thresholds, no re-interpretation, no "explained" pass. Definitions: `supported-r
 = items labelled `supported` ÷ all factual items (per arm); subjective axes scored
 by the blind stripped-view judge as **pairwise** win/loss/tie per article.
 
-**Faithfulness** (the axis OVP must win — keeping grounding is the whole point):
-- PASS needs BOTH: OVP `(unsupported + over_synthesized)` rate ≤ KMEM's, AND OVP
-  supported-rate ≥ KMEM's + 10 pts (or OVP ≥ 90% while KMEM < 90%).
-- **Hard floor:** OVP `(unsupported + over_synthesized)` ≤ **5%** of OVP card
-  factual sentences (the synthesis pass must not leak un-cited facts). Breaching
-  this FAILS H1 regardless of KMEM.
-- OVP `attribution_or_modality_wrong` ≤ KMEM's.
+Every primary axis (and the overall verdict) is **THREE-STATE: pass / fail /
+inconclusive.** If any primary axis is inconclusive, the verdict is NOT forced into
+a binary — resolve by product judgment or a larger sample, never by relaxing a
+threshold after the run.
 
-**Readability / usefulness** (OVP must be no worse than KMEM beyond a margin):
-- PASS: KMEM wins the blind pairwise readability comparison on ≤ **1/3** of sampled
-  articles. A KMEM blow-out (> **1/2**) FAILS H1 even if OVP wins faithfulness.
+**Faithfulness** (OVP must be AT LEAST as faithful, with clearly stronger
+provenance — keeping grounding is the whole point; OVP need NOT win supported-rate
+by a large margin). PASS requires the hard floor AND one of A/B/C:
+- **Hard floor (mandatory):** OVP `(unsupported + over_synthesized)` ≤ **5%** of OVP
+  card factual sentences (the synthesis pass must not leak un-cited facts).
+  Breaching this FAILS H1 regardless of KMEM.
+- AND `attribution_or_modality_wrong` ≤ KMEM's.
+- AND one of:
+  - **A.** OVP supported-rate ≥ KMEM supported-rate **+ 5 pts**; or
+  - **B.** both arms ≥ **90%** supported, OVP ≥ KMEM, AND OVP carries sentence-level
+    unit citations (the structural provenance KMEM lacks); or
+  - **C.** KMEM < **90%** and OVP ≥ **90%**.
+
+  Rationale: a fixed "+10 pts" false-fails OVP when KMEM is already high (KMEM 93% /
+  OVP 96% — OVP is more faithful AND has provenance, yet would "fail"). The bar is
+  "at least as faithful + stronger provenance," not a large supported-rate win.
+
+**Readability / usefulness** (OVP no worse than KMEM beyond a margin), blind
+pairwise over the **12** sampled articles:
+- **PASS:** KMEM wins ≤ **4/12**.
+- **FAIL:** KMEM wins ≥ **7/12**.
+- **INCONCLUSIVE:** KMEM wins **5–6/12**. If readability is inconclusive but OVP
+  clearly wins faithfulness + provenance, the verdict is "needs product judgment"
+  (→ overall INCONCLUSIVE), NOT an automatic H1 pass.
 
 **Coverage** (comparable within margin):
-- PASS: OVP central-point coverage ≥ KMEM coverage − **10 pts**.
+- **PASS:** OVP coverage ≥ KMEM coverage − **10 pts**, scored against the **central
+  source points / spans** (a fixed gold-light list per article), NOT output item
+  count — KMEM's ~14 memories vs OVP's ~8 cards differ in granularity, so counting
+  items would be a category error.
 
-**H1 verdict:** HOLDS iff faithfulness PASS AND readability PASS AND coverage PASS.
-OVP winning faithfulness but losing readability beyond the margin ⇒ H1 **FAILS**
-(record it honestly; do not relax the margin after the fact).
+**H1 verdict (three-state):**
+- **HOLDS** iff faithfulness PASS AND readability PASS AND coverage PASS.
+- **FAILS** iff faithfulness FAIL OR readability FAIL OR coverage FAIL.
+- **INCONCLUSIVE** iff no axis FAILs but ≥1 axis is INCONCLUSIVE (e.g. readability
+  5–6/12). Report it as inconclusive + the specific axis.
 
 **H2 verdict** (on a fixed set of downstream probe tasks — search/query + navigation,
-listed before the run):
-- HOLDS iff OVP cards WITHOUT Referent are comparable to KMEM (within the
-  readability/usefulness margin) on those tasks.
-- FAILS iff specific object/navigation tasks fail BECAUSE object structure is
+listed before the run; also three-state):
+- **HOLDS** iff OVP cards WITHOUT Referent are comparable to KMEM (within the
+  readability margin) on those tasks.
+- **FAILS** iff specific object/navigation tasks fail BECAUSE object structure is
   missing (not merely readability). Then Referent returns ONLY in minimal form
   (`important_objects[] / promotion_suggestions[] / do_not_promote[]`).
+- **INCONCLUSIVE** iff the probe tasks are mixed (some need structure, some don't) —
+  resolve by product judgment, not by reviving the full ontology.
 
 ## Decision rule (what the verdicts trigger)
 
