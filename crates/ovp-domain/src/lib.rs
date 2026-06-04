@@ -27,6 +27,9 @@ pub mod units;
 /// M14b experimental local-ReferentCandidate spike (parallel, deletable; consumes
 /// M14a.8 accepted units; NOT canonicalization). See `docs/stage-m14b-referent-candidates.md`.
 pub mod referents;
+/// M17 Grounded Reader Trunk — the VIEW layer (cards + reader pack) over the M14a.8
+/// truth layer. NOT canonicalization / Referent. See `docs/stage-m17-grounded-reader-trunk.md`.
+pub mod reader;
 pub mod vault_layout;
 
 #[cfg(feature = "testing")]

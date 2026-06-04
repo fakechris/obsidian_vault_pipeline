@@ -102,6 +102,28 @@ enum Cmd {
         #[arg(long)]
         critic_cache_dir: Option<PathBuf>,
     },
+    /// M17 Grounded Reader Trunk: Source → Grounded Units → Critic Repair → Reader
+    /// Cards → a human-usable reader pack (collapsible HTML + flat MD, provenance
+    /// intact). Fail-loud on truth-layer errors. NOT canonical/evergreen/RAG/Referent.
+    /// `--render-only` renders a pack from existing --units-json + --cards-json.
+    ReadSource {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = ".run/reader/case")]
+        out: PathBuf,
+        #[arg(long, default_value = ".run/reader/cassettes")]
+        cache_dir: PathBuf,
+        #[arg(long)]
+        critic_cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long)]
+        render_only: bool,
+        #[arg(long)]
+        units_json: Option<PathBuf>,
+        #[arg(long)]
+        cards_json: Option<PathBuf>,
+    },
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
     /// Hand-harness — NOT canonicalization, no manifest / GraphAssembler /
@@ -444,6 +466,25 @@ fn main() -> ExitCode {
                 client_kind,
                 repair,
                 critic_cache_dir: critic_cache,
+            })
+        }
+        Cmd::ReadSource { input, out, cache_dir, critic_cache_dir, client, render_only, units_json, cards_json } => {
+            use commands::client::ClientKind;
+            use commands::read_source::ReadSourceArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let critic_cache = critic_cache_dir.unwrap_or_else(|| cache_dir.clone());
+            commands::read_source::run(ReadSourceArgs {
+                input_path: input,
+                out_dir: out,
+                cache_dir,
+                critic_cache_dir: critic_cache,
+                client_kind,
+                render_only,
+                units_json,
+                cards_json,
             })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
