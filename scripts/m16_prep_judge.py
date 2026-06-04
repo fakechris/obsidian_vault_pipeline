@@ -25,12 +25,13 @@ def write_list(path, es):
 
 
 def main():
+    RUN = sys.argv[1] if len(sys.argv) > 1 else "m16"  # ovp-cards run dir + output run dir
     sample = json.load(open(f"{R}/docs/m15/sample-manifest.json"))["sample"]
     mapping, args = {}, []
     for idx, src in enumerate(sample, 1):
         slug = f"s{idx:02d}"
         km = f"{R}/.run/m15/kmem/{slug}/memories.json"
-        ov = f"{R}/.run/m16/ovp/{slug}/cards.json"
+        ov = f"{R}/.run/{RUN}/ovp/{slug}/cards.json"
         units = f"{R}/.run/m15/ovp/{slug}/units.accepted.json"
         if not (os.path.exists(km) and os.path.exists(ov)):
             print(f"  {slug}: SKIP (missing arm)"); continue
@@ -38,17 +39,17 @@ def main():
         ovp_e = entries(json.load(open(ov)), "ovp")
         kmem_is_A = (idx % 2 == 1)
         a_e, b_e = (kmem_e, ovp_e) if kmem_is_A else (ovp_e, kmem_e)
-        bd = f"{R}/.run/m16/blind/{slug}"; os.makedirs(bd, exist_ok=True)
+        bd = f"{R}/.run/{RUN}/blind/{slug}"; os.makedirs(bd, exist_ok=True)
         write_list(f"{bd}/system_A.md", a_e); write_list(f"{bd}/system_B.md", b_e)
         mapping[slug] = {"A": "kmem" if kmem_is_A else "ovp", "B": "ovp" if kmem_is_A else "kmem"}
         args.append({"slug": slug, "source": src, "kmem_path": km,
                      "ovp_cards_path": ov, "ovp_units_path": units, "blind_dir": bd,
                      "a_arm": mapping[slug]["A"]})
         print(f"  {slug}: A={mapping[slug]['A']} kmem={len(kmem_e)} ovp_v2={len(ovp_e)}")
-    os.makedirs(f"{R}/.run/m16/blind", exist_ok=True)
-    json.dump(mapping, open(f"{R}/.run/m16/blind/mapping.json", "w"), ensure_ascii=False, indent=2)
-    json.dump(args, open(f"{R}/.run/m16/phase4_args.json", "w"), ensure_ascii=False, indent=1)
-    print(f"built {len(args)} cases -> .run/m16/phase4_args.json")
+    os.makedirs(f"{R}/.run/{RUN}/blind", exist_ok=True)
+    json.dump(mapping, open(f"{R}/.run/{RUN}/blind/mapping.json", "w"), ensure_ascii=False, indent=2)
+    json.dump(args, open(f"{R}/.run/{RUN}/phase4_args.json", "w"), ensure_ascii=False, indent=1)
+    print(f"built {len(args)} cases -> .run/{RUN}/phase4_args.json")
     return 0
 
 
