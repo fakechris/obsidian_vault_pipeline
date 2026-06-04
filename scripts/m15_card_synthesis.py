@@ -70,6 +70,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--prompt", default=PROMPT_PATH)
     args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
 
     env = load_env_live()
     units = json.load(open(args.units, encoding="utf-8"))
