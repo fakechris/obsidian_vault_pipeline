@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ovp-core",
+    "crates/ovp-cli",
+    "crates/ovp-domain",
+    "crates/ovp-llm",
+    "crates/ovp-stores",
+    "crates/ovp-app",
+    "crates/ovp-run",
+    "crates/ovp-query",
+    "crates/ovp-lint",
+    "crates/ovp-rag",
+    "crates/ovp-auto",
+    "crates/ovp-review",
+    "crates/ovp-eval",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["OVP Next"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+tempfile = "3"
+serde_yaml = "0.9"
+# Live LLM transport. Only compiled when a crate opts in via its own
+# `anthropic`-style feature (optional dep). Blocking + rustls so there is
+# no async runtime and no system OpenSSL dependency.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

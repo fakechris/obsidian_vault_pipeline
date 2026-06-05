@@ -1,0 +1,21 @@
+[package]
+name = "ovp-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next L4 operational workflow: the run-cycle (assemble → run → apply → rebuild derived state)"
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-app = { path = "../ovp-app" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-stores = { path = "../ovp-stores" }
+serde = { workspace = true }
+
+[dev-dependencies]
+# Tests build a replay-only cassette client to inject via AppWiring.
+ovp-llm = { path = "../ovp-llm" }
+tempfile = { workspace = true }
+serde_json = { workspace = true }

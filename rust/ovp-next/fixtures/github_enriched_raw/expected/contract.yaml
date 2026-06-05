@@ -1,0 +1,56 @@
+version: 1
+
+# Single-outcome contract: github inputs terminate as enriched raw in v0.1.
+# No _深度解读.md exists, none is expected.
+terminal_state: terminal_raw
+
+expected_artifacts: []
+
+forbidden_artifacts:
+  - kind: interpretation
+    path_glob: "20-Areas/**/*_深度解读.md"
+    notes: "v0.1 must NOT produce a github interpretation"
+
+must:
+  - source_kind: github_repo
+  - field: source
+    op: matches_regex
+    value: "^https://github\\.com/[^/]+/[^/]+$"
+  - field: github_owner
+    op: equals
+    value: "jordanbaird"
+  - field: github_repo
+    op: equals
+    value: "Ice"
+  - field: github_stars
+    op: type
+    value: integer
+  - field: deepwiki_section_count
+    op: type
+    value: integer
+  - field: source_tier
+    op: equals
+    value: deepwiki
+  - event_emitted:
+      kind: source_routed_to_terminal_raw
+      notes: "terminal state must be observable in the event log, not silent"
+  - writeplan_constraint:
+      forbidden_path_prefix: "20-Areas/"
+      notes: "no Areas-level writes for terminal-raw github records"
+
+should:
+  - field: github_stars
+    op: gte
+    value: 0
+  - preserves_deepwiki_sections: true
+    notes: "do not re-extract sections already pre-computed by the enricher"
+
+may_break:
+  - field: tags
+    notes: "legacy `tags: [menu]` is noise; new system may emit richer tags"
+  - field: directory_layout
+    notes: "exact placement of the raw file (50-Inbox/03-Processed/) may change"
+
+# This fixture is intentionally NOT an open question about whether to build a
+# github interpreter post-v0.1. That product decision is outside this contract.
+# See notes.md "Out of scope for v0.1".

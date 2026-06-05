@@ -1,0 +1,8 @@
+/target
+/.run
+Cargo.lock.bak
+*.swp
+.DS_Store
+
+# Local live-LLM credentials (M9 eval); never commit
+.env*

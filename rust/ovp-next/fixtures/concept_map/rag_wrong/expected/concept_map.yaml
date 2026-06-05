@@ -1,0 +1,442 @@
+case: rag-wrong
+must_have:
+- id: idea-block
+  title: IdeaBlock
+  aliases:
+  - ideablock
+  - question-answer-packet
+  - qa-packet
+  concept_type: concept
+  expected_meaning: A structured unit of knowledge that embeds one critical question, its validated 2-3 sentence answer, and typed governance fields as a single object, replacing a prose chunk as the thing you embed.
+  required_evidence:
+  - 'line 89: ''a structure it calls an IdeaBlock: a question, its validated answer, and typed governance fields like clearance level, version state, and source, all on the same object'''
+  - 'line 81: ''One fact per unit, nothing more.'''
+  - 'line 93: ''your embedding represents a single atomic claim, not a chunk of narrative'''
+  acceptable_claims:
+  - Each IdeaBlock holds one critical question, one validated answer of two to three sentences, and typed governance fields (line 141).
+  - Embedding a question-answer packet makes the query-to-index match structural rather than just semantic (lines 85-87).
+  may_merge_with:
+  - question-answer-packet
+  - knowledge-unit
+  must_not_confuse_with:
+  - blockify
+  - chunking-problem
+  - data-pipeline
+  definition_must_include_any:
+  - question
+  - validated answer
+  - typed governance fields
+  - single atomic claim
+  - one fact per unit
+  - question-answer packet
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - seven stages
+  - preprocessing layer from Iternal Technologies
+  - competing vectors
+  - redundancy degrades
+  - CDN layer
+  claims_must_include_any:
+  - '0.1585'
+  - '0.3624'
+  - 2.29x
+  - one critical question
+  - two to three sentences
+  - single atomic claim
+  - structural rather than
+  claims_must_not_include_any:
+  - Azure AI Search
+  - Pinecone
+  - CDN layer
+  - fifteen near-duplicates
+  - fifteen competing vectors
+  evidence_must_include_any:
+  - validated answer
+  - typed governance fields
+  - question-answer packet
+  - single atomic claim
+- id: chunking-problem
+  title: The Chunk Is a Bad Unit
+  aliases:
+  - chunk-as-unit
+  - bad-chunk-unit
+  - chunking-assumption
+  - chunk-as-unit-assumption
+  concept_type: claim
+  expected_meaning: A prose chunk is a structurally neutral container with no idea boundary, no version context, and no access state, so it is the wrong unit of knowledge and the upstream source of most downstream retrieval failures.
+  required_evidence:
+  - 'lines 47-53: ''A chunk of text is a structurally neutral container. It knows nothing about: where its ideas begin or end / which version... / who is allowed to see it'''
+  - 'line 53: ''Since a chunk has no idea boundary, the splitter cuts wherever the token count runs out.'''
+  - 'line 43: ''And it''s the source of most of the retrieval failures people try to fix downstream.'''
+  acceptable_claims:
+  - You end up retrieving half a table or a claim stripped of its context (line 57).
+  - Because the chunk carries no metadata, there is nowhere to attach access control in the data itself (line 65).
+  may_merge_with: []
+  must_not_confuse_with:
+  - idea-block
+  - semantic-deduplication
+  - vector-redundancy
+  definition_must_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - wrong unit
+  - where its ideas begin or end
+  - source of most of the retrieval failures
+  - structurally agnostic
+  definition_must_not_include_any:
+  - validated answer
+  - question-answer packet
+  - typed governance fields
+  - single atomic claim
+  - seven stages
+  - improving vector retrieval 2.3x
+  - carrying typed governance metadata
+  claims_must_include_any:
+  - half a table
+  - stripped of
+  - no idea boundary
+  - splitter cuts wherever the token count
+  - nowhere to attach access control
+  - confidently wrong
+  - five copies
+  claims_must_not_include_any:
+  - '0.1585'
+  - '0.3624'
+  - 2.29x
+  - 13.55%
+  - 80-85%
+  - fine-tuned LLaMA 3
+  evidence_must_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - retrieval failures
+  - half a table
+- id: blockify
+  title: Blockify
+  aliases:
+  - blockify-pipeline
+  - iternal-blockify
+  concept_type: system
+  expected_meaning: A preprocessing layer and product from Iternal Technologies that sits between the document parser and the vector store and converts documents into IdeaBlocks through a defined seven-stage pipeline.
+  required_evidence:
+  - 'line 89: ''Blockify, a preprocessing layer from Iternal Technologies, implements this as a structure it calls an IdeaBlock'''
+  - 'line 127: ''Blockify''s processing runs in seven stages. Each stage has a defined input and output'''
+  - 'line 171: ''The pipeline sits between document parser and vector store regardless of which combination is in use.'''
+  acceptable_claims:
+  - The seven stages are Scoping, Ingestion, Chunking/extraction, Semantic deduplication, Auto-tagging, Human validation, and Export (lines 131-169).
+  - Ingestion uses fine-tuned LLaMA 3 / QWEN 3.5 / Gemma4 to convert raw chunks into draft IdeaBlocks (line 141).
+  - It is open source (line 201).
+  may_merge_with:
+  - data-pipeline
+  must_not_confuse_with:
+  - idea-block
+  definition_must_include_any:
+  - preprocessing layer
+  - Iternal Technologies
+  - seven stages
+  - between document parser and vector store
+  - converts documents into IdeaBlocks
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - competing vectors
+  - redundancy degrades
+  - CDN layer
+  - improving vector retrieval 2.3x while reducing corpus 40x
+  claims_must_include_any:
+  - seven stages
+  - Scoping
+  - Ingestion
+  - fine-tuned LLaMA 3
+  - QWEN 3.5
+  - Gemma4
+  - open source
+  - open-source
+  - defined input and output
+  claims_must_not_include_any:
+  - structurally neutral container
+  - hard drive you want to fill
+  - fifteen competing vectors
+  evidence_must_include_any:
+  - Iternal Technologies
+  - seven stages
+  - between document parser and vector store
+- id: semantic-deduplication
+  title: Semantic Deduplication / Distillation
+  aliases:
+  - semantic-distillation
+  - iterative-dedup
+  - distillation
+  concept_type: procedure
+  expected_meaning: Iterative clustering of blocks by cosine similarity at an 80-85% threshold across 3-5 rounds, merging near-duplicates into a single canonical block, which shrinks the corpus while improving retrieval accuracy.
+  required_evidence:
+  - 'line 153: ''Blocks are clustered by cosine similarity at an 80-85% threshold across three to five iterative rounds.'''
+  - 'lines 113-115: ''2,042 blocks collapsed to 1,200 canonical IdeaBlocks / Word count dropped from 88,877 to 44,537 / Distilled dataset outperformed undistilled by 13.55% on vector accuracy'''
+  acceptable_claims:
+  - Distilling the dataset improved vector accuracy by 13.55% over the undistilled version (line 115).
+  - Deduplication merges near-duplicates via a second specially tuned LLM and can run on GPU or Intel Xeon CPU (line 155).
+  may_merge_with: []
+  must_not_confuse_with:
+  - vector-redundancy
+  - chunking-problem
+  definition_must_include_any:
+  - cosine similarity
+  - 80-85%
+  - three to five iterative rounds
+  - 3-5 rounds
+  - single canonical block
+  - merge
+  - near-duplicates
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - validated answer
+  - question-answer packet
+  - competing vectors
+  - retrieval surface
+  - CDN layer
+  claims_must_include_any:
+  - 13.55%
+  - 2,042
+  - 1,200
+  - 88,877
+  - 44,537
+  - 80-85%
+  - specially tuned LLM
+  - Intel Xeon
+  claims_must_not_include_any:
+  - '0.1585'
+  - '0.3624'
+  - Azure AI Search
+  - Pinecone
+  - clearance level
+  - fifteen competing vectors
+  evidence_must_include_any:
+  - 80-85%
+  - canonical block
+  - 13.55%
+  - iterative rounds
+- id: governance-metadata
+  title: Typed Governance Fields
+  aliases:
+  - governance-fields
+  - data-layer-governance
+  - auto-tagging
+  - governance-in-data-layer
+  concept_type: concept
+  expected_meaning: Typed metadata such as clearance level, version state, product line, and access boundary carried as schema fields on each IdeaBlock, moving governance into the data layer instead of as logic bolted onto the orchestrator.
+  required_evidence:
+  - 'line 161: ''clearance level (PUBLIC, INTERNAL, CONFIDENTIAL, SECRET), version state (Current, Deprecated, Draft, Approved)... Applied by the pipeline, not the document author.'''
+  - 'line 180: ''Governance moves into the data layer: role-based access, version state, clearance level are typed fields on each block, not logic bolted onto the orchestrator.'''
+  - 'line 67: ''all of that ends up as logic bolted onto the orchestrator, disconnected from the content it''s supposed to govern.'''
+  acceptable_claims:
+  - A sales engineer and a legal reviewer querying the same index get different datasets because the blocks carry the access boundary (line 180).
+  - Governance metadata is applied by the pipeline, not the document author (line 161).
+  may_merge_with: []
+  must_not_confuse_with:
+  - idea-block
+  - data-pipeline
+  definition_must_include_any:
+  - typed fields on each block
+  - not logic bolted onto the orchestrator
+  - clearance level
+  - version state
+  - into the data layer
+  - applied by the pipeline, not the document author
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - competing vectors
+  - redundancy degrades
+  - seven stages
+  - CDN layer
+  - improving vector retrieval 2.3x while reducing corpus 40x
+  claims_must_include_any:
+  - PUBLIC, INTERNAL, CONFIDENTIAL, SECRET
+  - Current, Deprecated, Draft, Approved
+  - applied by the pipeline, not the document author
+  - access boundary
+  - sales engineer
+  - legal reviewer
+  - export control
+  claims_must_not_include_any:
+  - '0.1585'
+  - '0.3624'
+  - 2.29x
+  - fifteen competing vectors
+  - Azure AI Search
+  - CDN layer
+  evidence_must_include_any:
+  - clearance level
+  - version state
+  - not logic bolted onto the orchestrator
+  - applied by the pipeline
+- id: vector-redundancy
+  title: Redundancy Degrades the Retrieval Surface
+  aliases:
+  - retrieval-surface
+  - competing-vectors
+  - redundancy-degradation
+  concept_type: principle
+  expected_meaning: Near-duplicate copies of the same content create many competing vectors in one region of embedding space, spreading probability mass and lowering the canonical match score, so the vector index is a retrieval surface that redundancy degrades, not a hard drive to fill.
+  required_evidence:
+  - 'line 117: ''fifteen near-duplicates of the same paragraph create fifteen competing vectors in the same region of embedding space.'''
+  - 'line 119: ''Retrieval distributes probability mass across all of them, pulling the match score down for the canonical version. Collapse them into one canonical block and the signal sharpens.'''
+  - 'line 121: ''Your vector index isn''t a hard drive you want to fill. It''s a retrieval surface, and redundancy degrades it.'''
+  acceptable_claims:
+  - Collapsing duplicates into one canonical block sharpens the retrieval signal (line 119).
+  - Average query-to-best-block cosine distance was 0.1585 for IdeaBlocks vs 0.3624 for naive chunks, a 2.29x reduction (lines 97-99).
+  may_merge_with: []
+  must_not_confuse_with:
+  - semantic-deduplication
+  - vector-geometry
+  definition_must_include_any:
+  - competing vectors
+  - probability mass
+  - retrieval surface
+  - redundancy degrades
+  - hard drive you want to fill
+  - signal sharpens
+  - same region of embedding space
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - validated answer
+  - question-answer packet
+  - seven stages
+  - Iternal Technologies
+  - CDN layer
+  - 80-85% threshold across
+  claims_must_include_any:
+  - fifteen near-duplicates
+  - fifteen competing vectors
+  - probability mass
+  - match score
+  - canonical version
+  - signal sharpens
+  - redundancy degrades it
+  claims_must_not_include_any:
+  - Azure AI Search
+  - Pinecone
+  - Milvus
+  - Vertex Matching Engine
+  - seven stages
+  - clearance level
+  - Scoping
+  evidence_must_include_any:
+  - competing vectors
+  - probability mass
+  - retrieval surface
+  - redundancy degrades
+- id: distillation-layer
+  title: Distillation Layer (CDN Analogy)
+  aliases:
+  - cdn-analogy
+  - preprocessing-layer
+  - distillation-layer-pattern
+  concept_type: principle
+  expected_meaning: The architectural pattern of a corpus-distillation stage that RAG stacks are growing between document parsing and vectorization, analogous to how web stacks grew a CDN layer between origin and browser.
+  required_evidence:
+  - 'line 195: ''RAG stacks are beginning to grow a distillation layer between parsing and vectorization, the way web stacks grew a CDN layer between origin and browser.'''
+  - 'line 71: ''Most stacks have nothing between the document parser and the vector store.'''
+  - 'line 197: ''You can build it yourself with clustering, LLM-based summarization, and schema enforcement. Or you can use something purpose-built for it like Blockify.'''
+  acceptable_claims:
+  - The fix belongs at the data layer, not in a better retrieval algorithm (lines 193-199).
+  - You can build the distillation layer yourself with clustering, LLM summarization, and schema enforcement (line 197).
+  may_merge_with: []
+  must_not_confuse_with:
+  - blockify
+  - data-pipeline
+  definition_must_include_any:
+  - distillation layer
+  - between parsing and vectorization
+  - CDN layer
+  - origin and browser
+  - nothing between the document parser and the vector store
+  definition_must_not_include_any:
+  - structurally neutral container
+  - no idea boundary
+  - validated answer
+  - question-answer packet
+  - competing vectors
+  - 80-85%
+  - improving vector retrieval 2.3x while reducing corpus 40x
+  claims_must_include_any:
+  - clustering, LLM-based summarization, and schema enforcement
+  - not a better retrieval algorithm
+  - data layer
+  - the way web stacks grew a CDN layer
+  - purpose-built
+  claims_must_not_include_any:
+  - '0.1585'
+  - '0.3624'
+  - fifteen competing vectors
+  - PUBLIC, INTERNAL, CONFIDENTIAL, SECRET
+  - Azure AI Search
+  evidence_must_include_any:
+  - distillation layer
+  - CDN layer
+  - between parsing and vectorization
+  - clustering, LLM-based summarization, and schema enforcement
+must_not_mint:
+- slug: data-pipeline
+  reason: synonym-of-blockify (the generic name for the same seven-stage Blockify pipeline; merge into blockify)
+- slug: knowledge-unit
+  reason: synonym-of-idea-block (the article uses 'unit of knowledge' descriptively, line 39; it is the IdeaBlock under an abstract name)
+- slug: rag-retrieval
+  reason: umbrella label (a generic topic the article never defines as a standalone concept; its content folds into chunking-problem and idea-block)
+- slug: vector-geometry
+  reason: grab-bag (OVP's note mixed export targets and a pipeline summary under a label whose real mechanism is vector-redundancy; the distinct concept is redundancy-degrades-retrieval, not 'vector geometry' as a node)
+- slug: rag
+  reason: article/background metadata (RAG is the assumed background field, not a concept this article defines)
+coverage:
+  primary_note_should_cover:
+  - the chunk-as-unit assumption and why it fails (no idea boundary, version chaos, no access state)
+  - IdeaBlock as the replacement unit and the structural query-to-answer match
+  - the counterintuitive 'less data, more accuracy' distillation result and its numbers
+  - the seven-stage Blockify pipeline overview
+  - governance moving into the data layer and single-record updates
+  - the closing distillation-layer / CDN-analogy principle
+  evergreen_should_cover:
+  - idea-block
+  - chunking-problem
+  - blockify
+  - semantic-deduplication
+  - governance-metadata
+  - vector-redundancy
+  - distillation-layer
+  primary_only_ok:
+  - the 40x corpus-reduction headline (only in frontmatter/intro, lines 9/33; body shows ~1.7-2x, do not mint as fact)
+  - supported vector stores and embedding models list (Azure/Pinecone/Milvus/Vertex; OpenAI/Bedrock/Mistral/Jina, line 169)
+  - the index hierarchy Organization > Business Unit > Product > Persona (Stage 1 scoping detail, line 133)
+  - human validation SME workload (5-10 SMEs, 1-2 hours/quarter, line 165)
+  - LangChain / LlamaIndex / Haystack as orchestration layers above the gap (line 69)
+known_disagreements_with_nowledge:
+- item: Nowledge M6 — distillation layer analogous to CDNs for web content
+  decision: mint-as-evergreen
+  why: The article's closing principle (line 195) explicitly frames a reusable architectural pattern (parsing -> distillation -> vectorization mirrors origin -> CDN -> browser); it is a distinct, source-backed concept, not a re-slice of IdeaBlock. OVP dropped it; that drop is the defect.
+- item: Nowledge M7 — enterprise version chaos (SharePoint/Confluence/Git, five copies, confidently wrong)
+  decision: primary-note-only
+  why: Lines 59-63 are a concrete supporting illustration of the chunking-problem (the version-context failure), not a separate concept. It should be evidence inside chunking-problem and narrated in the primary note, not its own evergreen.
+- item: Nowledge M4 — Blockify 7-stage pipeline as a single procedure object
+  decision: merge-into-X
+  why: Correct to keep as one coherent object; merge into blockify (system) which owns the seven-stage pipeline. OVP's mistake was scattering stage fragments across data-pipeline / vector-geometry / governance-metadata instead of one owner.
+- item: OVP vector-geometry note
+  decision: do-not-mint
+  why: Its title names no concept the article defines; the real, article-grounded mechanism (lines 117-121, competing duplicate vectors degrade the retrieval surface) is captured as vector-redundancy. The OVP node's claims (export targets, pipeline summary) are off-topic for the label.
+- item: OVP knowledge-unit and rag-retrieval notes
+  decision: do-not-mint
+  why: Both re-serve idea-block's defining sentence under abstract umbrella names; the article gives neither a distinct meaning (line 39 'unit of knowledge' is descriptive). Nowledge correctly declined to mint them.
+forbidden_phrases_anywhere:
+- 40x
+- reducing corpus 40x
+- cuts corpus size by 40x
+- reduces tokens per query by 3x
+- Akshay
+- akshay_pachaar
+- dailydoseofds
+- BITS Pilani
+- LightningAI
+- '268967'
+- blue_verified

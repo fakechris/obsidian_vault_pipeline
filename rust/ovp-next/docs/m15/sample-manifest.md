@@ -1,0 +1,30 @@
+# M15 sample manifest (Phase 1)
+
+- seed: `20260603` (fixed, registered) · N: 12 · selected: 12
+- pool: `/Users/chris/Documents/ovp-vault/50-Inbox/03-Processed` (943 .md; 940 after tuned-3 exclusion)
+- KMEM-arm available in this sample: **0** / 12
+
+## Selected (primary sample)
+
+1. `2026-03/2026-03-29_Writing_effective_tools_for_AI_agents_原文.md`
+2. `2026-04/2026-04-09_Evaluating_Harness_Skills_And_Self_Improving_Loops.md`
+3. `2026-04/2026-04-11_0x0funky_TermHive.md`
+4. `2026-04/2026-04-11_Install_These_Skills_Before_Codex_Touches_Your_Xcode_Project.md`
+5. `2026-04/2026-04-13_Building_a_C_compiler_with_a_team_of_parallel_Claudes.md`
+6. `2026-04/2026-04-22_leigest519_OpenGame.md`
+7. `2026-04/2026-04-25_Michaelliv_mercury.md`
+8. `2026-04/The Knowledge Graph Inside MiroShark How Structured Memory Makes Simulated Agents Think.md`
+9. `2026-05/2026-05-05_augmentcode_-_We_dont_need_more_agents._We_need_a_better_system._So_we_built_one..md`
+10. `2026-05/2026-05-07_Sequoia_Ascent_2026_summary.md`
+11. `2026-05/2026-05-12_SaitoWu_-_如何成为任何领域的前_1%.md`
+12. `2026-05/2026-05-20_athleticKoder_-_On_Building_Agents_From_First_Principles.md`
+
+## Tuned-3 (excluded from primary; calibration only)
+
+- 2026-05-10_akshay_pachaar_-_Youre_doing_RAG_wrong.md
+- 2026-05-12_lxfater_-_AI_Agent_是如何记住东西？从原理到实战详细解释.md
+- 2026-05-28_How_to_Eval_AI_Agents_-_The_2026_Guide.md
+
+## KMEM-arm availability note
+
+KMEM arm exists as captured runtime output for 6 articles only (3 tuned [excluded] + graphrag-paper/fde-zh/adapt-claude-code). A random draw from the 942-file pool is expected to contain ~0 of them, so the primary N=12 sample has no KMEM counterpart unless the recovered service is run on each — the M15 Phase-3 blocker.

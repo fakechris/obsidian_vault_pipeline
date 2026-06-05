@@ -1,0 +1,26 @@
+[package]
+name = "ovp-domain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next domain layer: typed bodies + transforms for the v1 article path"
+
+[features]
+default = []
+# Enables the contract-assertion engine (testing/contract.rs). Off by
+# default so production builds don't carry test machinery.
+testing = []
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-llm = { path = "../ovp-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+ovp-domain = { path = ".", features = ["testing"] }
+tempfile = { workspace = true }

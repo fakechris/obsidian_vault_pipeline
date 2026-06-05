@@ -1,0 +1,23 @@
+[package]
+name = "ovp-auto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next L6 automation: a one-shot inbox sweep that calls ovp-run::RunCycle per input then ovp-lint::Lint, and reports"
+
+[dependencies]
+ovp-run = { path = "../ovp-run" }
+ovp-lint = { path = "../ovp-lint" }
+ovp-stores = { path = "../ovp-stores" }
+serde = { workspace = true }
+
+[dev-dependencies]
+# The e2e builds a real per-input wiring factory (replay client) to drive the
+# sweep through actual run-cycles — offline, tempdirs only.
+ovp-app = { path = "../ovp-app" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-llm = { path = "../ovp-llm" }
+ovp-core = { path = "../ovp-core" }
+tempfile = { workspace = true }
