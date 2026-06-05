@@ -1,77 +1,32 @@
-# Obsidian
-.obsidian/workspace.json
-.obsidian/workspace-mobile.json
-.obsidian/cache
-.obsidian/graph.json
-.obsidian/plugins/*/
-!.obsidian/plugins/*/data.json
-.trash/
-
-# Vault data (user content) — DO NOT TRACK IN GIT
-00-Polaris/
-10-Knowledge/
-20-Areas/
-30-Projects/
-40-Resources/
-50-Inbox/
-60-Logs/
-70-Archive/
-80-Views/
-
-# Private data
-.env
-.personal/
-.private/
-*_private.md
-*_personal.md
-
-# API Keys and Secrets
-*.key
-*.secret
-*_token*
-*_api_key*
-
-# Pipeline logs with personal data
-# (already covered by 60-Logs/ above, but keep for clarity)
-# 60-Logs/pipeline.jsonl
-# 60-Logs/transactions/*.json
-# 60-Logs/quality-reports/*.md
-# 60-Logs/pipeline-reports/*.md
-# 50-Inbox/.manifest.json
-# 50-Inbox/.pinboard_state.json
-
-# Autopilot and migration
-60-Logs/autopilot.db
-60-Logs/migration-reports/
-
-# System files
-.DS_Store
-Thumbs.db
-*.tmp
+/target
+/.run
+Cargo.lock.bak
 *.swp
-*~
+.DS_Store
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
+# Local live-LLM credentials (M9 eval); never commit
+.env*
 
-# Node (if any)
-node_modules/
+# Local agent/tool state; never commit
+/.agents/
+/.gstack/
+/.supervisor/
+/.worktrees/
+/.claude/settings.local.json
 
-# Large files
-*.mp4
-*.mov
-*.avi
-*.zip
-*.tar.gz
-.gstack/
-.worktrees/
-.supervisor/
-uv.lock
-.ovp/
+# Python-era local caches that can appear during migration checks
+/.venv/
+/.review-venv/
+/.mypy_cache/
+/.pytest_cache/
+/.ruff_cache/
+/uv.lock
+
+# Scratch reports/eval outputs
+/docs/eval/
+/docs/superpowers/
+/docs/reports/openhuman-vs-ovp-2026-05-16.*
+
+# Raw/live cassette captures must be curated before becoming fixtures
+**/cassettes/raw/
+**/cassettes/live/
