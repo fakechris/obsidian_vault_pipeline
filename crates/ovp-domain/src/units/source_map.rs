@@ -160,11 +160,24 @@ fn split_units(raw: &str) -> Vec<(usize, usize)> {
 pub(crate) fn render_plain(raw: &str) -> String {
     let stripped = strip_leading_marker(raw.trim());
     let linked = strip_markdown_links(stripped);
+    let chars: Vec<char> = linked.chars().collect();
     let mut out = String::with_capacity(linked.len());
     let mut prev_ws = false;
-    for c in linked.chars() {
-        if matches!(c, '*' | '_' | '`' | '~') {
+    for (i, &c) in chars.iter().enumerate() {
+        // Drop Markdown emphasis/code markers — EXCEPT an underscore BETWEEN two
+        // alphanumerics, which belongs to a code identifier (`message_agent`,
+        // `tool_call`), not emphasis. (M20: previously stripped → `messageagent`,
+        // the M17-documented underscore bug.)
+        if matches!(c, '*' | '`' | '~') {
             continue;
+        }
+        if c == '_' {
+            let prev_alnum = i > 0 && chars[i - 1].is_alphanumeric();
+            let next_alnum = chars.get(i + 1).is_some_and(|n| n.is_alphanumeric());
+            if !(prev_alnum && next_alnum) {
+                continue; // emphasis underscore (word boundary) → drop
+            }
+            // intra-identifier underscore → keep (falls through to push)
         }
         if c.is_whitespace() {
             if !prev_ws && !out.is_empty() {
@@ -196,7 +209,10 @@ fn strip_leading_marker(s: &str) -> &str {
     t
 }
 
-/// Replace `[text](url)` / `![alt](url)` with just the visible `text`/`alt`.
+/// Replace `[text](url)` / `![alt](url)` with the visible `text`/`alt` — EXCEPT a
+/// **citation link** whose anchor merely names its own source ([`is_citation_link`]),
+/// which is dropped entirely so it does not pollute prose. (M20: `LongMemEval
+/// [Medium](https://medium.com/…)` was rendering as "LongMemEval Medium".)
 pub(crate) fn strip_markdown_links(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -212,7 +228,11 @@ pub(crate) fn strip_markdown_links(s: &str) -> String {
                 let after = text_end + 1;
                 if bytes.get(after) == Some(&b'(') {
                     if let Some(paren) = s[after..].find(')') {
-                        out.push_str(&s[i + 1..text_end]);
+                        let anchor = &s[i + 1..text_end];
+                        let url = &s[after + 1..after + paren];
+                        if !is_citation_link(anchor, url) {
+                            out.push_str(anchor); // content link → keep visible text
+                        }
                         i = after + paren + 1;
                         continue;
                     }
@@ -224,6 +244,41 @@ pub(crate) fn strip_markdown_links(s: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+/// True when a markdown link's anchor merely names its own source/host — a
+/// citation like `[Medium](https://medium.com/…)`, `[arXiv](https://arxiv.org/…)`,
+/// `[Emergent Mind](https://emergentmind.com/…)` — rather than content
+/// (`[Claude Code](https://docs.anthropic.com/…)`). Deterministic: the anchor,
+/// normalized to lowercase alphanumerics (a trailing ` +N` reference-count suffix
+/// removed), EXACTLY equals one of the URL host's domain labels (minus `www` and
+/// common TLDs). Exact match keeps it conservative — a content anchor that merely
+/// contains a domain word is preserved.
+fn is_citation_link(anchor: &str, url: &str) -> bool {
+    let norm = |s: &str| -> String {
+        s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+    };
+    // Strip a trailing " +N" reference-count suffix (e.g. "GitHub +2").
+    let a = match anchor.trim().rsplit_once(" +") {
+        Some((head, tail)) if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => head,
+        _ => anchor.trim(),
+    };
+    let anchor_norm = norm(a);
+    if anchor_norm.is_empty() {
+        return false;
+    }
+    const TLDS: &[&str] = &[
+        "www", "com", "org", "net", "io", "ai", "co", "gov", "edu", "pub", "dev", "app", "info",
+    ];
+    let host = url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = host.split(['/', '?', '#']).next().unwrap_or("");
+    host.split('.').any(|label| {
+        let l = norm(label);
+        !l.is_empty() && !TLDS.contains(&l.as_str()) && l == anchor_norm
+    })
 }
 
 /// Fold a char to ASCII: fullwidth ASCII (CJK) → halfwidth, plus smart
@@ -331,6 +386,46 @@ mod tests {
     fn render_plain_strips_list_marker_and_link() {
         assert_eq!(render_plain("- **First** point [see](u)"), "First point see");
         assert_eq!(render_plain("1. Ordered item"), "Ordered item");
+    }
+
+    #[test]
+    fn render_plain_drops_citation_links_keeps_content_links() {
+        // M20 (m18-02): citation links whose anchor names the source are dropped.
+        assert_eq!(
+            render_plain("91.4% on LongMemEval [Medium](https://yogeshyadav.medium.com/x) with Gemini-3 Pro"),
+            "91.4% on LongMemEval with Gemini-3 Pro"
+        );
+        assert_eq!(render_plain("see [arXiv](https://arxiv.org/abs/1)"), "see");
+        assert_eq!(render_plain("[Emergent Mind](https://www.emergentmind.com/t) Cognee rules"), "Cognee rules");
+        // content links keep their visible text.
+        assert_eq!(
+            render_plain("Use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) now"),
+            "Use Claude Code now"
+        );
+        assert_eq!(render_plain("Use [vitest-evals](https://x/y) here"), "Use vitest-evals here");
+    }
+
+    #[test]
+    fn is_citation_link_classification() {
+        assert!(is_citation_link("Medium", "https://medium.com/x"));
+        assert!(is_citation_link("Medium", "https://yogeshyadav.medium.com/x"));
+        assert!(is_citation_link("arXiv", "https://arxiv.org/abs/1"));
+        assert!(is_citation_link("Emergent Mind", "https://www.emergentmind.com/t"));
+        assert!(is_citation_link("GitHub +2", "https://github.com/x")); // trailing +N
+        assert!(!is_citation_link("Claude Code", "https://docs.anthropic.com/x"));
+        assert!(!is_citation_link("vitest-evals", "https://x/y"));
+        assert!(!is_citation_link("the docs", "https://github.com/x")); // anchor ≠ a label
+    }
+
+    #[test]
+    fn render_plain_preserves_code_identifier_underscores() {
+        // M20 (M17 bug): intra-word underscores belong to identifiers, not emphasis.
+        assert_eq!(render_plain("Call message_agent and list_teammates."), "Call message_agent and list_teammates.");
+        assert_eq!(render_plain("Use `tool_call` here"), "Use tool_call here");
+        assert_eq!(render_plain("the shared_content dir"), "the shared_content dir");
+        // emphasis underscores (word boundary) are still stripped.
+        assert_eq!(render_plain("this is _emphasis_ text"), "this is emphasis text");
+        assert_eq!(render_plain("**bold** and _ital_ done"), "bold and ital done");
     }
 
     #[test]
