@@ -15,7 +15,10 @@ pub mod reply;
 pub mod request;
 
 pub use cache::{CacheMode, CachedModelClient};
-pub use client::{is_transient, CallError, ModelClient, NeverCallsClient, RetryingModelClient};
+pub use client::{
+    is_transient, BudgetEscalatingModelClient, CallError, ModelClient, NeverCallsClient,
+    RetryingModelClient,
+};
 pub use fixture::FixtureModelClient;
 pub use key::request_key;
 pub use reply::{ModelReply, StopReason, Usage};

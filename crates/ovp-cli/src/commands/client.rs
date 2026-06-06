@@ -154,10 +154,19 @@ fn validate_messages_endpoint(url: &str) -> Result<(), String> {
 const LIVE_MAX_RETRIES: u32 = 2;
 #[cfg(feature = "anthropic")]
 const LIVE_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(400);
+/// M20: on `BudgetExhausted` (a thinking model that used its whole budget and
+/// emitted no text), retry ONCE at this multiple of the effective budget,
+/// capped. Base used when no `OVP_LLM_MAX_TOKENS` override is set.
+#[cfg(feature = "anthropic")]
+const LIVE_BUDGET_ESCALATION_FACTOR: u32 = 2;
+#[cfg(feature = "anthropic")]
+const LIVE_BUDGET_ESCALATION_CAP: u32 = 96_000;
+#[cfg(feature = "anthropic")]
+const LIVE_BUDGET_BASE_DEFAULT: u32 = 16_000;
 
 #[cfg(feature = "anthropic")]
 fn build_live_client(cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError> {
-    use ovp_llm::{AnthropicBlockingClient, RetryingModelClient};
+    use ovp_llm::{AnthropicBlockingClient, BudgetEscalatingModelClient, RetryingModelClient};
 
     let cfg = LiveClientConfig::from_env()
         .map_err(|e| CliError::Io(format!("live provider config: {e}")))?;
@@ -181,7 +190,15 @@ fn build_live_client(cache_dir: &Path) -> Result<Box<dyn ModelClient>, CliError>
     // Bounded retry on transient transport/429/5xx faults, INSIDE the cache so
     // a cache hit never retries and only a finally-successful live call records.
     let retrying = RetryingModelClient::new(live, LIVE_MAX_RETRIES, LIVE_RETRY_BACKOFF);
-    let cached = CachedModelClient::new(retrying, cache_dir, ARTICLE_PROMPT_ID, CacheMode::Record)
+    // M20: one higher-budget retry on thinking-budget exhaustion, OUTSIDE retry
+    // (BudgetExhausted is non-transient) and INSIDE the cache (records once).
+    let escalated = cfg
+        .max_tokens
+        .unwrap_or(LIVE_BUDGET_BASE_DEFAULT)
+        .saturating_mul(LIVE_BUDGET_ESCALATION_FACTOR)
+        .min(LIVE_BUDGET_ESCALATION_CAP);
+    let escalating = BudgetEscalatingModelClient::new(retrying, escalated);
+    let cached = CachedModelClient::new(escalating, cache_dir, ARTICLE_PROMPT_ID, CacheMode::Record)
         .map_err(|e| CliError::Io(format!("opening cache dir `{}`: {e}", cache_dir.display())))?;
     Ok(Box::new(cached))
 }

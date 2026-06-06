@@ -99,15 +99,20 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
             .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
             .count();
         let stop = v.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("unknown");
-        let detail = if thinking_blocks > 0 {
-            format!(
-                "no_text_content_blocks: response had {thinking_blocks} thinking block(s) and no \
-                 text block (stop_reason={stop}). The provider is likely a reasoning/thinking model \
+        // `stop_reason=max_tokens` with no text = the reasoning model spent its
+        // whole budget thinking. Classify as `BudgetExhausted` (M20) so a
+        // higher-budget retry can recover it; everything else is a genuine
+        // `Decode` (no text for a non-budget reason → not retryable).
+        if stop == "max_tokens" {
+            let detail = format!(
+                "thinking_budget_exhausted: response had {thinking_blocks} thinking block(s) and no \
+                 text block (stop_reason=max_tokens). The provider is likely a reasoning/thinking model \
                  — raise OVP_LLM_MAX_TOKENS so it can emit text after thinking."
-            )
-        } else {
-            format!("no_text_content_blocks: response had no text content block (stop_reason={stop})")
-        };
+            );
+            return Err(CallError::BudgetExhausted { detail });
+        }
+        let detail =
+            format!("no_text_content_blocks: response had no text content block (stop_reason={stop})");
         return Err(CallError::Decode { detail });
     }
 
@@ -284,7 +289,10 @@ mod live {
                 body["model"] = serde_json::json!(model);
             }
             if let Some(mt) = self.max_tokens_override {
-                body["max_tokens"] = serde_json::json!(mt);
+                // The env override RAISES the budget; honor an explicit request
+                // that asks for even more (M20 budget escalation bumps
+                // `request.max_tokens` above the override on a retry).
+                body["max_tokens"] = serde_json::json!(mt.max(request.max_tokens));
             }
             let resp = self
                 .http
@@ -415,18 +423,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_thinking_only_response_is_diagnosed_decode_error() {
-        // A reasoning model that spent its budget thinking returns only a
-        // `thinking` block and no `text`. This must be a loud, actionable
-        // decode error naming the cause — not a silent empty success.
+    fn parse_thinking_only_response_is_budget_exhausted() {
+        // M20: a reasoning model that spent its whole budget thinking
+        // (`stop_reason=max_tokens`, only a `thinking` block, no `text`) is
+        // classified `BudgetExhausted` — recoverable by a higher-budget retry —
+        // not a generic Decode. Loud + actionable.
         let json = r#"{"model":"MiniMax-M2","content":[{"type":"thinking","thinking":"hmm...","signature":"s"}],"stop_reason":"max_tokens","usage":{"input_tokens":50,"output_tokens":64}}"#;
         match parse_anthropic_reply(json) {
-            Err(CallError::Decode { detail }) => {
-                assert!(detail.contains("no_text_content_blocks"), "got {detail}");
+            Err(CallError::BudgetExhausted { detail }) => {
+                assert!(detail.contains("thinking_budget_exhausted"), "got {detail}");
                 assert!(detail.contains("thinking block"), "should mention thinking blocks: {detail}");
                 assert!(detail.contains("OVP_LLM_MAX_TOKENS"), "should hint the fix: {detail}");
             }
-            other => panic!("expected diagnosed Decode error, got {other:?}"),
+            other => panic!("expected BudgetExhausted error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_empty_text_non_budget_stop_is_decode_error() {
+        // No text but stop_reason != max_tokens → genuine Decode (not retryable).
+        let json = r#"{"model":"m","content":[{"type":"thinking","thinking":"x","signature":"s"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        assert!(matches!(parse_anthropic_reply(json), Err(CallError::Decode { .. })));
     }
 }

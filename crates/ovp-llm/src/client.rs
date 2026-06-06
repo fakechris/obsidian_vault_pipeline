@@ -20,6 +20,11 @@ pub enum CallError {
     Transport { detail: String },
     /// Response failed to parse into the wire `ModelReply` shape.
     Decode { detail: String },
+    /// A reasoning/thinking model spent its whole `max_tokens` budget on a
+    /// thinking block and emitted NO text block (`stop_reason=max_tokens`). NOT
+    /// transient — retrying with the SAME budget won't help — but recoverable by
+    /// a higher-budget retry ([`BudgetEscalatingModelClient`]).
+    BudgetExhausted { detail: String },
     /// A client that should never be called was invoked. Bug indicator.
     Unexpected { detail: String },
 }
@@ -31,6 +36,7 @@ impl std::fmt::Display for CallError {
             CallError::Provider { code, detail } => write!(f, "provider error {code}: {detail}"),
             CallError::Transport { detail } => write!(f, "transport: {detail}"),
             CallError::Decode { detail } => write!(f, "decode: {detail}"),
+            CallError::BudgetExhausted { detail } => write!(f, "budget exhausted: {detail}"),
             CallError::Unexpected { detail } => write!(f, "unexpected: {detail}"),
         }
     }
@@ -78,9 +84,10 @@ pub fn is_transient(err: &CallError) -> bool {
                 c.contains("rate_limit") || c.contains("overloaded") || c.contains("unavailable")
             }
         }
-        CallError::CacheMiss { .. } | CallError::Decode { .. } | CallError::Unexpected { .. } => {
-            false
-        }
+        CallError::CacheMiss { .. }
+        | CallError::Decode { .. }
+        | CallError::BudgetExhausted { .. }
+        | CallError::Unexpected { .. } => false,
     }
 }
 
@@ -123,6 +130,41 @@ impl<C: ModelClient> ModelClient for RetryingModelClient<C> {
                     return Err(err);
                 }
             }
+        }
+    }
+}
+
+/// A `ModelClient` wrapper that recovers from [`CallError::BudgetExhausted`] —
+/// a reasoning model that used its whole `max_tokens` on thinking and emitted no
+/// text — by retrying ONCE with a raised `max_tokens` (`escalated_max_tokens`).
+/// Any other error (and a success) passes straight through. Bounded to a single
+/// retry: if the higher budget still exhausts, the error surfaces (fail loud).
+///
+/// Placement: wrap the live (or retrying) client and put a `CachedModelClient`
+/// *outside*, so the cache keys on the ORIGINAL request and records the
+/// successful higher-budget reply once. The escalation only takes effect if the
+/// underlying client honors a per-request `max_tokens` at/above the escalated
+/// value (the Anthropic client uses `max(request.max_tokens, env_override)`).
+pub struct BudgetEscalatingModelClient<C: ModelClient> {
+    inner: C,
+    escalated_max_tokens: u32,
+}
+
+impl<C: ModelClient> BudgetEscalatingModelClient<C> {
+    pub fn new(inner: C, escalated_max_tokens: u32) -> Self {
+        Self { inner, escalated_max_tokens }
+    }
+}
+
+impl<C: ModelClient> ModelClient for BudgetEscalatingModelClient<C> {
+    fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError> {
+        match self.inner.call(request) {
+            Err(CallError::BudgetExhausted { .. }) if request.max_tokens < self.escalated_max_tokens => {
+                let mut bumped = request.clone();
+                bumped.max_tokens = self.escalated_max_tokens;
+                self.inner.call(&bumped) // one bounded higher-budget retry
+            }
+            other => other,
         }
     }
 }
@@ -216,5 +258,58 @@ mod retry_tests {
         assert!(!is_transient(&CallError::Provider { code: "401".into(), detail: "x".into() }));
         assert!(!is_transient(&CallError::Decode { detail: "no text".into() }));
         assert!(!is_transient(&CallError::CacheMiss { key: "k".into() }));
+        // M20: budget-exhausted is NOT transient (same-budget retry won't help).
+        assert!(!is_transient(&CallError::BudgetExhausted { detail: "thinking".into() }));
+    }
+
+    // ---- M20 budget escalation ----
+
+    /// Returns `BudgetExhausted` until a request arrives with `max_tokens >=
+    /// threshold`, then succeeds. Records calls + the last max_tokens seen.
+    struct BudgetClient {
+        threshold: u32,
+        calls: u32,
+        last_max_tokens: u32,
+    }
+    impl ModelClient for BudgetClient {
+        fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError> {
+            self.calls += 1;
+            self.last_max_tokens = request.max_tokens;
+            if request.max_tokens >= self.threshold {
+                Ok(FlakyClient::reply())
+            } else {
+                Err(CallError::BudgetExhausted { detail: "thinking block, no text".into() })
+            }
+        }
+    }
+
+    #[test]
+    fn escalates_budget_then_succeeds() {
+        // First attempt at max_tokens=16 exhausts; the escalated 48000 succeeds.
+        let inner = BudgetClient { threshold: 40_000, calls: 0, last_max_tokens: 0 };
+        let mut client = BudgetEscalatingModelClient::new(inner, 48_000);
+        let reply = client.call(&req()).expect("escalated retry should succeed");
+        assert_eq!(reply.text, "ok");
+        assert_eq!(client.inner.calls, 2, "1 initial + 1 escalated retry");
+        assert_eq!(client.inner.last_max_tokens, 48_000, "retry raised max_tokens");
+    }
+
+    #[test]
+    fn budget_escalation_is_one_shot_then_fails_loud() {
+        // Even the escalated budget exhausts → surface the error after one retry.
+        let inner = BudgetClient { threshold: 999_999, calls: 0, last_max_tokens: 0 };
+        let mut client = BudgetEscalatingModelClient::new(inner, 48_000);
+        let err = client.call(&req()).unwrap_err();
+        assert!(matches!(err, CallError::BudgetExhausted { .. }));
+        assert_eq!(client.inner.calls, 2, "exactly one escalated retry, then fail");
+    }
+
+    #[test]
+    fn escalator_passes_through_non_budget_errors_and_success() {
+        // A transport error is not the escalator's business → passed through, no retry.
+        let flaky = FlakyClient::new(1, CallError::Transport { detail: "reset".into() });
+        let mut client = BudgetEscalatingModelClient::new(flaky, 48_000);
+        assert!(matches!(client.call(&req()).unwrap_err(), CallError::Transport { .. }));
+        assert_eq!(client.inner.calls, 1, "non-budget error not retried by escalator");
     }
 }
