@@ -8,10 +8,11 @@ use std::path::Path;
 
 use ovp_llm::{CallError, ModelClient};
 
+use crate::model_reply::{json_repair_request, parse_reply_value, RepairNote};
 use crate::source_doc::SourceDoc;
 
 use super::critic::{apply_repairs, run_unit_critique, CriticReply, RepairLog};
-use super::parser::parse_envelope;
+use super::parser::{parse_envelope, units_from_value};
 use super::prompt::unit_model_request;
 use super::validator::{extraction_parse_failed, validate};
 use super::SourceExtraction;
@@ -31,6 +32,49 @@ pub fn extract_units(reply_text: &str, source: &SourceDoc) -> SourceExtraction {
     match parse_envelope(reply_text) {
         Ok(values) => validate(&values, source),
         Err(e) => extraction_parse_failed(source, e.detail),
+    }
+}
+
+/// Resilient base extraction (M19). Parse the reply with parser-local recovery;
+/// on an unrecoverable JSON defect, attempt ONE bounded model JSON-repair call.
+/// Returns the raw unit values (for the critic merge), the validated extraction,
+/// and an optional repair note. The salvaged reply ALWAYS re-runs through the
+/// SAME `validate`, so repair can never bypass grounding. A repair `CallError`
+/// (replay cache-miss / transport) is swallowed → fail loud with the original
+/// defect (never silent-accept).
+fn resilient_unit_extract(
+    reply_text: &str,
+    source: &SourceDoc,
+    client: &mut dyn ModelClient,
+) -> (Vec<serde_json::Value>, SourceExtraction, Option<RepairNote>) {
+    match parse_reply_value(reply_text) {
+        Ok((value, note)) => match units_from_value(&value) {
+            Ok(values) => {
+                let ext = validate(&values, source);
+                (values, ext, note.map(|_| RepairNote::parser_local("units")))
+            }
+            // Envelope parsed but `units` is missing/not-an-array — a content
+            // issue, not a JSON-syntax one. Don't repair; surface it.
+            Err(e) => (Vec::new(), extraction_parse_failed(source, e.detail), None),
+        },
+        Err(defect) => {
+            let repaired = client
+                .call(&json_repair_request(reply_text))
+                .ok()
+                .and_then(|r| parse_reply_value(&r.text).ok())
+                .and_then(|(v, _)| units_from_value(&v).ok());
+            match repaired {
+                Some(values) => {
+                    let ext = validate(&values, source);
+                    (values, ext, Some(RepairNote::model_repair("units", &defect)))
+                }
+                None => (
+                    Vec::new(),
+                    extraction_parse_failed(source, format!("units: {defect}")),
+                    None,
+                ),
+            }
+        }
     }
 }
 
@@ -73,6 +117,9 @@ pub struct RepairedRun {
     pub critic: CriticReply,
     pub base_reply: String,
     pub critic_reply: String,
+    /// JSON salvage notes (M19): empty when the base reply parsed cleanly, one
+    /// entry when parser-local recovery or a bounded model repair was applied.
+    pub json_repair: Vec<RepairNote>,
 }
 
 /// Critic-assisted bounded repair: run the FROZEN v5 extractor on `base_client`
@@ -89,16 +136,14 @@ pub fn run_unit_extraction_repaired(
     base_client: &mut dyn ModelClient,
     critic_client: &mut dyn ModelClient,
 ) -> Result<RepairedRun, CallError> {
-    // 1. Frozen v5 base (replay). Keep the exact RAW values so re-validation of
-    //    the no-repair case is byte-identical (the conservative floor).
+    // 1. Base extraction with M19 resilient parse (parser-local recovery + one
+    //    bounded model repair). Keep the RAW values so re-validation of the
+    //    no-repair case is byte-identical (the conservative floor).
     let base_request = unit_model_request(source);
     let base_reply = base_client.call(&base_request)?;
-    let base_raw = parse_envelope(&base_reply.text).unwrap_or_default();
-    let base = if base_raw.is_empty() {
-        extract_units(&base_reply.text, source) // surfaces the parse error
-    } else {
-        validate(&base_raw, source)
-    };
+    let (base_raw, base, base_repair) =
+        resilient_unit_extract(&base_reply.text, source, base_client);
+    let json_repair: Vec<RepairNote> = base_repair.into_iter().collect();
 
     // 2. Independent critic (live/record) over the base accepted units.
     let (critic, critic_reply) = run_unit_critique(source, &base.units, critic_client)?;
@@ -118,6 +163,7 @@ pub fn run_unit_extraction_repaired(
         critic,
         base_reply: base_reply.text,
         critic_reply,
+        json_repair,
     })
 }
 
@@ -175,5 +221,84 @@ mod tests {
         assert!(run.extraction.report.parse_error.is_some());
         assert_eq!(run.extraction.units.len(), 0);
         assert_eq!(run.raw_reply, "not json", "raw reply preserved even on parse error");
+    }
+
+    // ---- M19 resilient base extraction ----
+
+    /// Returns each scripted reply in turn (one per `call`), then repeats the last.
+    struct ScriptedClient {
+        replies: Vec<String>,
+        i: usize,
+    }
+    impl ModelClient for ScriptedClient {
+        fn call(&mut self, _req: &ModelRequest) -> Result<ModelReply, CallError> {
+            let text = self.replies.get(self.i).or_else(|| self.replies.last()).cloned().unwrap_or_default();
+            self.i += 1;
+            Ok(ModelReply {
+                model: "scripted".into(),
+                text,
+                stop_reason: StopReason::EndTurn,
+                usage: Usage { input_tokens: 1, output_tokens: 1 },
+            })
+        }
+    }
+
+    /// A grounded unit whose evidence_quote matches `source()`'s body.
+    fn grounded_unit_json(text: &str) -> String {
+        format!(
+            r#"{{"kind":"assertion","text":"{text}","evidence_ref":"p001","evidence_quote":"A chunk is a structurally neutral container.","attribution":"author","modality":"asserted","arguments":[]}}"#
+        )
+    }
+
+    #[test]
+    fn resilient_extract_recovers_unescaped_backslash_parser_local() {
+        // m18-04 class: a stray backslash in a string. evidence_quote still
+        // matches the source → the recovered unit is accepted. No client call.
+        let reply = format!(r#"{{"units":[{}]}}"#, grounded_unit_json(r"see path C:\Users\app"));
+        let mut client = CannedClient { text: "UNUSED".into() };
+        let (values, ext, note) = resilient_unit_extract(&reply, &source(), &mut client);
+        assert_eq!(values.len(), 1);
+        assert_eq!(ext.report.accepted, 1);
+        assert_eq!(ext.report.accepted_without_quote, 0);
+        assert_eq!(note.unwrap().method, "parser-local: unescaped-backslash");
+    }
+
+    #[test]
+    fn resilient_extract_uses_bounded_model_repair_on_missing_quote() {
+        // m18-06/m18-19 class: unrecoverable locally → one repair call fixes it.
+        let broken = r#"{"units":[ "kind":"assertion" ]}"#; // structural garbage
+        let fixed = format!(r#"{{"units":[{}]}}"#, grounded_unit_json("a chunk is neutral"));
+        let mut client = ScriptedClient { replies: vec![fixed], i: 0 };
+        let (values, ext, note) = resilient_unit_extract(broken, &source(), &mut client);
+        assert_eq!(values.len(), 1);
+        assert_eq!(ext.report.accepted, 1);
+        let n = note.expect("repair note");
+        assert_eq!(n.stage, "units");
+        assert!(n.method.starts_with("model-repair"), "got {}", n.method);
+    }
+
+    #[test]
+    fn resilient_extract_fails_loud_when_repair_also_bad() {
+        let broken = r#"{"units":[ "kind": ]}"#;
+        // repair call returns junk too → fail loud, no silent accept.
+        let mut client = ScriptedClient { replies: vec!["still broken".into()], i: 0 };
+        let (values, ext, note) = resilient_unit_extract(broken, &source(), &mut client);
+        assert!(values.is_empty());
+        assert_eq!(ext.units.len(), 0);
+        assert!(ext.report.parse_error.is_some());
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn repaired_units_still_pass_through_grounding_validator() {
+        // The repair returns syntactically valid JSON but with an UNGROUNDED
+        // quote (not in source). It must NOT be accepted — repair cannot bypass
+        // grounding. accepted_without_quote stays 0.
+        let broken = r#"{"units":[ bad ]}"#;
+        let ungrounded = r#"{"units":[{"kind":"assertion","text":"x","evidence_ref":"p001","evidence_quote":"THIS QUOTE IS NOT IN THE SOURCE AT ALL","attribution":"author","modality":"asserted","arguments":[]}]}"#;
+        let mut client = ScriptedClient { replies: vec![ungrounded.into()], i: 0 };
+        let (_values, ext, _note) = resilient_unit_extract(broken, &source(), &mut client);
+        assert_eq!(ext.report.accepted, 0, "ungrounded repaired unit must not be accepted");
+        assert_eq!(ext.report.accepted_without_quote, 0, "grounding invariant holds");
     }
 }

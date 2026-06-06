@@ -55,6 +55,8 @@ pub struct CardSynthesisRun {
     pub cards: Vec<Card>,
     pub report: CardReport,
     pub raw_reply: String,
+    /// `Some` if the card JSON had to be salvaged (M19). Surfaced into run-status.
+    pub json_repair: Option<crate::model_reply::RepairNote>,
 }
 
 /// Build the (system, user) card prompt: the frozen v3 instructions + the accepted
@@ -85,16 +87,21 @@ pub fn card_model_request(accepted_units: &[Unit]) -> ModelRequest {
     }
 }
 
-/// Parse the `{ "cards": [...] }` envelope tolerantly (strip fence / find the first
-/// balanced object). Returns `Err(detail)` if no card array is found.
+/// Parse the `{ "cards": [...] }` envelope tolerantly (M19): strip fence /
+/// surrounding prose + parser-local backslash recovery via the shared
+/// [`crate::model_reply`] util. Returns `Err(detail)` if no card array is found.
 pub fn parse_cards(reply_text: &str) -> Result<Vec<RawCard>, String> {
-    let obj = extract_object(reply_text).ok_or_else(|| "no JSON object in reply".to_string())?;
-    let v: serde_json::Value =
-        serde_json::from_str(&obj).map_err(|e| format!("not JSON: {e}"))?;
-    let arr = v.get("cards").and_then(|c| c.as_array()).ok_or("missing `cards` array")?;
+    let (value, _note) =
+        crate::model_reply::parse_reply_value(reply_text).map_err(|d| d.to_string())?;
+    cards_from_value(&value)
+}
+
+/// Pull `RawCard`s out of an already-parsed `{ "cards": [...] }` envelope. One
+/// malformed card is skipped (not fatal); a missing array is an error.
+fn cards_from_value(value: &serde_json::Value) -> Result<Vec<RawCard>, String> {
+    let arr = value.get("cards").and_then(|c| c.as_array()).ok_or("missing `cards` array")?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
-        // One bad card is skipped, not fatal.
         if let Ok(rc) = serde_json::from_value::<RawCard>(item.clone()) {
             out.push(rc);
         }
@@ -156,59 +163,49 @@ fn resolve_unit<'a>(units: &'a [Unit], cid: &str) -> Option<&'a Unit> {
 }
 
 /// Full run: synthesize cards from the accepted Units (replay or live), validate.
-/// A reply that does not parse yields `Ok` with `report.parse_error` set + 0 cards.
+/// M19: on a JSON defect, attempt parser-local recovery, then ONE bounded model
+/// JSON-repair call (`client`). The salvaged reply still goes through the SAME
+/// `cards_from_value` + `validate_cards`, so repair cannot bypass the citation
+/// invariant. A reply that still does not parse yields `Ok` with
+/// `report.parse_error` set + 0 cards (fail-loud upstream).
 pub fn run_card_synthesis(
     accepted_units: &[Unit],
     client: &mut dyn ModelClient,
 ) -> Result<CardSynthesisRun, CallError> {
+    use crate::model_reply::{json_repair_request, parse_reply_value, RepairNote};
+
     let request = card_model_request(accepted_units);
     let reply = client.call(&request)?;
-    match parse_cards(&reply.text) {
+
+    // 1. Parser-local: parse (with backslash recovery). 2. Bounded model repair.
+    let (parsed, json_repair): (Result<Vec<RawCard>, String>, Option<RepairNote>) =
+        match parse_reply_value(&reply.text) {
+            Ok((value, note)) => (cards_from_value(&value), note.map(|_| RepairNote::parser_local("cards"))),
+            Err(defect) => {
+                let repaired = client
+                    .call(&json_repair_request(&reply.text))
+                    .ok()
+                    .and_then(|r| parse_reply_value(&r.text).ok())
+                    .and_then(|(v, _)| cards_from_value(&v).ok());
+                match repaired {
+                    Some(raw) => (Ok(raw), Some(RepairNote::model_repair("cards", &defect))),
+                    None => (Err(format!("cards: {defect}")), None),
+                }
+            }
+        };
+
+    match parsed {
         Ok(raw) => {
             let (cards, report) = validate_cards(&raw, accepted_units);
-            Ok(CardSynthesisRun { cards, report, raw_reply: reply.text })
+            Ok(CardSynthesisRun { cards, report, raw_reply: reply.text, json_repair })
         }
         Err(detail) => Ok(CardSynthesisRun {
             cards: Vec::new(),
             report: CardReport { parse_error: Some(detail), ..Default::default() },
             raw_reply: reply.text,
+            json_repair: None,
         }),
     }
-}
-
-fn extract_object(text: &str) -> Option<String> {
-    let t = text.trim();
-    let t = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t);
-    let t = t.trim_start_matches('\n').trim_end_matches("```").trim();
-    if t.starts_with('{') && serde_json::from_str::<serde_json::Value>(t).is_ok() {
-        return Some(t.to_string());
-    }
-    let bytes = t.as_bytes();
-    let start = bytes.iter().position(|&b| b == b'{')?;
-    let (mut depth, mut in_str, mut esc) = (0i32, false, false);
-    for (i, &b) in bytes.iter().enumerate().skip(start) {
-        if in_str {
-            match b {
-                _ if esc => esc = false,
-                b'\\' => esc = true,
-                b'"' => in_str = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(t[start..=i].to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -280,6 +277,59 @@ mod tests {
         let run = run_card_synthesis(&units(), &mut Canned("the model refused".into())).unwrap();
         assert!(run.report.parse_error.is_some());
         assert!(run.cards.is_empty());
+        assert!(run.json_repair.is_none());
+    }
+
+    /// Returns each scripted reply in turn, then repeats the last.
+    struct Scripted {
+        replies: Vec<String>,
+        i: usize,
+    }
+    impl ModelClient for Scripted {
+        fn call(&mut self, _r: &ModelRequest) -> Result<ModelReply, CallError> {
+            let text = self.replies.get(self.i).or_else(|| self.replies.last()).cloned().unwrap_or_default();
+            self.i += 1;
+            Ok(ModelReply { model: "scripted".into(), text, stop_reason: StopReason::EndTurn,
+                usage: Usage { input_tokens: 1, output_tokens: 1 } })
+        }
+    }
+
+    #[test]
+    fn card_json_recovered_by_bounded_model_repair() {
+        // m18-06 class: first reply has a dropped opening quote on an id; the
+        // bounded repair call returns valid JSON → cards kept, repair recorded.
+        let u = units();
+        let broken = r#"{"cards":[{"title":"t","content":"body", "cited_unit_ids":[ u-000-x"]}]}"#;
+        let fixed = format!(
+            r#"{{"cards":[{{"title":"t","content":"body","cited_unit_ids":["{}"]}}]}}"#, u[0].id);
+        let run = run_card_synthesis(&u, &mut Scripted { replies: vec![broken.into(), fixed], i: 0 }).unwrap();
+        assert_eq!(run.report.cards_kept, 1);
+        assert!(run.report.parse_error.is_none());
+        let n = run.json_repair.expect("repair note");
+        assert_eq!(n.stage, "cards");
+        assert!(n.method.starts_with("model-repair"));
+    }
+
+    #[test]
+    fn unescaped_backslash_in_cards_recovered_parser_local() {
+        let u = units();
+        let reply = format!(
+            r#"{{"cards":[{{"title":"path C:\Users","content":"body","cited_unit_ids":["{}"]}}]}}"#, u[0].id);
+        let run = run_card_synthesis(&u, &mut Canned(reply)).unwrap();
+        assert_eq!(run.report.cards_kept, 1);
+        assert_eq!(run.json_repair.unwrap().method, "parser-local: unescaped-backslash");
+    }
+
+    #[test]
+    fn repaired_cards_still_pass_citation_validator() {
+        // Repair returns valid JSON but the card cites a non-existent unit →
+        // dropped. Repair cannot bypass the citation invariant.
+        let u = units();
+        let broken = r#"{"cards":[ bad ]}"#;
+        let ungrounded = r#"{"cards":[{"title":"t","content":"floating","cited_unit_ids":["u-999-nope"]}]}"#;
+        let run = run_card_synthesis(&u, &mut Scripted { replies: vec![broken.into(), ungrounded.into()], i: 0 }).unwrap();
+        assert_eq!(run.report.cards_kept, 0, "ungrounded card dropped even after repair");
+        assert_eq!(run.report.cards_dropped_uncited, 1);
     }
 
     #[test]

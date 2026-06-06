@@ -14,6 +14,13 @@ pub struct SourceDoc {
     pub published: Option<String>,
     pub tags: Vec<String>,
     pub body_markdown: String,
+    /// Number of source-file lines BEFORE `body_markdown` begins (the YAML
+    /// frontmatter block + its `---` delimiters). M19: lets evidence line
+    /// numbers be reported FILE-relative (what a reader sees opening the file)
+    /// instead of body-relative. `#[serde(default)]` = 0 for older records and
+    /// frontmatter-less bodies.
+    #[serde(default)]
+    pub body_line_offset: usize,
     /// What kind of source this is. Defaults to `Article`. Named
     /// `source_kind` (not `kind`) to avoid colliding with `DomainBody`'s
     /// internal `kind` tag when a `Source` body is serialized.
@@ -39,6 +46,7 @@ impl SourceDoc {
             published,
             tags,
             body_markdown: body_markdown.into(),
+            body_line_offset: 0,
             source_kind: SourceKind::Article,
         }
     }

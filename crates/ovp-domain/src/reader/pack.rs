@@ -14,6 +14,7 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::model_reply::RepairNote;
 use crate::units::{RepairLog, Unit};
 
 use super::{Card, CardReport};
@@ -26,6 +27,8 @@ pub struct GroundingStatus {
     pub needs_review: usize,
     pub quote_not_found: usize,
     pub parse_error: Option<String>,
+    /// M19: JSON salvage notes (unit base + card synthesis). Empty = clean parse.
+    pub json_repairs: Vec<RepairNote>,
 }
 
 /// Small summary the CLI prints after writing.
@@ -41,9 +44,13 @@ pub struct ReaderPack {
     pub needs_review: usize,
     pub quote_not_found: usize,
     pub parse_error: Option<String>,
+    /// M19: whether any stage's JSON had to be salvaged (parser-local or model repair).
+    pub json_repaired: bool,
 }
 
-/// Write the reader pack files into `out_dir`.
+/// Write the reader pack files into `out_dir`. `grounding.json_repairs` (M19)
+/// records any JSON salvage applied so a repaired pack is auditable in
+/// `run-status.json`.
 pub fn write_reader_pack(
     out_dir: &Path,
     source_title: &str,
@@ -55,6 +62,7 @@ pub fn write_reader_pack(
 ) -> io::Result<ReaderPack> {
     fs::create_dir_all(out_dir)?;
     let (trims, adds) = repair_log.map(|l| (l.trims, l.adds_proposed)).unwrap_or((0, 0));
+    let json_repairs = &grounding.json_repairs;
 
     let summary = ReaderPack {
         case_id: source_title.to_string(),
@@ -67,6 +75,7 @@ pub fn write_reader_pack(
         needs_review: grounding.needs_review,
         quote_not_found: grounding.quote_not_found,
         parse_error: grounding.parse_error.clone().or_else(|| card_report.parse_error.clone()),
+        json_repaired: !json_repairs.is_empty(),
     };
 
     fs::write(out_dir.join("reader.html"), render_html(source_title, accepted, cards, &summary))?;
@@ -85,6 +94,10 @@ pub fn write_reader_pack(
         "quote_not_found": grounding.quote_not_found,
         "parse_error": summary.parse_error,
         "card_prompt": super::CARD_PROMPT_ID,
+        "json_repaired": summary.json_repaired,
+        "json_repairs": json_repairs.iter()
+            .map(|r| json!({ "stage": r.stage, "method": r.method }))
+            .collect::<Vec<_>>(),
     }))?;
     Ok(summary)
 }

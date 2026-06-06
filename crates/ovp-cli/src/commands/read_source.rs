@@ -60,13 +60,18 @@ pub fn run(args: ReadSourceArgs) -> Result<(), CliError> {
     let synth = run_card_synthesis(&accepted, card_client.as_mut())
         .map_err(|e| CliError::Io(format!("card synthesis call failed: {e}")))?;
 
-    // 4. Reader Pack.
+    // 4. Reader Pack. M19: collect JSON salvage notes (unit base + card
+    //    synthesis) so a repaired pack is auditable in run-status.json.
+    let mut json_repairs = run.json_repair.clone();
+    json_repairs.extend(synth.json_repair.clone());
     let grounding = GroundingStatus {
         accepted_without_quote: ex.report.accepted_without_quote,
         needs_review: ex.report.needs_review,
         quote_not_found: ex.report.quote_not_found,
         parse_error: ex.report.parse_error.clone(),
+        json_repairs: json_repairs.clone(),
     };
+
     let pack = write_reader_pack(&args.out_dir, &source.title, &accepted, &synth.cards,
         &synth.report, Some(&run.repair_log), &grounding)
         .map_err(|e| CliError::Io(format!("writing reader pack: {e}")))?;
@@ -74,6 +79,9 @@ pub fn run(args: ReadSourceArgs) -> Result<(), CliError> {
     write_units(&args.out_dir, &accepted);
 
     print_summary(&source.title, &pack);
+    for r in &json_repairs {
+        println!("  json-repair[{}]: {}", r.stage, r.method);
+    }
 
     // Card-layer fail-loud: units extracted but no cards survived synthesis.
     if let Some(e) = &synth.report.parse_error {

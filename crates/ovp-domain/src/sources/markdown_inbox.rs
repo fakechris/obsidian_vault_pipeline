@@ -194,6 +194,9 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         fm.arxiv_categories,
         fm.source_published_at,
     );
+    // Lines before the body begin (frontmatter + `---` delimiters). `body` is a
+    // suffix slice of `raw`, so the prefix is everything up to its start.
+    let body_line_offset = raw[..raw.len() - body.len()].bytes().filter(|&b| b == b'\n').count();
     Ok(SourceDoc {
         title,
         source_url,
@@ -201,6 +204,7 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         published: fm.published,
         tags: fm.tags,
         body_markdown: body.to_string(),
+        body_line_offset,
         source_kind: kind,
     })
 }
@@ -286,6 +290,27 @@ fn is_tracker_param(pair: &str) -> bool {
         key,
         "source" | "ref" | "ref_src" | "fbclid" | "gclid" | "mc_cid" | "mc_eid"
     ) || key.starts_with("utm_")
+}
+
+#[cfg(test)]
+mod clipping_tests {
+    use super::parse_clipping;
+
+    #[test]
+    fn body_line_offset_counts_frontmatter_lines() {
+        // 3 frontmatter lines + 2 `---` delimiters = body starts at file line 6
+        // → 5 lines precede the body.
+        let raw = "---\ntitle: T\nsource: https://e/x\nauthor: A\n---\nFirst body line.\n\nSecond.";
+        let doc = parse_clipping(raw).unwrap();
+        assert_eq!(doc.body_markdown, "First body line.\n\nSecond.");
+        assert_eq!(doc.body_line_offset, 5);
+    }
+
+    #[test]
+    fn body_line_offset_zero_without_frontmatter() {
+        let doc = parse_clipping("Just a body, no frontmatter.\n\nMore.").unwrap();
+        assert_eq!(doc.body_line_offset, 0);
+    }
 }
 
 #[cfg(test)]

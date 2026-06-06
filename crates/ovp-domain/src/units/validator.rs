@@ -43,7 +43,7 @@ pub fn validate(raw_values: &[serde_json::Value], source: &SourceDoc) -> SourceE
 
     for (idx, value) in raw_values.iter().enumerate() {
         match serde_json::from_value::<RawUnit>(value.clone()) {
-            Ok(raw) => units.push(validate_one(idx, raw, body, &spans)),
+            Ok(raw) => units.push(validate_one(idx, raw, body, &spans, source.body_line_offset)),
             Err(e) => units.push(malformed_unit(idx, value, &e.to_string())),
         }
     }
@@ -73,7 +73,13 @@ pub fn extraction_parse_failed(source: &SourceDoc, detail: String) -> SourceExtr
     }
 }
 
-fn validate_one(idx: usize, raw: RawUnit, body: &str, spans: &[RenderedSpan]) -> Unit {
+fn validate_one(
+    idx: usize,
+    raw: RawUnit,
+    body: &str,
+    spans: &[RenderedSpan],
+    line_offset: usize,
+) -> Unit {
     let id = unit_id(idx, &raw.evidence_quote);
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
@@ -101,7 +107,7 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, spans: &[RenderedSpan]) ->
         // Tier A: exact/rendered substring inside the ref region itself.
         let ref_text = concat_spans(spans, lo, hi);
         if let Some((_, _, kind)) = locate(&ref_text, &quote) {
-            location = Some(loc_at(body, (spans[lo].src_start, spans[hi].src_end), kind));
+            location = Some(loc_at(body, (spans[lo].src_start, spans[hi].src_end), kind, line_offset));
         } else if let Some((wlo, whi, kind)) = window_match(spans, lo, hi, &quote) {
             // Tier B: deterministic match in a contiguous window around the ref
             // (the quote straddles span/paragraph boundaries). Still verbatim.
@@ -113,6 +119,7 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, spans: &[RenderedSpan]) ->
                 body,
                 (spans[wlo].src_start, spans[whi].src_end),
                 MatchKind::RenderedWindow,
+                line_offset,
             ));
             let _ = kind;
         } else if let Some(other) = find_anywhere(spans, &quote) {
@@ -185,9 +192,10 @@ fn validate_one(idx: usize, raw: RawUnit, body: &str, spans: &[RenderedSpan]) ->
 /// on the RENDERED span text (links collapsed, markers stripped, fullwidth
 /// folded) whose offsets do not align with the raw-markdown body. So we report
 /// the whole ref span's source range — always a valid char boundary.
-fn loc_at(body: &str, range: (usize, usize), kind: MatchKind) -> EvidenceLocation {
+fn loc_at(body: &str, range: (usize, usize), kind: MatchKind, line_offset: usize) -> EvidenceLocation {
     let (rs, re) = range;
-    EvidenceLocation { byte_start: rs, byte_end: re, line: line_of(body, rs), match_kind: kind }
+    // FILE-relative line = body-relative line + lines consumed by frontmatter.
+    EvidenceLocation { byte_start: rs, byte_end: re, line: line_of(body, rs) + line_offset, match_kind: kind }
 }
 
 /// Resolve `reff` to a contiguous span-index range `[lo..=hi]`: a span id
@@ -471,6 +479,23 @@ mod tests {
         let loc = u.evidence.location.as_ref().unwrap();
         assert_eq!(&BODY[loc.byte_start..loc.byte_end], "A chunk is a structurally neutral container.");
         assert!(u.arguments[0].locatable);
+    }
+
+    #[test]
+    fn line_is_file_relative_with_frontmatter_offset() {
+        // M19 (m18-18): body-relative line + body_line_offset = FILE line.
+        // "A chunk…" is on body line 3 (after the heading + blank line).
+        let body_relative = {
+            let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutral container.", &[])], &src(BODY));
+            ex.units[0].evidence.location.as_ref().unwrap().line
+        };
+        let mut s = src(BODY);
+        s.body_line_offset = 28; // e.g. 26-line YAML frontmatter + two `---`
+        let ex = validate(&[raw("p002.s001", "A chunk is a structurally neutral container.", &[])], &s);
+        let loc = ex.units[0].evidence.location.as_ref().unwrap();
+        assert_eq!(loc.line, body_relative + 28, "line must shift by the frontmatter offset");
+        // byte ranges stay body-relative (used for re-rendering), unchanged.
+        assert_eq!(&BODY[loc.byte_start..loc.byte_end], "A chunk is a structurally neutral container.");
     }
 
     #[test]

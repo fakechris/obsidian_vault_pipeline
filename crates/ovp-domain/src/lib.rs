@@ -13,6 +13,10 @@ pub mod evergreen;
 pub mod evergreen_note;
 pub mod interpreted;
 pub mod knowledge_index;
+/// M19 tolerant model-reply JSON handling (parser-local recovery + bounded
+/// repair-request builder) for the grounded reader trunk. See
+/// `docs/stage-m19-json-robustness.md`.
+pub mod model_reply;
 pub mod moc;
 pub mod paper_doc;
 pub mod prompt;

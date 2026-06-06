@@ -52,12 +52,19 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-/// Extract the `units[]` array as opaque JSON values. Strips a leading
-/// ```json / trailing ``` fence if the model wrapped its reply.
+/// Extract the `units[]` array as opaque JSON values. Tolerant (M19): strips a
+/// ```json fence / surrounding prose and applies parser-local recovery
+/// (unescaped-backslash) via [`crate::model_reply::parse_reply_value`]. The
+/// recovery NOTE is discarded here; callers that record repairs (the harness)
+/// drive recovery+repair themselves and then call [`units_from_value`].
 pub fn parse_envelope(reply_text: &str) -> Result<Vec<serde_json::Value>, ParseError> {
-    let raw = strip_code_fence(reply_text);
-    let value: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|e| ParseError { detail: format!("not JSON: {e}") })?;
+    let (value, _note) = crate::model_reply::parse_reply_value(reply_text)
+        .map_err(|d| ParseError { detail: d.to_string() })?;
+    units_from_value(&value)
+}
+
+/// Pull the `units[]` array (opaque values) out of an already-parsed envelope.
+pub fn units_from_value(value: &serde_json::Value) -> Result<Vec<serde_json::Value>, ParseError> {
     let units = value
         .get("units")
         .ok_or_else(|| ParseError { detail: "missing `units` array".into() })?;
@@ -78,17 +85,6 @@ fn kind_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
     }
-}
-
-fn strip_code_fence(text: &str) -> &str {
-    let t = text.trim();
-    if let Some(rest) = t.strip_prefix("```json") {
-        return rest.trim_start_matches('\n').trim_end_matches("```").trim();
-    }
-    if let Some(rest) = t.strip_prefix("```") {
-        return rest.trim_start_matches('\n').trim_end_matches("```").trim();
-    }
-    t
 }
 
 #[cfg(test)]
