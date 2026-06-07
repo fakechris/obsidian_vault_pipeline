@@ -13,6 +13,11 @@ pub mod evergreen;
 pub mod evergreen_note;
 pub mod interpreted;
 pub mod knowledge_index;
+/// M22 Crystal pre-write gates: citation linter + deterministic provenance
+/// scoring over a cross-source synthesis candidate. Reuses the truth-layer
+/// matcher; fail-loud (a non-grounded claim can never be durable). No durable
+/// write / graph / Referent. See `docs/stage-m22-crystal-gates.md`.
+pub mod crystal;
 /// M19 tolerant model-reply JSON handling (parser-local recovery + bounded
 /// repair-request builder) for the grounded reader trunk. See
 /// `docs/stage-m19-json-robustness.md`.
