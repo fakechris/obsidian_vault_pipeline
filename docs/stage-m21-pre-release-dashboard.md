@@ -1,5 +1,12 @@
 # Stage M21 — Pre-release Knowledge Workflow Dashboard
 
+> **M21.1 UPDATE (2026-06-07) — the original "Knowledge Mem UNAVAILABLE / INCONCLUSIVE"
+> verdict below is SUPERSEDED.** A local Knowledge Mem service (`http://127.0.0.1:14242`)
+> was brought up; the KMEM arm was captured source-scoped for all 20 sources and a real
+> two-arm AB was run. See **§M21.1 — Real two-arm AB** at the end. The original M21 text is
+> retained for the audit trail; where it says "unavailable / INCONCLUSIVE", read the M21.1
+> result instead.
+
 **Goal:** put the OVP reader-trunk output (and, where available, Knowledge Mem's) for the
 fixed 20 held-out sources into a single shareable, auditable, AB-testable pre-release
 review surface, and produce a pre-release verdict across source-level usefulness,
@@ -11,17 +18,17 @@ tuning, **not** new pipeline development — an acceptance + review surface.
 
 ---
 
-## Knowledge Mem availability — UNAVAILABLE
+## Knowledge Mem availability — ~~UNAVAILABLE~~ → AVAILABLE (see §M21.1)
 
-Scouted thoroughly: no `kmem`/`knowledge-mem` binary on PATH, no Knowledge Mem MCP /
-connector in the session, no KMEM env keys (the only `.env` endpoint is the MiniMax LLM
-provider), no local KMEM config/data dirs. **Knowledge Mem source memories: unavailable.
-Knowledge Mem crystals / synthesis: unavailable.**
+> **Corrected in M21.1.** At the time of the original M21 run no KMEM service was reachable
+> from the session, so this was marked unavailable. That was an environment state, not a
+> permanent fact: a local KMEM service was subsequently started and the arm captured. The
+> original note is struck through below; the live result is in §M21.1.
 
-Per the M21 spec this is marked `unavailable` (not substituted with global search), which
-makes the **OVP-vs-KMEM head-to-head INCONCLUSIVE**. The dashboard renders the KMEM arm as
-explicitly unavailable; the source article remains ground truth. Everything else (OVP arm,
-synthesis, crystal readiness, an OVP-internal AB) is delivered.
+~~Scouted thoroughly: no `kmem`/`knowledge-mem` binary on PATH, no Knowledge Mem MCP /
+connector in the session, no KMEM env keys, no local KMEM config/data dirs. Knowledge Mem
+source memories: unavailable. Per the M21 spec this is marked `unavailable`, which makes the
+OVP-vs-KMEM head-to-head INCONCLUSIVE.~~
 
 ---
 
@@ -187,3 +194,91 @@ vault/canonical mutation.
 with the run client (MiniMax-class); ratings are agent judgments, not human. The AB is
 OVP-internal (card vs units), not OVP-vs-KMEM. These bound the strength of the PASS to
 "OVP standalone, agent-judged."
+
+---
+
+## §M21.1 — Real two-arm AB (Knowledge Mem attached)
+
+This supersedes the original "unavailable / INCONCLUSIVE" verdict. A local Knowledge Mem
+service was started at `http://127.0.0.1:14242`; the same fixed 20 sources were captured
+**source-scoped** and judged head-to-head against the OVP reader cards, with the source
+article as ground truth (no global search substitute).
+
+### Two root causes fixed (why M21 first reported "unavailable")
+
+1. **No live verdict, only wiring assumption.** The original review ran when no KMEM
+   service was reachable, so every case was hard-coded `kmem unavailable`.
+2. **Dashboard never consumed `--kmem`.** `m21_build_dashboard.py` accepted `--kmem` but
+   the case-page renderer ignored it and always printed the unavailable panel — so even a
+   populated `kmem.json` rendered as unavailable. Fixed: `render_kmem_case()` now renders
+   source-scoped memories; the index banner/table/AB-summary now compute a real two-arm
+   verdict.
+
+### KMEM capture (source-scoped, not global search)
+
+`scripts/m21_capture_kmem.py` per source: `POST /sources/ingest/file-path` →
+`POST /sources/{id}/extract` → poll `GET /sources/{id}` → read that source's own
+`memories[]`. **Fairness fix:** `GET /sources/{id}` returns memory `content` truncated to a
+~200-char preview; the script now enriches each memory via `GET /memories/{id}` for the
+**full body** (mean ~835 chars, 0 truncated). The first AB run scored KMEM on the truncated
+stubs (unfair — it depressed KMEM readability/usefulness); the AB was re-run on full bodies.
+
+**Coverage:** 20/20 sources captured, **123 source-scoped memories** total; lifecycle
+18 extracted / 2 indexed-but-populated (m18-14, m18-19 — both have memories and were
+evaluated; flagged `available_lifecycle_not_extracted` where applicable). No global search
+used anywhere.
+
+### Result — real two-arm AB (agent-judged, full KMEM content)
+
+| dimension (mean 1–5) | OVP cards | KMEM memories |
+|----------------------|:---------:|:-------------:|
+| faithfulness | **4.95** | 4.35 |
+| coverage | **4.90** | 2.85 |
+| readability | 4.40 | 4.35 |
+| provenance | **5.00** | 1.60 |
+| usefulness | **4.75** | 3.35 |
+
+- **Winner: OVP 20/20** (confidence high), **provenance_advantage: OVP 20/20**, OVP
+  standalone rating **20/20 good**. 0 OVP unsupported claims; 0 KMEM hallucinations.
+- **OVP's edge is coverage + provenance, NOT readability.** With full content,
+  **readability is a tie** (4.40 vs 4.35; KMEM ≥ OVP on readability in 12/20 cases) — KMEM's
+  abstracted prose reads well. OVP wins because (a) it captures far more of each article
+  (4.90 vs 2.85 coverage — KMEM often extracts a handful of memories from one section, e.g.
+  m18-02 captured only the "other systems" list, ~8% of the article), and (b) every card is
+  traceable to a verbatim source line (5.00 vs 1.60 — KMEM stores summaries with no
+  line-level provenance, only `chunk_index`).
+
+### Verdict (M21.1)
+
+| question | answer |
+|----------|--------|
+| 1. OVP source cards reach KMEM source-memory usefulness? | **Yes, and exceed it** — OVP wins usefulness 4.75 vs 3.35 and the head-to-head 20/20, on coverage + provenance. Readability is a genuine tie. |
+| 2. Corpus synthesis enough for crystal readiness? | **Near** (unchanged from M21; 14 grounded items, faithfulness 5/5). |
+| 3. KMEM crystal/synthesis clearly better than OVP? | **No.** KMEM source memories are concise and readable but lower-coverage and provenance-poor; no KMEM crystal/community layer was exposed by the service to compare. |
+| 4. M22? | Synthesis citation-linter + provenance-quality scoring before durable Crystal (unchanged); optionally pull KMEM crystals if the service exposes them. |
+| 5. Enter pre-release / AB stage? | **Yes** — the dashboard now supports a real OVP-vs-KMEM AB and a human can review both arms per case. |
+
+**M21.1 = PASS (no longer INCONCLUSIVE).** OVP is **at least comparable to KMEM at
+source-level usefulness and decisively better on coverage + provenance**, with readability
+parity. The earlier INCONCLUSIVE was an availability artifact, now resolved.
+
+### Honest confounds (unchanged + new)
+
+- **Judge/model confound:** the OVP packs, the synthesis, and the AB judges all share the
+  MiniMax-class model family; ratings are agent judgments, not human.
+- **KMEM provenance scoring is structural, not a tuning artifact:** KMEM genuinely stores
+  summaries without line-level citations, so its low provenance score reflects the system,
+  not the prompt.
+- **Two cases (m18-14, m18-19) were `indexed` not `extracted`** at capture time but had
+  memories; they were evaluated on those memories.
+- The **first AB run was unfair** (truncated KMEM content) and was discarded; the table
+  above is the full-content re-run.
+
+### Artifacts (M21.1)
+
+Committed: `scripts/m21_capture_kmem.py` (new), `scripts/m21_build_dashboard.py` (now
+consumes `--kmem` + renders the two-arm verdict), this doc. **Not committed** (gitignored
+`.run/m21/`): `kmem/kmem.json` + per-case memories, `reviews_kmem.json`, the rebuilt
+`dashboard-kmem/`, workflow scripts. No raw KMEM dumps, no `.env`, no vault/canonical
+mutation, no durable Crystal. Gates (re-verified): `cargo test --workspace` 534 passed,
+clippy clean, arch check passed.

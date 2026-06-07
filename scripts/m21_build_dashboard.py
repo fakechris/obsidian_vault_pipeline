@@ -105,12 +105,47 @@ def render_units(units):
     return "\n".join(out)
 
 
+def kmem_cases(kmem):
+    if not kmem:
+        return {}
+    cases = kmem.get("cases") if isinstance(kmem, dict) else None
+    return cases if isinstance(cases, dict) else {}
+
+
+def render_kmem_case(case_id, kmem):
+    entry = kmem_cases(kmem).get(case_id)
+    if not entry:
+        return KMEM_UNAVAIL
+    memories = entry.get("memories") or []
+    status = entry.get("status") or entry.get("lifecycle_state") or "unknown"
+    out = [f'<div class=meta>status={esc(status)} · source_id={esc(entry.get("source_id"))} · '
+           f'memories={len(memories)} · lifecycle={esc(entry.get("lifecycle_state"))}</div>']
+    if not memories:
+        out.append('<div class=unavail>No source-scoped Knowledge Mem memories captured for this case.</div>')
+        return "\n".join(out)
+    for i, m in enumerate(memories, 1):
+        out.append('<div class=card>')
+        out.append(f'<div class=t>{i}. {esc(m.get("title") or "(untitled)")} '
+                   f'<span class=pill>{esc(m.get("unit_type") or "memory")}</span></div>')
+        if m.get("content"):
+            out.append(f'<div class=c>{esc(m.get("content"))}</div>')
+        meta = []
+        if m.get("confidence") is not None:
+            meta.append(f'confidence={esc(m.get("confidence"))}')
+        if m.get("chunk_index") is not None:
+            meta.append(f'chunk={esc(m.get("chunk_index"))}')
+        if meta:
+            out.append(f'<div class=meta>{" · ".join(meta)}</div>')
+        out.append('</div>')
+    return "\n".join(out)
+
+
 KMEM_UNAVAIL = ('<div class=unavail>Knowledge Mem arm UNAVAILABLE in this environment '
                 '(no service / MCP / API). Marked unavailable per M21 spec — not '
                 'substituted with global search. The source article is ground truth.</div>')
 
 
-def case_page(case, verdict, out_dir: Path):
+def case_page(case, verdict, kmem, out_dir: Path):
     cid = case["case_id"]
     parts = [f'<!doctype html><html><head><meta charset=utf-8><title>{esc(cid)}</title>'
              f'<style>{CSS}</style></head><body>']
@@ -125,7 +160,7 @@ def case_page(case, verdict, out_dir: Path):
     # Side-by-side OVP vs KMEM
     parts.append('<div class=cols>')
     parts.append(f'<div class="col ovp"><h3>OVP reader cards</h3>{render_cards(case["cards"])}</div>')
-    parts.append(f'<div class="col kmem"><h3>Knowledge Mem source memories</h3>{KMEM_UNAVAIL}</div>')
+    parts.append(f'<div class="col kmem"><h3>Knowledge Mem source memories</h3>{render_kmem_case(cid, kmem)}</div>')
     parts.append('</div>')
 
     # AB block (anonymized): A = cards, B = raw units. Reveal toggles labels.
@@ -138,20 +173,34 @@ def case_page(case, verdict, out_dir: Path):
                  f'document.getElementById(\'{cid}-lb\').textContent=\'Side B = OVP raw grounded-units\';">Reveal arms</button></p>')
     parts.append('</div>')
 
-    # Agent verdict
+    # Agent verdict — M21.1 two-arm (OVP vs KMEM); falls back to single-arm schema.
     parts.append('<h2>Agent review</h2>')
     if verdict:
         v = verdict
-        parts.append(f'<p>rating: <span class={rating_cls(v.get("rating"))}>{esc(v.get("rating"))}</span> · '
-                     f'winner: {esc(v.get("winner"))} · kmem: {esc(v.get("kmem_status"))} · '
-                     f'provenance_checkable: {esc(v.get("provenance_checkable"))}</p>')
-        parts.append('<div class=scores>' + "".join(
-            f'<span>{k}: <b>{esc(v.get(k))}</b>/5</span>' for k in
-            ["faithfulness", "coverage", "readability", "source_support",
-             "practical_usefulness", "longterm_vault_usefulness"]) + '</div>')
-        parts.append(f'<p><b>AB:</b> {esc(v.get("ab_cardview_vs_units"))} — {esc(v.get("ab_note"))}</p>')
-        parts.append(f'<p><b>Unsupported claims:</b> {esc(v.get("unsupported_claims"))}</p>')
-        parts.append(f'<p><b>Rationale:</b> {esc(v.get("rationale"))}</p>')
+        if "winner" in v and ("ovp_faithfulness" in v or "kmem_faithfulness" in v):
+            parts.append(f'<p><b>winner: {esc(v.get("winner"))}</b> (confidence {esc(v.get("confidence"))}) · '
+                         f'provenance_advantage: {esc(v.get("provenance_advantage"))} · '
+                         f'OVP rating: <span class={rating_cls(v.get("rating"))}>{esc(v.get("rating"))}</span> · '
+                         f'KMEM: {esc(v.get("kmem_status"))} ({esc(v.get("kmem_memory_count"))} mem)</p>')
+            dims = ["faithfulness", "coverage", "readability", "provenance", "usefulness"]
+            parts.append('<table><tr><th>arm</th>' + "".join(f'<th>{d}</th>' for d in dims) + '</tr>')
+            parts.append('<tr><td>OVP cards</td>' + "".join(f'<td>{esc(v.get("ovp_"+d))}</td>' for d in dims) + '</tr>')
+            parts.append('<tr><td>KMEM memories</td>' + "".join(f'<td>{esc(v.get("kmem_"+d))}</td>' for d in dims) + '</tr>')
+            parts.append('</table>')
+            parts.append(f'<p><b>OVP unsupported claims:</b> {esc(v.get("unsupported_claims"))}</p>')
+            parts.append(f'<p><b>KMEM unsupported claims:</b> {esc(v.get("kmem_unsupported_claims"))}</p>')
+            parts.append(f'<p><b>Rationale:</b> {esc(v.get("rationale"))}</p>')
+        else:
+            parts.append(f'<p>rating: <span class={rating_cls(v.get("rating"))}>{esc(v.get("rating"))}</span> · '
+                         f'winner: {esc(v.get("winner"))} · kmem: {esc(v.get("kmem_status"))} · '
+                         f'provenance_checkable: {esc(v.get("provenance_checkable"))}</p>')
+            parts.append('<div class=scores>' + "".join(
+                f'<span>{k}: <b>{esc(v.get(k))}</b>/5</span>' for k in
+                ["faithfulness", "coverage", "readability", "source_support",
+                 "practical_usefulness", "longterm_vault_usefulness"]) + '</div>')
+            parts.append(f'<p><b>AB:</b> {esc(v.get("ab_cardview_vs_units"))} — {esc(v.get("ab_note"))}</p>')
+            parts.append(f'<p><b>Unsupported claims:</b> {esc(v.get("unsupported_claims"))}</p>')
+            parts.append(f'<p><b>Rationale:</b> {esc(v.get("rationale"))}</p>')
     else:
         parts.append('<p class=unavail>No agent verdict for this case.</p>')
 
@@ -170,7 +219,25 @@ def index_page(data, reviews, synthesis, synth_review, kmem, out_dir: Path):
     n_good = ratings.count("good")
     n_ok = ratings.count("ok")
     n_poor = ratings.count("poor")
-    kmem_available = bool(kmem)
+    kmem_map = kmem_cases(kmem)
+    kmem_available = bool(kmem_map)
+    kmem_available_cases = sum(1 for c in cases if kmem_map.get(c["case_id"], {}).get("memories"))
+    # Real two-arm verdict present iff verdicts carry the M21.1 winner schema.
+    verds = list(vmap.values())
+    two_arm = [v for v in verds if "winner" in v and "ovp_faithfulness" in v]
+    win_counts = {}
+    for v in two_arm:
+        win_counts[v.get("winner")] = win_counts.get(v.get("winner"), 0) + 1
+    prov_counts = {}
+    for v in two_arm:
+        prov_counts[v.get("provenance_advantage")] = prov_counts.get(v.get("provenance_advantage"), 0) + 1
+
+    def _mean(prefix):
+        out = {}
+        for d in ["faithfulness", "coverage", "readability", "provenance", "usefulness"]:
+            vals = [v.get(prefix + d) for v in two_arm if isinstance(v.get(prefix + d), int)]
+            out[d] = round(sum(vals) / len(vals), 2) if vals else "—"
+        return out
 
     p = [f'<!doctype html><html><head><meta charset=utf-8><title>M21 pre-release dashboard</title>'
          f'<style>{CSS}</style></head><body>']
@@ -185,40 +252,68 @@ def index_page(data, reviews, synthesis, synth_review, kmem, out_dir: Path):
                  'Knowledge Mem is unavailable in this environment, so the head-to-head AB cannot be '
                  'run. OVP standalone is assessed below (source-level usefulness, provenance, corpus '
                  'synthesis). The AB surface compares OVP card-view vs OVP raw units.</div>')
+    elif two_arm:
+        wtxt = ", ".join(f'{esc(k)}={n}' for k, n in sorted(win_counts.items()))
+        ovp_win = win_counts.get("ovp", 0)
+        cls = "pass" if ovp_win >= len(two_arm) / 2 else "inconclusive"
+        p.append(f'<div class="verdict {cls}"><b>OVP vs KMEM head-to-head (real two-arm AB, {len(two_arm)}/{len(cases)} cases):</b> '
+                 f'winner — {wtxt}. provenance_advantage — '
+                 + ", ".join(f"{esc(k)}={n}" for k, n in sorted(prov_counts.items())) + '. '
+                 f'Source-scoped KMEM memories captured for {kmem_available_cases}/{len(cases)} cases '
+                 '(source article is ground truth; no global-search substitute).</div>')
+    else:
+        p.append(f'<div class="verdict inconclusive"><b>OVP vs KMEM arm attached:</b> '
+                 f'{kmem_available_cases}/{len(cases)} cases have source-scoped Knowledge Mem memories. '
+                 'Run the M21.1 two-arm review to populate the head-to-head verdict.</div>')
     p.append(f'<div class="verdict pass"><b>OVP standalone (source-level):</b> {n_good} good · {n_ok} ok · '
              f'{n_poor} poor of {len(cases)} · accepted_without_quote=0 across all. '
              'Provenance is checkable per card (verbatim quote + source line).</div>')
 
     # 20-case table
     p.append('<h2>Per-source comparison</h2>')
+    last_col = "AB cards vs units" if not two_arm else "provenance adv."
     p.append('<table><tr><th>case</th><th>category</th><th>OVP cards</th><th>OVP units</th>'
-             '<th>awq</th><th>KMEM memories</th><th>winner</th><th>rating</th>'
-             '<th>AB cards vs units</th><th></th></tr>')
+             f'<th>awq</th><th>KMEM memories</th><th>winner</th><th>OVP rating</th>'
+             f'<th>{last_col}</th><th></th></tr>')
     for c in cases:
         v = vmap.get(c["case_id"], {})
+        kmem_n = len((kmem_map.get(c["case_id"]) or {}).get("memories") or []) if kmem_available else "unavailable"
+        last = v.get("provenance_advantage", "—") if two_arm else v.get("ab_cardview_vs_units", "—")
         p.append('<tr>'
                  f'<td><a href="cases/{esc(c["case_id"])}.html">{esc(c["case_id"])}</a></td>'
                  f'<td>{esc(c["category"])}</td>'
                  f'<td>{c["n_cards"]}</td><td>{c["n_units"]}</td>'
                  f'<td>{c["accepted_without_quote"]}</td>'
-                 f'<td class=unavail>unavailable</td>'
+                 f'<td>{esc(kmem_n)}</td>'
                  f'<td>{esc(v.get("winner","—"))}</td>'
                  f'<td class={rating_cls(v.get("rating"))}>{esc(v.get("rating","—"))}</td>'
-                 f'<td>{esc(v.get("ab_cardview_vs_units","—"))}</td>'
+                 f'<td>{esc(last)}</td>'
                  f'<td><a href="cases/{esc(c["case_id"])}.html">open</a></td>'
                  '</tr>')
     p.append('</table>')
 
     # AB summary
-    ab_counts = {}
-    for v in vmap.values():
-        k = v.get("ab_cardview_vs_units", "—")
-        ab_counts[k] = ab_counts.get(k, 0) + 1
     p.append('<h2>AB test surface</h2>')
-    p.append('<p>Knowledge Mem arm unavailable → the AB compares OVP <b>card view</b> (Side A) vs OVP '
-             '<b>raw grounded-units readout</b> (Side B), anonymized, per case page (with a reveal button). '
-             'This validates whether the card synthesis improves readability over the raw truth layer.</p>')
-    p.append('<p>Agent AB tally: ' + ", ".join(f'{esc(k)}={n}' for k, n in sorted(ab_counts.items())) + '</p>')
+    if two_arm:
+        om, km = _mean("ovp_"), _mean("kmem_")
+        p.append('<p>Real OVP-vs-KMEM two-arm AB: each case page renders OVP reader cards beside the '
+                 'source-scoped Knowledge Mem memories; reviewers scored both arms against the source '
+                 '(ground truth). Mean dimension scores (1–5):</p>')
+        dims = ["faithfulness", "coverage", "readability", "provenance", "usefulness"]
+        p.append('<table><tr><th>arm</th>' + "".join(f'<th>{d}</th>' for d in dims) + '</tr>')
+        p.append('<tr><td>OVP cards</td>' + "".join(f'<td>{esc(om[d])}</td>' for d in dims) + '</tr>')
+        p.append('<tr><td>KMEM memories</td>' + "".join(f'<td>{esc(km[d])}</td>' for d in dims) + '</tr></table>')
+        p.append('<p>Winner tally: ' + ", ".join(f'{esc(k)}={n}' for k, n in sorted(win_counts.items())) + '</p>')
+        p.append('<p class=meta>The OVP-internal card-vs-raw-units AB (anonymized, with reveal) remains on '
+                 'each case page as a secondary readability check.</p>')
+    else:
+        ab_counts = {}
+        for v in vmap.values():
+            k = v.get("ab_cardview_vs_units", "—")
+            ab_counts[k] = ab_counts.get(k, 0) + 1
+        p.append('<p>Knowledge Mem arm unavailable → the AB compares OVP <b>card view</b> (Side A) vs OVP '
+                 '<b>raw grounded-units readout</b> (Side B), anonymized, per case page (with a reveal button).</p>')
+        p.append('<p>Agent AB tally: ' + ", ".join(f'{esc(k)}={n}' for k, n in sorted(ab_counts.items())) + '</p>')
 
     # Corpus synthesis
     p.append('<h2>Corpus synthesis draft (review-only, NOT a durable Crystal)</h2>')
@@ -283,7 +378,7 @@ def main() -> int:
 
     vmap = {v["case_id"]: v for v in (reviews or {}).get("verdicts", [])}
     for case in data["cases"]:
-        case_page(case, vmap.get(case["case_id"]), args.out)
+        case_page(case, vmap.get(case["case_id"]), kmem, args.out)
     index_page(data, reviews, synthesis, synth_review, kmem, args.out)
     print(f"dashboard → {args.out}/index.html ({len(data['cases'])} cases, "
           f"kmem={'available' if kmem else 'UNAVAILABLE'})")
