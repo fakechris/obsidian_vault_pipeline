@@ -279,6 +279,76 @@ pub fn score_candidate(report: &CrystalLintReport) -> Vec<ProvenanceScore> {
     report.claims.iter().map(score_claim).collect()
 }
 
+// ---- Claim-strength gate (the SEMANTIC half) ----
+//
+// The deterministic gates above answer "do the citations resolve and how strong
+// is the provenance?". They CANNOT answer "does the claim overreach the evidence
+// it cites?". That judgment is made by a labeled LLM judge (a review workflow,
+// NOT this module) which sees each claim PLUS its cited units' quote + attribution
+// + modality, and returns a [`ClaimStrengthVerdict`]. The *combination* of the
+// deterministic provenance class with that verdict is done HERE, deterministically,
+// so the final routing stays auditable — only the per-claim judgment is the model's.
+
+/// How a claim relates to the evidence it actually cited (the LLM judge's call).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrengthClass {
+    /// The claim is supported, at its stated strength, by the cited quotes.
+    Supported,
+    /// The claim asserts more than the cited quotes support (scope/quantifier creep).
+    Overreach,
+    /// The claim fuses distinct/partial points into a generalization the citations don't jointly support.
+    OverSynthesized,
+    /// The claim states as a system fact what the cited unit attributes/hedges as opinion (attribution/modality mismatch).
+    OpinionAsFact,
+}
+
+/// One claim's semantic verdict, produced by the labeled LLM judge over the
+/// claim + its cited units' quote/attribution/modality. Deserialized from the
+/// claim-strength review workflow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimStrengthVerdict {
+    pub claim_id: String,
+    pub strength: StrengthClass,
+    /// Do the cited quotes, taken together, actually suffice for the claim?
+    pub evidence_sufficient: bool,
+    #[serde(default)]
+    pub rationale: String,
+}
+
+/// The final routing for a claim after BOTH gates. A claim is `Durable` only when
+/// the deterministic provenance gate AND the semantic claim-strength gate both
+/// pass; ungrounded claims are `Reject`; everything grounded-but-weak (thin
+/// provenance, overreach, over-synthesis, opinion-as-fact, insufficient evidence,
+/// or a missing strength verdict) is `Caveated` — kept as a reviewable insight,
+/// never written as durable truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinalClass {
+    Durable,
+    Caveated,
+    Reject,
+}
+
+/// Combine the deterministic provenance class with the (optional) semantic
+/// verdict into a final routing. Deterministic + total — the audit point.
+pub fn final_routing(provenance: ProvenanceClass, strength: Option<&ClaimStrengthVerdict>) -> FinalClass {
+    // Ungrounded can never be durable or even caveated-truth — reject outright.
+    if provenance == ProvenanceClass::Quarantine {
+        return FinalClass::Reject;
+    }
+    // No semantic verdict yet → not eligible for durable; hold as caveated.
+    let Some(v) = strength else {
+        return FinalClass::Caveated;
+    };
+    let semantically_clean = v.strength == StrengthClass::Supported && v.evidence_sufficient;
+    if provenance == ProvenanceClass::Durable && semantically_clean {
+        FinalClass::Durable
+    } else {
+        FinalClass::Caveated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +478,48 @@ mod tests {
         let rep = lint_candidate(&cand, &idx);
         assert!(!rep.claims[0].fully_grounded);
         assert_eq!(score_candidate(&rep)[0].class, ProvenanceClass::Quarantine);
+    }
+
+    // ---- claim-strength combiner ----
+
+    fn verdict(strength: StrengthClass, ok: bool) -> ClaimStrengthVerdict {
+        ClaimStrengthVerdict { claim_id: "c1".into(), strength, evidence_sufficient: ok, rationale: String::new() }
+    }
+
+    #[test]
+    fn durable_requires_both_gates_pass() {
+        let v = verdict(StrengthClass::Supported, true);
+        assert_eq!(final_routing(ProvenanceClass::Durable, Some(&v)), FinalClass::Durable);
+    }
+
+    #[test]
+    fn ungrounded_is_reject_regardless_of_strength() {
+        let v = verdict(StrengthClass::Supported, true);
+        assert_eq!(final_routing(ProvenanceClass::Quarantine, Some(&v)), FinalClass::Reject);
+        assert_eq!(final_routing(ProvenanceClass::Quarantine, None), FinalClass::Reject);
+    }
+
+    #[test]
+    fn missing_strength_verdict_holds_as_caveated() {
+        // Grounded + durable provenance but no semantic judgment yet → not durable.
+        assert_eq!(final_routing(ProvenanceClass::Durable, None), FinalClass::Caveated);
+    }
+
+    #[test]
+    fn semantic_defects_downgrade_durable_to_caveated() {
+        for s in [StrengthClass::Overreach, StrengthClass::OverSynthesized, StrengthClass::OpinionAsFact] {
+            let v = verdict(s, true);
+            assert_eq!(final_routing(ProvenanceClass::Durable, Some(&v)), FinalClass::Caveated,
+                "{s:?} must not be durable");
+        }
+        // Supported but evidence insufficient also downgrades.
+        let weak = verdict(StrengthClass::Supported, false);
+        assert_eq!(final_routing(ProvenanceClass::Durable, Some(&weak)), FinalClass::Caveated);
+    }
+
+    #[test]
+    fn caveated_provenance_stays_caveated_even_when_semantically_clean() {
+        let v = verdict(StrengthClass::Supported, true);
+        assert_eq!(final_routing(ProvenanceClass::Caveated, Some(&v)), FinalClass::Caveated);
     }
 }

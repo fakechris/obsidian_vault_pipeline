@@ -140,6 +140,10 @@ enum Cmd {
         packs_dir: PathBuf,
         #[arg(long, default_value = ".run/m22/crystal-lint.json")]
         out: PathBuf,
+        /// Optional claim-strength verdicts JSON (the labeled LLM gate's output);
+        /// when given, each claim gets a final durable/caveated/reject routing.
+        #[arg(long)]
+        strength: Option<PathBuf>,
     },
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
@@ -504,9 +508,9 @@ fn main() -> ExitCode {
                 cards_json,
             })
         }
-        Cmd::CrystalLint { candidate, packs_dir, out } => {
+        Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
-            commands::crystal_lint::run(CrystalLintArgs { candidate, packs_dir, out })
+            commands::crystal_lint::run(CrystalLintArgs { candidate, packs_dir, out, strength })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
             use commands::client::ClientKind;

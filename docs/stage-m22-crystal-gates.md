@@ -45,8 +45,28 @@ Crystal analog of the trunk's `accepted_without_quote=0`).
 
 **Deliberately NOT in this deterministic score:** the semantic "does the claim's strength
 exceed its evidence?" / over-synthesis judgment. That is a SEPARATE, model-based, clearly
-labeled gate (a review workflow) — kept out so the score stays auditable. It is scoped for a
-later stage, **not built here.**
+labeled gate — kept out of the score so the score stays auditable. See §3b.
+
+### 3b. Claim-strength gate (the semantic half) — now built
+
+A labeled **LLM judge** (a review workflow, not deterministic code) reads each claim plus
+**only its cited units' quote + attribution + modality** (not the whole article — so it
+checks the claim against exactly what it cited, not free associations) and returns a
+`ClaimStrengthVerdict { strength, evidence_sufficient, rationale }`. `strength` ∈
+`supported | overreach | over_synthesized | opinion_as_fact`. The verdict is combined with
+the deterministic provenance class by `final_routing()` — itself **deterministic and
+total** (the audit point) — into `FinalClass { Durable | Caveated | Reject }`:
+
+- `Quarantine` provenance → **Reject** (ungrounded, regardless of strength).
+- No verdict yet → **Caveated** (not eligible for durable until judged).
+- `Durable` provenance **and** `supported` **and** `evidence_sufficient` → **Durable**.
+- Everything else grounded-but-weak (overreach / over-synthesis / opinion-as-fact /
+  insufficient / merely caveated provenance) → **Caveated**.
+
+So a claim is durable only when **both** gates pass; the deterministic score never inherits
+the LLM's nondeterminism, and the combination is replayable. Modality/attribution feed the
+`opinion_as_fact` check (a hedged "may"/"可能" or single-author opinion stated as system fact
+is caught). The CLI accepts the verdicts via `--strength <verdicts.json>`.
 
 ### 4. Runnable gate (Rust CLI, not a script)
 
@@ -81,15 +101,27 @@ this candidate reflects that the agent was asked for cross-source claims and cop
 units — i.e. **when the synthesis emits structured citations they resolve 100%**, vs ~21%
 for prose. That confirms the M21 gap was citation *format*, not model capability.
 
-**Honest reading of "14 durable":** it means each claim's citation chain is mechanically
-verifiable AND draws on ≥2 distinct sources AND is spread across units. It does **not** mean
-the claims are semantically deep or free of over-synthesis — that is the separate LLM
-claim-strength gate (§3), not yet built. So "durable-eligible by provenance" ≠ "durable
-truth"; the second judgment is still owed before any real durable write.
+**Claim-strength gate result (the second half).** The 14 provenance-durable claims were
+then run through the claim-strength judge (§3b) and combined via `final_routing`:
+
+| stage | result |
+|-------|--------|
+| deterministic provenance | 14 durable · 0 caveated · 0 quarantine |
+| + claim-strength gate → **final** | **8 durable · 6 caveated · 0 reject** |
+
+The judge **discriminates** (it did not rubber-stamp): of 14 it flagged **6** — 5
+`over_synthesized` (e.g. c07 added "scalable"/"discriminative-task bias" that appear in no
+cited quote; c10 welded in "ephemeral sandboxes" present in no quote; c02's "multiple sources
+independently" rests on one author) and 1 `opinion_as_fact` (c12's moat thesis leans on a
+hedged conditional "可能/may" stated as established fact — caught via the cited unit's
+modality). Those 6 keep real citations (not rejected) but are routed to **caveated**, not
+durable. This is the whole point: **durable = citation chain verifiable AND the claim does
+not overreach the evidence it cited.** "Durable-eligible by provenance" (14) ≠ "durable
+truth" (8). No durable write happens here — routing only.
 
 ## Verification
 
-- `cargo test --workspace` → **540 passed, 1 ignored, 0 failed** (+6 crystal tests).
+- `cargo test --workspace` → **545 passed, 1 ignored, 0 failed** (+11 crystal tests: 6 linter/scoring, 5 claim-strength combiner).
 - `cargo clippy --workspace --all-targets -- -D warnings` → clean (also `-p ovp-cli --features anthropic`).
 - `bash scripts/check_architecture.sh` → **Architecture check passed.**
 
@@ -103,18 +135,23 @@ no durable Crystal written.
 
 ## What still must exist before durable Crystal + graphics
 
-1. **LLM claim-strength gate** (labeled, separate from the deterministic score): claim
-   strength ≤ evidence strength; over-synthesis / hidden-vs-surfaced counter-evidence;
-   author-opinion vs system-fact. Routes weak claims to `caveated`/`review`.
+1. ~~**LLM claim-strength gate**~~ — **DONE** (§3b): per-claim judge over claim + cited
+   units' quote/attribution/modality → `final_routing` combines with provenance. 14
+   provenance-durable → 8 final-durable / 6 caveated on the demo corpus.
 2. **Durable Crystal store design** (M23+): append-only, provenance-carrying, **not** the
    demoted canonical/Referent store — a real placement decision, intentionally deferred.
+   The writer must require `final == Durable` (which already implies `quarantine == 0` and a
+   `supported` strength verdict).
 3. **Graphics/graph LAST and gated:** a graph edge IS a cross-source claim. Every node/edge
    must carry a citation that passes this linter, or render as draft/uncertain; the graph
    must be **derived from already-gated Crystal claims**, never a new entity/relation
    extraction (that would revive the demoted Referent path). Without this rule, a visual
    layer silently erodes the verifiable-grounding moat KMEM lacks.
 
-**M22 verdict: PASS (gates only).** The citation chain is now mechanically enforceable and
-fail-loud; structured citations resolve 100% where prose resolved ~21%; model-supplied line drift is
-designed out. The semantic claim-strength gate and durable store remain owed before a real
-Crystal write.
+**M22 verdict: PASS (both gates).** The citation chain is mechanically enforceable and
+fail-loud (structured citations resolve 100% vs ~21% for prose; model-supplied line drift
+designed out), AND the semantic claim-strength gate is in place: on the demo corpus it cut
+14 provenance-durable claims to 8 final-durable (6 caveated for over-synthesis /
+opinion-as-fact). Both gates are deterministic-combined and auditable; only the per-claim
+semantic call is the model's. **Still owed before a real Crystal write:** the durable store
+design (M23+), then gated graphics — never a new entity/relation extraction.

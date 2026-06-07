@@ -7,7 +7,8 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
-    lint_candidate, score_candidate, CrystalCandidate, GroundingIndex, ProvenanceClass,
+    final_routing, lint_candidate, score_candidate, ClaimStrengthVerdict, CrystalCandidate,
+    FinalClass, GroundingIndex, ProvenanceClass,
 };
 use ovp_domain::units::Unit;
 
@@ -20,6 +21,11 @@ pub struct CrystalLintArgs {
     pub packs_dir: PathBuf,
     /// Where to write the lint+score report JSON.
     pub out: PathBuf,
+    /// Optional claim-strength verdicts JSON (the labeled LLM gate's output:
+    /// `[ { claim_id, strength, evidence_sufficient, rationale } ]`). When given,
+    /// each claim gets a final routing (durable/caveated/reject) via the
+    /// deterministic combiner.
+    pub strength: Option<PathBuf>,
 }
 
 /// Build the grounding index by reading `<packs_dir>/<case>/units.accepted.json`.
@@ -67,6 +73,28 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     let total_citations: usize = report.claims.iter().map(|c| c.n_citations).sum();
     let grounded_citations: usize = report.claims.iter().map(|c| c.n_grounded).sum();
 
+    // Optional claim-strength gate: combine the semantic verdicts with the
+    // deterministic provenance class for a final routing per claim.
+    let strength_verdicts: Vec<ClaimStrengthVerdict> = match &args.strength {
+        None => Vec::new(),
+        Some(p) => {
+            let t = std::fs::read_to_string(p)
+                .map_err(|e| CliError::Io(format!("reading {}: {e}", p.display())))?;
+            serde_json::from_str(&t)
+                .map_err(|e| CliError::Io(format!("parsing strength {}: {e}", p.display())))?
+        }
+    };
+    let final_routes: Vec<(String, FinalClass)> = scores
+        .iter()
+        .map(|s| {
+            let v = strength_verdicts.iter().find(|v| v.claim_id == s.claim_id);
+            (s.claim_id.clone(), final_routing(s.class, v))
+        })
+        .collect();
+    let final_durable = final_routes.iter().filter(|(_, f)| *f == FinalClass::Durable).count();
+    let final_caveated = final_routes.iter().filter(|(_, f)| *f == FinalClass::Caveated).count();
+    let final_reject = final_routes.iter().filter(|(_, f)| *f == FinalClass::Reject).count();
+
     println!("crystal-lint: {} claims over {} cases", report.n_claims, index.len());
     println!(
         "  citations: {grounded_citations}/{total_citations} grounded verbatim to an accepted unit"
@@ -76,6 +104,13 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
         report.n_fully_grounded, report.n_with_defects
     );
     println!("  provenance class: durable={durable} caveated={caveated} quarantine={quarantine}");
+    if args.strength.is_some() {
+        println!(
+            "  final routing (with claim-strength gate): durable={final_durable} caveated={final_caveated} reject={final_reject}"
+        );
+    } else {
+        println!("  (no --strength verdicts: final durable routing withheld; run the claim-strength gate)");
+    }
 
     if let Some(parent) = args.out.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -83,6 +118,7 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     let combined = serde_json::json!({
         "report": report,
         "scores": scores,
+        "final_routing": final_routes.iter().map(|(id, f)| serde_json::json!({"claim_id": id, "final": f})).collect::<Vec<_>>(),
         "summary": {
             "n_claims": report.n_claims,
             "n_fully_grounded": report.n_fully_grounded,
@@ -91,6 +127,10 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
             "durable": durable,
             "caveated": caveated,
             "quarantine": quarantine,
+            "strength_gate_applied": args.strength.is_some(),
+            "final_durable": final_durable,
+            "final_caveated": final_caveated,
+            "final_reject": final_reject,
         }
     });
     let s = serde_json::to_string_pretty(&combined).map_err(|e| CliError::Io(e.to_string()))?;
