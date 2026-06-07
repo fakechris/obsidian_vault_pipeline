@@ -20,7 +20,9 @@ verifiable. Root cause: the synthesis emitted **prose** citations, not resolvabl
 citations: [{ case_id, unit_id, quote, claimed_line? }], caveat } ] }`. A citation names a
 specific accepted `unit_id` and a **verbatim** `quote`; `claimed_line` is advisory only. The
 authoritative line is resolved **from the unit**, never trusted from the model — which makes
-line-number drift (the 2/36 problem) **impossible by construction**.
+**model-supplied** line-number drift (the 2/36 problem) **impossible by construction**. (The
+linter still trusts the *upstream unit's* line; a wrong unit line is an upstream truth-layer
+concern the Crystal gate does not re-check.)
 
 ### 2. Citation linter — mechanical, reuses the truth-layer matcher
 
@@ -53,6 +55,14 @@ grounding index from each case's committed `units.accepted.json`, runs the linte
 prints a summary, writes a structured report. It lives in the typed core (reuses the
 validator), per the rule that load-bearing gates are Rust, not offline scripts.
 
+**Exit code is the gate (P1 fix).** The report is ALWAYS written (for human inspection), but
+the command exits **non-zero when any claim has a citation defect** (`n_with_defects > 0`,
+i.e. ≥1 quarantined claim) — so CI or a future durable writer can never treat a candidate
+with bad citations as a passed gate. `caveated` claims do NOT fail the command (they route to
+review / non-durable, not a hard error). A durable writer must additionally require
+`quarantine == 0` and write only `Durable`-class claims. Verified: the smoke candidate
+(1 quarantine) exits 1; the clean 14-claim candidate exits 0.
+
 ## Demonstration on real data (the falsifiable milestone)
 
 A structured-citation synthesis was regenerated over the same 20 M20 packs (one agent,
@@ -61,7 +71,7 @@ review-only, copying real `unit_id`s + verbatim quote fragments from the packs) 
 | metric | M21 prose citations | M22 structured citations |
 |--------|:---:|:---:|
 | citations resolving verbatim | **3 / 14** quoted refs | **52 / 52** |
-| line numbers matching a real unit | 2 / 36 | resolved from unit (drift impossible) |
+| line numbers matching a real unit | 2 / 36 | resolved from unit (model-supplied drift impossible) |
 | claims fully grounded | — | **14 / 14** |
 | provenance class | — | 14 durable (2–4 sources each) · 0 caveated · 0 quarantine |
 
@@ -105,6 +115,6 @@ no durable Crystal written.
    layer silently erodes the verifiable-grounding moat KMEM lacks.
 
 **M22 verdict: PASS (gates only).** The citation chain is now mechanically enforceable and
-fail-loud; structured citations resolve 100% where prose resolved ~21%; line drift is
+fail-loud; structured citations resolve 100% where prose resolved ~21%; model-supplied line drift is
 designed out. The semantic claim-strength gate and durable store remain owed before a real
 Crystal write.

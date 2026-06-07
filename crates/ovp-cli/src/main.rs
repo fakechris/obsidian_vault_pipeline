@@ -10,6 +10,9 @@ pub enum CliError {
     Io(String),
     Core(ovp_core::CoreError),
     Assembly(ovp_app::AssemblyError),
+    /// A gate command produced its report but the gate did NOT pass (non-zero
+    /// exit so CI / a durable writer can't treat it as success).
+    Gate(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -18,6 +21,7 @@ impl std::fmt::Display for CliError {
             CliError::Io(s) => write!(f, "io: {s}"),
             CliError::Core(e) => write!(f, "{e}"),
             CliError::Assembly(e) => write!(f, "assembly: {e}"),
+            CliError::Gate(s) => write!(f, "gate: {s}"),
         }
     }
 }

@@ -97,5 +97,21 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     std::fs::write(&args.out, format!("{s}\n"))
         .map_err(|e| CliError::Io(format!("writing {}: {e}", args.out.display())))?;
     println!("  report: {}", args.out.display());
+
+    // Fail-loud gate: the report is always written (for inspection), but the
+    // command exits non-zero if ANY claim has a citation defect — so CI / a
+    // future durable writer can never treat a candidate with quarantined claims
+    // as a passed gate. `caveated` does NOT fail (it routes to review/non-durable,
+    // not a hard failure). A durable writer must additionally require
+    // `quarantine == 0` and write only `Durable`-class claims.
+    if report.n_with_defects > 0 {
+        return Err(CliError::Gate(format!(
+            "{} of {} claim(s) have citation defects ({quarantine} quarantined) — \
+             candidate did NOT pass the pre-write gate. See {}",
+            report.n_with_defects,
+            report.n_claims,
+            args.out.display()
+        )));
+    }
     Ok(())
 }
