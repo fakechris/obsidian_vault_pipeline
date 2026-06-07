@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
@@ -330,6 +331,54 @@ pub enum FinalClass {
     Reject,
 }
 
+/// Whether the supplied claim-strength verdicts COMPLETELY and cleanly cover a
+/// candidate's claims. A `full pre-write run` requires `complete()` — partial /
+/// duplicate / unknown verdicts must fail loud, never silently downgrade.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrengthCoverage {
+    /// Candidate claim ids with NO verdict.
+    pub missing: Vec<String>,
+    /// claim_ids appearing more than once in the verdicts.
+    pub duplicate: Vec<String>,
+    /// verdict claim_ids that are not in the candidate.
+    pub unknown: Vec<String>,
+}
+
+impl StrengthCoverage {
+    pub fn complete(&self) -> bool {
+        self.missing.is_empty() && self.duplicate.is_empty() && self.unknown.is_empty()
+    }
+}
+
+/// Compute coverage of `verdicts` over the candidate's `claim_ids` (in candidate
+/// order for `missing`; sorted+deduped for `duplicate`/`unknown`). Deterministic.
+pub fn strength_coverage(claim_ids: &[String], verdicts: &[ClaimStrengthVerdict]) -> StrengthCoverage {
+    use std::collections::BTreeSet;
+    let claim_set: BTreeSet<String> = claim_ids.iter().cloned().collect();
+    // count verdicts per id
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for v in verdicts {
+        *counts.entry(v.claim_id.clone()).or_insert(0) += 1;
+    }
+    let mut missing: Vec<String> = Vec::new();
+    for c in claim_ids {
+        if !counts.contains_key(c) {
+            missing.push(c.clone());
+        }
+    }
+    let mut duplicate: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for (id, n) in &counts {
+        if *n > 1 {
+            duplicate.push(id.clone());
+        }
+        if !claim_set.contains(id) {
+            unknown.push(id.clone());
+        }
+    }
+    StrengthCoverage { missing, duplicate, unknown }
+}
+
 /// Combine the deterministic provenance class with the (optional) semantic
 /// verdict into a final routing. Deterministic + total — the audit point.
 pub fn final_routing(provenance: ProvenanceClass, strength: Option<&ClaimStrengthVerdict>) -> FinalClass {
@@ -347,6 +396,214 @@ pub fn final_routing(provenance: ProvenanceClass, strength: Option<&ClaimStrengt
     } else {
         FinalClass::Caveated
     }
+}
+
+// ---- M23 minimal durable Crystal store ----
+//
+// Markdown/HTML is a VIEW; this is the truth layer. The store is an append-only
+// event ledger (one JSON event per line). A claim is identified by a deterministic
+// `claim_key` (hash of claim text + its citation set) so re-running the same input
+// is idempotent. Supersede/retract are append events, never in-place edits — the
+// history is always reconstructible. Only `final == Durable` claims are ever
+// written; `caveated`/`reject` stay in the review output, never in durable truth.
+
+/// Lifecycle of a durable claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrystalStatus {
+    Active,
+    Superseded,
+    Retracted,
+    Draft,
+}
+
+/// An append-only ledger operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreOp {
+    Write,
+    Supersede,
+    Retract,
+}
+
+/// A citation as persisted in a durable record (full chain, resolved line).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DurableCitation {
+    pub case_id: String,
+    pub unit_id: String,
+    pub quote: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_line: Option<usize>,
+}
+
+/// A durable Crystal record — the full audit chain for one claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DurableRecord {
+    /// Deterministic identity (hash of claim text + citation set) — idempotency key.
+    pub claim_key: String,
+    pub claim_id: String,
+    pub claim: String,
+    pub theme: String,
+    pub source_cases: Vec<String>,
+    pub citations: Vec<DurableCitation>,
+    pub provenance_score: f64,
+    pub provenance_class: ProvenanceClass,
+    pub strength: StrengthClass,
+    pub strength_rationale: String,
+    pub final_class: FinalClass,
+    pub run_id: String,
+    pub status: CrystalStatus,
+}
+
+/// One append-only ledger event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoreEvent {
+    pub op: StoreOp,
+    pub record: DurableRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Deterministic claim identity: hash of the claim text + its citation set
+/// (sorted `case:unit` pairs). Same claim+citations ⇒ same key ⇒ idempotent.
+pub fn claim_key(claim_text: &str, citations: &[DurableCitation]) -> String {
+    let mut pairs: Vec<String> =
+        citations.iter().map(|c| format!("{}:{}", c.case_id, c.unit_id)).collect();
+    pairs.sort();
+    let mut h = Sha256::new();
+    h.update(claim_text.trim().as_bytes());
+    h.update([0u8]);
+    h.update(pairs.join("|").as_bytes());
+    format!("ck-{:x}", h.finalize())[..19].to_string()
+}
+
+/// A deterministic run id derived from the set of claim ids being written, so a
+/// re-run with the same durable set is stable (no wall-clock). Caller may override.
+pub fn default_run_id(claim_ids: &[String]) -> String {
+    let mut ids = claim_ids.to_vec();
+    ids.sort();
+    let mut h = Sha256::new();
+    h.update(ids.join("|").as_bytes());
+    format!("run-{:x}", h.finalize())[..12].to_string()
+}
+
+/// Assemble a durable record from the gate outputs for one claim. `lint.citations`
+/// and `claim.citations` are in the same order (the linter maps over them), so the
+/// quote (candidate) and resolved line (linter) are zipped per citation.
+pub fn build_durable_record(
+    claim: &CrystalClaim,
+    lint: &ClaimLint,
+    score: &ProvenanceScore,
+    strength: &ClaimStrengthVerdict,
+    final_class: FinalClass,
+    run_id: &str,
+) -> DurableRecord {
+    let citations: Vec<DurableCitation> = claim
+        .citations
+        .iter()
+        .zip(lint.citations.iter())
+        .map(|(c, v)| DurableCitation {
+            case_id: c.case_id.clone(),
+            unit_id: c.unit_id.clone(),
+            quote: c.quote.clone(),
+            resolved_line: v.resolved_line,
+        })
+        .collect();
+    let mut source_cases: Vec<String> = citations.iter().map(|c| c.case_id.clone()).collect();
+    source_cases.sort();
+    source_cases.dedup();
+    DurableRecord {
+        claim_key: claim_key(&claim.claim, &citations),
+        claim_id: claim.id.clone(),
+        claim: claim.claim.clone(),
+        theme: claim.theme.clone(),
+        source_cases,
+        citations,
+        provenance_score: score.score,
+        provenance_class: score.class,
+        strength: strength.strength,
+        strength_rationale: strength.rationale.clone(),
+        final_class,
+        run_id: run_id.to_string(),
+        status: CrystalStatus::Active,
+    }
+}
+
+/// Fold the append-only ledger into current state: the latest event per
+/// `claim_key` decides its status (Write→Active, Retract→Retracted,
+/// Supersede→Superseded). Returns records sorted by claim_id, status applied.
+pub fn fold_ledger(events: &[StoreEvent]) -> Vec<DurableRecord> {
+    let mut state: BTreeMap<String, DurableRecord> = BTreeMap::new();
+    for ev in events {
+        let key = ev.record.claim_key.clone();
+        // Write and Supersede both make THIS record active (a Supersede also flips
+        // its predecessor to Superseded, below); Retract marks this record retracted.
+        let status = match ev.op {
+            StoreOp::Write | StoreOp::Supersede => CrystalStatus::Active,
+            StoreOp::Retract => CrystalStatus::Retracted,
+        };
+        let mut rec = ev.record.clone();
+        rec.status = status;
+        state.insert(key, rec);
+        // A supersede also flips the superseded predecessor, if present.
+        if ev.op == StoreOp::Supersede {
+            if let Some(prev) = &ev.supersedes {
+                if let Some(r) = state.get_mut(prev) {
+                    r.status = CrystalStatus::Superseded;
+                }
+            }
+        }
+    }
+    let mut out: Vec<DurableRecord> = state.into_values().collect();
+    out.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));
+    out
+}
+
+/// The set of `claim_key`s currently Active in the ledger (idempotency check: a
+/// Write for an already-active key is a no-op append).
+pub fn active_keys(events: &[StoreEvent]) -> std::collections::BTreeSet<String> {
+    fold_ledger(events)
+        .into_iter()
+        .filter(|r| r.status == CrystalStatus::Active)
+        .map(|r| r.claim_key)
+        .collect()
+}
+
+/// Render a human-readable Crystal view: durable (Active) claims with expandable
+/// provenance, plus a clearly-separated review section listing caveated/rejected
+/// claims (visible, but never mixed into durable truth). Deterministic.
+pub fn render_crystal_md(active: &[DurableRecord], review: &[(String, FinalClass, String)]) -> String {
+    let mut m = String::from("# Crystal — durable knowledge\n\n");
+    m.push_str(&format!(
+        "> {} durable claim(s). Each is grounded: claim → cited unit → verbatim quote → source line. \
+         Caveated/rejected claims are in the Review section and are NOT durable truth.\n\n",
+        active.len()
+    ));
+    for (i, r) in active.iter().enumerate() {
+        m.push_str(&format!("## {}. {}\n\n", i + 1, r.claim.trim()));
+        m.push_str(&format!(
+            "_{} · sources: {} · provenance {:.2} ({:?}) · strength {:?} · {:?} · key `{}`_\n\n",
+            r.theme, r.source_cases.join(", "), r.provenance_score, r.provenance_class,
+            r.strength, r.final_class, r.claim_key
+        ));
+        m.push_str(&format!("<details><summary>Provenance — {} citation(s)</summary>\n\n", r.citations.len()));
+        for c in &r.citations {
+            let line = c.resolved_line.map(|l| format!("line {l}")).unwrap_or_else(|| "—".into());
+            m.push_str(&format!("- ({}) `{}` · {}: “{}”\n", c.case_id, c.unit_id, line, c.quote.trim()));
+        }
+        m.push_str("\n</details>\n\n");
+    }
+    m.push_str("---\n\n## Review (NOT durable) — caveated / rejected\n\n");
+    if review.is_empty() {
+        m.push_str("_none_\n");
+    } else {
+        for (id, fc, why) in review {
+            m.push_str(&format!("- **{id}** [{fc:?}] — {why}\n", why = why.trim()));
+        }
+    }
+    m
 }
 
 #[cfg(test)]
@@ -521,5 +778,117 @@ mod tests {
     fn caveated_provenance_stays_caveated_even_when_semantically_clean() {
         let v = verdict(StrengthClass::Supported, true);
         assert_eq!(final_routing(ProvenanceClass::Caveated, Some(&v)), FinalClass::Caveated);
+    }
+
+    // ---- strength coverage ----
+
+    fn vfor(id: &str) -> ClaimStrengthVerdict {
+        ClaimStrengthVerdict { claim_id: id.into(), strength: StrengthClass::Supported, evidence_sufficient: true, rationale: String::new() }
+    }
+
+    #[test]
+    fn coverage_complete_when_one_to_one() {
+        let ids = vec!["c1".to_string(), "c2".to_string()];
+        let cov = strength_coverage(&ids, &[vfor("c1"), vfor("c2")]);
+        assert!(cov.complete(), "{cov:?}");
+    }
+
+    #[test]
+    fn coverage_flags_missing_duplicate_unknown() {
+        let ids = vec!["c1".to_string(), "c2".to_string(), "c3".to_string()];
+        // c2 missing; c1 duplicated; c9 unknown.
+        let cov = strength_coverage(&ids, &[vfor("c1"), vfor("c1"), vfor("c3"), vfor("c9")]);
+        assert!(!cov.complete());
+        assert_eq!(cov.missing, vec!["c2"]);
+        assert_eq!(cov.duplicate, vec!["c1"]);
+        assert_eq!(cov.unknown, vec!["c9"]);
+    }
+
+    #[test]
+    fn coverage_empty_verdicts_is_all_missing() {
+        let ids = vec!["c1".to_string(), "c2".to_string()];
+        let cov = strength_coverage(&ids, &[]);
+        assert_eq!(cov.missing, vec!["c1", "c2"]);
+        assert!(!cov.complete());
+    }
+
+    // ---- durable store ----
+
+    fn rec(key: &str, claim_id: &str) -> DurableRecord {
+        DurableRecord {
+            claim_key: key.into(), claim_id: claim_id.into(), claim: "c".into(), theme: "t".into(),
+            source_cases: vec!["m18-01".into()], citations: vec![DurableCitation {
+                case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: Some(12) }],
+            provenance_score: 0.9, provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported, strength_rationale: "ok".into(),
+            final_class: FinalClass::Durable, run_id: "r1".into(), status: CrystalStatus::Active,
+        }
+    }
+
+    #[test]
+    fn claim_key_is_deterministic_and_citation_sensitive() {
+        let c1 = vec![DurableCitation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: None }];
+        let c2 = vec![DurableCitation { case_id: "m18-02".into(), unit_id: "u-9".into(), quote: "q".into(), resolved_line: None }];
+        assert_eq!(claim_key("same claim", &c1), claim_key("same claim", &c1), "stable");
+        assert_ne!(claim_key("same claim", &c1), claim_key("same claim", &c2), "citation-sensitive");
+        assert_ne!(claim_key("claim A", &c1), claim_key("claim B", &c1), "text-sensitive");
+    }
+
+    #[test]
+    fn fold_write_then_retract_then_supersede() {
+        let mut a = rec("ck-a", "c1");
+        a.status = CrystalStatus::Active;
+        let events = vec![
+            StoreEvent { op: StoreOp::Write, record: rec("ck-a", "c1"), supersedes: None, reason: None },
+            StoreEvent { op: StoreOp::Write, record: rec("ck-b", "c2"), supersedes: None, reason: None },
+            StoreEvent { op: StoreOp::Retract, record: rec("ck-b", "c2"), supersedes: None, reason: Some("wrong".into()) },
+            StoreEvent { op: StoreOp::Supersede, record: rec("ck-c", "c1b"), supersedes: Some("ck-a".into()), reason: None },
+        ];
+        let state = fold_ledger(&events);
+        let by_key: std::collections::BTreeMap<_, _> = state.iter().map(|r| (r.claim_key.as_str(), r.status)).collect();
+        assert_eq!(by_key["ck-a"], CrystalStatus::Superseded);
+        assert_eq!(by_key["ck-b"], CrystalStatus::Retracted);
+        assert_eq!(by_key["ck-c"], CrystalStatus::Active);
+        // only ck-c is active.
+        assert_eq!(active_keys(&events).into_iter().collect::<Vec<_>>(), vec!["ck-c".to_string()]);
+    }
+
+    #[test]
+    fn active_keys_supports_idempotent_append() {
+        let events = vec![StoreEvent { op: StoreOp::Write, record: rec("ck-a", "c1"), supersedes: None, reason: None }];
+        // Re-writing ck-a would be a no-op: the caller skips keys already active.
+        assert!(active_keys(&events).contains("ck-a"));
+    }
+
+    #[test]
+    fn render_separates_durable_from_review() {
+        let md = render_crystal_md(&[rec("ck-a", "c1")], &[("c2".into(), FinalClass::Caveated, "over-synthesized".into())]);
+        assert!(md.contains("Crystal — durable knowledge"));
+        assert!(md.contains("Provenance — 1 citation"));
+        assert!(md.contains("Review (NOT durable)"));
+        assert!(md.contains("c2"));
+        assert!(md.contains("over-synthesized"));
+    }
+
+    #[test]
+    fn build_record_zips_quote_and_resolved_line() {
+        let body = "# H\n\nA chunk is a structurally neutral container.";
+        let idx = index_for("m18-01", body, &["A chunk is a structurally neutral container."]);
+        let uid = unit_id(&idx, "m18-01", 0);
+        let claim = CrystalClaim {
+            id: "c1".into(), claim: "chunks neutral".into(), theme: "x".into(),
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral".into(), claimed_line: None }],
+            caveat: None,
+        };
+        let cand = CrystalCandidate { items: vec![claim.clone()] };
+        let rep = lint_candidate(&cand, &idx);
+        let score = &score_candidate(&rep)[0];
+        let v = ClaimStrengthVerdict { claim_id: "c1".into(), strength: StrengthClass::Supported, evidence_sufficient: true, rationale: "r".into() };
+        let dr = build_durable_record(&claim, &rep.claims[0], score, &v, FinalClass::Durable, "run-x");
+        assert_eq!(dr.citations.len(), 1);
+        assert!(dr.citations[0].resolved_line.is_some(), "line resolved from unit");
+        assert_eq!(dr.citations[0].quote, "structurally neutral");
+        assert_eq!(dr.source_cases, vec!["m18-01"]);
+        assert!(dr.claim_key.starts_with("ck-"));
     }
 }

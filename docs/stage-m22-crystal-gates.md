@@ -68,6 +68,23 @@ the LLM's nondeterminism, and the combination is replayable. Modality/attributio
 `opinion_as_fact` check (a hedged "may"/"可能" or single-author opinion stated as system fact
 is caught). The CLI accepts the verdicts via `--strength <verdicts.json>`.
 
+### 3c. Verdict completeness (M22 closeout — full pre-write contract)
+
+The gate now distinguishes two runs explicitly and refuses to silently pass a partial one:
+
+- **citation/provenance-only run** (no `--strength`): diagnostic. The report marks
+  `strength_gate_applied=false`, `eligible_for_durable_write=false`. Exits 0 if citations are
+  clean — but is **not** a pre-write pass.
+- **full pre-write run** (`--strength` + complete verdicts): the real gate. `strength_coverage()`
+  (pure, tested) checks the verdict set against the candidate's claim ids and fails loud
+  (non-zero, new `CliError::Gate`) on any **missing**, **duplicate**, or **unknown** claim_id —
+  so a partial semantic verdict can never quietly downgrade-then-exit-0.
+
+The report now carries `strength_gate_applied`, `strength_verdict_complete`,
+`strength_coverage {missing,duplicate,unknown}`, `final_durable/caveated/reject`, and
+`eligible_for_durable_write` (true iff full pre-write run + complete verdicts + zero citation
+defects + zero rejects). **M22 is now a complete pre-write gate, not just a provenance gate.**
+
 ### 4. Runnable gate (Rust CLI, not a script)
 
 `ovp-cli crystal-lint --candidate <json> --packs-dir <dir> --out <json>` builds the

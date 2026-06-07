@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
-    final_routing, lint_candidate, score_candidate, ClaimStrengthVerdict, CrystalCandidate,
-    FinalClass, GroundingIndex, ProvenanceClass,
+    final_routing, lint_candidate, score_candidate, strength_coverage, ClaimStrengthVerdict,
+    CrystalCandidate, FinalClass, GroundingIndex, ProvenanceClass,
 };
 use ovp_domain::units::Unit;
 
@@ -84,6 +84,14 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
                 .map_err(|e| CliError::Io(format!("parsing strength {}: {e}", p.display())))?
         }
     };
+    // Strength-verdict completeness. A full pre-write run requires --strength AND
+    // complete coverage (no missing/duplicate/unknown). Partial verdicts must not
+    // silently downgrade-then-pass.
+    let claim_ids: Vec<String> = candidate.items.iter().map(|c| c.id.clone()).collect();
+    let coverage = strength_coverage(&claim_ids, &strength_verdicts);
+    let strength_gate_applied = args.strength.is_some();
+    let strength_verdict_complete = strength_gate_applied && coverage.complete();
+
     let final_routes: Vec<(String, FinalClass)> = scores
         .iter()
         .map(|s| {
@@ -94,6 +102,11 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     let final_durable = final_routes.iter().filter(|(_, f)| *f == FinalClass::Durable).count();
     let final_caveated = final_routes.iter().filter(|(_, f)| *f == FinalClass::Caveated).count();
     let final_reject = final_routes.iter().filter(|(_, f)| *f == FinalClass::Reject).count();
+    // Eligible for durable write iff: full pre-write run + complete verdicts + no
+    // citation defects + no rejected claims.
+    let eligible_for_durable_write = strength_verdict_complete
+        && report.n_with_defects == 0
+        && final_reject == 0;
 
     println!("crystal-lint: {} claims over {} cases", report.n_claims, index.len());
     println!(
@@ -104,12 +117,21 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
         report.n_fully_grounded, report.n_with_defects
     );
     println!("  provenance class: durable={durable} caveated={caveated} quarantine={quarantine}");
-    if args.strength.is_some() {
+    if strength_gate_applied {
         println!(
             "  final routing (with claim-strength gate): durable={final_durable} caveated={final_caveated} reject={final_reject}"
         );
+        if !coverage.complete() {
+            println!(
+                "  strength coverage INCOMPLETE: missing={:?} duplicate={:?} unknown={:?}",
+                coverage.missing, coverage.duplicate, coverage.unknown
+            );
+        }
+        println!(
+            "  eligible_for_durable_write={eligible_for_durable_write} (complete={strength_verdict_complete})"
+        );
     } else {
-        println!("  (no --strength verdicts: final durable routing withheld; run the claim-strength gate)");
+        println!("  citation/provenance-only run (no --strength): diagnostic, NOT a full pre-write pass; not durable-eligible");
     }
 
     if let Some(parent) = args.out.parent() {
@@ -119,6 +141,11 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
         "report": report,
         "scores": scores,
         "final_routing": final_routes.iter().map(|(id, f)| serde_json::json!({"claim_id": id, "final": f})).collect::<Vec<_>>(),
+        "strength_coverage": {
+            "missing": coverage.missing,
+            "duplicate": coverage.duplicate,
+            "unknown": coverage.unknown,
+        },
         "summary": {
             "n_claims": report.n_claims,
             "n_fully_grounded": report.n_fully_grounded,
@@ -127,10 +154,12 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
             "durable": durable,
             "caveated": caveated,
             "quarantine": quarantine,
-            "strength_gate_applied": args.strength.is_some(),
+            "strength_gate_applied": strength_gate_applied,
+            "strength_verdict_complete": strength_verdict_complete,
             "final_durable": final_durable,
             "final_caveated": final_caveated,
             "final_reject": final_reject,
+            "eligible_for_durable_write": eligible_for_durable_write,
         }
     });
     let s = serde_json::to_string_pretty(&combined).map_err(|e| CliError::Io(e.to_string()))?;
@@ -151,6 +180,15 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
             report.n_with_defects,
             report.n_claims,
             args.out.display()
+        )));
+    }
+    // Fail loud on an incomplete/duplicate/unknown strength verdict set — a
+    // partial semantic pass must never quietly exit 0.
+    if strength_gate_applied && !coverage.complete() {
+        return Err(CliError::Gate(format!(
+            "strength verdicts incomplete — missing={:?} duplicate={:?} unknown={:?}. \
+             A full pre-write run requires exactly one verdict per claim. See {}",
+            coverage.missing, coverage.duplicate, coverage.unknown, args.out.display()
         )));
     }
     Ok(())
