@@ -161,6 +161,13 @@ enum Cmd {
         store: PathBuf,
         #[arg(long)]
         run_id: Option<String>,
+        /// Crystal view header: title / scope / what-it-is-not-claiming (for crystal.md).
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long)]
+        not_claiming: Option<String>,
     },
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
@@ -529,9 +536,11 @@ fn main() -> ExitCode {
             use commands::crystal_lint::CrystalLintArgs;
             commands::crystal_lint::run(CrystalLintArgs { candidate, packs_dir, out, strength })
         }
-        Cmd::CrystalWrite { candidate, packs_dir, strength, store, run_id } => {
+        Cmd::CrystalWrite { candidate, packs_dir, strength, store, run_id, title, scope, not_claiming } => {
             use commands::crystal_write::CrystalWriteArgs;
-            commands::crystal_write::run(CrystalWriteArgs { candidate, packs_dir, strength, store, run_id })
+            commands::crystal_write::run(CrystalWriteArgs {
+                candidate, packs_dir, strength, store, run_id, title, scope, not_claiming,
+            })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
             use commands::client::ClientKind;

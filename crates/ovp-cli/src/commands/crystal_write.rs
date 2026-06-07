@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use ovp_domain::crystal::{
     active_keys, build_durable_record, default_run_id, fold_ledger, lint_candidate,
     render_crystal_md, score_candidate, strength_coverage, ClaimStrengthVerdict, CrystalCandidate,
-    FinalClass, GroundingIndex, StoreEvent, StoreOp,
+    CrystalHeader, FinalClass, GroundingIndex, ReviewEntry, StoreEvent, StoreOp,
 };
 use ovp_domain::units::Unit;
 
@@ -25,6 +25,10 @@ pub struct CrystalWriteArgs {
     pub store: PathBuf,
     /// Optional explicit run id; defaults to a deterministic hash of the written keys.
     pub run_id: Option<String>,
+    /// Crystal view header (scope/policy framing for crystal.md).
+    pub title: Option<String>,
+    pub scope: Option<String>,
+    pub not_claiming: Option<String>,
 }
 
 fn build_index(packs_dir: &std::path::Path) -> Result<GroundingIndex, CliError> {
@@ -136,7 +140,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     let verdict_of = |id: &str| verdicts.iter().find(|v| v.claim_id == id).unwrap();
 
     let mut new_records = Vec::new();
-    let mut review: Vec<(String, FinalClass, String)> = Vec::new();
+    let mut review: Vec<ReviewEntry> = Vec::new();
     for item in &candidate.items {
         match final_of(&item.id) {
             FinalClass::Durable => {
@@ -149,7 +153,18 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
                     &run_id,
                 ));
             }
-            fc => review.push((item.id.clone(), fc, verdict_of(&item.id).rationale.clone())),
+            fc => {
+                let v = verdict_of(&item.id);
+                review.push(ReviewEntry {
+                    claim_id: item.id.clone(),
+                    claim: item.claim.clone(),
+                    theme: item.theme.clone(),
+                    final_class: fc,
+                    strength: v.strength,
+                    evidence_sufficient: v.evidence_sufficient,
+                    rationale: v.rationale.clone(),
+                });
+            }
         }
     }
 
@@ -190,16 +205,17 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
         .cloned()
         .collect();
-    let md = render_crystal_md(&active_now, &review);
+    let header = CrystalHeader {
+        title: args.title.clone().unwrap_or_else(|| "Crystal".into()),
+        scope: args.scope.clone().unwrap_or_default(),
+        not_claiming: args.not_claiming.clone().unwrap_or_default(),
+    };
+    let md = render_crystal_md(&header, &active_now, &review);
     std::fs::write(args.store.join("crystal.md"), md)
         .map_err(|e| CliError::Io(format!("writing crystal.md: {e}")))?;
-    let review_json: Vec<_> = review
-        .iter()
-        .map(|(id, fc, why)| serde_json::json!({"claim_id": id, "final": fc, "rationale": why}))
-        .collect();
     std::fs::write(
         args.store.join("review.json"),
-        serde_json::to_string_pretty(&serde_json::json!({"review": review_json})).unwrap() + "\n",
+        serde_json::to_string_pretty(&serde_json::json!({"review": review})).unwrap() + "\n",
     )
     .map_err(|e| CliError::Io(format!("writing review.json: {e}")))?;
 

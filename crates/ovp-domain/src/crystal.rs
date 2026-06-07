@@ -571,18 +571,59 @@ pub fn active_keys(events: &[StoreEvent]) -> std::collections::BTreeSet<String> 
         .collect()
 }
 
-/// Render a human-readable Crystal view: durable (Active) claims with expandable
-/// provenance, plus a clearly-separated review section listing caveated/rejected
-/// claims (visible, but never mixed into durable truth). Deterministic.
-pub fn render_crystal_md(active: &[DurableRecord], review: &[(String, FinalClass, String)]) -> String {
-    let mut m = String::from("# Crystal — durable knowledge\n\n");
+/// A non-durable (caveated/reject) claim, with enough context to be read on its
+/// own — so a human reviewer does not have to re-open the candidate (M23 P2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewEntry {
+    pub claim_id: String,
+    pub claim: String,
+    pub theme: String,
+    pub final_class: FinalClass,
+    pub strength: StrengthClass,
+    pub evidence_sufficient: bool,
+    pub rationale: String,
+}
+
+/// Scope/policy header for a rendered Crystal view (M24). Counts are computed
+/// from the data; this carries the human-set framing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CrystalHeader {
+    pub title: String,
+    pub scope: String,
+    pub not_claiming: String,
+}
+
+/// Render a human-readable Crystal view: a scope/policy header, durable (Active)
+/// claims with expandable provenance, and a clearly-separated review section
+/// where each caveated/rejected claim is readable ON ITS OWN (claim text + theme
+/// + strength + rationale) — never mixed into durable truth. Deterministic.
+pub fn render_crystal_md(
+    header: &CrystalHeader,
+    active: &[DurableRecord],
+    review: &[ReviewEntry],
+) -> String {
+    let title = if header.title.trim().is_empty() { "Crystal" } else { header.title.trim() };
+    let mut m = format!("# {title} — durable knowledge\n\n");
+    if !header.scope.trim().is_empty() {
+        m.push_str(&format!("**Scope:** {}\n\n", header.scope.trim()));
+    }
     m.push_str(&format!(
-        "> {} durable claim(s). Each is grounded: claim → cited unit → verbatim quote → source line. \
-         Caveated/rejected claims are in the Review section and are NOT durable truth.\n\n",
-        active.len()
+        "**Durable claims:** {} · **Review (caveated/rejected, not durable):** {}\n\n",
+        active.len(),
+        review.len()
     ));
+    m.push_str(
+        "**Evidence policy:** every durable claim is grounded — claim → cited accepted unit → \
+         verbatim quote → source line — and passed both the citation/provenance gate and the \
+         claim-strength gate. Caveated/rejected claims are listed in the Review section and are \
+         NOT durable truth.\n\n",
+    );
+    if !header.not_claiming.trim().is_empty() {
+        m.push_str(&format!("**What this Crystal is NOT claiming:** {}\n\n", header.not_claiming.trim()));
+    }
+    m.push_str("---\n\n## Durable claims\n\n");
     for (i, r) in active.iter().enumerate() {
-        m.push_str(&format!("## {}. {}\n\n", i + 1, r.claim.trim()));
+        m.push_str(&format!("### {}. {}\n\n", i + 1, r.claim.trim()));
         m.push_str(&format!(
             "_{} · sources: {} · provenance {:.2} ({:?}) · strength {:?} · {:?} · key `{}`_\n\n",
             r.theme, r.source_cases.join(", "), r.provenance_score, r.provenance_class,
@@ -599,8 +640,13 @@ pub fn render_crystal_md(active: &[DurableRecord], review: &[(String, FinalClass
     if review.is_empty() {
         m.push_str("_none_\n");
     } else {
-        for (id, fc, why) in review {
-            m.push_str(&format!("- **{id}** [{fc:?}] — {why}\n", why = why.trim()));
+        for e in review {
+            m.push_str(&format!("### {} [{:?}] — {}\n\n", e.claim_id, e.final_class, e.theme));
+            m.push_str(&format!("{}\n\n", e.claim.trim()));
+            m.push_str(&format!(
+                "_strength: {:?} · evidence_sufficient: {} · why not durable:_ {}\n\n",
+                e.strength, e.evidence_sufficient, e.rationale.trim()
+            ));
         }
     }
     m
@@ -862,12 +908,30 @@ mod tests {
 
     #[test]
     fn render_separates_durable_from_review() {
-        let md = render_crystal_md(&[rec("ck-a", "c1")], &[("c2".into(), FinalClass::Caveated, "over-synthesized".into())]);
-        assert!(md.contains("Crystal — durable knowledge"));
+        let header = CrystalHeader {
+            title: "Agent Memory".into(),
+            scope: "memory + context engineering".into(),
+            not_claiming: "not a universal theory".into(),
+        };
+        let review = vec![ReviewEntry {
+            claim_id: "c2".into(),
+            claim: "All agents must use file-backed memory.".into(),
+            theme: "memory".into(),
+            final_class: FinalClass::Caveated,
+            strength: StrengthClass::OverSynthesized,
+            evidence_sufficient: false,
+            rationale: "fuses single-source quotes into a universal".into(),
+        }];
+        let md = render_crystal_md(&header, &[rec("ck-a", "c1")], &review);
+        assert!(md.contains("Agent Memory — durable knowledge"));
+        assert!(md.contains("**Scope:** memory + context engineering"));
+        assert!(md.contains("NOT claiming"));
         assert!(md.contains("Provenance — 1 citation"));
         assert!(md.contains("Review (NOT durable)"));
-        assert!(md.contains("c2"));
-        assert!(md.contains("over-synthesized"));
+        // P2: the caveated claim is readable on its own — claim text present.
+        assert!(md.contains("All agents must use file-backed memory."), "review must show claim text");
+        assert!(md.contains("OverSynthesized"));
+        assert!(md.contains("fuses single-source quotes"));
     }
 
     #[test]
