@@ -145,6 +145,23 @@ enum Cmd {
         #[arg(long)]
         strength: Option<PathBuf>,
     },
+    /// M23 durable Crystal write: run the FULL pre-write gate and, only if
+    /// durable-eligible, append `Durable` claims to an append-only store +
+    /// render `crystal.md`. Refuses on any gate gap. No vault write / graph.
+    CrystalWrite {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        packs_dir: PathBuf,
+        /// Claim-strength verdicts (REQUIRED — a durable write is a full pre-write run).
+        #[arg(long)]
+        strength: PathBuf,
+        /// Durable store directory (append-only ledger.jsonl + crystal.md + review.json).
+        #[arg(long, default_value = ".run/m23/store")]
+        store: PathBuf,
+        #[arg(long)]
+        run_id: Option<String>,
+    },
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
     /// Hand-harness — NOT canonicalization, no manifest / GraphAssembler /
@@ -511,6 +528,10 @@ fn main() -> ExitCode {
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
             commands::crystal_lint::run(CrystalLintArgs { candidate, packs_dir, out, strength })
+        }
+        Cmd::CrystalWrite { candidate, packs_dir, strength, store, run_id } => {
+            use commands::crystal_write::CrystalWriteArgs;
+            commands::crystal_write::run(CrystalWriteArgs { candidate, packs_dir, strength, store, run_id })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
             use commands::client::ClientKind;
