@@ -169,6 +169,19 @@ enum Cmd {
         #[arg(long)]
         not_claiming: Option<String>,
     },
+    /// M25 Crystal Review Workbench: apply human review decisions over caveated
+    /// claims into a REVISED structured candidate. The decision authors a
+    /// candidate; it does NOT decide durability — the revised candidate must
+    /// re-enter the strength gate + crystal-write. Fail-loud on unknown claim ids.
+    CrystalReview {
+        #[arg(long)]
+        candidate: PathBuf,
+        /// Reviewer decisions JSON: [{ claim_id, action, revisions, note }].
+        #[arg(long)]
+        decisions: PathBuf,
+        #[arg(long, default_value = ".run/m25/revised-candidate.json")]
+        out: PathBuf,
+    },
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
     /// Hand-harness — NOT canonicalization, no manifest / GraphAssembler /
@@ -541,6 +554,10 @@ fn main() -> ExitCode {
             commands::crystal_write::run(CrystalWriteArgs {
                 candidate, packs_dir, strength, store, run_id, title, scope, not_claiming,
             })
+        }
+        Cmd::CrystalReview { candidate, decisions, out } => {
+            use commands::crystal_review::CrystalReviewArgs;
+            commands::crystal_review::run(CrystalReviewArgs { candidate, decisions, out })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
             use commands::client::ClientKind;

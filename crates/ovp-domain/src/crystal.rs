@@ -652,6 +652,90 @@ pub fn render_crystal_md(
     m
 }
 
+// ---- M25 Crystal Review Workbench: human-decision → revised candidate ----
+//
+// A human (helped by an AI evidence review + KMEM 旁证) decides what to do with a
+// caveated claim. The decision is NEVER a durability verdict — it can only author
+// a REVISED structured candidate that re-enters the SAME gate (linter +
+// provenance + claim-strength). `apply_decisions` turns accepted rewrites/splits
+// into a fresh `CrystalCandidate`; the gate (not the human) then decides durable.
+
+/// What the reviewer chose for one caveated claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAction {
+    /// Replace the claim with one revised claim (narrower text and/or fewer citations).
+    Rewrite,
+    /// Replace the claim with several narrower claims (each re-gated independently).
+    Split,
+    /// Leave it caveated (no candidate produced).
+    KeepCaveated,
+    /// Discard it (no candidate produced).
+    Reject,
+}
+
+/// A reviewer's decision for one caveated claim. `revisions` carries the new
+/// claim(s) for `Rewrite` (exactly 1) / `Split` (≥2); ignored otherwise. Each
+/// revision is a full structured claim (text + citations) so the linter can
+/// re-verify verbatim grounding and the strength gate can re-judge scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewDecision {
+    pub claim_id: String,
+    pub action: ReviewAction,
+    #[serde(default)]
+    pub revisions: Vec<CrystalClaim>,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// Outcome of applying decisions: the revised candidate + a per-decision log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyOutcome {
+    pub revised: CrystalCandidate,
+    /// `(original_claim_id, action, n_revisions)` in decision order.
+    pub log: Vec<(String, ReviewAction, usize)>,
+    /// Decisions whose `claim_id` is not in the original candidate (fail-loud signal).
+    pub unknown: Vec<String>,
+}
+
+/// Build a revised candidate from reviewer decisions over the ORIGINAL candidate.
+/// Only `Rewrite`/`Split` produce candidate claims; `KeepCaveated`/`Reject` drop
+/// out (they never become durable). New claim ids are derived (`<id>r`, `<id>s1`…)
+/// when a revision omits its own id, so they are traceable to the source claim.
+/// Deterministic. Does NOT decide durability — that is the gate's job downstream.
+pub fn apply_decisions(original: &CrystalCandidate, decisions: &[ReviewDecision]) -> ApplyOutcome {
+    use std::collections::BTreeSet;
+    let known: BTreeSet<&str> = original.items.iter().map(|c| c.id.as_str()).collect();
+    let mut items: Vec<CrystalClaim> = Vec::new();
+    let mut log: Vec<(String, ReviewAction, usize)> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for d in decisions {
+        if !known.contains(d.claim_id.as_str()) {
+            unknown.push(d.claim_id.clone());
+            continue;
+        }
+        let n = match d.action {
+            ReviewAction::Rewrite | ReviewAction::Split => {
+                for (i, rev) in d.revisions.iter().enumerate() {
+                    let mut c = rev.clone();
+                    if c.id.trim().is_empty() {
+                        c.id = if d.action == ReviewAction::Rewrite {
+                            format!("{}r", d.claim_id)
+                        } else {
+                            format!("{}s{}", d.claim_id, i + 1)
+                        };
+                    }
+                    items.push(c);
+                }
+                d.revisions.len()
+            }
+            ReviewAction::KeepCaveated | ReviewAction::Reject => 0,
+        };
+        log.push((d.claim_id.clone(), d.action, n));
+    }
+    ApplyOutcome { revised: CrystalCandidate { items }, log, unknown }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,6 +1016,54 @@ mod tests {
         assert!(md.contains("All agents must use file-backed memory."), "review must show claim text");
         assert!(md.contains("OverSynthesized"));
         assert!(md.contains("fuses single-source quotes"));
+    }
+
+    // ---- review decisions → revised candidate ----
+
+    fn claim(id: &str) -> CrystalClaim {
+        CrystalClaim {
+            id: id.into(), claim: format!("claim {id}"), theme: "t".into(),
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), claimed_line: None }],
+            caveat: None,
+        }
+    }
+
+    #[test]
+    fn apply_rewrite_split_keep_reject() {
+        let orig = CrystalCandidate { items: vec![claim("c1"), claim("c2"), claim("c3"), claim("c4")] };
+        let mut rw = claim("");
+        rw.claim = "narrower c1".into();
+        let decisions = vec![
+            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rw], note: "narrow".into() },
+            ReviewDecision { claim_id: "c2".into(), action: ReviewAction::Split,
+                revisions: vec![{ let mut a = claim(""); a.claim = "part a".into(); a }, { let mut b = claim(""); b.claim = "part b".into(); b }], note: String::new() },
+            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::KeepCaveated, revisions: vec![], note: String::new() },
+            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Reject, revisions: vec![], note: String::new() },
+        ];
+        let out = apply_decisions(&orig, &decisions);
+        let ids: Vec<&str> = out.revised.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["c1r", "c2s1", "c2s2"], "rewrite→c1r, split→c2s1/c2s2; keep/reject drop");
+        assert!(out.unknown.is_empty());
+        assert_eq!(out.revised.items[0].claim, "narrower c1");
+    }
+
+    #[test]
+    fn apply_flags_unknown_claim_id() {
+        let orig = CrystalCandidate { items: vec![claim("c1")] };
+        let decisions = vec![ReviewDecision { claim_id: "c9".into(), action: ReviewAction::KeepCaveated, revisions: vec![], note: String::new() }];
+        let out = apply_decisions(&orig, &decisions);
+        assert_eq!(out.unknown, vec!["c9"]);
+        assert!(out.revised.items.is_empty());
+    }
+
+    #[test]
+    fn apply_preserves_explicit_revision_id() {
+        let orig = CrystalCandidate { items: vec![claim("c1")] };
+        let mut rev = claim("c1-narrow");
+        rev.claim = "x".into();
+        let decisions = vec![ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rev], note: String::new() }];
+        let out = apply_decisions(&orig, &decisions);
+        assert_eq!(out.revised.items[0].id, "c1-narrow", "explicit id kept");
     }
 
     #[test]
