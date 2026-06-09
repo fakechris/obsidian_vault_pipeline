@@ -1,5 +1,13 @@
 # Legacy OVP Alignment
 
+> **⚠️ Superseded for the reader-trunk era (M29).** This matrix was written from the pre-pivot
+> M7–M13 canonical-store roadmap and predates the M14–M28 reader-trunk + Crystal pivot, so its
+> P0 framing (canonical store / absorb / knowledge.db as the next milestones) no longer reflects
+> the active direction. For the current product-capability comparison and mainline-return verdict,
+> read [`docs/mainline-return-matrix.md`](./mainline-return-matrix.md) and
+> [`docs/stage-m29-mainline-return-audit.md`](./stage-m29-mainline-return-audit.md). The gap rows
+> below remain accurate as a legacy *inventory*; only their roadmap priority is stale.
+
 > Living gap matrix between the legacy Python `ovp_pipeline` and the Rust rewrite. Updated when stages land. See `docs/architecture.md` for the current Rust state; this doc is about what the legacy does that we don't yet match.
 
 ## How we use this doc
