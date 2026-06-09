@@ -414,6 +414,15 @@ def status_pill(s):
 def src_links(ids):
     return " ".join(f'<a class="mono" href="sources.html#{E(i)}">{E(i)}</a>' for i in ids) or '<span class="note">—</span>'
 
+def durable_links(ids):
+    return " ".join(f'<a class="mono" href="crystal.html#{E(i)}">{E(i)}</a>' for i in ids) or '<span class="note">—</span>'
+
+def caveated_href(cid):
+    return f"backlog.html#caveated-{cid}"
+
+def caveated_links(ids):
+    return " ".join(f'<a class="mono" href="{E(caveated_href(i))}">{E(i)}</a>' for i in ids) or '<span class="note">—</span>'
+
 def page(active, title, sub, body, strip=""):
     nav = "".join(
         f'<a class="{ "on" if href==active else "" }" href="{href}">{E(label)}'
@@ -520,8 +529,8 @@ def attention_page():
             E(b["summary_en"]),
             E(b["summary_zh"]),
             "Single-source and supported — sound but thin; a second source would let it clear the strength gate.",
-            b["related_sources"], f"crystal.html#{cid}", None,
-            [("Split / narrow claim", "backlog.html", False), ("Keep caveated", "backlog.html", False)]))
+            b["related_sources"], caveated_href(cid), None,
+            [("Split / narrow claim", caveated_href(cid), False), ("Keep caveated", caveated_href(cid), False)]))
 
     # 7. Gate-Protected Item (gate_blocked / rewrite)
     gp = [b for b in BACKLOG if b["type"] in ("gate_blocked", "needs_rewrite_or_split")]
@@ -533,8 +542,8 @@ def attention_page():
             E(b["summary_en"]),
             E(b["summary_zh"]),
             f"The claim-strength gate classified this as <b>{E(c['strength'])}</b> and refused promotion — the gate working as designed.",
-            b["related_sources"], f"crystal.html#{cid}", None,
-            [("Keep caveated", "backlog.html", False), ("Dismiss", "backlog.html", False)]))
+            b["related_sources"], caveated_href(cid), None,
+            [("Keep caveated", caveated_href(cid), False), ("Dismiss", caveated_href(cid), False)]))
 
     intro = ('<p class="note" style="margin:-8px 0 16px">Operational review feed — highest-value actions first. '
              'Actions are non-mutating links into the detail surfaces. '
@@ -577,17 +586,18 @@ def sources_page():
     for s in SOURCES:
         dn = len(s["durable_claims"]); cn = len(s["caveated_claims"])
         cmp_link = f'<a href="compare.html#{s["id"]}">{E(s["verdict"] or "—")}</a>'
-        dlink = " ".join(f'<a class="mono" href="crystal.html#{E(i)}">{E(i)}</a>' for i in s["durable_claims"]) or '<span class="note">—</span>'
+        dlink = durable_links(s["durable_claims"])
+        clink = caveated_links(s["caveated_claims"])
         rows.append(f"""<tr id="{E(s['id'])}"><td class="mono">{E(s['id'])}</td>
 <td>{E(s['title'])}<div class="note">{E(s['category'])}</div></td>
 <td>{status_pill(s['status'])}</td>
 <td>{s['ovp_cards'] if s['ovp_cards'] is not None else '—'}</td>
 <td>{s['kmem_mem'] if s['kmem_mem'] is not None else '—'}</td>
 <td>{dn}</td><td>{cn}</td>
-<td>{dlink}</td>
+<td>{dlink}</td><td>{clink}</td>
 <td>{cmp_link}</td></tr>""")
     head = """<tr><th>id</th><th>title / category</th><th>status</th>
-<th>OVP cards</th><th>KMEM mem</th><th>durable</th><th>caveated</th><th>durable claims</th><th>article verdict</th></tr>"""
+<th>OVP cards</th><th>KMEM mem</th><th>durable</th><th>caveated</th><th>durable claims</th><th>caveated claims</th><th>article verdict</th></tr>"""
     legend = ('<div class="legend">'
               + status_pill("durable") + status_pill("needs-partner") + status_pill("uncovered")
               + '<span class="note">durable = cited by ≥1 durable claim · needs-partner = caveated material only · uncovered = no claim</span></div>')
@@ -602,10 +612,16 @@ def backlog_page():
         "gate_blocked": "被门拦截", "theme_gap": "主题缺口",
     }
     rows = []
+    seen_caveated_anchors = set()
     for b in BACKLOG:
         rel = src_links(b["related_sources"])
-        cav = " ".join(f'<a class="mono" href="crystal.html#{E(i)}">{E(i)}</a>' for i in b["related_caveated"]) or "—"
-        rows.append(f"""<div class="card lv-{b['status']}">
+        anchors = []
+        for cid in b["related_caveated"]:
+            if cid not in seen_caveated_anchors:
+                anchors.append(f'<span id="caveated-{E(cid)}"></span>')
+                seen_caveated_anchors.add(cid)
+        cav = caveated_links(b["related_caveated"]) if b["related_caveated"] else "—"
+        rows.append(f"""<div class="card lv-{b['status']}" id="{E(b['id'])}">{''.join(anchors)}
 <div class="top"><span class="ctype">{E(b['type'])}</span>
 <span class="tag">{E(type_zh.get(b['type'],''))}</span>
 <span class="p-{b['priority']}">priority: {E(b['priority'])}</span>{status_pill(b['status'])}

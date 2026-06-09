@@ -43,6 +43,15 @@ python3 scripts/m28/generate_console.py
 # open .run/m28/dashboard/index.html
 ```
 
+### M28.1 review fix
+
+Post-ship UI review found that some caveated-claim ids in the Attention and Backlog surfaces
+linked to `crystal.html#...`, but `crystal.html` intentionally renders only durable claims. The
+generator now routes caveated claim links to stable Backlog anchors (`backlog.html#caveated-*`)
+and the Sources page exposes both durable and caveated claim ids. The console therefore supports
+the full source → caveated backlog → durable Crystal navigation loop without changing any M27
+decision or gate.
+
 ---
 
 ## Inputs (read-only)
@@ -130,8 +139,8 @@ Routing logic:
 
 ## KnowledgeMem UI patterns
 
-KMEM was **not** inspected again for this milestone; the runtime, password, and any dump are
-untouched. The direction was already derived from prior live observation.
+The M28 implementation did **not** inspect KMEM again; the runtime, password, and any dump were
+not used by the implementation. The direction was already derived from prior live observation.
 
 **Adopted (information architecture only):**
 
@@ -163,7 +172,7 @@ untouched. The direction was already derived from prior live observation.
 8. ✅ Review-facing summaries are bilingual EN/ZH across all pages.
 9. ✅ This doc + About page record the KMEM patterns adopted and rejected.
 10. ✅ No Rust/code paths changed — added a Python generator, a JSON asset, and docs only.
-11. ✅ Forbidden-path audit clean: no KMEM inspection, no password, no `.run` artifacts /
+11. ✅ Forbidden-path audit clean: no KMEM implementation access, no password, no `.run` artifacts /
     cassettes / secrets / dumps committed; gates untouched; no caveated promoted; no
     Referent / RAG / graph added.
 
@@ -171,7 +180,7 @@ untouched. The direction was already derived from prior live observation.
 
 ## Constraints honored
 
-No KMEM re-inspection · no password use · M22/M23 gates unchanged · no caveated promotion ·
+No KMEM implementation re-inspection · no password use in implementation · M22/M23 gates unchanged · no caveated promotion ·
 no Referent/Resolver · no RAG · no graph visualization · no prompt tuning · no M27 decision
 changes · no `.run` artifacts committed.
 
