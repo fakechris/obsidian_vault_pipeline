@@ -3,7 +3,8 @@
 > Companion to [`docs/stage-m29-mainline-return-audit.md`](./stage-m29-mainline-return-audit.md).
 > Compares **product capability**, not CLI names. "Covered" means a real human gets the same
 > product value, by whatever command/storage the Rust trunk chooses.
-> Snapshot: branch `codex/rust-migration` @ M28 (HEAD `a7fd390`), 2026-06-08.
+> Snapshot: branch `codex/rust-migration` @ M31 (HEAD `754011e`), 2026-06-10.
+> M30/M31 deltas marked **(M31)**.
 >
 > Supersedes the reader-trunk-era view of [`docs/legacy-alignment.md`](./legacy-alignment.md),
 > which was written from the pre-pivot M7–M13 canonical-store roadmap and predates M14–M28.
@@ -24,20 +25,20 @@
 ### 1. Daily capture / ingest
 | Legacy capability | Rust today | Status |
 |---|---|---|
-| Pinboard fetch + landing (`pinboard-processor`, L1) | none | missing-P0 |
-| Clippings / Reader web-clipper intake (L0) | none | missing-P0 |
-| Raw Markdown inbox intake | `MarkdownInboxSource` / `InboxScanSource` (read a file) | partial |
+| Pinboard fetch + landing (`pinboard-processor`, L1) | **(M31)** `pinboard-sync` + `daily --pinboard-*`: trait-gated adapter, fixture/export always, live behind `pinboard-live` feature, URL dedup, ledger | covered |
+| Clippings / Reader web-clipper intake (L0) | **(M31)** `intake` sweep: Clippings/00-Capture/02-Pinboard → 01-Raw, normalize, flag thin/broken | covered |
+| Raw Markdown inbox intake | **(M31)** raw scan + hash dedup in `daily` plan; manual drops indexed as queued | covered |
 | GitHub repo intake (`auto_github_processor`) | none | missing-P1 |
 | Web-page / article intake (`auto_article_processor` intake path) | `interpret-article` reads one file; no inbox watch/normalize/lifecycle | partial |
-| Global URL dedup across active staging set (`source_dedup`) | none | missing-P0 |
+| Global URL dedup across active staging set (`source_dedup`) | **(M31)** URL + content-sha256 dedup at intake; duplicates parked, ledger-recorded | covered |
 
 ### 2. Source lifecycle & vault file movement
 | Legacy capability | Rust today | Status |
 |---|---|---|
-| 5-stage staging set L0–L4 (`Clippings`→`01-Raw`→`02-Processing`→`03-Processed/YYYY-MM`) | none | missing-P0 |
+| 5-stage staging set L0–L4 (`Clippings`→`01-Raw`→`02-Processing`→`03-Processed/YYYY-MM`) | **(M31)** capture→raw→processed/duplicates moves (collision-suffixed, never delete/overwrite, write-logged) | covered (no 02-Processing stage — direct raw→processed) |
 | `VaultLayout` (~25 typed vault paths) | `vault_layout.rs` exists (value type) | partial |
 | Image/attachment download + rewrite (`image_downloader`) | none | missing-P1 |
-| File move/lock/archive primitives | `VaultFsPlanApplier` writes notes; no lifecycle move/lock | partial |
+| File move/lock/archive primitives | **(M31)** `safe_move`/`write_new` (never overwrite) + `RunLock` single-instance guard | covered |
 | Frontmatter repair / normalize (`repair_*`, `note_type_normalize`) | sinks own schema (write-correct-first) | redesigned / deferred |
 
 ### 3. Article / paper / clipping handling
@@ -78,7 +79,7 @@
 | FTS search surface (`page_fts`) | lexical `query search`, no FTS index | partial |
 | Atlas / Topics / Map / Graph reader surfaces | none (graph viz intentionally out) | dropped/deferred |
 | Ops dashboards (candidates, contradictions, signals, actions, pulse, audit) | none | needs-decision |
-| Article-level review console (NEW) | M26 AB dashboard + **M28 Crystal Console** (static HTML over `.run`) | redesigned (net-new) |
+| Article-level review console (NEW) | **(M31)** Rust `ovp-console` over PRODUCT state (`.ovp/console`): attention/runs/sources/packs/crystal, bilingual; M28 `.run` console superseded as product surface | redesigned (net-new) |
 
 ### 7. Automation / autopilot / daemon / scheduled
 | Legacy capability | Rust today | Status |
@@ -100,11 +101,11 @@
 ### 9. State stores / knowledge.db / indexes / audit
 | Legacy capability | Rust today | Status |
 |---|---|---|
-| `knowledge.db` SQLite (pages_index, FTS5, page_links, embeddings, audit_events, truth_projections, ops_state) | **none — no SQLite anywhere** | missing-P0 / needs-decision |
+| `knowledge.db` SQLite (pages_index, FTS5, page_links, embeddings, audit_events, truth_projections, ops_state) | **(M31) decided**: JSON projection `ovp-index` (rebuildable, queryable via `find`); SQLite consciously deferred until query pain proves it; no embeddings/FTS | redesigned (decision made) |
 | Schema migration discipline (additive/recompute/breaking, v9) | n/a | deferred |
 | Canonical store persistence | `CanonicalFsStoreApplier` (fs records, demoted) | partial |
-| Durable run ledger / transactions (`txn.py`, `60-Logs/transactions`) | `EventLog` **in-memory only** | missing-P0 |
-| Audit-event log | `Event` in-memory; crystal ledger append-only on disk | partial |
+| Durable run ledger / transactions (`txn.py`, `60-Logs/transactions`) | **(M30/M31)** append-only `.ovp/*.jsonl` ledgers + per-run reports + `pipeline.jsonl` write log with ordering proofs (demoted manifest path still uses in-memory `EventLog`) | covered (blessed path) |
+| Audit-event log | **(M31)** every product write logged to `60-Logs/pipeline.jsonl` (`event_type`, legacy-compatible) BEFORE its success record | covered (blessed path) |
 | `ops_state` projection | none | missing-P1 |
 
 ### 10. Integration surfaces
@@ -112,8 +113,8 @@
 |---|---|---|
 | MCP server (`mcp.py`) | none | needs-decision |
 | GitHub enrichment | none | missing-P1 |
-| Pinboard | none | missing-P0 (see §1) |
-| Browser/Reader clipper | none | missing-P0 (see §1) |
+| Pinboard | **(M31)** covered (see §1) | covered |
+| Browser/Reader clipper | **(M31)** clipper lands in `Clippings/`; intake sweeps it | covered |
 | KnowledgeMem | `ovp-eval` comparator only (above trunk, gate-fenced) — reference-only | redesigned (eval, not product) |
 | Export artifact (`ovp-export`) | none | deferred |
 
@@ -121,13 +122,13 @@
 
 | Status | Count (capability rows) |
 |---|---|
-| covered | 4 |
-| partial | 14 |
-| redesigned (net-new or different) | 8 |
-| missing-P0 | 8 |
+| covered | 14 |
+| partial | 11 |
+| redesigned (net-new or different) | 10 |
+| missing-P0 | 0 |
 | missing-P1 | 11 |
 | dropped | 3 |
 | deferred | 8 |
-| needs-decision | 5 |
+| needs-decision | 3 |
 
-**P0 set (blocks a usable daily Rust workflow on the real vault):** real intake (Pinboard/Clippings/inbox watch + normalize + URL dedup), source lifecycle file movement (staging set L0–L4), absorb→evergreen as a *blessed* path, a *persistent* read index + durable run ledger/audit (replace in-memory `EventLog`), and the `knowledge.db`-equivalent projection decision.
+**(M31) The M29 P0 set is closed**: intake (clippings + pinboard + URL/content dedup), lifecycle file movement, the blessed daily write path (reader/crystal as output surface), the durable run ledger/audit, and the read-index decision (JSON projection) are all shipped on the blessed path. The legacy "absorb→evergreen" P0 is resolved by redesign: the reader/crystal trunk is the blessed enrichment path; eager evergreen/canonical stays demoted. Remaining gaps are P1 (Reuse surfaces, doctor/ops projections, web UI/MCP decisions, daemon) plus real-vault dogfood time — see `stage-m31-mainline-capability-closure.md`.
