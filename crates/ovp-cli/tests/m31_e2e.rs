@@ -304,7 +304,7 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     assert!(stdout.contains("blocked (3 failures)"), "{stdout}");
     assert!(stdout.contains("done: 0 processed, 0 failed"), "{stdout}");
     let console = std::fs::read_to_string(vault.join(".ovp/console/index.html")).unwrap();
-    assert!(console.contains("被拦截"), "blocked pill on console");
+    assert!(console.contains("失败暂停"), "blocked pill on console");
     assert!(console.contains("--retry-blocked"), "operator action hint on console");
 
     // The blocked source is still findable with its failure context.

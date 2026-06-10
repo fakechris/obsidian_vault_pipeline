@@ -44,8 +44,10 @@ pub struct DailyRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack_dir: Option<String>,
     /// Where the lifecycle phase moved the source after success
-    /// (`50-Inbox/03-Processed/<YYYY-MM>/…`). Absent when the move was
-    /// disabled or failed (warning surfaced in the run report).
+    /// (`50-Inbox/03-Processed/<YYYY-MM>/…`). The LEDGER copy of a record is
+    /// always `None` — the record is made durable BEFORE the move so a crash
+    /// can never orphan a source; the run-report copy carries the actual
+    /// destination (and the index reads it from there).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
     #[serde(default)]

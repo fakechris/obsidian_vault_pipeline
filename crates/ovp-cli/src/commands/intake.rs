@@ -19,6 +19,11 @@ pub struct IntakeArgs {
 
 pub fn run(args: IntakeArgs) -> Result<(), CliError> {
     let layout = VaultLayout::new();
+    let _lock = if args.dry_run {
+        None
+    } else {
+        Some(ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?)
+    };
     let done = succeeded_hashes(
         &read_daily_ledger(&args.vault_root.join(layout.daily_ledger())).map_err(CliError::Io)?,
     );

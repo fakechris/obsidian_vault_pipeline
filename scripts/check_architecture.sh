@@ -143,7 +143,7 @@ fi
 # trunk + VaultLayout, but never the demoted M7–M13 modules (referents,
 # concept_registry, canonical, moc, knowledge_index, evergreen, transforms).
 check "daily product crates do not import the demoted substrate" \
-    'ovp_domain::(referents|concept_registry|canonical|moc|knowledge_index|evergreen|transforms)' \
+    'ovp_domain::(referents|concept_registry|canonical|moc|knowledge_index|evergreen|transforms|sinks)|EvergreenSink|ArticleVaultPlanSink|PaperVaultPlanSink|EvergreenConceptWriter|ConceptResolver|ConceptRegistry|CanonicalConcept|MocBuilder|KnowledgeIndexBuilder' \
     "crates/ovp-intake/src" \
     "crates/ovp-daily/src" \
     "crates/ovp-index/src" \

@@ -34,11 +34,17 @@ pub fn build_index(
 ) -> Result<IndexModel, String> {
     let layout = VaultLayout::new();
 
-    let mut sources = build_sources(vault_root, &layout)?;
+    // Reports first: they carry the run rows AND the only durable record of
+    // where the lifecycle phase moved each processed source (the ledger copy
+    // is written before the move, deliberately).
+    let reports = read_reports(vault_root, &layout)?;
+    let runs = runs_from_reports(vault_root, &reports);
+    let moved = moved_map(&reports);
+
+    let mut sources = build_sources(vault_root, &layout, &moved)?;
     let packs = build_packs(vault_root, &layout, &sources)?;
     enrich_titles_from_packs(&mut sources, &packs);
     let claims = build_claims(vault_root, &layout)?;
-    let runs = build_runs(vault_root, &layout)?;
 
     let totals = Totals {
         sources: sources.len(),
@@ -101,7 +107,12 @@ fn count(rows: &[SourceRow], status: SourceStatus) -> usize {
 }
 
 /// One row per content hash, folded across both ledgers + a raw-inbox scan.
-fn build_sources(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<SourceRow>, String> {
+/// `moved` is the report-derived processed-source destination map.
+fn build_sources(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    moved: &HashMap<String, String>,
+) -> Result<Vec<SourceRow>, String> {
     let daily = read_daily_ledger(&vault_root.join(layout.daily_ledger()))?;
     let intake = read_intake_ledger(&vault_root.join(layout.intake_ledger()))?;
 
@@ -115,6 +126,14 @@ fn build_sources(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<SourceRo
             IntakeAction::NeedsContent => SourceStatus::NeedsContent,
             IntakeAction::Unparseable => SourceStatus::Unparseable,
         };
+        // Precedence: a later Duplicate record for the same hash means another
+        // COPY was parked — it must not mask the canonical copy still queued
+        // in 01-Raw.
+        if status == SourceStatus::Duplicate
+            && rows.get(&rec.sha256).is_some_and(|r| r.status == SourceStatus::Queued)
+        {
+            continue;
+        }
         rows.insert(rec.sha256.clone(), SourceRow {
             sha256: rec.sha256.clone(),
             status,
@@ -150,9 +169,13 @@ fn build_sources(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<SourceRo
         match rec.status {
             RunStatus::Succeeded => {
                 entry.status = SourceStatus::Processed;
-                entry.rel_path = rec
-                    .moved_to
-                    .clone()
+                // The processed location comes from the run report (the ledger
+                // record is durable BEFORE the lifecycle move, so its own
+                // moved_to is None by design).
+                entry.rel_path = moved
+                    .get(&rec.source_sha256)
+                    .cloned()
+                    .or_else(|| rec.moved_to.clone())
                     .or_else(|| Some(rec.source_path.clone()));
                 entry.pack_dir = rec.pack_dir.clone();
                 entry.last_reason = None;
@@ -208,12 +231,97 @@ fn build_sources(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<SourceRo
         }
     }
 
-    let mut out: Vec<SourceRow> = rows.into_values().collect();
+    // Ghost cleanup: ledgers are append-only and hash-keyed, so a file fixed
+    // IN PLACE (enriched needs-content note, repaired frontmatter, edited
+    // failed source) gets a NEW hash and a new row — the OLD hash's row would
+    // otherwise sit in the attention feed forever, pointing at bytes that no
+    // longer exist. A non-Processed row survives only while its recorded file
+    // still exists with the recorded content. (Processed rows are history,
+    // not work items, and their packs are the evidence — they stay.)
+    let mut out: Vec<SourceRow> = rows
+        .into_values()
+        .filter(|row| {
+            if row.status == SourceStatus::Processed {
+                return true;
+            }
+            let Some(rel) = row.rel_path.as_deref() else { return true };
+            match std::fs::read(vault_root.join(rel)) {
+                Ok(bytes) => hex_sha256(&bytes) == row.sha256,
+                Err(_) => false,
+            }
+        })
+        .collect();
     out.sort_by(|a, b| {
         (a.status, a.title.as_deref().unwrap_or(""), a.sha256.as_str())
             .cmp(&(b.status, b.title.as_deref().unwrap_or(""), b.sha256.as_str()))
     });
     Ok(out)
+}
+
+/// All run reports, ordered oldest → newest. Collision-suffixed same-run-id
+/// files (`<run_id> -2.json`) sort AFTER their base by (date, stem, seq) —
+/// plain filename order would put `" -2"` before `".json"` and corrupt
+/// "latest run".
+fn read_reports(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<(String, RunReport)>, String> {
+    let dir = vault_root.join(layout.reports_dir());
+    let mut reports = Vec::new();
+    if !dir.is_dir() {
+        return Ok(reports);
+    }
+    for entry in std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))? {
+        let path = entry.map_err(|e| format!("reading {}: {e}", dir.display()))?.path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let report: RunReport =
+            serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        reports.push((rel_to(vault_root, &path), report));
+    }
+    reports.sort_by_key(|(file, report)| {
+        let stem = file.rsplit('/').next().unwrap_or(file).trim_end_matches(".json");
+        let (base, seq) = match stem.rsplit_once(" -") {
+            Some((b, n)) if n.bytes().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
+                (b.to_string(), n.parse::<u32>().unwrap_or(0))
+            }
+            _ => (stem.to_string(), 1),
+        };
+        (report.date.clone(), base, seq)
+    });
+    Ok(reports)
+}
+
+fn runs_from_reports(_vault_root: &Path, reports: &[(String, RunReport)]) -> Vec<RunRow> {
+    reports
+        .iter()
+        .map(|(file, report)| RunRow {
+            run_id: report.run_id.clone(),
+            date: report.date.clone(),
+            report_file: file.clone(),
+            succeeded: report.reader.succeeded,
+            failed: report.reader.failed,
+            skipped: report.reader.skipped,
+            blocked: report.reader.blocked,
+            ingested: report.intake.as_ref().map(|i| i.ingested).unwrap_or(0),
+            pinboard_new: report.pinboard.as_ref().map(|p| p.new_notes).unwrap_or(0),
+            lifecycle_warnings: report.lifecycle_warnings.len(),
+        })
+        .collect()
+}
+
+/// sha256 → processed destination, folded oldest → newest so the latest
+/// report wins.
+fn moved_map(reports: &[(String, RunReport)]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (_, report) in reports {
+        for rec in &report.records {
+            if let Some(to) = &rec.moved_to {
+                map.insert(rec.source_sha256.clone(), to.clone());
+            }
+        }
+    }
+    map
 }
 
 #[derive(Deserialize)]
@@ -226,6 +334,8 @@ struct RunStatusFile {
     cards: usize,
     #[serde(default)]
     json_repaired: bool,
+    #[serde(default)]
+    parse_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -267,6 +377,12 @@ fn build_packs(
                 .map_err(|e| format!("reading {}: {e}", status_path.display()))?,
         )
         .map_err(|e| format!("parsing {}: {e}", status_path.display()))?;
+        // A failed attempt also leaves a pack dir (audit artifacts + the
+        // fail-loud "pack written" semantics). Only card-bearing packs are
+        // PRODUCT; the failure itself is on the source row, not here.
+        if status.parse_error.is_some() || status.cards == 0 {
+            continue;
+        }
         let cards: Vec<CardFile> = std::fs::read_to_string(dir.join("cards.json"))
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -356,40 +472,6 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
 /// Stringify a serde snake_case enum without hand-maintaining a mapping.
 fn enum_str<T: serde::Serialize>(v: &T) -> Option<String> {
     serde_json::to_value(v).ok().and_then(|j| j.as_str().map(String::from))
-}
-
-fn build_runs(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<RunRow>, String> {
-    let dir = vault_root.join(layout.reports_dir());
-    let mut runs = Vec::new();
-    if !dir.is_dir() {
-        return Ok(runs);
-    }
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .map_err(|e| format!("reading {}: {e}", dir.display()))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
-    files.sort();
-    for path in files {
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("reading {}: {e}", path.display()))?;
-        let report: RunReport =
-            serde_json::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
-        runs.push(RunRow {
-            run_id: report.run_id.clone(),
-            date: report.date.clone(),
-            report_file: rel_to(vault_root, &path),
-            succeeded: report.reader.succeeded,
-            failed: report.reader.failed,
-            skipped: report.reader.skipped,
-            blocked: report.reader.blocked,
-            ingested: report.intake.as_ref().map(|i| i.ingested).unwrap_or(0),
-            pinboard_new: report.pinboard.as_ref().map(|p| p.new_notes).unwrap_or(0),
-            lifecycle_warnings: report.lifecycle_warnings.len(),
-        });
-    }
-    Ok(runs)
 }
 
 fn collect_markdown(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {

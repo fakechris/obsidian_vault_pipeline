@@ -221,6 +221,41 @@ fn max_sources_caps_a_run_loudly() {
 }
 
 #[test]
+fn lifecycle_move_failure_is_a_warning_with_the_record_already_durable() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write_vault_with_inbox(root, &[("alpha", BODY)]);
+    // Make the processed dir IMPOSSIBLE to create: a file where the month dir's
+    // parent must go.
+    std::fs::write(root.join("50-Inbox/03-Processed"), "a file, not a dir").unwrap();
+
+    let work = plan_daily(&root.join("50-Inbox/01-Raw"), root, &[], false).unwrap();
+    let card_reply = format!(
+        r#"{{"cards":[{{"title":"t","content":"A chunk is structurally neutral.","cited_unit_ids":["{}"]}}]}}"#,
+        accepted_unit_id()
+    );
+    let mut factory = factory_for(vec![units_reply(), "{}".into(), card_reply]);
+    let report = run_daily(&cfg(root), &work, &mut factory).unwrap();
+
+    // The run is a SUCCESS — the pack is the product; the move is a warning.
+    assert_eq!(report.failed(), 0);
+    assert_eq!(report.lifecycle_warnings.len(), 1, "{:?}", report.lifecycle_warnings);
+    assert!(report.lifecycle_warnings[0].contains("lifecycle move failed"));
+    assert_eq!(report.processed[0].moved_to, None);
+    assert!(root.join("50-Inbox/01-Raw/alpha.md").exists(), "source left in place");
+
+    // The ledger record was durable BEFORE the move attempt.
+    let ledger = read_daily_ledger(&root.join(".ovp/daily-runs.jsonl")).unwrap();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].status, RunStatus::Succeeded);
+
+    // And the next plan dedup-skips the leftover file.
+    let work2 = plan_daily(&root.join("50-Inbox/01-Raw"), root, &ledger, false).unwrap();
+    assert!(work2.todo.is_empty());
+    assert_eq!(work2.skipped.len(), 1);
+}
+
+#[test]
 fn lifecycle_move_can_be_disabled() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

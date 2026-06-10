@@ -49,6 +49,14 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     let ledger_path = args.vault_root.join(layout.daily_ledger());
     let intake_cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id.clone());
 
+    // One mutating run at a time (cron + manual overlap would double-spend
+    // LLM calls and race the lifecycle moves). Dry runs read only.
+    let _lock = if args.dry_run {
+        None
+    } else {
+        Some(ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?)
+    };
+
     let mut report = RunReport::new(&args.run_id, &args.date);
     println!("daily [{}]: vault {}", args.date, args.vault_root.display());
 
@@ -65,19 +73,22 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     }
 
     // Phase 2 — intake sweep (capture dirs → 01-Raw).
+    let mut dry_run_pending_ingest = 0usize;
     if !args.no_intake {
         let done = succeeded_hashes(&read_daily_ledger(&ledger_path).map_err(CliError::Io)?);
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
         println!(
-            "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}",
+            "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}{}",
             sweep.ingested.len(), sweep.duplicates.len(), sweep.needs_content.len(),
             sweep.unparseable.len(),
             if sweep.already_flagged > 0 {
                 format!(" ({} previously flagged)", sweep.already_flagged)
             } else {
                 String::new()
-            }
+            },
+            if args.dry_run { " — dry-run, nothing moved" } else { "" },
         );
+        dry_run_pending_ingest = if args.dry_run { sweep.ingested.len() } else { 0 };
         report.intake = Some((&sweep).into());
     }
 
@@ -96,6 +107,12 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     if args.dry_run {
         for item in &work.todo {
             println!("  would process: {} ({})", item.rel, &item.sha256[..8]);
+        }
+        if dry_run_pending_ingest > 0 {
+            println!(
+                "  note: {dry_run_pending_ingest} capture(s) above would ALSO be ingested into \
+                 01-Raw and then planned on a real run (dry-run intake moves nothing)"
+            );
         }
         println!("  dry-run: nothing written.");
         return Ok(());
@@ -145,10 +162,11 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         );
     }
 
-    // Phase 5 — durable run report, then read model + console refresh.
+    // Phase 5 — durable run report FIRST (so the rebuilt index includes this
+    // run), then read model + console refresh. The report does NOT claim the
+    // refresh happened — index/console paths are printed, not recorded, since
+    // they are written after it.
     report.set_reader(planned, &daily);
-    report.index_file = Some(layout.index_file().to_string());
-    report.console_file = Some(format!("{}/index.html", layout.console_dir()));
     let report_rel =
         ovp_daily::write_run_report(&args.vault_root, &report).map_err(CliError::Io)?;
 
@@ -165,9 +183,32 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     println!("  index: {index_rel} · console: {console_rel}");
 
     if failed > 0 {
-        return Err(CliError::Gate(format!(
-            "daily: {failed} source(s) failed (recorded in the ledger; they will be retried next run)"
-        )));
+        // Honest retry guidance: a 3rd failure means the source is now
+        // BLOCKED, not silently retried.
+        let prior: std::collections::HashMap<&str, usize> =
+            work.todo.iter().map(|i| (i.sha256.as_str(), i.prior_failures)).collect();
+        let newly_blocked = daily
+            .processed
+            .iter()
+            .filter(|r| r.status == RunStatus::Failed)
+            .filter(|r| {
+                prior.get(r.source_sha256.as_str()).copied().unwrap_or(0) + 1
+                    >= ovp_daily::MAX_FAILURES_BEFORE_BLOCKED
+            })
+            .count();
+        let retryable = failed - newly_blocked;
+        let mut msg = format!("daily: {failed} source(s) failed (recorded in the ledger");
+        if retryable > 0 {
+            msg.push_str(&format!("; {retryable} will be retried next run"));
+        }
+        if newly_blocked > 0 {
+            msg.push_str(&format!(
+                "; {newly_blocked} now BLOCKED after {} failures — review and rerun with --retry-blocked",
+                ovp_daily::MAX_FAILURES_BEFORE_BLOCKED
+            ));
+        }
+        msg.push(')');
+        return Err(CliError::Gate(msg));
     }
     Ok(())
 }

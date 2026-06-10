@@ -33,6 +33,11 @@ pub fn run(args: PinboardSyncArgs) -> Result<(), CliError> {
         }
     };
 
+    let _lock = if args.dry_run {
+        None
+    } else {
+        Some(ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?)
+    };
     let cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id);
     let outcome = sync_pinboard(&cfg, fetch.as_mut(), args.dry_run).map_err(CliError::Io)?;
 

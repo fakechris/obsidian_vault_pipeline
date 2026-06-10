@@ -202,9 +202,16 @@ where
     };
 
     for item in batch {
-        let record = process_one(cfg, &layout, item, make_client, &log_path,
-            &mut daily_report.lifecycle_warnings)?;
+        let mut record = process_one(cfg, &layout, item, make_client, &log_path)?;
+        // The Succeeded record is made durable BEFORE the lifecycle move: a
+        // crash after this point leaves (at worst) a processed file lingering
+        // in 01-Raw, which the dedup gate skips forever — never an orphaned
+        // source in 03-Processed without a record.
         append_daily_record(&ledger_path, &record)?;
+        if record.status == RunStatus::Succeeded && cfg.lifecycle_move {
+            record.moved_to = move_to_processed(cfg, &layout, item, &log_path,
+                &mut daily_report.lifecycle_warnings);
+        }
         daily_report.processed.push(record);
     }
     Ok(daily_report)
@@ -215,18 +222,18 @@ where
 /// record.
 ///
 /// Audit ordering on success (M31): pack written → `reader_pack_write` event →
-/// lifecycle move → `source_processed_move` event → (caller appends the
-/// Succeeded ledger record). A success record therefore always implies its
-/// write-log entries exist. A crash inside this window re-runs the source next
-/// time (idempotent pack overwrite) — the log may gain a duplicate event, but
-/// can never MISS one for a recorded success.
+/// (caller appends the Succeeded ledger record) → lifecycle move →
+/// `source_processed_move` event. A success record therefore always implies
+/// its pack-write log entry exists, and the source can never be moved out of
+/// the queue without a durable record: a crash at any point either re-runs the
+/// source (still in 01-Raw, no record) or leaves a recorded success whose file
+/// lingers in 01-Raw (dedup-skipped forever, harmless).
 fn process_one<F>(
     cfg: &DailyConfig,
     layout: &VaultLayout,
     item: &DailyItem,
     make_client: &mut F,
     log_path: &Path,
-    lifecycle_warnings: &mut Vec<String>,
 ) -> Result<DailyRunRecord, String>
 where
     F: FnMut() -> Result<Box<dyn ModelClient>, String>,
@@ -244,6 +251,22 @@ where
         cards,
         reason,
     };
+
+    // Guard the plan→run window: a reader batch can take minutes, and the
+    // vault is live (Obsidian, sync). If the bytes changed since planning,
+    // the plan-time sha256 would mis-attribute the pack and poison dedup —
+    // record a retryable failure instead (the next plan picks up the new hash).
+    match std::fs::read(&item.path) {
+        Ok(bytes) if hex_sha256(&bytes) != item.sha256 => {
+            return Ok(record(RunStatus::Failed, None, None, 0, 0,
+                Some("source changed since plan (sha256 mismatch); requeued under its new content".into())));
+        }
+        Err(e) => {
+            return Ok(record(RunStatus::Failed, None, None, 0, 0,
+                Some(format!("source unreadable since plan: {e}"))))
+        }
+        Ok(_) => {}
+    }
 
     let source = match read_source_from_path(&item.path) {
         Ok(s) => s,
@@ -283,16 +306,12 @@ where
                     date: cfg.date.clone(),
                     run_id: cfg.run_id.clone(),
                 })?;
-                // Lifecycle: move the source out of the raw queue.
-                let moved_to = if cfg.lifecycle_move {
-                    move_to_processed(cfg, layout, item, log_path, lifecycle_warnings)?
-                } else {
-                    None
-                };
+                // The lifecycle move happens in run_daily AFTER this record is
+                // durable; `moved_to` is populated on the report copy only.
                 Ok(record(
                     RunStatus::Succeeded,
                     Some(pack_rel),
-                    moved_to,
+                    None,
                     run.pack.n_accepted_units,
                     run.pack.n_cards,
                     None,
@@ -308,16 +327,18 @@ where
 }
 
 /// Move a succeeded source `01-Raw → 03-Processed/<YYYY-MM>/` (keeping its
-/// filename), logging the move. A move failure is a WARNING, not a run
-/// failure: the pack is the product, and the dedup gate keeps the leftover
-/// raw file harmless on future scans.
+/// filename), logging the move. Runs strictly AFTER the Succeeded ledger
+/// record is durable, so every problem here — the move itself or its log
+/// append — is a WARNING, never a run failure or an abort: the pack is the
+/// product, the record exists, and a leftover raw file is dedup-skipped on
+/// every future scan.
 fn move_to_processed(
     cfg: &DailyConfig,
     layout: &VaultLayout,
     item: &DailyItem,
     log_path: &Path,
     warnings: &mut Vec<String>,
-) -> Result<Option<String>, String> {
+) -> Option<String> {
     let month = cfg.date.get(..7).unwrap_or(&cfg.date);
     let file_name = item
         .path
@@ -328,18 +349,20 @@ fn move_to_processed(
     match safe_move(&item.path, &target) {
         Ok(actual) => {
             let to_rel = rel_to(&cfg.vault_root, &actual);
-            append_pipeline_event(log_path, &PipelineLogEvent {
+            if let Err(e) = append_pipeline_event(log_path, &PipelineLogEvent {
                 event_type: "source_processed_move".into(),
                 target: to_rel.clone(),
                 reason: format!("ovp-next daily: source {} processed", item.rel),
                 date: cfg.date.clone(),
                 run_id: cfg.run_id.clone(),
-            })?;
-            Ok(Some(to_rel))
+            }) {
+                warnings.push(format!("move of {} succeeded but logging it failed: {e}", item.rel));
+            }
+            Some(to_rel)
         }
         Err(e) => {
             warnings.push(format!("lifecycle move failed for {}: {e}", item.rel));
-            Ok(None)
+            None
         }
     }
 }

@@ -140,6 +140,45 @@ pub fn rel_to(root: &Path, p: &Path) -> String {
         .unwrap_or_else(|_| p.to_string_lossy().into_owned())
 }
 
+/// Single-writer guard for the vault's product state. Two overlapping runs
+/// (cron + manual) would double-spend LLM calls, append duplicate records,
+/// and race `safe_move`'s check-then-rename — so every mutating command takes
+/// this lock first. `create_new` is atomic; the file holds the PID for
+/// diagnosis. Released on drop; a crash leaves a stale lock that the error
+/// message tells the operator how to clear.
+#[derive(Debug)]
+pub struct RunLock {
+    path: PathBuf,
+}
+
+impl RunLock {
+    pub fn acquire(vault_root: &Path) -> Result<Self, String> {
+        let path = vault_root.join(".ovp/run.lock");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", std::process::id());
+                Ok(Self { path })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
+                "another OVP run appears to be in progress (lock file {}); \
+                 if no run is active, delete the lock file and retry",
+                path.display()
+            )),
+            Err(e) => Err(format!("acquiring {}: {e}", path.display())),
+        }
+    }
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +216,16 @@ mod tests {
         let q = write_new(&p, "b").unwrap();
         assert_eq!(q, dir.path().join("note -2.md"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
+    }
+
+    #[test]
+    fn run_lock_excludes_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = RunLock::acquire(dir.path()).expect("first lock");
+        let err = RunLock::acquire(dir.path()).expect_err("second lock must fail");
+        assert!(err.contains("run.lock"), "got: {err}");
+        drop(lock);
+        let _again = RunLock::acquire(dir.path()).expect("released on drop");
     }
 
     #[test]

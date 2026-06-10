@@ -50,7 +50,7 @@ fn header(model: &IndexModel) -> String {
         queued = stat(t.queued, "queued", "待读"),
         processed = stat(t.processed, "processed", "已处理"),
         failed = stat(t.failed, "failed", "失败"),
-        blocked = stat(t.blocked, "blocked", "被拦截"),
+        blocked = stat(t.blocked, "blocked", "失败暂停"),
         needs = stat(t.needs_content, "needs content", "待补内容"),
         packs = stat(t.packs, "reader packs", "阅读包"),
         durable = stat(t.claims_durable, "durable claims", "持久化主张"),
@@ -129,7 +129,7 @@ fn runs_section(runs: &[RunRow]) -> String {
         String::new()
     };
     format!(
-        "<section><h2>Runs <span class=\"zh\">运行</span></h2>\n<table><thead><tr><th>date</th><th>run · 报告</th><th>ok</th><th>failed · 失败</th><th>skipped</th><th>ingested · 摄入</th><th>pinboard</th></tr></thead><tbody>\n{rows}</tbody></table>{note}\n</section>\n"
+        "<section><h2>Runs <span class=\"zh\">运行</span></h2>\n<table><thead><tr><th>date · 日期</th><th>run · 运行报告</th><th>ok · 成功</th><th>failed · 失败</th><th>skipped · 跳过</th><th>ingested · 摄入</th><th>pinboard · 书签</th></tr></thead><tbody>\n{rows}</tbody></table>{note}\n</section>\n"
     )
 }
 
@@ -141,8 +141,11 @@ fn sources_section(sources: &[SourceRow]) -> String {
     for s in sources {
         let (en, zh, class) = source_status_label(s.status);
         let title = esc(s.title.as_deref().unwrap_or("(untitled)"));
+        // External URLs get attribute-escaping ONLY — percent-encoding `?`/`#`
+        // (href() is for vault-relative paths) would rewrite the query string
+        // and break the provenance link.
         let title_cell = match (&s.url, &s.rel_path) {
-            (Some(u), _) => format!("<a href=\"{}\">{title}</a>", href(u)),
+            (Some(u), _) => format!("<a href=\"{}\">{title}</a>", esc(u)),
             (None, _) => title.clone(),
         };
         let pack_cell = s
@@ -157,7 +160,7 @@ fn sources_section(sources: &[SourceRow]) -> String {
         ));
     }
     format!(
-        "<section><h2>Sources <span class=\"zh\">来源</span></h2>\n<table><thead><tr><th>status · 状态</th><th>title · 标题</th><th>date</th><th>location · 位置</th><th>provenance · 溯源</th></tr></thead><tbody>\n{rows}</tbody></table>\n</section>\n"
+        "<section><h2>Sources <span class=\"zh\">来源</span></h2>\n<table><thead><tr><th>status · 状态</th><th>title · 标题</th><th>date · 日期</th><th>location · 位置</th><th>provenance · 溯源</th></tr></thead><tbody>\n{rows}</tbody></table>\n</section>\n"
     )
 }
 
@@ -209,7 +212,11 @@ fn crystal_section(model: &IndexModel) -> String {
                 "<li class=\"lv-ok\"><span class=\"pill s-ok\">durable <i class=\"zh\">持久化</i></span> <b>{}</b> <span class=\"meta\">{}{}</span><div class=\"reason\">{}</div></li>\n",
                 esc(&c.claim_id),
                 esc(c.theme.as_deref().unwrap_or("")),
-                if c.sources.is_empty() { String::new() } else { format!(" · {} sources · 来源", c.sources.len()) },
+                if c.sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {n} sources · {n} 个来源", n = c.sources.len())
+                },
                 esc(&c.claim),
             ));
         }
@@ -403,13 +410,16 @@ mod tests {
         // Bilingual section headers + status pills.
         for needle in [
             "OVP Console", "工作台", "Attention", "待处理", "Sources", "来源",
-            "Reader Packs", "阅读包", "Crystal", "结晶主张", "持久化", "保留意见", "被拦截",
+            "Reader Packs", "阅读包", "Crystal", "结晶主张", "持久化", "保留意见", "失败暂停",
         ] {
             assert!(html.contains(needle), "missing {needle}");
         }
         // HTML-escaped title; percent-escaped pack link with spaces.
         assert!(html.contains("Good &lt;Article&gt; &amp; Co"));
         assert!(html.contains("40-Resources/Reader/2026-06-09_Good%20Article-aaaa1111/reader.html"));
+        // External source URLs keep their query string intact (attribute
+        // escaping only — no %3F/%23 mangling).
+        assert!(html.contains("href=\"https://e.x/good?a=1&amp;b=2\""), "external URL preserved");
         // Attention feed carries the blocked source + its reason + action hint.
         assert!(html.contains("card synthesis did not parse"));
         assert!(html.contains("--retry-blocked"));

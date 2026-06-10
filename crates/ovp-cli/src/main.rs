@@ -288,7 +288,9 @@ enum Cmd {
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M23 durable Crystal write: run the FULL pre-write gate and, only if
     /// durable-eligible, append `Durable` claims to an append-only store +
-    /// render `crystal.md`. Refuses on any gate gap. No vault write / graph.
+    /// render `crystal.md`. Refuses on any gate gap. No graph. For the M31
+    /// product surface pass `--store <vault>/.ovp/crystal` (the console and
+    /// `find` read ONLY that location); the `.run` default is diagnostic.
     CrystalWrite {
         #[arg(long)]
         candidate: PathBuf,

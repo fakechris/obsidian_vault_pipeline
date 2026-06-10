@@ -38,7 +38,7 @@ pub(crate) fn source_status_label(s: SourceStatus) -> (&'static str, &'static st
         SourceStatus::Processed => ("processed", "已处理", "ok"),
         SourceStatus::Queued => ("queued", "待读", "info"),
         SourceStatus::Failed => ("failed", "失败", "bad"),
-        SourceStatus::Blocked => ("blocked", "被拦截", "bad"),
+        SourceStatus::Blocked => ("blocked", "失败暂停", "bad"),
         SourceStatus::NeedsContent => ("needs content", "待补内容", "warn"),
         SourceStatus::Unparseable => ("unparseable", "无法解析", "warn"),
         SourceStatus::Duplicate => ("duplicate", "重复", "dim"),

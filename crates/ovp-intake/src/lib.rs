@@ -34,5 +34,5 @@ pub use pinboard::LivePinboardFetch;
 pub use sweep::{sweep_intake, IntakeConfig, SweepOutcome, MIN_READER_BODY_CHARS};
 pub use vaultops::{
     append_jsonl, append_pipeline_event, hex_sha256, read_jsonl, rel_to, safe_move, write_new,
-    PipelineLogEvent,
+    PipelineLogEvent, RunLock,
 };
