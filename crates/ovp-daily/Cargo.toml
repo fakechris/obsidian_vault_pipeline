@@ -1,0 +1,18 @@
+[package]
+name = "ovp-daily"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next M30 daily loop: inbox scan + content-hash dedup + reader-trunk run per new source, with a durable append-only run ledger and OVP_RULES-mandated write log"
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-llm = { path = "../ovp-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

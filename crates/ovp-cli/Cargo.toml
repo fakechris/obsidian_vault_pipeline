@@ -34,6 +34,7 @@ ovp-rag = { path = "../ovp-rag" }
 ovp-auto = { path = "../ovp-auto" }
 ovp-review = { path = "../ovp-review" }
 ovp-eval = { path = "../ovp-eval" }
+ovp-daily = { path = "../ovp-daily" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -6,6 +6,7 @@ pub mod copy_probe;
 pub mod crystal_lint;
 pub mod crystal_review;
 pub mod crystal_write;
+pub mod daily;
 pub mod defaults;
 pub mod extract_referents;
 pub mod extract_units;

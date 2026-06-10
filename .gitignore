@@ -30,3 +30,4 @@ Cargo.lock.bak
 # Raw/live cassette captures must be curated before becoming fixtures
 **/cassettes/raw/
 **/cassettes/live/
+.gstack/

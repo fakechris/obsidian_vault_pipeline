@@ -121,7 +121,8 @@ eval_bad=$(grep -lE '^ovp-eval *=' \
     crates/ovp-llm/Cargo.toml \
     crates/ovp-query/Cargo.toml \
     crates/ovp-lint/Cargo.toml \
-    crates/ovp-auto/Cargo.toml 2>/dev/null || true)
+    crates/ovp-auto/Cargo.toml \
+    crates/ovp-daily/Cargo.toml 2>/dev/null || true)
 if [[ -n "$eval_bad" ]]; then
     echo "FAIL — these trunk crates depend on ovp-eval:"
     echo "$eval_bad"

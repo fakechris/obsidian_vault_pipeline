@@ -128,6 +128,39 @@ enum Cmd {
         #[arg(long)]
         cards_json: Option<PathBuf>,
     },
+    /// M30 blessed daily loop: scan the vault inbox (`50-Inbox/01-Raw`), skip
+    /// content already processed (sha256 vs the durable `.ovp/daily-runs.jsonl`
+    /// ledger), run the grounded reader trunk per NEW source, and write each
+    /// reader pack into the vault (`40-Resources/Reader/<date>_<title>-<hash8>/`).
+    /// Every attempt is appended to the ledger; every pack write is logged to
+    /// `60-Logs/pipeline.jsonl` (the OVP_RULES contract). Per-source failures
+    /// are recorded + retried next run; exit is non-zero if any source failed.
+    Daily {
+        /// The real vault root (e.g. ~/Documents/ovp-vault).
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Inbox to sweep. Default: `<vault-root>/50-Inbox/01-Raw`.
+        #[arg(long)]
+        inbox: Option<PathBuf>,
+        /// Cassette root for model calls. Default: `<vault-root>/.ovp/cassettes/daily`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// ISO-8601 date stamped on records + pack dirs. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        /// Run id stamped on ledger records. Defaults to `daily-<date>`.
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Plan only: print what would be processed; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Max sources processed in one run (LLM-loop rate limit per
+        /// OVP_RULES). 0 = unlimited.
+        #[arg(long, default_value_t = 10)]
+        max_sources: usize,
+    },
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
     /// model call, NO durable write. See `docs/stage-m22-crystal-gates.md`.
@@ -543,6 +576,26 @@ fn main() -> ExitCode {
                 render_only,
                 units_json,
                 cards_json,
+            })
+        }
+        Cmd::Daily { vault_root, inbox, cache_dir, client, date, run_id, dry_run, max_sources } => {
+            use commands::client::ClientKind;
+            use commands::daily::DailyArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            let date = date.unwrap_or_else(today_iso);
+            let run_id = run_id.unwrap_or_else(|| format!("daily-{date}"));
+            commands::daily::run(DailyArgs {
+                vault_root,
+                inbox,
+                cache_dir,
+                client_kind,
+                date,
+                run_id,
+                dry_run,
+                max_sources,
             })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {

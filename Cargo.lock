@@ -719,6 +719,7 @@ dependencies = [
  "ovp-app",
  "ovp-auto",
  "ovp-core",
+ "ovp-daily",
  "ovp-domain",
  "ovp-eval",
  "ovp-lint",
@@ -740,6 +741,18 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "ovp-daily"
+version = "0.1.0"
+dependencies = [
+ "ovp-domain",
+ "ovp-llm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

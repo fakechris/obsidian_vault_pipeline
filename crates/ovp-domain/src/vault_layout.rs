@@ -94,6 +94,44 @@ impl VaultLayout {
     pub fn knowledge_index(&self) -> VaultPath {
         VaultPath::new("60-Logs/knowledge-index.json")
     }
+
+    /// Daily reader-pack product directory (vault-relative, M30):
+    /// `40-Resources/Reader/<YYYY-MM-DD>_<title>-<hash8>/`. Date-stamped per
+    /// `OVP_RULES.md`; the content-hash suffix makes the directory stable per
+    /// source content (same bytes → same dir) and collision-free across
+    /// same-title sources. Returned as a `String` because it is a directory,
+    /// not a note path.
+    pub fn reader_pack_dir(&self, date: &str, title: &str, content_hash8: &str) -> String {
+        format!(
+            "40-Resources/Reader/{date}_{title}-{content_hash8}",
+            title = truncate_chars(&sanitize_filename(title), 60),
+        )
+    }
+
+    /// Durable daily-run ledger (vault-relative, append-only JSONL). The
+    /// authoritative dedup + audit state for the `daily` loop; lives under
+    /// `.ovp/` with the rest of the vault's operational state.
+    pub fn daily_ledger(&self) -> &'static str {
+        ".ovp/daily-runs.jsonl"
+    }
+
+    /// The vault's write-operation log mandated by `OVP_RULES.md` ("Always log
+    /// every write operation to 60-Logs/pipeline.jsonl").
+    pub fn pipeline_log(&self) -> &'static str {
+        "60-Logs/pipeline.jsonl"
+    }
+
+    /// Cassette root for the daily loop's model calls (vault-local, never in
+    /// the repo).
+    pub fn daily_cassette_dir(&self) -> &'static str {
+        ".ovp/cassettes/daily"
+    }
+}
+
+/// Truncate to at most `max` characters on a char boundary (titles can be
+/// long and multi-byte; a byte slice could panic mid-codepoint).
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect::<String>().trim_end().to_string()
 }
 
 /// Extract the `YYYY-MM` prefix from a `YYYY-MM-DD` date string. Falls
@@ -173,5 +211,31 @@ mod tests {
         let l = VaultLayout::new();
         assert_eq!(l.inbox_raw_dir(), "50-Inbox/01-Raw");
         assert_eq!(l.processed_dir("2026-05"), "50-Inbox/03-Processed/2026-05");
+    }
+
+    #[test]
+    fn reader_pack_dir_is_dated_sanitized_and_hash_suffixed() {
+        let l = VaultLayout::new();
+        assert_eq!(
+            l.reader_pack_dir("2026-06-09", "Agent Memory: A/B", "a1b2c3d4"),
+            "40-Resources/Reader/2026-06-09_Agent Memory  A B-a1b2c3d4"
+        );
+    }
+
+    #[test]
+    fn reader_pack_dir_truncates_long_titles_on_char_boundary() {
+        let l = VaultLayout::new();
+        let long = "深".repeat(80);
+        let dir = l.reader_pack_dir("2026-06-09", &long, "a1b2c3d4");
+        assert!(dir.contains(&"深".repeat(60)));
+        assert!(!dir.contains(&"深".repeat(61)));
+    }
+
+    #[test]
+    fn daily_state_paths() {
+        let l = VaultLayout::new();
+        assert_eq!(l.daily_ledger(), ".ovp/daily-runs.jsonl");
+        assert_eq!(l.pipeline_log(), "60-Logs/pipeline.jsonl");
+        assert_eq!(l.daily_cassette_dir(), ".ovp/cassettes/daily");
     }
 }
