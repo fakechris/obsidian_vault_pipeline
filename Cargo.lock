@@ -718,10 +718,13 @@ dependencies = [
  "clap",
  "ovp-app",
  "ovp-auto",
+ "ovp-console",
  "ovp-core",
  "ovp-daily",
  "ovp-domain",
  "ovp-eval",
+ "ovp-index",
+ "ovp-intake",
  "ovp-lint",
  "ovp-llm",
  "ovp-query",
@@ -731,6 +734,16 @@ dependencies = [
  "ovp-stores",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-console"
+version = "0.1.0"
+dependencies = [
+ "ovp-domain",
+ "ovp-index",
+ "tempfile",
 ]
 
 [[package]]
@@ -748,10 +761,10 @@ name = "ovp-daily"
 version = "0.1.0"
 dependencies = [
  "ovp-domain",
+ "ovp-intake",
  "ovp-llm",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
 ]
 
@@ -782,6 +795,30 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-index"
+version = "0.1.0"
+dependencies = [
+ "ovp-daily",
+ "ovp-domain",
+ "ovp-intake",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-intake"
+version = "0.1.0"
+dependencies = [
+ "ovp-domain",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
 ]
 

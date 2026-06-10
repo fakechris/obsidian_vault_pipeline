@@ -1,22 +1,22 @@
-//! Durable, append-only state for the daily loop — two JSONL files in the vault:
+//! The durable daily-run ledger (`.ovp/daily-runs.jsonl`): one record per
+//! source the loop ATTEMPTED. The authoritative dedup state (`succeeded`
+//! hashes are skipped on later runs; failures are retried, and 3+ failures
+//! block a source pending operator review) and the audit trail of what ran
+//! when.
 //!
-//! - `.ovp/daily-runs.jsonl` ([`DailyRunRecord`]): one record per source the loop
-//!   ATTEMPTED. The authoritative dedup state (`succeeded` hashes are skipped on
-//!   later runs; failures are retried) and the audit trail of what ran when.
-//! - `60-Logs/pipeline.jsonl` ([`PipelineLogEvent`]): the vault-wide write log
-//!   mandated by `OVP_RULES.md` — event type, target path, reason.
-//!
-//! Both are append-only: records are never rewritten or deleted (same contract
-//! as the Crystal store ledger). A malformed ledger line is a hard error — this
-//! is authoritative state, and silently skipping a line could re-run (and
-//! re-bill) every source it covered.
+//! Append-only, like the Crystal store ledger; a malformed line is a hard
+//! error. JSONL primitives + the OVP_RULES write-log event live in
+//! `ovp_intake::vaultops` (shared with the capture boundary) and are
+//! re-exported here for compatibility.
 
-use std::collections::HashSet;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use ovp_intake::vaultops::{append_jsonl, read_jsonl};
+
+pub use ovp_intake::vaultops::{append_pipeline_event, PipelineLogEvent};
 
 /// Schema tag stamped on every daily-run record.
 pub const DAILY_SCHEMA: &str = "ovp.daily/v1";
@@ -43,6 +43,11 @@ pub struct DailyRunRecord {
     /// Vault-relative reader-pack directory (present on success).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack_dir: Option<String>,
+    /// Where the lifecycle phase moved the source after success
+    /// (`50-Inbox/03-Processed/<YYYY-MM>/…`). Absent when the move was
+    /// disabled or failed (warning surfaced in the run report).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
     #[serde(default)]
     pub units: usize,
     #[serde(default)]
@@ -52,45 +57,15 @@ pub struct DailyRunRecord {
     pub reason: Option<String>,
 }
 
-/// One `OVP_RULES.md` write-log event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PipelineLogEvent {
-    pub event: String,
-    pub target: String,
-    pub reason: String,
-    pub date: String,
-    pub run_id: String,
-}
-
 /// Read the full daily ledger. A missing file is an empty ledger (first run);
 /// a malformed line is a hard error.
 pub fn read_daily_ledger(path: &Path) -> Result<Vec<DailyRunRecord>, String> {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("reading ledger {}: {e}", path.display())),
-    };
-    let mut records = Vec::new();
-    for (i, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let rec: DailyRunRecord = serde_json::from_str(line).map_err(|e| {
-            format!("ledger {} line {}: malformed record: {e}", path.display(), i + 1)
-        })?;
-        records.push(rec);
-    }
-    Ok(records)
+    read_jsonl(path)
 }
 
 /// Append one record to the daily ledger (creating parent dirs on first use).
 pub fn append_daily_record(path: &Path, rec: &DailyRunRecord) -> Result<(), String> {
     append_jsonl(path, rec)
-}
-
-/// Append one write-log event to `60-Logs/pipeline.jsonl`.
-pub fn append_pipeline_event(path: &Path, event: &PipelineLogEvent) -> Result<(), String> {
-    append_jsonl(path, event)
 }
 
 /// The content hashes the dedup gate skips: every source that has EVER
@@ -103,19 +78,14 @@ pub fn succeeded_hashes(records: &[DailyRunRecord]) -> HashSet<String> {
         .collect()
 }
 
-fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+/// Failure count per content hash (for the retry cap: 3+ failures without a
+/// success ⇒ blocked pending operator review).
+pub fn failed_counts(records: &[DailyRunRecord]) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for r in records.iter().filter(|r| r.status == RunStatus::Failed) {
+        *counts.entry(r.source_sha256.clone()).or_insert(0) += 1;
     }
-    let line = serde_json::to_string(value).map_err(|e| format!("serializing record: {e}"))?;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| format!("opening {}: {e}", path.display()))?;
-    writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
-    f.flush().map_err(|e| format!("flushing {}: {e}", path.display()))
+    counts
 }
 
 #[cfg(test)]
@@ -131,6 +101,7 @@ mod tests {
             source_sha256: hash.into(),
             status,
             pack_dir: Some("40-Resources/Reader/x".into()),
+            moved_to: None,
             units: 3,
             cards: 2,
             reason: None,
@@ -156,6 +127,17 @@ mod tests {
     }
 
     #[test]
+    fn m30_records_without_moved_to_still_parse() {
+        // Backwards compatibility: ovp.daily/v1 records written before the
+        // lifecycle phase existed have no `moved_to` key.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daily-runs.jsonl");
+        std::fs::write(&path, "{\"schema\":\"ovp.daily/v1\",\"run_id\":\"r\",\"date\":\"2026-06-09\",\"source_path\":\"a.md\",\"source_sha256\":\"h\",\"status\":\"succeeded\",\"units\":1,\"cards\":1}\n").unwrap();
+        let got = read_daily_ledger(&path).unwrap();
+        assert_eq!(got[0].moved_to, None);
+    }
+
+    #[test]
     fn malformed_line_is_a_hard_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("daily-runs.jsonl");
@@ -165,10 +147,15 @@ mod tests {
     }
 
     #[test]
-    fn only_succeeded_hashes_dedup() {
-        let records = vec![rec("h1", RunStatus::Succeeded), rec("h2", RunStatus::Failed)];
+    fn only_succeeded_hashes_dedup_and_failures_count() {
+        let records = vec![
+            rec("h1", RunStatus::Succeeded),
+            rec("h2", RunStatus::Failed),
+            rec("h2", RunStatus::Failed),
+        ];
         let skip = succeeded_hashes(&records);
         assert!(skip.contains("h1"));
         assert!(!skip.contains("h2"), "failed sources must stay retryable");
+        assert_eq!(failed_counts(&records).get("h2"), Some(&2));
     }
 }

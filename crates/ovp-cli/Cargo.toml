@@ -20,6 +20,10 @@ default = []
 # HTTP is the M8 comparator's purpose, distinct from the gated LLM transport;
 # neither is exercised by a normal offline run.
 anthropic = ["ovp-llm/anthropic"]
+# Forwards to ovp-intake/pinboard-live: the live Pinboard HTTP fetch for
+# `pinboard-sync --live` / `daily --pinboard-live`. OFF by default — the
+# offline build only ever reads export files.
+pinboard-live = ["ovp-intake/pinboard-live"]
 
 [dependencies]
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
@@ -35,6 +39,12 @@ ovp-auto = { path = "../ovp-auto" }
 ovp-review = { path = "../ovp-review" }
 ovp-eval = { path = "../ovp-eval" }
 ovp-daily = { path = "../ovp-daily" }
+ovp-intake = { path = "../ovp-intake" }
+ovp-index = { path = "../ovp-index" }
+ovp-console = { path = "../ovp-console" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

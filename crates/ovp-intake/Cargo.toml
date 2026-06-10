@@ -1,0 +1,25 @@
+[package]
+name = "ovp-intake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next M31 capture/intake: clippings + pinboard capture, filename normalization, URL/content dedup, non-destructive lifecycle moves, append-only intake ledgers"
+
+[features]
+default = []
+# Enables the live Pinboard HTTP client (pulls in reqwest). The default build
+# is offline: fixture/export-file fetch only. Token comes from the
+# PINBOARD_TOKEN env var (legacy-compatible) and is never logged or persisted.
+pinboard-live = ["dep:reqwest"]
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

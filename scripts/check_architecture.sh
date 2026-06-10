@@ -122,7 +122,10 @@ eval_bad=$(grep -lE '^ovp-eval *=' \
     crates/ovp-query/Cargo.toml \
     crates/ovp-lint/Cargo.toml \
     crates/ovp-auto/Cargo.toml \
-    crates/ovp-daily/Cargo.toml 2>/dev/null || true)
+    crates/ovp-daily/Cargo.toml \
+    crates/ovp-intake/Cargo.toml \
+    crates/ovp-index/Cargo.toml \
+    crates/ovp-console/Cargo.toml 2>/dev/null || true)
 if [[ -n "$eval_bad" ]]; then
     echo "FAIL — these trunk crates depend on ovp-eval:"
     echo "$eval_bad"
@@ -135,6 +138,27 @@ fi
 # Heuristic: any file declaring `impl Transform<...> for <T>` and ALSO
 # containing `Box<dyn (.*Client|.*Store|.*Fetcher)>` is using the wrong
 # trait — must implement `EffectfulTransform` instead.
+# === M31: the daily product line must not revive the demoted substrate ===
+# ovp-intake / ovp-daily / ovp-index / ovp-console may use the reader/crystal
+# trunk + VaultLayout, but never the demoted M7–M13 modules (referents,
+# concept_registry, canonical, moc, knowledge_index, evergreen, transforms).
+check "daily product crates do not import the demoted substrate" \
+    'ovp_domain::(referents|concept_registry|canonical|moc|knowledge_index|evergreen|transforms)' \
+    "crates/ovp-intake/src" \
+    "crates/ovp-daily/src" \
+    "crates/ovp-index/src" \
+    "crates/ovp-console/src"
+
+# === M31: pinboard HTTP stays feature-gated (no ambient network dep) ===
+echo -n "ok    [pinboard live transport is feature-gated] ... "
+intake_toml="crates/ovp-intake/Cargo.toml"
+if grep -E '^reqwest *=' "$intake_toml" | grep -vq 'optional = true'; then
+    echo "FAIL — reqwest must be optional in $intake_toml"
+    fail=1
+else
+    echo "passed"
+fi
+
 echo -n "ok    [no Transform impl holds an effect client] ... "
 violators=""
 # `\bimpl Transform<` so we don't match EffectfulTransform.

@@ -35,11 +35,13 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Parse a pipeline manifest and print its nodes, edges, and topological order.
     Graph {
         #[arg(long)]
         manifest: PathBuf,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Execute a pipeline with the v0.1 in-tree fake filters; dump plan + events to disk.
     Run {
         #[arg(long)]
@@ -54,6 +56,7 @@ enum Cmd {
         #[arg(long, default_value = ".run")]
         out: PathBuf,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Apply a serialized WritePlan to a filesystem vault. Reads the
     /// plan JSON, runs VaultFsPlanApplier, prints the report.
     ApplyPlan {
@@ -68,6 +71,7 @@ enum Cmd {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14a.4 (experimental): copy-only probe — does the model verbatim-copy a
     /// substring from rendered spans? Diagnostic; writes no vault.
     CopyProbe {
@@ -82,6 +86,7 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         max_spans: usize,
     },
+    /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14a (experimental): extract grounded knowledge **Units** from a source
     /// and write a review pack to `--out`. Hand-harness — does NOT go through a
     /// manifest / GraphAssembler / RunCycle, writes no vault. Default client is
@@ -106,6 +111,7 @@ enum Cmd {
         #[arg(long)]
         critic_cache_dir: Option<PathBuf>,
     },
+    /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M17 Grounded Reader Trunk: Source → Grounded Units → Critic Repair → Reader
     /// Cards → a human-usable reader pack (collapsible HTML + flat MD, provenance
     /// intact). Fail-loud on truth-layer errors. NOT canonical/evergreen/RAG/Referent.
@@ -128,13 +134,15 @@ enum Cmd {
         #[arg(long)]
         cards_json: Option<PathBuf>,
     },
-    /// M30 blessed daily loop: scan the vault inbox (`50-Inbox/01-Raw`), skip
-    /// content already processed (sha256 vs the durable `.ovp/daily-runs.jsonl`
-    /// ledger), run the grounded reader trunk per NEW source, and write each
-    /// reader pack into the vault (`40-Resources/Reader/<date>_<title>-<hash8>/`).
-    /// Every attempt is appended to the ledger; every pack write is logged to
-    /// `60-Logs/pipeline.jsonl` (the OVP_RULES contract). Per-source failures
-    /// are recorded + retried next run; exit is non-zero if any source failed.
+    /// PRODUCT — the blessed daily operator loop (M30/M31): optional pinboard
+    /// capture → intake sweep (Clippings/00-Capture/02-Pinboard → 01-Raw with
+    /// URL/content dedup) → grounded reader trunk per NEW source → lifecycle
+    /// move to 03-Processed → durable run report (`.ovp/reports/`) → read
+    /// model + console refresh. Every attempt lands in the append-only
+    /// ledger; every write is logged to `60-Logs/pipeline.jsonl` BEFORE its
+    /// success record (OVP_RULES). Per-source failures are retried next run;
+    /// 3 failures block a source pending review. Exit is non-zero if any
+    /// source failed.
     Daily {
         /// The real vault root (e.g. ~/Documents/ovp-vault).
         #[arg(long)]
@@ -160,7 +168,106 @@ enum Cmd {
         /// OVP_RULES). 0 = unlimited.
         #[arg(long, default_value_t = 10)]
         max_sources: usize,
+        /// Skip the capture/intake sweep phase.
+        #[arg(long)]
+        no_intake: bool,
+        /// Pinboard capture from a JSON export file (offline).
+        #[arg(long)]
+        pinboard_fixture: Option<PathBuf>,
+        /// Pinboard capture from the live API (requires `--features
+        /// pinboard-live` build + PINBOARD_TOKEN).
+        #[arg(long)]
+        pinboard_live: bool,
+        /// Leave succeeded sources in 01-Raw instead of moving them to
+        /// 03-Processed.
+        #[arg(long)]
+        no_lifecycle: bool,
+        /// Also retry sources blocked by the 3-failure cap.
+        #[arg(long)]
+        retry_blocked: bool,
     },
+    /// PRODUCT — run the capture/intake sweep alone (no model calls):
+    /// normalize + dedup Clippings/00-Capture/02-Pinboard into 01-Raw, with
+    /// duplicates parked, thin files flagged needs-content, and every
+    /// disposition appended to `.ovp/intake.jsonl`.
+    Intake {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// ISO-8601 date stamp. Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        /// Run id for the ledger records. Defaults to `intake-<date>`.
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Plan only: print dispositions; move/write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// PRODUCT — materialize Pinboard bookmarks as notes in
+    /// `50-Inbox/02-Pinboard/` (URL-deduped against `.ovp/pinboard-sync.jsonl`
+    /// and the intake ledger). Offline via `--fixture <export.json>`; live API
+    /// via `--live` (needs a `--features pinboard-live` build + PINBOARD_TOKEN
+    /// env var — never stored, never logged).
+    PinboardSync {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Pinboard JSON export file (posts/all format).
+        #[arg(long)]
+        fixture: Option<PathBuf>,
+        /// Call the live Pinboard API.
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// PRODUCT — rebuild the persistent read model
+    /// (`.ovp/index/index.json`) from the ledgers, reader packs, crystal
+    /// store, and run reports. Always a FULL deterministic rebuild
+    /// (rebuilding IS the migration story); the projection is never
+    /// authoritative.
+    Index {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// PRODUCT — query the read model: list/search/filter sources, reader
+    /// packs, crystal claims, and runs. `ovp-next find --vault-root V chunks`
+    /// or `--kind sources --status blocked`. Run `index` (or `daily`) first.
+    Find {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Case-insensitive substring over titles/URLs/paths/cards/claims.
+        term: Option<String>,
+        /// Restrict to one kind: sources|packs|claims|runs.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Status filter (queued|processed|failed|blocked|needs_content|
+        /// unparseable|duplicate|durable|caveated|…).
+        #[arg(long)]
+        status: Option<String>,
+        /// Date prefix filter (2026 / 2026-06 / 2026-06-09).
+        #[arg(long)]
+        date: Option<String>,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// PRODUCT — refresh the bilingual product console
+    /// (`.ovp/console/index.html`) from product state: attention feed, runs,
+    /// sources, reader packs, crystal claims. Also persists the read model so
+    /// console and `find` agree.
+    Console {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
     /// model call, NO durable write. See `docs/stage-m22-crystal-gates.md`.
@@ -178,6 +285,7 @@ enum Cmd {
         #[arg(long)]
         strength: Option<PathBuf>,
     },
+    /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M23 durable Crystal write: run the FULL pre-write gate and, only if
     /// durable-eligible, append `Durable` claims to an append-only store +
     /// render `crystal.md`. Refuses on any gate gap. No vault write / graph.
@@ -202,6 +310,7 @@ enum Cmd {
         #[arg(long)]
         not_claiming: Option<String>,
     },
+    /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M25 Crystal Review Workbench: apply human review decisions over caveated
     /// claims into a REVISED structured candidate. The decision authors a
     /// candidate; it does NOT decide durability — the revised candidate must
@@ -215,6 +324,7 @@ enum Cmd {
         #[arg(long, default_value = ".run/m25/revised-candidate.json")]
         out: PathBuf,
     },
+    /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
     /// Hand-harness — NOT canonicalization, no manifest / GraphAssembler /
@@ -231,6 +341,7 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Interpret a single article from disk through the v1 article pipeline.
     /// Default client is replay-only against `--cache-dir`; no network.
     InterpretArticle {
@@ -261,6 +372,7 @@ enum Cmd {
         #[arg(long)]
         concept_registry: Option<PathBuf>,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Run one full operational cycle (L4): assemble + run the manifest, apply
     /// the plan (vault + canonical), then rebuild the MOC and knowledge index.
     /// Idempotent on re-run. Default client is replay-only; no network.
@@ -291,6 +403,7 @@ enum Cmd {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Read-only query (L5) over the canonical store + knowledge index.
     /// `list` / `get <slug>` / `search <term>` / `backlinks <slug>` / `stats`.
     Query {
@@ -306,6 +419,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Read-only health checks (L5) over the canonical store + vault + index.
     /// Reports findings; never fixes. Exits non-zero at/above `--max-severity`.
     Lint {
@@ -320,6 +434,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Automation sweep (L6): discover markdown under `--inbox-root`, run the L4
     /// run-cycle on each input, then the L5 lint gate; print an operational
     /// report. Exits non-zero if any cycle failed or lint failed at
@@ -355,6 +470,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
     /// evergreen notes. Scores the query, ranks, and prints a bounded context.
     /// Read-only — never assembles, runs, applies, or writes.
@@ -373,6 +489,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Run one full cycle (L4) on a single input and produce a deterministic,
     /// human-inspectable review pack: processor chain, run report, apply
     /// summary, files written, canonical summary, L5 query stats + lint, and
@@ -422,6 +539,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// External E2E comparator (M8): run ONE input through both the ovp-next
     /// pipeline (via the review harness) and the external Nowledge Mem HTTP
     /// service, normalize both, and write a deterministic comparison pack
@@ -578,7 +696,21 @@ fn main() -> ExitCode {
                 cards_json,
             })
         }
-        Cmd::Daily { vault_root, inbox, cache_dir, client, date, run_id, dry_run, max_sources } => {
+        Cmd::Daily {
+            vault_root,
+            inbox,
+            cache_dir,
+            client,
+            date,
+            run_id,
+            dry_run,
+            max_sources,
+            no_intake,
+            pinboard_fixture,
+            pinboard_live,
+            no_lifecycle,
+            retry_blocked,
+        } => {
             use commands::client::ClientKind;
             use commands::daily::DailyArgs;
             let client_kind = match client {
@@ -596,7 +728,47 @@ fn main() -> ExitCode {
                 run_id,
                 dry_run,
                 max_sources,
+                no_intake,
+                pinboard_fixture,
+                pinboard_live,
+                no_lifecycle,
+                retry_blocked,
             })
+        }
+        Cmd::Intake { vault_root, date, run_id, dry_run } => {
+            let date = date.unwrap_or_else(today_iso);
+            let run_id = run_id.unwrap_or_else(|| format!("intake-{date}"));
+            commands::intake::run(commands::intake::IntakeArgs { vault_root, date, run_id, dry_run })
+        }
+        Cmd::PinboardSync { vault_root, fixture, live, date, run_id, dry_run } => {
+            let date = date.unwrap_or_else(today_iso);
+            let run_id = run_id.unwrap_or_else(|| format!("pinboard-{date}"));
+            commands::pinboard_sync::run(commands::pinboard_sync::PinboardSyncArgs {
+                vault_root,
+                fixture,
+                live,
+                date,
+                run_id,
+                dry_run,
+            })
+        }
+        Cmd::Index { vault_root, date } => {
+            let date = date.unwrap_or_else(today_iso);
+            commands::index_cmd::run_index(commands::index_cmd::IndexArgs { vault_root, date })
+        }
+        Cmd::Find { vault_root, term, kind, status, date, json } => {
+            commands::index_cmd::run_find(commands::index_cmd::FindArgs {
+                vault_root,
+                term,
+                kind,
+                status,
+                date,
+                json,
+            })
+        }
+        Cmd::Console { vault_root, date } => {
+            let date = date.unwrap_or_else(today_iso);
+            commands::console_cmd::run(commands::console_cmd::ConsoleArgs { vault_root, date })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;

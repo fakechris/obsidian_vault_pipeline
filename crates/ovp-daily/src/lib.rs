@@ -1,18 +1,27 @@
-//! M30 — the daily loop: the first blessed Rust workflow on the real vault.
+//! The daily loop — the blessed Rust workflow on the real vault (M30, extended
+//! by M31 into the full operator cycle):
 //!
-//! `plan_daily` scans the inbox (`50-Inbox/01-Raw` by convention), hashes every
-//! markdown source, and splits new work from already-succeeded sources using the
-//! durable ledger. `run_daily` drives each new source through the validated
-//! reader trunk (`ovp_domain::reader::pipeline`), writes the pack to the
-//! vault-local product surface (`40-Resources/Reader/`), and appends one
-//! [`ledger::DailyRunRecord`] per attempt plus one `pipeline.jsonl` write-log
-//! event per pack write (the `OVP_RULES.md` contract).
+//! ```text
+//! capture sweep (ovp-intake) ─▶ 50-Inbox/01-Raw ─▶ plan (hash dedup + retry cap)
+//!   ─▶ reader trunk per source ─▶ 40-Resources/Reader/<pack>/
+//!   ─▶ lifecycle move ─▶ 50-Inbox/03-Processed/<YYYY-MM>/
+//!   ─▶ durable run report (.ovp/reports/) ─▶ index + console refresh (CLI)
+//! ```
 //!
-//! Hard lines: no canonical store / evergreen / MOC / Referent / RAG; no file
-//! moves out of the inbox (dedup is by content hash, so leaving sources in
-//! place is idempotent); per-source failures are recorded and the loop
-//! continues — only configuration errors (unreadable ledger, client factory)
-//! abort the run.
+//! `plan_daily` scans the inbox, hashes every markdown source, and splits new
+//! work from already-succeeded content (durable ledger) and from sources
+//! blocked by the retry cap. `run_daily` drives each planned source through
+//! the validated reader trunk, with the M31 audit-ordering invariant: the
+//! OVP_RULES write-log event is appended BEFORE the success ledger record, so
+//! a `succeeded` record can never exist without its write-log entry.
+//!
+//! Failure semantics: a per-source failure is recorded `Failed` and retried on
+//! the next run; after [`MAX_FAILURES_BEFORE_BLOCKED`] failures (without a
+//! success) the source is *blocked* — skipped and surfaced for operator review
+//! — until `retry_blocked` is set. Only configuration errors (unreadable
+//! ledger, client factory) abort a run.
+//!
+//! Hard lines: no canonical store / evergreen / MOC / Referent / RAG.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,15 +29,25 @@ use std::path::{Path, PathBuf};
 use ovp_domain::reader::{run_reader_pipeline, ReaderPipelineError};
 use ovp_domain::units::read_source_from_path;
 use ovp_domain::VaultLayout;
+use ovp_intake::vaultops::{hex_sha256, rel_to, safe_move};
 use ovp_llm::ModelClient;
-use sha2::{Digest, Sha256};
 
 pub mod ledger;
+pub mod report;
 
 pub use ledger::{
-    append_daily_record, append_pipeline_event, read_daily_ledger, succeeded_hashes,
-    DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,
+    append_daily_record, append_pipeline_event, failed_counts, read_daily_ledger,
+    succeeded_hashes, DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,
 };
+pub use report::{
+    write_run_report, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
+    RUN_REPORT_SCHEMA,
+};
+
+/// After this many failures without a success a source stops being retried
+/// automatically (operator review; `--retry-blocked` overrides). Mirrors the
+/// "stop after 3 attempts and reassess" working rule.
+pub const MAX_FAILURES_BEFORE_BLOCKED: usize = 3;
 
 /// Configuration for one daily run.
 #[derive(Debug, Clone)]
@@ -37,9 +56,13 @@ pub struct DailyConfig {
     /// ISO-8601 date stamped on records and pack directories.
     pub date: String,
     pub run_id: String,
-    /// Hard cap on sources processed in one run (`OVP_RULES.md`: never call a
-    /// paid LLM API in a loop without a rate limit). `0` = unlimited.
+    /// Hard cap on sources processed in one run (OVP_RULES: never call a paid
+    /// LLM API in a loop without a rate limit). `0` = unlimited.
     pub max_sources: usize,
+    /// Move a source to `50-Inbox/03-Processed/<YYYY-MM>/` after it succeeds.
+    pub lifecycle_move: bool,
+    /// Also plan sources blocked by the retry cap.
+    pub retry_blocked: bool,
 }
 
 /// One scanned inbox source.
@@ -50,13 +73,18 @@ pub struct DailyItem {
     pub rel: String,
     /// sha256 (hex) of the file bytes.
     pub sha256: String,
+    /// Failures recorded so far for this content (drives the retry cap).
+    pub prior_failures: usize,
 }
 
-/// The dedup-gated work plan: `todo` is new content, `skipped` already succeeded.
+/// The dedup-gated work plan.
 #[derive(Debug, Default)]
 pub struct DailyWork {
     pub todo: Vec<DailyItem>,
+    /// Already succeeded (or duplicate content within this scan).
     pub skipped: Vec<DailyItem>,
+    /// Hit the retry cap; needs operator review (or `retry_blocked`).
+    pub blocked: Vec<DailyItem>,
 }
 
 /// Outcome of one daily run.
@@ -66,8 +94,12 @@ pub struct DailyReport {
     /// the ledger before they appear here).
     pub processed: Vec<DailyRunRecord>,
     pub skipped: usize,
+    pub blocked: usize,
     /// Sources left unprocessed because `max_sources` capped the run.
     pub capped: usize,
+    /// Non-fatal lifecycle problems (e.g. processed-move failed; the pack is
+    /// still the product, so the run record stays `Succeeded`).
+    pub lifecycle_warnings: Vec<String>,
 }
 
 impl DailyReport {
@@ -108,28 +140,30 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-/// Scan the inbox and split sources into new work vs already-succeeded content
-/// (by sha256 against the ledger). Identical content appearing under two file
-/// names is planned once — the duplicate is reported as skipped.
+/// Scan the inbox and split sources into new work, skipped (succeeded /
+/// duplicate content), and blocked (retry cap). `retry_blocked` folds blocked
+/// sources back into `todo`.
 pub fn plan_daily(
     inbox: &Path,
     vault_root: &Path,
     records: &[DailyRunRecord],
+    retry_blocked: bool,
 ) -> Result<DailyWork, String> {
     let done = succeeded_hashes(records);
+    let failures = failed_counts(records);
     let mut seen_this_run: HashSet<String> = HashSet::new();
     let mut work = DailyWork::default();
     for path in scan_inbox(inbox)? {
         let bytes =
             std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let sha256 = hex_sha256(&bytes);
-        let rel = path
-            .strip_prefix(vault_root)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-        let item = DailyItem { path, rel, sha256: sha256.clone() };
+        let rel = rel_to(vault_root, &path);
+        let prior_failures = failures.get(&sha256).copied().unwrap_or(0);
+        let item = DailyItem { path, rel, sha256: sha256.clone(), prior_failures };
         if done.contains(&sha256) || !seen_this_run.insert(sha256) {
             work.skipped.push(item);
+        } else if prior_failures >= MAX_FAILURES_BEFORE_BLOCKED && !retry_blocked {
+            work.blocked.push(item);
         } else {
             work.todo.push(item);
         }
@@ -159,41 +193,45 @@ where
         (&work.todo[..], 0)
     };
 
-    let mut report =
-        DailyReport { processed: Vec::new(), skipped: work.skipped.len(), capped };
+    let mut daily_report = DailyReport {
+        processed: Vec::new(),
+        skipped: work.skipped.len(),
+        blocked: work.blocked.len(),
+        capped,
+        lifecycle_warnings: Vec::new(),
+    };
 
     for item in batch {
-        let record = process_one(cfg, &layout, item, make_client)?;
+        let record = process_one(cfg, &layout, item, make_client, &log_path,
+            &mut daily_report.lifecycle_warnings)?;
         append_daily_record(&ledger_path, &record)?;
-        if let Some(pack_dir) = &record.pack_dir {
-            append_pipeline_event(
-                &log_path,
-                &PipelineLogEvent {
-                    event: "reader_pack_write".into(),
-                    target: pack_dir.clone(),
-                    reason: format!("ovp-next daily: new source {}", item.rel),
-                    date: cfg.date.clone(),
-                    run_id: cfg.run_id.clone(),
-                },
-            )?;
-        }
-        report.processed.push(record);
+        daily_report.processed.push(record);
     }
-    Ok(report)
+    Ok(daily_report)
 }
 
-/// Run the reader trunk for one source. `Err` only for a client-factory
-/// failure; every pipeline outcome (including failures) becomes a record.
+/// Run the reader trunk for one source. `Err` only for a client-factory or
+/// audit-log failure; every pipeline outcome (including failures) becomes a
+/// record.
+///
+/// Audit ordering on success (M31): pack written → `reader_pack_write` event →
+/// lifecycle move → `source_processed_move` event → (caller appends the
+/// Succeeded ledger record). A success record therefore always implies its
+/// write-log entries exist. A crash inside this window re-runs the source next
+/// time (idempotent pack overwrite) — the log may gain a duplicate event, but
+/// can never MISS one for a recorded success.
 fn process_one<F>(
     cfg: &DailyConfig,
     layout: &VaultLayout,
     item: &DailyItem,
     make_client: &mut F,
+    log_path: &Path,
+    lifecycle_warnings: &mut Vec<String>,
 ) -> Result<DailyRunRecord, String>
 where
     F: FnMut() -> Result<Box<dyn ModelClient>, String>,
 {
-    let record = |status, pack_dir, units, cards, reason| DailyRunRecord {
+    let record = |status, pack_dir, moved_to, units, cards, reason| DailyRunRecord {
         schema: DAILY_SCHEMA.into(),
         run_id: cfg.run_id.clone(),
         date: cfg.date.clone(),
@@ -201,6 +239,7 @@ where
         source_sha256: item.sha256.clone(),
         status,
         pack_dir,
+        moved_to,
         units,
         cards,
         reason,
@@ -209,7 +248,8 @@ where
     let source = match read_source_from_path(&item.path) {
         Ok(s) => s,
         Err(e) => {
-            return Ok(record(RunStatus::Failed, None, 0, 0, Some(format!("source parse: {e}"))))
+            return Ok(record(RunStatus::Failed, None, None, 0, 0,
+                Some(format!("source parse: {e}"))))
         }
     };
 
@@ -229,33 +269,79 @@ where
             Some(reason) => Ok(record(
                 RunStatus::Failed,
                 None,
+                None,
                 run.pack.n_accepted_units,
                 run.pack.n_cards,
                 Some(reason),
             )),
-            None => Ok(record(
-                RunStatus::Succeeded,
-                Some(pack_rel),
-                run.pack.n_accepted_units,
-                run.pack.n_cards,
-                None,
-            )),
+            None => {
+                // Write-log FIRST (the success record must imply it exists).
+                append_pipeline_event(log_path, &PipelineLogEvent {
+                    event_type: "reader_pack_write".into(),
+                    target: pack_rel.clone(),
+                    reason: format!("ovp-next daily: new source {}", item.rel),
+                    date: cfg.date.clone(),
+                    run_id: cfg.run_id.clone(),
+                })?;
+                // Lifecycle: move the source out of the raw queue.
+                let moved_to = if cfg.lifecycle_move {
+                    move_to_processed(cfg, layout, item, log_path, lifecycle_warnings)?
+                } else {
+                    None
+                };
+                Ok(record(
+                    RunStatus::Succeeded,
+                    Some(pack_rel),
+                    moved_to,
+                    run.pack.n_accepted_units,
+                    run.pack.n_cards,
+                    None,
+                ))
+            }
         },
         Err(e @ ReaderPipelineError::Client(_))
         | Err(e @ ReaderPipelineError::TruthLayer(_))
         | Err(e @ ReaderPipelineError::Io(_)) => {
-            Ok(record(RunStatus::Failed, None, 0, 0, Some(e.to_string())))
+            Ok(record(RunStatus::Failed, None, None, 0, 0, Some(e.to_string())))
         }
     }
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut s = String::with_capacity(64);
-    for b in digest {
-        s.push_str(&format!("{b:02x}"));
+/// Move a succeeded source `01-Raw → 03-Processed/<YYYY-MM>/` (keeping its
+/// filename), logging the move. A move failure is a WARNING, not a run
+/// failure: the pack is the product, and the dedup gate keeps the leftover
+/// raw file harmless on future scans.
+fn move_to_processed(
+    cfg: &DailyConfig,
+    layout: &VaultLayout,
+    item: &DailyItem,
+    log_path: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<Option<String>, String> {
+    let month = cfg.date.get(..7).unwrap_or(&cfg.date);
+    let file_name = item
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "source.md".into());
+    let target = cfg.vault_root.join(layout.processed_dir(month)).join(file_name);
+    match safe_move(&item.path, &target) {
+        Ok(actual) => {
+            let to_rel = rel_to(&cfg.vault_root, &actual);
+            append_pipeline_event(log_path, &PipelineLogEvent {
+                event_type: "source_processed_move".into(),
+                target: to_rel.clone(),
+                reason: format!("ovp-next daily: source {} processed", item.rel),
+                date: cfg.date.clone(),
+                run_id: cfg.run_id.clone(),
+            })?;
+            Ok(Some(to_rel))
+        }
+        Err(e) => {
+            warnings.push(format!("lifecycle move failed for {}: {e}", item.rel));
+            Ok(None)
+        }
     }
-    s
 }
 
 #[cfg(test)]
@@ -288,6 +374,22 @@ mod tests {
         assert!(scan_inbox(&dir.path().join("nope")).is_err());
     }
 
+    fn ledger_record(hash: &str, status: RunStatus) -> DailyRunRecord {
+        DailyRunRecord {
+            schema: DAILY_SCHEMA.into(),
+            run_id: "r".into(),
+            date: "2026-06-09".into(),
+            source_path: "x".into(),
+            source_sha256: hash.into(),
+            status,
+            pack_dir: None,
+            moved_to: None,
+            units: 0,
+            cards: 0,
+            reason: None,
+        }
+    }
+
     #[test]
     fn plan_skips_succeeded_and_in_run_duplicates() {
         let dir = tempfile::tempdir().unwrap();
@@ -297,24 +399,41 @@ mod tests {
         std::fs::write(inbox.join("new.md"), "fresh content").unwrap();
         std::fs::write(inbox.join("new-copy.md"), "fresh content").unwrap();
 
-        let done_hash = hex_sha256(b"already processed");
-        let records = vec![DailyRunRecord {
-            schema: DAILY_SCHEMA.into(),
-            run_id: "r".into(),
-            date: "2026-06-09".into(),
-            source_path: "50-Inbox/01-Raw/done.md".into(),
-            source_sha256: done_hash,
-            status: RunStatus::Succeeded,
-            pack_dir: None,
-            units: 0,
-            cards: 0,
-            reason: None,
-        }];
-
-        let work = plan_daily(&inbox, dir.path(), &records).unwrap();
+        let records =
+            vec![ledger_record(&hex_sha256(b"already processed"), RunStatus::Succeeded)];
+        let work = plan_daily(&inbox, dir.path(), &records, false).unwrap();
         assert_eq!(work.todo.len(), 1, "duplicate content planned once");
         assert_eq!(work.todo[0].rel, "50-Inbox/01-Raw/new-copy.md");
         assert_eq!(work.skipped.len(), 2);
+    }
+
+    #[test]
+    fn retry_cap_blocks_after_three_failures_unless_overridden() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = dir.path().join("50-Inbox/01-Raw");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("flaky.md"), "flaky content").unwrap();
+        let h = hex_sha256(b"flaky content");
+
+        let two = vec![
+            ledger_record(&h, RunStatus::Failed),
+            ledger_record(&h, RunStatus::Failed),
+        ];
+        let work = plan_daily(&inbox, dir.path(), &two, false).unwrap();
+        assert_eq!(work.todo.len(), 1, "2 failures still retried");
+        assert_eq!(work.todo[0].prior_failures, 2);
+
+        let three = vec![
+            ledger_record(&h, RunStatus::Failed),
+            ledger_record(&h, RunStatus::Failed),
+            ledger_record(&h, RunStatus::Failed),
+        ];
+        let work = plan_daily(&inbox, dir.path(), &three, false).unwrap();
+        assert!(work.todo.is_empty());
+        assert_eq!(work.blocked.len(), 1, "3 failures ⇒ blocked");
+
+        let work = plan_daily(&inbox, dir.path(), &three, true).unwrap();
+        assert_eq!(work.todo.len(), 1, "--retry-blocked folds it back in");
     }
 
     #[test]
@@ -323,7 +442,7 @@ mod tests {
         let inbox = dir.path().join("50-Inbox/01-Raw");
         std::fs::create_dir_all(&inbox).unwrap();
         std::fs::write(inbox.join("x.md"), "x").unwrap();
-        let work = plan_daily(&inbox, dir.path(), &[]).unwrap();
+        let work = plan_daily(&inbox, dir.path(), &[], false).unwrap();
         assert_eq!(work.todo[0].rel, "50-Inbox/01-Raw/x.md");
     }
 }

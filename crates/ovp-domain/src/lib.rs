@@ -63,7 +63,7 @@ pub use response::{ModelResponse, ResponseContent};
 pub use sinks::{ArticleVaultPlanSink, EvergreenSink, PaperVaultPlanSink};
 pub use source_doc::{PaperMeta, SourceDoc, SourceKind};
 pub use sources::{InboxScanSource, MarkdownInboxSource};
-pub use vault_layout::VaultLayout;
+pub use vault_layout::{sanitize_filename, truncate_chars, VaultLayout};
 pub use transforms::{
     ArticleParser, ConceptResolver, EvergreenConceptWriter, LLMInvoker, PaperParser,
     PaperPromptBuilder, PromptBuilder, RouteBySourceKind, SourceResolver, ARTICLE_PROMPT_ID,

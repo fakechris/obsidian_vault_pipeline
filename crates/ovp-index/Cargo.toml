@@ -1,16 +1,16 @@
 [package]
-name = "ovp-daily"
+name = "ovp-index"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "OVP Next daily loop (M30/M31): plan + reader-trunk run per new source with durable append-only ledger, retry cap, lifecycle move, and per-run report"
+description = "OVP Next M31 read model: a deterministic JSON projection over the product ledgers, reader packs, and the Crystal store — rebuildable, queryable, never authoritative"
 
 [dependencies]
 ovp-domain = { path = "../ovp-domain" }
+ovp-daily = { path = "../ovp-daily" }
 ovp-intake = { path = "../ovp-intake" }
-ovp-llm = { path = "../ovp-llm" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

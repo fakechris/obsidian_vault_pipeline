@@ -15,6 +15,9 @@ members = [
     "crates/ovp-review",
     "crates/ovp-eval",
     "crates/ovp-daily",
+    "crates/ovp-intake",
+    "crates/ovp-index",
+    "crates/ovp-console",
 ]
 
 [workspace.package]

@@ -89,10 +89,46 @@ impl VaultLayout {
         format!("50-Inbox/03-Processed/{month}")
     }
 
+    /// Where duplicate captures are parked (M31 intake): content/URL already
+    /// known, so the file is moved out of the capture dirs but NEVER deleted
+    /// (OVP_RULES). Month-bucketed like `processed_dir`.
+    pub fn duplicates_dir(&self, month: &str) -> String {
+        format!("50-Inbox/03-Processed/duplicates/{month}")
+    }
+
+    /// The capture directories the M31 intake sweep reads, vault-relative, in
+    /// sweep order: Obsidian Web Clipper drops into `Clippings/`; manual
+    /// captures into `50-Inbox/00-Capture`; pinboard-sync materializes into
+    /// `50-Inbox/02-Pinboard`.
+    pub fn capture_dirs(&self) -> [&'static str; 3] {
+        ["Clippings", "50-Inbox/00-Capture", "50-Inbox/02-Pinboard"]
+    }
+
+    /// Where pinboard-sync materializes bookmark notes (vault-relative).
+    pub fn pinboard_dir(&self) -> &'static str {
+        "50-Inbox/02-Pinboard"
+    }
+
+    /// Normalized raw-inbox filename for an ingested capture:
+    /// `<YYYY-MM-DD>_<title>-<hash8>.md` (date-stamped per OVP_RULES; the
+    /// content-hash suffix keeps same-title captures distinct and ties the
+    /// filename to the dedup identity).
+    pub fn normalized_source_name(&self, date: &str, title: &str, content_hash8: &str) -> String {
+        format!(
+            "{date}_{title}-{content_hash8}.md",
+            title = truncate_chars(&sanitize_filename(title), 60),
+        )
+    }
+
     /// Derived knowledge-index artifact (vault-relative). Lives under the
     /// logs tree because it is rebuildable, not authoritative.
     pub fn knowledge_index(&self) -> VaultPath {
         VaultPath::new("60-Logs/knowledge-index.json")
+    }
+
+    /// Root of the reader-pack product surface (vault-relative directory).
+    pub fn reader_root(&self) -> &'static str {
+        "40-Resources/Reader"
     }
 
     /// Daily reader-pack product directory (vault-relative, M30):
@@ -103,7 +139,8 @@ impl VaultLayout {
     /// not a note path.
     pub fn reader_pack_dir(&self, date: &str, title: &str, content_hash8: &str) -> String {
         format!(
-            "40-Resources/Reader/{date}_{title}-{content_hash8}",
+            "{root}/{date}_{title}-{content_hash8}",
+            root = self.reader_root(),
             title = truncate_chars(&sanitize_filename(title), 60),
         )
     }
@@ -126,11 +163,47 @@ impl VaultLayout {
     pub fn daily_cassette_dir(&self) -> &'static str {
         ".ovp/cassettes/daily"
     }
+
+    /// Durable intake ledger (vault-relative, append-only JSONL, M31): one
+    /// record per capture-file disposition (ingested / duplicate /
+    /// needs_content / unparseable).
+    pub fn intake_ledger(&self) -> &'static str {
+        ".ovp/intake.jsonl"
+    }
+
+    /// Durable pinboard-sync ledger (vault-relative, append-only JSONL, M31):
+    /// one record per bookmark materialized; the URL-dedup authority.
+    pub fn pinboard_ledger(&self) -> &'static str {
+        ".ovp/pinboard-sync.jsonl"
+    }
+
+    /// Per-run durable report directory (`<run_id>.json`, M31).
+    pub fn reports_dir(&self) -> &'static str {
+        ".ovp/reports"
+    }
+
+    /// The persisted read-model file the `find` command queries (M31).
+    pub fn index_file(&self) -> &'static str {
+        ".ovp/index/index.json"
+    }
+
+    /// The product console directory (static HTML over product state, M31).
+    pub fn console_dir(&self) -> &'static str {
+        ".ovp/console"
+    }
+
+    /// The vault-local durable Crystal store directory (M31 product home for
+    /// what `crystal-write --store` produces: ledger.jsonl + crystal.md +
+    /// review.json).
+    pub fn crystal_store_dir(&self) -> &'static str {
+        ".ovp/crystal"
+    }
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be
-/// long and multi-byte; a byte slice could panic mid-codepoint).
-fn truncate_chars(s: &str, max: usize) -> String {
+/// long and multi-byte; a byte slice could panic mid-codepoint). Public so
+/// intake filename normalization (M31) agrees with pack-dir naming.
+pub fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect::<String>().trim_end().to_string()
 }
 
@@ -142,8 +215,9 @@ fn year_month(date: &str) -> &str {
 
 /// Replace characters that are illegal or troublesome in vault filenames
 /// with a space, then trim. Mirrors the legacy sink behavior so existing
-/// paths are byte-identical.
-fn sanitize_filename(s: &str) -> String {
+/// paths are byte-identical. Public so intake normalization (M31) shares
+/// the exact same rules as note/pack naming.
+pub fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| {
             if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
