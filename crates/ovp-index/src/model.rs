@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const INDEX_SCHEMA: &str = "ovp.index/v1";
+pub const INDEX_SCHEMA: &str = "ovp.index/v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,6 +131,35 @@ pub struct Totals {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlockedSource {
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub fail_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_attempt: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunStats {
+    pub window_days: usize,
+    pub total_runs: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub success_rate_pct: f64,
+    pub avg_processed_per_run: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpsState {
+    pub blocked_sources: Vec<BlockedSource>,
+    pub queue_depth: usize,
+    pub run_stats: Option<RunStats>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexModel {
     pub schema: String,
     /// Date the model was built (caller-provided; keeps rebuilds deterministic).
@@ -142,4 +171,6 @@ pub struct IndexModel {
     pub packs: Vec<PackRow>,
     pub claims: Vec<ClaimRow>,
     pub runs: Vec<RunRow>,
+    #[serde(default)]
+    pub ops: OpsState,
 }

@@ -23,7 +23,7 @@ pub mod query;
 
 pub use build::{build_index, read_index, write_index};
 pub use model::{
-    ClaimRow, ClaimStatus, IndexModel, PackRow, RunRow, SourceRow, SourceStatus, Totals,
-    INDEX_SCHEMA,
+    BlockedSource, ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, RunRow, RunStats,
+    SourceRow, SourceStatus, Totals, INDEX_SCHEMA,
 };
 pub use query::{claim_status_str, run_query, source_status_str, Hit, Query, QueryKind};

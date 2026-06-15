@@ -325,7 +325,7 @@ footer{margin-top:40px;color:var(--dim);font-size:11px}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ovp_index::{ClaimRow, PackRow, RunRow, SourceRow, Totals};
+    use ovp_index::{ClaimRow, OpsState, PackRow, RunRow, SourceRow, Totals};
 
     fn model() -> IndexModel {
         IndexModel {
@@ -401,6 +401,7 @@ mod tests {
                 pinboard_new: 1,
                 lifecycle_warnings: 0,
             }],
+            ops: OpsState::default(),
         }
     }
 
@@ -443,6 +444,7 @@ mod tests {
             packs: vec![],
             claims: vec![],
             runs: vec![],
+            ops: OpsState::default(),
         };
         let html = render_console(&empty);
         assert!(html.contains("Nothing needs attention"));

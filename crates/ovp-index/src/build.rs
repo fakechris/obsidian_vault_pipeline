@@ -22,8 +22,8 @@ use ovp_intake::{read_intake_ledger, IntakeAction};
 use serde::Deserialize;
 
 use crate::model::{
-    ClaimRow, ClaimStatus, IndexModel, PackRow, RunRow, SourceRow, SourceStatus, Totals,
-    INDEX_SCHEMA,
+    BlockedSource, ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, RunRow, RunStats,
+    SourceRow, SourceStatus, Totals, INDEX_SCHEMA,
 };
 
 /// Build the full read model. `date`/`run_id` only stamp the header.
@@ -61,6 +61,8 @@ pub fn build_index(
         runs: runs.len(),
     };
 
+    let ops = build_ops_state(&sources, &runs, date);
+
     Ok(IndexModel {
         schema: INDEX_SCHEMA.into(),
         date: date.into(),
@@ -70,6 +72,7 @@ pub fn build_index(
         packs,
         claims,
         runs,
+        ops,
     })
 }
 
@@ -497,4 +500,136 @@ fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsState {
+    let blocked_sources: Vec<BlockedSource> = sources
+        .iter()
+        .filter(|s| s.status == SourceStatus::Blocked)
+        .map(|s| BlockedSource {
+            sha256: s.sha256.clone(),
+            title: s.title.clone(),
+            fail_count: s.fail_count,
+            last_reason: s.last_reason.clone(),
+            last_attempt: s.date.clone(),
+        })
+        .collect();
+
+    let queue_depth = sources.iter().filter(|s| s.status == SourceStatus::Queued).count();
+
+    let run_stats = compute_run_stats(runs, today);
+
+    OpsState {
+        blocked_sources,
+        queue_depth,
+        run_stats,
+    }
+}
+
+fn compute_run_stats(runs: &[RunRow], today: &str) -> Option<RunStats> {
+    if runs.is_empty() {
+        return None;
+    }
+
+    let window_days: usize = 30;
+    let cutoff = subtract_days(today, window_days);
+
+    let recent: Vec<&RunRow> = runs
+        .iter()
+        .filter(|r| r.date.as_str() >= cutoff.as_str())
+        .collect();
+
+    if recent.is_empty() {
+        return None;
+    }
+
+    let total_runs = recent.len();
+    let succeeded: usize = recent.iter().map(|r| r.succeeded).sum();
+    let failed: usize = recent.iter().map(|r| r.failed).sum();
+    let total_attempted = succeeded + failed;
+    let success_rate_pct = if total_attempted > 0 {
+        (succeeded as f64 / total_attempted as f64) * 100.0
+    } else {
+        0.0
+    };
+    let avg_processed_per_run = succeeded as f64 / total_runs as f64;
+
+    Some(RunStats {
+        window_days,
+        total_runs,
+        succeeded,
+        failed,
+        success_rate_pct,
+        avg_processed_per_run,
+    })
+}
+
+/// Simple date subtraction (YYYY-MM-DD format). Returns a best-effort ISO date
+/// `days` before `today`. Ignores leap-second edge cases.
+fn subtract_days(today: &str, days: usize) -> String {
+    let parts: Vec<&str> = today.split('-').collect();
+    if parts.len() != 3 {
+        return String::new();
+    }
+    let (y, m, d) = match (
+        parts[0].parse::<i32>(),
+        parts[1].parse::<u32>(),
+        parts[2].parse::<u32>(),
+    ) {
+        (Ok(y), Ok(m), Ok(d)) => (y, m, d),
+        _ => return String::new(),
+    };
+
+    let mut total = to_days(y, m, d) as i64 - days as i64;
+    if total < 0 {
+        total = 0;
+    }
+    from_days(total as u32)
+}
+
+fn to_days(y: i32, m: u32, d: u32) -> u32 {
+    let y = y as u32;
+    let mut days = y * 365 + y / 4 - y / 100 + y / 400;
+    let month_days = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    days += month_days[(m - 1) as usize];
+    if m > 2 && is_leap(y) {
+        days += 1;
+    }
+    days + d
+}
+
+fn from_days(total: u32) -> String {
+    let mut y = total / 366;
+    loop {
+        let jan1 = to_days(y as i32, 1, 1);
+        if jan1 > total {
+            y -= 1;
+        } else {
+            break;
+        }
+    }
+    let jan1 = to_days(y as i32, 1, 1);
+    let mut rem = total - jan1 + 1;
+    let leap = is_leap(y);
+    let mdays = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut m = 0;
+    for (i, &md) in mdays.iter().enumerate() {
+        if rem <= md {
+            m = i + 1;
+            break;
+        }
+        rem -= md;
+    }
+    if m == 0 {
+        m = 12;
+    }
+    format!("{y:04}-{m:02}-{rem:02}")
+}
+
+fn is_leap(y: u32) -> bool {
+    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
 }
