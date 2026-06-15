@@ -209,6 +209,9 @@ enum Cmd {
         /// web-fetch-live` build).
         #[arg(long)]
         image_live: bool,
+        /// Skip daily digest generation.
+        #[arg(long)]
+        no_digest: bool,
     },
     /// PRODUCT — run the capture/intake sweep alone (no model calls):
     /// normalize + dedup Clippings/00-Capture/02-Pinboard into 01-Raw, with
@@ -308,6 +311,19 @@ enum Cmd {
         /// Delete all managed projections and rebuild from the full ledger.
         #[arg(long)]
         rebuild: bool,
+    },
+    /// PRODUCT — generate daily digest (`.ovp/digests/<date>.md`): summarize
+    /// today's new packs, crystal status, attention items. Ephemeral reuse
+    /// surface — never enters ledger. Uses LLM synthesis when available.
+    Digest {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Override the date (default: today). Format: YYYY-MM-DD.
+        #[arg(long)]
+        date: Option<String>,
+        /// Skip LLM synthesis and produce plain text only.
+        #[arg(long)]
+        no_llm: bool,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
@@ -761,6 +777,7 @@ fn main() -> ExitCode {
             no_images,
             image_fixture,
             image_live,
+            no_digest,
         } => {
             use commands::client::ClientKind;
             use commands::daily::DailyArgs;
@@ -791,6 +808,7 @@ fn main() -> ExitCode {
                 no_images,
                 image_fixture,
                 image_live,
+                no_digest,
             })
         }
         Cmd::Intake { vault_root, date, run_id, dry_run } => {
@@ -836,6 +854,10 @@ fn main() -> ExitCode {
                 _ => LaneFilter::All,
             };
             commands::project::run(ProjectArgs { vault_root, lane, verbose, write, rebuild })
+        }
+        Cmd::Digest { vault_root, date, no_llm } => {
+            let date = date.unwrap_or_else(today_iso);
+            commands::digest::run(commands::digest::DigestArgs { vault_root, date, no_llm })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;

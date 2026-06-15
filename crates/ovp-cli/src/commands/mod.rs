@@ -9,6 +9,7 @@ pub mod crystal_write;
 pub mod console_cmd;
 pub mod daily;
 pub mod defaults;
+pub mod digest;
 pub mod extract_referents;
 pub mod extract_units;
 pub mod graph;

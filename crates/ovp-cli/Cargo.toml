@@ -49,6 +49,7 @@ ovp-intake = { path = "../ovp-intake" }
 ovp-index = { path = "../ovp-index" }
 ovp-console = { path = "../ovp-console" }
 ovp-enrich = { path = "../ovp-enrich" }
+ovp-memory = { path = "../ovp-memory" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -59,6 +59,8 @@ pub struct DailyArgs {
     pub image_fixture: Option<PathBuf>,
     /// Download images via live HTTP (requires web-fetch-live feature).
     pub image_live: bool,
+    /// Skip daily digest generation.
+    pub no_digest: bool,
 }
 
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
@@ -304,6 +306,16 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         .map_err(CliError::Io)?;
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
+
+    // Phase 6 — optional daily digest (ephemeral reuse surface).
+    if !args.no_digest {
+        let data = ovp_memory::digest::collect_digest_data(&model, &args.date);
+        let content = ovp_memory::digest::render_plain_digest(&data);
+        if let Ok(dpath) = ovp_memory::digest::write_digest(&args.vault_root, &args.date, &content) {
+            let drel = dpath.strip_prefix(&args.vault_root).unwrap_or(&dpath).display();
+            println!("  digest: {drel}");
+        }
+    }
 
     let failed = daily.failed();
     println!(

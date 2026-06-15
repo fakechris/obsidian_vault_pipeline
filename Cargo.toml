@@ -19,6 +19,7 @@ members = [
     "crates/ovp-index",
     "crates/ovp-console",
     "crates/ovp-enrich",
+    "crates/ovp-memory",
 ]
 
 [workspace.package]

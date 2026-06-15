@@ -728,6 +728,7 @@ dependencies = [
  "ovp-intake",
  "ovp-lint",
  "ovp-llm",
+ "ovp-memory",
  "ovp-query",
  "ovp-rag",
  "ovp-review",
@@ -860,6 +861,17 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "ovp-memory"
+version = "0.1.0"
+dependencies = [
+ "ovp-domain",
+ "ovp-index",
+ "ovp-llm",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
