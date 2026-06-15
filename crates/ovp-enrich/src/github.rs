@@ -224,9 +224,6 @@ impl GitHubFetch for LiveGitHubFetch {
                         if let Some(encoded) = v["content"].as_str() {
                             let cleaned: String =
                                 encoded.chars().filter(|c| !c.is_whitespace()).collect();
-                            use sha2::Digest;
-                            // GitHub returns base64-encoded content
-                            let _ = sha2::Sha256::new(); // ensure import used
                             decode_base64(&cleaned).ok()
                         } else {
                             None
