@@ -354,6 +354,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// PRODUCT — start the OVP MCP server (stdio JSON-RPC, synchronous).
+    /// Exposes OVP tools (find/search/status/doctor) and resources
+    /// (ovp://index, ovp://working-memory) to any MCP-compatible client.
+    /// Level 3+ integration surface — not a daily pipeline blocker.
+    Mcp {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
     /// PRODUCT — start the OVP console HTTP server (synchronous, localhost-only
     /// by default). Serves `.ovp/console/` HTML pages + JSON API endpoints
     /// (`/api/find`, `/api/search`, `/api/model`, `/api/refresh`).
@@ -917,6 +925,9 @@ fn main() -> ExitCode {
         }
         Cmd::Doctor { vault_root, fix, json } => {
             commands::doctor::run(commands::doctor::DoctorArgs { vault_root, fix, json })
+        }
+        Cmd::Mcp { vault_root } => {
+            commands::mcp::run(commands::mcp::McpArgs { vault_root })
         }
         Cmd::Serve { vault_root, port, host } => {
             commands::serve::run(commands::serve::ServeArgs { vault_root, host, port })

@@ -21,6 +21,7 @@ members = [
     "crates/ovp-enrich",
     "crates/ovp-memory",
     "crates/ovp-server",
+    "crates/ovp-mcp",
 ]
 
 [workspace.package]
