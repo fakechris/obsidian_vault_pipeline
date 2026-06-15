@@ -16,8 +16,10 @@ use std::path::Path;
 use ovp_domain::VaultLayout;
 use ovp_index::{ClaimStatus, IndexModel, SourceStatus};
 
+mod ops;
 mod render;
 
+pub use ops::{render_audit_page, render_candidates_page, render_ops_page};
 pub use render::render_console;
 
 /// Render and write `.ovp/console/index.html`. Overwrite is CORRECT — the
@@ -30,6 +32,29 @@ pub fn write_console(vault_root: &Path, model: &IndexModel) -> Result<String, St
     std::fs::write(&target, render_console(model))
         .map_err(|e| format!("writing {}: {e}", target.display()))?;
     Ok(format!("{}/index.html", layout.console_dir()))
+}
+
+/// Render and write ops dashboard pages alongside the main console.
+/// Returns paths of the three generated files.
+pub fn write_ops_pages(vault_root: &Path, model: &IndexModel) -> Result<Vec<String>, String> {
+    let layout = VaultLayout::new();
+    let dir = vault_root.join(layout.console_dir());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+
+    let pages = [
+        ("ops.html", render_ops_page(model)),
+        ("audit.html", render_audit_page(model)),
+        ("candidates.html", render_candidates_page(model)),
+    ];
+
+    let mut paths = Vec::new();
+    for (name, html) in &pages {
+        let target = dir.join(name);
+        std::fs::write(&target, html)
+            .map_err(|e| format!("writing {}: {e}", target.display()))?;
+        paths.push(format!("{}/{name}", layout.console_dir()));
+    }
+    Ok(paths)
 }
 
 /// Bilingual label for a source status (EN, 中文, css class).

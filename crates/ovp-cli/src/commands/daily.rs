@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use ovp_console::write_console;
+use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
     plan_daily, read_daily_ledger, run_daily, succeeded_hashes, DailyConfig, RunReport,
     RunStatus,
@@ -306,6 +306,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         .map_err(CliError::Io)?;
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
+    let _ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
 
     // Phase 6 — optional daily digest (ephemeral reuse surface).
     if !args.no_digest {

@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use ovp_console::write_console;
+use ovp_console::{write_console, write_ops_pages};
 use ovp_index::{build_index, write_index};
 
 use crate::CliError;
@@ -18,8 +18,12 @@ pub fn run(args: ConsoleArgs) -> Result<(), CliError> {
     let model = build_index(&args.vault_root, &args.date, None).map_err(CliError::Io)?;
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
+    let ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
     println!("console [{}]: {}", args.date, args.vault_root.join(&console_rel).display());
     println!("  index refreshed: {index_rel}");
+    for p in &ops_pages {
+        println!("  ops page: {p}");
+    }
     println!(
         "  sources={} packs={} durable={} caveated={} runs={}",
         model.totals.sources,
