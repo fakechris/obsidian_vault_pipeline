@@ -243,9 +243,14 @@ impl WebFetch for LiveWebFetch {
     }
 }
 
-/// Minimal readability extraction: strip HTML to readable text.
-/// Uses a simple approach (strip tags, collapse whitespace, extract <title>).
-/// For a production version, integrate `dom_smoothie` or similar.
+/// MVP readability extraction: strip HTML to plain text.
+///
+/// Current implementation: tag stripping + whitespace collapse + `<title>`
+/// extraction. Sufficient for bare-bookmark→text capture; does NOT produce
+/// article-quality extraction (no boilerplate removal, no content scoring).
+///
+/// Upgrade path: integrate `dom_smoothie` (or equivalent Rust readability
+/// library) once dogfood confirms the need for higher-fidelity extraction.
 pub fn extract_readable(html: &str) -> (Option<String>, String) {
     let title = extract_title(html);
     let text = strip_tags(html);

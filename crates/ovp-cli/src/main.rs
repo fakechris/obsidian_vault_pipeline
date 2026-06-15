@@ -309,6 +309,8 @@ enum Cmd {
         #[arg(long)]
         write: bool,
         /// Delete all managed projections and rebuild from the full ledger.
+        /// Only files marked `<!-- crystal-managed -->` are deleted — these
+        /// are fully machine-owned and must not contain human edits.
         #[arg(long)]
         rebuild: bool,
     },

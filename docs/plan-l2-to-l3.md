@@ -114,8 +114,9 @@ graph TD
 
 ### 1a. Web Fetcher（bare bookmark → 全文）
 
+- **状态**：**MVP shipped** — trait + fixture/live impls 落地。当前 readability 为 tag-stripping（足以捕获 bare bookmark 文本内容）；article-quality extraction（boilerplate 移除/content scoring）待 dogfood 证明需求后升级至 `dom_smoothie`。
 - **架构**：`WebFetch` trait（同 `PinboardFetch`/`AnthropicBlockingClient` 已落地模式）——fixture impl 编译时内置用于测试；live impl behind `web-fetch-live` feature。
-- **⚠️ 修正（依赖）**：`readability` crate 已停更（v0.3.0 / 2023-12）。改用维护中的 **`dom_smoothie`**（2026-06 仍活跃），或自行 vet readability 的 html5ever pin。
+- **⚠️ 修正（依赖）**：`readability` crate 已停更（v0.3.0 / 2023-12）。改用维护中的 **`dom_smoothie`**（2026-06 仍活跃），或自行 vet readability 的 html5ever pin。**当前 v1 未引入 dom_smoothie，使用自研 strip-tags 作为 MVP。**
 - **⚠️ 修正（集成点）**：插入在 **Phase 2 intake sweep 之后、Phase 3 `plan_daily` 之前**（不是「reader 之前」）。否则 `needs_content` 已被 `plan_daily` 分类并跳过，抓回正文当次 run 不会被规划。
 - **安全**：URL allow/deny、超时 30s、内容 ≤ 2MB、rate limit。
 - **失败策略**：抓取失败 → 保持 `needs_content`，不 block 其他源。

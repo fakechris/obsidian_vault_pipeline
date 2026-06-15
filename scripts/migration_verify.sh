@@ -31,10 +31,10 @@ else
 fi
 
 section "Gate 2: cargo clippy (no warnings)"
-if cargo clippy --workspace --all-targets 2>&1 | grep -q 'No issues found'; then
-    echo "✓ Clippy clean."
+if cargo clippy --workspace --all-targets -- -D warnings >/dev/null 2>&1; then
+    echo "✓ Clippy clean (exit code 0, -D warnings)."
 else
-    echo "✗ Clippy has warnings/errors"
+    echo "✗ Clippy has warnings/errors (exit code non-zero)"
     fail=1
 fi
 

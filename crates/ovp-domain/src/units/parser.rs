@@ -53,7 +53,7 @@ impl std::fmt::Display for ParseError {
 }
 
 /// Extract the `units[]` array as opaque JSON values. Tolerant (M19): strips a
-/// ```json fence / surrounding prose and applies parser-local recovery
+/// ` ```json ` fence / surrounding prose and applies parser-local recovery
 /// (unescaped-backslash) via [`crate::model_reply::parse_reply_value`]. The
 /// recovery NOTE is discarded here; callers that record repairs (the harness)
 /// drive recovery+repair themselves and then call [`units_from_value`].
