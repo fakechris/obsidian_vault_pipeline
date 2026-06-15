@@ -291,9 +291,8 @@ enum Cmd {
         #[arg(long)]
         date: Option<String>,
     },
-    /// PRODUCT — Projection Lanes: view claims by routing lane (durable/review).
-    /// Read-only view over the Crystal ledger. Shows which claims are eligible
-    /// for vault projection (durable) and which await human review (caveated).
+    /// PRODUCT — Projection Lanes: view claims by routing lane (durable/review),
+    /// or write durable claims as vault notes (`--write` / `--rebuild`).
     Project {
         #[arg(long)]
         vault_root: PathBuf,
@@ -303,6 +302,12 @@ enum Cmd {
         /// Show extra detail per claim (provenance score, sources, rationale).
         #[arg(long)]
         verbose: bool,
+        /// Write durable claims as vault notes in 10-Knowledge/Crystal/.
+        #[arg(long)]
+        write: bool,
+        /// Delete all managed projections and rebuild from the full ledger.
+        #[arg(long)]
+        rebuild: bool,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
@@ -823,14 +828,14 @@ fn main() -> ExitCode {
             let date = date.unwrap_or_else(today_iso);
             commands::console_cmd::run(commands::console_cmd::ConsoleArgs { vault_root, date })
         }
-        Cmd::Project { vault_root, lane, verbose } => {
+        Cmd::Project { vault_root, lane, verbose, write, rebuild } => {
             use commands::project::{LaneFilter, ProjectArgs};
             let lane = match lane.as_deref() {
                 Some("durable") => LaneFilter::Durable,
                 Some("review") => LaneFilter::Review,
                 _ => LaneFilter::All,
             };
-            commands::project::run(ProjectArgs { vault_root, lane, verbose })
+            commands::project::run(ProjectArgs { vault_root, lane, verbose, write, rebuild })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
