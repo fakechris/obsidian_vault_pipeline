@@ -354,6 +354,19 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// PRODUCT — start the OVP console HTTP server (synchronous, localhost-only
+    /// by default). Serves `.ovp/console/` HTML pages + JSON API endpoints
+    /// (`/api/find`, `/api/search`, `/api/model`, `/api/refresh`).
+    Serve {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Port to listen on.
+        #[arg(long, default_value_t = 3141)]
+        port: u16,
+        /// Host to bind. Default: 127.0.0.1 (localhost only).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -904,6 +917,9 @@ fn main() -> ExitCode {
         }
         Cmd::Doctor { vault_root, fix, json } => {
             commands::doctor::run(commands::doctor::DoctorArgs { vault_root, fix, json })
+        }
+        Cmd::Serve { vault_root, port, host } => {
+            commands::serve::run(commands::serve::ServeArgs { vault_root, host, port })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
