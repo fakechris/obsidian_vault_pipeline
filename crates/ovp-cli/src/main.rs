@@ -325,6 +325,22 @@ enum Cmd {
         #[arg(long)]
         no_llm: bool,
     },
+    /// PRODUCT — retrieval-augmented Q&A over OVP product state. Queries
+    /// the JSON index for context, sends to LLM, prints a cited answer.
+    /// Ephemeral reuse surface — never enters ledger.
+    Ask {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// The question to answer.
+        question: String,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Save the Q&A to `.ovp/chats/<timestamp>.md`.
+        #[arg(long)]
+        save: bool,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -858,6 +874,20 @@ fn main() -> ExitCode {
         Cmd::Digest { vault_root, date, no_llm } => {
             let date = date.unwrap_or_else(today_iso);
             commands::digest::run(commands::digest::DigestArgs { vault_root, date, no_llm })
+        }
+        Cmd::Ask { vault_root, question, client, cache_dir, save } => {
+            use commands::client::ClientKind;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::ask::run(commands::ask::AskCliArgs {
+                vault_root,
+                question,
+                client_kind,
+                cache_dir,
+                save,
+            })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;

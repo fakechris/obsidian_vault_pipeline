@@ -317,6 +317,19 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         }
     }
 
+    // Phase 6b — working memory (ephemeral context package).
+    {
+        let wm_args = ovp_memory::working_memory::WorkingMemoryArgs {
+            date: args.date.clone(),
+            ..Default::default()
+        };
+        let wm_content = ovp_memory::working_memory::build_working_memory(&model, &wm_args);
+        if let Ok(wm_path) = ovp_memory::working_memory::write_working_memory(&args.vault_root, &wm_content) {
+            let wm_rel = wm_path.strip_prefix(&args.vault_root).unwrap_or(&wm_path).display();
+            println!("  working-memory: {wm_rel}");
+        }
+    }
+
     let failed = daily.failed();
     println!(
         "  done: {} processed, {failed} failed, {} skipped (report: {report_rel})",
