@@ -53,6 +53,12 @@ pub struct DailyArgs {
     pub github_fixture: Option<PathBuf>,
     /// Enrich GitHub repo URLs via live API (requires GITHUB_TOKEN env).
     pub github_live: bool,
+    /// Skip image download post-processing for reader packs.
+    pub no_images: bool,
+    /// Image download fixture directory (offline testing).
+    pub image_fixture: Option<PathBuf>,
+    /// Download images via live HTTP (requires web-fetch-live feature).
+    pub image_live: bool,
 }
 
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
@@ -244,6 +250,48 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         );
     }
 
+    // Phase 4.5 — image download for succeeded packs (optional).
+    if !args.no_images && !args.dry_run {
+        if let Some(mut downloader) = build_image_downloader(&args)? {
+            let succeeded_packs: Vec<PathBuf> = daily
+                .processed
+                .iter()
+                .filter(|r| r.status == RunStatus::Succeeded)
+                .filter_map(|r| r.pack_dir.as_ref())
+                .map(|d| args.vault_root.join(d))
+                .collect();
+            if !succeeded_packs.is_empty() {
+                use ovp_enrich::image_download::{
+                    process_pack_images, ImageDownloadConfig,
+                };
+                let img_config = ImageDownloadConfig {
+                    attachments_dir: PathBuf::from("attachments"),
+                    ..Default::default()
+                };
+                let mut total_images = 0usize;
+                let mut total_downloaded = 0usize;
+                for pack_dir in &succeeded_packs {
+                    let results = process_pack_images(
+                        pack_dir,
+                        &args.vault_root,
+                        downloader.as_mut(),
+                        &img_config,
+                    );
+                    for r in &results {
+                        total_images += r.images_found;
+                        total_downloaded += r.images_downloaded;
+                    }
+                }
+                if total_images > 0 {
+                    println!(
+                        "  images: {} found, {} downloaded across {} pack(s)",
+                        total_images, total_downloaded, succeeded_packs.len()
+                    );
+                }
+            }
+        }
+    }
+
     // Phase 5 — durable run report FIRST (so the rebuilt index includes this
     // run), then read model + console refresh. The report does NOT claim the
     // refresh happened — index/console paths are printed, not recorded, since
@@ -369,6 +417,39 @@ fn live_github_fetch() -> Result<Box<dyn GitHubFetch>, CliError> {
     Err(CliError::Io(
         "live GitHub fetch requires a build with `--features github-live`; \
          offline runs use --github-fixture <dir>"
+            .into(),
+    ))
+}
+
+fn build_image_downloader(
+    args: &DailyArgs,
+) -> Result<Option<Box<dyn ovp_enrich::image_download::ImageDownloader>>, CliError> {
+    use ovp_enrich::image_download::FixtureImageDownloader;
+    if args.image_live && args.image_fixture.is_some() {
+        return Err(CliError::Io(
+            "pass either --image-fixture or --image-live, not both".into(),
+        ));
+    }
+    if let Some(path) = &args.image_fixture {
+        return Ok(Some(Box::new(FixtureImageDownloader::new(path))));
+    }
+    if args.image_live {
+        return Ok(Some(live_image_download()?));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "web-fetch-live")]
+fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDownloader>, CliError> {
+    use ovp_enrich::image_download::LiveImageDownloader;
+    Ok(Box::new(LiveImageDownloader::new().map_err(CliError::Io)?))
+}
+
+#[cfg(not(feature = "web-fetch-live"))]
+fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDownloader>, CliError> {
+    Err(CliError::Io(
+        "live image download requires a build with `--features web-fetch-live`; \
+         offline runs use --image-fixture <dir>"
             .into(),
     ))
 }

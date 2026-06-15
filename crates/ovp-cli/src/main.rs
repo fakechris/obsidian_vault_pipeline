@@ -199,6 +199,16 @@ enum Cmd {
         /// github-live` build + GITHUB_TOKEN env).
         #[arg(long)]
         github_live: bool,
+        /// Skip image download post-processing for reader packs.
+        #[arg(long)]
+        no_images: bool,
+        /// Image download fixture directory (offline testing).
+        #[arg(long)]
+        image_fixture: Option<PathBuf>,
+        /// Download pack images via live HTTP (requires `--features
+        /// web-fetch-live` build).
+        #[arg(long)]
+        image_live: bool,
     },
     /// PRODUCT — run the capture/intake sweep alone (no model calls):
     /// normalize + dedup Clippings/00-Capture/02-Pinboard into 01-Raw, with
@@ -730,6 +740,9 @@ fn main() -> ExitCode {
             web_fetch_live,
             github_fixture,
             github_live,
+            no_images,
+            image_fixture,
+            image_live,
         } => {
             use commands::client::ClientKind;
             use commands::daily::DailyArgs;
@@ -757,6 +770,9 @@ fn main() -> ExitCode {
                 web_fetch_live,
                 github_fixture,
                 github_live,
+                no_images,
+                image_fixture,
+                image_live,
             })
         }
         Cmd::Intake { vault_root, date, run_id, dry_run } => {
