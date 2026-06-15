@@ -24,6 +24,12 @@ anthropic = ["ovp-llm/anthropic"]
 # `pinboard-sync --live` / `daily --pinboard-live`. OFF by default — the
 # offline build only ever reads export files.
 pinboard-live = ["ovp-intake/pinboard-live"]
+# Forwards to ovp-enrich/web-fetch-live: live HTTP fetch for enriching
+# needs-content sources. OFF by default — the offline build only uses fixtures.
+web-fetch-live = ["ovp-enrich/web-fetch-live"]
+# Forwards to ovp-enrich/github-live: live GitHub API for enriching
+# repo URLs. OFF by default — the offline build only uses fixtures.
+github-live = ["ovp-enrich/github-live"]
 
 [dependencies]
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
@@ -42,6 +48,7 @@ ovp-daily = { path = "../ovp-daily" }
 ovp-intake = { path = "../ovp-intake" }
 ovp-index = { path = "../ovp-index" }
 ovp-console = { path = "../ovp-console" }
+ovp-enrich = { path = "../ovp-enrich" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

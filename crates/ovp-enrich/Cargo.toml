@@ -1,0 +1,26 @@
+[package]
+name = "ovp-enrich"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next enrichment: web fetch, GitHub enrichment, image download. Only enriches — never owns intake/lifecycle/dedup (those stay in ovp-intake)"
+
+[features]
+default = []
+# Enables the live web-fetch HTTP client (pulls in reqwest).
+# The default build is offline: fixture-based fetch only.
+web-fetch-live = ["dep:reqwest"]
+# Enables live GitHub API calls (pulls in reqwest).
+github-live = ["dep:reqwest"]
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

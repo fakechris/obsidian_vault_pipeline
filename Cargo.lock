@@ -722,6 +722,7 @@ dependencies = [
  "ovp-core",
  "ovp-daily",
  "ovp-domain",
+ "ovp-enrich",
  "ovp-eval",
  "ovp-index",
  "ovp-intake",
@@ -778,6 +779,18 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-enrich"
+version = "0.1.0"
+dependencies = [
+ "ovp-domain",
+ "reqwest",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
 ]

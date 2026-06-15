@@ -20,6 +20,10 @@ use ovp_daily::{
 };
 use ovp_domain::VaultLayout;
 use ovp_index::{build_index, write_index};
+use ovp_enrich::github::{
+    enrich_github_repos, parse_github_repo_url, FixtureGitHubFetch, GitHubFetch,
+};
+use ovp_enrich::web_fetch::{enrich_needs_content, FixtureWebFetch, WebFetch};
 use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch};
 
 use crate::commands::client::{build_client, ClientKind};
@@ -41,6 +45,14 @@ pub struct DailyArgs {
     pub pinboard_live: bool,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
+    /// Web fetch fixture directory for enriching needs-content sources.
+    pub web_fetch_fixture: Option<PathBuf>,
+    /// Enrich needs-content sources via live web fetch.
+    pub web_fetch_live: bool,
+    /// GitHub enrichment fixture directory for repo URLs.
+    pub github_fixture: Option<PathBuf>,
+    /// Enrich GitHub repo URLs via live API (requires GITHUB_TOKEN env).
+    pub github_live: bool,
 }
 
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
@@ -74,6 +86,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
 
     // Phase 2 — intake sweep (capture dirs → 01-Raw).
     let mut dry_run_pending_ingest = 0usize;
+    let mut sweep_needs_content = Vec::new();
     if !args.no_intake {
         let done = succeeded_hashes(&read_daily_ledger(&ledger_path).map_err(CliError::Io)?);
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
@@ -89,7 +102,76 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
             if args.dry_run { " — dry-run, nothing moved" } else { "" },
         );
         dry_run_pending_ingest = if args.dry_run { sweep.ingested.len() } else { 0 };
+        sweep_needs_content = sweep.needs_content.clone();
         report.intake = Some((&sweep).into());
+    }
+
+    // Phase 2.5 — web fetch enrichment (optional).
+    // Enriches needs-content sources (from the intake sweep) by fetching their
+    // URLs. Successfully enriched files get enough body for plan_daily to pick
+    // them up as reader candidates.
+    if (args.web_fetch_fixture.is_some() || args.web_fetch_live) && !args.dry_run {
+        let needs_content_items: Vec<(String, String)> = sweep_needs_content
+            .iter()
+            .filter_map(|rec| {
+                rec.url.as_ref().map(|u| (rec.from.clone(), u.clone()))
+            })
+            .collect();
+        if !needs_content_items.is_empty() {
+            let mut fetcher = build_web_fetcher(&args)?;
+            let results = enrich_needs_content(
+                fetcher.as_mut(),
+                &args.vault_root,
+                &needs_content_items,
+            );
+            let enriched = results.iter().filter(|r| r.updated).count();
+            let failed = results.iter().filter(|r| !r.updated).count();
+            println!(
+                "  enrich: {} needs-content URL(s), {} enriched, {} failed",
+                needs_content_items.len(), enriched, failed,
+            );
+            for r in &results {
+                if !r.updated {
+                    if let Some(err) = &r.fetch.error {
+                        println!("    skip {}: {err}", r.url);
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2.6 — GitHub enrichment (optional).
+    // Enriches needs-content sources whose URLs point to GitHub repos.
+    if (args.github_fixture.is_some() || args.github_live) && !args.dry_run {
+        let github_items: Vec<(String, String)> = sweep_needs_content
+            .iter()
+            .filter_map(|rec| {
+                rec.url.as_ref().and_then(|u| {
+                    parse_github_repo_url(u).map(|_| (rec.from.clone(), u.clone()))
+                })
+            })
+            .collect();
+        if !github_items.is_empty() {
+            let mut fetcher = build_github_fetcher(&args)?;
+            let results = enrich_github_repos(
+                fetcher.as_mut(),
+                &args.vault_root,
+                &github_items,
+            );
+            let written = results.iter().filter(|r| r.written).count();
+            let failed = results.iter().filter(|r| !r.written).count();
+            println!(
+                "  github: {} repo URL(s), {} enriched, {} failed",
+                github_items.len(), written, failed,
+            );
+            for r in &results {
+                if !r.written {
+                    if let Some(err) = &r.fetch.error {
+                        println!("    skip {}/{}: {err}", r.owner, r.repo);
+                    }
+                }
+            }
+        }
     }
 
     // Phase 3 — plan.
@@ -233,6 +315,60 @@ pub fn live_pinboard_fetch() -> Result<Box<dyn PinboardFetch>, CliError> {
     Err(CliError::Io(
         "live pinboard requires a build with `--features pinboard-live` \
          (and PINBOARD_TOKEN in the environment); offline runs use --pinboard-fixture <export.json>"
+            .into(),
+    ))
+}
+
+fn build_web_fetcher(args: &DailyArgs) -> Result<Box<dyn WebFetch>, CliError> {
+    if args.web_fetch_live && args.web_fetch_fixture.is_some() {
+        return Err(CliError::Io(
+            "pass either --web-fetch-fixture or --web-fetch-live, not both".into(),
+        ));
+    }
+    if let Some(path) = &args.web_fetch_fixture {
+        return Ok(Box::new(FixtureWebFetch::new(path)));
+    }
+    live_web_fetch()
+}
+
+#[cfg(feature = "web-fetch-live")]
+fn live_web_fetch() -> Result<Box<dyn WebFetch>, CliError> {
+    use ovp_enrich::web_fetch::LiveWebFetch;
+    Ok(Box::new(LiveWebFetch::with_defaults().map_err(CliError::Io)?))
+}
+
+#[cfg(not(feature = "web-fetch-live"))]
+fn live_web_fetch() -> Result<Box<dyn WebFetch>, CliError> {
+    Err(CliError::Io(
+        "live web fetch requires a build with `--features web-fetch-live`; \
+         offline runs use --web-fetch-fixture <dir>"
+            .into(),
+    ))
+}
+
+fn build_github_fetcher(args: &DailyArgs) -> Result<Box<dyn GitHubFetch>, CliError> {
+    if args.github_live && args.github_fixture.is_some() {
+        return Err(CliError::Io(
+            "pass either --github-fixture or --github-live, not both".into(),
+        ));
+    }
+    if let Some(path) = &args.github_fixture {
+        return Ok(Box::new(FixtureGitHubFetch::new(path)));
+    }
+    live_github_fetch()
+}
+
+#[cfg(feature = "github-live")]
+fn live_github_fetch() -> Result<Box<dyn GitHubFetch>, CliError> {
+    use ovp_enrich::github::LiveGitHubFetch;
+    Ok(Box::new(LiveGitHubFetch::from_env().map_err(CliError::Io)?))
+}
+
+#[cfg(not(feature = "github-live"))]
+fn live_github_fetch() -> Result<Box<dyn GitHubFetch>, CliError> {
+    Err(CliError::Io(
+        "live GitHub fetch requires a build with `--features github-live`; \
+         offline runs use --github-fixture <dir>"
             .into(),
     ))
 }

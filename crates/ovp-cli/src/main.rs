@@ -185,6 +185,20 @@ enum Cmd {
         /// Also retry sources blocked by the 3-failure cap.
         #[arg(long)]
         retry_blocked: bool,
+        /// Web fetch enrichment from a fixture directory (offline testing).
+        #[arg(long)]
+        web_fetch_fixture: Option<PathBuf>,
+        /// Enrich needs-content sources via live HTTP fetch (requires
+        /// `--features web-fetch-live` build).
+        #[arg(long)]
+        web_fetch_live: bool,
+        /// GitHub enrichment from a fixture directory (offline testing).
+        #[arg(long)]
+        github_fixture: Option<PathBuf>,
+        /// Enrich GitHub repo URLs via live API (requires `--features
+        /// github-live` build + GITHUB_TOKEN env).
+        #[arg(long)]
+        github_live: bool,
     },
     /// PRODUCT — run the capture/intake sweep alone (no model calls):
     /// normalize + dedup Clippings/00-Capture/02-Pinboard into 01-Raw, with
@@ -712,6 +726,10 @@ fn main() -> ExitCode {
             pinboard_live,
             no_lifecycle,
             retry_blocked,
+            web_fetch_fixture,
+            web_fetch_live,
+            github_fixture,
+            github_live,
         } => {
             use commands::client::ClientKind;
             use commands::daily::DailyArgs;
@@ -735,6 +753,10 @@ fn main() -> ExitCode {
                 pinboard_live,
                 no_lifecycle,
                 retry_blocked,
+                web_fetch_fixture,
+                web_fetch_live,
+                github_fixture,
+                github_live,
             })
         }
         Cmd::Intake { vault_root, date, run_id, dry_run } => {
