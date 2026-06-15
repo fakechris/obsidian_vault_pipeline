@@ -341,6 +341,19 @@ enum Cmd {
         #[arg(long)]
         save: bool,
     },
+    /// PRODUCT — health checks over OVP vault state: ledger↔fs consistency,
+    /// orphan packs, stale index, crystal integrity, disk usage. Exits non-zero
+    /// if any check FAILs. `--fix` applies safe repairs (rebuild index, etc.).
+    Doctor {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Apply safe fixes (rebuild stale index, etc.). Never deletes.
+        #[arg(long)]
+        fix: bool,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -888,6 +901,9 @@ fn main() -> ExitCode {
                 cache_dir,
                 save,
             })
+        }
+        Cmd::Doctor { vault_root, fix, json } => {
+            commands::doctor::run(commands::doctor::DoctorArgs { vault_root, fix, json })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
