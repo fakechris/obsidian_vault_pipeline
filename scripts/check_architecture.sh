@@ -125,7 +125,11 @@ eval_bad=$(grep -lE '^ovp-eval *=' \
     crates/ovp-daily/Cargo.toml \
     crates/ovp-intake/Cargo.toml \
     crates/ovp-index/Cargo.toml \
-    crates/ovp-console/Cargo.toml 2>/dev/null || true)
+    crates/ovp-console/Cargo.toml \
+    crates/ovp-enrich/Cargo.toml \
+    crates/ovp-memory/Cargo.toml \
+    crates/ovp-server/Cargo.toml \
+    crates/ovp-mcp/Cargo.toml 2>/dev/null || true)
 if [[ -n "$eval_bad" ]]; then
     echo "FAIL — these trunk crates depend on ovp-eval:"
     echo "$eval_bad"
@@ -147,7 +151,11 @@ check "daily product crates do not import the demoted substrate" \
     "crates/ovp-intake/src" \
     "crates/ovp-daily/src" \
     "crates/ovp-index/src" \
-    "crates/ovp-console/src"
+    "crates/ovp-console/src" \
+    "crates/ovp-enrich/src" \
+    "crates/ovp-memory/src" \
+    "crates/ovp-server/src" \
+    "crates/ovp-mcp/src"
 
 # === M31: pinboard HTTP stays feature-gated (no ambient network dep) ===
 echo -n "ok    [pinboard live transport is feature-gated] ... "
@@ -158,6 +166,30 @@ if grep -E '^reqwest *=' "$intake_toml" | grep -vq 'optional = true'; then
 else
     echo "passed"
 fi
+
+# === L3 gate: ovp-enrich reqwest must be optional ===
+echo -n "ok    [ovp-enrich reqwest is optional] ... "
+enrich_toml="crates/ovp-enrich/Cargo.toml"
+if [[ -f "$enrich_toml" ]]; then
+    if grep -E '^reqwest *=' "$enrich_toml" | grep -vq 'optional = true'; then
+        echo "FAIL — reqwest must be optional in $enrich_toml"
+        fail=1
+    else
+        echo "passed"
+    fi
+else
+    echo "skipped (crate not found)"
+fi
+
+# === L3 gate: no async runtime in new product crates ===
+for crate in ovp-enrich ovp-memory ovp-server ovp-mcp; do
+    crate_toml="crates/$crate/Cargo.toml"
+    if [[ -f "$crate_toml" ]]; then
+        check "no tokio/async-std in $crate" \
+            '(^|[^a-z_])(tokio|async_std|async-std)([^a-z_]|$)' \
+            "$crate_toml"
+    fi
+done
 
 echo -n "ok    [no Transform impl holds an effect client] ... "
 violators=""
