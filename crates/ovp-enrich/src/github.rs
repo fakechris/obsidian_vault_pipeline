@@ -373,10 +373,15 @@ fn write_github_note(
         body.push_str("\n\n---\n\n");
     }
 
-    // README content
+    // README content. Floor the cut to a char boundary — READMEs are routinely
+    // non-ASCII (CJK/emoji), so a raw byte slice would panic mid-character.
     if let Some(readme) = &result.readme_content {
         let truncated = if readme.len() > 8000 {
-            &readme[..8000]
+            let mut end = 8000;
+            while end > 0 && !readme.is_char_boundary(end) {
+                end -= 1;
+            }
+            &readme[..end]
         } else {
             readme.as_str()
         };

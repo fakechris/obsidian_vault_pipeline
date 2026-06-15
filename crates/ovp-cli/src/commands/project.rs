@@ -220,8 +220,10 @@ fn derive_slug(theme: &str, claim_key: &str) -> String {
         .trim()
         .replace(' ', "-")
         .to_lowercase();
-    let theme_part = if theme_part.len() > 40 {
-        theme_part[..40].trim_end_matches('-').to_string()
+    // Cap by CHARS, not bytes — themes are bilingual (multibyte CJK), so a
+    // byte slice would panic mid-character on a long Chinese theme.
+    let theme_part = if theme_part.chars().count() > 40 {
+        theme_part.chars().take(40).collect::<String>().trim_end_matches('-').to_string()
     } else {
         theme_part
     };

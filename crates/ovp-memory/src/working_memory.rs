@@ -86,9 +86,14 @@ pub fn build_working_memory(model: &IndexModel, args: &WorkingMemoryArgs) -> Str
         }
     }
 
-    // Truncate to approximate token budget (1 token ≈ 4 chars)
-    let char_budget = args.max_tokens * 4;
+    // Truncate to approximate token budget (1 token ≈ 4 chars). Floor to a
+    // char boundary first — content is bilingual (multibyte CJK), so a raw
+    // byte truncate would panic mid-character.
+    let mut char_budget = args.max_tokens * 4;
     if out.len() > char_budget {
+        while char_budget > 0 && !out.is_char_boundary(char_budget) {
+            char_budget -= 1;
+        }
         out.truncate(char_budget);
         out.push_str("\n\n…(truncated to token budget)\n");
     }
@@ -126,4 +131,52 @@ fn parse_date(s: &str) -> Option<u32> {
     let m: u32 = s[5..7].parse().ok()?;
     let d: u32 = s[8..10].parse().ok()?;
     Some(y * 10000 + m * 100 + d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_index::model::{ClaimRow, ClaimStatus, IndexModel, OpsState, Totals};
+
+    fn model_with_cjk_claims() -> IndexModel {
+        let claims = (0..50)
+            .map(|i| ClaimRow {
+                claim_id: format!("c{i}"),
+                claim: "代理记忆与上下文系统：文件系统即记忆，语义检索不足以独立支撑长期记忆。".into(),
+                theme: Some("记忆与上下文".into()),
+                status: ClaimStatus::Durable,
+                sources: vec!["case-a".into()],
+                strength: Some("supported".into()),
+                run_id: None,
+            })
+            .collect();
+        IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: "2026-06-15".into(),
+            run_id: None,
+            totals: Totals::default(),
+            sources: vec![],
+            packs: vec![],
+            claims,
+            runs: vec![],
+            ops: OpsState::default(),
+        }
+    }
+
+    /// Regression: the token-budget truncate used to byte-slice `out`, which
+    /// panicked when the budget landed inside a multibyte (CJK) char. The
+    /// content is bilingual, so this fires on the real vault. Sweep many budgets
+    /// so at least one lands mid-character.
+    #[test]
+    fn truncate_never_panics_on_bilingual_content_at_any_budget() {
+        let model = model_with_cjk_claims();
+        for max_tokens in 1..=300 {
+            let out = build_working_memory(
+                &model,
+                &WorkingMemoryArgs { date: "2026-06-15".into(), max_tokens, lookback_days: 3 },
+            );
+            // If we got here the truncate didn't panic; the result is valid UTF-8.
+            assert!(!out.is_empty());
+        }
+    }
 }
