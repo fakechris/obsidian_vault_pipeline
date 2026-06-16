@@ -64,3 +64,25 @@ Do not commit local scratch, live outputs, credentials, or raw evaluation data:
 - raw/live cassette captures unless the user explicitly asks to curate and commit them
 
 Committed replay cassettes under crate tests are acceptable only when they are intentional frozen fixtures.
+
+## OVP Evolution Rules
+
+When modifying LLM prompt templates or pipeline behavior:
+
+1. Write a Candidate Spec (`evolution/candidates/<id>.json`) BEFORE editing
+2. Identify the target Change Surface: prompt | parser | runtime | gate | model
+3. State a falsifiable hypothesis with predicted metric delta
+4. Run `ovp-next evolve validate --candidate <spec>` to confirm spec validity
+5. Run `ovp-next evolve ab --candidate <spec>` to generate paired comparison (Phase 2+)
+6. Accept only if hard gates pass and guardrails hold
+7. Record in Evolution Ledger with git SHA and rollback plan
+8. Bump the prompt namespace version constant after acceptance
+
+Rules:
+- One surface per candidate (no mixing prompt + parser changes)
+- Hard gate: accepted_without_quote must remain 0
+- Cassette replay is the source of truth for regression
+- Prompt versions are monotonically increasing; never reuse a version number
+- The `ovp-evolve` crate owns all evolution governance logic
+- `evolution/components.json` is the component registry (validated at load time)
+- `.ovp/evolution-ledger.jsonl` is the append-only decision record

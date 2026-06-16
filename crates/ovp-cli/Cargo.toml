@@ -52,6 +52,7 @@ ovp-enrich = { path = "../ovp-enrich" }
 ovp-memory = { path = "../ovp-memory" }
 ovp-server = { path = "../ovp-server" }
 ovp-mcp = { path = "../ovp-mcp" }
+ovp-evolve = { path = "../ovp-evolve" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

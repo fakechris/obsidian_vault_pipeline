@@ -29,3 +29,4 @@ pub mod mcp;
 pub mod run;
 pub mod run_cycle;
 pub mod serve;
+pub mod evolve;

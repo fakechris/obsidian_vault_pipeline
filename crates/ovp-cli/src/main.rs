@@ -582,6 +582,32 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// PRODUCT — Evolution Kernel governance: component registry, candidate
+    /// validation, evolution ledger, root-cause diagnostics. Subcommands:
+    /// `registry`, `validate`, `ledger`, `diagnose`.
+    Evolve {
+        /// Subcommand: registry | validate | ledger | diagnose
+        #[arg(value_enum)]
+        action: EvolveAction,
+        /// Path to `evolution/components.json`.
+        #[arg(long, default_value = "evolution/components.json")]
+        registry_path: PathBuf,
+        /// Candidate spec path (for `validate`).
+        #[arg(long)]
+        candidate: Option<PathBuf>,
+        /// Vault root (for `ledger`).
+        #[arg(long)]
+        vault_root: Option<PathBuf>,
+        /// Run ID (for `diagnose`).
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Source name (for `diagnose`).
+        #[arg(long)]
+        source: Option<String>,
+        /// Symptoms (for `diagnose`).
+        #[arg(long)]
+        symptom: Vec<String>,
+    },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
     /// evergreen notes. Scores the query, ranks, and prints a bounded context.
@@ -736,6 +762,14 @@ enum SeverityArg {
 enum ClientKindArg {
     Replay,
     Live,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum EvolveAction {
+    Registry,
+    Validate,
+    Ledger,
+    Diagnose,
 }
 
 fn main() -> ExitCode {
@@ -1086,6 +1120,38 @@ fn main() -> ExitCode {
                 dry_run,
                 json,
             })
+        }
+        Cmd::Evolve { action, registry_path, candidate, vault_root, run_id, source, symptom } => {
+            use commands::evolve::{EvolveArgs, EvolveSubcmd};
+            let sub = match action {
+                EvolveAction::Registry => EvolveSubcmd::Registry,
+                EvolveAction::Validate => {
+                    let path = candidate.unwrap_or_else(|| {
+                        eprintln!("evolve validate requires --candidate <path>");
+                        std::process::exit(2);
+                    });
+                    EvolveSubcmd::Validate { candidate: path }
+                }
+                EvolveAction::Ledger => {
+                    let vr = vault_root.unwrap_or_else(|| {
+                        eprintln!("evolve ledger requires --vault-root <path>");
+                        std::process::exit(2);
+                    });
+                    EvolveSubcmd::Ledger { vault_root: vr }
+                }
+                EvolveAction::Diagnose => {
+                    let rid = run_id.unwrap_or_else(|| {
+                        eprintln!("evolve diagnose requires --run-id <id>");
+                        std::process::exit(2);
+                    });
+                    let src = source.unwrap_or_else(|| {
+                        eprintln!("evolve diagnose requires --source <name>");
+                        std::process::exit(2);
+                    });
+                    EvolveSubcmd::Diagnose { run_id: rid, source: src, symptoms: symptom }
+                }
+            };
+            commands::evolve::run(EvolveArgs { sub, registry_path })
         }
         Cmd::Rag { vault_root, canonical_root, query, limit, json } => {
             use commands::rag::RagArgs;
