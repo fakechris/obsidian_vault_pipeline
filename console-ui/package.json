@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cosmograph/cosmos": "^1.6.1",
     "@types/cytoscape": "^3.21.9",
     "3d-force-graph": "^1.73.0",
     "cytoscape": "^3.34.0",

@@ -179,6 +179,22 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
         .collect()
 }
 
+/// Union-find root with path compression. Used by the graph community
+/// (cluster) pass so it scales to tens of thousands of claims.
+fn uf_find(parent: &mut [usize], x: usize) -> usize {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut cur = x;
+    while parent[cur] != cur {
+        let next = parent[cur];
+        parent[cur] = root;
+        cur = next;
+    }
+    root
+}
+
 fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let records = load_active_records(state);
     let model = state.current_model();
@@ -330,25 +346,59 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
     }
 
-    // Connect claims that draw from the same source(s). This is the
-    // graph's connective tissue: without it the layout is a scatter of
-    // disconnected provenance stars (themes are per-claim, so they can't
-    // link anything). Each unordered pair gets at most one edge, weighted
-    // by the number of shared sources.
-    let claim_src_vec: Vec<(&String, &std::collections::BTreeSet<String>)> =
-        claim_sources.iter().collect();
-    for i in 0..claim_src_vec.len() {
-        for j in (i + 1)..claim_src_vec.len() {
-            let (a_id, a_src) = claim_src_vec[i];
-            let (b_id, b_src) = claim_src_vec[j];
-            let shared = a_src.intersection(b_src).count();
-            if shared > 0 {
-                edges.push(GEdge {
-                    source: a_id.clone(),
-                    target: b_id.clone(),
-                    edge_type: "related".into(),
-                    weight: Some(shared),
-                });
+    // Build the source → claims inverted index once; reused for both the
+    // shares-source edges and the community (cluster) assignment.
+    let mut source_claims: HashMap<String, Vec<String>> = HashMap::new();
+    for (claim_id, srcs) in &claim_sources {
+        for s in srcs {
+            source_claims
+                .entry(s.clone())
+                .or_default()
+                .push(claim_id.clone());
+        }
+    }
+
+    // Connect claims that draw from the same source(s) — the graph's
+    // connective tissue (themes are per-claim, so they can't link anything).
+    // Small graphs get exact pairwise edges weighted by the number of shared
+    // sources (rich, thick edges). Large graphs would blow up O(n²) and emit
+    // millions of edges, so we chain each source's claims instead — linear in
+    // citations, same connectivity, bounded edge count.
+    if claim_sources.len() <= 400 {
+        let claim_src_vec: Vec<(&String, &std::collections::BTreeSet<String>)> =
+            claim_sources.iter().collect();
+        for i in 0..claim_src_vec.len() {
+            for j in (i + 1)..claim_src_vec.len() {
+                let shared =
+                    claim_src_vec[i].1.intersection(claim_src_vec[j].1).count();
+                if shared > 0 {
+                    edges.push(GEdge {
+                        source: claim_src_vec[i].0.clone(),
+                        target: claim_src_vec[j].0.clone(),
+                        edge_type: "related".into(),
+                        weight: Some(shared),
+                    });
+                }
+            }
+        }
+    } else {
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for claims in source_claims.values() {
+            for w in claims.windows(2) {
+                let (a, b) = if w[0] <= w[1] {
+                    (w[0].clone(), w[1].clone())
+                } else {
+                    (w[1].clone(), w[0].clone())
+                };
+                if a != b && seen.insert((a.clone(), b.clone())) {
+                    edges.push(GEdge {
+                        source: a,
+                        target: b,
+                        edge_type: "related".into(),
+                        weight: Some(1),
+                    });
+                }
             }
         }
     }
@@ -362,51 +412,46 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
     }
 
-    // Cluster (community) assignment: connected components over `related`
-    // edges, so claims that chain together through shared sources land in
-    // one cluster. Units/sources inherit the cluster of the claim they hang
-    // off. This is what lets the client color by community and stay legible
-    // when the graph grows to hundreds of nodes.
+    // Cluster (community) assignment via union-find over claims that share a
+    // source — O(citations·α), so it scales to tens of thousands of claims.
+    // Units/sources inherit the cluster of the claim they hang off.
     {
-        let mut claim_adj: HashMap<&str, Vec<&str>> = HashMap::new();
-        for e in &edges {
-            if e.edge_type == "related" {
-                claim_adj.entry(&e.source).or_default().push(&e.target);
-                claim_adj.entry(&e.target).or_default().push(&e.source);
-            }
-        }
         let claim_ids: Vec<String> = nodes
             .values()
             .filter(|n| n.node_type == "claim")
             .map(|n| n.id.clone())
             .collect();
-        let mut claim_cluster: HashMap<String, usize> = HashMap::new();
-        let mut next = 1usize;
-        for cid in &claim_ids {
-            if claim_cluster.contains_key(cid) {
-                continue;
-            }
-            // BFS this component.
-            let mut stack = vec![cid.as_str()];
-            while let Some(cur) = stack.pop() {
-                if claim_cluster.contains_key(cur) {
-                    continue;
-                }
-                claim_cluster.insert(cur.to_string(), next);
-                if let Some(neigh) = claim_adj.get(cur) {
-                    for n in neigh {
-                        if !claim_cluster.contains_key(*n) {
-                            stack.push(n);
-                        }
+        let mut idx: HashMap<&str, usize> = HashMap::new();
+        for (i, c) in claim_ids.iter().enumerate() {
+            idx.insert(c.as_str(), i);
+        }
+        let mut parent: Vec<usize> = (0..claim_ids.len()).collect();
+        for claims in source_claims.values() {
+            let mut members =
+                claims.iter().filter_map(|c| idx.get(c.as_str()).copied());
+            if let Some(first) = members.next() {
+                for ci in members {
+                    let ra = uf_find(&mut parent, first);
+                    let rb = uf_find(&mut parent, ci);
+                    if ra != rb {
+                        parent[rb] = ra;
                     }
                 }
             }
-            next += 1;
         }
-        // Write cluster onto claims.
-        for (id, c) in &claim_cluster {
-            if let Some(n) = nodes.get_mut(id) {
-                n.cluster = *c;
+        let mut root_to_cluster: HashMap<usize, usize> = HashMap::new();
+        let mut next = 1usize;
+        let mut claim_cluster: HashMap<String, usize> = HashMap::new();
+        for (i, c) in claim_ids.iter().enumerate() {
+            let r = uf_find(&mut parent, i);
+            let cl = *root_to_cluster.entry(r).or_insert_with(|| {
+                let v = next;
+                next += 1;
+                v
+            });
+            claim_cluster.insert(c.clone(), cl);
+            if let Some(n) = nodes.get_mut(c) {
+                n.cluster = cl;
             }
         }
         // Propagate claim → unit (cites), then unit → source (extracted_from).

@@ -3,7 +3,7 @@ import cytoscape from 'cytoscape';
 import fcose from 'cytoscape-fcose';
 import { fetchGraph, fetchClaim } from './shared/api';
 import { COLORS, nodeColor } from './shared/theme';
-import type { GraphNode, GraphEdge, ClaimDetail } from './shared/types';
+import type { GraphNode, GraphEdge, GraphData, ClaimDetail } from './shared/types';
 
 cytoscape.use(fcose);
 
@@ -266,10 +266,10 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
 
 // ── Initialization ──
 
-export async function init2D() {
+export async function init2D(preloaded?: GraphData) {
   const loading = showLoading('Loading knowledge graph…');
   try {
-    const data = await fetchGraph();
+    const data = preloaded ?? await fetchGraph();
     allNodes = data.nodes;
     allEdges = data.edges;
     if (allNodes.length > 600) {
