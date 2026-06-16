@@ -114,10 +114,15 @@ function createNodeObject(node: FGNode): THREE.Object3D {
     group.add(ring);
   }
 
-  // Always-visible text label
-  const label = createTextLabel(node.label, node.type);
-  label.position.set(0, radius + 4, 0);
-  group.add(label);
+  // Label only claims by default — units/sources are provenance detail and
+  // labelling all of them turns 3D space into a wall of text. Identify them
+  // via click → detail panel instead.
+  let label: CSS2DObject | null = null;
+  if (node.type === 'claim') {
+    label = createTextLabel(node.label, node.type);
+    label.position.set(0, radius + 4, 0);
+    group.add(label);
+  }
 
   (group as any).__radius = radius;
   (group as any).__coreMat = coreMat;
@@ -212,12 +217,14 @@ const graph = new ForceGraph3D(container, { extraRenderers })
   .nodeLabel(() => '')
   .linkColor((e: object) => {
     const edge = e as FGEdge;
+    if (edge.type === 'related') return '#fbbf24cc';
     if (edge.type === 'cites') return '#a78bfa88';
     if (edge.type === 'extracted_from') return '#67e8f966';
     return '#64748b66';
   })
   .linkWidth((e: object) => {
     const edge = e as FGEdge;
+    if (edge.type === 'related') return 1.4;
     return edge.type === 'cites' ? GRAPH.linkWidthCites : GRAPH.linkWidth;
   })
   .linkCurvature(0.15)

@@ -26,27 +26,37 @@ const statsEl = document.getElementById('graph-stats');
 
 // ── Cytoscape style definitions ──
 
+// Label styling shared by every node: a dark rounded pill sits *below* the
+// node so text never overlaps the circle or its neighbors. Labels are clipped
+// to a single line and hidden when zoomed out (min-zoomed-font-size).
+const LABEL_BASE = {
+  'text-valign': 'bottom',
+  'text-halign': 'center',
+  'text-margin-y': 5,
+  'font-family': 'Inter, Noto Sans SC, system-ui, sans-serif',
+  'font-size': '11px',
+  'font-weight': 500,
+  'color': '#e2e8f0',
+  'text-max-width': '110px',
+  'text-wrap': 'ellipsis',
+  'text-background-color': '#0b0d13',
+  'text-background-opacity': 0.78,
+  'text-background-padding': '3px',
+  'text-background-shape': 'roundrectangle',
+  'min-zoomed-font-size': 9,
+} as const;
+
 const CY_STYLE: cytoscape.StylesheetStyle[] = [
   {
     selector: 'node',
     style: {
       'label': 'data(label)',
-      'text-valign': 'center',
-      'text-halign': 'center',
-      'font-family': 'Inter, Noto Sans SC, system-ui, sans-serif',
-      'font-size': '11px',
-      'font-weight': 500,
-      'color': '#e2e8f0',
-      'text-outline-color': '#0f1117',
-      'text-outline-width': 2,
-      'text-max-width': '120px',
-      'text-wrap': 'ellipsis',
-      'background-opacity': 0.85,
+      ...LABEL_BASE,
+      'background-opacity': 0.9,
       'border-width': 2,
       'overlay-padding': '4px',
-      'transition-property': 'opacity, background-color, border-color, border-width',
-      'transition-duration': 200,
-      'min-zoomed-font-size': 8,
+      'transition-property': 'opacity, background-color, border-color, border-width, text-opacity',
+      'transition-duration': 180,
     } as any,
   },
   {
@@ -54,25 +64,27 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
     style: {
       'background-color': '#c4b5fd',
       'border-color': '#8b5cf6',
-      'font-size': '13px',
+      'font-size': '12px',
       'font-weight': 600,
-      'color': '#faf5ff',
-      'width': 'mapData(degree, 0, 10, 40, 80)',
-      'height': 'mapData(degree, 0, 10, 40, 80)',
-      'text-outline-color': '#2e1065',
-      'text-outline-width': 2.5,
+      'color': '#f5f3ff',
+      'width': 'mapData(degree, 1, 14, 34, 92)',
+      'height': 'mapData(degree, 1, 14, 34, 92)',
+      'z-index': 3,
     } as any,
   },
+  // Units and sources are provenance detail — keep them small and, by
+  // default, label-free so the canvas isn't a wall of text. Their labels
+  // reappear on hover / search (see .neighbor / .highlighted / .search-match).
   {
     selector: 'node[type="unit"]',
     style: {
       'background-color': '#93c5fd',
       'border-color': '#3b82f6',
-      'font-size': '11px',
       'color': '#eff6ff',
-      'width': 'mapData(degree, 0, 10, 28, 60)',
-      'height': 'mapData(degree, 0, 10, 28, 60)',
-      'text-outline-color': '#1e3a5f',
+      'width': 'mapData(degree, 1, 10, 14, 34)',
+      'height': 'mapData(degree, 1, 10, 14, 34)',
+      'text-opacity': 0,
+      'z-index': 1,
     } as any,
   },
   {
@@ -82,41 +94,55 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
       'border-color': '#22c55e',
       'font-size': '10px',
       'color': '#f0fdf4',
-      'width': 'mapData(degree, 0, 10, 24, 50)',
-      'height': 'mapData(degree, 0, 10, 24, 50)',
-      'text-outline-color': '#14532d',
+      'width': 'mapData(degree, 1, 14, 20, 56)',
+      'height': 'mapData(degree, 1, 14, 20, 56)',
+      'text-opacity': 0,
+      'z-index': 2,
     } as any,
   },
   {
     selector: 'edge',
     style: {
-      'width': 1.5,
-      'line-color': '#334155',
-      'target-arrow-color': '#334155',
-      'target-arrow-shape': 'triangle',
-      'arrow-scale': 0.8,
+      'width': 1,
+      'line-color': '#475569',
       'curve-style': 'bezier',
-      'opacity': 0.5,
+      'opacity': 0.45,
       'transition-property': 'opacity, line-color, width',
-      'transition-duration': 200,
+      'transition-duration': 180,
     } as any,
   },
+  // claim ↔ claim "shares a source" — the connective tissue. Undirected,
+  // accent-colored, thickness scales with how many sources are shared.
+  {
+    selector: 'edge[type="related"]',
+    style: {
+      'line-color': '#fbbf24',
+      'width': 'mapData(weight, 1, 4, 2, 7)',
+      'opacity': 0.55,
+      'curve-style': 'bezier',
+      'line-cap': 'round',
+      'z-index': 4,
+    } as any,
+  },
+  // claim → unit (which sentence backs the claim)
   {
     selector: 'edge[type="cites"]',
     style: {
-      'line-color': '#7c3aed',
-      'target-arrow-color': '#7c3aed',
-      'width': 2.5,
-      'opacity': 0.6,
+      'line-color': '#a78bfa',
+      'target-arrow-color': '#a78bfa',
+      'target-arrow-shape': 'triangle',
+      'arrow-scale': 0.8,
+      'width': 1.6,
+      'opacity': 0.5,
     } as any,
   },
+  // unit → source (where the sentence came from) — quietest layer
   {
     selector: 'edge[type="extracted_from"]',
     style: {
-      'line-color': '#0891b2',
-      'target-arrow-color': '#0891b2',
-      'width': 1.5,
-      'opacity': 0.45,
+      'line-color': '#3f4d63',
+      'width': 1,
+      'opacity': 0.32,
     } as any,
   },
   // Hover/highlight states
@@ -125,35 +151,38 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
     style: {
       'border-width': 4,
       'background-opacity': 1,
-      'z-index': 10,
+      'text-opacity': 1,
+      'z-index': 30,
     } as any,
   },
   {
     selector: 'node.neighbor',
     style: {
       'border-width': 3,
-      'background-opacity': 0.95,
-      'z-index': 9,
+      'background-opacity': 0.98,
+      'text-opacity': 1,
+      'z-index': 29,
     } as any,
   },
   {
     selector: 'node.faded',
     style: {
-      'opacity': 0.08,
+      'opacity': 0.07,
+      'text-opacity': 0,
     } as any,
   },
   {
     selector: 'edge.highlighted',
     style: {
-      'opacity': 0.9,
+      'opacity': 0.95,
       'width': 3,
-      'z-index': 10,
+      'z-index': 30,
     } as any,
   },
   {
     selector: 'edge.faded',
     style: {
-      'opacity': 0.04,
+      'opacity': 0.03,
     } as any,
   },
   {
@@ -162,7 +191,8 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
       'border-width': 4,
       'border-color': '#fbbf24',
       'background-opacity': 1,
-      'z-index': 20,
+      'text-opacity': 1,
+      'z-index': 40,
     } as any,
   },
 ];
@@ -212,15 +242,21 @@ export async function init2D() {
         name: 'fcose',
         animate: true,
         animationDuration: 800,
-        nodeRepulsion: () => 8000,
-        idealEdgeLength: () => 100,
-        edgeElasticity: () => 0.45,
-        gravity: 0.25,
-        gravityRange: 1.5,
+        nodeRepulsion: () => 9000,
+        // Pull related claims close; let provenance leaves (cites /
+        // extracted_from) stretch out so the claim network reads as the core.
+        idealEdgeLength: (edge: any) =>
+          edge.data('type') === 'related' ? 70 : 150,
+        edgeElasticity: (edge: any) =>
+          edge.data('type') === 'related' ? 0.55 : 0.3,
+        gravity: 0.6,
+        gravityRangeCompound: 1.5,
+        gravityRange: 2.4,
         numIter: 2500,
         quality: 'proof',
         randomize: true,
-        nodeSeparation: 80,
+        nodeSeparation: 90,
+        packComponents: true,
       } as any,
       minZoom: 0.15,
       maxZoom: 4,

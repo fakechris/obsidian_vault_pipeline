@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 
 use ovp_domain::crystal::{fold_ledger, CrystalStatus, DurableRecord, StoreEvent};
 use ovp_domain::units::Unit;
-use ovp_domain::VaultLayout;
+use ovp_domain::{truncate_chars, VaultLayout};
 use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
 use ovp_intake::read_jsonl;
 use tiny_http::{Header, Method, Response, Server};
@@ -223,18 +223,28 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         target: String,
         #[serde(rename = "type")]
         edge_type: String,
+        /// For `related` (claim↔claim) edges: how many sources the two
+        /// claims share. Drives edge thickness in the client.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        weight: Option<usize>,
     }
 
     let mut nodes: HashMap<String, GNode> = HashMap::new();
     let mut edges: Vec<GEdge> = Vec::new();
+    // claim_id → set of source node ids it draws evidence from. Two claims
+    // that share a source are topically related; we materialize that as a
+    // `related` edge so the graph is a connected claim network rather than a
+    // forest of isolated claim→unit→source stars.
+    let mut claim_sources: HashMap<String, std::collections::BTreeSet<String>> =
+        HashMap::new();
 
     for rec in &records {
         let claim_id = format!("claim:{}", rec.claim_key);
         nodes.entry(claim_id.clone()).or_insert_with(|| GNode {
             id: claim_id.clone(),
             node_type: "claim".into(),
-            label: if rec.claim.len() > 80 {
-                format!("{}…", &rec.claim[..77])
+            label: if rec.claim.chars().count() > 80 {
+                format!("{}…", truncate_chars(&rec.claim, 77))
             } else {
                 rec.claim.clone()
             },
@@ -249,8 +259,8 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             nodes.entry(unit_id.clone()).or_insert_with(|| GNode {
                 id: unit_id.clone(),
                 node_type: "unit".into(),
-                label: if cit.quote.len() > 60 {
-                    format!("{}…", &cit.quote[..57])
+                label: if cit.quote.chars().count() > 60 {
+                    format!("{}…", truncate_chars(&cit.quote, 57))
                 } else {
                     cit.quote.clone()
                 },
@@ -264,6 +274,7 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                 source: claim_id.clone(),
                 target: unit_id.clone(),
                 edge_type: "cites".into(),
+                weight: None,
             });
 
             let source_node_id =
@@ -297,11 +308,40 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                     sid
                 };
 
+            claim_sources
+                .entry(claim_id.clone())
+                .or_default()
+                .insert(source_node_id.clone());
+
             edges.push(GEdge {
                 source: unit_id,
                 target: source_node_id,
                 edge_type: "extracted_from".into(),
+                weight: None,
             });
+        }
+    }
+
+    // Connect claims that draw from the same source(s). This is the
+    // graph's connective tissue: without it the layout is a scatter of
+    // disconnected provenance stars (themes are per-claim, so they can't
+    // link anything). Each unordered pair gets at most one edge, weighted
+    // by the number of shared sources.
+    let claim_src_vec: Vec<(&String, &std::collections::BTreeSet<String>)> =
+        claim_sources.iter().collect();
+    for i in 0..claim_src_vec.len() {
+        for j in (i + 1)..claim_src_vec.len() {
+            let (a_id, a_src) = claim_src_vec[i];
+            let (b_id, b_src) = claim_src_vec[j];
+            let shared = a_src.intersection(b_src).count();
+            if shared > 0 {
+                edges.push(GEdge {
+                    source: a_id.clone(),
+                    target: b_id.clone(),
+                    edge_type: "related".into(),
+                    weight: Some(shared),
+                });
+            }
         }
     }
 
