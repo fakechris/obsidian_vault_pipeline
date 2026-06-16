@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OVP Console — Visualization</title>
+  <link rel="stylesheet" href="./src/styles/global.css" />
+</head>
+<body>
+  <nav class="nav-bar">
+    <span class="nav-title">OVP Visualization</span>
+    <a href="/viz/graph.html" class="nav-link active">3D Graph</a>
+    <a href="/viz/flow.html" class="nav-link">Data Flow</a>
+    <a href="/viz/explore.html" class="nav-link">Explore</a>
+    <a href="/viz/monitor.html" class="nav-link">Monitor</a>
+    <a href="/" class="nav-link nav-back">← Console</a>
+  </nav>
+  <main class="page-content">
+    <h1>OVP Knowledge Visualization</h1>
+    <div class="card-grid">
+      <a href="/viz/graph.html" class="card">
+        <h2>3D Knowledge Graph</h2>
+        <p>Crystal claims, units, and sources in an interactive 3D force-directed graph with particle edges and bloom lighting.</p>
+      </a>
+      <a href="/viz/flow.html" class="card">
+        <h2>Pipeline Data Flow</h2>
+        <p>Sankey diagram showing how data flows from intake through reader, units, cards, to crystal.</p>
+      </a>
+      <a href="/viz/explore.html" class="card">
+        <h2>Provenance Explorer</h2>
+        <p>Search claims and trace the full citation chain back to source quotes.</p>
+      </a>
+      <a href="/viz/monitor.html" class="card">
+        <h2>Live Monitor</h2>
+        <p>Real-time pipeline progress via SSE — watch sources move through stages.</p>
+      </a>
+    </div>
+  </main>
+</body>
+</html>

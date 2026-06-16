@@ -1052,6 +1052,7 @@ version = "0.1.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
+ "ovp-intake",
  "serde",
  "serde_json",
  "tiny_http",

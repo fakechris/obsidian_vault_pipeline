@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
+ovp-intake = { path = "../ovp-intake" }
 serde.workspace = true
 serde_json.workspace = true
 tiny_http = "0.12"
