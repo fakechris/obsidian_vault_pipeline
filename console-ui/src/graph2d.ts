@@ -169,6 +169,38 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
       'opacity': 0.32,
     } as any,
   },
+  // Cheap straight edges for big graphs (no arrowheads, fastest to draw).
+  {
+    selector: 'edge.fast-edge',
+    style: {
+      'curve-style': 'haystack',
+      'haystack-radius': 0,
+      'target-arrow-shape': 'none',
+    } as any,
+  },
+  // At scale the within-cluster `related` mesh gets dense; keep it faint so
+  // it reads as a halo, not a solid fill. Cluster position/color carry the
+  // community signal.
+  {
+    selector: 'edge.fast-edge[type="related"]',
+    style: { 'opacity': 0.14, 'width': 1 } as any,
+  },
+  // Compact node sizing for big graphs so clusters don't overlap into blobs.
+  {
+    selector: 'node.compact[type="claim"]',
+    style: {
+      'width': 'mapData(degree, 1, 14, 12, 34)',
+      'height': 'mapData(degree, 1, 14, 12, 34)',
+    } as any,
+  },
+  {
+    selector: 'node.compact[type="source"]',
+    style: { 'width': 'mapData(degree, 1, 14, 8, 22)', 'height': 'mapData(degree, 1, 14, 8, 22)' } as any,
+  },
+  {
+    selector: 'node.compact[type="unit"]',
+    style: { 'width': 8, 'height': 8 } as any,
+  },
   // Level-of-detail: hide label when the node isn't important enough at the
   // current zoom. Declared BEFORE highlight states so hover/search re-show it.
   {
@@ -235,10 +267,14 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
 // ── Initialization ──
 
 export async function init2D() {
+  const loading = showLoading('Loading knowledge graph…');
   try {
     const data = await fetchGraph();
     allNodes = data.nodes;
     allEdges = data.edges;
+    if (allNodes.length > 600) {
+      loading.textContent = `Laying out ${allNodes.length} nodes…`;
+    }
 
     // Compute degree
     allNodes.forEach(n => {
@@ -272,37 +308,56 @@ export async function init2D() {
 
     // Layout cost scales badly with node count: 'proof' quality + animation
     // is fine for a few hundred elements but janks on thousands. Drop to a
-    // cheaper, non-animated pass once the graph is large.
+    // cheaper, non-animated pass once the graph is large, and crank repulsion
+    // + edge length so a cluster spreads into a readable mesh instead of a
+    // solid overlapping blob.
     const big = elements.length > 600;
 
     cy = cytoscape({
       container,
       elements,
       style: CY_STYLE,
+      // Rendering hints — the difference between "unusable" and "smooth" on a
+      // 1000+ element graph: render a cached texture while panning/zooming,
+      // drop edges mid-gesture, and don't pay for retina pixels.
+      textureOnViewport: true,
+      hideEdgesOnViewport: big,
+      pixelRatio: big ? 1 : (undefined as any),
+      motionBlur: false,
       layout: {
         name: 'fcose',
         animate: !big,
         animationDuration: 800,
-        nodeRepulsion: () => 9000,
-        // Pull related claims close; let provenance leaves (cites /
-        // extracted_from) stretch out so the claim network reads as the core.
+        // Strong repulsion on big graphs so intra-cluster claims fan out;
+        // longer `related` edges keep the cluster open rather than collapsed.
+        nodeRepulsion: () => (big ? 80000 : 9000),
         idealEdgeLength: (edge: any) =>
-          edge.data('type') === 'related' ? 70 : 150,
+          edge.data('type') === 'related' ? (big ? 150 : 70) : (big ? 220 : 150),
         edgeElasticity: (edge: any) =>
-          edge.data('type') === 'related' ? 0.55 : 0.3,
-        gravity: 0.6,
+          edge.data('type') === 'related' ? 0.45 : 0.25,
+        // Weaker gravity at scale → components breathe out (the "sparse,
+        // comfortable" feel) instead of being pulled into the center.
+        gravity: big ? 0.12 : 0.6,
         gravityRangeCompound: 1.5,
-        gravityRange: 2.4,
-        numIter: big ? 1000 : 2500,
+        gravityRange: big ? 4.0 : 2.4,
+        numIter: big ? 300 : 2500,
         quality: big ? 'default' : 'proof',
         randomize: true,
-        nodeSeparation: 90,
+        nodeSeparation: big ? 180 : 90,
         packComponents: true,
       } as any,
-      minZoom: 0.15,
+      minZoom: 0.06,
       maxZoom: 4,
       wheelSensitivity: 0.3,
     });
+
+    // On big graphs, straight "haystack" edges are far cheaper to draw than
+    // beziers (no arrowheads, but worth it for interactivity at scale), and
+    // compact node sizing keeps clusters from overlapping into blobs.
+    if (big) {
+      cy.edges().addClass('fast-edge');
+      cy.nodes().addClass('compact');
+    }
 
     // LOD/thinning prep: rank claims by degree, decide if the graph is big
     // enough to warrant hiding detail when zoomed out.
@@ -327,10 +382,13 @@ export async function init2D() {
       requestAnimationFrame(() => { lodScheduled = false; applyLOD(); });
     };
     cy.on('zoom', scheduleLOD);
-    cy.on('layoutstop', applyLOD);
+    cy.on('layoutstop', () => { applyLOD(); loading.remove(); });
     applyLOD();
+    // Fallback: ensure the overlay never gets stuck if layoutstop is missed.
+    setTimeout(() => loading.remove(), 12000);
 
   } catch (err) {
+    loading.remove();
     console.error('Failed to load graph data:', err);
     container.innerHTML = `
       <div style="
@@ -652,6 +710,19 @@ function focusNode(id: string) {
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
+}
+
+// ── Loading overlay (layout on a big graph blocks for a few seconds) ──
+
+function showLoading(text: string): HTMLElement {
+  const el = document.createElement('div');
+  el.textContent = text;
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:200;display:flex;align-items:center;' +
+    'justify-content:center;background:#0f1117;color:#94a3b8;font-size:14px;' +
+    'font-family:Inter,Noto Sans SC,system-ui,sans-serif;letter-spacing:0.02em;';
+  document.body.appendChild(el);
+  return el;
 }
 
 // ── Cleanup (for view switching) ──
