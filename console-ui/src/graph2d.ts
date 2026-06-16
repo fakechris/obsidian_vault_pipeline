@@ -12,6 +12,25 @@ cytoscape.use(fcose);
 let cy: cytoscape.Core | null = null;
 let allNodes: GraphNode[] = [];
 let allEdges: GraphEdge[] = [];
+let colorMode: 'type' | 'cluster' = 'type';
+// Claim ids sorted by degree (descending) — drives level-of-detail labels:
+// at low zoom only the top hubs are labeled, more appear as you zoom in.
+let claimsByDegree: string[] = [];
+let isLarge = false; // engage LOD + thinning only when the graph is big
+
+// Distinct, evenly-spaced hues for community coloring. Cluster 0 (no
+// community) stays neutral gray; clusters 1..n cycle the palette.
+const CLUSTER_HUES = [265, 210, 145, 35, 0, 320, 175, 50, 240, 110, 300, 20];
+function clusterColor(cluster: number | undefined): string {
+  if (!cluster) return '#64748b';
+  const h = CLUSTER_HUES[(cluster - 1) % CLUSTER_HUES.length];
+  return `hsl(${h}, 62%, 68%)`;
+}
+function clusterBorder(cluster: number | undefined): string {
+  if (!cluster) return '#475569';
+  const h = CLUSTER_HUES[(cluster - 1) % CLUSTER_HUES.length];
+  return `hsl(${h}, 60%, 45%)`;
+}
 
 // ── DOM refs (shared with graph-main) ──
 
@@ -23,6 +42,11 @@ const themeFilter = document.getElementById('theme-filter') as HTMLSelectElement
 const typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const statsEl = document.getElementById('graph-stats');
+const colorModeBtn = document.getElementById('color-mode') as HTMLButtonElement | null;
+const askPanel = document.getElementById('ask-panel');
+const askToggle = document.getElementById('toggle-ask') as HTMLButtonElement | null;
+const askInput = document.getElementById('ask-input') as HTMLInputElement | null;
+const askResults = document.getElementById('ask-results');
 
 // ── Cytoscape style definitions ──
 
@@ -145,6 +169,17 @@ const CY_STYLE: cytoscape.StylesheetStyle[] = [
       'opacity': 0.32,
     } as any,
   },
+  // Level-of-detail: hide label when the node isn't important enough at the
+  // current zoom. Declared BEFORE highlight states so hover/search re-show it.
+  {
+    selector: 'node.label-suppressed',
+    style: { 'text-opacity': 0 } as any,
+  },
+  // Thinning: leaf nodes hidden when zoomed out on a large graph.
+  {
+    selector: 'node.thinned',
+    style: { 'display': 'none' } as any,
+  },
   // Hover/highlight states
   {
     selector: 'node.highlighted',
@@ -222,6 +257,7 @@ export async function init2D() {
           strength: n.strength || '',
           case_id: n.case_id || '',
           url: n.url || '',
+          cluster: n.cluster || 0,
         },
       })),
       ...allEdges.map((e, i) => ({
@@ -234,13 +270,18 @@ export async function init2D() {
       })),
     ];
 
+    // Layout cost scales badly with node count: 'proof' quality + animation
+    // is fine for a few hundred elements but janks on thousands. Drop to a
+    // cheaper, non-animated pass once the graph is large.
+    const big = elements.length > 600;
+
     cy = cytoscape({
       container,
       elements,
       style: CY_STYLE,
       layout: {
         name: 'fcose',
-        animate: true,
+        animate: !big,
         animationDuration: 800,
         nodeRepulsion: () => 9000,
         // Pull related claims close; let provenance leaves (cites /
@@ -252,8 +293,8 @@ export async function init2D() {
         gravity: 0.6,
         gravityRangeCompound: 1.5,
         gravityRange: 2.4,
-        numIter: 2500,
-        quality: 'proof',
+        numIter: big ? 1000 : 2500,
+        quality: big ? 'default' : 'proof',
         randomize: true,
         nodeSeparation: 90,
         packComponents: true,
@@ -263,9 +304,31 @@ export async function init2D() {
       wheelSensitivity: 0.3,
     });
 
+    // LOD/thinning prep: rank claims by degree, decide if the graph is big
+    // enough to warrant hiding detail when zoomed out.
+    claimsByDegree = allNodes
+      .filter(n => n.type === 'claim')
+      .sort((a, b) => (b.degree || 0) - (a.degree || 0))
+      .map(n => n.id);
+    isLarge = allNodes.length > 80;
+
     setupInteractions();
     populateFilters();
     updateStats();
+    setupAsk();
+    setupColorMode();
+
+    // Re-apply LOD whenever the view scale changes, and once the layout
+    // settles. Throttled to one pass per animation frame.
+    let lodScheduled = false;
+    const scheduleLOD = () => {
+      if (lodScheduled) return;
+      lodScheduled = true;
+      requestAnimationFrame(() => { lodScheduled = false; applyLOD(); });
+    };
+    cy.on('zoom', scheduleLOD);
+    cy.on('layoutstop', applyLOD);
+    applyLOD();
 
   } catch (err) {
     console.error('Failed to load graph data:', err);
@@ -448,6 +511,147 @@ function updateStats() {
     <span><span class="dot source-dot"></span>${sources} sources</span>
     <span style="color:#64748b">${allEdges.length} edges</span>
   `;
+}
+
+// ── Color mode: by node type (default) or by community/cluster ──
+
+function setupColorMode() {
+  if (!colorModeBtn) return;
+  colorModeBtn.addEventListener('click', () => {
+    colorMode = colorMode === 'type' ? 'cluster' : 'type';
+    applyColorMode();
+    colorModeBtn!.textContent =
+      colorMode === 'cluster' ? 'Color: Cluster' : 'Color: Type';
+    colorModeBtn!.classList.toggle('active', colorMode === 'cluster');
+  });
+}
+
+function applyColorMode() {
+  if (!cy) return;
+  if (colorMode === 'cluster') {
+    cy.batch(() => {
+      cy!.nodes().forEach(n => {
+        const c = n.data('cluster') as number;
+        n.style('background-color', clusterColor(c));
+        n.style('border-color', clusterBorder(c));
+      });
+    });
+  } else {
+    cy.batch(() => {
+      cy!.nodes().forEach(n => {
+        n.removeStyle('background-color');
+        n.removeStyle('border-color');
+      });
+    });
+  }
+}
+
+// ── Level-of-detail: reveal labels / leaf nodes progressively by zoom ──
+
+function applyLOD() {
+  if (!cy) return;
+  const z = cy.zoom();
+
+  // How many of the top claims (by degree) carry a label at this zoom.
+  let labelTopN: number;
+  if (!isLarge) labelTopN = claimsByDegree.length;      // small graph: all
+  else if (z < 0.35) labelTopN = 8;
+  else if (z < 0.7) labelTopN = 24;
+  else if (z < 1.2) labelTopN = 64;
+  else labelTopN = claimsByDegree.length;
+  const labeled = new Set(claimsByDegree.slice(0, labelTopN));
+
+  // Thinning: drop unit leaves when zoomed out on a big graph.
+  const thin = isLarge && z < 0.6;
+
+  cy.batch(() => {
+    cy!.nodes('[type="claim"]').forEach(n => {
+      n.toggleClass('label-suppressed', !labeled.has(n.id()));
+    });
+    cy!.nodes('[type="unit"]').forEach(n => {
+      n.toggleClass('thinned', thin);
+    });
+  });
+}
+
+// ── Ask panel: search the loaded graph, then focus + highlight on click ──
+
+function setupAsk() {
+  if (askToggle && askPanel) {
+    askToggle.addEventListener('click', () => {
+      const open = askPanel!.classList.toggle('open');
+      askToggle!.classList.toggle('active', open);
+      if (open && askInput) askInput.focus();
+    });
+  }
+  if (!askInput || !askResults) return;
+  let t: ReturnType<typeof setTimeout>;
+  askInput.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(runAsk, 200);
+  });
+}
+
+function runAsk() {
+  if (!cy || !askResults) return;
+  const q = (askInput?.value || '').toLowerCase().trim();
+  cy.elements().removeClass('search-match');
+  if (!q) {
+    askResults.innerHTML =
+      '<p class="ask-empty">Search claims, evidence quotes, and sources.</p>';
+    return;
+  }
+  const order: Record<string, number> = { claim: 0, source: 1, unit: 2 };
+  const hits = allNodes
+    .filter(n =>
+      n.label.toLowerCase().includes(q) ||
+      (n.theme || '').toLowerCase().includes(q))
+    .sort((a, b) =>
+      (order[a.type] - order[b.type]) || ((b.degree || 0) - (a.degree || 0)))
+    .slice(0, 40);
+
+  hits.forEach(h => cy!.getElementById(h.id).addClass('search-match'));
+
+  if (hits.length === 0) {
+    askResults.innerHTML = '<p class="ask-empty">No matches.</p>';
+    return;
+  }
+  askResults.innerHTML = hits
+    .map(h => `
+      <div class="ask-item" data-id="${h.id}">
+        <span class="ask-kind ask-kind-${h.type}">${h.type}</span>
+        <span class="ask-label">${escapeHtml(h.label)}</span>
+      </div>`)
+    .join('');
+  askResults.querySelectorAll('.ask-item').forEach(el => {
+    el.addEventListener('click', () =>
+      focusNode(el.getAttribute('data-id')!));
+  });
+}
+
+function focusNode(id: string) {
+  if (!cy) return;
+  const node = cy.getElementById(id);
+  if (node.empty()) return;
+  // Ensure a thinned/unlabeled node becomes visible.
+  cy.animate(
+    { center: { eles: node }, zoom: Math.max(cy.zoom(), 1.6) },
+    { duration: 500 }
+  );
+  const neighborhood = node.closedNeighborhood();
+  cy.elements().addClass('faded');
+  neighborhood.removeClass('faded thinned');
+  node.removeClass('faded label-suppressed thinned').addClass('highlighted');
+  neighborhood.nodes().not(node).addClass('neighbor');
+  neighborhood.edges().addClass('highlighted');
+  if (node.data('type') === 'claim') showClaimDetail(id);
+  else showNodeInfo(node.data());
+  setTimeout(() => { if (cy) cy.elements().removeClass('faded'); }, 2200);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
 }
 
 // ── Cleanup (for view switching) ──

@@ -7,6 +7,7 @@ export interface GraphNode {
   strength?: string;
   case_id?: string;
   url?: string;
+  cluster?: number;
 }
 
 export interface GraphEdge {

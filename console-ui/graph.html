@@ -30,10 +30,23 @@
       <option value="unit">Units</option>
       <option value="source">Sources</option>
     </select>
-    <input type="text" id="search-input" placeholder="Search nodes…" />
+    <input type="text" id="search-input" placeholder="Filter nodes…" />
+    <button id="color-mode" title="Toggle node coloring by type or community">Color: Type</button>
+    <button id="toggle-ask" title="Search the graph">Ask ▸</button>
     <button id="toggle-dag" title="Toggle DAG / Force layout">DAG</button>
     <button id="toggle-view" title="Switch to 3D immersive view">3D</button>
     <button id="reset-camera" title="Reset camera">⟳</button>
+  </div>
+
+  <!-- Ask / search side panel -->
+  <div id="ask-panel">
+    <div class="ask-head">
+      <span>Ask the graph</span>
+    </div>
+    <input type="text" id="ask-input" placeholder="Search claims, evidence, sources…" />
+    <div id="ask-results">
+      <p class="ask-empty">Search claims, evidence quotes, and sources.</p>
+    </div>
   </div>
 
   <div id="graph-stats"></div>

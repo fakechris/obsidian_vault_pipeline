@@ -215,6 +215,10 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         #[serde(skip_serializing_if = "Option::is_none")]
         url: Option<String>,
         degree: usize,
+        /// Community id — claims in the same shared-source component get the
+        /// same cluster; units/sources inherit their claim's cluster. Drives
+        /// "color by cluster" so structure is legible at scale.
+        cluster: usize,
     }
 
     #[derive(serde::Serialize)]
@@ -252,6 +256,7 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             strength: Some(format!("{:?}", rec.strength).to_lowercase()),
             url: None,
             degree: 0,
+            cluster: 0,
         });
 
         for cit in &rec.citations {
@@ -268,6 +273,7 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                 strength: None,
                 url: None,
                 degree: 0,
+                cluster: 0,
             });
 
             edges.push(GEdge {
@@ -292,6 +298,7 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                         strength: None,
                         url: src.and_then(|s| s.url.clone()),
                         degree: 0,
+                        cluster: 0,
                     });
                     sid
                 } else {
@@ -304,6 +311,7 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                         strength: None,
                         url: None,
                         degree: 0,
+                        cluster: 0,
                     });
                     sid
                 };
@@ -351,6 +359,78 @@ fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
         if let Some(n) = nodes.get_mut(&edge.target) {
             n.degree += 1;
+        }
+    }
+
+    // Cluster (community) assignment: connected components over `related`
+    // edges, so claims that chain together through shared sources land in
+    // one cluster. Units/sources inherit the cluster of the claim they hang
+    // off. This is what lets the client color by community and stay legible
+    // when the graph grows to hundreds of nodes.
+    {
+        let mut claim_adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for e in &edges {
+            if e.edge_type == "related" {
+                claim_adj.entry(&e.source).or_default().push(&e.target);
+                claim_adj.entry(&e.target).or_default().push(&e.source);
+            }
+        }
+        let claim_ids: Vec<String> = nodes
+            .values()
+            .filter(|n| n.node_type == "claim")
+            .map(|n| n.id.clone())
+            .collect();
+        let mut claim_cluster: HashMap<String, usize> = HashMap::new();
+        let mut next = 1usize;
+        for cid in &claim_ids {
+            if claim_cluster.contains_key(cid) {
+                continue;
+            }
+            // BFS this component.
+            let mut stack = vec![cid.as_str()];
+            while let Some(cur) = stack.pop() {
+                if claim_cluster.contains_key(cur) {
+                    continue;
+                }
+                claim_cluster.insert(cur.to_string(), next);
+                if let Some(neigh) = claim_adj.get(cur) {
+                    for n in neigh {
+                        if !claim_cluster.contains_key(*n) {
+                            stack.push(n);
+                        }
+                    }
+                }
+            }
+            next += 1;
+        }
+        // Write cluster onto claims.
+        for (id, c) in &claim_cluster {
+            if let Some(n) = nodes.get_mut(id) {
+                n.cluster = *c;
+            }
+        }
+        // Propagate claim → unit (cites), then unit → source (extracted_from).
+        let mut unit_cluster: HashMap<String, usize> = HashMap::new();
+        for e in &edges {
+            if e.edge_type == "cites" {
+                if let Some(c) = claim_cluster.get(&e.source) {
+                    unit_cluster.insert(e.target.clone(), *c);
+                }
+            }
+        }
+        for (id, c) in &unit_cluster {
+            if let Some(n) = nodes.get_mut(id) {
+                n.cluster = *c;
+            }
+        }
+        for e in &edges {
+            if e.edge_type == "extracted_from" {
+                if let Some(c) = unit_cluster.get(&e.source) {
+                    if let Some(n) = nodes.get_mut(&e.target) {
+                        n.cluster = *c;
+                    }
+                }
+            }
         }
     }
 
