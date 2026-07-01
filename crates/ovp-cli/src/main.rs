@@ -423,6 +423,59 @@ enum Cmd {
         not_claiming: Option<String>,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
+    /// M32 turnkey Crystal synthesis: reader packs → units catalog + keyword
+    /// theme clusters → per-cluster cross-source synthesis (`crystal_synth/v1`)
+    /// → grounded filter → batched claim-strength (`crystal_strength/v1`) →
+    /// durable write (delegates to `crystal-write`). Offline by default
+    /// (`--client replay`); reuses every gate/store fn so it cannot drift from
+    /// `crystal-write`. NOT graph/canonical/evergreen/Referent.
+    CrystalSynth {
+        /// Glob root of reader packs. Default: `<vault-root>/40-Resources/Reader`
+        /// when `--vault-root` is set, else `<work-dir>/packs-src`.
+        #[arg(long)]
+        reader_dir: Option<PathBuf>,
+        /// Optional vault root; when set, derives reader-dir + store + cache-dir
+        /// and enables `--refresh`.
+        #[arg(long)]
+        vault_root: Option<PathBuf>,
+        /// Scratch for units-catalog.json, packs/, candidate*.json, strength.json.
+        #[arg(long, default_value = ".run/crystal-synth")]
+        work_dir: PathBuf,
+        /// Durable store. Default: `<vault-root>/.ovp/crystal` (product) or
+        /// `<work-dir>/store` (diagnostic).
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Cassette root. Default: `<vault-root>/.ovp/cassettes/crystal` or
+        /// `<work-dir>/cassettes`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        #[arg(long, default_value_t = 16)]
+        max_cases_per_cluster: usize,
+        #[arg(long, default_value_t = 22)]
+        max_units_per_case: usize,
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Crystal view header (forwarded to the durable write).
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long)]
+        not_claiming: Option<String>,
+        /// After the write, refresh the index + console (requires --vault-root + --date).
+        #[arg(long)]
+        refresh: bool,
+        /// Date for --refresh (index/console are date-stamped).
+        #[arg(long)]
+        date: Option<String>,
+        /// Strict CI gate: fail the run if any claim routes to caveated/review.
+        /// Default OFF — caveated claims go to review.json and the run succeeds.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M25 Crystal Review Workbench: apply human review decisions over caveated
     /// claims into a REVISED structured candidate. The decision authors a
     /// candidate; it does NOT decide durability — the revised candidate must
@@ -976,6 +1029,23 @@ fn main() -> ExitCode {
             use commands::crystal_write::CrystalWriteArgs;
             commands::crystal_write::run(CrystalWriteArgs {
                 candidate, packs_dir, strength, store, run_id, title, scope, not_claiming,
+            })
+        }
+        Cmd::CrystalSynth {
+            reader_dir, vault_root, work_dir, store, client, cache_dir,
+            max_cases_per_cluster, max_units_per_case, run_id, title, scope,
+            not_claiming, refresh, date, strict,
+        } => {
+            use commands::client::ClientKind;
+            use commands::crystal_synth::CrystalSynthArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::crystal_synth::run(CrystalSynthArgs {
+                reader_dir, vault_root, work_dir, store, client_kind, cache_dir,
+                max_cases_per_cluster, max_units_per_case, run_id, title, scope,
+                not_claiming, refresh, date, strict,
             })
         }
         Cmd::CrystalReview { candidate, decisions, out } => {

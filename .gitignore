@@ -1,5 +1,8 @@
 /target
 /.run
+/.ovp
+/.claude/worktrees/
+console-ui/node_modules/
 Cargo.lock.bak
 *.swp
 .DS_Store

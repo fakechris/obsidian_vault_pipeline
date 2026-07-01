@@ -1,0 +1,14 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "crystal_synth-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.crystal_synth",
+  "hypothesis": "A per-theme-cluster cross-source synthesis prompt over the reader-pack units catalog produces structured-citation claims (case_id + exact unit_id + verbatim quote) whose citations pass the mechanical crystal-lint gate at a high rate, enabling durable claims without bespoke scripts. Predicted: >=90% of emitted citations verbatim-grounded on the M24/M27 replay set (pilot observed 85/88 = 97%).",
+  "predicted_delta": { "citation_grounding_rate": ">=0.90", "durable_claims": ">0 on the pilot 34-source set" },
+  "guardrails": { "accepted_without_quote": 0 },
+  "eval_plan": { "replay_set": ".run/realrun (34-source pilot packs + cassettes)", "paired_sources": 34, "soak": false },
+  "rollback": "Revert the crystal-synth command + prompt; the durable store is append-only and gate-guarded, so no bad claim can persist. Remove prompt.crystal_synth from evolution/components.json.",
+  "ablation_required": false
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "crystal_strength-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.crystal_strength",
+  "hypothesis": "A batched claim-strength judge that receives each cited unit's attribution/modality can route opinion_as_fact / modality-mismatch and overreaching claims to caveated instead of durable, so only genuinely supported cross-source claims become durable. Predicted: claims citing non-asserted / quoted_person / system_interpretation units are not marked supported on the replay set.",
+  "predicted_delta": { "opinion_as_fact_caught": true, "false_durable_rate": "lower than a grounding-only gate" },
+  "guardrails": { "accepted_without_quote": 0 },
+  "eval_plan": { "replay_set": ".run/realrun (34-source pilot packs + cassettes)", "paired_sources": 34, "soak": false },
+  "rollback": "Revert the crystal-synth command + strength prompt; durable writes are gate-guarded and idempotent. Remove prompt.crystal_strength from evolution/components.json.",
+  "ablation_required": false
+}

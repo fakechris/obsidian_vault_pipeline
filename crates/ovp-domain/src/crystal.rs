@@ -26,6 +26,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// M32 — the `crystal-synth` turnkey stages (catalog collection, keyword
+/// clustering, cross-source synthesis + claim-strength model calls, grounded
+/// filtering). Pure/deterministic helpers plus two cassette-replayable model
+/// stages; reuses the gate functions in this module and NEVER touches demoted
+/// substrate.
+pub mod synth;
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 

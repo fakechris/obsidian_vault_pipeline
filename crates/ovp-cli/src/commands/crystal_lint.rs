@@ -8,10 +8,10 @@ use std::path::PathBuf;
 
 use ovp_domain::crystal::{
     final_routing, lint_candidate, score_candidate, strength_coverage, ClaimStrengthVerdict,
-    CrystalCandidate, FinalClass, GroundingIndex, ProvenanceClass,
+    CrystalCandidate, FinalClass, ProvenanceClass,
 };
-use ovp_domain::units::Unit;
 
+use crate::commands::crystal_write::build_grounding_index;
 use crate::CliError;
 
 pub struct CrystalLintArgs {
@@ -28,42 +28,13 @@ pub struct CrystalLintArgs {
     pub strength: Option<PathBuf>,
 }
 
-/// Build the grounding index by reading `<packs_dir>/<case>/units.accepted.json`.
-fn build_index(packs_dir: &std::path::Path) -> Result<GroundingIndex, CliError> {
-    let mut index = GroundingIndex::new();
-    let entries = std::fs::read_dir(packs_dir)
-        .map_err(|e| CliError::Io(format!("reading packs dir {}: {e}", packs_dir.display())))?;
-    for entry in entries.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let case_id = entry.file_name().to_string_lossy().to_string();
-        let units_path = entry.path().join("units.accepted.json");
-        if !units_path.exists() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&units_path)
-            .map_err(|e| CliError::Io(format!("reading {}: {e}", units_path.display())))?;
-        let units: Vec<Unit> = serde_json::from_str(&text)
-            .map_err(|e| CliError::Io(format!("parsing {}: {e}", units_path.display())))?;
-        index.insert(case_id, units);
-    }
-    if index.is_empty() {
-        return Err(CliError::Io(format!(
-            "no units.accepted.json found under {}",
-            packs_dir.display()
-        )));
-    }
-    Ok(index)
-}
-
 pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     let text = std::fs::read_to_string(&args.candidate)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.candidate.display())))?;
     let candidate: CrystalCandidate = serde_json::from_str(&text)
         .map_err(|e| CliError::Io(format!("parsing candidate {}: {e}", args.candidate.display())))?;
 
-    let index = build_index(&args.packs_dir)?;
+    let index = build_grounding_index(&args.packs_dir)?;
     let report = lint_candidate(&candidate, &index);
     let scores = score_candidate(&report);
 

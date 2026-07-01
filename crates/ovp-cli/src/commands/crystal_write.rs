@@ -31,7 +31,38 @@ pub struct CrystalWriteArgs {
     pub not_claiming: Option<String>,
 }
 
-fn build_index(packs_dir: &std::path::Path) -> Result<GroundingIndex, CliError> {
+/// In-memory inputs for a durable write — the shared core `crystal-write` and
+/// `crystal-synth` both call, so neither can drift from the frozen gate/store
+/// logic. The candidate, verdicts, and index are already loaded (no file paths,
+/// no re-parsing); the header/store/run_id carry the write framing.
+pub struct WriteInputs {
+    pub candidate: CrystalCandidate,
+    pub verdicts: Vec<ClaimStrengthVerdict>,
+    pub index: GroundingIndex,
+    pub store: PathBuf,
+    pub run_id: Option<String>,
+    pub header: CrystalHeader,
+}
+
+/// What a durable write produced (returned so callers can print their own summary).
+pub struct WriteOutcome {
+    pub run_id: String,
+    /// Durable-class records considered this run (some may already be active).
+    pub considered: usize,
+    /// Newly-appended ledger lines this run.
+    pub appended: usize,
+    /// Total active durable claims in the store after the write.
+    pub active_total: usize,
+    /// Caveated/reject claims routed to review (never durable).
+    pub review: usize,
+    pub ledger_path: PathBuf,
+    pub crystal_md_path: PathBuf,
+}
+
+/// Build the grounding index by reading `<packs_dir>/<case>/units.accepted.json`.
+/// Shared by `crystal-lint`, `crystal-write`, and `crystal-synth` so all three
+/// resolve citations against exactly the same keying (directory name == case_id).
+pub fn build_grounding_index(packs_dir: &std::path::Path) -> Result<GroundingIndex, CliError> {
     let mut index = GroundingIndex::new();
     let entries = std::fs::read_dir(packs_dir)
         .map_err(|e| CliError::Io(format!("reading packs dir {}: {e}", packs_dir.display())))?;
@@ -85,7 +116,41 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     )
     .map_err(|e| CliError::Io(format!("parsing strength: {e}")))?;
 
-    let index = build_index(&args.packs_dir)?;
+    let index = build_grounding_index(&args.packs_dir)?;
+    let header = CrystalHeader {
+        title: args.title.clone().unwrap_or_else(|| "Crystal".into()),
+        scope: args.scope.clone().unwrap_or_default(),
+        not_claiming: args.not_claiming.clone().unwrap_or_default(),
+    };
+    let out = write_durable(WriteInputs {
+        candidate,
+        verdicts,
+        index,
+        store: args.store.clone(),
+        run_id: args.run_id.clone(),
+        header,
+    })?;
+
+    println!("crystal-write: run_id={}", out.run_id);
+    println!(
+        "  eligible: {} durable claim(s) considered, {} newly appended ({} already active)",
+        out.considered,
+        out.appended,
+        out.considered - out.appended
+    );
+    println!("  store: {} active durable claim(s) total", out.active_total);
+    println!("  review (NOT durable): {} caveated/reject claim(s)", out.review);
+    println!("  ledger: {}", out.ledger_path.display());
+    println!("  view:   {}", out.crystal_md_path.display());
+    Ok(())
+}
+
+/// Shared durable-write core: run the FULL pre-write gate over already-loaded
+/// inputs and, only if durable-eligible, append `Durable` claims to the store
+/// (idempotent by `claim_key`), record caveated/reject in `review.json`, and
+/// render `crystal.md`. Refuses loudly on any gate gap. Reused by `crystal-synth`.
+pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
+    let WriteInputs { candidate, verdicts, index, store, run_id: run_id_override, header } = inputs;
     let report = lint_candidate(&candidate, &index);
     let scores = score_candidate(&report);
     let claim_ids: Vec<String> = candidate.items.iter().map(|c| c.id.clone()).collect();
@@ -125,7 +190,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     }
 
     // --- Assemble durable records for the Durable-class claims. ---
-    let run_id = args.run_id.clone().unwrap_or_else(|| {
+    let run_id = run_id_override.clone().unwrap_or_else(|| {
         let durable_ids: Vec<String> = candidate
             .items
             .iter()
@@ -169,22 +234,26 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     }
 
     // --- Append-only, idempotent write. ---
-    std::fs::create_dir_all(&args.store)
-        .map_err(|e| CliError::Io(format!("creating store {}: {e}", args.store.display())))?;
-    let ledger_path = args.store.join("ledger.jsonl");
+    std::fs::create_dir_all(&store)
+        .map_err(|e| CliError::Io(format!("creating store {}: {e}", store.display())))?;
+    let ledger_path = store.join("ledger.jsonl");
     let existing = read_ledger(&ledger_path)?;
-    let active = active_keys(&existing);
+    // Track keys already active AND keys appended earlier in THIS batch, so two
+    // records with the same claim_key in one run (e.g. the synth model emitting
+    // a duplicate claim) append only once — idempotency holds within a batch too.
+    let mut active = active_keys(&existing);
     let mut events = existing.clone();
     let mut appended = 0usize;
     let mut appended_lines = String::new();
     for r in &new_records {
         if active.contains(&r.claim_key) {
-            continue; // idempotent: already active, no duplicate append
+            continue; // idempotent: already active (or already appended this run)
         }
         let ev = StoreEvent { op: StoreOp::Write, record: r.clone(), supersedes: None, reason: None };
         appended_lines.push_str(&serde_json::to_string(&ev).map_err(|e| CliError::Io(e.to_string()))?);
         appended_lines.push('\n');
         events.push(ev);
+        active.insert(r.claim_key.clone());
         appended += 1;
     }
     if !appended_lines.is_empty() {
@@ -205,29 +274,23 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
         .cloned()
         .collect();
-    let header = CrystalHeader {
-        title: args.title.clone().unwrap_or_else(|| "Crystal".into()),
-        scope: args.scope.clone().unwrap_or_default(),
-        not_claiming: args.not_claiming.clone().unwrap_or_default(),
-    };
     let md = render_crystal_md(&header, &active_now, &review);
-    std::fs::write(args.store.join("crystal.md"), md)
+    let crystal_md_path = store.join("crystal.md");
+    std::fs::write(&crystal_md_path, md)
         .map_err(|e| CliError::Io(format!("writing crystal.md: {e}")))?;
     std::fs::write(
-        args.store.join("review.json"),
+        store.join("review.json"),
         serde_json::to_string_pretty(&serde_json::json!({"review": review})).unwrap() + "\n",
     )
     .map_err(|e| CliError::Io(format!("writing review.json: {e}")))?;
 
-    println!("crystal-write: run_id={run_id}");
-    println!(
-        "  eligible: {} durable claim(s) considered, {appended} newly appended ({} already active)",
-        new_records.len(),
-        new_records.len() - appended
-    );
-    println!("  store: {} active durable claim(s) total", active_now.len());
-    println!("  review (NOT durable): {} caveated/reject claim(s)", review.len());
-    println!("  ledger: {}", ledger_path.display());
-    println!("  view:   {}", args.store.join("crystal.md").display());
-    Ok(())
+    Ok(WriteOutcome {
+        run_id,
+        considered: new_records.len(),
+        appended,
+        active_total: active_now.len(),
+        review: review.len(),
+        ledger_path,
+        crystal_md_path,
+    })
 }

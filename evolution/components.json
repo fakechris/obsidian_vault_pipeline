@@ -35,6 +35,20 @@
       "quality_buckets": ["crystal_provenance"]
     },
     {
+      "id": "prompt.crystal_synth",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/crystal_synth.md",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
+      "id": "prompt.crystal_strength",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/crystal_strength.md",
+      "quality_buckets": ["crystal_provenance"]
+    },
+    {
       "id": "parser.json_repair",
       "surface": "parser",
       "file": "crates/ovp-domain/src/units/parser.rs",
