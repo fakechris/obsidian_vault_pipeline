@@ -1,9 +1,10 @@
 import type {
   ClaimDetail,
+  FindHit,
   FlowData,
   GraphResponse,
   IndexModel,
-  SearchResult,
+  ThemeCount,
 } from './types';
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -41,10 +42,19 @@ export function fetchFlow(): Promise<FlowData> {
   return fetchJson<FlowData>('/api/flow');
 }
 
-export function fetchFind(term: string): Promise<SearchResult[]> {
-  return fetchJson<SearchResult[]>(
-    `/api/find?term=${encodeURIComponent(term)}`,
+export function fetchFind(term: string): Promise<FindHit[]> {
+  return fetchJson<FindHit[]>(`/api/find?term=${encodeURIComponent(term)}`);
+}
+
+/** Hit-flagged claim subgraph for the tight search layout. */
+export function fetchSearchSubgraph(q: string): Promise<GraphResponse> {
+  return fetchJson<GraphResponse>(
+    `/api/search?q=${encodeURIComponent(q)}&subgraph=1`,
   );
+}
+
+export function fetchThemes(): Promise<ThemeCount[]> {
+  return fetchJson<ThemeCount[]>('/api/themes');
 }
 
 export function fetchModel(): Promise<IndexModel> {

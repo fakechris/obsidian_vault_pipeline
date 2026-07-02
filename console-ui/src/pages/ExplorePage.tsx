@@ -1,24 +1,35 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchClaim, fetchFind } from '../lib/api';
-import type { ClaimDetail, SearchResult } from '../lib/types';
+import { fetchClaim, fetchFind, fetchSearchSubgraph } from '../lib/api';
+import type { ClaimDetail, FindHit, GraphNode } from '../lib/types';
 
 export default function ExplorePage() {
   const [term, setTerm] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [claims, setClaims] = useState<GraphNode[]>([]);
+  const [others, setOthers] = useState<FindHit[]>([]);
   const [detail, setDetail] = useState<ClaimDetail | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     clearTimeout(debounce.current);
-    if (!term.trim()) {
-      setResults([]);
+    const q = term.trim();
+    if (!q) {
+      setClaims([]);
+      setOthers([]);
       return;
     }
     debounce.current = setTimeout(async () => {
       try {
-        setResults(await fetchFind(term.trim()));
+        // Claims come from the graph search (structured ids + metadata);
+        // /api/find hits are display lines for everything else — and need
+        // the index, which a crystal-only vault may not have. Degrade.
+        const [subgraph, hits] = await Promise.all([
+          fetchSearchSubgraph(q),
+          fetchFind(q).catch(() => [] as FindHit[]),
+        ]);
+        setClaims(subgraph.nodes.filter((n) => n.hit));
+        setOthers(hits.filter((h) => h.kind !== 'claim').slice(0, 20));
         setStatus(null);
       } catch {
         setStatus('Search failed 搜索失败');
@@ -27,14 +38,9 @@ export default function ExplorePage() {
     return () => clearTimeout(debounce.current);
   }, [term]);
 
-  async function showDetail(r: SearchResult) {
-    if (r.kind !== 'claim') {
-      setDetail(null);
-      setStatus(`${r.kind}: provenance detail is claim-only 仅 claim 提供溯源`);
-      return;
-    }
+  async function showDetail(node: GraphNode) {
     try {
-      setDetail(await fetchClaim(r.id));
+      setDetail(await fetchClaim(node.id.replace(/^claim:/, '')));
       setStatus(null);
     } catch {
       setStatus('Failed to load claim detail 加载失败');
@@ -53,20 +59,41 @@ export default function ExplorePage() {
           />
         </div>
         <ul className="min-h-0 flex-1 overflow-y-auto p-2">
-          {results.map((r) => (
-            <li key={`${r.kind}:${r.id}`}>
+          {claims.map((n) => (
+            <li key={n.id}>
               <button
-                onClick={() => void showDetail(r)}
+                onClick={() => void showDetail(n)}
                 className="w-full rounded-md px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-white/5"
               >
-                <span className="mr-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-                  {r.kind}
+                <span className="mr-2 rounded bg-claim-deep/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-claim">
+                  claim
                 </span>
-                {r.label}
+                {n.label}
+                {n.theme && (
+                  <span className="mt-0.5 block text-[11px] text-slate-500">
+                    {n.theme} · {n.strength}
+                  </span>
+                )}
               </button>
             </li>
           ))}
-          {term && results.length === 0 && (
+          {others.length > 0 && (
+            <li className="mt-2 border-t border-border-soft px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              Other matches 其他命中
+            </li>
+          )}
+          {others.map((h, i) => (
+            <li
+              key={`${h.kind}-${i}`}
+              className="px-3 py-1.5 text-xs text-slate-400"
+            >
+              <span className="mr-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                {h.kind}
+              </span>
+              {h.line}
+            </li>
+          ))}
+          {term && claims.length === 0 && others.length === 0 && (
             <li className="px-3 py-2 text-sm text-slate-500">
               No results 无结果
             </li>
@@ -96,7 +123,7 @@ export default function ExplorePage() {
             <div className="mt-3 space-y-3">
               {detail.citations.map((c) => (
                 <div
-                  key={c.unit_id}
+                  key={`${c.case_id}:${c.unit_id}`}
                   className="rounded-lg border border-border-soft bg-surface p-4"
                 >
                   <div className="text-xs text-slate-500">

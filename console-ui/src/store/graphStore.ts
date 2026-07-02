@@ -1,8 +1,8 @@
 import { create } from 'zustand';
-import { fetchClaim, fetchGraph } from '../lib/api';
+import { fetchClaim, fetchGraph, fetchSearchSubgraph } from '../lib/api';
 import type { ClaimDetail, GraphNode, GraphResponse } from '../lib/types';
 
-export type ViewMode = 'overview' | 'focus';
+export type ViewMode = 'overview' | 'focus' | 'search';
 
 export interface HoverState {
   node: GraphNode;
@@ -29,9 +29,14 @@ interface GraphState {
   transformTick: number;
 
   bumpTransform: () => void;
+  /** Active search query in search mode. */
+  searchQuery: string | null;
+
   loadOverview: (theme?: string | null) => Promise<void>;
   /** Fetch the 2-hop neighborhood and switch to focus mode. */
   loadFocus: (id: string) => Promise<void>;
+  /** Fetch the hit-flagged subgraph and switch to search mode. */
+  loadSearch: (q: string) => Promise<void>;
   backToOverview: () => Promise<void>;
   select: (id: string | null) => void;
   setHover: (h: HoverState | null) => void;
@@ -54,6 +59,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   detail: null,
   detailLoading: false,
   transformTick: 0,
+  searchQuery: null,
 
   bumpTransform: () =>
     set((s: GraphState) => ({ transformTick: s.transformTick + 1 })),
@@ -74,6 +80,25 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         focusId: null,
         selection: null,
         hover: null,
+        detail: null,
+        searchQuery: null,
+      });
+    } catch (e) {
+      set({ error: (e as Error).message, loading: false });
+    }
+  },
+
+  loadSearch: async (q) => {
+    set({ loading: true, error: null, hover: null });
+    try {
+      const data = await fetchSearchSubgraph(q);
+      set({
+        data,
+        loading: false,
+        viewMode: 'search',
+        searchQuery: q,
+        focusId: null,
+        selection: null,
         detail: null,
       });
     } catch (e) {
@@ -110,6 +135,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         selection: null,
         hover: null,
         detail: null,
+        searchQuery: null,
       });
       return;
     }

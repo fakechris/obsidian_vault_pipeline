@@ -7,6 +7,8 @@ export type GraphMode = 'overview' | 'neighborhood' | 'full';
 export interface GraphNode {
   id: string;
   type: NodeType;
+  /** Search mode: node matched the query (vs 1-hop context). */
+  hit?: boolean;
   label: string;
   theme?: string;
   strength?: string;
@@ -74,11 +76,17 @@ export interface FlowData {
   flows: FlowLink[];
 }
 
-export interface SearchResult {
-  id: string;
+/** /api/find hit — a display line, not a structured record. */
+export interface FindHit {
   kind: string;
-  label: string;
-  score?: number;
+  status: string;
+  line: string;
+  path?: string;
+}
+
+export interface ThemeCount {
+  theme: string;
+  count: number;
 }
 
 export interface RunRow {

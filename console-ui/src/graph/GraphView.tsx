@@ -6,6 +6,7 @@ import CommunityLabels from './CommunityLabels';
 import NodeTooltip from './NodeTooltip';
 import DetailPanel from './DetailPanel';
 import Legend from './Legend';
+import SearchBar from './SearchBar';
 
 export default function GraphView() {
   const data = useGraphStore((s) => s.data);
@@ -67,6 +68,7 @@ export default function GraphView() {
         <Legend communities={data.communities} nodes={data.nodes} />
       )}
       {data && <NodeTooltip communities={data.communities} />}
+      <SearchBar />
       <DetailPanel />
 
       <div className="pointer-events-none absolute left-4 top-3 z-30 text-xs text-slate-500">
@@ -78,7 +80,7 @@ export default function GraphView() {
             {data.truncated && ' · top by importance 按重要度截取'}
           </span>
         )}
-        {data && viewMode === 'focus' && (
+        {data && viewMode !== 'overview' && (
           <span className="pointer-events-auto flex items-center gap-3">
             <button
               onClick={() => void backToOverview()}
@@ -86,10 +88,18 @@ export default function GraphView() {
             >
               ← Overview 返回全景
             </button>
-            <span>
-              Neighborhood 邻域 · {data.nodes.length} nodes
-              {data.truncated && ' (capped 截断)'}
-            </span>
+            {viewMode === 'focus' ? (
+              <span>
+                Neighborhood 邻域 · {data.nodes.length} nodes
+                {data.truncated && ' (capped 截断)'}
+              </span>
+            ) : (
+              <span>
+                {data.nodes.filter((n) => n.hit).length} hits 命中 ·{' '}
+                {data.nodes.filter((n) => !n.hit).length} context 关联
+                {data.truncated && ' · more matches truncated 更多命中被截断'}
+              </span>
+            )}
           </span>
         )}
       </div>

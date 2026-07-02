@@ -98,6 +98,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
                 handle_graph(&state, &path)
             }
             (Method::Get, "/api/flow") => handle_flow(&state),
+            (Method::Get, "/api/themes") => handle_themes(&state),
             (Method::Get, p) if p.starts_with("/api/claim/") => {
                 handle_claim(&state, &path)
             }
@@ -138,16 +139,39 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
 }
 
 fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let params = parse_query_string(url);
+    let term = params.get("q").or_else(|| params.get("term")).cloned();
+
+    // Graph search mode: return a hit-flagged subgraph instead of text hits
+    // (the ≤40-node tight-layout scenario in the console).
+    if params.get("subgraph").map(String::as_str) == Some("1") {
+        let Some(term) = term.filter(|t| !t.trim().is_empty()) else {
+            return json_response(400, r#"{"error":"subgraph search requires q"}"#);
+        };
+        let records = load_active_records(state);
+        let model = state.current_model();
+        let resp = graph::search_subgraph(&records, model.as_ref(), term.trim());
+        let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
+        return json_response(200, &body);
+    }
+
     let model = match state.current_model() {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
-
-    let params = parse_query_string(url);
-    let term = params.get("q").or_else(|| params.get("term")).cloned();
     let query = Query { kind: None, status: None, date: None, term };
     let hits = run_query(&model, &query);
     let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+    json_response(200, &body)
+}
+
+fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let records = load_active_records(state);
+    let themes: Vec<serde_json::Value> = graph::theme_counts(&records)
+        .into_iter()
+        .map(|(theme, count)| serde_json::json!({ "theme": theme, "count": count }))
+        .collect();
+    let body = serde_json::to_string(&themes).unwrap_or_else(|_| "[]".into());
     json_response(200, &body)
 }
 

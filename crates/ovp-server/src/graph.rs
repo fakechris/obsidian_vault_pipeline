@@ -109,11 +109,18 @@ impl GraphError {
     }
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct GNode {
     pub id: String,
     #[serde(rename = "type")]
     pub node_type: String,
+    /// Search mode only: this node matched the query (vs 1-hop context).
+    #[serde(skip_serializing_if = "is_false")]
+    pub hit: bool,
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
@@ -228,6 +235,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             degree: 0,
             cluster: 0,
             importance: 0.0,
+            hit: false,
             provenance: Some(rec.provenance_score),
         });
 
@@ -247,6 +255,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                 degree: 0,
                 cluster: 0,
                 importance: 0.0,
+                hit: false,
                 provenance: None,
             });
 
@@ -275,6 +284,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     degree: 0,
                     cluster: 0,
                     importance: 0.0,
+                    hit: false,
                     provenance: None,
                 });
                 sid
@@ -290,6 +300,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     degree: 0,
                     cluster: 0,
                     importance: 0.0,
+                    hit: false,
                     provenance: None,
                 });
                 sid
@@ -795,6 +806,128 @@ fn neighborhood_response(
     })
 }
 
+pub const MAX_SEARCH_HITS: usize = 40;
+const MAX_SEARCH_CONTEXT: usize = 80;
+
+/// Search-mode subgraph: claims matching `query` (case-insensitive over
+/// claim text, theme, and claim key), flagged `hit`, plus up to
+/// MAX_SEARCH_CONTEXT 1-hop `related` context claims — the ≤40-node tight
+/// layout scenario. Matching runs over the ledger directly (the index's
+/// query hits are display strings without structured ids).
+pub fn search_subgraph(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    query: &str,
+) -> GraphResponse {
+    let mut base = build_base(records, model);
+    add_related_edges(&mut base);
+    compute_degrees(&mut base);
+    assign_clusters(&mut base);
+    compute_importance(&mut base, records);
+
+    let needle = query.to_lowercase();
+    let mut matching: Vec<(&DurableRecord, f64)> = records
+        .iter()
+        .filter(|r| {
+            r.claim.to_lowercase().contains(&needle)
+                || r.theme.to_lowercase().contains(&needle)
+                || r.claim_key.to_lowercase().contains(&needle)
+        })
+        .map(|r| {
+            let id = format!("claim:{}", r.claim_key);
+            let imp = base.nodes.get(&id).map(|n| n.importance).unwrap_or(0.0);
+            (r, imp)
+        })
+        .collect();
+    matching.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.claim_key.cmp(&b.0.claim_key))
+    });
+    let total_matches = matching.len();
+    matching.truncate(MAX_SEARCH_HITS);
+
+    let hit_ids: HashSet<String> = matching
+        .iter()
+        .map(|(r, _)| format!("claim:{}", r.claim_key))
+        .collect();
+
+    // 1-hop related context around the hits, importance-ranked, capped.
+    let mut context_ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = hit_ids.clone();
+    for e in &base.edges {
+        if e.edge_type != "related" {
+            continue;
+        }
+        let other = if hit_ids.contains(e.source.as_str()) {
+            &e.target
+        } else if hit_ids.contains(e.target.as_str()) {
+            &e.source
+        } else {
+            continue;
+        };
+        if seen.insert(other.clone()) {
+            context_ids.push(other.clone());
+        }
+    }
+    context_ids.sort_by(|a, b| {
+        let ia = base.nodes.get(a).map(|n| n.importance).unwrap_or(0.0);
+        let ib = base.nodes.get(b).map(|n| n.importance).unwrap_or(0.0);
+        ib.partial_cmp(&ia)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.cmp(b))
+    });
+    context_ids.truncate(MAX_SEARCH_CONTEXT);
+
+    let mut nodes: Vec<GNode> = hit_ids
+        .iter()
+        .chain(context_ids.iter())
+        .filter_map(|id| base.nodes.get(id).cloned())
+        .map(|mut n| {
+            n.hit = hit_ids.contains(n.id.as_str());
+            n
+        })
+        .collect();
+    sort_by_importance(&mut nodes);
+
+    let kept: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let edges: Vec<GEdge> = base
+        .edges
+        .iter()
+        .filter(|e| {
+            e.edge_type == "related"
+                && kept.contains(e.source.as_str())
+                && kept.contains(e.target.as_str())
+        })
+        .cloned()
+        .collect();
+
+    let claim_refs: Vec<&GNode> = nodes.iter().collect();
+    let communities = build_communities(&claim_refs);
+    let total_nodes = base.nodes.len();
+
+    GraphResponse {
+        mode: "search".into(),
+        nodes,
+        edges,
+        communities,
+        total_nodes,
+        truncated: total_matches > MAX_SEARCH_HITS,
+    }
+}
+
+/// Theme histogram over active records — feeds the theme filter dropdown.
+pub fn theme_counts(records: &[DurableRecord]) -> Vec<(String, usize)> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in records {
+        *counts.entry(r.theme.as_str()).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> =
+        counts.into_iter().map(|(t, c)| (t.to_string(), c)).collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
 /// SPA client-side routes under `/viz/` (extensionless paths) must fall back
 /// to the SPA's index.html instead of 404ing.
 pub fn is_spa_route(relative: &str) -> bool {
@@ -1027,6 +1160,37 @@ mod tests {
         let mut q = HashMap::new();
         q.insert("mode".to_string(), "neighborhood".to_string());
         assert_eq!(GraphParams::from_query(&q).unwrap_err().status, 400);
+    }
+
+    #[test]
+    fn search_subgraph_flags_hits_and_pulls_related_context() {
+        let records = sample_records();
+        let resp = search_subgraph(&records, None, "for a");
+        let hits: Vec<&GNode> = resp.nodes.iter().filter(|n| n.hit).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "claim:a");
+        assert_eq!(resp.mode, "search");
+        // b and c share case1 with a → related context, not hits.
+        assert!(resp.nodes.iter().any(|n| n.id == "claim:b" && !n.hit));
+        // d shares nothing with a — not in the subgraph.
+        assert!(!resp.nodes.iter().any(|n| n.id == "claim:d"));
+        assert!(resp.edges.iter().all(|e| e.edge_type == "related"));
+    }
+
+    #[test]
+    fn search_subgraph_no_matches_is_empty() {
+        let records = sample_records();
+        let resp = search_subgraph(&records, None, "zzz-no-such-term");
+        assert!(resp.nodes.is_empty());
+        assert!(resp.edges.is_empty());
+    }
+
+    #[test]
+    fn theme_counts_ordered_by_count_then_name() {
+        let records = sample_records();
+        let t = theme_counts(&records);
+        assert_eq!(t[0], ("alpha".to_string(), 2));
+        assert_eq!(t.len(), 3);
     }
 
     #[test]

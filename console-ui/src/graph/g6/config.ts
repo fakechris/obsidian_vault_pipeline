@@ -8,7 +8,7 @@ export interface G6Data {
   edges: EdgeData[];
 }
 
-export type GraphViewKind = 'overview' | 'focus';
+export type GraphViewKind = 'overview' | 'focus' | 'search';
 
 function nodeOf(datum: NodeData): GraphNode {
   return datum.data as unknown as GraphNode;
@@ -70,7 +70,7 @@ export function toG6Data(
   // read as noise; hover/detail carries them.
   const candidates =
     kind === 'focus' ? data.nodes.filter((n) => n.type !== 'unit') : data.nodes;
-  const labelBudget = kind === 'focus' ? 60 : BASE_LABEL_COUNT;
+  const labelBudget = kind === 'overview' ? BASE_LABEL_COUNT : 60;
   const ranked = new Set(
     [...candidates]
       .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
@@ -107,10 +107,11 @@ export function buildGraphOptions(
   opts: BuildOptions,
 ): GraphOptions {
   const focus = opts.kind === 'focus';
+  const subgraph = opts.kind !== 'overview';
 
   return {
     data: toG6Data(data, opts.kind, opts.focusId),
-    animation: focus,
+    animation: subgraph,
     autoResize: true,
     padding: 24,
     autoFit: 'view',
@@ -125,14 +126,18 @@ export function buildGraphOptions(
             ? clusterColor(n.cluster)
             : nodeColor(n.type);
         },
-        fillOpacity: 0.92,
+        fillOpacity: (d: NodeData) =>
+          opts.kind === 'search' && !nodeOf(d).hit ? 0.45 : 0.92,
         lineWidth: (d: NodeData) => {
           const n = nodeOf(d);
+          if (n.hit) return 2.5; // search hit — amber ring
           return n.strength && n.strength !== 'supported' ? 1.5 : 0;
         },
-        stroke: COLORS.textMuted,
+        stroke: (d: NodeData) =>
+          nodeOf(d).hit ? COLORS.highlight : COLORS.textMuted,
         lineDash: (d: NodeData) => {
           const n = nodeOf(d);
+          if (n.hit) return [];
           return n.strength && n.strength !== 'supported' ? [3, 2] : [];
         },
         labelText: (d: NodeData) =>
@@ -168,14 +173,20 @@ export function buildGraphOptions(
           EDGE_COLORS[(d.data?.type as string) ?? 'related'] ?? COLORS.edge,
         lineWidth: (d: EdgeData) =>
           Math.min(4, 1 + ((d.data?.weight as number) ?? 1) * 0.5),
-        strokeOpacity: focus ? 0.55 : 0.28,
+        strokeOpacity: subgraph ? 0.55 : 0.28,
       },
       state: {
         highlight: { strokeOpacity: 0.9, stroke: COLORS.highlight },
         dimmed: { strokeOpacity: 0.06 },
       },
     },
-    ...(focus ? { layout: { ...LAYOUT_PRESETS.focus } } : {}),
+    ...(opts.kind !== 'overview'
+      ? {
+          layout: {
+            ...LAYOUT_PRESETS[opts.kind === 'search' ? 'search' : 'focus'],
+          },
+        }
+      : {}),
     behaviors: [
       'zoom-canvas',
       'drag-canvas',
