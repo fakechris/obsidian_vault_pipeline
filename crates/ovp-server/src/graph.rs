@@ -26,6 +26,12 @@ const MAX_COMMUNITIES: usize = 40;
 /// A community label needs this theme coverage to stand alone; below it we
 /// join the top-2 themes so the hull label doesn't overclaim.
 const DOMINANT_THEME_COVERAGE: f64 = 0.4;
+/// Node label truncation: claims and unit quotes are clipped for the graph
+/// payload (full text lives behind /api/claim/:id).
+const MAX_CLAIM_LABEL_LEN: usize = 80;
+const TRUNCATED_CLAIM_LABEL_LEN: usize = 77;
+const MAX_QUOTE_LABEL_LEN: usize = 60;
+const TRUNCATED_QUOTE_LABEL_LEN: usize = 57;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphMode {
@@ -206,7 +212,13 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
         .map(|m| {
             m.packs
                 .iter()
-                .filter_map(|p| Some((p.pack_dir.rsplit('/').next()?, p)))
+                .filter_map(|p| {
+                    // Path::file_name, not rsplit('/'), so a Windows-written
+                    // index (backslash separators) still resolves case ids.
+                    let case =
+                        std::path::Path::new(&p.pack_dir).file_name()?.to_str()?;
+                    Some((case, p))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -220,8 +232,11 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
         nodes.entry(claim_id.clone()).or_insert_with(|| GNode {
             id: claim_id.clone(),
             node_type: "claim".into(),
-            label: if rec.claim.chars().count() > 80 {
-                format!("{}…", truncate_chars(&rec.claim, 77))
+            label: if rec.claim.chars().count() > MAX_CLAIM_LABEL_LEN {
+                format!(
+                    "{}…",
+                    truncate_chars(&rec.claim, TRUNCATED_CLAIM_LABEL_LEN)
+                )
             } else {
                 rec.claim.clone()
             },
@@ -240,8 +255,11 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             nodes.entry(unit_id.clone()).or_insert_with(|| GNode {
                 id: unit_id.clone(),
                 node_type: "unit".into(),
-                label: if cit.quote.chars().count() > 60 {
-                    format!("{}…", truncate_chars(&cit.quote, 57))
+                label: if cit.quote.chars().count() > MAX_QUOTE_LABEL_LEN {
+                    format!(
+                        "{}…",
+                        truncate_chars(&cit.quote, TRUNCATED_QUOTE_LABEL_LEN)
+                    )
                 } else {
                     cit.quote.clone()
                 },

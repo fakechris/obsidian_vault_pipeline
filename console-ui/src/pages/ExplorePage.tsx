@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { fetchClaim, fetchFind, fetchSearchSubgraph } from '../lib/api';
 import type { ClaimDetail, FindHit, GraphNode } from '../lib/types';
 
+const MAX_OTHER_MATCHES = 20;
+
 export default function ExplorePage() {
   const [term, setTerm] = useState('');
   const [claims, setClaims] = useState<GraphNode[]>([]);
@@ -29,7 +31,9 @@ export default function ExplorePage() {
           fetchFind(q).catch(() => [] as FindHit[]),
         ]);
         setClaims(subgraph.nodes.filter((n) => n.hit));
-        setOthers(hits.filter((h) => h.kind !== 'claim').slice(0, 20));
+        setOthers(
+          hits.filter((h) => h.kind !== 'claim').slice(0, MAX_OTHER_MATCHES),
+        );
         setStatus(null);
       } catch {
         setStatus('Search failed 搜索失败');

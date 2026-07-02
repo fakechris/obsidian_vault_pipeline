@@ -249,7 +249,10 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
             m.packs
                 .iter()
                 .filter_map(|p| {
-                    let case = p.pack_dir.rsplit('/').next()?;
+                    // Path::file_name, not rsplit('/') — separator-agnostic.
+                    let case = std::path::Path::new(&p.pack_dir)
+                        .file_name()?
+                        .to_str()?;
                     Some((case.to_string(), p))
                 })
                 .collect()

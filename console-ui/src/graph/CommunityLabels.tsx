@@ -4,6 +4,12 @@ import { clusterColor } from '../lib/palette';
 import type { Community, GraphNode } from '../lib/types';
 import { MAX_HULLS, MIN_HULL_MEMBERS } from './g6/hulls';
 
+/** Top-N communities always get a label even when their disc is small on
+ * screen — the overview needs landmarks. */
+const LANDMARK_RANK_THRESHOLD = 6;
+/** Minimum on-screen disc radius (px) for a community to own a label. */
+const MIN_LABELED_DISC_RADIUS = 26;
+
 interface Anchor {
   community: Community;
   world: [number, number];
@@ -90,7 +96,11 @@ export default function CommunityLabels({
   const visible: { community: Community; x: number; y: number }[] = [];
   anchors.forEach(({ community, world }, rank) => {
     const discScreenR = (20 * Math.sqrt(community.size) + 34) * zoom;
-    if (discScreenR < 26 && rank >= 6) return;
+    if (
+      discScreenR < MIN_LABELED_DISC_RADIUS &&
+      rank >= LANDMARK_RANK_THRESHOLD
+    )
+      return;
     const screen = worldToScreen(world);
     if (!screen) return;
     const [x, y] = screen;
