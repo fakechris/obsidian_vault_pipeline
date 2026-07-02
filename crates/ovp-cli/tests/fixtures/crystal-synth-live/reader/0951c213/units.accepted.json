@@ -1,0 +1,584 @@
+[
+  {
+    "id": "u-000-725b8842",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Harness 是将 model 放入其中的一层 runtime，能检查真实 repo、请求 tool、编辑文件、运行检查、记住发生的事情，并在多轮中继续推进。",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "coding agent 则更进一步：它把 model 放进一套 runtime。\n这个 runtime 能检查真实 repo，请求 tool，编辑文件，跑检查，记住发生过什么，并在多轮中继续推进。\n这层 runtime 就是 harness。",
+      "location": {
+        "byte_start": 421,
+        "byte_end": 826,
+        "line": 39,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "runtime",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "model",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p006.s001`..`p009.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-001-1cf16d61",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "对于 coding agent 来说，harness 本身就是 product。",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "对 coding agent 来说，harness 本身就是 product。",
+      "location": {
+        "byte_start": 828,
+        "byte_end": 885,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "coding agent",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-2ee33dd7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Model 可以提出 proposal，Harness 负责做决定。",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "Model 可以提出 proposal，Harness 负责做决定。",
+      "location": {
+        "byte_start": 1701,
+        "byte_end": 1757,
+        "line": 73,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Model",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "proposal",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "决定",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-91745917",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The interface is not the agent",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "The interface is not the agent",
+      "location": {
+        "byte_start": 1906,
+        "byte_end": 1936,
+        "line": 79,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "interface",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "harness",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-8ecc01c0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Model 在 loop 里面，harness 拥有 loop。",
+    "evidence": {
+      "ref_id": "p051.s001",
+      "quote": "model 在 loop 里面, harness 拥有 loop。",
+      "location": {
+        "byte_start": 3760,
+        "byte_end": 3805,
+        "line": 133,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "loop",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-221fbc1a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第一个核心组件是 Live repo context：Agent 需要知道 workspace、当前文件、相关 project docs，以及哪些 repo state 可以安全暴露。",
+    "evidence": {
+      "ref_id": "p032.s001",
+      "quote": "Agent 不该从空 prompt 开始。它需要知道 workspace、当前文件、相关 project docs，以及哪些 repo state 可以安全暴露。",
+      "location": {
+        "byte_start": 2326,
+        "byte_end": 2491,
+        "line": 93,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Live repo context",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Agent",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p031.s002`..`p032.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-9b2aeac3",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第二个核心组件是 Prompt shape：稳定的 prefix、清晰的 tool contract、当前 request、受控的 history 带来的行为差异可能比换 model 更大。",
+    "evidence": {
+      "ref_id": "p034.s001",
+      "quote": "Context quality 经常看起来像 model quality。稳定的 prefix、清晰的 tool contract、当前 request、受控的 history，带来的行为差异可能比换 model 更大。",
+      "location": {
+        "byte_start": 2496,
+        "byte_end": 2693,
+        "line": 97,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Prompt shape",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Context quality",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p033.s002`..`p034.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-3073bad1",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第三个核心组件是 Structured tools：Tools 是 model proposal 和真实 side effects 之间的 contract，Harness 解析 arguments、验证 paths、检查 policy、执行操作、裁剪 output 并记录发生了什么。",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "Harness 解析 arguments，验证 paths，检查 policy，执行操作，裁剪 output，并记录发生了什么。",
+      "location": {
+        "byte_start": 2829,
+        "byte_end": 2945,
+        "line": 105,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Structured tools",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Harness",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-774c9a1e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第四个核心组件是 Context reduction：好的 context 是一个 projection，而非不断膨胀的 blob；如果 harness 盲目追加所有东西，model 最后会看到太多、太少，或者看到错误的东西。",
+    "evidence": {
+      "ref_id": "p040.s001",
+      "quote": "好的 context 是一个 projection，而非不断膨胀的 blob。",
+      "location": {
+        "byte_start": 3083,
+        "byte_end": 3150,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Context reduction",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "context",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-a8fd8caa",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第五个核心组件是 Transcripts and memory：Transcript 回答「发生过什么」，Working state 回答「现在什么重要」，这是两份不同的任务，需要区别对待。",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "Transcript 回答：「发生过什么？」",
+      "location": {
+        "byte_start": 3155,
+        "byte_end": 3224,
+        "line": 113,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Transcripts and memory",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Transcript",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "Working state",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p041.s002`..`p042.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-739e86cc",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coding Agent 的第六个核心组件是 Delegation：Subagents 应该是有边界的 workers，拥有 scoped tools、isolated state、distilled results；当 delegation 充当 context firewall 时，它才真正有用。",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "Subagents 也不等于 magic parallelism。它们应该是有边界的 workers：scoped tools、isolated state、distilled results。",
+      "location": {
+        "byte_start": 3340,
+        "byte_end": 3486,
+        "line": 121,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Delegation",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Subagents",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p045.s002`..`p046.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-5c8f401c",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Anything that must be reliable belongs in the harness，任何必须可靠的东西都应该放在 harness 里。",
+    "evidence": {
+      "ref_id": "p068.s001",
+      "quote": "Anything that must be reliable belongs in the harness.",
+      "location": {
+        "byte_start": 5475,
+        "byte_end": 5531,
+        "line": 181,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Anything that must be reliable",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "harness",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-c5105c8c",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Model quality 只占其中一层，真正的 agent experience 来自 model 周围的整套 harness。",
+    "evidence": {
+      "ref_id": "p063.s001",
+      "quote": "model 当然重要，只是 model quality 只占其中一层。真正的 agent experience 来自 model 周围的整套 harness：",
+      "location": {
+        "byte_start": 5069,
+        "byte_end": 5288,
+        "line": 169,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model quality",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent experience",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "harness",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p062.s006`..`p064.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-572ec8bf",
+    "kind": "assertion",
+    "text": "coding agent 是一个 observe-act loop，但真正有价值的部分，发生在 observe 和 act 之间。",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "coding agent 是一个 observe-act loop，但真正有价值的部分，发生在 observe 和 act 之间。",
+      "location": {
+        "byte_start": 3574,
+        "byte_end": 3681,
+        "line": 129,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-9ed61f45",
+    "kind": "assertion",
+    "text": "每一个箭头，都是 harness 可以保护用户的位置；也可能是它悄悄失控的位置。",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "每一个箭头，都是 harness 可以保护用户的位置；也可能是它悄悄失控的位置。",
+      "location": {
+        "byte_start": 1955,
+        "byte_end": 2134,
+        "line": 83,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p026.s001`..`p027.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-244a8e96",
+    "kind": "assertion",
+    "text": "如果 agent 不断重复，去检查 loop 和 retry policy。如果它编辑 stale code，去检查 file-state baselines。如果它越跑越差，去检查 context projection。如果它运行了意外的东西，去检查 permission policy。如果它无法从 tool errors 中恢复，去检查 tool result objects。如果它解释不清发生了什么，去检查 traces、audit、doctor surfaces。",
+    "evidence": {
+      "ref_id": "p062.s001",
+      "quote": "如果 agent 不断重复，去检查 loop 和 retry policy。如果它编辑 stale code，去检查 file-state baselines。如果它越跑越差，去检查 context projection。如果它运行了意外的东西，去检查 permission policy。如果它无法从 tool errors 中恢复，去检查 tool result objects。如果它解释不清发生了什么，去检查 traces、audit、doctor surfaces。",
+      "location": {
+        "byte_start": 4511,
+        "byte_end": 5155,
+        "line": 156,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p058.s001`..`p062.s006` around the ref"
+      }
+    ]
+  }
+]

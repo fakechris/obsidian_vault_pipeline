@@ -1,0 +1,762 @@
+[
+  {
+    "id": "u-000-059dad59",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "AHE (Agentic Harness Engineering) is the framework that holds the base model frozen, evolves all seven harness components automatically against rollouts, and lifts a bash-only seed from 69.7% to 77.0% in ten iterations.",
+    "evidence": {
+      "ref_id": "p004.s002",
+      "quote": "It holds the base model frozen, evolves all seven harness components automatically against rollouts, and lifts a bash-only seed from 69.7% to 77.0% in ten iterations.",
+      "location": {
+        "byte_start": 420,
+        "byte_end": 587,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AHE (Agentic Harness Engineering)",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "seven harness components",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-52d0f99b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A coding agent's harness is everything around the model: system prompt, tool definitions, middleware, skills, sub-agents, memory.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "A coding agent's harness is everything around the model: system prompt, tool definitions, middleware, skills, sub-agents, memory.",
+      "location": {
+        "byte_start": 1623,
+        "byte_end": 1752,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "system prompt, tool definitions, middleware, skills, sub-agents, memory",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-978cf247",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Editing the system prompt as the only adaptation surface drops pass@1 by 2.3 points on Terminal-Bench 2.",
+    "evidence": {
+      "ref_id": "p003.s001",
+      "quote": "Editing it as the only adaptation surface drops pass@1 by 2.3 points on Terminal-Bench 2.",
+      "location": {
+        "byte_start": 208,
+        "byte_end": 336,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "system prompt",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "pass@1",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-9c31a03f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Prior automated work optimizes one component at a time, almost always the prompt or an in-context playbook (ACE, GEPA, DSPy) or the trajectory distribution (TF-GRPO, GRPO variants), leaving tools, middleware, and memory closed.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "Prior automated work optimizes one component at a time, almost always the prompt or an in-context playbook (ACE, GEPA, DSPy) or the trajectory distribution (TF-GRPO, GRPO variants).",
+      "location": {
+        "byte_start": 1910,
+        "byte_end": 2091,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Prior automated work",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-e02c2c70",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "AHE evolves the full harness as a combinatorial whole and treats every edit as a falsifiable contract verified against the next round's task outcomes.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "AHE evolves the full harness as a combinatorial whole and treats every edit as a falsifiable contract verified against the next round's task outcomes.",
+      "location": {
+        "byte_start": 2136,
+        "byte_end": 2286,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AHE",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-ef307a70",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Component observability instantiates the harness on the NexAU framework, exposing seven editable component types as files at fixed mount points: system prompt, tool description, tool implementation, middleware, skill, sub-agent configuration, and long-term memory.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "The harness is instantiated on the NexAU framework, which exposes seven editable component types as files at fixed mount points: system prompt, tool description, tool implementation, middleware, skill, sub-agent configuration, and long-term memory.",
+      "location": {
+        "byte_start": 2506,
+        "byte_end": 2787,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Component observability",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "NexAU framework",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-a8de5971",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Experience observability uses the Agent Debugger framework to distill raw rollout traces into a layered evidence corpus, with each trajectory message in its own file and per-task root-cause reports identifying failure patterns.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "The Agent Debugger framework distills raw rollout traces (millions of tokens) into a layered evidence corpus.",
+      "location": {
+        "byte_start": 3116,
+        "byte_end": 3255,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Experience observability",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Agent Debugger framework",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-4efad71d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Decision observability requires every edit to ship with a change manifest entry naming the failure pattern it addresses, the predicted task fixes, the at-risk regressions, and the constraint level, allowing the loop to intersect predicted fixes and regressions against observed task-level deltas.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "Every edit ships with a change\\manifest.json entry naming the failure pattern it addresses, the predicted task fixes, the at-risk regressions, and the constraint level (prompt, tool description, tool implementation, middleware, skill).",
+      "location": {
+        "byte_start": 3527,
+        "byte_end": 3795,
+        "line": 69,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Decision observability",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "change\\manifest.json",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-175e6758",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Ten AHE iterations on Terminal-Bench 2 lift pass@1 from 69.7% to 77.0%, outperforming human-designed harnesses (opencode 47.2%, terminus-2 62.9%, Codex-CLI 71.9%) and self-evolve baselines (ACE 68.9%, TF-GRPO 72.3%).",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "Ten AHE iterations on Terminal-Bench 2 (89 tasks, k=2 rollouts, GPT-5.4 high reasoning, 32 hours total runtime) lift pass@1 from 69.7% to 77.0%.",
+      "location": {
+        "byte_start": 4877,
+        "byte_end": 5022,
+        "line": 89,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AHE iterations",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "pass@1",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-1ab783bf",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "On Hard-tier tasks, AHE slips to 53.3% behind Codex-CLI's 56.7%, traced to component interference rather than missing capability.",
+    "evidence": {
+      "ref_id": "p032.s002",
+      "quote": "On Hard it slips to 53.3% behind Codex-CLI's 56.7%, traced to component interference rather than missing capability.",
+      "location": {
+        "byte_start": 5225,
+        "byte_end": 5342,
+        "line": 91,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AHE",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Hard-tier tasks",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-0d471029",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "On SWE-bench-verified (500 tasks across seven repos), AHE achieves the highest aggregate at 75.6% while spending 12% fewer tokens than the seed, 21% fewer than TF-GRPO, and 32% fewer than ACE.",
+    "evidence": {
+      "ref_id": "p033.s001",
+      "quote": "On SWE-bench-verified (500 tasks across seven repos), AHE achieves the highest aggregate at 75.6% while spending 12% fewer tokens than the seed, 21% fewer than TF-GRPO, and 32% fewer than ACE.",
+      "location": {
+        "byte_start": 5225,
+        "byte_end": 5589,
+        "line": 91,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AHE",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "SWE-bench-verified",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p032.s002`..`p033.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-011-02c20ce4",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Cross-model transfer using the same evolved workspace produces positive gains on five alternate bases: +10.1pp on deepseek-v4-flash, +6.3pp on qwen-3.6-plus, +5.1pp on gemini-3.1-flash-lite-preview, and +2.3pp on both GPT-5.4 medium and xhigh.",
+    "evidence": {
+      "ref_id": "p035.s002",
+      "quote": "produces five positive gains: +10.1pp on deepseek-v4-flash (51.7→61.8), +6.3pp on qwen-3.6-plus (56.2→62.5), +5.1pp on gemini-3.1-flash-lite-preview (36.5→41.6), and +2.3pp on both GPT-5.4 medium and xhigh.",
+      "location": {
+        "byte_start": 5875,
+        "byte_end": 6173,
+        "line": 97,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Cross-model transfer",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-a880514f",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Weaker bases benefit more from evolved harness components because they lean on the coordination patterns AHE has fixed inside tools, middleware, and memory, while stronger bases can re-derive the same coordination from the prompt cheaply.",
+    "evidence": {
+      "ref_id": "p036.s001",
+      "quote": "Weaker bases benefit more because they lean on the coordination patterns AHE has fixed inside tools, middleware, and memory.",
+      "location": {
+        "byte_start": 6175,
+        "byte_end": 6299,
+        "line": 99,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Weaker bases",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "coordination patterns",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-5e2c8cd2",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The component ablation shows that swapping a single AHE component into the bash-only seed yields: memory alone +5.6pp, tools alone +3.3pp, middleware alone +2.2pp, and system prompt alone −2.3pp.",
+    "evidence": {
+      "ref_id": "p037.s002",
+      "quote": "Swapping a single AHE component into the bash-only seed: memory alone +5.6pp, tools alone +3.3pp, middleware alone +2.2pp, system prompt alone −2.3pp.",
+      "location": {
+        "byte_start": 6424,
+        "byte_end": 6581,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Component ablation",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "memory, tools, middleware, system prompt",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-795b165c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The harness components ACE and TF-GRPO never edit are exactly where the gain lives.",
+    "evidence": {
+      "ref_id": "p037.s003",
+      "quote": "The harness components ACE and TF-GRPO never edit are exactly where the gain lives.",
+      "location": {
+        "byte_start": 6581,
+        "byte_end": 6665,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ACE and TF-GRPO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "harness components",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-0eccac52",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The pattern across all four case studies is that prompts say what to avoid, but execution-time enforcement is what changes outcomes, with three of the four winning fixes shipping at the tool-implementation or middleware level.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "The pattern across all four cases: prompts say what to avoid, but execution-time enforcement is what changes outcomes.",
+      "location": {
+        "byte_start": 9506,
+        "byte_end": 9624,
+        "line": 125,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "execution-time enforcement",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "outcomes",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-af01ab3c",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Non-additive component interaction causes three positive single-component gains summing to +11.1pp to result in only +7.3pp for full AHE, with stacking costing 3.8pp.",
+    "evidence": {
+      "ref_id": "p052.s001",
+      "quote": "Three positive single-component gains sum to +11.1pp, but full AHE only achieves +7.3pp.",
+      "location": {
+        "byte_start": 10060,
+        "byte_end": 10188,
+        "line": 131,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Non-additive component interaction",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-c84f10a6",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Regression blindness shows that across nine evaluation rounds, the evolve agent issued 43 unique regression predictions and only 5 landed (precision 11.6%), with 40 unforeseen regressions actually occurring (recall 11.1%).",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "Across nine evaluation rounds, the evolve agent issued 43 unique regression predictions and only 5 landed (precision 11.6%).",
+      "location": {
+        "byte_start": 10386,
+        "byte_end": 10536,
+        "line": 133,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Regression blindness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-2f312109",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The evolve agent can justify why an edit should help but cannot reliably name what the same edit will break.",
+    "evidence": {
+      "ref_id": "p054.s001",
+      "quote": "The agent can justify why an edit should help.",
+      "location": {
+        "byte_start": 10681,
+        "byte_end": 10727,
+        "line": 135,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "evolve agent",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-d1c5d0a4",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "The authors flag that cross-benchmark and cross-model transfer evidence is encouraging, but a non-Terminal-Bench-2 evolution run is what would close the benchmark overfitting question, calling it a generalization hazard.",
+    "evidence": {
+      "ref_id": "p055.s002",
+      "quote": "Cross-benchmark and cross-model transfer evidence is encouraging, but a non-Terminal-Bench-2 evolution run is what would close the benchmaxxing question.",
+      "location": {
+        "byte_start": 10851,
+        "byte_end": 11005,
+        "line": 137,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "generalization hazard",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-1aa19c74",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "The best recommendation is to treat AHE as a controlled research prototype that already produces a frozen harness worth studying, while waiting for evolution runs on a second benchmark before adopting the framework as a deployment-grade self-improvement loop.",
+    "evidence": {
+      "ref_id": "p056.s001",
+      "quote": "the best recommendation is to treat AHE as a controlled research prototype that already produces a frozen harness worth studying, while waiting for evolution runs on a second benchmark before adopting the framework as a deployment-grade self-improvement loop.",
+      "location": {
+        "byte_start": 11073,
+        "byte_end": 11335,
+        "line": 139,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "AHE",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-e3ac5aa6",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "ML engineers can now evolve a coding agent's tools, middleware, and memory automatically against a benchmark, now that observability primitives turn each component edit into a falsifiable contract.",
+    "evidence": {
+      "ref_id": "p065.s001",
+      "quote": "ML engineers can now evolve a coding agent's tools, middleware, and memory automatically against a benchmark, now that observability primitives turn each component edit into a falsifiable contract.",
+      "location": {
+        "byte_start": 12675,
+        "byte_end": 12872,
+        "line": 157,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "ML engineers",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "tools, middleware, and memory",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-37a975ba",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The central design move is that every phase of the loop produces structured, file-level artifacts another agent can read.",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "The central design move is that every phase of the loop produces structured, file-level artifacts another agent can read.",
+      "location": {
+        "byte_start": 2306,
+        "byte_end": 2427,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-c7ce0200",
+    "kind": "assertion",
+    "text": "Self-justification becomes measurement.",
+    "evidence": {
+      "ref_id": "p022.s003",
+      "quote": "Self-justification becomes measurement.",
+      "location": {
+        "byte_start": 3996,
+        "byte_end": 4036,
+        "line": 71,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-0ed7ea4f",
+    "kind": "assertion",
+    "text": "The seed harness is deliberately minimal, just a single bash tool with no middleware or skills, so every component the loop adds has to earn its place against measured rollouts.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "The seed harness is deliberately minimal, just a single bash tool with no middleware or skills, so every component the loop adds has to earn its place against measured rollouts.",
+      "location": {
+        "byte_start": 2937,
+        "byte_end": 3114,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

@@ -1,0 +1,640 @@
+[
+  {
+    "id": "u-000-5ab7927d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "At top labs, the minimum CV threshold for consistent interview callbacks appears to be roughly 3+ first-author papers plus at least one internship or industry role.",
+    "evidence": {
+      "ref_id": "p006.s003",
+      "quote": "3+ first-author papers and at least one internship or industry role seems to be the threshold for consistently getting callbacks at top labs.",
+      "location": {
+        "byte_start": 1699,
+        "byte_end": 2236,
+        "line": 21,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "3+ first-author papers and at least one internship or industry role",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "top labs",
+        "role": "location",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p006.s002`..`p006.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-001-db7049c0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "if you're already getting interviews: more papers will not help you at this point",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "if you're already getting interviews: more papers will not help you at this point",
+      "location": {
+        "byte_start": 2238,
+        "byte_end": 2331,
+        "line": 23,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "more papers",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "interviews",
+        "role": "context",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-a1f59ede",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Referrals are helpful but not required to get interviews; the author's experience shows unreferred applications can be equally successful.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Referrals: Nice to have, but not necessary.",
+      "location": {
+        "byte_start": 3057,
+        "byte_end": 3104,
+        "line": 29,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Referrals",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-5be6ca76",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "With RSUs (typical at big tech), you receive actual shares in the company on a vesting schedule.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "With RSUs (typical at big tech), you receive actual shares in the company on a vesting schedule.",
+      "location": {
+        "byte_start": 6843,
+        "byte_end": 6943,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "RSUs",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-0f294af4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stock options give the right to buy shares at a fixed strike price regardless of market price; if the market price exceeds the strike price you profit, but if it is lower your options are worthless.",
+    "evidence": {
+      "ref_id": "p025.s002",
+      "quote": "You're getting the opportunity to buy shares at a fixed price X, regardless of what the market price Y is at the time.",
+      "location": {
+        "byte_start": 7227,
+        "byte_end": 7348,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stock options",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-d70d92de",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Stock options typically expire 90 days after you leave the company.",
+    "evidence": {
+      "ref_id": "p026.s002",
+      "quote": "Stock options typically expire 90 days after you leave the company.",
+      "location": {
+        "byte_start": 7509,
+        "byte_end": 7577,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stock options",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "90 days after you leave the company",
+        "role": "time_limit",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-1c68f953",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "When a recruiter quotes total compensation including startup equity, mentally discount it significantly since you are most likely not retiring next year.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "when a recruiter quotes you a total compensation number that includes startup equity, smile politely and mentally discount it significantly.",
+      "location": {
+        "byte_start": 8712,
+        "byte_end": 8865,
+        "line": 67,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "total compensation number that includes startup equity",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-86bf8208",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Technical interviews. This is the bulk of the process and where preparation matters the most.",
+    "evidence": {
+      "ref_id": "p034.s001",
+      "quote": "Technical interviews. This is the bulk of the process and where preparation matters the most.",
+      "location": {
+        "byte_start": 9299,
+        "byte_end": 9396,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Technical interviews",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-269844a5",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Allocate at least one month of regular study time for interview preparation since working with ML daily is not the same as being ready to implement attention from scratch or derive backward passes.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "Allocate at least a month of regular study time.",
+      "location": {
+        "byte_start": 9987,
+        "byte_end": 10532,
+        "line": 83,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "at least a month of regular study time",
+        "role": "duration",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p036.s002`..`p039.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-009-e684db4f",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Before each interview, use an LLM to conduct mock interviews by pasting the role description and asking it to interview you, as there was surprisingly frequent overlap with actual questions.",
+    "evidence": {
+      "ref_id": "p045.s001",
+      "quote": "Before each interview, I'd paste a description of the role, interview and company into my favourite LLM for the day (usually Claude) and ask it to interview me.",
+      "location": {
+        "byte_start": 12029,
+        "byte_end": 12189,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "LLM to conduct mock interviews",
+        "role": "tool",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-b72d94c4",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "For coding interview preparation, complete at minimum the Blind 75 focusing on Medium difficulty problems with optimal solutions, targeting under 20 minutes per problem.",
+    "evidence": {
+      "ref_id": "p047.s001",
+      "quote": "Do at least Blind 75 and optionally NeetCode 150, focusing on Mediums.",
+      "location": {
+        "byte_start": 12659,
+        "byte_end": 12729,
+        "line": 105,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Blind 75",
+        "role": "resource",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-c4b78d0f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "In ML coding interviews, the baseline expectation is to implement a transformer end-to-end, causal/cross/self attention, flash attention, attention backward pass, MLP forward/backward pass, and a simple training loop in PyTorch or JAX.",
+    "evidence": {
+      "ref_id": "p054.s001",
+      "quote": "Implement a transformer end-to-end",
+      "location": {
+        "byte_start": 15247,
+        "byte_end": 15284,
+        "line": 122,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "implement a transformer end-to-end",
+        "role": "skill",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-8552032b",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "If anxiety is affecting your performance, consider therapy or serious introspection before starting the process rather than discovering your triggers under pressure during interviews.",
+    "evidence": {
+      "ref_id": "p066.s004",
+      "quote": "that kind of reflection is more useful before you start (knowing your triggers, your relationship with failure, what your sense of worth is actually tied to) so you're not discovering it under fire like I did.",
+      "location": {
+        "byte_start": 17740,
+        "byte_end": 17966,
+        "line": 151,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "reflection",
+        "role": "action",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-f754d626",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start interviewing with companies you care less about first to calibrate your confidence and get realistic compensation data before negotiating for offers you actually want.",
+    "evidence": {
+      "ref_id": "p073.s001",
+      "quote": "Start with companies you care less about.",
+      "location": {
+        "byte_start": 19756,
+        "byte_end": 19914,
+        "line": 165,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "companies you care less about",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-4b760f3b",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Inform each company about your other interview processes to keep timelines clear and often prompt companies to move faster if they are interested.",
+    "evidence": {
+      "ref_id": "p075.s001",
+      "quote": "Tell every company about your other processes.",
+      "location": {
+        "byte_start": 20888,
+        "byte_end": 21025,
+        "line": 169,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "every company about your other processes",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-f8905f24",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Keep a spreadsheet tracking companies, your position in each process, deadlines, and contacts to avoid forgetting to apply to places you were interested in.",
+    "evidence": {
+      "ref_id": "p092.s001",
+      "quote": "Keep a spreadsheet.",
+      "location": {
+        "byte_start": 24571,
+        "byte_end": 24647,
+        "line": 203,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "a spreadsheet",
+        "role": "tool",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-b0290799",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "If you are not hearing back from a company you really want to work at, cold-email someone at the company to express interest directly and get on their radar rather than relying solely on the application form.",
+    "evidence": {
+      "ref_id": "p094.s001",
+      "quote": "should have cold-emailed someone at the company, expressed my interest directly, and tried to actually get on someone's radar rather than hoping the application form would do it for me.",
+      "location": {
+        "byte_start": 25288,
+        "byte_end": 25547,
+        "line": 207,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "cold-emailed someone at the company",
+        "role": "action",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-70b620ad",
+    "kind": "relation",
+    "subtype": "observation",
+    "text": "Interview difficulty is comparable on average between startups and big tech, but startups have higher variance, and an unusually easy interview process may signal the work itself will be less complex.",
+    "evidence": {
+      "ref_id": "p017.s003",
+      "quote": "if it feels too easy, that might be a signal about the complexity of the work you'd actually be doing.",
+      "location": {
+        "byte_start": 5139,
+        "byte_end": 5315,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "interview process",
+        "role": "indicator",
+        "locatable": true
+      },
+      {
+        "surface": "complexity of the work",
+        "role": "outcome",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-875ff21b",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Companies can move their compensation numbers significantly if they want you, and it is always worth asking to negotiate.",
+    "evidence": {
+      "ref_id": "p080.s001",
+      "quote": "Companies can move their numbers significantly if they want you...",
+      "location": {
+        "byte_start": 21802,
+        "byte_end": 21872,
+        "line": 179,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Companies",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "their numbers",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-c5cce4fb",
+    "kind": "assertion",
+    "text": "They split into two flavours, classic behavioural questions (“tell me about a time you had a conflict”, “tell me a time you received feedback”...), research-style interviews (“what topics are you interested in?”, “where do you see the field going?”).",
+    "evidence": {
+      "ref_id": "p036.s001",
+      "quote": "They split into two flavours, classic behavioural questions (“tell me about a time you had a conflict”, “tell me a time you received feedback”...), research-style interviews (“what topics are you interested in?”, “where do you see the field going?”).",
+      "location": {
+        "byte_start": 9705,
+        "byte_end": 9987,
+        "line": 83,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-1c68f953",
+    "kind": "assertion",
+    "text": "when a recruiter quotes you a total compensation number that includes startup equity, smile politely and mentally discount it significantly.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "when a recruiter quotes you a total compensation number that includes startup equity, smile politely and mentally discount it significantly.",
+      "location": {
+        "byte_start": 8712,
+        "byte_end": 8865,
+        "line": 67,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-5b24ac38",
+    "kind": "assertion",
+    "text": "I found a lot of comfort in having a consistent pre-interview ritual.",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "I found a lot of comfort in having a consistent pre-interview ritual.",
+      "location": {
+        "byte_start": 16757,
+        "byte_end": 16826,
+        "line": 147,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-15b8992f",
+    "kind": "assertion",
+    "text": "Cold emails: Emailing the hiring manager or someone on the team directly (if you know who they are) is often appreciated.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "Cold emails: Emailing the hiring manager or someone on the team directly (if you know who they are) is often appreciated.",
+      "location": {
+        "byte_start": 3466,
+        "byte_end": 3591,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

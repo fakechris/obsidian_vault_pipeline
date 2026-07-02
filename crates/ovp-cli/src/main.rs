@@ -478,6 +478,12 @@ enum Cmd {
         /// Default OFF — caveated claims go to review.json and the run succeeds.
         #[arg(long)]
         strict: bool,
+        /// Fail loud BEFORE any model call if a cluster exceeds
+        /// --max-cases-per-cluster (instead of silently excluding the overflow
+        /// cases from synthesis). Default OFF — overflow is warned + recorded
+        /// in warnings.json and the run proceeds on the capped slice.
+        #[arg(long)]
+        strict_cluster_cap: bool,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M25 Crystal Review Workbench: apply human review decisions over caveated
@@ -1043,7 +1049,7 @@ fn main() -> ExitCode {
         Cmd::CrystalSynth {
             reader_dir, vault_root, work_dir, store, client, cache_dir,
             max_cases_per_cluster, max_units_per_case, run_id, title, scope,
-            not_claiming, refresh, date, strict,
+            not_claiming, refresh, date, strict, strict_cluster_cap,
         } => {
             use commands::client::ClientKind;
             use commands::crystal_synth::CrystalSynthArgs;
@@ -1054,7 +1060,7 @@ fn main() -> ExitCode {
             commands::crystal_synth::run(CrystalSynthArgs {
                 reader_dir, vault_root, work_dir, store, client_kind, cache_dir,
                 max_cases_per_cluster, max_units_per_case, run_id, title, scope,
-                not_claiming, refresh, date, strict,
+                not_claiming, refresh, date, strict, strict_cluster_cap,
             })
         }
         Cmd::CrystalReview { candidate, decisions, out } => {

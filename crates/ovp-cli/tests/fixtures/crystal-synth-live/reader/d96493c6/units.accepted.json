@@ -1,0 +1,732 @@
+[
+  {
+    "id": "u-000-0f942a9e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Holon is a headless AI coding agent runner that executes Claude Code in sandboxed Docker containers to transform GitHub issues and pull requests into reviewable code changes.",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "Holon runs AI coding agents (Claude Code by default) in a headless, sandboxed environment to transform GitHub issues and pull requests into reviewable code changes.",
+      "location": {
+        "byte_start": 945,
+        "byte_end": 1110,
+        "line": 70,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Holon",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "headless AI coding agent runner",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-3ccefad6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "This document introduces Holon, a headless AI coding agent runner designed to automate GitHub issue-to-PR workflows.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "This document introduces Holon, a headless AI coding agent runner designed to automate GitHub issue-to-PR workflows.",
+      "location": {
+        "byte_start": 454,
+        "byte_end": 571,
+        "line": 54,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "HolonSpec",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "input specification document",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-3319383a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An Agent Bundle is a self-contained tar.gz archive containing compiled agent code, dependencies, an executable entrypoint, and manifest.json describing runtime requirements.",
+    "evidence": {
+      "ref_id": "p1460.s001",
+      "quote": "Every agent bundle includes a manifest.json at its root that describes the agent's metadata, requirements, and capabilities",
+      "location": {
+        "byte_start": 107849,
+        "byte_end": 108089,
+        "line": 3649,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Agent Bundle",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "self-contained tar.gz archive",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p1459.s001`..`p1461.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-e2fde9ca",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Docker Runtime is the component that executes agents in isolated Docker containers, handling workspace preparation, image composition, and container lifecycle management.",
+    "evidence": {
+      "ref_id": "p1118.s001",
+      "quote": "The Docker Runtime is responsible for executing agents in isolated, sandboxed Docker containers.",
+      "location": {
+        "byte_start": 81408,
+        "byte_end": 81505,
+        "line": 2777,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Docker Runtime",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "component that executes agents in isolated Docker containers",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-84278d72",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Preflight checks validate that required dependencies (Docker, Git, tokens, disk space) are available before agent execution, failing fast with clear error messages.",
+    "evidence": {
+      "ref_id": "p3334.s001",
+      "quote": "Preflight checks ensure that required dependencies (Docker, Git, tokens) are available, paths are accessible, and the system is properly configured.",
+      "location": {
+        "byte_start": 247149,
+        "byte_end": 247473,
+        "line": 8337,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Preflight checks",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "validate required dependencies",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p3333.s001`..`p3334.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-292c0de9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Workspace Preparers create isolated copies of source repositories for container execution using strategies: git-clone, snapshot, or existing.",
+    "evidence": {
+      "ref_id": "p1307.s001",
+      "quote": "Holon prepares workspaces using pluggable preparer strategies that create isolated copies of the source repository for agent execution.",
+      "location": {
+        "byte_start": 96187,
+        "byte_end": 96444,
+        "line": 3276,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Workspace Preparers",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "pluggable preparer strategies",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p1306.s004`..`p1308.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-613ad0f5",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Publisher system transforms agent execution outputs (patches, summaries, manifests) into concrete Git commits and GitHub operations using pluggable publisher implementations.",
+    "evidence": {
+      "ref_id": "p1831.s001",
+      "quote": "The publishing system transforms agent execution outputs (patches, summaries, manifests) into concrete Git commits and GitHub operations.",
+      "location": {
+        "byte_start": 134635,
+        "byte_end": 134773,
+        "line": 4554,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Publisher system",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "transforms agent execution outputs",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-15f7fb03",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Agent Contract defines the standardized I/O interface between Holon runner and agent executables, specifying input filesystem layout and required output artifacts.",
+    "evidence": {
+      "ref_id": "p1503.s001",
+      "quote": "The agent contract defines the standardized I/O interface between the Holon runner and agent executables.",
+      "location": {
+        "byte_start": 110515,
+        "byte_end": 110684,
+        "line": 3744,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Agent Contract",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "standardized I/O interface",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p1502.s001`..`p1504.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-010-262cdfa6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Standardized artifacts are the three required outputs every Holon execution produces: diff.patch (code changes), summary.md (human-readable explanation), and manifest.json (execution metadata).",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "Every execution produces three required artifacts:",
+      "location": {
+        "byte_start": 6040,
+        "byte_end": 6500,
+        "line": 154,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Standardized artifacts",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "three required outputs",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p060.s002`..`p065.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-27f4f038",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Holon uses a four-tier configuration hierarchy with explicit precedence: CLI flags > project config > environment variables > defaults.",
+    "evidence": {
+      "ref_id": "p075.s001",
+      "quote": "Holon uses a four-tier configuration system with explicit precedence rules:",
+      "location": {
+        "byte_start": 7178,
+        "byte_end": 7255,
+        "line": 196,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "four-tier configuration hierarchy",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-2fc73f00",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The Docker Runtime mounts four directories: /holon/workspace (read-write), /holon/input (read-only), /holon/output (read-write), and /holon/agent (read-only).",
+    "evidence": {
+      "ref_id": "p109.s001",
+      "quote": "Holon isolates agent execution using Docker containers with read-only and read-write mount points:",
+      "location": {
+        "byte_start": 8808,
+        "byte_end": 9319,
+        "line": 269,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Docker containers",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "isolated execution",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p108.s001`..`p109.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-07792543",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agents are resolved through a multi-strategy resolver chain: LocalFileResolver, HTTPResolver, AliasResolver, ChannelResolver, and BuiltinResolver.",
+    "evidence": {
+      "ref_id": "p872.s003",
+      "quote": "LocalFileResolver : Direct file paths",
+      "location": {
+        "byte_start": 64594,
+        "byte_end": 64711,
+        "line": 2166,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "resolver chain",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p872.s002`..`p873.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-ed2dd2ec",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The holon solve command orchestrates the complete workflow: parse reference, prepare workspace, collect context, execute agent, and publish results.",
+    "evidence": {
+      "ref_id": "p571.s001",
+      "quote": "The holon solve command orchestrates the complete workflow: prepare workspace → collect context → run agent → publish results.",
+      "location": {
+        "byte_start": 38354,
+        "byte_end": 38690,
+        "line": 1424,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "holon solve command",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "complete workflow orchestration",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p570.s003`..`p573.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-b24e54ee",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Context collection gathers GitHub metadata (issues, PRs, reviews, diffs, CI results) and structures it into standardized JSON files for agent consumption.",
+    "evidence": {
+      "ref_id": "p1703.s001",
+      "quote": "Context Collection is the system that gathers GitHub metadata (issues, PRs, reviews, diffs, CI results) from the GitHub API and structures it into standardized JSON files for agent consumption.",
+      "location": {
+        "byte_start": 125230,
+        "byte_end": 125424,
+        "line": 4235,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Context Collection",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "gathers GitHub metadata",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-ee128ece",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "GitHub Actions integration provides automated issue resolution through holon-trigger.yml (event listener) and holon-solve.yml (execution orchestrator) workflows.",
+    "evidence": {
+      "ref_id": "p2647.s001",
+      "quote": "holon-trigger.yml - Event listener that filters and routes GitHub events",
+      "location": {
+        "byte_start": 194043,
+        "byte_end": 194251,
+        "line": 6611,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GitHub Actions integration",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "automated issue resolution",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p2646.s001`..`p2648.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-017-95d48729",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use @holonbot comment on an issue or PR to trigger automated resolution.",
+    "evidence": {
+      "ref_id": "p604.s001",
+      "quote": "Comment @holonbot on issue/PR Runs immediately if user has write access",
+      "location": {
+        "byte_start": 41095,
+        "byte_end": 41318,
+        "line": 1513,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "@holonbot comment",
+        "role": "trigger",
+        "locatable": false
+      },
+      {
+        "surface": "issue or PR",
+        "role": "target",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-d11ef85d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The Actor Identity System resolves GitHub actor identity through token precedence: explicit user token, Holonbot broker exchange, or github-actions fallback.",
+    "evidence": {
+      "ref_id": "p3525.s001",
+      "quote": "Token Source Actor Login Actor Type Actor App Slug Actor Source Set Where",
+      "location": {
+        "byte_start": 260883,
+        "byte_end": 261241,
+        "line": 8812,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Actor Identity System",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "resolves GitHub actor identity",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-b03c8947",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Image auto-detection selects Docker base images by scanning workspace files using a root-first strategy, prioritizing signal files like go.mod, package.json, and pyproject.toml.",
+    "evidence": {
+      "ref_id": "p6621.s001",
+      "quote": "The detection system uses a root-first approach to maximize accuracy and performance",
+      "location": {
+        "byte_start": 499200,
+        "byte_end": 499287,
+        "line": 16745,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Image auto-detection",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "selects Docker base images",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-021-9420fee8",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "HolonSpec describes what the agent should do",
+    "evidence": {
+      "ref_id": "p6036.s001",
+      "quote": "HolonSpec describes what the agent should do",
+      "location": {
+        "byte_start": 445007,
+        "byte_end": 445358,
+        "line": 15229,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p6035.s001`..`p6036.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-022-bbe76336",
+    "kind": "assertion",
+    "text": "Headless-First No TTY/interactive prompts; all inputs via files and environment variables",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "Headless-First No TTY/interactive prompts; all inputs via files and environment variables",
+      "location": {
+        "byte_start": 824,
+        "byte_end": 1786,
+        "line": 61,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p020.s001`..`p024.s001` around the ref"
+      }
+    ]
+  }
+]

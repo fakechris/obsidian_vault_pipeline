@@ -1,0 +1,566 @@
+[
+  {
+    "id": "u-000-b87c73aa",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "模型 steering（导向）的核心思想是：通过直接操纵模型内部的激活值来引导模型的输出行为，而不是通过修改提示词或重新训练。",
+    "evidence": {
+      "ref_id": "p004.s001",
+      "quote": "这就是 模型 steering（导向） 的核心思想：通过直接操纵模型内部的激活值，来引导模型的输出行为，而不是通过修改提示词或重新训练。",
+      "location": {
+        "byte_start": 731,
+        "byte_end": 923,
+        "line": 18,
+        "match_kind": "whitespace"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "模型 steering",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-db0cd124",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "激活值（activations）是大语言模型在处理文本时每一层产生的一组数字，表示模型当前\"在想什么\"。",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "大语言模型在处理文本时，每一层都会产生一组 激活值（activations） ——可以理解为模型当前\"在想什么\"的数字表示。",
+      "location": {
+        "byte_start": 1879,
+        "byte_end": 2039,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "激活值（activations）",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-b38d7b9d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "这是研究人员在 AI 的\"大脑\"里找到了一个特定的神经元组合——当模型读到或看到\"金门大桥\"时，这个组合就会激活。",
+    "evidence": {
+      "ref_id": "p003.s002",
+      "quote": "这是研究人员在 AI 的\"大脑\"里找到了一个特定的神经元组合——当模型读到或看到\"金门大桥\"时，这个组合就会激活。",
+      "location": {
+        "byte_start": 424,
+        "byte_end": 579,
+        "line": 16,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "金门大桥",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-adfb1047",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Steering 是对模型内部最基础的激活状态进行精确、手术式的修改，不是让模型\"假装\"自己是某个东西，也不是在输入里附加文字。",
+    "evidence": {
+      "ref_id": "p016.s002",
+      "quote": "这是对模型内部最基础的激活状态进行精确、手术式的修改。",
+      "location": {
+        "byte_start": 2502,
+        "byte_end": 2583,
+        "line": 48,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Steering",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-6767c927",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "朴素方法（对比激活）的步骤是：准备两组相同的提示词，其中一组末尾加上目标描述词，记录激活值并计算差值，这个差值向量即为目标概念的 steering 向量。",
+    "evidence": {
+      "ref_id": "p022.s011",
+      "quote": "计算差值：steering_vector = 第二组激活 - 第一组激活",
+      "location": {
+        "byte_start": 3075,
+        "byte_end": 3204,
+        "line": 65,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "对比激活（朴素方法）",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p022.s010`..`p022.s012` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-cfd3a282",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "稀疏自编码器方法通过训练一个辅助模型来\"解读\"主模型的激活值，找出哪些神经元组合经常一起激活形成\"特征\"，每个特征对应一个概念，找到特征后可以精确调高或调低其强度。",
+    "evidence": {
+      "ref_id": "p027.s002",
+      "quote": "训练一个辅助模型（稀疏自编码器）来\"解读\"主模型的激活值",
+      "location": {
+        "byte_start": 3576,
+        "byte_end": 3658,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "稀疏自编码器（Sparse Autoencoder）",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-e901ffd5",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "DwarfStar 4 是 antirez 开发的专门为 DeepSeek V4 Flash 设计的轻量级推理引擎，将 steering 作为\"一等公民\"内置，不依赖 llama.cpp 或其他运行时，专为该模型优化。",
+    "evidence": {
+      "ref_id": "p063.s001",
+      "quote": "antirez 开发的 DwarfStar 4 是一个专门为 DeepSeek V4 Flash 设计的轻量级推理引擎。",
+      "location": {
+        "byte_start": 7930,
+        "byte_end": 8034,
+        "line": 165,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "DwarfStar 4",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-5891b307",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "这是一个 6850 亿参数的混合专家模型 ，但每次推理只激活约 370 亿参数。",
+    "evidence": {
+      "ref_id": "p059.s002",
+      "quote": "这是一个 6850 亿参数的混合专家模型 ，但每次推理只激活约 370 亿参数。",
+      "location": {
+        "byte_start": 7241,
+        "byte_end": 7341,
+        "line": 152,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "DeepSeek V4 Flash",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-f2d91a24",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Steering 在 AI 研究中处于尴尬的\"中产阶级\"地位：对大公司来说太低级（可直接训练模型），对普通用户来说太高级（需接触模型权重或激活值，只有模型所有者才能做）。",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "Steering 在 AI 研究中处于一个尴尬的位置：",
+      "location": {
+        "byte_start": 5807,
+        "byte_end": 5862,
+        "line": 121,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Steering",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-d712e5cc",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "直接说\"请简洁回答\"",
+    "evidence": {
+      "ref_id": "p050.s002",
+      "quote": "直接说\"请简洁回答\"",
+      "location": {
+        "byte_start": 6452,
+        "byte_end": 6479,
+        "line": 130,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "提示词工程 vs Steering",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-b8db609c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Steering 最有可能成功的应用方向是安全与对齐：如果能精确识别并控制与危险代码生成、欺骗行为、偏见与歧视、越狱攻击相关的特征，就可以在推理时动态调整让模型更安全。",
+    "evidence": {
+      "ref_id": "p083.s001",
+      "quote": "危险代码生成",
+      "location": {
+        "byte_start": 10452,
+        "byte_end": 10473,
+        "line": 214,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "安全与对齐",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-f95dd7ad",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "一个足够复杂的 steering 方法最终会变成替换整个模型——如果在每一层把激活值换成更强模型的激活值，得到的是更好的结果，但那不是在让原模型更聪明，而是在跟更强的模型对话。",
+    "evidence": {
+      "ref_id": "p090.s001",
+      "quote": "一个足够复杂的 steering 方法最终会变成替换整个模型。",
+      "location": {
+        "byte_start": 10970,
+        "byte_end": 11045,
+        "line": 233,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Steering 的理论局限",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-3428d229",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Steering 的核心价值也许不在于替代训练或提示词，而在于提供一种新的理解 AI 的方式——通过直接操纵它的\"大脑\"，我们得以窥见它到底是如何\"思考\"的。",
+    "evidence": {
+      "ref_id": "p106.s002",
+      "quote": "但也许它真正的价值不在于替代训练或提示词，而在于给我们提供了一种新的理解 AI 的方式——通过直接操纵它的\"大脑\"，我们得以窥见它到底是如何\"思考\"的。",
+      "location": {
+        "byte_start": 12770,
+        "byte_end": 12982,
+        "line": 272,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Steering 的价值",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-046da6bf",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "金门大桥 Claude 不是\"假装\"痴迷大桥，而是它的\"大脑\"真的被调成了那样，这说明模型内部确实存在对应具体概念的神经结构。",
+    "evidence": {
+      "ref_id": "p040.s002",
+      "quote": "金门大桥 Claude 不是\"假装\"痴迷大桥，而是它的\"大脑\"真的被调成了那样。",
+      "location": {
+        "byte_start": 5309,
+        "byte_end": 5405,
+        "line": 109,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "金门大桥 Claude",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-10a60c98",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Steering 需要在推理过程中访问模型的内部激活值，必须使用本地模型，不能通过 API 调用，直到最近本地模型的质量才足够好值得为它们做 steering。",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "Steering 需要在推理过程中访问模型的内部激活值，这意味着：",
+      "location": {
+        "byte_start": 6786,
+        "byte_end": 6867,
+        "line": 138,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Steering 的硬件要求",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-a4647117",
+    "kind": "assertion",
+    "text": "—— 脑内手术 vs. 语言劝说",
+    "evidence": {
+      "ref_id": "p007.s002",
+      "quote": "—— 脑内手术 vs. 语言劝说",
+      "location": {
+        "byte_start": 1147,
+        "byte_end": 1213,
+        "line": 24,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p007.s001`..`p007.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-a5670bef",
+    "kind": "assertion",
+    "text": "提取概念方向 ：找到对应某个概念（如\"简洁回答\"）的激活模式",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "提取概念方向 ：找到对应某个概念（如\"简洁回答\"）的激活模式",
+      "location": {
+        "byte_start": 2131,
+        "byte_end": 2258,
+        "line": 42,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p014.s001`..`p015.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-017-5f195447",
+    "kind": "assertion",
+    "text": "稀疏自编码器就像给模型的大脑做 fMRI 扫描，找出哪些神经活动模式对应哪些想法。",
+    "evidence": {
+      "ref_id": "p028.s001",
+      "quote": "稀疏自编码器就像给模型的大脑做 fMRI 扫描，找出哪些神经活动模式对应哪些想法。",
+      "location": {
+        "byte_start": 3910,
+        "byte_end": 4023,
+        "line": 82,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-3cae9b6a",
+    "kind": "assertion",
+    "text": "金门大桥实验最迷人的地方在于：它让我们看到了模型内部确实存在对应具体概念的神经结构。",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "金门大桥实验最迷人的地方在于：它让我们看到了模型内部确实存在对应具体概念的神经结构。",
+      "location": {
+        "byte_start": 4930,
+        "byte_end": 5056,
+        "line": 107,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-656e243a",
+    "kind": "assertion",
+    "text": "无论 steering 最终能否成为实用的工程工具，它都已经改变了我们看待 AI 模型的方式。",
+    "evidence": {
+      "ref_id": "p107.s001",
+      "quote": "无论 steering 最终能否成为实用的工程工具，它都已经改变了我们看待 AI 模型的方式。",
+      "location": {
+        "byte_start": 12984,
+        "byte_end": 13097,
+        "line": 274,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

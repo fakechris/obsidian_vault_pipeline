@@ -53,6 +53,11 @@ pub struct CrystalSynthArgs {
     /// fails loud. Default false — caveated claims route to review.json and the
     /// run succeeds (they are never durable regardless).
     pub strict: bool,
+    /// When true, a cluster larger than `max_cases_per_cluster` fails loud
+    /// BEFORE any model call (instead of silently excluding the overflow cases
+    /// from synthesis). Default false — overflow is warned + recorded in
+    /// warnings.json and the run proceeds on the capped slice.
+    pub strict_cluster_cap: bool,
 }
 
 /// Resolved paths after applying `--vault-root` precedence.
@@ -158,6 +163,67 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
 
     // (b) Deterministic keyword theme clusters. -----------------------------
     let clusters = cluster_by_keyword(&catalog);
+
+    // Surface degraded inputs BEFORE any model call, so they cannot silently
+    // shrink the synthesis (the M32 live repro's first attempt lost 18 of 34
+    // cases exactly this way): (1) cases whose title fell back to the directory
+    // name (no reader.md heading / run-status source) — keyword clustering
+    // degrades to `misc` for those; (2) clusters larger than the cap, whose
+    // overflow cases would be excluded from synthesis entirely. Both are
+    // warned on stderr and recorded in warnings.json for auditability.
+    let fallback_title_cases: Vec<String> = catalog
+        .cases
+        .iter()
+        .filter(|(id, c)| c.title == **id)
+        .map(|(id, _)| id.clone())
+        .collect();
+    if !fallback_title_cases.is_empty() {
+        eprintln!(
+            "crystal-synth: WARNING: {} case(s) have no readable title (fell back to the \
+             directory name; keyword clustering degrades): {}",
+            fallback_title_cases.len(),
+            fallback_title_cases.join(", ")
+        );
+    }
+    let mut cap_overflow: Vec<serde_json::Value> = Vec::new();
+    for cluster in &clusters {
+        if cluster.cases.len() > args.max_cases_per_cluster {
+            let excluded = &cluster.cases[args.max_cases_per_cluster..];
+            eprintln!(
+                "crystal-synth: WARNING: cluster `{}` has {} case(s) but the cap is {} — \
+                 {} case(s) will NOT be synthesized: {}",
+                cluster.key,
+                cluster.cases.len(),
+                args.max_cases_per_cluster,
+                excluded.len(),
+                excluded.join(", ")
+            );
+            cap_overflow.push(serde_json::json!({
+                "cluster": cluster.key,
+                "cases": cluster.cases.len(),
+                "cap": args.max_cases_per_cluster,
+                "excluded": excluded,
+            }));
+        }
+    }
+    // Always written (empty on a clean run), so a rerun in the same work dir
+    // can never leave a stale warning report behind.
+    write_json(
+        &args.work_dir.join("warnings.json"),
+        &serde_json::json!({
+            "fallback_title_cases": fallback_title_cases,
+            "cluster_cap_overflow": cap_overflow,
+        }),
+    )?;
+    if args.strict_cluster_cap && !cap_overflow.is_empty() {
+        return Err(CliError::Gate(format!(
+            "crystal-synth: {} cluster(s) exceed --max-cases-per-cluster={} with \
+             --strict-cluster-cap set (details in {}). Raise the cap or split the run.",
+            cap_overflow.len(),
+            args.max_cases_per_cluster,
+            args.work_dir.join("warnings.json").display()
+        )));
+    }
 
     // (c) Per-cluster cross-source synthesis (model, cassette-replayable). ---
     let mut base = build_client(args.client_kind, &paths.cache_dir)?;
@@ -409,6 +475,7 @@ mod tests {
             refresh: false,
             date: None,
             strict: false,
+            strict_cluster_cap: false,
         };
 
         // First run: writes candidate.json + a durable ledger line + crystal.md.
@@ -478,8 +545,76 @@ mod tests {
             refresh: false,
             date: None,
             strict: false,
+            strict_cluster_cap: false,
         })
         .unwrap_err();
         assert!(matches!(err, CliError::Gate(_)), "incomplete strength must fail loud, got {err:?}");
+    }
+
+    /// Minimal args for the warning-path tests: replay client, no cassettes.
+    fn bare_args(reader: &std::path::Path, work: &std::path::Path) -> CrystalSynthArgs {
+        CrystalSynthArgs {
+            reader_dir: Some(reader.to_path_buf()),
+            vault_root: None,
+            work_dir: work.to_path_buf(),
+            store: Some(work.join("store")),
+            client_kind: ClientKind::Replay,
+            cache_dir: Some(work.join("cassettes")),
+            max_cases_per_cluster: 16,
+            max_units_per_case: 22,
+            run_id: None,
+            title: None,
+            scope: None,
+            not_claiming: None,
+            refresh: false,
+            date: None,
+            strict: false,
+            strict_cluster_cap: false,
+        }
+    }
+
+    #[test]
+    fn cluster_cap_overflow_strict_gates_before_model_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        // Two cases in the same (memory) bucket with cap=1 → one excluded.
+        write_pack(&reader, "m18-01", "Working memory systems",
+            "Memory is scarce working memory in systems.",
+            &["Memory is scarce working memory in systems."]);
+        write_pack(&reader, "m18-02", "Context and retrieval",
+            "Context windows are a scarce budget for retrieval.",
+            &["Context windows are a scarce budget for retrieval."]);
+        let work = tmp.path().join("work");
+        let mut args = bare_args(&reader, &work);
+        args.max_cases_per_cluster = 1;
+        args.strict_cluster_cap = true;
+        // No cassettes exist — gating BEFORE the model call is what makes this pass.
+        let err = run(args).unwrap_err();
+        assert!(matches!(err, CliError::Gate(_)), "expected cap gate, got {err:?}");
+        // The overflow is recorded for auditability even though the run gated.
+        let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
+        let overflow = v["cluster_cap_overflow"].as_array().unwrap();
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0]["cluster"], "memory");
+        assert_eq!(overflow[0]["excluded"], serde_json::json!(["m18-02"]));
+    }
+
+    #[test]
+    fn title_fallback_is_recorded_in_warnings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        write_pack(&reader, "0951c213", "ignored", "A body sentence here.", &["A body sentence here."]);
+        // Strip reader.md so the title falls back to the directory name — the
+        // exact degradation that collapsed the M32 live repro's first attempt.
+        std::fs::remove_file(reader.join("0951c213").join("reader.md")).unwrap();
+        let work = tmp.path().join("work");
+        // No cassettes → the run errors at the synth call, but warnings.json
+        // must already be on disk by then.
+        let err = run(bare_args(&reader, &work)).unwrap_err();
+        assert!(matches!(err, CliError::Io(_)), "expected cassette miss, got {err:?}");
+        let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
+        assert_eq!(v["fallback_title_cases"], serde_json::json!(["0951c213"]));
     }
 }

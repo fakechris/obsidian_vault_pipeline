@@ -1,0 +1,762 @@
+[
+  {
+    "id": "u-000-e75320ab",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "ReMEM is a lightweight, framework-agnostic memory substrate for AI agents that provides a persistent memory layer capable of storing content, querying by meaning, organizing across layers, and surviving restarts.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "ReMEM is a lightweight, framework-agnostic memory substrate for AI agents.",
+      "location": {
+        "byte_start": 3381,
+        "byte_end": 3455,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ReMEM",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-a7a05cf6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "ReMEM's core insight is that prompts should be external environment variables, not direct context, applied to the problem of persistent, queryable agent memory.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "It applies the core insight from Recursive Language Models (RLMs) - that prompts should be external environment variables, not direct context - to the problem of persistent, queryable agent memory.",
+      "location": {
+        "byte_start": 3587,
+        "byte_end": 3820,
+        "line": 113,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Recursive Language Models (RLMs)",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "ReMEM",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-8e823f92",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "LLMs are limited by their context window.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "LLMs are limited by their context window.",
+      "location": {
+        "byte_start": 4959,
+        "byte_end": 5000,
+        "line": 145,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LLMs",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "context window",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-203449b9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The RLM-Style Memory REPL enables a model to navigate memory programmatically by writing JavaScript, never holding all memory in context—only constant-size metadata—thus allowing arbitrarily large memory stores without context window overflow.",
+    "evidence": {
+      "ref_id": "p116.s001",
+      "quote": "The model writes JavaScript to navigate memory.",
+      "location": {
+        "byte_start": 20613,
+        "byte_end": 20660,
+        "line": 532,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "RLM-Style Memory REPL",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-07a0966b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "ReMEM maintains four weighted retrieval layers: Episodic (1 hour TTL, weight 0.2), Semantic (7 days TTL, weight 0.3), Identity (30 days TTL, weight 0.5), and Procedural (30 days TTL, weight 0.4).",
+    "evidence": {
+      "ref_id": "p123.s001",
+      "quote": "| Episodic | 1 hour | 0.2 | Raw recent interactions |\n| Semantic | 7 days | 0.3 | Synthesized facts, preferences, decisions |\n| Identity | 30 days | 0.5 | Core identity signals and values |\n| Procedural | 30 days | 0.4 | Learned behaviors and triggered rules |",
+      "location": {
+        "byte_start": 21588,
+        "byte_end": 22348,
+        "line": 551,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ReMEM",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Episodic layer",
+        "role": "object",
+        "locatable": false
+      },
+      {
+        "surface": "Semantic layer",
+        "role": "object",
+        "locatable": false
+      },
+      {
+        "surface": "Identity layer",
+        "role": "object",
+        "locatable": false
+      },
+      {
+        "surface": "Procedural layer",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p120.s001`..`p123.s006` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "5 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-c0a67e29",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Hybrid scoring combines 40% keyword relevance with 60% cosine similarity when vector embeddings are available; when embeddings are unavailable, it falls back to keyword plus access count scoring.",
+    "evidence": {
+      "ref_id": "p122.s001",
+      "quote": "Hybrid scoring (v0.4.1): When EmbeddingService is wired into LayerManager, the content relevance score is a hybrid: 40% keyword matching + 60% cosine similarity.",
+      "location": {
+        "byte_start": 21741,
+        "byte_end": 21910,
+        "line": 555,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "hybrid scoring",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-aea3cbbd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Temporal validity enforces that semantic layer entries with validUntil timestamps older than the current time are automatically filtered out from all layer queries.",
+    "evidence": {
+      "ref_id": "p126.s002",
+      "quote": "Temporal validity is enforced in all layer queries — entries with validUntil < now are automatically filtered out and not returned.",
+      "location": {
+        "byte_start": 22516,
+        "byte_end": 22656,
+        "line": 568,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "temporal validity",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-95f806dd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Episodic compression automatically compresses old episodic entries into LLM-generated semantic summaries (2-4 sentences) when the episodic layer exceeds 80% capacity, preserving meaning while reclaiming storage.",
+    "evidence": {
+      "ref_id": "p131.s001",
+      "quote": "When the episodic layer fills above 80% capacity, old entries are LLM-compressed into semantic summaries instead of lost to TTL eviction.",
+      "location": {
+        "byte_start": 23132,
+        "byte_end": 23273,
+        "line": 586,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Episodic compression",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-39ffd371",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Memory consolidation deduplicates entries via embedding or keyword similarity, resolves conflicts by detecting contradictions and marking older entries as superseded, and promotes frequently-accessed episodic entries to the semantic layer.",
+    "evidence": {
+      "ref_id": "p031.s009",
+      "quote": "Memory consolidation (v0.6.1) - Cross-layer deduplication via embedding/keyword similarity, conflict resolution with contradiction detection, cross-layer promotion of frequently-accessed episodic entries to semantic layer",
+      "location": {
+        "byte_start": 6214,
+        "byte_end": 6526,
+        "line": 155,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Memory consolidation",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-8da89563",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Memory links create explicit typed relationships between memories (about, supports, contradicts, etc.) enabling weighted graph-adjacent recall and optional traversal path details.",
+    "evidence": {
+      "ref_id": "p031.s021",
+      "quote": "Memory links + neighbor-aware retrieval (v0.8.0, expanded in v0.8.5) - Explicit typed links between memories (about, supports, contradicts, etc.), weighted graph-adjacent recall, and optional traversal path details",
+      "location": {
+        "byte_start": 7671,
+        "byte_end": 7898,
+        "line": 163,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Memory links",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-8f9c0fc1",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Identity alignment auditing detects drift from a constitution and provides corrective injection text to keep agent behavior anchored to stated values.",
+    "evidence": {
+      "ref_id": "p031.s022",
+      "quote": "Identity alignment audits (v0.8.5) - Drift scoring plus corrective injection text for agents that need to keep behavior anchored to a constitution",
+      "location": {
+        "byte_start": 7898,
+        "byte_end": 8051,
+        "line": 164,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Identity alignment audits",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-4af3d57d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Identity duplication backs up an agent's full identity to DARKSOL's server, while infection pulls and overlays an identity package on any ReMEM-equipped agent, requiring a live connection to persist.",
+    "evidence": {
+      "ref_id": "p108.s001",
+      "quote": "Persistence: Live connection required — cut the connection = overlay stops",
+      "location": {
+        "byte_start": 17827,
+        "byte_end": 18202,
+        "line": 483,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Identity duplication",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "infection",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p107.s006`..`p108.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-e29ada35",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Framework adapters (v0.6.1, expanded in v0.8.5) - Dependency-free helpers for Vercel AI SDK, LangGraph-style stores, and OpenClaw/session memory with decision/procedure/project-context helpers",
+    "evidence": {
+      "ref_id": "p031.s020",
+      "quote": "Framework adapters (v0.6.1, expanded in v0.8.5) - Dependency-free helpers for Vercel AI SDK, LangGraph-style stores, and OpenClaw/session memory with decision/procedure/project-context helpers",
+      "location": {
+        "byte_start": 7472,
+        "byte_end": 7671,
+        "line": 162,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Framework adapters",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-008881e3",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Benchmark results show ReMEM achieved 99.4% recall@1 and 100% recall@5 on exact-codename lookups across 50,000 memories (3.6M tokens) with 49.98ms average query latency, compared to 0% recall for fixed recent-context baseline.",
+    "evidence": {
+      "ref_id": "p057.s001",
+      "quote": "50,000 memories\nApprox 3,625,526 stored tokens\nSimulated active context: 7,264 tokens\nCorpus/window pressure: 499x\nFixed recent-context recall: 0%\nReMEM exact-codename lookup: 99.4% recall@1, 100% recall@5\nAvg query latency: 49.98ms local in-memory sql.js run",
+      "location": {
+        "byte_start": 10213,
+        "byte_end": 11053,
+        "line": 237,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ReMEM",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "50,000 memories benchmark",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p053.s001`..`p057.s007` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-38913f72",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "SQLite via sql.js - WebAssembly-compiled SQLite. No native binaries. Cross-platform by default.",
+    "evidence": {
+      "ref_id": "p229.s001",
+      "quote": "SQLite via sql.js - WebAssembly-compiled SQLite. No native binaries. Cross-platform by default.",
+      "location": {
+        "byte_start": 34490,
+        "byte_end": 34616,
+        "line": 968,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "SQLite via sql.js",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p227.s001`..`p229.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-967a6995",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The ModelAbstraction provides a plug-and-play LLM interface supporting Bankr, OpenAI, Anthropic, and Ollama without changing application code.",
+    "evidence": {
+      "ref_id": "p031.s019",
+      "quote": "Plug-and-play LLM abstraction - Bankr, OpenAI, Anthropic, Ollama - swap without changing your code",
+      "location": {
+        "byte_start": 7367,
+        "byte_end": 7472,
+        "line": 161,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ModelAbstraction",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-6001df5c",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Small embedding-backed semantic retrieval achieved 100% recall@1 and 100% recall@5 on 80 memories, while identifying embedding ingestion as the current performance bottleneck.",
+    "evidence": {
+      "ref_id": "p057.s008",
+      "quote": "Small embedding-backed semantic run: 100% recall@1/@5 on 80 memories, with embedding ingestion identified as the current bottleneck",
+      "location": {
+        "byte_start": 11053,
+        "byte_end": 11190,
+        "line": 252,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "embedding-backed semantic retrieval",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-a0edbcda",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "PostgreSQL vector search currently computes cosine similarity in application memory rather than using native pgvector, which pgvector indexing will address in a future optimization.",
+    "evidence": {
+      "ref_id": "p232.s001",
+      "quote": "PostgreSQL vector search is brute-force for now - embeddings are stored in Postgres, but semantic search currently computes cosine similarity in application memory.",
+      "location": {
+        "byte_start": 35386,
+        "byte_end": 35556,
+        "line": 984,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "PostgreSQL vector search",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-b5ac5345",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Drift detection pattern-matching is fragile - Only fires on specific negation patterns (prefer not, no longer, changed to, etc.). LLM fallback requires a separate eval model.",
+    "evidence": {
+      "ref_id": "p232.s005",
+      "quote": "Drift detection pattern-matching is fragile - Only fires on specific negation patterns (prefer not, no longer, changed to, etc.). LLM fallback requires a separate eval model.",
+      "location": {
+        "byte_start": 35701,
+        "byte_end": 35912,
+        "line": 985,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Drift detection",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p232.s004`..`p232.s006` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-019-db9e3608",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "The episodic layer has a short 1-hour TTL that may need tuning for long-running automation agents.",
+    "evidence": {
+      "ref_id": "p232.s007",
+      "quote": "Episodic layer TTL is short (1h) - May need tuning for long-running automation agents.",
+      "location": {
+        "byte_start": 35913,
+        "byte_end": 36005,
+        "line": 987,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Episodic layer TTL",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-7841096f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Episodic Capture Pipeline buffers events with importance scoring (type-based base scores), deduplicates rapid identical events, extracts topics from event content and hashtags, and batch-writes to the MemoryStore.",
+    "evidence": {
+      "ref_id": "p031.s007",
+      "quote": "Episodic capture pipeline (v0.5.0) - Automatic event capture for the episodic layer.",
+      "location": {
+        "byte_start": 5942,
+        "byte_end": 6032,
+        "line": 154,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Episodic capture pipeline",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-a8e29526",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Snapshot/restore provides full core and layered memory snapshots with SHA-256 integrity checks and portable export/import for long-running agents to survive restarts, migrations, and crashes.",
+    "evidence": {
+      "ref_id": "p031.s015",
+      "quote": "Snapshot/restore (v0.6.2) - Full core + layered memory snapshots with SHA-256 integrity checks and portable export/import for long-running agents.",
+      "location": {
+        "byte_start": 6949,
+        "byte_end": 7101,
+        "line": 158,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Snapshot/restore",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-d8e342c9",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Do not claim ReMEM universally extends every model's context window, 100% semantic recall at large scale, production latency from synthetic in-memory sql.js results, or embedding ingestion performance independent of hardware and model.",
+    "evidence": {
+      "ref_id": "p338.s001",
+      "quote": "Do not claim:\nReMEM universally extends every model's context window.\n100% semantic recall at large scale.\nProduction latency from synthetic in-memory sql.js results.\nEmbedding ingestion performance independent of hardware/model.",
+      "location": {
+        "byte_start": 53764,
+        "byte_end": 54363,
+        "line": 1300,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "ReMEM",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p334.s002`..`p339.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-023-10b552f7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Procedural entries store triggered behaviors with richer matching supporting phrases, terms, topics, regex, priority, and minimum score thresholds.",
+    "evidence": {
+      "ref_id": "p152.s001",
+      "quote": "Richer trigger matching",
+      "location": {
+        "byte_start": 26669,
+        "byte_end": 26696,
+        "line": 678,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Procedural Memory",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  }
+]

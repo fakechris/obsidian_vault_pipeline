@@ -1,0 +1,543 @@
+[
+  {
+    "id": "u-000-266f7bd4",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Ask Codex to look across sessions, Memories, and Chronicle to identify patterns, reuse what already exists, and only create the smallest useful skill, subagent, or automation.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "Ask Codex to look across your sessions, Memories, and Chronicle, identify patterns, reuse what already exists, and only create the smallest useful skill, subagent, or automation.",
+      "location": {
+        "byte_start": 79,
+        "byte_end": 257,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "sessions, Memories, and Chronicle",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "skill, subagent, or automation",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-7e0f51cb",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A Skill is defined as a reusable workflow or playbook.",
+    "evidence": {
+      "ref_id": "p016.s001",
+      "quote": "Skill: a reusable workflow or playbook.",
+      "location": {
+        "byte_start": 1476,
+        "byte_end": 1518,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Skill",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-44d08c7a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A Custom subagent is defined as a bounded specialist role or investigation task suitable for delegation.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "Custom subagent: a bounded specialist role or investigation task suitable for delegation.",
+      "location": {
+        "byte_start": 1520,
+        "byte_end": 1612,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Custom subagent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-aeda96b9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An Automation is defined as a scheduled or recurring check, report, reminder, or monitor.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "Automation: a scheduled or recurring check, report, reminder, or monitor.",
+      "location": {
+        "byte_start": 1614,
+        "byte_end": 1690,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Automation",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-5c9b5fd7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Skip is defined as work that is too one-off, ambiguous, sensitive, or poorly evidenced to package.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "Skip: work that is too one-off, ambiguous, sensitive, or poorly evidenced to package.",
+      "location": {
+        "byte_start": 1692,
+        "byte_end": 1780,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Skip",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-2104aa31",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use evidence in this priority order: recent Codex sessions, Codex Memories and rollout summaries, Chronicle for discovery, and existing skills/agents/automations for reuse.",
+    "evidence": {
+      "ref_id": "p004.s001",
+      "quote": "Use available evidence in this order:",
+      "location": {
+        "byte_start": 407,
+        "byte_end": 444,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "available evidence",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-3a533992",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Chronicle, if enabled, to spot repeated work outside Codex.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "Chronicle, if enabled, to spot repeated work outside Codex.",
+      "location": {
+        "byte_start": 576,
+        "byte_end": 638,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Chronicle",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-e3b2bd2d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Chronicle should be used for discovery only; confirm important details in the relevant source system when possible.",
+    "evidence": {
+      "ref_id": "p007.s002",
+      "quote": "Use Chronicle for discovery only; confirm important details in the relevant source system when possible.",
+      "location": {
+        "byte_start": 638,
+        "byte_end": 743,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Chronicle",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-c4df0a9f",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Look broadly for work that is repeated, time-consuming, error-prone, context-heavy, or benefits from a consistent process.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "Look broadly for work that is repeated, time-consuming, error-prone, context-heavy, or benefits from a consistent process.",
+      "location": {
+        "byte_start": 868,
+        "byte_end": 990,
+        "line": 45,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "work",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-e1bb88b3",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Only act on a candidate when it has occurred at least twice, or is clearly likely to recur and costly to repeat.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "occurred at least twice, or is clearly likely to recur and costly to repeat;",
+      "location": {
+        "byte_start": 1154,
+        "byte_end": 1233,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "candidate",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-e56bcaf1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Only act on a candidate when it has stable inputs, a repeatable procedure, and a clear output or stopping condition.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "has stable inputs, a repeatable procedure, and a clear output or stopping condition;",
+      "location": {
+        "byte_start": 1235,
+        "byte_end": 1322,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "candidate",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-bf3dfeba",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Only act on a candidate when it would materially improve speed, quality, consistency, or reliability.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "would materially improve speed, quality, consistency, or reliability;",
+      "location": {
+        "byte_start": 1324,
+        "byte_end": 1396,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "candidate",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-1e6e6852",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Only act on a candidate when it is not already adequately covered.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "is not already adequately covered.",
+      "location": {
+        "byte_start": 1398,
+        "byte_end": 1435,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "candidate",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-24ba2ab9",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Choose the smallest appropriate form (skill, subagent, or automation) for each candidate.",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "Choose the smallest appropriate form:",
+      "location": {
+        "byte_start": 1437,
+        "byte_end": 1474,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "form",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-57ccaec3",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "First produce a compact shortlist including the repeated workflow, supporting evidence and dates, frequency/confidence, recommended form, and why it is or is not worth creating.",
+    "evidence": {
+      "ref_id": "p020.s001",
+      "quote": "First produce a compact shortlist with:",
+      "location": {
+        "byte_start": 1782,
+        "byte_end": 1821,
+        "line": 67,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "compact shortlist",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-bc42de01",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Then create only the high-confidence missing items.",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "Then create only the high-confidence missing items.",
+      "location": {
+        "byte_start": 2019,
+        "byte_end": 2070,
+        "line": 79,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "high-confidence missing items",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-f9feba5e",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Finish with what was created, what was deliberately skipped, and what needs more evidence before packaging.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Finish with:",
+      "location": {
+        "byte_start": 2201,
+        "byte_end": 2213,
+        "line": 81,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "what you created or extended",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-5e193933",
+    "kind": "relation",
+    "subtype": "observation",
+    "text": "Existing skills, custom agents, and automations should be reused or extended instead of creating duplicates.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "Existing skills, custom agents, and automations, so you reuse or extend what already exists instead of duplicating it.",
+      "location": {
+        "byte_start": 745,
+        "byte_end": 866,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Existing skills, custom agents, and automations",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "what already exists",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-bfd07858",
+    "kind": "assertion",
+    "text": "Look back over my recent work from the last 30 days, or all available history if shorter, and identify repeated manual workflows worth packaging.",
+    "evidence": {
+      "ref_id": "p003.s001",
+      "quote": "Look back over my recent work from the last 30 days, or all available history if shorter, and identify repeated manual workflows worth packaging.",
+      "location": {
+        "byte_start": 259,
+        "byte_end": 405,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

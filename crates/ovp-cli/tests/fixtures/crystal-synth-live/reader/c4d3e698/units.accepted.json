@@ -1,0 +1,343 @@
+[
+  {
+    "id": "u-000-6d46efef",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "LLM-based QA uses a markdown file where an AI agent is instructed to act as a QA engineer, performing manual testing tasks on a software release.",
+    "evidence": {
+      "ref_id": "p004.s002",
+      "quote": "The idea is to create a markdown file where an AI agent is asked to work as a QA engineer, performing a number of manual testings on the new release.",
+      "location": {
+        "byte_start": 1770,
+        "byte_end": 1920,
+        "line": 19,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "markdown file",
+        "role": "instrument",
+        "locatable": true
+      },
+      {
+        "surface": "AI agent",
+        "role": "agent",
+        "locatable": true
+      },
+      {
+        "surface": "QA engineer",
+        "role": "role_assigned",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-63cff173",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "There is a tradeoff between quality and time when writing new software with AI, with some projects completing in weeks that would otherwise take many months.",
+    "evidence": {
+      "ref_id": "p002.s002",
+      "quote": "This tradeoff in certain projects I developed can be brutal, that is, completing projects that may take many months in a few weeks.",
+      "location": {
+        "byte_start": 595,
+        "byte_end": 727,
+        "line": 15,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "tradeoff",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "quality and time",
+        "role": "attributes",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-bbe5050f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "One of those domains is software QA and testing.",
+    "evidence": {
+      "ref_id": "p002.s004",
+      "quote": "One of those domains is software QA and testing.",
+      "location": {
+        "byte_start": 867,
+        "byte_end": 916,
+        "line": 15,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "software QA and testing",
+        "role": "domain",
+        "locatable": true
+      },
+      {
+        "surface": "LLMs",
+        "role": "enabler",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-7dd8a6cb",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "LLM-based QA allows checking for speed regressions without specifying the previous expected speed, since speed is a moving target that changes with new releases.",
+    "evidence": {
+      "ref_id": "p006.s002",
+      "quote": "I don't have to tell the agent what was the previous expected speed, as this is a moving target that changes with new releases and new optimizations.",
+      "location": {
+        "byte_start": 2511,
+        "byte_end": 2700,
+        "line": 24,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "speed regression",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "moving target",
+        "role": "property",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-26e9a149",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "LLM-based QA can perform psychological and usability assessments, identifying features that look surprising, poorly documented, or sloppy from the user's perspective.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "Testing that uses these approaches may also move in the more psychological side of software quality, asking the agent to identify all the new features that may look surprising, not documented enough, or generally sloppy from the POV of the user.",
+      "location": {
+        "byte_start": 3459,
+        "byte_end": 3704,
+        "line": 30,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "psychological side of software quality",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "new features",
+        "role": "objects",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-eb84ce3a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Manual QA tasks like psychological and usability assessments were previously mostly skipped due to time and logistic constraints.",
+    "evidence": {
+      "ref_id": "p009.s002",
+      "quote": "All things that needed to be executed manually before, and that most of the times were mostly skipped.",
+      "location": {
+        "byte_start": 3704,
+        "byte_end": 3807,
+        "line": 30,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "manual QA tasks",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-9ecb17d6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The introduction of automatic QA may raise the bar of quality for new software releases and partially compensate for the lower quality of code produced at high speed with automatic programming.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "I have the feeling that the introduction of automatic QA may raise the bar of quality for new releases of software, and maybe partially compensate for the lower quality of the code produced at high speed with the use of automatic programming.",
+      "location": {
+        "byte_start": 3809,
+        "byte_end": 4051,
+        "line": 32,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "automatic QA",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "quality for new releases",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "lower quality of the code produced at high speed",
+        "role": "compensated_factor",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-4f0506ab",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Traditional testing has structural limitations: timing issues, complex setups, and quality outputs that can only be visually inspected, leaving many testing opportunities unexploited.",
+    "evidence": {
+      "ref_id": "p003.s004",
+      "quote": "Moreover integration testing is structurally hard: there are a number of timing issues, setups, and certain quality outputs that can only be visually inspected and not automatically checked that leave a lot of testing opportunities not really exploited because of time or logistic constraints.",
+      "location": {
+        "byte_start": 1399,
+        "byte_end": 1693,
+        "line": 17,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "integration testing",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "structural limitations",
+        "role": "property",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-dc858bc6",
+    "kind": "assertion",
+    "text": "In my experience the output does not reach the structural quality and economy of complexity of the best hand-written software.",
+    "evidence": {
+      "ref_id": "p001.s004",
+      "quote": "In my experience the output does not reach the structural quality and economy of complexity of the best hand-written software.",
+      "location": {
+        "byte_start": 181,
+        "byte_end": 308,
+        "line": 13,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-570824cf",
+    "kind": "assertion",
+    "text": "there are domains where LLMs simply open new strictly more powerful ways to automate processes, without any compromise on quality.",
+    "evidence": {
+      "ref_id": "p002.s003",
+      "quote": "there are domains where LLMs simply open new strictly more powerful ways to automate processes, without any compromise on quality.",
+      "location": {
+        "byte_start": 727,
+        "byte_end": 867,
+        "line": 15,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-91a46b15",
+    "kind": "assertion",
+    "text": "The agent is asked to check the long list of QA activities especially in light of the added commits, starting with an inspection of the changes and with the identification of what could be affected, so that the QA pass specializes trying to find specific regressions.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "The agent is asked to check the long list of QA activities especially in light of the added commits, starting with an inspection of the changes and with the identification of what could be affected, so that the QA pass specializes trying to find specific regressions.",
+      "location": {
+        "byte_start": 2894,
+        "byte_end": 3163,
+        "line": 26,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

@@ -1,0 +1,868 @@
+[
+  {
+    "id": "u-000-8386a512",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Understand Anything is an open-source plugin that maps an entire codebase into a visual, interactive knowledge graph with one-line installation across 14 platforms.",
+    "evidence": {
+      "ref_id": "p004.s001",
+      "quote": "This is an open-source plugin that maps your entire codebase into a visual, interactive knowledge graph.",
+      "location": {
+        "byte_start": 365,
+        "byte_end": 469,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Understand Anything",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-a36a1e14",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The multi-agent pipeline scans every file, extracts every function, class, import, and dependency, and assembles it into a knowledge graph saved as JSON.",
+    "evidence": {
+      "ref_id": "p017.s002",
+      "quote": "A multi-agent pipeline scans every file, extracts every function, class, import, and dependency, and assembles it into a knowledge graph saved as JSON.",
+      "location": {
+        "byte_start": 1912,
+        "byte_end": 2064,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "multi-agent pipeline",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-7c284d37",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The five parallel agents are: project-scanner (discovers all files, detects languages and frameworks), file-analyzer (extracts functions, classes, imports; builds graph nodes and edges), architecture-analyzer (identifies architectural layers), tour-builder (generates guided learning tours ordered by dependency), and graph-reviewer (validates graph completeness and referential integrity).",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "project-scanner - Discovers all files, detects languages and frameworks",
+      "location": {
+        "byte_start": 3689,
+        "byte_end": 3863,
+        "line": 108,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "project-scanner",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "file-analyzer",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "architecture-analyzer",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "tour-builder",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "graph-reviewer",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p036.s001`..`p038.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "4 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-7a4d019d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "This activates a 6th agent (domain-analyzer) that maps your code to business processes: domains, flows, and steps.",
+    "evidence": {
+      "ref_id": "p058.s001",
+      "quote": "This activates a 6th agent (domain-analyzer) that maps your code to business processes: domains, flows, and steps.",
+      "location": {
+        "byte_start": 6051,
+        "byte_end": 6169,
+        "line": 169,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "domain-analyzer",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-a9ade1a8",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The structural graph (/understand) maps code: files, functions, classes, imports, and layers, while the domain graph (/understand-domain) maps business logic: domains, flows, and process steps as separate views of the same codebase.",
+    "evidence": {
+      "ref_id": "p109.s001",
+      "quote": "The structural graph (/understand) maps code: files, functions, classes, imports, layers.",
+      "location": {
+        "byte_start": 12993,
+        "byte_end": 13082,
+        "line": 291,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "structural graph",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "domain graph",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-3df44a95",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Incremental updates work by using Tree-sitter to generate a fingerprint per file during the initial scan, so that subsequent /understand runs only re-analyze files whose fingerprint has changed.",
+    "evidence": {
+      "ref_id": "p105.s001",
+      "quote": "Tree-sitter generates a fingerprint per file during the initial scan.",
+      "location": {
+        "byte_start": 12448,
+        "byte_end": 12555,
+        "line": 283,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "incremental updates",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-c318cc9a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The codebase is 200,000 lines.",
+    "evidence": {
+      "ref_id": "p008.s003",
+      "quote": "The codebase is 200,000 lines.",
+      "location": {
+        "byte_start": 795,
+        "byte_end": 826,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "codebase onboarding",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-a37d90ca",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Existing tools (Sourcegraph, Greptile, GitNexus, DeepWiki) solve parts of the problem but none provide a visual, interactive, shareable, agent-integrated knowledge graph covering structural analysis, business domain mapping, guided architectural tours, and knowledge-base analysis in a single plugin workflow.",
+    "evidence": {
+      "ref_id": "p011.s002",
+      "quote": "None of them give you a visual, interactive, shareable, agent-integrated knowledge graph.",
+      "location": {
+        "byte_start": 1206,
+        "byte_end": 1493,
+        "line": 49,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "existing tools",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p011.s001`..`p012.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-c8c288b5",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The plugin requires no npm installs, config files, or environment setup beyond installation.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "No npm installs, no config files, no environment setup.",
+      "location": {
+        "byte_start": 2585,
+        "byte_end": 2692,
+        "line": 77,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Understand Anything installation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p024.s003`..`p025.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-ff0c8fb0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "File analysis runs in batches of 20-30 files with up to 5 concurrent analyzers.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "File analysis runs in batches of 20–30 files, up to 5 concurrent.",
+      "location": {
+        "byte_start": 4202,
+        "byte_end": 4269,
+        "line": 120,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "file analysis",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-dd0c022f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The architecture-analyzer groups nodes into layers (API, Service, Data, UI, Utility) by analyzing file structure and what each module exports and imports.",
+    "evidence": {
+      "ref_id": "p087.s001",
+      "quote": "The architecture-analyzer groups nodes into layers (API, Service, Data, UI, Utility)",
+      "location": {
+        "byte_start": 8329,
+        "byte_end": 8501,
+        "line": 241,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "architecture-analyzer",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-135b67c6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The tour-builder topologically sorts the graph to order the guided tour from foundational modules to high-level ones.",
+    "evidence": {
+      "ref_id": "p088.s001",
+      "quote": "The tour-builder topologically sorts the graph — ordering the guided tour from foundational modules to high-level ones",
+      "location": {
+        "byte_start": 8503,
+        "byte_end": 8681,
+        "line": 243,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "tour-builder",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-c149190d",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "LLM costs are non-trivial for large repos with many files, and no published cost estimate exists for average codebase sizes.",
+    "evidence": {
+      "ref_id": "p092.s002",
+      "quote": "Large repos with many files will accumulate non-trivial token costs.",
+      "location": {
+        "byte_start": 9306,
+        "byte_end": 9375,
+        "line": 251,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LLM costs",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-84b8cb06",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Graph quality mirrors code quality.",
+    "evidence": {
+      "ref_id": "p092.s004",
+      "quote": "Graph quality mirrors code quality.",
+      "location": {
+        "byte_start": 9440,
+        "byte_end": 9564,
+        "line": 252,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "graph quality",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-3eb63332",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "There is no published independent benchmark for graph accuracy regarding how often summaries are correct, architectural layer assignments are accurate, or guided tours compare to human-written walkthroughs.",
+    "evidence": {
+      "ref_id": "p092.s011",
+      "quote": "No published independent benchmark for graph accuracy.",
+      "location": {
+        "byte_start": 9940,
+        "byte_end": 10269,
+        "line": 254,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "graph accuracy benchmarks",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-4254b66a",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Understand Anything does not expose the knowledge graph via MCP for AI agents; the graph is human-facing and agents interact via slash commands instead of a programmatic interface.",
+    "evidence": {
+      "ref_id": "p100.s003",
+      "quote": "It does not expose an MCP server for programmatic agent consumption.",
+      "location": {
+        "byte_start": 11780,
+        "byte_end": 11849,
+        "line": 273,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "MCP integration",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-008048b5",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "The /understand-knowledge feature is under-documented with no dedicated docs page, no example output, and no benchmark for the LLM-derived implicit relationship quality.",
+    "evidence": {
+      "ref_id": "p092.s012",
+      "quote": "/understand-knowledge is under-documented.",
+      "location": {
+        "byte_start": 10270,
+        "byte_end": 10469,
+        "line": 255,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "/understand-knowledge",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-fe9831a6",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "To enable auto-updates so the graph stays fresh on every commit, run /understand --auto-update.",
+    "evidence": {
+      "ref_id": "p082.s001",
+      "quote": "Enable auto-updates so the graph stays fresh on every commit:",
+      "location": {
+        "byte_start": 7780,
+        "byte_end": 7877,
+        "line": 227,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "/understand --auto-update",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p081.s001`..`p082.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-b6fd31e0",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Commit the .understand-anything/ directory once so teammates skip the analysis pipeline on onboarding.",
+    "evidence": {
+      "ref_id": "p071.s001",
+      "quote": "Commit it once and your teammates skip the analysis pipeline on onboarding:",
+      "location": {
+        "byte_start": 7228,
+        "byte_end": 7370,
+        "line": 199,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": ".understand-anything/",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p070.s001`..`p071.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-a00742f4",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Add intermediate/ and diff-overlay.json to .gitignore as local scratch that shouldn't be committed.",
+    "evidence": {
+      "ref_id": "p075.s001",
+      "quote": "Add these to .gitignore — they're local scratch and shouldn't be committed:",
+      "location": {
+        "byte_start": 7452,
+        "byte_end": 7573,
+        "line": 209,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": ".gitignore",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p074.s001`..`p075.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-020-0fb0591a",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "For large graphs (10 MB+), use git-lfs to track the JSON files.",
+    "evidence": {
+      "ref_id": "p079.s001",
+      "quote": "For large graphs (10 MB+), use git-lfs:",
+      "location": {
+        "byte_start": 7619,
+        "byte_end": 7851,
+        "line": 217,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "git-lfs",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p077.s001`..`p082.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-021-71b1b3cd",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "For large monorepos, use subdirectory scoping like /understand src/frontend or /understand packages/api to avoid long initial scan times and higher LLM costs.",
+    "evidence": {
+      "ref_id": "p107.s001",
+      "quote": "Yes, with subdirectory scoping: /understand src/frontend or /understand packages/api.",
+      "location": {
+        "byte_start": 12734,
+        "byte_end": 12819,
+        "line": 287,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "subdirectory scoping",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-ee7c8eae",
+    "kind": "relation",
+    "subtype": "null",
+    "text": "The graph is stored entirely locally in .understand-anything/knowledge-graph.json in the repo, and can be committed and shared with teammates.",
+    "evidence": {
+      "ref_id": "p104.s001",
+      "quote": "The graph lives in .understand-anything/knowledge-graph.json in your repo, so entirely local.",
+      "location": {
+        "byte_start": 12186,
+        "byte_end": 12279,
+        "line": 281,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "knowledge graph",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": ".understand-anything/knowledge-graph.json",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-ab23e6c9",
+    "kind": "assertion",
+    "text": "Cursor manual install fallback noted in README. Auto-discovery via .cursor-plugin/plugin.json doesn't always fire; the README now explicitly documents the manual fallback as of yesterday's commit.",
+    "evidence": {
+      "ref_id": "p092.s014",
+      "quote": "Cursor manual install fallback noted in README. Auto-discovery via .cursor-plugin/plugin.json doesn't always fire; the README now explicitly documents the manual fallback as of yesterday's commit.",
+      "location": {
+        "byte_start": 10594,
+        "byte_end": 10796,
+        "line": 256,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-b233c74b",
+    "kind": "assertion",
+    "text": "No MCP server integration. Unlike GitNexus, Understand Anything does not expose the knowledge graph via MCP for agent consumption.",
+    "evidence": {
+      "ref_id": "p092.s015",
+      "quote": "No MCP server integration. Unlike GitNexus, Understand Anything does not expose the knowledge graph via MCP for agent consumption.",
+      "location": {
+        "byte_start": 10797,
+        "byte_end": 10933,
+        "line": 257,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-3c3c3796",
+    "kind": "assertion",
+    "text": "The architecture-analyzer groups nodes into layers (API, Service, Data, UI, Utility) by analyzing the file structure and the nature of what each module exports and imports.",
+    "evidence": {
+      "ref_id": "p087.s001",
+      "quote": "The architecture-analyzer groups nodes into layers (API, Service, Data, UI, Utility) by analyzing the file structure and the nature of what each module exports and imports.",
+      "location": {
+        "byte_start": 8329,
+        "byte_end": 8501,
+        "line": 241,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-026-c78ceeb5",
+    "kind": "assertion",
+    "text": "Poorly named functions, no separation of concerns, and large procedural scripts produce noisy graphs.",
+    "evidence": {
+      "ref_id": "p092.s005",
+      "quote": "Poorly named functions, no separation of concerns, and large procedural scripts produce noisy graphs.",
+      "location": {
+        "byte_start": 9564,
+        "byte_end": 9666,
+        "line": 252,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-027-53f1911f",
+    "kind": "assertion",
+    "text": "For the knowledge base use case (/understand-knowledge), there's a deterministic parser that extracts wikilinks and categories from index.md, combined with LLM agents that discover implicit relationships and extract claims.",
+    "evidence": {
+      "ref_id": "p089.s001",
+      "quote": "For the knowledge base use case (/understand-knowledge), there's a deterministic parser that extracts wikilinks and categories from index.md, combined with LLM agents that discover implicit relationships and extract claims.",
+      "location": {
+        "byte_start": 8683,
+        "byte_end": 8906,
+        "line": 245,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-028-28f5798f",
+    "kind": "assertion",
+    "text": "The domain view is more useful for PMs and business stakeholders; the structural view is more useful for engineers.",
+    "evidence": {
+      "ref_id": "p109.s004",
+      "quote": "The domain view is more useful for PMs and business stakeholders; the structural view is more useful for engineers.",
+      "location": {
+        "byte_start": 13221,
+        "byte_end": 13337,
+        "line": 291,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

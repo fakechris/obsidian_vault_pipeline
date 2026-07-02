@@ -1,0 +1,916 @@
+[
+  {
+    "id": "u-000-ec7daf0c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An operating loop is a durable thread with shared memory, tools that can act on the computer, ways to steer and resume the task, and a surface where the user can review the artifact itself.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "learning to give work an operating loop: a durable thread, shared memory, tools that can act on my computer, ways to steer and resume the task, and a surface where I can review the artifact itself.",
+      "location": {
+        "byte_start": 704,
+        "byte_end": 930,
+        "line": 20,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "operating loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-47e50d21",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Codex gives work somewhere to live, shifting from excellent coding tool to a broader productivity surface.",
+    "evidence": {
+      "ref_id": "p004.s002",
+      "quote": "Codex is still excellent for coding, but the more interesting shift is that it gives my work somewhere to live.",
+      "location": {
+        "byte_start": 590,
+        "byte_end": 702,
+        "line": 18,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Codex",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-2ea81c3e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "They accumulate history, preferences, and old decisions that I do not want to recreate every time I come back.",
+    "evidence": {
+      "ref_id": "p010.s003",
+      "quote": "They accumulate history, preferences, and old decisions that I do not want to recreate every time I come back.",
+      "location": {
+        "byte_start": 1433,
+        "byte_end": 1544,
+        "line": 34,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "compaction",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-caade902",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Long-running threads trade off continuity against higher cost when revisited later because the conversation may no longer be in cache.",
+    "evidence": {
+      "ref_id": "p012.s002",
+      "quote": "Long-running threads are not free. If you revisit them later, the conversation is probably no longer in cache, so you can incur more cost than you would in a fresh short thread.",
+      "location": {
+        "byte_start": 1660,
+        "byte_end": 1863,
+        "line": 39,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "long-running threads",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p012.s001`..`p012.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-004-400c8c8e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The benefit is not speed. It is that the agent gets the unedited version of my thinking.",
+    "evidence": {
+      "ref_id": "p015.s002",
+      "quote": "The benefit is not speed. It is that the agent gets the unedited version of my thinking.",
+      "location": {
+        "byte_start": 1992,
+        "byte_end": 2230,
+        "line": 45,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "voice input",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p015.s001`..`p015.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-23df28b7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Steering lets you inject the next message after a tool call.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "Steering lets you inject the next message after a tool call.",
+      "location": {
+        "byte_start": 2872,
+        "byte_end": 2932,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Steering",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-54c016a0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The unit of work stops being \"one prompt, one answer.\" It becomes a small operating loop.",
+    "evidence": {
+      "ref_id": "p022.s002",
+      "quote": "The unit of work stops being \"one prompt, one answer.\" It becomes a small operating loop.",
+      "location": {
+        "byte_start": 3473,
+        "byte_end": 3563,
+        "line": 64,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "unit of work",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-0f254d4e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A Heartbeat is a thread-local automation. You can say, \"keep an eye on this every few hours,\" and the thread can schedule itself.",
+    "evidence": {
+      "ref_id": "p051.s001",
+      "quote": "A Heartbeat is a thread-local automation. You can say, \"keep an eye on this every few hours,\" and the thread can schedule itself.",
+      "location": {
+        "byte_start": 8775,
+        "byte_end": 8943,
+        "line": 130,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Heartbeat",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p050.s002`..`p051.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-008-24146ecd",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Together they become a feedback loop that keeps running without me sitting there.",
+    "evidence": {
+      "ref_id": "p059.s004",
+      "quote": "Together they become a feedback loop that keeps running without me sitting there.",
+      "location": {
+        "byte_start": 10395,
+        "byte_end": 10477,
+        "line": 152,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Heartbeats, connectors, and computer use",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-14e0bb3e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Goals should be ambitious with a real success criterion the agent can keep pushing against, rather than weak instructions to implement a plan.",
+    "evidence": {
+      "ref_id": "p067.s001",
+      "quote": "You should be ambitious with them. A weak goal is \"implement the plan in this Markdown file.\" A strong goal has a real success criterion that the agent can keep pushing against.",
+      "location": {
+        "byte_start": 11018,
+        "byte_end": 11259,
+        "line": 170,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Goals",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p066.s001`..`p067.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-b8c767ac",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Ambition without verification is just a wish.",
+    "evidence": {
+      "ref_id": "p070.s002",
+      "quote": "Ambition without verification is just a wish.",
+      "location": {
+        "byte_start": 11877,
+        "byte_end": 11923,
+        "line": 178,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Ambition without verification",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-f6422215",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The vault is an Obsidian-based shared memory system that holds rolling context around work: people, decisions, open loops, daily notes, project state, and understanding that would otherwise get lost between threads.",
+    "evidence": {
+      "ref_id": "p029.s003",
+      "quote": "The vault holds rolling context around my work: people, decisions, open loops, daily notes, project state, and the bits of understanding that would otherwise get lost between threads.",
+      "location": {
+        "byte_start": 4433,
+        "byte_end": 4617,
+        "line": 85,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "vault",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-6d2b4e08",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Files force the agent to compress experience into a form that survives the thread, so if the thread dies, compacts badly, or becomes too expensive, the useful knowledge is preserved.",
+    "evidence": {
+      "ref_id": "p033.s002",
+      "quote": "Files force the agent to compress experience into a form that can survive the thread.",
+      "location": {
+        "byte_start": 5166,
+        "byte_end": 5252,
+        "line": 94,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memory as files",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-065a1ea1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Codex's first-party memory features serve as a local recall layer for stable preferences and recurring workflows but are not a replacement for checked-in instructions or an explicit vault.",
+    "evidence": {
+      "ref_id": "p035.s002",
+      "quote": "I think of those as a local recall layer: useful for stable preferences, recurring workflows, project conventions, and known pitfalls, but not a replacement for checked-in instructions or an explicit vault.",
+      "location": {
+        "byte_start": 5583,
+        "byte_end": 5790,
+        "line": 98,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Codex first-party memory features",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-fa837917",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Chronicle points at the same goal as the vault system: work should leave behind structured memory, not just a longer chat transcript.",
+    "evidence": {
+      "ref_id": "p035.s005",
+      "quote": "But directionally it points at the same thing I care about: work should leave behind structured memory, not just a longer chat transcript.",
+      "location": {
+        "byte_start": 6156,
+        "byte_end": 6295,
+        "line": 98,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Chronicle",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-5b2f1dd8",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Chronicle is an opt-in research preview with real tradeoffs around permissions, rate limits, prompt injection, and unencrypted local memory files.",
+    "evidence": {
+      "ref_id": "p035.s004",
+      "quote": "it is an opt-in research preview with real tradeoffs around permissions, rate limits, prompt injection, and unencrypted local memory files.",
+      "location": {
+        "byte_start": 5954,
+        "byte_end": 6156,
+        "line": 98,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Chronicle",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-582f0027",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "$browser is for local web surfaces to inspect and annotate; @chrome is for signed-in browser state and multiple tabs; @computer is for work that only exists as a GUI.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "$browser is for local web surfaces I want to inspect and annotate @chrome is for signed-in browser state and multiple tabs @computer is for work that only exists as a GUI",
+      "location": {
+        "byte_start": 6326,
+        "byte_end": 6623,
+        "line": 102,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "$browser, @chrome, and @computer",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p037.s001`..`p039.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-4c4707c9",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "@chrome is better when I want the agent to use several authenticated tabs in parallel without taking over the whole app I am using.",
+    "evidence": {
+      "ref_id": "p041.s003",
+      "quote": "@chrome is better when I want the agent to use several authenticated tabs in parallel without taking over the whole app I am using.",
+      "location": {
+        "byte_start": 6959,
+        "byte_end": 7093,
+        "line": 112,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "@chrome vs @computer for Twitter",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-b9d8a22d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The side panel is where Codex stops being only a chat app and starts becoming the place the work happens.",
+    "evidence": {
+      "ref_id": "p073.s003",
+      "quote": "The side panel is where Codex stops being only a chat app and starts becoming the place the work happens.",
+      "location": {
+        "byte_start": 12087,
+        "byte_end": 12193,
+        "line": 184,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "side panel",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-541ef5e9",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Once output is a small application instead of just a document, the relationship between user and agent changes.",
+    "evidence": {
+      "ref_id": "p084.s003",
+      "quote": "Once the output is a small application instead of just a document, the relationship changes.",
+      "location": {
+        "byte_start": 13923,
+        "byte_end": 14016,
+        "line": 210,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "quoted_person",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "HTML output over document output",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-643447d8",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "As Codex gets places to remember, revisit, inspect, and act, less work dies between prompts.",
+    "evidence": {
+      "ref_id": "p089.s001",
+      "quote": "The more Codex gets places to remember, revisit, inspect, and act, the less my work dies between prompts.",
+      "location": {
+        "byte_start": 14781,
+        "byte_end": 14886,
+        "line": 220,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Codex capabilities",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-08d330a1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "You can jump directly to pinned threads with Command-1 through Command-9.",
+    "evidence": {
+      "ref_id": "p011.s002",
+      "quote": "You can jump directly to pinned threads with Command-1 through Command-9.",
+      "location": {
+        "byte_start": 1579,
+        "byte_end": 1658,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "pinned thread shortcuts",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-024-fee8f01c",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "I also use Wispr Flow because system-wide dictation changes how much context I can feed into everything else too.",
+    "evidence": {
+      "ref_id": "p015.s003",
+      "quote": "I also use Wispr Flow because system-wide dictation changes how much context I can feed into everything else too.",
+      "location": {
+        "byte_start": 2080,
+        "byte_end": 2230,
+        "line": 45,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Wispr Flow",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-cdd1a5a8",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start long-running threads in an Obsidian vault with AGENTS.md instructions to update relevant pages as you learn more about people, make progress on projects, or close open loops.",
+    "evidence": {
+      "ref_id": "p028.s001",
+      "quote": "At the top level, I keep AGENTS.md instructions that say things like: as you learn more about people, make progress on projects, or close an open loop, update the relevant pages in the vault.",
+      "location": {
+        "byte_start": 4148,
+        "byte_end": 4341,
+        "line": 83,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Obsidian vault with AGENTS.md",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-026-73537279",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "I do not want evergreen threads to quietly accumulate vibes in conversation history.",
+    "evidence": {
+      "ref_id": "p032.s003",
+      "quote": "I do not want evergreen threads to quietly accumulate vibes in conversation history.",
+      "location": {
+        "byte_start": 4895,
+        "byte_end": 4980,
+        "line": 92,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "reviewing vault diffs",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-74e5f10b",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "once you do something useful once, you can often package it so Codex can do it again without reteaching the workflow.",
+    "evidence": {
+      "ref_id": "p043.s004",
+      "quote": "once you do something useful once, you can often package it so Codex can do it again without reteaching the workflow.",
+      "location": {
+        "byte_start": 7511,
+        "byte_end": 7796,
+        "line": 116,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Skill Installer",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-028-ee70603d",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "You can ask the model to make a single index.html file with JavaScript and CSS, open it in the side panel, and start interacting with it immediately. No server required.",
+    "evidence": {
+      "ref_id": "p083.s002",
+      "quote": "You can ask the model to make a single index.html file with JavaScript and CSS, open it in the side panel, and start interacting with it immediately. No server required. I have been experimenting with using Heartbeats to update a static index.html over time so that whenever I return to a thread, there is already a fresh artifact waiting for me.",
+      "location": {
+        "byte_start": 13337,
+        "byte_end": 13754,
+        "line": 206,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "index.html for static artifacts",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p082.s005`..`p083.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-029-f8e3b900",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Connectors extend Codex's reach into the rest of the user's actual work, with $slack, $gmail, and $calendar being most useful because Slack threads, inboxes, and calendars are where work shows up before it ever becomes code.",
+    "evidence": {
+      "ref_id": "p042.s002",
+      "quote": "The ones I use most are $slack, $gmail, and $calendar, because Slack threads, inboxes, and calendars are where a lot of work shows up before it ever becomes code.",
+      "location": {
+        "byte_start": 7156,
+        "byte_end": 7325,
+        "line": 114,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Connectors",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-030-0a9b8627",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "For me it does three jobs: inspect artifacts, operate web surfaces, and review changes.",
+    "evidence": {
+      "ref_id": "p074.s001",
+      "quote": "For me it does three jobs: inspect artifacts, operate web surfaces, and review changes.",
+      "location": {
+        "byte_start": 12195,
+        "byte_end": 12282,
+        "line": 186,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-033-c5b393c2",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Skills make repeated workflows reusable.",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "Skills make repeated workflows reusable.",
+      "location": {
+        "byte_start": 7327,
+        "byte_end": 7367,
+        "line": 116,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

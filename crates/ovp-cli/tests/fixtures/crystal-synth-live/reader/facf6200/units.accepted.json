@@ -1,0 +1,561 @@
+[
+  {
+    "id": "u-000-ebde97ec",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agent memory systems initially used vector databases, which store facts as text chunks and retrieve them by semantic similarity, but this approach fails when a query requires connecting facts that don't appear in the same chunk.",
+    "evidence": {
+      "ref_id": "p020.s001",
+      "quote": "Vector-based memory stores facts as text chunks and retrieves them by semantic similarity. That works until a query requires connecting facts that don’t appear in the same chunk.",
+      "location": {
+        "byte_start": 1821,
+        "byte_end": 2053,
+        "line": 65,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Vector-based memory",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "text chunks",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "semantic similarity",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p019.s001`..`p020.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-001-14145fdd",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Entities as nodes, relationships as edges, traversal instead of matching.",
+    "evidence": {
+      "ref_id": "p005.s002",
+      "quote": "Entities as nodes, relationships as edges, traversal instead of matching.",
+      "location": {
+        "byte_start": 373,
+        "byte_end": 447,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Knowledge graphs",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "entities",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "relationships",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-96441412",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When giving an agent a knowledge graph for memory, the default behavior is that the LLM handling extraction decides the structure on its own, picking entity types, relationship labels, and attributes, which produces generic results.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "When you give an agent a knowledge graph for memory, the default behavior is that the LLM handling extraction decides the structure on its own.",
+      "location": {
+        "byte_start": 487,
+        "byte_end": 630,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LLM handling extraction",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-8a411e42",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The agent didn't forget anything—nobody told it what to pay attention to.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "The agent didn’t forget anything. Nobody told it what to pay attention to.",
+      "location": {
+        "byte_start": 1175,
+        "byte_end": 1278,
+        "line": 53,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "the agent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p013.s002`..`p014.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-004-756457ea",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An ontology is the organizational blueprint that defines the schema for an agent's memory—specifying what entity types exist, what relationships are valid, and what attributes each entity carries.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "That organizational blueprint is called an ontology.",
+      "location": {
+        "byte_start": 1543,
+        "byte_end": 1599,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ontology",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-057c9398",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The extraction step in a graph-based agent memory pipeline determines what the graph contains, how it's structured, and what's queryable downstream, yet in most frameworks this step is a black box with zero user control over classification.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "The extraction step is where everything is decided. It determines what your graph contains, how it’s structured, and what’s queryable downstream.",
+      "location": {
+        "byte_start": 3416,
+        "byte_end": 3670,
+        "line": 93,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "The extraction step",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p030.s010`..`p031.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-006-2623527c",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Define custom entity types using EntityModel (a Pydantic BaseModel subclass) with EntityText fields and descriptions that guide the extraction model.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "Define custom entity types using EntityModel (a subclass of Pydantic’s BaseModel) with EntityText fields and descriptions that guide the extraction model.",
+      "location": {
+        "byte_start": 4302,
+        "byte_end": 4458,
+        "line": 113,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "EntityModel",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "EntityText fields",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-1bb5018a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "EdgeModel is used to define relationship types between entities, carrying their own attributes like role or proficiency.",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "Edge types use EdgeModel and carry their own attributes.",
+      "location": {
+        "byte_start": 5629,
+        "byte_end": 5685,
+        "line": 151,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "EdgeModel",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-b3d1b249",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "WORKS\\ON can only connect a User to a Project",
+    "evidence": {
+      "ref_id": "p055.s001",
+      "quote": "WORKS\\ON can only connect a User to a Project USES\\TECHNOLOGY can only connect a User to a Technology.",
+      "location": {
+        "byte_start": 6814,
+        "byte_end": 6960,
+        "line": 185,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "EntityEdgeSourceTarget",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "WORKS_ON",
+        "role": "object",
+        "locatable": false
+      },
+      {
+        "surface": "USES_TECHNOLOGY",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p054.s012`..`p056.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "3 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-4e79bf96",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Context templates assemble typed facts into a prompt-ready block by specifying which edge and entity types to include, formatted with temporal annotations into a single string injected into the agent's prompt.",
+    "evidence": {
+      "ref_id": "p079.s001",
+      "quote": "The final piece is context templates, which assemble typed facts into a prompt-ready block.",
+      "location": {
+        "byte_start": 9410,
+        "byte_end": 9501,
+        "line": 243,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context templates",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-ebd09079",
+    "kind": "assertion",
+    "subtype": "decision",
+    "text": "Zep enforces a hard limit of 10 custom entity types, 10 custom edge types, and 10 fields per type to force developers to focus on what matters in a domain rather than modeling everything.",
+    "evidence": {
+      "ref_id": "p089.s001",
+      "quote": "Zep enforces a hard limit of 10 custom entity types, 10 custom edge types, and 10 fields per type.",
+      "location": {
+        "byte_start": 10307,
+        "byte_end": 10405,
+        "line": 272,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "10 custom entity types",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "10 custom edge types",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "10 fields per type",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-306e35e3",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start with 3-4 entity types and 3-4 edge types that capture 80% of domain logic, and add complexity incrementally.",
+    "evidence": {
+      "ref_id": "p095.s001",
+      "quote": "Start with 3-4 entity types and 3-4 edge types that capture 80% of your domain logic, and add complexity incrementally.",
+      "location": {
+        "byte_start": 11112,
+        "byte_end": 11231,
+        "line": 284,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "3-4 entity types",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "3-4 edge types",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-35d8c457",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The schema defines the space of valid memories, acting as guardrails on what an agent is allowed to remember—similar to how typed function calling constrains the LLM's output space to prevent invalid arguments.",
+    "evidence": {
+      "ref_id": "p093.s001",
+      "quote": "The schema defines the space of valid memories.",
+      "location": {
+        "byte_start": 10846,
+        "byte_end": 10893,
+        "line": 280,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "The schema",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-6b0baba1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agent memory without schema discipline produces a graph that behaves like a vector store, incurring the cost of graph construction without gaining the benefit of structured retrieval.",
+    "evidence": {
+      "ref_id": "p096.s001",
+      "quote": "Agent memory without schema discipline is a graph that behaves like a vector store. In a way, you pay the cost of graph construction without getting the benefit of structured retrieval.",
+      "location": {
+        "byte_start": 11112,
+        "byte_end": 11419,
+        "line": 284,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Agent memory without schema discipline",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p095.s001`..`p097.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-190aecb6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "LLM extraction works reasonably well on general knowledge, but domain-specific applications with internal terminology, product names that collide with common words, or jargon absent from training data require a schema to guide extraction—otherwise it produces nonsense.",
+    "evidence": {
+      "ref_id": "p099.s002",
+      "quote": "the moment your domain has internal terminology, product names that collide with common words, or jargon absent from the training data, unguided extraction produces nonsense.",
+      "location": {
+        "byte_start": 11596,
+        "byte_end": 11834,
+        "line": 292,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "domain-specific applications",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "unguided extraction",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-904d8596",
+    "kind": "assertion",
+    "text": "Your agent remembers everything and understands nothing.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "Your agent remembers everything and understands nothing.",
+      "location": {
+        "byte_start": 64,
+        "byte_end": 120,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-fa62de97",
+    "kind": "assertion",
+    "text": "The docstrings and field descriptions are important here because good descriptions with concrete examples give the extractor enough signal to classify accurately.",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "The docstrings and field descriptions are important here because good descriptions with concrete examples give the extractor enough signal to classify accurately.",
+      "location": {
+        "byte_start": 4990,
+        "byte_end": 5152,
+        "line": 133,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-f71f65c8",
+    "kind": "assertion",
+    "text": "That's intentional to force a dev to think about what matters in a domain rather than modeling everything.",
+    "evidence": {
+      "ref_id": "p091.s001",
+      "quote": "That's intentional to force a dev to think about what matters in a domain rather than modeling everything.",
+      "location": {
+        "byte_start": 10471,
+        "byte_end": 10579,
+        "line": 276,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

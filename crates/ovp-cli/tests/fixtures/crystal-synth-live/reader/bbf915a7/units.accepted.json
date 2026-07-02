@@ -1,0 +1,746 @@
+[
+  {
+    "id": "u-000-2ec51bde",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Loop Driven Development moves engineering that matters to the feedback loop when coding agents do implementation, with the human's job reduced to four decisions: which oracle to trust, which properties to pin, what shape the comparison takes, and when the agent is done.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "when coding agents do the implementation, the engineering that matters moves to the feedback loop, and the human's job comes down to four decisions — which oracle to trust, which properties to pin, what shape the comparison takes, and when the agent is done",
+      "location": {
+        "byte_start": 77,
+        "byte_end": 444,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Loop Driven Development",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "the human's job",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-e08a3d9a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The hardest part of building a credible benchmark is methodology that holds up for readers who have every incentive to find the flaw.",
+    "evidence": {
+      "ref_id": "p005.s003",
+      "quote": "Anyone can publish a benchmark where their own product wins; the hard part is building one where the methodology holds up for readers who have every incentive to find the flaw",
+      "location": {
+        "byte_start": 1083,
+        "byte_end": 1260,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "credible benchmark",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-2b37c49a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "xlsx-corpus-bench is a benchmark that runs real-world workbooks through xlsx engines and compares every recalculated formula cell against what real Excel produces.",
+    "evidence": {
+      "ref_id": "p006.s001",
+      "quote": "One session later I had a benchmark that runs 15,970 real-world workbooks (6.8 million formula cells) through five xlsx engines and compares every recalculated formula cell against what real Excel produces",
+      "location": {
+        "byte_start": 1369,
+        "byte_end": 1579,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "xlsx-corpus-bench",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-ddec9e43",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The benchmark uses two public corpora: FUSE (10,544 workbooks crawled from the open web) and SpreadsheetBench (5,426 modern, formula-heavy workbooks from real Excel forum questions).",
+    "evidence": {
+      "ref_id": "p006.s003",
+      "quote": "FUSE, 10,544 workbooks crawled from the open web — old, hostile, every producer imaginable — and SpreadsheetBench, 5,426 modern, formula-heavy workbooks from real Excel forum questions",
+      "location": {
+        "byte_start": 1672,
+        "byte_end": 1972,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "FUSE",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "SpreadsheetBench",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-b04bf4f1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Cached values in spreadsheet files cannot be trusted as ground truth because files crawled from the open web might have been last saved by LibreOffice, a Java library from 2009, or a tool that never ran calculation at all.",
+    "evidence": {
+      "ref_id": "p012.s002",
+      "quote": "A workbook crawled from the open web might have last been saved by LibreOffice, by a Java library from 2009, or by a tool that never ran the calculation at all",
+      "location": {
+        "byte_start": 2910,
+        "byte_end": 3071,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "cached values",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-c9842cfd",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The harness uses Excel itself as oracle, injecting fullCalcOnLoad='1' into the calcPr element, opening via AppleScript with links not updated, and saving the recalculated copy as frozen truth.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "the harness asks Excel itself, fresh, for every file",
+      "location": {
+        "byte_start": 3271,
+        "byte_end": 3327,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Excel itself",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "oracle",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-a11723d6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The benchmark pins three behaviors per library: whether the file opens, whether it survives open→save→reopen (with library-neutral structural validation), and whether recalculation matches Excel.",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "The bench pins three behaviors per library, and the README defines each in a sentence: does the file open, does it survive open→save→reopen (where the written output also has to pass a library-neutral structural validation — readable zip, well-formed XML, all relationship targets resolve), and does recalculation match Excel",
+      "location": {
+        "byte_start": 3933,
+        "byte_end": 4332,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "three behaviors",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-81836db6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Excel uses the cached values of external references it cannot resolve, so excluding external-reference formulas would have quietly excused real engine failures.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "Excel uses the cached values of external references it can't resolve, so an engine that does the same can be judged on those cells",
+      "location": {
+        "byte_start": 5023,
+        "byte_end": 5154,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "cached values of external references",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-30710bab",
+    "kind": "assertion",
+    "subtype": "recommendation",
+    "text": "Methodological choices should be biased toward defensibility, because the numbers are only useful if people cannot question them.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "i dont want heuristics or exclusions that might be deemed dubious",
+      "location": {
+        "byte_start": 5486,
+        "byte_end": 5617,
+        "line": 69,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "heuristics or exclusions",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-0a6b42f5",
+    "kind": "assertion",
+    "subtype": "decision",
+    "text": "Files that Excel itself cannot open must be excluded from both numerator and denominator for every tool, ensuring the same file set is used across all libraries.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "when we then compute stats for each of the runners we should fully exclude files excel cant open from both numerator and denominator, we must use exact same file set for all tools being tested",
+      "location": {
+        "byte_start": 6268,
+        "byte_end": 6462,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "files excel cant open",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-28d0851b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The comparison uses per-cell binary equality with 1e-9 relative tolerance for numbers, exact equality for strings and error codes, all via one shared comparator function.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Per-cell, binary, equality with a tolerance",
+      "location": {
+        "byte_start": 6853,
+        "byte_end": 6897,
+        "line": 81,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "comparison",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-78a999ee",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Numbers get 1e-9 relative tolerance because floating-point accumulation legitimately differs between engines, and pinning the 16th digit would punish implementation order rather than correctness.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "Numbers get a 1e-9 relative tolerance because floating-point accumulation legitimately differs between engines, and pinning the 16th digit would punish implementation order rather than correctness",
+      "location": {
+        "byte_start": 7308,
+        "byte_end": 7505,
+        "line": 85,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "1e-9 relative tolerance",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-3ee97aa3",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Strings and error codes get exact equality because there's no legitimate reason for #VALUE! and #REF! to disagree between engines.",
+    "evidence": {
+      "ref_id": "p029.s002",
+      "quote": "Strings and error codes get exact equality, because there's no legitimate reason for #VALUE!",
+      "location": {
+        "byte_start": 7505,
+        "byte_end": 7651,
+        "line": 85,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "exact equality for strings and error codes",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-f8af0df4",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Results are reported as percent of workbooks with zero mismatched cells (user's question: is my file right?) and percent of all formula cells matching (engineering signal: how much behavior is correct?).",
+    "evidence": {
+      "ref_id": "p030.s002",
+      "quote": "Percent of workbooks with zero mismatched cells is the user's question: is my file right, yes or no?",
+      "location": {
+        "byte_start": 7923,
+        "byte_end": 8024,
+        "line": 87,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Percent of workbooks with zero mismatched cells",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-c4263547",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Done-ness lived in files: the bench writes failures into checked-in reports (WITAN-FAILURES.md, WITAN-RECALC-GAPS.md) that are enumerated and prioritized.",
+    "evidence": {
+      "ref_id": "p032.s002",
+      "quote": "Done-ness lived in files: the bench writes its failures into checked-in reports — WITAN-FAILURES.md, WITAN-RECALC-GAPS.md — that are enumerated and prioritized",
+      "location": {
+        "byte_start": 8521,
+        "byte_end": 8686,
+        "line": 91,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Done-ness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-5e51c52c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agents that are both investigator and implementer may reason to what Excel probably does instead of asking; the fix is to request the receipt.",
+    "evidence": {
+      "ref_id": "p038.s002",
+      "quote": "An agent in this loop is investigator and implementer at once, and the failure mode is subtle: it reasons its way to what Excel probably does instead of asking",
+      "location": {
+        "byte_start": 9607,
+        "byte_end": 9768,
+        "line": 103,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "An agent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-05515300",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The largest 'function bug' group in the initial report was actually cascading locale mismatch: 128,000 cells due to whether 31/12/2023 parses as a date, not an engine bug.",
+    "evidence": {
+      "ref_id": "p042.s003",
+      "quote": "on the order of 128,000 cells that came down to whether 31/12/2023 parses as a date",
+      "location": {
+        "byte_start": 10693,
+        "byte_end": 10992,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "locale mismatch",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-141f070e",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "After fixing the locale and regenerating truth data, the real engine gap was 10,604 cells across 235 files—about 4% of the original 281,941 mismatched cells; the other 96% was measurement error.",
+    "evidence": {
+      "ref_id": "p042.s005",
+      "quote": "With the locale pinned and the truth rebuilt, the real engine gap was 10,604 cells across 235 files — about 4% of the original number",
+      "location": {
+        "byte_start": 11056,
+        "byte_end": 11193,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "the real engine gap",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-fa762870",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A bad oracle is worse than no oracle because it sends work in the wrong direction, demonstrated here as 271,000 cells of misdirected effort.",
+    "evidence": {
+      "ref_id": "p042.s007",
+      "quote": "The LDD post says a bad oracle is worse than no oracle because it sends work in the wrong direction; here is that sentence as 271,000 cells",
+      "location": {
+        "byte_start": 11230,
+        "byte_end": 11371,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "a bad oracle",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-40c75f72",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Excel returns #VALUE! for SUMIF/COUNTIFS over closed external workbooks even when cached values exist, so matching Excel meant making the engine strictly less useful on those cells.",
+    "evidence": {
+      "ref_id": "p043.s004",
+      "quote": "Excel returns #VALUE! for SUMIF/COUNTIFS over closed external workbooks even when cached values exist, so matching Excel meant making the engine strictly less useful on those cells",
+      "location": {
+        "byte_start": 11912,
+        "byte_end": 12388,
+        "line": 113,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Excel",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p043.s003`..`p043.s005` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-021-4f37bb18",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The witan engine achieved 100.0% opening and round-trip on both corpora, 95.3–95.7% full recalculation match, and 99.7–99.8% of all formula cells matching Excel.",
+    "evidence": {
+      "ref_id": "p045.s001",
+      "quote": "witan opens and round-trips 100.0% of both corpora, recalculates 95.3% of FUSE and 95.7% of SpreadsheetBench workbooks fully Excel-identically, and matches Excel on 99.7–99.8% of all formula cells",
+      "location": {
+        "byte_start": 12836,
+        "byte_end": 13140,
+        "line": 117,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "witan",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-f3176a7c",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "To replicate LDD in practice: use a public corpus as the denominator sampled from the wild, use the real application as scripted oracle with frozen truth, apply one comparator and one universe with no dubious exclusions, use failure reports as the agent's work queue, and pin everything including corpus, truth snapshots, comparator, and engine binary.",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "1. A public corpus as the denominator. Behaviors sampled from the wild, not authored by the team being measured",
+      "location": {
+        "byte_start": 13273,
+        "byte_end": 13476,
+        "line": 121,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "LDD",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p047.s001`..`p048.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-8ab8a187",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The total cost was two long agent sessions, mostly unattended, producing 6.8 million assertions against real Excel with fix sessions arriving pre-enumerated and pre-prioritized.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "The total cost was two long agent sessions, most of them unattended",
+      "location": {
+        "byte_start": 14132,
+        "byte_end": 14200,
+        "line": 129,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "two long agent sessions",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-1715e3a1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When oracle queries become approximately free, the equilibrium number of oracle-derived tests shifts dramatically.",
+    "evidence": {
+      "ref_id": "p049.s002",
+      "quote": "when oracle queries become approximately free, the equilibrium number of oracle-derived tests shifts dramatically",
+      "location": {
+        "byte_start": 14200,
+        "byte_end": 14345,
+        "line": 129,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "oracle queries",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-75f9e44d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The benchmark's charts are authored and rendered by the engine under test itself, which is acceptable because the loop established the report is honest.",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "the result charts in the README are authored and rendered by witan itself",
+      "location": {
+        "byte_start": 14592,
+        "byte_end": 14766,
+        "line": 131,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "the result charts",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "witan",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  }
+]

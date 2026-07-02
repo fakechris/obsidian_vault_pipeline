@@ -1,0 +1,558 @@
+[
+  {
+    "id": "u-000-67d25b70",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A subagent is a specialized assistant that runs in its own context window, with its own system prompt, tools, and permissions.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "A subagent is a specialized assistant that runs in its own context window, with its own system prompt, tools, and permissions.",
+      "location": {
+        "byte_start": 501,
+        "byte_end": 627,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "subagent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-769864d2",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A subagent workflow consists of the main agent calling it, the subagent doing the work in isolation, and returning a summary.",
+    "evidence": {
+      "ref_id": "p005.s002",
+      "quote": "The main agent calls it, the subagent does the work in isolation, and returns a summary.",
+      "location": {
+        "byte_start": 627,
+        "byte_end": 716,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "subagent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-e98364d1",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A subagent is created with a Markdown file and frontmatter containing metadata like name, description, tools, and model.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "You create one with a Markdown file and frontmatter:",
+      "location": {
+        "byte_start": 795,
+        "byte_end": 847,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Markdown file and frontmatter",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-37d51c96",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Claude Code picks up subagents automatically and invokes them when the description matches the task.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Claude Code picks it up automatically and invokes it when the description matches the task.",
+      "location": {
+        "byte_start": 1189,
+        "byte_end": 1280,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Claude Code",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-5df1a643",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Subagent files can be saved in different locations to control scope, and when two subagents share the same name, the higher-priority location wins.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "You can save the file in different locations depending on scope. When two subagents share the same name, the higher-priority location wins.",
+      "location": {
+        "byte_start": 1282,
+        "byte_end": 1446,
+        "line": 59,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "subagent file locations",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p011.s001`..`p012.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-1f5f2520",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The typical subagent locations are .claude/agents/ for team-shared agents and /.claude/agents/ for personal agents.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "For most cases you'll use .claude/agents/ (check it into version control, share with your team) or /.claude/agents/ (personal, available everywhere).",
+      "location": {
+        "byte_start": 1525,
+        "byte_end": 1675,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": ".claude/agents/",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "/.claude/agents/",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-48b663f1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Without subagents, every grep, find, ls, and glob call stays in context, and after thirty minutes the context can contain 80k tokens of noise.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "Thirty minutes in, you have 80k tokens of noise you'll never read.",
+      "location": {
+        "byte_start": 2107,
+        "byte_end": 2173,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-5eec3a75",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When Claude compacts the context, important details get lost in the summary.",
+    "evidence": {
+      "ref_id": "p020.s002",
+      "quote": "Important details get lost in the summary",
+      "location": {
+        "byte_start": 2241,
+        "byte_end": 2283,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context compaction",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-a3e1040c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Explore subagent searches the codebase without polluting the main context, firing all grep and find calls in its own window and returning only relevant findings.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "Explore: searches the codebase without polluting your main context. Fires all the grep and find calls in its own window and returns only the relevant findings.",
+      "location": {
+        "byte_start": 2457,
+        "byte_end": 2647,
+        "line": 83,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Explore",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p023.s002`..`p024.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-009-45fc5400",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Plan subagent investigates and produces an implementation plan, reading files, understanding the architecture, and returning a step-by-step document.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "Plan: investigates and produces an implementation plan. Reads files, understands the architecture, and returns a step-by-step doc.",
+      "location": {
+        "byte_start": 2555,
+        "byte_end": 2783,
+        "line": 85,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Plan",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p024.s002`..`p025.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-010-dc2beada",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Instead of 50 tool calls in the main window, subagents return 3 lines with the answer, and the rest is discarded.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Instead of 50 tool calls in your window, you get 3 lines with the answer. The rest is discarded.",
+      "location": {
+        "byte_start": 2864,
+        "byte_end": 3037,
+        "line": 89,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "subagent results",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p026.s001`..`p027.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-7546f76a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "By default, a subagent starts with a blank context, which can be limiting when the parent has already built up context tokens.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "By default, a subagent starts with a blank context. Good for cleanliness, bad when you've already invested 100k tokens building understanding of your codebase and you want the subagent to inherit all of it.",
+      "location": {
+        "byte_start": 3552,
+        "byte_end": 3783,
+        "line": 97,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "subagent context",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p030.s001`..`p031.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-cae3e879",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Forking the context copies the parent's context to the subagent at the moment of the fork, and is enabled by setting CLAUDE_CODE_FORK_SUBAGENT=1.",
+    "evidence": {
+      "ref_id": "p033.s001",
+      "quote": "Forking solves that: the subagent starts with an exact copy of the parent's context at the moment of the fork.",
+      "location": {
+        "byte_start": 3862,
+        "byte_end": 3972,
+        "line": 103,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "CLAUDE_CODE_FORK_SUBAGENT=1",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-d167d10b",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Forked subagents also share the prompt cache prefix with the parent, making children 2-N 10x cheaper on input tokens.",
+    "evidence": {
+      "ref_id": "p042.s002",
+      "quote": "Shares the prompt cache prefix with the parent (children 2-N are 10x cheaper on input tokens)",
+      "location": {
+        "byte_start": 4528,
+        "byte_end": 4625,
+        "line": 122,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "forked subagents",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-9490b282",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start with a simple subagent in .claude/agents/ to keep Claude Code context clean during long sessions.",
+    "evidence": {
+      "ref_id": "p051.s001",
+      "quote": "My recommendation, start with a simple subagent in .claude/agents/. You'll feel the difference on the first long session.",
+      "location": {
+        "byte_start": 5405,
+        "byte_end": 5652,
+        "line": 142,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": ".claude/agents/",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p050.s001`..`p051.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-6e6269da",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "What it does: starts the moment you open a session and shows a timeline with the main agent's context window and how subagents start working in their own separate context.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "What it does: starts the moment you open a session and shows a timeline with the main agent's context window and how subagents start working in their own separate context.",
+      "location": {
+        "byte_start": 5232,
+        "byte_end": 5403,
+        "line": 140,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context-timeline hook",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-70c2dbb2",
+    "kind": "assertion",
+    "subtype": "procedure_step",
+    "text": "The context-timeline hook is installed using the command: npx claude-code-templates@latest --hook monitoring/context-timeline",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "npx claude-code-templates@latest --hook monitoring/context-timeline",
+      "location": {
+        "byte_start": 5141,
+        "byte_end": 5227,
+        "line": 134,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "npx claude-code-templates@latest --hook monitoring/context-timeline",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p047.s001`..`p048.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-55b5df1d",
+    "kind": "assertion",
+    "text": "You can also fork on demand with the /fork slash command:",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "You can also fork on demand with the /fork slash command:",
+      "location": {
+        "byte_start": 4145,
+        "byte_end": 4202,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

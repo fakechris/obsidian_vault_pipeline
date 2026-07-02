@@ -65,6 +65,8 @@ Do not commit local scratch, live outputs, credentials, or raw evaluation data:
 
 Committed replay cassettes under crate tests are acceptable only when they are intentional frozen fixtures.
 
+NEVER write intermediate or run artifacts (live-run outputs, cassettes, stores, work dirs) to `/tmp` — it is wiped on reboot and the evidence is lost. Put them under the gitignored `.run/<milestone>/` in this repo (or the vault's `.ovp/` when they belong to the operator vault) so they survive and stay auditable.
+
 ## OVP Evolution Rules
 
 When modifying LLM prompt templates or pipeline behavior:

@@ -1,0 +1,677 @@
+[
+  {
+    "id": "u-000-b27370e4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Patter is the open-source SDK that gives your AI agent a phone number.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "Patter is the open-source SDK that gives your AI agent a phone number.",
+      "location": {
+        "byte_start": 1603,
+        "byte_end": 1673,
+        "line": 50,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Patter",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-78f7f437",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Patter SDK handles telephony, speech-to-text, text-to-speech, and real-time audio streaming when pointed at any function that returns a string.",
+    "evidence": {
+      "ref_id": "p008.s002",
+      "quote": "Point it at any function that returns a string, and Patter handles the rest: telephony, speech-to-text, text-to-speech, and real-time audio streaming.",
+      "location": {
+        "byte_start": 1673,
+        "byte_end": 1824,
+        "line": 50,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Patter",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-5a1fedb4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Pipeline mode composes STT + LLM + TTS sequentially and inherits the latency of each provider plus the endpointing window.",
+    "evidence": {
+      "ref_id": "p054.s001",
+      "quote": "Pipeline mode composes STT + LLM + TTS sequentially and inherits the latency of each provider plus the endpointing window.",
+      "location": {
+        "byte_start": 11034,
+        "byte_end": 11156,
+        "line": 249,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Pipeline mode",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-332cc299",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Patter provides Twilio and Telnyx parity for DTMF, transfer, AMD, voicemail drop, and recording, with both speech-to-speech (Realtime/ConvAI engines) and sandwich pipeline (STT → LLM → TTS) architectures from one API.",
+    "evidence": {
+      "ref_id": "p034.s002",
+      "quote": "Out of the box you get Twilio + Telnyx parity (DTMF, transfer, AMD, voicemail drop, recording), both architectures from one API — speech-to-speech (Realtime / ConvAI engines) and the sandwich pipeline (STT → LLM → TTS) — and production-grade barge-in / VAD / IVR primitives that work the same on every carrier.",
+      "location": {
+        "byte_start": 4507,
+        "byte_end": 4838,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Patter",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Twilio + Telnyx parity",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-73dc2c56",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The 4-line quickstart replaces 50 lines of glue code that would otherwise be written against a generic voice-agent toolkit.",
+    "evidence": {
+      "ref_id": "p034.s003",
+      "quote": "The 4-line quickstart above replaces 50 lines of glue you'd otherwise write against a generic voice-agent toolkit",
+      "location": {
+        "byte_start": 4507,
+        "byte_end": 5246,
+        "line": 132,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "4-line quickstart",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "50 lines of glue",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p034.s002`..`p034.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-005-d05f097c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Patter's Python and TypeScript SDKs are identical with the same surface, hooks, and events, allowing cross-runtime teams to ship the same agent twice without rewriting.",
+    "evidence": {
+      "ref_id": "p034.s004",
+      "quote": "the Python and TypeScript SDKs are identical — same surface, same hooks, same events — so cross-runtime teams ship the same agent twice without rewriting it.",
+      "location": {
+        "byte_start": 4960,
+        "byte_end": 5246,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Python and TypeScript SDKs",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-3f3b012c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Observability uses vendor-neutral OpenTelemetry tracing with a built-in dashboard and tunnel; no extra collector required.",
+    "evidence": {
+      "ref_id": "p034.s003",
+      "quote": "Observability is vendor-neutral OpenTelemetry tracing, plus a built-in dashboard and tunnel; no extra collector required.",
+      "location": {
+        "byte_start": 4838,
+        "byte_end": 4960,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Observability",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "OpenTelemetry tracing",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-3f9254f6",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use engine=OpenAIRealtime() for the fastest turn UX, or pair the pipeline with low-latency providers such as Cerebras/Groq for the LLM and ElevenLabs Turbo v2.5 for TTS.",
+    "evidence": {
+      "ref_id": "p054.s001",
+      "quote": "For the fastest turn UX pick engine=OpenAIRealtime(), or pair the pipeline with low-latency providers such as Cerebras/Groq for the LLM and ElevenLabs Turbo v2.5 for TTS.",
+      "location": {
+        "byte_start": 10923,
+        "byte_end": 11329,
+        "line": 247,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "engine=OpenAIRealtime()",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p053.s005`..`p054.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-008-10c94251",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Whisper STT — on mulaw 8 kHz inputs Whisper routinely hallucinates short fillers",
+    "evidence": {
+      "ref_id": "p056.s008",
+      "quote": "Whisper STT — on mulaw 8 kHz inputs Whisper routinely hallucinates short fillers",
+      "location": {
+        "byte_start": 12028,
+        "byte_end": 12149,
+        "line": 256,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Whisper STT",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "mulaw 8 kHz inputs",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-7cb026c8",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "For production, prefer OpenAITranscribeSTT (gpt-4o-transcribe) over Whisper STT because it is 10× faster, uses the same API key, and has no hallucination floor.",
+    "evidence": {
+      "ref_id": "p056.s010",
+      "quote": "For production prefer OpenAITranscribeSTT (gpt-4o-transcribe) — same OPENAI_API_KEY, 10× faster, no hallucination floor.",
+      "location": {
+        "byte_start": 12274,
+        "byte_end": 12405,
+        "line": 256,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "OpenAITranscribeSTT",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-18cb275c",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "ElevenLabs free tier cannot access the library voice catalog via API, returning 402 Payment Required; users must set ELEVENLABS_VOICE_ID to a voice they own or use one of 45 well-known names that resolve automatically to UUIDs.",
+    "evidence": {
+      "ref_id": "p056.s001",
+      "quote": "ElevenLabs free tier — the library voice catalog is not reachable via API (402 Payment Required).",
+      "location": {
+        "byte_start": 11351,
+        "byte_end": 11458,
+        "line": 253,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ElevenLabs free tier",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-b6e26d1d",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Telnyx outbound calls return 403 D38 until the connection has an Outbound Profile attached in the Telnyx portal, though inbound and Call Control answer flows work without it.",
+    "evidence": {
+      "ref_id": "p056.s004",
+      "quote": "Telnyx outbound — calls will return 403 D38 until your connection has an \"Outbound Profile\" attached in the Telnyx portal.",
+      "location": {
+        "byte_start": 11686,
+        "byte_end": 11818,
+        "line": 254,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Telnyx outbound",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-e0f126d6",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Google Gemini free tier has a hard quota=0 on gemini-2.0-flash, requiring billing to be enabled on the project before using Gemini as the LLM.",
+    "evidence": {
+      "ref_id": "p056.s006",
+      "quote": "Google Gemini free tier — gemini-2.0-flash has a hard quota=0 on the free tier. Enable billing on the project before using Gemini as the LLM.",
+      "location": {
+        "byte_start": 11818,
+        "byte_end": 12027,
+        "line": 254,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Google Gemini free tier",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "gemini-2.0-flash",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p056.s005`..`p056.s007` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-9504f458",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "For production outbound calls (especially on Twilio), replace it with or a static webhook_url to avoid WSS upgrade races on first call.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "For production outbound calls (especially on Twilio), replace it with or a static webhook_url to avoid WSS upgrade races on first call.",
+      "location": {
+        "byte_start": 3935,
+        "byte_end": 4227,
+        "line": 124,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "tunnel=True",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p030.s001`..`p031.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-98b5f0bd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Outbound calls + AMD | phone.call(to, machineDetection) | patter-outbound-calls",
+    "evidence": {
+      "ref_id": "p036.s004",
+      "quote": "Outbound calls + AMD | phone.call(to, machineDetection) | patter-outbound-calls",
+      "location": {
+        "byte_start": 5423,
+        "byte_end": 5562,
+        "line": 139,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AMD",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-729ba584",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When the carrier reports no-answer, busy, or canceled, the outcome is forwarded to the dashboard's /webhooks/twilio/status callback so it appears in the call log even if no media frames were exchanged.",
+    "evidence": {
+      "ref_id": "p060.s001",
+      "quote": "When the carrier reports no-answer, busy, or canceled, the outcome is forwarded to the dashboard's /webhooks/twilio/status callback so it appears in the call log even if no media frames were ever exchanged.",
+      "location": {
+        "byte_start": 13081,
+        "byte_end": 13524,
+        "line": 268,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "call()",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p059.s006`..`p060.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-be5ae3cd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "PatterTool enables using a phone as a tool in LangChain, OpenAI Assistants, or Hermes, callable via PatterTool(phone, agent).execute(...).",
+    "evidence": {
+      "ref_id": "p036.s016",
+      "quote": "Phone-as-a-tool (LangChain / OpenAI Assistants / Hermes) | PatterTool(phone, agent).execute(...)",
+      "location": {
+        "byte_start": 6733,
+        "byte_end": 6872,
+        "line": 151,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "PatterTool",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-0b5ff291",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "<a href=\"https://pypi.org/project/getpatter/\"><img src=\"https://img.shields.io/pypi/v/getpatter?logo=pypi&logoColor=white&label=pip%20install%20getpatter\" alt=\"PyPI\" /></a> <a href=\"https://www.npmjs.com/package/getpatter\"><img src=\"https://img.shields.io/npm/v/getpatter?logo=npm&logoColor=white&label=npm%20install%20getpatter\" alt=\"npm\" /></a>",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "<a href=\"https://pypi.org/project/getpatter/\"><img src=\"https://img.shields.io/pypi/v/getpatter?logo=pypi&logoColor=white&label=pip%20install%20getpatter\" alt=\"PyPI\" /></a> <a href=\"https://www.npmjs.com/package/getpatter\"><img src=\"https://img.shields.io/npm/v/getpatter?logo=npm&logoColor=white&label=npm%20install%20getpatter\" alt=\"npm\" /></a> <a href=\"./LICENSE\"><img src=\"https://img.shields.io/badge/license-MIT-green\" alt=\"MIT License\" /></a> <img src=\"https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white\" alt=\"Python 3.11+\" /> <img src=\"https://img.shields.io/badge/typescript-5.0%2B-3178c6?logo=typescript&logoColor=white\" alt=\"TypeScript 5+\" />",
+      "location": {
+        "byte_start": 317,
+        "byte_end": 1347,
+        "line": 25,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Patter",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p003.s004`..`p005.s006` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-699a6b6b",
+    "kind": "assertion",
+    "text": "both architectures from one API — speech-to-speech (Realtime / ConvAI engines) and the sandwich pipeline (STT → LLM → TTS)",
+    "evidence": {
+      "ref_id": "p034.s002",
+      "quote": "both architectures from one API — speech-to-speech (Realtime / ConvAI engines) and the sandwich pipeline (STT → LLM → TTS)",
+      "location": {
+        "byte_start": 4507,
+        "byte_end": 4838,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-8c58a601",
+    "kind": "assertion",
+    "text": "docker compose up",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "docker compose up",
+      "location": {
+        "byte_start": 10510,
+        "byte_end": 10548,
+        "line": 233,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p049.s001`..`p050.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-020-bc97fdfa",
+    "kind": "assertion",
+    "text": "production-grade barge-in / VAD / IVR primitives that work the same on every carrier",
+    "evidence": {
+      "ref_id": "p034.s002",
+      "quote": "production-grade barge-in / VAD / IVR primitives that work the same on every carrier",
+      "location": {
+        "byte_start": 4507,
+        "byte_end": 4838,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-268997a5",
+    "kind": "assertion",
+    "text": "Call transfer | transfer_call (auto-injected)",
+    "evidence": {
+      "ref_id": "p036.s012",
+      "quote": "Call transfer | transfer_call (auto-injected)",
+      "location": {
+        "byte_start": 6354,
+        "byte_end": 6443,
+        "line": 147,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-77ce7a7d",
+    "kind": "assertion",
+    "text": "Test mode (no phone) | phone.test(agent)",
+    "evidence": {
+      "ref_id": "p036.s014",
+      "quote": "Test mode (no phone) | phone.test(agent)",
+      "location": {
+        "byte_start": 6572,
+        "byte_end": 6656,
+        "line": 149,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-034114a0",
+    "kind": "assertion",
+    "text": "Built-in tunnel | Cloudflare (auto)",
+    "evidence": {
+      "ref_id": "p036.s015",
+      "quote": "Built-in tunnel | Cloudflare (auto)",
+      "location": {
+        "byte_start": 6656,
+        "byte_end": 6733,
+        "line": 150,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

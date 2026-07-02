@@ -1,0 +1,953 @@
+[
+  {
+    "id": "u-000-ce91fb60",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An IdeaBlock is a structured question-answer packet implemented by Blockify: one question, its validated answer, and typed governance fields like clearance level, version state, and source, all on the same object.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "Blockify, a preprocessing layer from Iternal Technologies, implements this as a structure it calls an IdeaBlock: a question, its validated answer, and typed governance fields like clearance level, version state, and source, all on the same object.",
+      "location": {
+        "byte_start": 2650,
+        "byte_end": 2984,
+        "line": 89,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "IdeaBlock",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Blockify",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-bc5f8608",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A Question-Answer Packet is a unit of knowledge consisting of one question, its validated answer, and governance fields as typed schema, replacing text windows with structurally explicit claims.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "Instead of embedding a window of prose, you embed a claim: one question, its validated answer, and governance fields as typed schema.",
+      "location": {
+        "byte_start": 2160,
+        "byte_end": 2293,
+        "line": 79,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Question-Answer Packet",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-494048dd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Semantic distillation is the process of reducing a corpus by iteratively deduplicating near-identical blocks at 80-85% similarity across multiple rounds, collapsing redundant copies into canonical IdeaBlocks.",
+    "evidence": {
+      "ref_id": "p040.s001",
+      "quote": "After iterative deduplication at 80-85% similarity across 3-5 rounds:",
+      "location": {
+        "byte_start": 3907,
+        "byte_end": 3976,
+        "line": 111,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "semantic distillation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-bcff0b13",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The article's central thesis is that the chunk is the wrong unit of knowledge to embed, and this flawed assumption is the source of most retrieval failures that are then incorrectly patched downstream.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "Every RAG pipeline starts with the same assumption: a chunk of text is the right unit of knowledge to embed.",
+      "location": {
+        "byte_start": 358,
+        "byte_end": 466,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "chunk",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-c822efaf",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A chunk of text is a structurally neutral container with no information about idea boundaries, document version, or access permissions.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "A chunk of text is a structurally neutral container.",
+      "location": {
+        "byte_start": 627,
+        "byte_end": 679,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "chunk",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-05fce334",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Chunking produces fragmented content like half a table, a conclusion without its argument, or a claim stripped of supporting context, leaving the LLM unable to detect what is missing.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "You end up retrieving half a table, or a conclusion with no argument, or a claim stripped of the context that makes it true.",
+      "location": {
+        "byte_start": 974,
+        "byte_end": 1098,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "chunking",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-8f48e5a4",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Enterprise corpora typically contain the same document in many near-identical versions, causing Top-K retrieval to return redundant copies mixed with deprecated versions, leading the LLM to produce confidently wrong answers.",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "Most enterprise corpora have the same document in a dozen near-identical versions across SharePoint, Confluence, and Git.",
+      "location": {
+        "byte_start": 1184,
+        "byte_end": 1305,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Top-K retrieval",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "version problem",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-394a6e17",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Governance metadata such as role filters, version state, and clearance levels end up as logic bolted onto the orchestrator, disconnected from the content they govern, because chunks carry no metadata.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "Because the chunk carries no metadata either, there's nowhere to attach access control in the data itself.",
+      "location": {
+        "byte_start": 1469,
+        "byte_end": 1577,
+        "line": 65,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "access control",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "chunk",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-aa49d7d6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Most RAG stacks have no processing layer between the document parser and the vector store, allowing the chunking problems of idea boundaries, version mixing, and governance to compound.",
+    "evidence": {
+      "ref_id": "p020.s001",
+      "quote": "Most stacks have nothing between the document parser and the vector store.",
+      "location": {
+        "byte_start": 1872,
+        "byte_end": 1946,
+        "line": 71,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "gap",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-8255486c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When the index stores answers to questions instead of text windows, the match between query and content becomes structural rather than probabilistic, because queries are already questions.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Your queries are already questions.",
+      "location": {
+        "byte_start": 2406,
+        "byte_end": 2441,
+        "line": 85,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Question-Answer Packet",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-12ec73f1",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "In Blockify's internal benchmark across 17 documents and 298 pages, IdeaBlocks achieved an average cosine distance of 0.1585 versus 0.3624 for naive chunks, a 2.29x reduction in retrieval distance.",
+    "evidence": {
+      "ref_id": "p033.s001",
+      "quote": "In Blockify's internal benchmark across 17 documents and 298 pages, the average cosine distance from query to best-matching block was 0.1585 for IdeaBlocks versus 0.3624 for naive chunks.",
+      "location": {
+        "byte_start": 3305,
+        "byte_end": 3494,
+        "line": 97,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "IdeaBlocks",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Blockify's internal benchmark",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-fe3712e9",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Semantic distillation of 2,042 raw IdeaBlocks down to 1,200 canonical blocks (reducing word count from 88,877 to 44,537) improved vector accuracy by 13.55% over the undistilled dataset.",
+    "evidence": {
+      "ref_id": "p041.s002",
+      "quote": "Word count dropped from 88,877 to 44,537",
+      "location": {
+        "byte_start": 4033,
+        "byte_end": 4076,
+        "line": 114,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "semantic distillation",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "vector accuracy",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-7cf251c7",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Redundant copies hurt retrieval because fifteen near-duplicates create fifteen competing vectors in the same embedding region, dispersing probability mass and pulling down match scores; collapsing them into one canonical block sharpens the signal.",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "The reason redundant copies hurt rather than help: fifteen near-duplicates of the same paragraph create fifteen competing vectors in the same region of embedding space.",
+      "location": {
+        "byte_start": 4151,
+        "byte_end": 4319,
+        "line": 117,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "redundant copies",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-0931a113",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The vector index is a retrieval surface where redundancy degrades quality, not a hard drive to fill.",
+    "evidence": {
+      "ref_id": "p044.s001",
+      "quote": "Your vector index isn't a hard drive you want to fill.",
+      "location": {
+        "byte_start": 4501,
+        "byte_end": 4557,
+        "line": 121,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "vector index",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-882dca71",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 1 (Scoping) defines the index hierarchy as Organization > Business Unit > Product > Persona before any document is parsed, determining access tier tagging and shaping deduplication.",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "Before any document is parsed, you define the index hierarchy: Organization > Business Unit > Product > Persona.",
+      "location": {
+        "byte_start": 4979,
+        "byte_end": 5091,
+        "line": 133,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 1: Scoping",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-4a79bd3a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 2 (Ingestion) converts documents from DOCX, PDF, PPT, PNG/JPG, Markdown, or HTML formats into draft IdeaBlocks using a fine-tuned LLM, with input bounded at 1,000 to 4,000 characters.",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "Documents enter as DOCX, PDF, PPT, PNG/JPG, Markdown, or HTML.",
+      "location": {
+        "byte_start": 5219,
+        "byte_end": 5281,
+        "line": 139,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 2: Ingestion",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-b741445f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 3 (Chunking and extraction) performs context-aware splitting where the LLM converts chunks to draft IdeaBlocks rather than cutting on token count alone, outputting question-answer pairs instead of prose windows.",
+    "evidence": {
+      "ref_id": "p057.s001",
+      "quote": "Context-aware splitting means the LLM converts chunks to draft IdeaBlocks rather than cutting on token count alone.",
+      "location": {
+        "byte_start": 5689,
+        "byte_end": 5804,
+        "line": 147,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 3: Chunking and extraction",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-c5ac9076",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 4 (Semantic deduplication) clusters blocks by cosine similarity at an 80-85% threshold across three to five iterative rounds, merging near-duplicates into a single canonical block via a second specially tuned LLM.",
+    "evidence": {
+      "ref_id": "p060.s001",
+      "quote": "Blocks are clustered by cosine similarity at an 80-85% threshold across three to five iterative rounds.",
+      "location": {
+        "byte_start": 5968,
+        "byte_end": 6071,
+        "line": 153,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 4: Semantic deduplication",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-54b228e8",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 5 (Auto-tagging) applies typed metadata to each block including clearance level, version state, product line, export control flags, and data privacy labels, applied by the pipeline rather than the document author.",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "Each block receives typed metadata: clearance level (PUBLIC, INTERNAL, CONFIDENTIAL, SECRET), version state (Current, Deprecated, Draft, Approved), product line, export control flags, and data privacy labels.",
+      "location": {
+        "byte_start": 6471,
+        "byte_end": 6679,
+        "line": 161,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 5: Auto-tagging",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-29b9b9c8",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 6 (Human validation) distributes a product corpus of 2,000 to 3,000 IdeaBlocks across five to ten SMEs, each spending one to two hours per quarter reviewing structured claims with source citations.",
+    "evidence": {
+      "ref_id": "p066.s001",
+      "quote": "A product corpus of 2,000 to 3,000 IdeaBlocks splits across five to ten SMEs, each spending one to two hours per quarter on their slice.",
+      "location": {
+        "byte_start": 6761,
+        "byte_end": 6897,
+        "line": 165,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 6: Human validation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-295f03c3",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stage 7 (Export) pushes validated blocks to supported vector databases (Azure AI Search, Pinecone, Milvus, Vertex Matching Engine) and supports embedding models from OpenAI, Bedrock, Mistral, Jina, and open-source providers.",
+    "evidence": {
+      "ref_id": "p068.s001",
+      "quote": "Validated blocks push to the vector database via API or export as JSON-L.",
+      "location": {
+        "byte_start": 6988,
+        "byte_end": 7061,
+        "line": 169,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stage 7: Export",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-021-4a7afd1d",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The new approach achieves a 40x corpus size reduction, a 3x reduction in tokens per query, and a 2.3x improvement in vector search relevance without modifying the retrieval algorithm, reranker, or embedding model.",
+    "evidence": {
+      "ref_id": "p003.s001",
+      "quote": "cuts corpus size by 40x.",
+      "location": {
+        "byte_start": 107,
+        "byte_end": 133,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "new approach",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-d6d54be6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "With IdeaBlocks, governance moves into the data layer as typed fields on each block, so a sales engineer and legal reviewer querying the same index receive different datasets not because of retrieval-layer filtering but because the blocks themselves carry the access boundary.",
+    "evidence": {
+      "ref_id": "p073.s004",
+      "quote": "Governance moves into the data layer: role-based access, version state, clearance level are typed fields on each block, not logic bolted onto the orchestrator.",
+      "location": {
+        "byte_start": 7791,
+        "byte_end": 7956,
+        "line": 180,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "governance",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "data layer",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-badb6b89",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "With IdeaBlocks, updates propagate from a single record: when a spec changes, you update one IdeaBlock and every application querying it gets the corrected answer on the next request, unlike naive chunking where the same fact lives in dozens of near-duplicate passages.",
+    "evidence": {
+      "ref_id": "p073.s006",
+      "quote": "Updates propagate from a single record: when a spec changes, you update one IdeaBlock.",
+      "location": {
+        "byte_start": 8148,
+        "byte_end": 8240,
+        "line": 181,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "updates",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "IdeaBlock",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-e4951924",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The chunk became a retrieval assumption because it was a parsing convenience, and years of retrieval stack improvements (rerankers, hybrid search, threshold tuning, prompt engineering) have been downstream patches of the real problem.",
+    "evidence": {
+      "ref_id": "p076.s001",
+      "quote": "The chunk is a parsing convenience that became a retrieval assumption.",
+      "location": {
+        "byte_start": 8651,
+        "byte_end": 8721,
+        "line": 187,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "chunk",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-3ad039ac",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The fix is not a better retrieval algorithm but a better unit of knowledge at the data layer, and RAG stacks are beginning to grow a distillation layer between parsing and vectorization, analogous to how web stacks grew a CDN layer.",
+    "evidence": {
+      "ref_id": "p079.s001",
+      "quote": "The fix is not a better retrieval algorithm.",
+      "location": {
+        "byte_start": 8947,
+        "byte_end": 8991,
+        "line": 193,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "fix",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-026-934d8e2e",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Build a distillation layer between parsing and vectorization using clustering, LLM-based summarization, and schema enforcement, or use a purpose-built tool like Blockify.",
+    "evidence": {
+      "ref_id": "p081.s001",
+      "quote": "You can build it yourself with clustering, LLM-based summarization, and schema enforcement.",
+      "location": {
+        "byte_start": 9169,
+        "byte_end": 9260,
+        "line": 197,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "distillation layer",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-d71bfae3",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Fix the chunk-as-unit assumption at the data layer rather than tuning retrieval downstream, because doing so pays off more than any retrieval optimization.",
+    "evidence": {
+      "ref_id": "p082.s001",
+      "quote": "the chunk-as-unit assumption is the bug, and fixing it at the data layer pays off more than tuning retrieval ever will.",
+      "location": {
+        "byte_start": 9323,
+        "byte_end": 9454,
+        "line": 199,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "chunk-as-unit assumption",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-028-3199b141",
+    "kind": "assertion",
+    "text": "That gap is where all three problems compound.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "That gap is where all three problems compound.",
+      "location": {
+        "byte_start": 1948,
+        "byte_end": 1994,
+        "line": 73,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-029-4820f01b",
+    "kind": "assertion",
+    "text": "It has no idea boundary, version context or access state.",
+    "evidence": {
+      "ref_id": "p077.s001",
+      "quote": "It has no idea boundary, version context or access state.",
+      "location": {
+        "byte_start": 8723,
+        "byte_end": 8780,
+        "line": 189,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-030-dfa199b7",
+    "kind": "assertion",
+    "text": "The architecture doesn't change how you query.",
+    "evidence": {
+      "ref_id": "p074.s001",
+      "quote": "The architecture doesn't change how you query.",
+      "location": {
+        "byte_start": 8525,
+        "byte_end": 8573,
+        "line": 183,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-031-56034516",
+    "kind": "assertion",
+    "text": "The counterintuitive finding: less data, more accuracy",
+    "evidence": {
+      "ref_id": "p035.s001",
+      "quote": "The counterintuitive finding: less data, more accuracy",
+      "location": {
+        "byte_start": 3547,
+        "byte_end": 3603,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

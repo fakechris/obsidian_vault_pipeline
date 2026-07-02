@@ -1,0 +1,705 @@
+[
+  {
+    "id": "u-000-a8c403ab",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "ccglass is a lightweight local logging reverse-proxy with a web dashboard for inspecting API requests from coding agents.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "See exactly what your coding agent sends to the model. A lightweight",
+      "location": {
+        "byte_start": 2276,
+        "byte_end": 2349,
+        "line": 100,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ccglass",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-4d612da3",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Coding agent CLIs ignore HTTP_PROXY/HTTPS_PROXY environment variables, making traditional intercepting proxies ineffective.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "These CLIs are Node/native apps that ignore HTTP_PROXY/HTTPS_PROXY",
+      "location": {
+        "byte_start": 3593,
+        "byte_end": 3675,
+        "line": 143,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "HTTP_PROXY/HTTPS_PROXY",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-22c369bb",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "ccglass intercepts traffic by having the client make its HTTPS connection to the real API directly, while only the plain HTTP hop to localhost passes through the proxy — avoiding the need for CA certificates or TLS pinning.",
+    "evidence": {
+      "ref_id": "p021.s004",
+      "quote": "ccglass sidesteps all of it: the client does the HTTPS to the real API",
+      "location": {
+        "byte_start": 3764,
+        "byte_end": 3838,
+        "line": 145,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ccglass interception approach",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-9b42ce8f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "ccglass works with multiple providers: Claude Code, Codex (OpenAI), DeepSeek-TUI, Kimi (via Claude Code), OpenCode, Ollama, LM Studio, OpenRouter, GLM/Zhipu, AWS Bedrock, and Google Vertex AI.",
+    "evidence": {
+      "ref_id": "p010.s002",
+      "quote": "Claude Code, Codex, OpenCode, DeepSeek-TUI, Kimi, Ollama, OpenRouter, and more.",
+      "location": {
+        "byte_start": 2276,
+        "byte_end": 2480,
+        "line": 100,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "providers",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p010.s001`..`p010.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-106d5a2e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Each provider wraps a specific client, uses a designated environment variable to set the proxy URL, connects to its upstream API, and uses either Anthropic Messages or OpenAI Chat format.",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "| ccglass <provider> or --provider | Wraps | Env var | Upstream | Format |",
+      "location": {
+        "byte_start": 3942,
+        "byte_end": 4021,
+        "line": 151,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "provider configuration",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-5efe2b19",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The ccglass dashboard provides a live request stream showing system prompts, messages, and tools; a conversation flow sequence diagram; turn-to-turn diff between requests; token/cache/cost metrics; response reassembly; and self-inspection tools when wrapping Claude Code.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "Live request stream — every call appears instantly; click to expand the",
+      "location": {
+        "byte_start": 8598,
+        "byte_end": 8678,
+        "line": 221,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "dashboard features",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-907a44b6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Captures are stored in a content-addressed (git-style) format where each message, tools array, and system block is written once to a blobs directory and referenced by sha256 hash from per-request manifests, preventing quadratic storage growth in long sessions.",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "Captures are stored content-addressed (git-style): each message, the tools",
+      "location": {
+        "byte_start": 13019,
+        "byte_end": 13096,
+        "line": 296,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "content-addressed storage",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-7a807f80",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Auth tokens in authorization and x-api-key headers are masked by default in saved logs.",
+    "evidence": {
+      "ref_id": "p052.s001",
+      "quote": "Auth tokens (authorization, x-api-key) are masked by default",
+      "location": {
+        "byte_start": 13504,
+        "byte_end": 13582,
+        "line": 305,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "auth token masking",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-0954b893",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "ccglass requires Node ≥ 18 and has no runtime dependencies for the core proxy and dashboard; the optional MCP self-inspection feature pulls in @modelcontextprotocol/sdk and zod.",
+    "evidence": {
+      "ref_id": "p054.s001",
+      "quote": "Node ≥ 18. The core proxy + dashboard have no runtime dependencies",
+      "location": {
+        "byte_start": 13660,
+        "byte_end": 13751,
+        "line": 308,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Node.js requirement",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p053.s001`..`p054.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-49c512a5",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Install ccglass globally with npm and run it by naming the provider directly or using the interactive picker.",
+    "evidence": {
+      "ref_id": "p011.s002",
+      "quote": "npm install -g ccglass",
+      "location": {
+        "byte_start": 2518,
+        "byte_end": 2541,
+        "line": 106,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ccglass installation",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-f9bc8920",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Use the ccglass proxy subcommand to start only the proxy and dashboard for IDE extensions that support custom API base URLs, then configure the IDE to point at the proxy URL.",
+    "evidence": {
+      "ref_id": "p032.s002",
+      "quote": "ccglass proxy --provider openai # OpenAI-compatible IDEs (Cursor, Cline, Continue…)",
+      "location": {
+        "byte_start": 7545,
+        "byte_end": 7953,
+        "line": 197,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "IDE inspection with proxy subcommand",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p031.s001`..`p033.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-f0daec9c",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Use ccglass migrate to copy ./.ccglass session data into the global store, and ccglass repack to force-migrate existing captures to the content-addressed v2 format.",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "ccglass migrate copies .json files from this project's ./.ccglass",
+      "location": {
+        "byte_start": 12606,
+        "byte_end": 12687,
+        "line": 288,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ccglass migrate",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-e53ebd43",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Use ccglass rm to delete a session and reclaim orphaned blobs through mark-and-sweep garbage collection.",
+    "evidence": {
+      "ref_id": "p051.s001",
+      "quote": "ccglass rm <session> — delete a session and reclaim its orphaned blobs.",
+      "location": {
+        "byte_start": 13328,
+        "byte_end": 13502,
+        "line": 300,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ccglass rm",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p050.s007`..`p051.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-cd007f7d",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "The IDE proxy inspection only works when the IDE is configured to use a custom API key with a custom base URL (BYOK mode); Cursor's built-in subscription models route through Cursor's own backend and cannot be intercepted.",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "Limitation: This only works when the IDE is configured to use your own API key with a custom base URL (BYOK mode).",
+      "location": {
+        "byte_start": 8331,
+        "byte_end": 8451,
+        "line": 217,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "IDE inspection limitation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-bca7ee58",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When Claude Code is in Bedrock mode (CLAUDE_CODE_USE_BEDROCK=1), it reads its endpoint from ANTHROPIC_BEDROCK_BASE_URL, not ANTHROPIC_BASE_URL, causing ccglass to capture zero requests because it injects the wrong environment variable.",
+    "evidence": {
+      "ref_id": "p078.s001",
+      "quote": "Claude Code in Bedrock mode reads its endpoint from ANTHROPIC_BEDROCK_BASE_URL, not ANTHROPIC_BASE_URL.",
+      "location": {
+        "byte_start": 17057,
+        "byte_end": 17168,
+        "line": 391,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Bedrock mode env var bug",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-632430c2",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Codex in ChatGPT login mode uses a WebSocket transport that bypasses OPENAI_BASE_URL, so the dashboard will be empty; switching to API-key mode enables ccglass to capture traffic.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "captures traffic when Codex is in API-key mode (OPENAI_API_KEY). If Codex is authenticated via ChatGPT login, it uses a WebSocket transport (wss://chatgpt.com/...)",
+      "location": {
+        "byte_start": 5297,
+        "byte_end": 5577,
+        "line": 167,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Codex authentication mode",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p024.s001`..`p025.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-afc7c437",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The storage spec's non-goals for v1 include per-content-block granularity (splitting is per whole message), a global cross-project blob store, automatic background GC, and content-addressing the response.",
+    "evidence": {
+      "ref_id": "p341.s001",
+      "quote": "Per-content-block granularity (we split per whole message).",
+      "location": {
+        "byte_start": 55901,
+        "byte_end": 56030,
+        "line": 1519,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "content-addressed storage v1 non-goals",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p340.s006`..`p342.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-33e5f78f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The v2 manifest format contains version, id, session, seq, ts, and format fields, with request having inline headers and meta (model, params) while system, tools, and messages are stored as blob refs; response stays inline.",
+    "evidence": {
+      "ref_id": "p350.s001",
+      "quote": "The v2 manifest replaces today's full NNNN.json",
+      "location": {
+        "byte_start": 57211,
+        "byte_end": 57273,
+        "line": 1550,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "v2 manifest format",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p349.s001`..`p350.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-2444fc07",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Auto-migration converts legacy captures to v2 format lazily on read, atomically repacking in place; the migration is idempotent and safe — a read-only root silently skips migration while still returning the reconstructed record.",
+    "evidence": {
+      "ref_id": "p362.s001",
+      "quote": "Idempotent & safe: already-v2 files are untouched; if the root is read-only",
+      "location": {
+        "byte_start": 59738,
+        "byte_end": 60317,
+        "line": 1610,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "auto-migration behavior",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p360.s004`..`p363.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-9b8e1acc",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "When a missing blob is encountered during unpackRecord, backfill a placeholder object instead of throwing, so one bad record does not break loading the whole session.",
+    "evidence": {
+      "ref_id": "p369.s001",
+      "quote": "Missing blob: unpackRecord backfills a placeholder object",
+      "location": {
+        "byte_start": 61373,
+        "byte_end": 61439,
+        "line": 1646,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "missing blob handling",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-39e46fd1",
+    "kind": "assertion",
+    "text": "Every LLM API call resends the entire conversation so far.",
+    "evidence": {
+      "ref_id": "p336.s001",
+      "quote": "Every LLM API call resends the entire conversation so far.",
+      "location": {
+        "byte_start": 55034,
+        "byte_end": 55092,
+        "line": 1500,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-fb448c8a",
+    "kind": "assertion",
+    "text": "Per-content-block granularity (we split per whole message). A global cross-project blob store. Automatic background GC. Content-addressing the response (it is never repeated across requests).",
+    "evidence": {
+      "ref_id": "p341.s001",
+      "quote": "Per-content-block granularity (we split per whole message). A global cross-project blob store. Automatic background GC. Content-addressing the response (it is never repeated across requests).",
+      "location": {
+        "byte_start": 55739,
+        "byte_end": 56168,
+        "line": 1517,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p340.s003`..`p342.s004` around the ref"
+      }
+    ]
+  }
+]

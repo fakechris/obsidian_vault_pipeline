@@ -1,0 +1,411 @@
+[
+  {
+    "id": "u-000-01d1f62d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Self-correction loops are a design pattern where Claude runs, collects feedback via a goal or rubric, self-corrects, and proceeds until the goal or rubric is satisfied.",
+    "evidence": {
+      "ref_id": "p005.s003",
+      "quote": "This let’s Claude run, collect feedback via the goal or rubric, self-correct, and proceed until the goal or rubric is satisfied.",
+      "location": {
+        "byte_start": 1085,
+        "byte_end": 1216,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Self-correction loops",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-a420a2e8",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Parameter Golf is an open source ML engineering challenge to train the best model that fits in a 16MB artifact in under 10 minutes on 8xH100s.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "Parameter Golf is an open source ML engineering challenge to train the best model that fits in a 16MB artifact in < 10 minutes on 8xH100s.",
+      "location": {
+        "byte_start": 1295,
+        "byte_end": 1533,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Parameter Golf",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-543143bf",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Outcomes is a feature in Claude Managed Agents that spawns a grader sub-agent to handle independent grading in a separate context window.",
+    "evidence": {
+      "ref_id": "p012.s002",
+      "quote": "Outcomes in CMA handles this by spawning a grader sub-agent for you.",
+      "location": {
+        "byte_start": 2915,
+        "byte_end": 3054,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Outcomes",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-b0b38a6f",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "A verifier sub-agent tends to outperform self-critique with Fable 5, because grading is done in an independent context window.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "We’ve found that a verifier sub-agent tends to outperform self-critique with Fable 5, because grading is done in an independent context window.",
+      "location": {
+        "byte_start": 2669,
+        "byte_end": 2915,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "verifier sub-agent",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "self-critique",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-2b4033ca",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Fable 5 improved the training pipeline 6x more than Opus 4.7 on the Parameter Golf challenge.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "Fable 5 improved the training pipeline 6x more than Opus 4.7.",
+      "location": {
+        "byte_start": 3340,
+        "byte_end": 3402,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Fable 5",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Opus 4.7",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-456b2e3e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Opus 4.7's first experiment produced a small win and nearly everything after followed the same template: adjust a scalar, measure, keep if positive.",
+    "evidence": {
+      "ref_id": "p015.s001",
+      "quote": "Opus 4.7's first experiment produced a small win and nearly everything after followed the same template: adjust a scalar, measure, keep if positive.",
+      "location": {
+        "byte_start": 3645,
+        "byte_end": 3793,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opus 4.7",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-7f954a35",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Fable 5 bet on larger structural changes and showed resilience, such as pushing through a quantization regression to its biggest win.",
+    "evidence": {
+      "ref_id": "p014.s002",
+      "quote": "Fable 5 bet on larger structural changes and showed resilience (e.g., pushing through a quantization regression to its biggest win).",
+      "location": {
+        "byte_start": 3402,
+        "byte_end": 3643,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Fable 5",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-31681fc2",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Memory can be thought of as an outer loop that spans across sessions: Claude writes to memory during a session and those memories can be retrieved in future sessions.",
+    "evidence": {
+      "ref_id": "p017.s002",
+      "quote": "We can think about this as a outer loop that spans across sessions: Claude writes to memory during a session and those memories can be retrieved in future sessions.",
+      "location": {
+        "byte_start": 3957,
+        "byte_end": 4122,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Memory",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-0612469b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Effective use of memory benefits from a progression: fail (get something wrong and document), investigate (figure out why), verify (turn diagnosis into a checked fact), distill (turn verification into a general rule), and consult (read the rule instead of re-deriving it).",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "fail (get something wrong and document), investigate (before moving on, figure out why), verify (turn the diagnosis into a checked fact), distill (turn verification into a general rule), and consult (read the rule, instead of re-deriving it).",
+      "location": {
+        "byte_start": 5063,
+        "byte_end": 5373,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Memory progression",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-12ef773d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "To improve performance, task-specific memory instructions are needed.",
+    "evidence": {
+      "ref_id": "p024.s003",
+      "quote": "To improve performance, task-specific memory instructions are needed.",
+      "location": {
+        "byte_start": 5534,
+        "byte_end": 5604,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Sonnet 4.6",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-53b0a6d3",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Fable 5 tends to complete the memory progression; in its strongest runs, verification coverage is up to 73% (22 of 30) and it distills learnings into general rules that help with future tasks.",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "Fable 5 tends to complete the progression: in its strongest runs, verification coverage is up to 73% (22 of 30) and it distills learnings into general rules that help with future tasks.",
+      "location": {
+        "byte_start": 5809,
+        "byte_end": 5994,
+        "line": 81,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Fable 5",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-60109196",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Rather than directly prompting and steering Fable 5, it is often better to design loops that let the model self-correct in response to environment feedback and manage its own context via memory.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Rather than directly prompting and steering Fable 5, it's often better to design loops that let the model to self-correct in response to environment feedback (e.g., /goal or Outcomes) and manage its own context (e.g., via memory).",
+      "location": {
+        "byte_start": 5996,
+        "byte_end": 6226,
+        "line": 83,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "loops",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-6d279753",
+    "kind": "assertion",
+    "text": "We've seen that models have problems with self-critique on their own outputs.",
+    "evidence": {
+      "ref_id": "p010.s002",
+      "quote": "We've seen that models have problems with self-critique on their own outputs.",
+      "location": {
+        "byte_start": 2369,
+        "byte_end": 2449,
+        "line": 47,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-60109196",
+    "kind": "assertion",
+    "text": "Rather than directly prompting and steering Fable 5, it's often better to design loops that let the model to self-correct in response to environment feedback (e.g., /goal or Outcomes) and manage its own context (e.g., via memory).",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Rather than directly prompting and steering Fable 5, it's often better to design loops that let the model to self-correct in response to environment feedback (e.g., /goal or Outcomes) and manage its own context (e.g., via memory).",
+      "location": {
+        "byte_start": 5996,
+        "byte_end": 6226,
+        "line": 83,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-9b3e456c",
+    "kind": "assertion",
+    "text": "Benchmarks today assume models are stateless.",
+    "evidence": {
+      "ref_id": "p019.s003",
+      "quote": "Benchmarks today assume models are stateless.",
+      "location": {
+        "byte_start": 4432,
+        "byte_end": 4478,
+        "line": 67,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

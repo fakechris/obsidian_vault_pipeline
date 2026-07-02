@@ -1,0 +1,586 @@
+[
+  {
+    "id": "u-000-e84993a7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A company is a collection of algorithms, where each business workflow is a series of steps that can be broken down recursively into sub-algorithms.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "you will recognize this as a series of steps, aka—an algorithm",
+      "location": {
+        "byte_start": 1087,
+        "byte_end": 1197,
+        "line": 28,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "companies",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "algorithms",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-a698d715",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The author conceptualizes a business as a graph of algorithms—a way of thinking about the relationships between components using actions like send to or receive.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "I think of this as a graph of algorithms",
+      "location": {
+        "byte_start": 2118,
+        "byte_end": 2159,
+        "line": 54,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "graph of algorithms",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-74a0eb2b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The word 'graph' is used because it enables thinking about relationships between components and describing them using actions such as send to or receive.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "I use the word graph because it allows me to think of the relationships between the different components and describe them using an action—such as send to or receive, or whatever",
+      "location": {
+        "byte_start": 2161,
+        "byte_end": 2346,
+        "line": 56,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "graph",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-b4008a95",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Breaking down business processes into component algorithms reveals all the pieces, how they fit together, and what can be optimized or eliminated.",
+    "evidence": {
+      "ref_id": "p022.s001",
+      "quote": "It allows you to see all the pieces, how they fit together, and figure out what to optimize or even eliminate from the workflow",
+      "location": {
+        "byte_start": 2618,
+        "byte_end": 2746,
+        "line": 62,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "processes",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-7baef640",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "AI excels at both discrete task execution and determining how things fit together, making every workflow component ripe for optimization or elimination.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "AI excels at both discrete task execution and determining how things fit together, and every single one of your company's workflow components becomes ripe for optimization or elimination",
+      "location": {
+        "byte_start": 2813,
+        "byte_end": 3004,
+        "line": 66,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-688e690d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "AI-deniers fail to realize how opaque most businesses are, how much waste exists in their processes, and the level of redundancy and inefficiency present.",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "AI-deniers are simply not realizing how opaque most businesses are, how much waste there is in their processes, or the level of redundancy and inefficiency",
+      "location": {
+        "byte_start": 3033,
+        "byte_end": 3189,
+        "line": 70,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "businesses",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-35328742",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Consultancies such as Accenture, KPMG, and McKinsey will lead the push to analyze and optimize businesses using AI.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "consultancies like Accenture, KPMG, and McKinsey will be leading that push",
+      "location": {
+        "byte_start": 3191,
+        "byte_end": 3295,
+        "line": 72,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "consultancies",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-3faac576",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The result of AI-driven business optimization will inevitably be a smaller, tighter company that saves money and requires fewer humans to run it.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "the result will inevitably be a smaller, tighter company that not only saves money but has fewer humans required to run it",
+      "location": {
+        "byte_start": 4077,
+        "byte_end": 4204,
+        "line": 85,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "company",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-b49030fd",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Once AI is used inside a company for workflow analysis, it is one step away from a system that continuously analyzes all business components and algorithms.",
+    "evidence": {
+      "ref_id": "p035.s001",
+      "quote": "it's just one step away from a workflow that continuously analyzes these business components/algorithms",
+      "location": {
+        "byte_start": 4344,
+        "byte_end": 4503,
+        "line": 93,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "workflow",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-908f1972",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Every business process—from idea generation to campaign launching and lead capturing—is just another algorithm that AI will soon execute better than most humans.",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "AI will do so much of this very soon, often better than most humans",
+      "location": {
+        "byte_start": 5792,
+        "byte_end": 5860,
+        "line": 130,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-c26fc28c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "No matter how special a product or company appears, it still operates as a pipeline of steps that can be broken down algorithmically.",
+    "evidence": {
+      "ref_id": "p062.s001",
+      "quote": "No matter how special the product or company, it still operates as a pipeline of steps",
+      "location": {
+        "byte_start": 7178,
+        "byte_end": 7267,
+        "line": 165,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "company",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-f11ed7f3",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The upside of AI-driven business optimization is that businesses will become far more efficient, producing more productivity, output, and new things in the world.",
+    "evidence": {
+      "ref_id": "p068.s001",
+      "quote": "businesses are about to become way more efficient. Which means more productivity, more output, and ultimately a lot more new things in the world",
+      "location": {
+        "byte_start": 7657,
+        "byte_end": 8072,
+        "line": 175,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "businesses",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p067.s001`..`p068.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-72170eaa",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The downside of AI-driven business optimization will be the loss of many easy-to-automate human jobs.",
+    "evidence": {
+      "ref_id": "p070.s001",
+      "quote": "there will be downsides—especially from the loss of many easy-to-automate human jobs",
+      "location": {
+        "byte_start": 8203,
+        "byte_end": 8294,
+        "line": 181,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "human jobs",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-e3e9b7be",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Business owners and workers should realize what is coming and prepare for it both as competitors in the new model and as participants in these companies.",
+    "evidence": {
+      "ref_id": "p070.s002",
+      "quote": "My advice is not to be depressed, but instead to realize what's happening and prepare for it",
+      "location": {
+        "byte_start": 8294,
+        "byte_end": 8388,
+        "line": 181,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "business owners",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "workers",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-96d38766",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Business owners and employees should understand what their business looks like as a graph of algorithms and start anticipating what AI will recommend before it arrives.",
+    "evidence": {
+      "ref_id": "p074.s010",
+      "quote": "Understand what your business looks like as a Graph of Algorithms, and start thinking about what AI will recommend before it gets there",
+      "location": {
+        "byte_start": 8917,
+        "byte_end": 9054,
+        "line": 193,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "business owners",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "employees",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-a4135242",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The process of AI-driven business optimization will make it easier for people to start businesses, including those who had no chance in 2022 or before.",
+    "evidence": {
+      "ref_id": "p069.s001",
+      "quote": "This same process will also make it easier for people to start businesses, including those who had no chance in 2022 or before",
+      "location": {
+        "byte_start": 8074,
+        "byte_end": 8201,
+        "line": 179,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "people",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-106d77a5",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The author believes AI is fueled by transparency, meaning that making business processes visible enables AI to optimize them.",
+    "evidence": {
+      "ref_id": "p074.s006",
+      "quote": "AI is about to make this process commonplace for all businesses because companies can't wait to optimize using AI, and AI is fueled by transparency",
+      "location": {
+        "byte_start": 8680,
+        "byte_end": 8829,
+        "line": 191,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "transparency",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-c0e77df3",
+    "kind": "assertion",
+    "text": "I think the reason so many people don't understand how big AI is going to be is that they don't understand that everything is an algorithm.",
+    "evidence": {
+      "ref_id": "p001.s001",
+      "quote": "I think the reason so many people don't understand how big AI is going to be is that they don't understand that everything is an algorithm.",
+      "location": {
+        "byte_start": 0,
+        "byte_end": 139,
+        "line": 11,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-3663c5c9",
+    "kind": "assertion",
+    "text": "Explainability is the new currency.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "Explainability is the new currency.",
+      "location": {
+        "byte_start": 1199,
+        "byte_end": 1236,
+        "line": 30,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-d0fd7763",
+    "kind": "assertion",
+    "text": "Transparency opens the door for optimization",
+    "evidence": {
+      "ref_id": "p047.s001",
+      "quote": "Transparency opens the door for optimization",
+      "location": {
+        "byte_start": 5641,
+        "byte_end": 5688,
+        "line": 124,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-7aafc810",
+    "kind": "assertion",
+    "text": "Steps that can be articulated and visualized.",
+    "evidence": {
+      "ref_id": "p048.s002",
+      "quote": "Steps that can be articulated and visualized.",
+      "location": {
+        "byte_start": 5723,
+        "byte_end": 5769,
+        "line": 126,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

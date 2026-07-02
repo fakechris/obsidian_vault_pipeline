@@ -1,0 +1,572 @@
+[
+  {
+    "id": "u-000-55bb70a4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Dynamic Dreaming",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Dynamic Dreaming",
+      "location": {
+        "byte_start": 1827,
+        "byte_end": 1846,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dynamic Dreaming",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-71249328",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "We (humans) dream to condense and reflect on our thoughts, not only things that happened today, but a weird blend of everything that has ever happened.",
+    "evidence": {
+      "ref_id": "p004.s001",
+      "quote": "We (humans) dream to condense and reflect on our thoughts, not only things that happened today, but a weird blend of everything that has ever happened.",
+      "location": {
+        "byte_start": 251,
+        "byte_end": 402,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-c9de8c0e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Most memory systems don't do this. They learn instantly, the moment data flows in, and then never look at it again.",
+    "evidence": {
+      "ref_id": "p006.s001",
+      "quote": "Most memory systems don't do this. They learn instantly, the moment data flows in, and then never look at it again.",
+      "location": {
+        "byte_start": 473,
+        "byte_end": 738,
+        "line": 37,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Most memory systems",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p005.s001`..`p006.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-003-4f4033da",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Better, but still a single pass. Whatever the summarizer thought mattered at that one moment is what gets kept.",
+    "evidence": {
+      "ref_id": "p007.s003",
+      "quote": "Better, but still a single pass. Whatever the summarizer thought mattered at that one moment is what gets kept.",
+      "location": {
+        "byte_start": 918,
+        "byte_end": 1154,
+        "line": 41,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Claude Code",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p007.s002`..`p007.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-1e9a83bb",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A user who lands on option B in the final message can have their memory silently poisoned by an earlier \"prefers option A\" note written mid-discussion.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "A user spends twenty minutes debating two architectures and lands on option B in the very last message, but the system already wrote down \"prefers option A\" from the middle of the discussion.",
+      "location": {
+        "byte_start": 1378,
+        "byte_end": 1569,
+        "line": 45,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "option A",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "option B",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-307912d0",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Static summarization can prematurely and permanently decide what mattered, leaving only a three-line summary when a user returns to ask about yesterday's conversation.",
+    "evidence": {
+      "ref_id": "p009.s002",
+      "quote": "Or what about the user who comes back tomorrow and asks about yesterday's conversation, only to find that the only thing left of it is a three-line summary that decided, prematurely and forever, what mattered?",
+      "location": {
+        "byte_start": 1378,
+        "byte_end": 1825,
+        "line": 45,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "three-line summary",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p009.s001`..`p009.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-006-17c0bc51",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "It DEFINITELY shouldn't be a hash table you write once and read forever (like other memory providers). It should think about what it knows, on its own, in the background, and get better at remembering you the longer it lives.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "It DEFINITELY shouldn't be a hash table you write once and read forever (like other memory providers). It should think about what it knows, on its own, in the background, and get better at remembering you the longer it lives.",
+      "location": {
+        "byte_start": 1881,
+        "byte_end": 2136,
+        "line": 49,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dynamic Dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p011.s002`..`p012.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-22487b47",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The system decides when, and it decides how deep to go based on what the heuristics tell it. A quick reflection for a short session. A longer dive when the day's worth of context warrants it.",
+    "evidence": {
+      "ref_id": "p017.s002",
+      "quote": "The system decides when, and it decides how deep to go based on what the heuristics tell it. A quick reflection for a short session. A longer dive when the day's worth of context warrants it.",
+      "location": {
+        "byte_start": 2484,
+        "byte_end": 2818,
+        "line": 59,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dynamic Dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p016.s001`..`p017.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-f0c70091",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "And the part that matters most: it reweights old facts in light of everything that's come in since they were written.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "And the part that matters most: it reweights old facts in light of everything that's come in since they were written.",
+      "location": {
+        "byte_start": 3015,
+        "byte_end": 3132,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-1767d088",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Dreaming resolves contradictions between memories, tempers memories that were too confident, and connects isolated memories that suddenly find their neighbors.",
+    "evidence": {
+      "ref_id": "p019.s003",
+      "quote": "Memories that were too confident get tempered. Memories that contradicted each other get resolved. Memories that were just sitting there, isolated, suddenly find their neighbors.",
+      "location": {
+        "byte_start": 3132,
+        "byte_end": 3311,
+        "line": 65,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memories",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p019.s002`..`p019.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-010-67a0d372",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The output of Dynamic Dreaming is three things at once: new memories, a graph of inferences called derivations that weave between them, and a weighted evolving picture of who the user actually is—not a static profile but a thought-out view that updates as evidence changes.",
+    "evidence": {
+      "ref_id": "p020.s002",
+      "quote": "It's three things at once: new memories, a graph of inferences (we also call them derivations) that weave between them, and a weighted, evolving picture of who the user actually is. Not a static profile, but a thought-out view that updates as the evidence changes.",
+      "location": {
+        "byte_start": 3313,
+        "byte_end": 3605,
+        "line": 67,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "new memories",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "graph of inferences",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "weighted, evolving picture of who the user actually is",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p020.s001`..`p020.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-011-432b50a1",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Dynamic Dreaming successfully connected disparate facts (Mumbai jailbreak, O1 visa, two acquisitions, GitHub stars) that came in over months across dozens of separate conversations into a single coherent inference.",
+    "evidence": {
+      "ref_id": "p022.s003",
+      "quote": "The Mumbai jailbreak, the O1 visa, the two acquisitions, the GitHub stars. They came in over months, across dozens of separate conversations, in no particular order. Dreaming is what stitched them into a single thought.",
+      "location": {
+        "byte_start": 3671,
+        "byte_end": 3969,
+        "line": 71,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dynamic Dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p022.s001`..`p022.s005` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-18fa4b1d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Dynamic Dreaming is described as the closest thing to a context window that never expires.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "It is the closest thing I've seen to a context window that never expires.",
+      "location": {
+        "byte_start": 4125,
+        "byte_end": 4202,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Dynamic Dreaming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-b4c54af7",
+    "kind": "assertion",
+    "subtype": "decision",
+    "text": "Supermemory requires that every inference stay grounded to source memories—if the system cannot show its work tracing back to source memories, it does not get to claim the thought.",
+    "evidence": {
+      "ref_id": "p028.s002",
+      "quote": "We don't let the system invent things it can't trace back to source memories. If it can't show its work, it doesn't get to claim the thought.",
+      "location": {
+        "byte_start": 4778,
+        "byte_end": 4955,
+        "line": 83,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "inferences",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p028.s001`..`p028.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-f4627f24",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Just ask your agents to use supermemory. No additional configuration is required on your end.",
+    "evidence": {
+      "ref_id": "p014.s003",
+      "quote": "Just ask your agents to use supermemory. No additional configuration is required on your end.",
+      "location": {
+        "byte_start": 2179,
+        "byte_end": 2381,
+        "line": 55,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "supermemory",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p014.s002`..`p014.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-9826a0e5",
+    "kind": "assertion",
+    "text": "Memory shouldn't be a transcript.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "Memory shouldn't be a transcript.",
+      "location": {
+        "byte_start": 1848,
+        "byte_end": 1881,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-97efe9de",
+    "kind": "assertion",
+    "text": "No cron job, no fixed timer.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "No cron job, no fixed timer.",
+      "location": {
+        "byte_start": 2598,
+        "byte_end": 2626,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-9bc442e0",
+    "kind": "assertion",
+    "text": "This is the first feature that makes memory feel less like a database and more like a mind.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "This is the first feature that makes memory feel less like a database and more like a mind.",
+      "location": {
+        "byte_start": 5264,
+        "byte_end": 5510,
+        "line": 87,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p030.s005`..`p031.s002` around the ref"
+      }
+    ]
+  }
+]
