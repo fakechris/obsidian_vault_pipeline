@@ -1,36 +1,92 @@
 import type { GraphOptions, NodeData, EdgeData } from '@antv/g6';
 import { clusterColor, COLORS, EDGE_COLORS, nodeColor } from '../../lib/palette';
 import type { GraphNode, GraphResponse } from '../../lib/types';
-import { hullPlugins } from './hulls';
-
-/** How many labels the overview shows before zooming in (tier 0). */
-export const OVERVIEW_LABEL_COUNT = 30;
+import { BASE_LABEL_COUNT } from './density';
 
 export interface G6Data {
   nodes: NodeData[];
   edges: EdgeData[];
 }
 
+export type GraphViewKind = 'overview' | 'focus';
+
+function nodeOf(datum: NodeData): GraphNode {
+  return datum.data as unknown as GraphNode;
+}
+
+export function nodeSize(n: GraphNode): number {
+  if (n.type === 'unit') return 9;
+  if (n.type === 'source') return 12 + 10 * (n.importance ?? 0);
+  return 10 + 22 * (n.importance ?? 0);
+}
+
+/** d3-force presets for the small focus/search subgraphs (parameters derived
+ * from the Nowledge Mem reference). The overview never uses force — see
+ * clusterSeeds. */
+export const LAYOUT_PRESETS = {
+  focus: {
+    type: 'd3-force',
+    link: { distance: 60, strength: 0.7 },
+    collide: { radius: 22, strength: 1.1 },
+    manyBody: { strength: -140 },
+    velocityDecay: 0.68,
+    alphaDecay: 0.04,
+  },
+  search: {
+    type: 'd3-force',
+    link: { distance: 34, strength: 0.82 },
+    collide: { radius: 26, strength: 1.05 },
+    manyBody: { strength: -60 },
+    radial: { strength: 0.09, r: 140 },
+    velocityDecay: 0.74,
+    alphaDecay: 0.05,
+  },
+} as const;
+
 export function toG6Data(
   data: GraphResponse,
-  opts?: { intraClusterEdgesOnly?: boolean },
+  kind: GraphViewKind,
+  focusId?: string | null,
 ): G6Data {
-  const seeds = clusterSeeds(data.nodes);
   let edges = data.edges;
-  if (opts?.intraClusterEdgesOnly) {
+  let position: (n: GraphNode, i: number) => { x: number; y: number } | undefined;
+
+  if (kind === 'overview') {
     // Tier 0: thousands of cross-community `related` edges drawn as long
     // straight lines across the galaxy map are pure noise. Keep edges inside
-    // a community; cross-community relations surface on focus (Stage 2).
+    // a community; cross-community relations surface in focus mode.
     const clusterOf = new Map(data.nodes.map((n) => [n.id, n.cluster]));
     edges = data.edges.filter(
       (e) => clusterOf.get(e.source) === clusterOf.get(e.target),
     );
+    const seeds = clusterSeeds(data.nodes);
+    position = (n, i) => seeds.positionOf(n, i);
+  } else {
+    position = () => ({ x: 0, y: 0 }); // d3-force takes over
   }
+
+  // Label LOD: top-N by importance start labeled; density.ts moves the
+  // boundary with zoom. In focus mode units stay unlabeled — their quotes
+  // read as noise; hover/detail carries them.
+  const candidates =
+    kind === 'focus' ? data.nodes.filter((n) => n.type !== 'unit') : data.nodes;
+  const labelBudget = kind === 'focus' ? 60 : BASE_LABEL_COUNT;
+  const ranked = new Set(
+    [...candidates]
+      .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
+      .slice(0, labelBudget)
+      .map((n) => n.id),
+  );
+
   return {
     nodes: data.nodes.map((n, i) => ({
       id: n.id,
-      style: seeds.positionOf(n, i),
-      data: { ...n } as unknown as Record<string, unknown>,
+      style: position ? position(n, i) : undefined,
+      data: {
+        ...n,
+        labeled: ranked.has(n.id) || n.id === focusId,
+        labelSize: 12,
+      } as unknown as Record<string, unknown>,
     })),
     edges: edges.map((e, i) => ({
       id: `e${i}`,
@@ -38,6 +94,94 @@ export function toG6Data(
       target: e.target,
       data: { type: e.type, weight: e.weight ?? 1 },
     })),
+  };
+}
+
+export interface BuildOptions {
+  kind: GraphViewKind;
+  focusId?: string | null;
+}
+
+export function buildGraphOptions(
+  data: GraphResponse,
+  opts: BuildOptions,
+): GraphOptions {
+  const focus = opts.kind === 'focus';
+
+  return {
+    data: toG6Data(data, opts.kind, opts.focusId),
+    animation: focus,
+    autoResize: true,
+    padding: 24,
+    autoFit: 'view',
+    node: {
+      style: {
+        size: (d: NodeData) => nodeSize(nodeOf(d)),
+        fill: (d: NodeData) => {
+          const n = nodeOf(d);
+          // Overview colors by community (structure); focus colors by type —
+          // the claim/unit/source distinction is the story there.
+          return !focus && n.type === 'claim'
+            ? clusterColor(n.cluster)
+            : nodeColor(n.type);
+        },
+        fillOpacity: 0.92,
+        lineWidth: (d: NodeData) => {
+          const n = nodeOf(d);
+          return n.strength && n.strength !== 'supported' ? 1.5 : 0;
+        },
+        stroke: COLORS.textMuted,
+        lineDash: (d: NodeData) => {
+          const n = nodeOf(d);
+          return n.strength && n.strength !== 'supported' ? [3, 2] : [];
+        },
+        labelText: (d: NodeData) =>
+          (d.data as { labeled?: boolean }).labeled ? nodeOf(d).label : '',
+        labelFill: COLORS.text,
+        labelFontSize: (d: NodeData) =>
+          (d.data as { labelSize?: number }).labelSize ?? 12,
+        labelFontFamily: 'Inter, "Noto Sans SC", system-ui, sans-serif',
+        labelBackground: true,
+        labelBackgroundFill: 'rgba(15, 17, 23, 0.78)',
+        labelBackgroundRadius: 4,
+        labelPadding: [2, 5],
+        labelPlacement: 'bottom',
+        labelMaxWidth: 260,
+        labelWordWrap: true,
+        labelMaxLines: 2,
+      },
+      state: {
+        selected: {
+          stroke: COLORS.highlight,
+          lineWidth: 3,
+          lineDash: [],
+          shadowColor: COLORS.highlight,
+          shadowBlur: 12,
+        },
+        dimmed: { opacity: 0.15 },
+        highlight: { lineWidth: 2, stroke: COLORS.highlight, lineDash: [] },
+      },
+    },
+    edge: {
+      style: {
+        stroke: (d: EdgeData) =>
+          EDGE_COLORS[(d.data?.type as string) ?? 'related'] ?? COLORS.edge,
+        lineWidth: (d: EdgeData) =>
+          Math.min(4, 1 + ((d.data?.weight as number) ?? 1) * 0.5),
+        strokeOpacity: focus ? 0.55 : 0.28,
+      },
+      state: {
+        highlight: { strokeOpacity: 0.9, stroke: COLORS.highlight },
+        dimmed: { strokeOpacity: 0.06 },
+      },
+    },
+    ...(focus ? { layout: { ...LAYOUT_PRESETS.focus } } : {}),
+    behaviors: [
+      'zoom-canvas',
+      'drag-canvas',
+      'drag-element',
+      { type: 'brush-select', trigger: 'shift' },
+    ],
   };
 }
 
@@ -104,146 +248,4 @@ function clusterSeeds(nodes: GraphNode[]) {
       return { x: anchor.x + Math.cos(a) * r, y: anchor.y + Math.sin(a) * r };
     },
   };
-}
-
-function nodeOf(datum: NodeData): GraphNode {
-  return datum.data as unknown as GraphNode;
-}
-
-export function nodeSize(n: GraphNode): number {
-  if (n.type === 'unit') return 8;
-  if (n.type === 'source') return 10 + 10 * (n.importance ?? 0);
-  return 10 + 22 * (n.importance ?? 0);
-}
-
-/** d3-force presets. `browse` for the overview; `search`/focus subgraphs use
- * the tighter parameters (derived from the Nowledge Mem reference). */
-export const LAYOUT_PRESETS = {
-  browse: {
-    type: 'd3-force',
-    // Positions are cluster-seeded (see clusterSeeds); alpha 0.3 keeps the
-    // force pass a local refinement instead of re-scrambling communities,
-    // and the weak link strength stops cross-community `related` edges from
-    // pulling everything back into one blob.
-    link: { distance: 40, strength: 0.25 },
-    collide: { radius: 16, strength: 1.0 },
-    manyBody: { strength: -70 },
-    alpha: 0.3,
-    alphaDecay: 0.04,
-    velocityDecay: 0.6,
-  },
-  search: {
-    type: 'd3-force',
-    link: { distance: 34, strength: 0.82 },
-    collide: { radius: 26, strength: 1.05 },
-    manyBody: { strength: -60 },
-    radial: { strength: 0.09, r: 140 },
-    velocityDecay: 0.74,
-    alphaDecay: 0.05,
-  },
-} as const;
-
-export interface BuildOptions {
-  /** Node ids allowed to show a label (importance-ranked LOD bucket). */
-  labeled: Set<string>;
-  /** 'cluster' colors by community; 'type' by claim/unit/source. */
-  colorBy: 'cluster' | 'type';
-  /** 'none' keeps the deterministic seeded positions (overview). */
-  layout: keyof typeof LAYOUT_PRESETS | 'none';
-}
-
-export function buildGraphOptions(
-  data: GraphResponse,
-  opts: BuildOptions,
-): GraphOptions {
-  const labeled = opts.labeled;
-  const animation = data.nodes.length <= 1500;
-  const layout =
-    opts.layout === 'none' ? undefined : { ...LAYOUT_PRESETS[opts.layout] };
-
-  return {
-    data: toG6Data(data, { intraClusterEdgesOnly: opts.layout === 'none' }),
-    animation,
-    autoResize: true,
-    padding: 24,
-    autoFit: 'view',
-    node: {
-      style: {
-        size: (d: NodeData) => nodeSize(nodeOf(d)),
-        fill: (d: NodeData) => {
-          const n = nodeOf(d);
-          return opts.colorBy === 'cluster' && n.type === 'claim'
-            ? clusterColor(n.cluster)
-            : nodeColor(n.type);
-        },
-        fillOpacity: 0.92,
-        lineWidth: (d: NodeData) =>
-          nodeOf(d).strength && nodeOf(d).strength !== 'supported' ? 1.5 : 0,
-        stroke: COLORS.textMuted,
-        lineDash: (d: NodeData) =>
-          nodeOf(d).strength && nodeOf(d).strength !== 'supported'
-            ? [3, 2]
-            : [],
-        labelText: (d: NodeData) => {
-          const n = nodeOf(d);
-          return labeled.has(n.id) ? n.label : '';
-        },
-        labelFill: COLORS.text,
-        labelFontSize: 11,
-        labelFontFamily: 'Inter, "Noto Sans SC", system-ui, sans-serif',
-        labelBackground: true,
-        labelBackgroundFill: 'rgba(15, 17, 23, 0.78)',
-        labelBackgroundRadius: 4,
-        labelPadding: [2, 5],
-        labelPlacement: 'bottom',
-        labelMaxWidth: 240,
-        labelWordWrap: true,
-        labelMaxLines: 2,
-      },
-      state: {
-        selected: {
-          stroke: COLORS.highlight,
-          lineWidth: 3,
-          lineDash: [],
-          shadowColor: COLORS.highlight,
-          shadowBlur: 12,
-        },
-        dimmed: { opacity: 0.15 },
-        highlight: { lineWidth: 2, stroke: COLORS.highlight, lineDash: [] },
-      },
-    },
-    edge: {
-      style: {
-        stroke: (d: EdgeData) =>
-          EDGE_COLORS[(d.data?.type as string) ?? 'related'] ?? COLORS.edge,
-        lineWidth: (d: EdgeData) =>
-          Math.min(4, 1 + ((d.data?.weight as number) ?? 1) * 0.5),
-        strokeOpacity: 0.28,
-      },
-      state: {
-        highlight: { strokeOpacity: 0.9, stroke: COLORS.highlight },
-        dimmed: { strokeOpacity: 0.06 },
-      },
-    },
-    ...(layout ? { layout } : {}),
-    behaviors: [
-      'zoom-canvas',
-      'drag-canvas',
-      'drag-element',
-      { type: 'brush-select', trigger: 'shift' },
-    ],
-    // Positions are pre-seeded, so hulls can be part of the initial options —
-    // no need to wait for a layout event.
-    plugins: hullPlugins(data.communities, data.nodes),
-  };
-}
-
-/** Top-N node ids by importance — the label LOD bucket for the overview. */
-export function topLabelIds(data: GraphResponse, n: number): Set<string> {
-  return new Set(
-    [...data.nodes]
-      .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
-      .slice(0, n)
-      .map((d) => d.id),
-  );
 }

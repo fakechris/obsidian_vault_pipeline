@@ -7,11 +7,15 @@ export const MAX_HULLS = 20;
 export const MIN_HULL_MEMBERS = 3;
 
 /**
- * G6 v5 `bubble-sets` plugin configs for the largest communities. The plan
- * called for `hull` (cheaper), but @antv/g6 5.1.1's hull plugin throws
- * during viewport transforms ("Cannot read properties of null") and its
- * destroy path is broken — which silently killed zoom/drag for the whole
- * graph. bubble-sets is what the reference product uses and works cleanly.
+ * G6 v5 `bubble-sets` plugin configs for the largest communities — the blob
+ * shapes only. Community labels are a screen-space React overlay
+ * (CommunityLabels.tsx): world-space canvas labels can't serve both the
+ * zoomed-out overview and zoomed-in exploration at once.
+ *
+ * NOTE: the plan called for the `hull` plugin (cheaper), but @antv/g6
+ * 5.1.1's hull plugin throws during viewport transforms and its destroy
+ * path is broken — which silently killed zoom/drag for the whole graph.
+ * bubble-sets works cleanly and is what the reference product uses.
  */
 export function hullPlugins(
   communities: Community[],
@@ -40,21 +44,6 @@ export function hullPlugins(
         stroke: color,
         strokeOpacity: 0.45,
         lineWidth: 1,
-        label: true,
-        labelText: `${c.label} · ${c.size}`,
-        labelPlacement: 'top',
-        labelCloseToPath: false,
-        labelAutoRotate: false,
-        labelFill: '#e2e8f0',
-        // World-coordinate font: the overview sits at ~0.1-0.2 zoom, so hull
-        // labels (the tier-0 navigation layer) must be big in world units
-        // to be readable on screen. Scales with community weight.
-        labelFontSize: 26 + Math.round(Math.sqrt(c.size) * 3),
-        labelFontWeight: 600,
-        labelBackground: true,
-        labelBackgroundFill: 'rgba(15, 17, 23, 0.7)',
-        labelBackgroundRadius: 5,
-        labelPadding: [3, 8],
       };
     });
 }
