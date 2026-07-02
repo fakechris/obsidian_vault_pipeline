@@ -53,8 +53,9 @@ claim <500ms 展开邻域；DetailPanel 带原文 quote；`?focus=` 深链可分
 ## 已知后续（非本阶段范围）
 - 静态 console（`crates/ovp-console`）的 Attention feed 可加
   `/viz/graph?focus=claim:<key>` 深链入口
-- viz 构建产物进真实 vault 目前靠手动复制到 `<vault>/.ovp/console/viz/`；
-  可考虑 `ovp-next console --with-viz` 或 serve 时兜底读 repo 产物
+- ~~viz 构建产物进真实 vault 靠手动复制~~ → 已解决（M33 follow-up）：
+  `ovp-next serve --viz-dir <repo>/.ovp/console/viz` 作为 /viz/* 的兜底
+  overlay，vault 内文件优先；无 flag 且 vault 缺 viz 时启动会提示
 - 真实 vault 语料还小（M32 全量跑完后再看社区/importance 分布是否需要调权）
 - G6 程序化 `zoomTo` 在 bubble-sets 挂载时偶发 landmark 报错（用户滚轮/拖拽
   不受影响）；升级 G6 时复查

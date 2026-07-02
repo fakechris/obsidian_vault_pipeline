@@ -204,6 +204,13 @@ struct BaseGraph {
     claim_sources: BTreeMap<String, BTreeSet<String>>,
 }
 
+/// Last segment of a vault-relative dir string, tolerant of either
+/// separator: an index written on Windows carries `\`, which Unix
+/// `Path::file_name` would NOT treat as a separator.
+pub(crate) fn last_path_segment(dir: &str) -> Option<&str> {
+    dir.rsplit(['/', '\\']).next().filter(|s| !s.is_empty())
+}
+
 fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGraph {
     let source_lookup: HashMap<&str, &ovp_index::SourceRow> = model
         .map(|m| m.sources.iter().map(|s| (s.sha256.as_str(), s)).collect())
@@ -212,13 +219,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
         .map(|m| {
             m.packs
                 .iter()
-                .filter_map(|p| {
-                    // Path::file_name, not rsplit('/'), so a Windows-written
-                    // index (backslash separators) still resolves case ids.
-                    let case =
-                        std::path::Path::new(&p.pack_dir).file_name()?.to_str()?;
-                    Some((case, p))
-                })
+                .filter_map(|p| Some((last_path_segment(&p.pack_dir)?, p)))
                 .collect()
         })
         .unwrap_or_default();
@@ -961,6 +962,11 @@ pub fn is_spa_route(relative: &str) -> bool {
     let Some(rest) = relative.strip_prefix("viz/") else {
         return false;
     };
+    // Malformed paths (absolute rest via `/viz//…`, empty segments) are not
+    // client routes — they must 404, not get a 200 SPA shell.
+    if rest.starts_with('/') || rest.contains("//") || rest.is_empty() {
+        return false;
+    }
     let last = rest.rsplit('/').next().unwrap_or(rest);
     !last.contains('.') || last.ends_with(".html")
 }
@@ -1261,5 +1267,21 @@ mod tests {
         assert!(!is_spa_route("viz/assets/graph-abc.js"));
         assert!(!is_spa_route("index.html"));
         assert!(!is_spa_route("ops.html"));
+        // Malformed / absolute-smuggling paths are not client routes.
+        assert!(!is_spa_route("viz//etc/hosts"));
+        assert!(!is_spa_route("viz/a//b"));
+        assert!(!is_spa_route("viz/"));
+    }
+
+    #[test]
+    fn last_path_segment_handles_both_separators() {
+        assert_eq!(last_path_segment("a/b/case-01"), Some("case-01"));
+        assert_eq!(
+            last_path_segment(r"40-Resources\Reader\case-01"),
+            Some("case-01")
+        );
+        assert_eq!(last_path_segment("case-01"), Some("case-01"));
+        assert_eq!(last_path_segment("a/b/"), None);
+        assert_eq!(last_path_segment(""), None);
     }
 }

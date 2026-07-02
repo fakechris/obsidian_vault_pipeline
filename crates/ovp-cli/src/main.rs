@@ -376,6 +376,10 @@ enum Cmd {
         /// Host to bind. Default: 127.0.0.1 (localhost only).
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// Fallback dir for /viz/* SPA assets (e.g. <repo>/.ovp/console/viz).
+        /// Lets a dev checkout serve any vault without copying the build in.
+        #[arg(long)]
+        viz_dir: Option<PathBuf>,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
@@ -1018,8 +1022,13 @@ fn main() -> ExitCode {
         Cmd::Mcp { vault_root } => {
             commands::mcp::run(commands::mcp::McpArgs { vault_root })
         }
-        Cmd::Serve { vault_root, port, host } => {
-            commands::serve::run(commands::serve::ServeArgs { vault_root, host, port })
+        Cmd::Serve { vault_root, port, host, viz_dir } => {
+            commands::serve::run(commands::serve::ServeArgs {
+                vault_root,
+                host,
+                port,
+                viz_dir,
+            })
         }
         Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
             use commands::crystal_lint::CrystalLintArgs;
