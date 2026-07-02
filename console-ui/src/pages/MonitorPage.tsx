@@ -3,6 +3,7 @@ import { fetchModel } from '../lib/api';
 import type { IndexModel } from '../lib/types';
 
 const POLL_MS = 2000;
+const MAX_RECENT_RUNS = 15;
 
 // The old monitor listened to /api/sse, which was always a stub (tiny_http
 // is a sequential loop; it cannot stream). Polling /api/model and diffing
@@ -115,7 +116,7 @@ export default function MonitorPage() {
           </thead>
           <tbody>
             {(model?.runs ?? [])
-              .slice(-15)
+              .slice(-MAX_RECENT_RUNS)
               .reverse()
               .map((r) => (
                 <tr

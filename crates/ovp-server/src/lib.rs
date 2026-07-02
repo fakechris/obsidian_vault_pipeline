@@ -21,12 +21,17 @@ pub struct ServeConfig {
     pub vault_root: PathBuf,
     pub host: String,
     pub port: u16,
+    /// Fallback directory for `/viz/*` assets (the SPA build output). When
+    /// the vault's `.ovp/console/viz/` misses, files are served from here —
+    /// so a dev checkout can serve ANY vault without copying the build in.
+    pub viz_dir: Option<PathBuf>,
 }
 
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
     model: RwLock<Option<IndexModel>>,
+    viz_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -68,6 +73,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(None),
+        viz_dir: config.viz_dir,
     });
 
     // Pre-load model
@@ -77,6 +83,17 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     eprintln!("  console: http://{bind}/");
     eprintln!("  API:     http://{bind}/api/find?term=...");
     eprintln!("  reload:  http://{bind}/api/refresh");
+    match &state.viz_dir {
+        Some(dir) => eprintln!("  viz:     overlay from {}", dir.display()),
+        None => {
+            if !state.console_dir().join("viz").join("index.html").exists() {
+                eprintln!(
+                    "  viz:     NOT DEPLOYED in this vault — pass --viz-dir \
+                     <repo>/.ovp/console/viz to serve the SPA build"
+                );
+            }
+        }
+    }
 
     for request in server.incoming_requests() {
         let path = request.url().to_string();
@@ -249,7 +266,7 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
             m.packs
                 .iter()
                 .filter_map(|p| {
-                    let case = p.pack_dir.rsplit('/').next()?;
+                    let case = graph::last_path_segment(&p.pack_dir)?;
                     Some((case.to_string(), p))
                 })
                 .collect()
@@ -366,12 +383,28 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
             Response::from_data(content).with_header(header).with_status_code(200)
         }
         Err(_) => {
+            // Viz overlay: /viz/* assets missing from the vault fall back to
+            // the configured SPA build dir (--viz-dir), so a dev checkout
+            // serves any vault without copying .ovp/console/viz into it.
+            if let Some(rest) = relative.strip_prefix("viz/") {
+                if let Some(content) = read_viz_overlay(state, rest) {
+                    let ct = content_type_for(relative);
+                    let header = Header::from_bytes("Content-Type", ct).unwrap();
+                    return Response::from_data(content)
+                        .with_header(header)
+                        .with_status_code(200);
+                }
+            }
             // SPA fallback: client-side routes like /viz/graph have no file
-            // on disk — serve the SPA shell and let the router take over.
+            // on disk — serve the SPA shell (vault first, then overlay) and
+            // let the router take over.
             if graph::is_spa_route(relative) {
-                if let Ok(content) =
-                    std::fs::read(console_dir.join("viz").join("index.html"))
-                {
+                let shell = std::fs::read(
+                    console_dir.join("viz").join("index.html"),
+                )
+                .ok()
+                .or_else(|| read_viz_overlay(state, "index.html"));
+                if let Some(content) = shell {
                     let header = Header::from_bytes(
                         "Content-Type",
                         "text/html; charset=utf-8",
@@ -385,6 +418,24 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
             text_response(404, "Not Found")
         }
     }
+}
+
+/// Read a `/viz/`-relative asset from the overlay build dir, if configured.
+/// `..` is already rejected by serve_static, but `rest` can still be
+/// absolute (`/viz//etc/passwd` → rest `/etc/passwd`) and `Path::join`
+/// DISCARDS the base for an absolute RHS — so only plain relative
+/// components are allowed through.
+fn read_viz_overlay(state: &AppState, rest: &str) -> Option<Vec<u8>> {
+    let dir = state.viz_dir.as_ref()?;
+    let rel = std::path::Path::new(rest);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    std::fs::read(dir.join(rel)).ok()
 }
 
 fn json_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -456,5 +507,77 @@ fn hex_val(b: u8) -> u8 {
         b'a'..=b'f' => b - b'a' + 10,
         b'A'..=b'F' => b - b'A' + 10,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("ovp-server-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn state(vault: PathBuf, viz_dir: Option<PathBuf>) -> AppState {
+        AppState {
+            vault_root: vault,
+            layout: VaultLayout::new(),
+            model: RwLock::new(None),
+            viz_dir,
+        }
+    }
+
+    #[test]
+    fn viz_overlay_serves_assets_and_spa_shell_when_vault_misses() {
+        let root = temp_root("overlay");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
+        let overlay = root.join("viz-build");
+        std::fs::create_dir_all(overlay.join("assets")).unwrap();
+        std::fs::write(overlay.join("index.html"), "<html>spa</html>").unwrap();
+        std::fs::write(overlay.join("assets/app.js"), "js").unwrap();
+
+        let st = state(vault.clone(), Some(overlay));
+        // Asset missing in the vault → served from the overlay.
+        assert_eq!(serve_static(&st, "/viz/assets/app.js").status_code(), 200);
+        // Client-side route → SPA shell from the overlay.
+        assert_eq!(serve_static(&st, "/viz/graph").status_code(), 200);
+        // Legacy multi-page link → SPA shell too.
+        assert_eq!(serve_static(&st, "/viz/graph.html").status_code(), 200);
+        // Outside /viz/ the overlay must not apply.
+        assert_eq!(serve_static(&st, "/nope.html").status_code(), 404);
+        // Absolute-path smuggling: Path::join would swap in the RHS wholesale
+        // for `/viz//etc/...` — must be rejected, never read outside the
+        // overlay dir.
+        std::fs::write(root.join("secret.txt"), "nope").unwrap();
+        let abs = format!("/viz/{}", root.join("secret.txt").display());
+        assert_eq!(serve_static(&st, &abs).status_code(), 404);
+        assert_eq!(serve_static(&st, "/viz//etc/hosts").status_code(), 404);
+
+        // Vault copy wins over the overlay when present.
+        std::fs::create_dir_all(vault.join(".ovp/console/viz")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/console/viz/index.html"),
+            "<html>vault</html>",
+        )
+        .unwrap();
+        assert_eq!(serve_static(&st, "/viz/index.html").status_code(), 200);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_overlay_missing_viz_is_404() {
+        let root = temp_root("no-overlay");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
+        let st = state(vault, None);
+        assert_eq!(serve_static(&st, "/viz/assets/app.js").status_code(), 404);
+        assert_eq!(serve_static(&st, "/viz/graph").status_code(), 404);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

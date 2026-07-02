@@ -3,6 +3,8 @@ import { clusterColor } from '../lib/palette';
 import { flyToNodes } from './controller';
 import type { Community, GraphNode } from '../lib/types';
 
+const MAX_LEGEND_COMMUNITIES = 12;
+
 interface Props {
   communities: Community[];
   nodes: GraphNode[];
@@ -30,7 +32,7 @@ export default function Legend({ communities, nodes }: Props) {
         Communities 社区
       </div>
       <ul className="space-y-0.5">
-        {communities.slice(0, 12).map((c) => (
+        {communities.slice(0, MAX_LEGEND_COMMUNITIES).map((c) => (
           <li key={c.id}>
             <button
               onClick={() => flyToNodes(memberIds.get(c.id) ?? [])}
