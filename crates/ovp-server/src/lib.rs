@@ -4,13 +4,15 @@
 //! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`, `/api/flow`).
 //! Uses `tiny_http` to avoid any async runtime dependency.
 
+mod graph;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use ovp_domain::crystal::{fold_ledger, CrystalStatus, DurableRecord, StoreEvent};
 use ovp_domain::units::Unit;
-use ovp_domain::{truncate_chars, VaultLayout};
+use ovp_domain::VaultLayout;
 use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
 use ovp_intake::read_jsonl;
 use tiny_http::{Header, Method, Response, Server};
@@ -92,7 +94,9 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
                 handle_search(&state, &path)
             }
             (Method::Get, "/api/model") => handle_model(&state),
-            (Method::Get, "/api/graph") => handle_graph(&state),
+            (Method::Get, p) if p.starts_with("/api/graph") => {
+                handle_graph(&state, &path)
+            }
             (Method::Get, "/api/flow") => handle_flow(&state),
             (Method::Get, p) if p.starts_with("/api/claim/") => {
                 handle_claim(&state, &path)
@@ -179,311 +183,28 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
         .collect()
 }
 
-/// Union-find root with path compression. Used by the graph community
-/// (cluster) pass so it scales to tens of thousands of claims.
-fn uf_find(parent: &mut [usize], x: usize) -> usize {
-    let mut root = x;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut cur = x;
-    while parent[cur] != cur {
-        let next = parent[cur];
-        parent[cur] = root;
-        cur = next;
-    }
-    root
-}
+fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let params = match graph::GraphParams::from_query(&parse_query_string(url)) {
+        Ok(p) => p,
+        Err(e) => {
+            let body = serde_json::json!({ "error": e.message });
+            return json_response(e.status, &body.to_string());
+        }
+    };
 
-fn handle_graph(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let records = load_active_records(state);
     let model = state.current_model();
 
-    let source_lookup: HashMap<String, &ovp_index::SourceRow> = model
-        .as_ref()
-        .map(|m| {
-            m.sources.iter().map(|s| (s.sha256.clone(), s)).collect()
-        })
-        .unwrap_or_default();
-    let pack_lookup: HashMap<String, &ovp_index::PackRow> = model
-        .as_ref()
-        .map(|m| {
-            m.packs
-                .iter()
-                .filter_map(|p| {
-                    let case = p.pack_dir.rsplit('/').next()?;
-                    Some((case.to_string(), p))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    #[derive(serde::Serialize)]
-    struct GNode {
-        id: String,
-        #[serde(rename = "type")]
-        node_type: String,
-        label: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        theme: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        strength: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        url: Option<String>,
-        degree: usize,
-        /// Community id — claims in the same shared-source component get the
-        /// same cluster; units/sources inherit their claim's cluster. Drives
-        /// "color by cluster" so structure is legible at scale.
-        cluster: usize,
-    }
-
-    #[derive(serde::Serialize)]
-    struct GEdge {
-        source: String,
-        target: String,
-        #[serde(rename = "type")]
-        edge_type: String,
-        /// For `related` (claim↔claim) edges: how many sources the two
-        /// claims share. Drives edge thickness in the client.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        weight: Option<usize>,
-    }
-
-    let mut nodes: HashMap<String, GNode> = HashMap::new();
-    let mut edges: Vec<GEdge> = Vec::new();
-    // claim_id → set of source node ids it draws evidence from. Two claims
-    // that share a source are topically related; we materialize that as a
-    // `related` edge so the graph is a connected claim network rather than a
-    // forest of isolated claim→unit→source stars.
-    let mut claim_sources: HashMap<String, std::collections::BTreeSet<String>> =
-        HashMap::new();
-
-    for rec in &records {
-        let claim_id = format!("claim:{}", rec.claim_key);
-        nodes.entry(claim_id.clone()).or_insert_with(|| GNode {
-            id: claim_id.clone(),
-            node_type: "claim".into(),
-            label: if rec.claim.chars().count() > 80 {
-                format!("{}…", truncate_chars(&rec.claim, 77))
-            } else {
-                rec.claim.clone()
-            },
-            theme: Some(rec.theme.clone()),
-            strength: Some(format!("{:?}", rec.strength).to_lowercase()),
-            url: None,
-            degree: 0,
-            cluster: 0,
-        });
-
-        for cit in &rec.citations {
-            let unit_id = format!("unit:{}", cit.unit_id);
-            nodes.entry(unit_id.clone()).or_insert_with(|| GNode {
-                id: unit_id.clone(),
-                node_type: "unit".into(),
-                label: if cit.quote.chars().count() > 60 {
-                    format!("{}…", truncate_chars(&cit.quote, 57))
-                } else {
-                    cit.quote.clone()
-                },
-                theme: None,
-                strength: None,
-                url: None,
-                degree: 0,
-                cluster: 0,
-            });
-
-            edges.push(GEdge {
-                source: claim_id.clone(),
-                target: unit_id.clone(),
-                edge_type: "cites".into(),
-                weight: None,
-            });
-
-            let source_node_id =
-                if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
-                    let sha = pack.source_sha256.as_deref().unwrap_or(&cit.case_id);
-                    let sid = format!("source:{}", sha);
-                    let src = source_lookup.get(sha);
-                    nodes.entry(sid.clone()).or_insert_with(|| GNode {
-                        id: sid.clone(),
-                        node_type: "source".into(),
-                        label: src
-                            .and_then(|s| s.title.clone())
-                            .unwrap_or_else(|| pack.title.clone()),
-                        theme: None,
-                        strength: None,
-                        url: src.and_then(|s| s.url.clone()),
-                        degree: 0,
-                        cluster: 0,
-                    });
-                    sid
-                } else {
-                    let sid = format!("source:{}", cit.case_id);
-                    nodes.entry(sid.clone()).or_insert_with(|| GNode {
-                        id: sid.clone(),
-                        node_type: "source".into(),
-                        label: cit.case_id.clone(),
-                        theme: None,
-                        strength: None,
-                        url: None,
-                        degree: 0,
-                        cluster: 0,
-                    });
-                    sid
-                };
-
-            claim_sources
-                .entry(claim_id.clone())
-                .or_default()
-                .insert(source_node_id.clone());
-
-            edges.push(GEdge {
-                source: unit_id,
-                target: source_node_id,
-                edge_type: "extracted_from".into(),
-                weight: None,
-            });
+    match graph::build_graph(&records, model.as_ref(), &params) {
+        Ok(resp) => {
+            let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
+            json_response(200, &body)
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "error": e.message });
+            json_response(e.status, &body.to_string())
         }
     }
-
-    // Build the source → claims inverted index once; reused for both the
-    // shares-source edges and the community (cluster) assignment.
-    let mut source_claims: HashMap<String, Vec<String>> = HashMap::new();
-    for (claim_id, srcs) in &claim_sources {
-        for s in srcs {
-            source_claims
-                .entry(s.clone())
-                .or_default()
-                .push(claim_id.clone());
-        }
-    }
-
-    // Connect claims that draw from the same source(s) — the graph's
-    // connective tissue (themes are per-claim, so they can't link anything).
-    // Small graphs get exact pairwise edges weighted by the number of shared
-    // sources (rich, thick edges). Large graphs would blow up O(n²) and emit
-    // millions of edges, so we chain each source's claims instead — linear in
-    // citations, same connectivity, bounded edge count.
-    if claim_sources.len() <= 400 {
-        let claim_src_vec: Vec<(&String, &std::collections::BTreeSet<String>)> =
-            claim_sources.iter().collect();
-        for i in 0..claim_src_vec.len() {
-            for j in (i + 1)..claim_src_vec.len() {
-                let shared =
-                    claim_src_vec[i].1.intersection(claim_src_vec[j].1).count();
-                if shared > 0 {
-                    edges.push(GEdge {
-                        source: claim_src_vec[i].0.clone(),
-                        target: claim_src_vec[j].0.clone(),
-                        edge_type: "related".into(),
-                        weight: Some(shared),
-                    });
-                }
-            }
-        }
-    } else {
-        let mut seen: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        for claims in source_claims.values() {
-            for w in claims.windows(2) {
-                let (a, b) = if w[0] <= w[1] {
-                    (w[0].clone(), w[1].clone())
-                } else {
-                    (w[1].clone(), w[0].clone())
-                };
-                if a != b && seen.insert((a.clone(), b.clone())) {
-                    edges.push(GEdge {
-                        source: a,
-                        target: b,
-                        edge_type: "related".into(),
-                        weight: Some(1),
-                    });
-                }
-            }
-        }
-    }
-
-    for edge in &edges {
-        if let Some(n) = nodes.get_mut(&edge.source) {
-            n.degree += 1;
-        }
-        if let Some(n) = nodes.get_mut(&edge.target) {
-            n.degree += 1;
-        }
-    }
-
-    // Cluster (community) assignment via union-find over claims that share a
-    // source — O(citations·α), so it scales to tens of thousands of claims.
-    // Units/sources inherit the cluster of the claim they hang off.
-    {
-        let claim_ids: Vec<String> = nodes
-            .values()
-            .filter(|n| n.node_type == "claim")
-            .map(|n| n.id.clone())
-            .collect();
-        let mut idx: HashMap<&str, usize> = HashMap::new();
-        for (i, c) in claim_ids.iter().enumerate() {
-            idx.insert(c.as_str(), i);
-        }
-        let mut parent: Vec<usize> = (0..claim_ids.len()).collect();
-        for claims in source_claims.values() {
-            let mut members =
-                claims.iter().filter_map(|c| idx.get(c.as_str()).copied());
-            if let Some(first) = members.next() {
-                for ci in members {
-                    let ra = uf_find(&mut parent, first);
-                    let rb = uf_find(&mut parent, ci);
-                    if ra != rb {
-                        parent[rb] = ra;
-                    }
-                }
-            }
-        }
-        let mut root_to_cluster: HashMap<usize, usize> = HashMap::new();
-        let mut next = 1usize;
-        let mut claim_cluster: HashMap<String, usize> = HashMap::new();
-        for (i, c) in claim_ids.iter().enumerate() {
-            let r = uf_find(&mut parent, i);
-            let cl = *root_to_cluster.entry(r).or_insert_with(|| {
-                let v = next;
-                next += 1;
-                v
-            });
-            claim_cluster.insert(c.clone(), cl);
-            if let Some(n) = nodes.get_mut(c) {
-                n.cluster = cl;
-            }
-        }
-        // Propagate claim → unit (cites), then unit → source (extracted_from).
-        let mut unit_cluster: HashMap<String, usize> = HashMap::new();
-        for e in &edges {
-            if e.edge_type == "cites" {
-                if let Some(c) = claim_cluster.get(&e.source) {
-                    unit_cluster.insert(e.target.clone(), *c);
-                }
-            }
-        }
-        for (id, c) in &unit_cluster {
-            if let Some(n) = nodes.get_mut(id) {
-                n.cluster = *c;
-            }
-        }
-        for e in &edges {
-            if e.edge_type == "extracted_from" {
-                if let Some(c) = unit_cluster.get(&e.source) {
-                    if let Some(n) = nodes.get_mut(&e.target) {
-                        n.cluster = *c;
-                    }
-                }
-            }
-        }
-    }
-
-    let body = serde_json::json!({
-        "nodes": nodes.into_values().collect::<Vec<_>>(),
-        "edges": edges,
-    });
-    json_response(200, &body.to_string())
 }
 
 fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -602,6 +323,9 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let console_dir = state.console_dir();
 
+    // Deep links like /viz/graph?focus=… carry a query string; the file
+    // lookup (and SPA-route detection) must see the path only.
+    let url_path = url_path.split('?').next().unwrap_or(url_path);
     let relative = if url_path == "/" || url_path.is_empty() {
         "index.html"
     } else {
@@ -626,7 +350,25 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
             let header = Header::from_bytes("Content-Type", ct).unwrap();
             Response::from_data(content).with_header(header).with_status_code(200)
         }
-        Err(_) => text_response(404, "Not Found"),
+        Err(_) => {
+            // SPA fallback: client-side routes like /viz/graph have no file
+            // on disk — serve the SPA shell and let the router take over.
+            if graph::is_spa_route(relative) {
+                if let Ok(content) =
+                    std::fs::read(console_dir.join("viz").join("index.html"))
+                {
+                    let header = Header::from_bytes(
+                        "Content-Type",
+                        "text/html; charset=utf-8",
+                    )
+                    .unwrap();
+                    return Response::from_data(content)
+                        .with_header(header)
+                        .with_status_code(200);
+                }
+            }
+            text_response(404, "Not Found")
+        }
     }
 }
 
