@@ -735,7 +735,34 @@ fn neighborhood_response(
         by_layer.entry(*layer).or_default().push(id);
     }
 
+    // The focus node's own citation chain (its units, and their sources) is
+    // the point of the focus tier — reserve it BEFORE the importance-ranked
+    // cap. Otherwise a hub claim's high-importance `related` neighbors can
+    // fill all slots and evict the selected claim's own evidence.
     let mut kept: HashSet<&str> = HashSet::new();
+    kept.insert(focus);
+    let mut focus_units: HashSet<&str> = HashSet::new();
+    for e in &base.edges {
+        if e.edge_type == "cites" && e.source == focus {
+            focus_units.insert(e.target.as_str());
+        }
+    }
+    for u in &focus_units {
+        if kept.len() >= MAX_NEIGHBORHOOD_NODES {
+            break;
+        }
+        kept.insert(u);
+    }
+    for e in &base.edges {
+        if kept.len() >= MAX_NEIGHBORHOOD_NODES {
+            break;
+        }
+        if e.edge_type == "extracted_from" && focus_units.contains(e.source.as_str())
+        {
+            kept.insert(e.target.as_str());
+        }
+    }
+
     'outer: for (_, mut ids) in by_layer {
         ids.sort_by(|a, b| {
             let ia = base.nodes.get(*a).map(|n| n.importance).unwrap_or(0.0);
@@ -908,13 +935,16 @@ pub fn theme_counts(records: &[DurableRecord]) -> Vec<(String, usize)> {
 }
 
 /// SPA client-side routes under `/viz/` (extensionless paths) must fall back
-/// to the SPA's index.html instead of 404ing.
+/// to the SPA's index.html instead of 404ing. `.html` paths that missed on
+/// disk also fall back: pre-M33 multi-page links (`/viz/graph.html`, …) still
+/// live in bookmarks and old consoles, and the router redirects unknown
+/// paths to /graph. Real files win — this only runs after a read miss.
 pub fn is_spa_route(relative: &str) -> bool {
     let Some(rest) = relative.strip_prefix("viz/") else {
         return false;
     };
     let last = rest.rsplit('/').next().unwrap_or(rest);
-    !last.contains('.')
+    !last.contains('.') || last.ends_with(".html")
 }
 
 #[cfg(test)]
@@ -1039,22 +1069,27 @@ mod tests {
     }
 
     #[test]
-    fn neighborhood_expands_units_then_sources_by_hops() {
+    fn neighborhood_expands_by_hops_and_always_keeps_focus_chain() {
         let records = sample_records();
         let mut p = params(GraphMode::Neighborhood);
-        p.focus = Some("claim:d".into());
+        p.focus = Some("claim:a".into());
         p.hops = 1;
         let resp = build_graph(&records, None, &p).unwrap();
-        // 1 hop from an isolated claim: itself + its unit only.
         let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(ids.contains(&"claim:d"));
-        assert!(ids.contains(&"unit:u9"));
-        assert!(!ids.iter().any(|i| i.starts_with("source:")));
+        // The focus claim's OWN citation chain is always reserved, even at
+        // 1 hop — it's the point of the focus tier.
+        assert!(ids.contains(&"claim:a"));
+        assert!(ids.contains(&"unit:u1"));
+        assert!(ids.contains(&"source:case1"));
+        // But 1 hop does NOT expand other claims' units (2 hops away via
+        // the related edge to b).
+        assert!(ids.contains(&"claim:b"));
+        assert!(!ids.contains(&"unit:u3"));
 
         p.hops = 2;
         let resp = build_graph(&records, None, &p).unwrap();
         let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(ids.contains(&"source:case9"));
+        assert!(ids.contains(&"unit:u3"));
     }
 
     #[test]
@@ -1088,6 +1123,40 @@ mod tests {
         assert!(resp.truncated);
         // The focus itself always survives the cap (layer 0 fills first).
         assert!(resp.nodes.iter().any(|n| n.id == "source:hub"));
+    }
+
+    #[test]
+    fn neighborhood_reserves_focus_citation_chain_under_cap() {
+        // 350 claims all share one source → pairwise related edges, so the
+        // focus claim's layer 1 holds 349 high-importance claims. Without
+        // the reservation its own (importance-0) unit gets evicted by the
+        // importance-ranked cap.
+        let mut records = Vec::new();
+        for i in 0..350 {
+            records.push(rec(
+                &format!("k{i:03}"),
+                "t",
+                StrengthClass::Supported,
+                0.9,
+                &[("hub", &format!("u{i:03}"))],
+            ));
+        }
+        let mut p = params(GraphMode::Neighborhood);
+        p.focus = Some("claim:k000".into());
+        let resp = build_graph(&records, None, &p).unwrap();
+        assert!(resp.nodes.len() <= MAX_NEIGHBORHOOD_NODES);
+        assert!(resp.truncated);
+        let ids: HashSet<&str> =
+            resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("claim:k000"));
+        assert!(
+            ids.contains("unit:u000"),
+            "focus claim's own unit must survive the cap"
+        );
+        assert!(
+            ids.contains("source:hub"),
+            "focus claim's source must survive the cap"
+        );
     }
 
     #[test]
@@ -1167,8 +1236,11 @@ mod tests {
         assert!(is_spa_route("viz/graph"));
         assert!(is_spa_route("viz/explore"));
         assert!(is_spa_route("viz/graph/deep/link"));
+        // Legacy multi-page links fall back to the SPA shell (only reached
+        // when the file is absent on disk).
+        assert!(is_spa_route("viz/graph.html"));
+        assert!(is_spa_route("viz/monitor.html"));
         assert!(!is_spa_route("viz/assets/graph-abc.js"));
-        assert!(!is_spa_route("viz/index.html"));
         assert!(!is_spa_route("index.html"));
         assert!(!is_spa_route("ops.html"));
     }

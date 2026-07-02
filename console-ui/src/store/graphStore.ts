@@ -143,7 +143,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   select: (id) => {
-    set({ selection: id, detail: null });
+    // Reset detailLoading here: an in-flight fetch for the PREVIOUS claim
+    // is guarded by selection and will never clear it, so a unit/source
+    // panel opened next would show "Loading" forever.
+    set({ selection: id, detail: null, detailLoading: false });
     if (id) void loadDetailFor(id, set);
   },
 
@@ -168,6 +171,10 @@ async function loadDetailFor(
       set({ detail, detailLoading: false });
     }
   } catch {
-    set({ detailLoading: false });
+    // Same guard on failure — a stale rejection must not clobber the
+    // loading state of a newer selection's fetch.
+    if (useGraphStore.getState().selection === id) {
+      set({ detailLoading: false });
+    }
   }
 }
