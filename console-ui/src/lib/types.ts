@@ -2,7 +2,7 @@
 
 export type NodeType = 'claim' | 'unit' | 'source';
 export type EdgeType = 'cites' | 'extracted_from' | 'related';
-export type GraphMode = 'overview' | 'neighborhood' | 'full';
+export type GraphMode = 'overview' | 'neighborhood' | 'search';
 
 export interface GraphNode {
   id: string;

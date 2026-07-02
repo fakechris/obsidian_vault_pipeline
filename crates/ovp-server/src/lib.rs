@@ -102,7 +102,6 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
             (Method::Get, p) if p.starts_with("/api/claim/") => {
                 handle_claim(&state, &path)
             }
-            (Method::Get, "/api/sse") => handle_sse(&state),
             (Method::Get, _) => serve_static(&state, &path),
             _ => text_response(405, "Method Not Allowed"),
         };
@@ -182,14 +181,6 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     };
     let body = serde_json::to_string(&model).unwrap_or_else(|_| "{}".into());
     json_response(200, &body)
-}
-
-fn handle_sse(_state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
-    let body = "event: ready\ndata: {}\n\n";
-    let data = body.as_bytes().to_vec();
-    let header =
-        Header::from_bytes("Content-Type", "text/event-stream").unwrap();
-    Response::from_data(data).with_header(header).with_status_code(200)
 }
 
 fn load_active_records(state: &AppState) -> Vec<DurableRecord> {

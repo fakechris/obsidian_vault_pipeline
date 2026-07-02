@@ -16,7 +16,7 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 export interface GraphQuery {
-  mode?: 'overview' | 'neighborhood' | 'full';
+  mode?: 'overview' | 'neighborhood';
   limit?: number;
   theme?: string;
   focus?: string;

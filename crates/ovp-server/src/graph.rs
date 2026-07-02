@@ -8,8 +8,8 @@
 //!   metadata for hull labels.
 //! - `neighborhood`: BFS around one focus node, units and sources included —
 //!   the "focus" tier the client expands into on click / deep link.
-//! - `full`: the legacy everything dump (kept for back-compat until the old
-//!   frontend is deleted).
+//! - search subgraphs (`search_subgraph`): hit-flagged claims + 1-hop
+//!   related context for the tight search layout.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -31,7 +31,6 @@ const DOMINANT_THEME_COVERAGE: f64 = 0.4;
 pub enum GraphMode {
     Overview,
     Neighborhood,
-    Full,
 }
 
 impl GraphMode {
@@ -39,7 +38,6 @@ impl GraphMode {
         match self {
             GraphMode::Overview => "overview",
             GraphMode::Neighborhood => "neighborhood",
-            GraphMode::Full => "full",
         }
     }
 }
@@ -60,7 +58,6 @@ impl GraphParams {
         let mode = match params.get("mode").map(String::as_str) {
             None | Some("overview") => GraphMode::Overview,
             Some("neighborhood") => GraphMode::Neighborhood,
-            Some("full") => GraphMode::Full,
             Some(other) => {
                 return Err(GraphError::bad_request(&format!(
                     "unknown mode: {other}"
@@ -186,7 +183,6 @@ pub fn build_graph(
     compute_importance(&mut base, records);
 
     match params.mode {
-        GraphMode::Full => Ok(full_response(base)),
         GraphMode::Overview => Ok(overview_response(base, params)),
         GraphMode::Neighborhood => neighborhood_response(base, params),
     }
@@ -656,23 +652,6 @@ fn sort_by_importance(nodes: &mut [GNode]) {
     });
 }
 
-fn full_response(base: BaseGraph) -> GraphResponse {
-    let total_nodes = base.nodes.len();
-    let claims: Vec<&GNode> =
-        base.nodes.values().filter(|n| n.node_type == "claim").collect();
-    let communities = build_communities(&claims);
-    let mut nodes: Vec<GNode> = base.nodes.into_values().collect();
-    nodes.sort_by(|a, b| a.id.cmp(&b.id));
-    GraphResponse {
-        mode: GraphMode::Full.as_str().into(),
-        nodes,
-        edges: base.edges,
-        communities,
-        total_nodes,
-        truncated: false,
-    }
-}
-
 fn overview_response(base: BaseGraph, params: &GraphParams) -> GraphResponse {
     let total_nodes = base.nodes.len();
 
@@ -1139,16 +1118,6 @@ mod tests {
         let resp =
             build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         assert_eq!(resp.communities[0].label, "t1 / t2");
-    }
-
-    #[test]
-    fn full_mode_keeps_all_node_types() {
-        let records = sample_records();
-        let resp = build_graph(&records, None, &params(GraphMode::Full)).unwrap();
-        assert_eq!(resp.nodes.len(), 12);
-        assert!(resp.nodes.iter().any(|n| n.node_type == "unit"));
-        assert!(resp.nodes.iter().any(|n| n.node_type == "source"));
-        assert!(resp.nodes.iter().any(|n| n.importance > 0.0));
     }
 
     #[test]
