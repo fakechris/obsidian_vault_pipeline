@@ -174,7 +174,7 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     let fallback_title_cases: Vec<String> = catalog
         .cases
         .iter()
-        .filter(|(id, c)| c.title == **id)
+        .filter(|(id, c)| c.title.as_str() == id.as_str())
         .map(|(id, _)| id.clone())
         .collect();
     if !fallback_title_cases.is_empty() {
