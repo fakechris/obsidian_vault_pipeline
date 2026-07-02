@@ -11,11 +11,11 @@ use std::path::Path;
 
 use ovp_llm::ModelClient;
 
-use crate::model_reply::RepairNote;
+use crate::model_reply::{json_repair_request, RepairNote};
 use crate::source_doc::SourceDoc;
-use crate::units::{run_unit_extraction_repaired, Unit};
+use crate::units::{critic_model_request, run_unit_extraction_repaired, unit_model_request, Unit};
 
-use super::cards::run_card_synthesis;
+use super::cards::{card_model_request, run_card_synthesis};
 use super::pack::{write_reader_pack, GroundingStatus, ReaderPack};
 
 /// Why a reader-pipeline run could not produce a pack.
@@ -76,6 +76,16 @@ pub fn run_reader_pipeline(
         ex.report.accepted_without_quote,
     ) {
         write_audit(out_dir, &run.base_reply, &run.critic_reply, "");
+        // The replies transported fine but their CONTENT is unusable. Under a
+        // recording cache they are already cassetted, and request keys are
+        // pure content hashes — every retry (tomorrow's daily, --retry-blocked)
+        // would replay the identical failure forever. Forget the whole
+        // extraction exchange (base + any JSON-repair keyed on the bad reply +
+        // critic) so the next attempt genuinely re-asks the model. No-op for
+        // replay/fake clients.
+        base_client.invalidate(&unit_model_request(source));
+        base_client.invalidate(&json_repair_request(&run.base_reply));
+        critic_client.invalidate(&critic_model_request(source, &run.base.units));
         return Err(ReaderPipelineError::TruthLayer(reason));
     }
 
@@ -118,6 +128,13 @@ pub fn run_reader_pipeline(
     } else {
         None
     };
+    if card_failure.is_some() {
+        // Same forgetting as the truth-layer gate: callers treat a card
+        // failure as a failed source and retry it — a cassetted bad card
+        // reply must not pin every retry to the identical failure.
+        card_client.invalidate(&card_model_request(&accepted));
+        card_client.invalidate(&json_repair_request(&synth.raw_reply));
+    }
 
     Ok(ReaderPipelineRun { pack, json_repairs, card_failure })
 }
@@ -237,6 +254,121 @@ mod tests {
         assert!(matches!(err, ReaderPipelineError::TruthLayer(_)), "got {err:?}");
         assert!(dir.path().join("model-reply.units.txt").exists());
         assert!(!dir.path().join("reader.md").exists(), "no pack on truth-layer failure");
+    }
+
+    /// The dogfood retry scenario: day 1 the model returns unusable units
+    /// JSON, which a Record cache cassettes; day 2's retry must NOT replay the
+    /// pinned bad reply — the truth-layer gate invalidates it, so the retry
+    /// re-asks the model and succeeds. (Without the invalidation this test
+    /// fails: the second run replays "not json" and errors identically.)
+    #[test]
+    fn truth_layer_failure_invalidates_cassette_so_retry_reasks() {
+        use ovp_llm::{CacheMode, CachedModelClient};
+
+        /// Unit-extract requests get scripted replies in order; JSON-repair
+        /// requests always fail to repair (stay unparseable).
+        struct Scripted {
+            unit_replies: Vec<String>,
+            calls: usize,
+        }
+        impl ModelClient for Scripted {
+            fn call(&mut self, r: &ModelRequest) -> Result<ModelReply, CallError> {
+                let ns = r.cache_namespace.as_deref().unwrap_or("");
+                let text = if ns.starts_with("json_repair") {
+                    "still not json".to_string()
+                } else {
+                    let t = self.unit_replies[self.calls.min(self.unit_replies.len() - 1)].clone();
+                    self.calls += 1;
+                    t
+                };
+                Ok(ModelReply {
+                    model: "scripted".into(),
+                    text,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage { input_tokens: 1, output_tokens: 1 },
+                })
+            }
+        }
+
+        let src = source();
+        let ex = crate::units::extract_units(&units_reply(), &src);
+        let unit_id = ex.accepted().next().expect("one accepted unit").id.clone();
+        let cards = format!(
+            r#"{{"cards":[{{"title":"Chunks are neutral","content":"A chunk is structurally neutral.","unit_type":"definition","cited_unit_ids":["{unit_id}"]}}]}}"#
+        );
+
+        let cache = tempfile::tempdir().unwrap();
+        let inner = Scripted { unit_replies: vec!["not json".into(), units_reply()], calls: 0 };
+        let mut base =
+            CachedModelClient::new(inner, cache.path(), "", CacheMode::Record).unwrap();
+        let mut critic = Canned("{}".into());
+        let mut cards_client = Canned(cards);
+
+        // Day 1: bad reply recorded → truth-layer failure (+ invalidation).
+        let dir1 = tempfile::tempdir().unwrap();
+        let err = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir1.path())
+            .expect_err("day 1 fails on unusable units JSON");
+        assert!(matches!(err, ReaderPipelineError::TruthLayer(_)), "got {err:?}");
+
+        // Day 2 (same cassette dir): the retry re-asks and succeeds.
+        let dir2 = tempfile::tempdir().unwrap();
+        let run = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir2.path())
+            .expect("day 2 retry re-asks the model instead of replaying the pin");
+        assert_eq!(run.pack.n_cards, 1);
+        assert!(run.card_failure.is_none());
+    }
+
+    /// Same pinning fix for the card stage: a card reply that yields 0 usable
+    /// cards is forgotten, so the retry gets a fresh card synthesis.
+    #[test]
+    fn card_failure_invalidates_cassette_so_retry_reasks() {
+        use ovp_llm::{CacheMode, CachedModelClient};
+
+        struct Scripted {
+            replies: Vec<String>,
+            calls: usize,
+        }
+        impl ModelClient for Scripted {
+            fn call(&mut self, _r: &ModelRequest) -> Result<ModelReply, CallError> {
+                let text = self.replies[self.calls.min(self.replies.len() - 1)].clone();
+                self.calls += 1;
+                Ok(ModelReply {
+                    model: "scripted".into(),
+                    text,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage { input_tokens: 1, output_tokens: 1 },
+                })
+            }
+        }
+
+        let src = source();
+        let ex = crate::units::extract_units(&units_reply(), &src);
+        let unit_id = ex.accepted().next().expect("one accepted unit").id.clone();
+        let good_cards = format!(
+            r#"{{"cards":[{{"title":"Chunks are neutral","content":"A chunk is structurally neutral.","unit_type":"definition","cited_unit_ids":["{unit_id}"]}}]}}"#
+        );
+        // Parses fine but cites an unknown unit → 0 cards survive → card failure.
+        let bad_cards =
+            r#"{"cards":[{"title":"x","content":"y","cited_unit_ids":["u-999-deadbeef"]}]}"#
+                .to_string();
+
+        let cache = tempfile::tempdir().unwrap();
+        let inner = Scripted { replies: vec![bad_cards, good_cards], calls: 0 };
+        let mut cards_client =
+            CachedModelClient::new(inner, cache.path(), "", CacheMode::Record).unwrap();
+        let mut base = Canned(units_reply());
+        let mut critic = Canned("{}".into());
+
+        let dir1 = tempfile::tempdir().unwrap();
+        let run1 = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir1.path())
+            .expect("pipeline runs");
+        assert!(run1.card_failure.is_some(), "day 1: bad card reply is a card failure");
+
+        let dir2 = tempfile::tempdir().unwrap();
+        let run2 = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir2.path())
+            .expect("pipeline runs");
+        assert!(run2.card_failure.is_none(), "day 2: retry re-asked and got usable cards");
+        assert_eq!(run2.pack.n_cards, 1);
     }
 
     #[test]

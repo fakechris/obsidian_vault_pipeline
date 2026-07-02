@@ -109,8 +109,16 @@ fn call_and_parse<T>(
         .map_err(|e| CliError::Io(format!("crystal-synth: {stage} call failed: {e}")))?;
     match parse_reply_value(&reply.text) {
         Ok((_v, note)) => {
-            let parsed = parse(&reply.text)
-                .map_err(|d| CliError::Io(format!("crystal-synth: {stage} parse: {d}")))?;
+            let parsed = match parse(&reply.text) {
+                Ok(p) => p,
+                Err(d) => {
+                    // Valid JSON the stage parser rejects (e.g. no `claims`
+                    // array) pins a rerun just like unparseable JSON — forget
+                    // it too so the retry re-asks the model.
+                    client.invalidate(request);
+                    return Err(CliError::Io(format!("crystal-synth: {stage} parse: {d}")));
+                }
+            };
             let log = note.map(|_| RepairLog {
                 stage: stage.to_string(),
                 method: "parser-local: unescaped-backslash".to_string(),
@@ -131,13 +139,20 @@ fn call_and_parse<T>(
                         method: format!("model-repair (input defect: {defect})"),
                     }),
                 )),
-                _ => Err(CliError::Io(format!(
-                    "crystal-synth: {stage} JSON unrecoverable: {}",
-                    match defect {
-                        JsonDefect::Unrecoverable(d) => d,
-                        other => other.to_string(),
-                    }
-                ))),
+                _ => {
+                    // Forget the unrecoverable exchange under a recording
+                    // cache: a rerun must re-ask the model, not replay the
+                    // same unparseable reply forever. No-op for replay/fakes.
+                    client.invalidate(request);
+                    client.invalidate(&json_repair_request(&reply.text));
+                    Err(CliError::Io(format!(
+                        "crystal-synth: {stage} JSON unrecoverable: {}",
+                        match defect {
+                            JsonDefect::Unrecoverable(d) => d,
+                            other => other.to_string(),
+                        }
+                    )))
+                }
             }
         }
     }

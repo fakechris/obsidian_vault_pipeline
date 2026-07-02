@@ -143,4 +143,18 @@ impl<C: ModelClient> ModelClient for CachedModelClient<C> {
             }
         }
     }
+
+    /// Drop the cassette + memo entry for `request`, so the next `call`
+    /// re-asks the inner client and re-records. Record mode only: a
+    /// `ReplayOnly` cache serves (possibly committed) fixtures that a failing
+    /// run must never be able to delete — there it stays a no-op.
+    fn invalidate(&mut self, request: &ModelRequest) {
+        if self.mode != CacheMode::Record {
+            return;
+        }
+        let namespace = self.namespace_for(request).to_string();
+        let key = request_key(request);
+        self.memo.remove(&Self::memo_key(&namespace, &key));
+        let _ = fs::remove_file(self.cassette_path(&namespace, &key));
+    }
 }

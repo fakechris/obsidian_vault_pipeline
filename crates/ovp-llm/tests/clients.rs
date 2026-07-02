@@ -150,3 +150,55 @@ fn cached_record_persists_across_instances() {
     let r = replay.call(&req("hi")).expect("replay finds disk cassette");
     assert_eq!(r.text, "recorded-value");
 }
+
+/// Returns scripted replies in order (last one repeats), counting calls.
+struct Scripted {
+    replies: Vec<&'static str>,
+    calls: usize,
+}
+
+impl ModelClient for Scripted {
+    fn call(&mut self, _r: &ModelRequest) -> Result<ModelReply, CallError> {
+        let text = self.replies[self.calls.min(self.replies.len() - 1)];
+        self.calls += 1;
+        Ok(reply(text))
+    }
+}
+
+#[test]
+fn record_invalidate_forgets_and_rerecords() {
+    // The retry-pinning fix: a recorded reply whose CONTENT proved unusable is
+    // invalidated, so the next call re-asks the inner client and re-records.
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = Scripted { replies: vec!["bad-reply", "good-reply"], calls: 0 };
+    let mut cached =
+        CachedModelClient::new(inner, tmp.path(), "ns/v1", CacheMode::Record).unwrap();
+
+    let r = req("x");
+    assert_eq!(cached.call(&r).unwrap().text, "bad-reply");
+    assert_eq!(cached.call(&r).unwrap().text, "bad-reply", "pinned by the cassette");
+
+    cached.invalidate(&r);
+    assert_eq!(cached.call(&r).unwrap().text, "good-reply", "re-asked after invalidate");
+    assert_eq!(cached.call(&r).unwrap().text, "good-reply", "new reply re-recorded");
+}
+
+#[test]
+fn replay_only_invalidate_never_deletes_fixtures() {
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let mut inner = FixtureModelClient::new();
+        inner.insert(&req("hi"), reply("committed-fixture"));
+        let mut record =
+            CachedModelClient::new(inner, tmp.path(), "ns/v1", CacheMode::Record).unwrap();
+        record.call(&req("hi")).unwrap();
+    }
+
+    // A replay-only cache serves (possibly committed) fixtures; a failing run
+    // calling invalidate must not be able to delete them.
+    let mut replay =
+        CachedModelClient::new(NeverCallsClient, tmp.path(), "ns/v1", CacheMode::ReplayOnly)
+            .unwrap();
+    replay.invalidate(&req("hi"));
+    assert_eq!(replay.call(&req("hi")).unwrap().text, "committed-fixture");
+}

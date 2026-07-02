@@ -143,9 +143,9 @@ pub fn rel_to(root: &Path, p: &Path) -> String {
 /// Single-writer guard for the vault's product state. Two overlapping runs
 /// (cron + manual) would double-spend LLM calls, append duplicate records,
 /// and race `safe_move`'s check-then-rename — so every mutating command takes
-/// this lock first. `create_new` is atomic; the file holds the PID for
-/// diagnosis. Released on drop; a crash leaves a stale lock that the error
-/// message tells the operator how to clear.
+/// this lock first. `create_new` is atomic; the file holds the owning PID.
+/// Released on drop; a lock stranded by a crash (Drop never ran) is reclaimed
+/// automatically once the owning process is verifiably gone.
 #[derive(Debug)]
 pub struct RunLock {
     path: PathBuf,
@@ -158,17 +158,118 @@ impl RunLock {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                let _ = writeln!(f, "{}", std::process::id());
-                Ok(Self { path })
+        match Self::try_create(&path) {
+            Ok(lock) => Ok(lock),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Stale-lock recovery: release is Drop-only, so a crash or
+                // Ctrl-C (default SIGINT runs no destructors) strands the lock
+                // and would block every later run until manual deletion. If
+                // the recorded owner is verifiably dead, reclaim it — but ONLY
+                // under the exclusive reclaim guard: every deletion of
+                // run.lock happens with the guard held and after re-checking
+                // staleness, so a racer that already re-created a fresh lock
+                // can never have it deleted out from under it (the other
+                // racer loses the guard and takes the in-progress error).
+                if Self::owner_is_dead(&path) {
+                    if let Some(lock) = Self::reclaim_under_guard(&path) {
+                        return Ok(lock);
+                    }
+                }
+                Err(format!(
+                    "another OVP run appears to be in progress (lock file {}); \
+                     if no run is active, delete the lock file and retry",
+                    path.display()
+                ))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(format!(
-                "another OVP run appears to be in progress (lock file {}); \
-                 if no run is active, delete the lock file and retry",
-                path.display()
-            )),
             Err(e) => Err(format!("acquiring {}: {e}", path.display())),
+        }
+    }
+
+    /// One atomic `create_new` attempt, stamping this process's PID.
+    fn try_create(path: &Path) -> std::io::Result<Self> {
+        let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
+        let _ = writeln!(f, "{}", std::process::id());
+        Ok(Self { path: path.to_path_buf() })
+    }
+
+    /// Reclaim a stale lock while holding the exclusive reclaim guard. Returns
+    /// `None` when the guard is contested or the lock turned out to be fresh
+    /// on the re-check — the caller falls back to the in-progress error.
+    fn reclaim_under_guard(path: &Path) -> Option<Self> {
+        let guard = path.with_extension("lock.reclaim");
+        if !Self::claim_guard(&guard) {
+            return None;
+        }
+        // Re-check under the guard: the stale lock may have been reclaimed
+        // and replaced by a live owner between our probe and winning the guard.
+        let lock = if Self::owner_is_dead(path) {
+            eprintln!(
+                "ovp: reclaiming stale run lock {} (owning process is gone)",
+                path.display()
+            );
+            let _ = std::fs::remove_file(path);
+            Self::try_create(path).ok()
+        } else {
+            None
+        };
+        let _ = std::fs::remove_file(&guard);
+        lock
+    }
+
+    /// Atomically claim the reclaim guard (PID-stamped like the lock). A guard
+    /// stranded by a crash mid-reclaim is itself reclaimed by the same
+    /// dead-owner rule: removal + ONE `create_new` retry — the create is
+    /// atomic, so exactly one racer wins it.
+    fn claim_guard(guard: &Path) -> bool {
+        fn stamp(mut f: std::fs::File) -> bool {
+            let _ = writeln!(f, "{}", std::process::id());
+            true
+        }
+        match OpenOptions::new().write(true).create_new(true).open(guard) {
+            Ok(f) => stamp(f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !Self::owner_is_dead(guard) {
+                    return false;
+                }
+                let _ = std::fs::remove_file(guard);
+                match OpenOptions::new().write(true).create_new(true).open(guard) {
+                    Ok(f) => stamp(f),
+                    Err(_) => false,
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// True only when the lock file names a PID that is verifiably no longer
+    /// running. Conservative on every uncertainty (unreadable file, no PID,
+    /// probe failure, non-unix): treat the owner as alive and keep refusing —
+    /// the manual-deletion instruction in the error still applies.
+    fn owner_is_dead(path: &Path) -> bool {
+        let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .filter(|p| *p > 0)
+        else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            // `kill -0` probes liveness without signaling; exit 0 = alive.
+            // (A live process owned by another user also reports non-zero,
+            // but a vault lock under $HOME is always same-user.)
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| !s.success())
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            false
         }
     }
 }
@@ -216,6 +317,59 @@ mod tests {
         let q = write_new(&p, "b").unwrap();
         assert_eq!(q, dir.path().join("note -2.md"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_lock_reclaims_stale_lock_from_dead_process() {
+        let dir = tempfile::tempdir().unwrap();
+        // Fabricate a crash: a lock file naming a process that has exited.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        let lock_path = dir.path().join(".ovp/run.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
+
+        let lock = RunLock::acquire(dir.path()).expect("stale lock is reclaimed");
+        assert!(
+            !lock_path.with_extension("lock.reclaim").exists(),
+            "reclaim guard is cleaned up"
+        );
+        drop(lock);
+        assert!(!lock_path.exists(), "reclaimed lock still releases on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_lock_recovers_from_a_stranded_reclaim_guard() {
+        // Crash DURING a previous reclaim: both the lock and the reclaim
+        // guard are stranded with dead owners. Acquire must recover through
+        // both layers (guard reclaimed by the same dead-owner rule).
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        let lock_path = dir.path().join(".ovp/run.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
+        std::fs::write(lock_path.with_extension("lock.reclaim"), format!("{dead_pid}\n")).unwrap();
+
+        let _lock = RunLock::acquire(dir.path()).expect("recovers through stale lock AND guard");
+        assert!(!lock_path.with_extension("lock.reclaim").exists(), "guard cleaned up");
+    }
+
+    #[test]
+    fn run_lock_refuses_live_owner_and_unreadable_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".ovp/run.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // Owner alive (this very process) → refuse.
+        std::fs::write(&lock_path, format!("{}\n", std::process::id())).unwrap();
+        RunLock::acquire(dir.path()).expect_err("live owner must refuse");
+        // Garbage content → conservative: refuse, never reclaim blindly.
+        std::fs::write(&lock_path, "not-a-pid\n").unwrap();
+        RunLock::acquire(dir.path()).expect_err("unreadable owner must refuse");
     }
 
     #[test]

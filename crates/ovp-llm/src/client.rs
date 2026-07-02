@@ -50,6 +50,17 @@ impl std::error::Error for CallError {}
 /// `Send + Sync` so wrappers (cache, fanout, retry) can compose freely.
 pub trait ModelClient: Send + Sync {
     fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError>;
+
+    /// Forget any memoized reply for `request`. Pipelines call this when a
+    /// reply that *transported* fine turned out to carry UNUSABLE content
+    /// (parse failure, truth-layer violation, zero cards): under a recording
+    /// cache the bad reply is already cassetted and — request keys being pure
+    /// content hashes — every later retry would replay the identical failure
+    /// forever. Forgetting makes the next attempt genuinely re-ask the model.
+    ///
+    /// Default: no-op. Live/fake clients memoize nothing; replay-only caches
+    /// must NOT delete their (possibly committed) fixtures.
+    fn invalidate(&mut self, _request: &ModelRequest) {}
 }
 
 /// A client that errors on every call. Used as the inner client of a
@@ -132,6 +143,10 @@ impl<C: ModelClient> ModelClient for RetryingModelClient<C> {
             }
         }
     }
+
+    fn invalidate(&mut self, request: &ModelRequest) {
+        self.inner.invalidate(request);
+    }
 }
 
 /// A `ModelClient` wrapper that recovers from [`CallError::BudgetExhausted`] —
@@ -166,6 +181,10 @@ impl<C: ModelClient> ModelClient for BudgetEscalatingModelClient<C> {
             }
             other => other,
         }
+    }
+
+    fn invalidate(&mut self, request: &ModelRequest) {
+        self.inner.invalidate(request);
     }
 }
 
