@@ -1,20 +1,17 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
+// Single-entry React SPA (M33). Client routes (/viz/graph, /viz/explore, …)
+// are handled by react-router; ovp-server falls back to viz/index.html for
+// extensionless /viz/* paths.
 export default defineConfig({
   base: '/viz/',
+  plugins: [react(), tailwindcss()],
   build: {
     outDir: resolve(__dirname, '../.ovp/console/viz'),
     emptyOutDir: true,
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'),
-        graph: resolve(__dirname, 'graph.html'),
-        flow: resolve(__dirname, 'flow.html'),
-        explore: resolve(__dirname, 'explore.html'),
-        monitor: resolve(__dirname, 'monitor.html'),
-      },
-    },
   },
   server: {
     proxy: {

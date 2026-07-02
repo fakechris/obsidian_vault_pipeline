@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -12,5 +13,17 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Legacy vanilla-TS pages, kept on disk for reference until the M33
+  // migration completes (Stage 4 deletes them). Not part of the SPA build.
+  "exclude": [
+    "src/graph.ts",
+    "src/graph2d.ts",
+    "src/graph-cosmos.ts",
+    "src/graph-main.ts",
+    "src/explore.ts",
+    "src/flow.ts",
+    "src/monitor.ts",
+    "src/shared"
+  ]
 }
