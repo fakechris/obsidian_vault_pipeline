@@ -171,6 +171,10 @@ workbench (human+LLM judged). The only prior result is the 20 curated cases (§2
 - [x] **RAG — lexical is the product; semantic embeddings deferred (not permanently cut).** Reuse
       surface = `ask` / `find` / `digest` over the JSON index (lexical). Add BM25+embedding+RRF
       only if daily query pain proves the need.
+      *(2026-07-02: the "revisit if proven" clause was exercised for the **synthesis grouping
+      layer** — 87% cluster-cap drop + 40% misc on the full corpus. See
+      [`stage-m34-knowledge-substrate-design.md`](./stage-m34-knowledge-substrate-design.md).
+      The query surface stays lexical.)*
 
 ## 8. Hygiene (refactor, not features — lower priority than migration)
 
