@@ -1,15 +1,24 @@
 # Stage M34 — Knowledge Substrate Design: similarity · grouping · identity · lifecycle
 
 **Type:** Architecture design anchor (like [`stage-m32`](./stage-m32-python-retirement-and-product-definition.md)
-is the product anchor). NOT a feature epic; implementation is gated on the spikes in §7.
-**Status:** Direction operator-approved 2026-07-02. Spikes not yet run.
+is the product anchor). NOT a feature epic; implementation is gated on the experiments in §7.
+**Status:** REVISED 2026-07-02 (second operator review): §2 now separates evidence-backed
+decisions from **hypotheses**. The entity ladder (§5) is a HYPOTHESIS — candidate design C —
+awaiting the §7 comparative experiment. Nothing in §5 may be implemented before that verdict.
 **Companions:** [`stage-m32-python-retirement-and-product-definition.md`](./stage-m32-python-retirement-and-product-definition.md) ·
 2026-07-02 full-corpus evidence in `.run/m32-stage123-20260702/` (gitignored, operator machine).
 
-> **Read this first.** This document deliberately re-opens one settled-looking question — "does OVP
-> need entities?" — from first principles, at the operator's direction. The M13 demotion is NOT
-> re-litigated as a *method* verdict (eager, ungrounded ontology stays dead); §5 explains precisely
-> what is different this time and §7-S2 defines the experiment that decides it.
+> **Read this first.** This document re-opens "does OVP need entities?" — but its first draft
+> repeated the M7–M13 process failure: designing mechanism (ladders, invariants, ledgers) before
+> proving product value. The operator caught it. The M13 demotion is NOT re-litigated as a
+> *method* verdict (eager, ungrounded ontology stays dead); §5 is now explicitly a **candidate
+> design**, and §7 defines the multi-arm experiment that decides between it, a KMEM-style route,
+> a no-entity route, and a query-time-aggregation route.
+>
+> **Process rule (learned twice now, M13 and this doc's first draft):** architecture docs must
+> separate evidence-backed decisions from hypotheses, and any new *persistent* state layer
+> requires a product-value experiment BEFORE design detail. Prefer projections (rebuildable
+> derived state) over ledgers until data proves statefulness is needed.
 
 ---
 
@@ -33,22 +42,35 @@ Three problems raised in review turned out to be one architecture problem:
 supersede/contradiction detection requires deciding "are these two claims about the same thing",
 which is an identity question, which needs a similarity substrate.
 
-## 2. Decisions (operator-approved 2026-07-02)
+## 2. Decisions vs hypotheses (revised 2026-07-02, second operator review)
+
+### 2a. Decisions — standing on existing evidence
 
 1. **Embeddings: YES** — local multilingual model (bge-m3 / multilingual-e5 class; runnable via
    qmd/ollama), as **internal, rebuildable synthesis infrastructure**, NOT the query surface.
    Vectors are content-hash cached on disk (same discipline as cassettes; provider swappable).
-   This exercises M32 §9's "deferred, not cut — revisit only if real usage proves the need"
-   clause: 87% drop + 40% misc IS the proof. M32 §7's "RAG — lexical is the product" stays true
-   for the **query/reuse surface** (`ask`/`find`/`digest` remain lexical).
-2. **Entities: YES, as *earned identity*** (§4 L3, §5) — gated the same way claims are. Eager
-   extraction, model-as-identity-authority, and ontology-first product surfaces stay dead.
-3. **Claim lifecycle**: lineage keyed by (subject, intent); strengthen / append / contradict
-   lanes; the store invariant migrates from batch-replay determinism to **event-sourced
-   auditability** (§6).
-4. **No vector DB service (qdrant etc.) for now** — in-memory kNN over cached vectors is enough at
-   10^3–10^4 cases. Same pain-proves-need discipline as the M31 NO-SQLite decision. Qdrant remains
-   the designated L1 backend IF scale proves the pain.
+   Evidence: 87% cap-drop + 40% misc + bilingual corpus — keyword grouping is falsified by data.
+   M32 §7's "RAG — lexical is the product" stays true for the query surface.
+2. **Stage 3a (map-reduce execution layer) ships** — needed under every candidate route.
+3. **No vector DB service** — pain-proves-need, same as NO-SQLite.
+4. **The claim-layer moat is NOT in question.** Quote-backed units + gated claims are shipped,
+   validated (M26 AB: 17/3/0, coverage 87% vs 58%, fewer factual issues), and research-aligned
+   (§X). Nothing in this document may weaken the existing gates.
+
+### 2b. Hypotheses — require the §7 comparative experiment before ANY implementation
+
+- **H1 (entities):** an explicit identity layer improves the student product (browse, review,
+  trust) enough to justify its machinery. Counter-hypothesis: query-time LLM aggregation over a
+  good index (arm D) delivers the same product functions with no persistent identity at all —
+  current industry practice increasingly favors compute-at-read over precomputed structure, and
+  a well-prompted model may simply beat a rule ladder.
+- **H2 (ladder shape):** IF entities win, the T1–T4 ladder (§5) is the right shape — and even
+  then, **projection-first**: anchors derived (rebuildable) from durable claims' citations,
+  upgraded to a stateful ledger only if projections prove insufficient.
+- **H3 (lifecycle-by-subject):** supersede/contradict need durable subjects. Near-term
+  counter-hypothesis: retrieval-based lineage (judge sees candidate duplicates + evidence at
+  synthesis time) covers strengthen/dedup without any identity layer; only contradiction —
+  already deferred — truly wants stable subjects.
 
 ## 3. First-principles: does a growing knowledge base need entities?
 
@@ -96,7 +118,14 @@ Layer discipline (each layer is FORBIDDEN to do the next layer's job):
   ships first — it is the machinery under ANY grouping mechanism (KMEM's "crystal from 3+ related
   memories" is also a bounded group).
 
-## 5. Entities: a promotion ladder toward earned identity (revised 2026-07-02, operator review)
+## 5. HYPOTHESIS — candidate design C: a promotion ladder toward earned identity
+
+> **Status: unproven.** This section is the detailed spec of candidate C in the §7 experiment —
+> kept because the invariants (split-only merging, genericity ceiling, graceful degradation) are
+> the interesting testable content. If C does not clearly beat B (no entities) in §7, this whole
+> section is marked DEAD. If it wins, implementation starts **projection-first**: anchors as a
+> rebuildable view derived from durable claims' citations — the append-only entity ledger below
+> is the LAST resort, not the starting point (see the header process rule).
 
 What M13/M14b actually falsified (0/3 on real models): **eager** extraction at ingest +
 **model-as-identity-authority** (no evidence gate) + **product surfaces stacked on the ungrounded
@@ -200,34 +229,60 @@ intent). Until L3 exists, an interim lineage key of (community, claim-embedding 
 citation overlap) is acceptable for strengthen/dedup but NOT for contradiction (too soft) — one
 more reason lifecycle depends on identity.
 
-## 7. Spikes — data decides, before any product code
+## 6.5 Research grounding — what the literature does and does not support
 
-All three run offline on the real 994-pack corpus; artifacts under `.run/m34-spikes/` (never /tmp).
+Supports the **shipped moat** (claim-level attribution + atomic verification): AIS
+(attributable-to-identified-sources framing), ALCE (citation quality must be *verified* — models'
+citations are routinely incomplete; exactly why our verbatim gate exists), FActScore (atomic-fact
+decomposition ≈ our units/claims), FEVER (claim+evidence is a mature, hard problem), GopherCite
+(verified quotes build trust; citation alone is not sufficient). Supports the **product value of
+the graph route** (KMEM/GraphRAG style): GraphRAG — entity/community summaries measurably help
+corpus-level sensemaking — while Microsoft's own discussions acknowledge the summary→source
+**traceability gap** (the exact weakness OVP attacks). Emerging but not settled: provenance-anchored
+KG extraction (e.g. AEVS: unprovenanced triples make faithfulness unverifiable).
 
-- **S1 — community quality (L1/L2).** Embed 994 cases (title + representative units) → kNN →
-  deterministic communities. Accept iff: 20 sampled communities show **≥80% member topical
-  coherence** (human-judged) AND **≥3 genuinely bilingual communities** exist (中英 same-topic
-  sources actually co-clustered). Compare directly against keyword-bucket assignment on the same
-  sample.
-- **S2 — entity candidates (the M13 counterfactual).** Bottom-up mining through the T1→T3 funnel
-  (deterministic mining → genericity ceiling → frequency/value filters → evidence packs); batch
-  judge to T4. Accept iff ALL of:
-  (a) **precision** — ≥80% of 20 sampled T4 candidates judged "a real thing worth aggregating by";
-  (b) **recall** — against a human-built reference set (a person lists the identity anchors they
-  would expect from a sampled slice of the corpus BEFORE seeing system output), the funnel
-  recovers **≥70%**; precision-only would let the system flatter itself (operator requirement);
-  (c) alias binding correct, incl. at least one 中英 pair;
-  (d) **cold-start check** — on ONE single source (the student scenario), T1/T2 immediately
-  surface ≥80% of the topics/proper nouns a human lists for that source, with zero LLM calls.
-  Explicitly contrast with M13's 0/3: same corpus family, opposite method.
-- **S3 — claim lineage.** Take the 22 (repro) + 19 (capped full run) durable claims; simulate a
-  second synthesis pass; hand-label ground truth; measure lineage adjudication
-  (strengthen/append) accuracy — accept at **≥90%**. Contradiction lane is measured but not
-  gated (needs L3).
+**What NO literature validates:** the specific
+`unit → claim → T1–T4 entity ladder → subject-keyed lifecycle` product structure. That chain is
+our hypothesis to prove, with data, in §7. The moat sentence, corrected accordingly:
+**the moat is claim-level attribution + evidence-verifiable synthesis + sensemaking — the entity
+ladder is one candidate implementation, not the moat itself.**
 
-Failed spike → the corresponding layer does not get built; this document is amended with the
-evidence. Passed spikes → Stage 3b (L1/L2 productization), Stage 3c (L3 + lifecycle), each a
-normal PR-gated stage.
+## 7. The comparative experiment — product value decides, before any product code
+
+One experiment replaces the former S2/S3 mechanism-spikes. S1 is kept (it serves every arm).
+
+- **S1 — grouping quality (unchanged, needed by ALL arms).** Embed 994 cases → kNN →
+  deterministic communities. Accept iff 20 sampled communities show ≥80% member topical coherence
+  AND ≥3 genuinely bilingual communities. Baseline: keyword buckets on the same sample.
+
+- **S2′ — four-arm product comparison** on 50–100 real historical sources (papers, web, notes,
+  GitHub, 中文材料 — the student mix), artifacts under `.run/m34-spikes/`:
+  - **A — KMEM-style:** memory → LLM entity/relations → community → crystal summary. Use the live
+    Nowledge instance where its 0.9.1 stability allows; fall back to existing captures (M21/M26
+    machinery) — sample size may shrink, record it.
+  - **B — OVP minimal (no entities):** units → gated claims → community crystals (Stage 3a
+    output). Retrieval-based lineage for dedup/strengthen. This arm mostly EXISTS already.
+  - **C-lite — grounded anchors as projection:** B + deterministic mention mining + genericity
+    ceiling + ONE batched judge pass → anchors derived from claim citations as a rebuildable
+    view. NO ladder state machine, NO entity ledger — the cheapest faithful slice of §5. (Testing
+    full C would require building it first — the exact trap this revision exists to avoid.)
+  - **D — query-time aggregation (no precomputed structure):** B's index + an agentic query-time
+    LLM that aggregates "everything about X" / "what does this corpus say" on demand, answers
+    verified through the existing citation gate. The "a good prompt beats a rule ladder"
+    null-hypothesis arm.
+  - **Task-anchored metrics** (student tasks, reusing the M26 workbench pattern; human-judged):
+    "这批资料讲了什么" comprehension speed/quality · important-concept recall vs a human
+    reference list (precision AND recall) · wrong-merge count · unsupported-claim count ·
+    crystal→quote traceability (one click, verbatim) · token cost per source and per query ·
+    does the graph/anchor layer actually help review & lookup vs D.
+  - **Decision rules:** C-lite not clearly > B → **no entity layer** (H1 dies; §5 marked DEAD).
+    D ≈ B/C on product value → prefer D's simplicity for reuse surfaces. A clearly wins user
+    value AND the grounding gap demonstrably doesn't hurt real use → swallow pride, reassess the
+    architecture-purity premium honestly. C-lite clearly wins on trusted-crystal / review /
+    evidence-lookback → THEN design durable anchors, projection-first (§5 becomes the spec
+    baseline; ledger still last-resort).
+
+Failed arm → its layer is not built; this document is amended with the evidence either way.
 
 ## 8. Execution order
 
@@ -236,9 +291,13 @@ normal PR-gated stage.
    strength (≤20 claims/call). Gives the current corpus a full-coverage crystal store NOW and is
    the machinery under any future grouping. (A model `crystal_merge/v1` reduce is added only if
    the deterministic dedup's residual duplicate rate proves the need — via the evolution flow.)
-2. **S1 → S2 → S3 spikes** (offline, no product writes).
-3. **Stage 3b:** replace keyword buckets with L1/L2 communities behind the same crystal-synth CLI.
-4. **Stage 3c:** L3 entity gate + lineage/supersede ledger semantics + contradiction lane.
+2. **S1** (grouping quality — needed by every arm), then **S2′ four-arm comparison** (offline,
+   no product writes). The experiment verdict decides which of B / C / D becomes Stage 3b+.
+3. **Stage 3b:** replace keyword buckets with L1/L2 communities behind the same crystal-synth CLI
+   (this much is safe under every arm that wins).
+4. **Stage 3c (CONDITIONAL on the S2′ verdict):** whichever of {nothing extra (B), projection
+   anchors (C-lite→C), query-time aggregation surface (D)} the data picked; ledger-backed L3 +
+   contradiction lane only after projections prove insufficient.
 5. M32 Level-3 exit criterion #3 ("crystallize the full corpus") is satisfied by Stage 3a
    coverage; quality re-crystallization after 3b is a product improvement, not a retirement gate.
 
