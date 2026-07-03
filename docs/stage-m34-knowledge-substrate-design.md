@@ -322,7 +322,10 @@ through rubric points. Do not let the system's design philosophy write the exam 
 on.
 
 1. **Pre-registration.** Tasks, metrics, judge prompts, and decision rules are committed to the
-   repo BEFORE any arm output is generated. No post-hoc metric additions.
+   repo BEFORE any arm output is generated. No post-hoc metric additions. The source/sample plan
+   is also pre-registered: corpus window, eligibility rules, exclusion rules, strata, random seed,
+   and replacement policy. Otherwise a fair task set can still be biased by a hand-picked source
+   set.
 2. **Tasks come from users, not designers.** Three sources, frozen before arm outputs exist:
    (a) the operator's real historical questions (ask/digest/chat logs); (b) blind elicitation —
    people (or an LLM given only source titles/TOC, never any arm's representation) asked "what
@@ -332,20 +335,31 @@ on.
    check (a real user intent — ONE stratum among six, not the rubric). **N ≥ 30, ≥5 per
    stratum**, bilingual mix; report bootstrap CIs over tasks; no prompt may instruct
    evidence-formatting.
-3. **Arms are products, not layers.** Each system fields its honest full stack: OVP = its real
-   answer path (durable claims + fallback to units/packs via the index); KMEM = its real query
-   surface (memories + entities + communities + crystals). If a full surface is unavailable, the
-   arm is RENAMED (e.g. "KMEM-memories-only") and every conclusion scoped accordingly. Same
-   answering model, same context-token budget, same generation budget across arms; latency and
-   token cost reported per answer.
+3. **Arms are products, not layers — and the evaluation lane must be explicit.**
+   - **Product-native lane (primary product verdict):** each system fields its honest full stack:
+     OVP = its real answer path (durable claims + fallback to units/packs via the index); KMEM =
+     its real query surface (memories + entities + communities + crystals). Native model choices
+     and orchestration are allowed because they are part of the product. Report model, context,
+     latency, and token/cost per answer.
+   - **Evidence-normalized lane (diagnostic only):** the same answer model, same context-token
+     budget, and same generation budget are used across arms to isolate the quality of each
+     evidence surface. Conclusions from this lane must be labeled as evidence-surface findings,
+     not product findings.
+   If a full surface is unavailable, the arm is RENAMED (e.g. "KMEM-memories-only") and every
+   conclusion scoped accordingly. Do not mix product-native and evidence-normalized outputs in
+   one win/loss table.
 4. **Primary metrics are user-neutral:** (a) task success — does the answer satisfy the
    information need (0–3); (b) **factual correctness verified against the sources** — penalize
    statements that are WRONG, not statements that are uncited (this is where grounding must earn
    its keep); (c) key-point coverage vs a per-task reference built from the sources before any
-   answers are seen. **Traceability is measured separately and behaviorally** — a trust probe on
-   a subset: pick 2 statements per answer, "show me why", score whether/how fast the original
-   passage is reachable. Output is a **multi-dimensional scorecard + per-stratum winners** — no
-   single weighted score; the operator makes the tradeoff visible-eyes-open.
+   answers are seen. Factual correctness is operationalized as: decompose each answer into atomic
+   claims, verify each claim against blind source excerpts, and label it
+   `correct | wrong | unsupported | unverifiable`; only `wrong` is a hard correctness penalty,
+   while `unsupported` and `unverifiable` are reported separately. **Traceability is measured
+   separately and behaviorally** — a trust probe on a subset: pick 2 statements per answer,
+   "show me why", score whether/how fast the original passage is reachable. Output is a
+   **multi-dimensional scorecard + per-stratum winners** — no single weighted score; the operator
+   makes the tradeoff visible-eyes-open.
 5. **Judge hygiene:** arm identity blinded (neutral labels; formatting normalized — citations
    stripped for the usefulness pass, restored for the verification pass); ≥2 judge models from a
    different family than the answer model; answer-order randomized per task; anchored scales with
@@ -358,8 +372,11 @@ on.
    its real coverage, not the 14-claim artifact; (b) KMEM full surface reachable or arm renamed;
    (c) C-lite either rebuilt over the full unit corpus (not projected from scarce claims) or
    DROPPED from this round — testing it before B's substrate is fixed is meaningless; (d) S1
-   grouping passes, or grouping-dependent arms note the limitation.
-  - **Decision rules (unchanged in substance, now fire only on S2v2):** C-lite not clearly > B →
+   grouping passes for any grouping-dependent verdict. If S1 fails, S2v2 may still compare
+   non-grouping answer paths (for example B/D/A breadth and correctness), but it may NOT trigger
+   Stage 3b, entity/community decisions, or any claim that grouping quality is solved.
+8. **Decision rules (unchanged in substance, now fire only on S2v2 after the relevant entry
+   conditions pass):** C-lite not clearly > B →
     **no entity layer** (H1 dies; §5 marked DEAD). D ≈ B/C on product value → prefer D's
     simplicity for reuse surfaces. A clearly wins user value AND the grounding gap demonstrably
     doesn't hurt real use → reassess the architecture-purity premium honestly. C-lite clearly
