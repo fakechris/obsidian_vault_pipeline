@@ -282,18 +282,89 @@ One experiment replaces the former S2/S3 mechanism-spikes. S1 is kept (it serves
     LLM that aggregates "everything about X" / "what does this corpus say" on demand, answers
     verified through the existing citation gate. The "a good prompt beats a rule ladder"
     null-hypothesis arm.
-  - **Task-anchored metrics** (knowledge-work tasks, reusing the M26 workbench pattern;
-    human-judged):
-    "这批资料讲了什么" comprehension speed/quality · important-concept recall vs a human
-    reference list (precision AND recall) · wrong-merge count · unsupported-claim count ·
-    crystal→quote traceability (one click, verbatim) · token cost per source and per query ·
-    does the graph/anchor layer actually help review & lookup vs D.
-  - **Decision rules:** C-lite not clearly > B → **no entity layer** (H1 dies; §5 marked DEAD).
-    D ≈ B/C on product value → prefer D's simplicity for reuse surfaces. A clearly wins user
-    value AND the grounding gap demonstrably doesn't hurt real use → swallow pride, reassess the
-    architecture-purity premium honestly. C-lite clearly wins on trusted-crystal / review /
-    evidence-lookback → THEN design durable anchors, projection-first (§5 becomes the spec
-    baseline; ledger still last-resort).
+### 7.1 Round-1 result (2026-07-03) — DIRECTIONAL ONLY; bias audit appended
+
+Run: 50 KMEM-aligned sources, 6 designer-written tasks, bundles A=386 KMEM memories /
+B=14 durable claims / C=80 anchors projected from B / D=1402 accepted units (top-8 retrieved per
+task per arm); answers synthesized by the same model per arm; single LLM judge. Winners:
+**B 4/6, A 1/6 (breadth/workflow task), D 1/6 (product task), C 0/6.** t5's numeric scores
+excluded (scale bug; winner kept). Artifacts: `.run/m34-spikes/20260703-s1-qmd-embeddinggemma/`.
+Separate result: **S1 (kNN+Louvain grouping) FAILED its acceptance criteria** — identity/community
+remains unproven and Stage 3b is NOT unblocked.
+
+**Verified bias audit (operator-driven; each item checked in the artifacts):**
+1. **Task prompts embed OVP's philosophy** — t1 literally instructs "Return only claims with
+   cited evidence": the task asks every arm to produce B-shaped output. Designer-written tasks,
+   n=6.
+2. **Rubric double-counts groundedness** (quote_traceability AND unsupported_claims as scored
+   dimensions) while breadth/latency stay qualitative.
+3. **No blinding** — the judge saw arm names (`B_ovp_durable_claim`, `A_kmem_memory`) and cited
+   them in rationales; single judge; judge model = the answer-writing model (self-preference).
+4. **A is not KMEM** — memories only; no crystals/entities/communities surface.
+5. **C was strangled at birth** — 80 anchors projected from B's 14 claims inherit B's scarcity;
+   its 0/6 says nothing about mature entity value.
+6. **Coverage confound, and the round's REAL headline:** the durable gate yielded **14 claims
+   from 50 sources (~0.28/source)**. B won 4/6 under a rubric that barely punishes tiny corpus
+   coverage — and lost exactly the breadth tasks (t3 to A, t6 to D). The honest reading:
+   *grounded durable synthesis wins reliability-flavored asks; its coverage is OVP's key product
+   weakness; the breadth layer above durable claims (or a verified read-time layer) is the gap.*
+
+**What round 1 may be cited for:** the three directional signals above and the S1 failure.
+**What it may NOT be cited for:** "OVP beats KMEM", "entities have no value", or any Stage 3c
+decision. Decision rules remain unfired until S2v2.
+
+### 7.2 S2v2 — the pre-registered fair protocol (supersedes the metric/judging spec above)
+
+Design principle, from the operator: users don't inherently care that content is source-backed —
+they care "I imported my stuff; can it answer my questions; what did it build for me."
+Groundedness must earn its value **through measured correctness and trust behavior**, never
+through rubric points. Do not let the system's design philosophy write the exam it grades itself
+on.
+
+1. **Pre-registration.** Tasks, metrics, judge prompts, and decision rules are committed to the
+   repo BEFORE any arm output is generated. No post-hoc metric additions.
+2. **Tasks come from users, not designers.** Three sources, frozen before arm outputs exist:
+   (a) the operator's real historical questions (ask/digest/chat logs); (b) blind elicitation —
+   people (or an LLM given only source titles/TOC, never any arm's representation) asked "what
+   would you want to ask this library?"; (c) source-derived reader questions generated from full
+   source text. Stratified over a fixed intent taxonomy: orientation ("这批资料讲了什么") ·
+   specific lookup · cross-source synthesis · decision support · review/refresh · provenance
+   check (a real user intent — ONE stratum among six, not the rubric). **N ≥ 30, ≥5 per
+   stratum**, bilingual mix; report bootstrap CIs over tasks; no prompt may instruct
+   evidence-formatting.
+3. **Arms are products, not layers.** Each system fields its honest full stack: OVP = its real
+   answer path (durable claims + fallback to units/packs via the index); KMEM = its real query
+   surface (memories + entities + communities + crystals). If a full surface is unavailable, the
+   arm is RENAMED (e.g. "KMEM-memories-only") and every conclusion scoped accordingly. Same
+   answering model, same context-token budget, same generation budget across arms; latency and
+   token cost reported per answer.
+4. **Primary metrics are user-neutral:** (a) task success — does the answer satisfy the
+   information need (0–3); (b) **factual correctness verified against the sources** — penalize
+   statements that are WRONG, not statements that are uncited (this is where grounding must earn
+   its keep); (c) key-point coverage vs a per-task reference built from the sources before any
+   answers are seen. **Traceability is measured separately and behaviorally** — a trust probe on
+   a subset: pick 2 statements per answer, "show me why", score whether/how fast the original
+   passage is reachable. Output is a **multi-dimensional scorecard + per-stratum winners** — no
+   single weighted score; the operator makes the tradeoff visible-eyes-open.
+5. **Judge hygiene:** arm identity blinded (neutral labels; formatting normalized — citations
+   stripped for the usefulness pass, restored for the verification pass); ≥2 judge models from a
+   different family than the answer model; answer-order randomized per task; anchored scales with
+   calibration examples (kills the t5 scale-bug class); operator blind-judges a 20% sample;
+   inter-judge agreement reported.
+6. **Coverage and cost are first-class columns:** each arm reports % of corpus represented in its
+   evidence layer, tokens per answer, wall latency. Round 1's hidden confound becomes a visible
+   metric.
+7. **Entry conditions before running S2v2:** (a) Stage 3a full-corpus crystallize done — B fields
+   its real coverage, not the 14-claim artifact; (b) KMEM full surface reachable or arm renamed;
+   (c) C-lite either rebuilt over the full unit corpus (not projected from scarce claims) or
+   DROPPED from this round — testing it before B's substrate is fixed is meaningless; (d) S1
+   grouping passes, or grouping-dependent arms note the limitation.
+  - **Decision rules (unchanged in substance, now fire only on S2v2):** C-lite not clearly > B →
+    **no entity layer** (H1 dies; §5 marked DEAD). D ≈ B/C on product value → prefer D's
+    simplicity for reuse surfaces. A clearly wins user value AND the grounding gap demonstrably
+    doesn't hurt real use → reassess the architecture-purity premium honestly. C-lite clearly
+    wins on trusted-crystal / review / evidence-lookback → THEN design durable anchors,
+    projection-first (ledger still last-resort).
 
 Failed arm → its layer is not built; this document is amended with the evidence either way.
 
