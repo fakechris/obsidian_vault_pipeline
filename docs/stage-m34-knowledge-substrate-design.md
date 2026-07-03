@@ -6,7 +6,9 @@ is the product anchor). NOT a feature epic; implementation is gated on the exper
 decisions from **hypotheses**. The entity ladder (§5) is a HYPOTHESIS — candidate design C —
 awaiting the §7 comparative experiment. Nothing in §5 may be implemented before that verdict.
 **Companions:** [`stage-m32-python-retirement-and-product-definition.md`](./stage-m32-python-retirement-and-product-definition.md) ·
-2026-07-02 full-corpus evidence in `.run/m32-stage123-20260702/` (gitignored, operator machine).
+[`product-pipeline.md`](./product-pipeline.md) (the mature-system pipeline map; this doc covers
+only its G5-undecided box) · 2026-07-02 full-corpus evidence in `.run/m32-stage123-20260702/`
+(gitignored, operator machine).
 
 > **Read this first.** This document re-opens "does OVP need entities?" — but its first draft
 > repeated the M7–M13 process failure: designing mechanism (ladders, invariants, ledgers) before
