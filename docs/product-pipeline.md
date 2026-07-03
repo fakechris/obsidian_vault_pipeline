@@ -31,7 +31,12 @@ become a second, unverified truth store.
    - **Event ledgers** (`.ovp/*.jsonl`, `60-Logs/pipeline.jsonl`) — what happened, in order.
    - **Reader packs** (`40-Resources/Reader/<case>/`, esp. `units.accepted.json`) — the EVIDENCE
      authority. Claims cite into packs; deleting a pack severs citation chains. (Correction to the
-     "crystal ledger is the only authority" framing: packs are co-equal.)
+     "crystal ledger is the only authority" framing: packs are co-equal.) A pack is an evidence
+     *artifact*, not a ledger, so "append-only" is not a sufficient contract — its **integrity
+     contract** is: pack identity bound to (source content sha, run id); `units.accepted.json`
+     present and parseable; every crystal citation back-resolvable to a pack unit and its verbatim
+     quote; and `doctor` verifies the full claim→pack→unit→quote chain. A pack failing this
+     contract counts as evidence loss, not as a stale derived view.
    - **Crystal ledger** (`.ovp/crystal/ledger.jsonl`) — the durable-knowledge authority.
    Everything else — index, console, digest, working memory, vault projections, graphs, ask
    answers — is **derived: deletable, rebuildable, forbidden to flow back into authorities**.
@@ -119,10 +124,10 @@ console/graph`.
 | index rebuild | `.ovp/index/` read model | 0 | ✅ |
 | console | `.ovp/console/` bilingual UI + graph | 0 | ✅ |
 | project --write | `10-Knowledge/Crystal/*.md` (machine-managed marker) | 0 | ✅ |
-| digest | `.ovp/digests/<date>.md` | $ | ✅ |
-| working-memory | `.ovp/working-memory.md` | $ | ✅ |
-| ask / find | on-demand answers (citation-gated) | $/0 | ✅ |
-| serve / MCP | localhost UI · MCP tools | 0 | ✅ |
+| digest | `.ovp/digests/<date>.md` — ops digest (new packs/blocked/claim counts) | 0 today · $ optional (`render_llm_digest` exists, unwired) | ✅ plain |
+| working-memory | `.ovp/working-memory.md` | 0 today | ✅ |
+| ask / find | on-demand answers — **retrieval-constrained, NOT truth-gated yet**: `ask` feeds index hits into the prompt and prints the model answer; no post-answer citation parser / quote verifier exists. Calling it citation-gated requires building that verifier (gap, §6) | $/0 | 🟡 |
+| serve / MCP | localhost UI · MCP tools (find/search/status + shallow doctor only; no ask/project/crystal-status) | 0 | ✅ minimal |
 
 Boundary: these can be deleted and rebuilt at any time and MUST NOT write back into authorities.
 
@@ -149,13 +154,20 @@ suffices until proven otherwise). All pipelines idempotent + crash-resumable (Ru
 reclaim; append-only ledgers; cassette-resumable model calls). **Dirty-marking is the one
 incremental mechanism** shared by index/console/synth/recluster — no pipeline invents its own.
 
-| Tier | Runs |
-|---|---|
-| per ingest | intake → dedup → enrich → reader (new/changed only) → lifecycle move → ledgers |
-| daily | index → console → digest → small incremental synth (dirty groups) → doctor summary |
-| weekly | recluster (churn-bounded) → dirty-community resynth → **review-queue session** |
-| on demand | ask · find · project · serve · MCP · compare-run |
-| on prompt change | evolve candidate → AB → cassette replay gate |
+Do not conflate what `daily` does TODAY with the mature scheduler — the gap is the work:
+
+| Tier | **Current** (`ovp-next daily` today) | **Mature scheduler** (target) |
+|---|---|---|
+| per ingest | intake → dedup → enrich(fixture-gated) → reader → lifecycle move → ledgers ✅ | same, with live-validated enrich + paper route |
+| daily | report → index → console → plain digest → working-memory | + **incremental crystal-synth on dirty groups** (entry conditions below) + doctor summary |
+| weekly | — (manual) | recluster (churn-bounded) → dirty-community resynth → **review-queue session** |
+| on demand | ask · find · project · serve · MCP · compare-run ✅ | same, with truth-gated ask |
+| on prompt change | evolve candidate → AB → cassette replay gate ✅ | same |
+
+**Entry conditions before auto-synth joins the daily tier** (it does NOT get scheduled by
+default): Stage 3a merged (full-coverage batching) · `--strict-cluster-cap` on ·
+a per-run token budget cap · the dirty-group spec implemented · synth failure states
+designed and doctor-visible. Until all five hold, crystal-synth stays a manual command.
 
 ## 5. KMEM's 12 pipelines → OVP mapping
 
@@ -164,7 +176,7 @@ incremental mechanism** shared by index/console/synth/recluster — no pipeline 
 | kg-extraction | NOT foundational; candidate = grounded anchor projection (M34 arm C-lite) |
 | community-detection | embedding grouping for synthesis batching (G3) |
 | crystallization | crystal-synth + lint + strength + write (G3, gated) |
-| insight-detection | digest today; future claim-pattern detection |
+| insight-detection | **ops digest today** (new packs/blocked/counts — NOT cross-source pattern/contradiction/emerging-topic detection); claim-pattern detection is future work |
 | evolves | claim lifecycle (G4) |
 | memory-compaction | claim dedup/strengthen/supersede — evidence itself is NEVER compacted |
 | label-consolidation | tags/labels as projections, never authority |
@@ -179,5 +191,7 @@ incremental mechanism** shared by index/console/synth/recluster — no pipeline 
 P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a full-coverage synth ·
 review-queue loop with weekly cadence · doctor crystal-integrity checks.
 P1: incremental dirty-group synth · cost report · minimal lineage (dedup/strengthen) ·
+**ask truth-gating** (post-answer citation parser + quote verifier — until then `ask` is
+retrieval-constrained only) · **MCP mature surface** (ask/project/crystal-status; deep doctor) ·
 web-fetch same-run fix · UTC→local date · live validation of enrich paths · paper-route A/B.
 Gated on M34 experiment: everything in G5-undecided, supersede-by-subject, contradiction.

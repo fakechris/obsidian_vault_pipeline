@@ -86,10 +86,12 @@ Derived from product functions, not from technology choices:
 | Claim lifecycle: supersede / contradiction | No — content-hash too strict, cosine too soft; needs "same subject, same intent" structure | **Yes** |
 | Grouping for synthesis | **Yes** — communities suffice; identity not required here | No |
 
-Conclusion: a **read-only reader** product needs no entities; a product that promises
-ask/digest/browse over a **continuously growing** library — ours, per the M32 product definition —
-cannot ship those functions without an identity layer. Entities are required by the product, not
-by the graph technology.
+What this table establishes — and its limit: a **read-only reader** product needs no entities,
+and several functions of a growing ask/digest/browse product plausibly want identity. But this is
+a **functional argument, not a product verdict**: arm D of the §7 experiment (query-time LLM
+aggregation over a good index, answers verified post-hoc) may deliver the same functions with no
+persistent identity at all. This table MOTIVATES hypothesis H1; it does not decide it. No agent
+may cite this section as justification for implementing an entity layer ahead of the §7 verdict.
 
 ## 4. The four-layer substrate
 
@@ -134,10 +136,11 @@ What M13/M14b actually falsified (0/3 on real models): **eager** extraction at i
 ontology** (MOC/Atlas/evergreen). What it did not test: entities subjected to the same evidence
 discipline that makes claims durable.
 
-**But "every entity must be earned" does not productize** (operator review, 2026-07-02): a student
-importing ONE lecture PDF must immediately see browsable topics; common-sense proper nouns
-(`Qdrant`, `BGE-M3`, `Attention Is All You Need`) must not wait for a ≥3-source gate; and judging
-every mention with an LLM explodes token cost. The answer is not loosening the durable gate — it
+**But "every entity must be earned" does not productize** (operator review, 2026-07-02): the
+target user is a **general knowledge worker** (the student is one archetype scenario, not the
+product boundary) — someone importing ONE document must immediately see browsable topics;
+common-sense proper nouns (`Qdrant`, `BGE-M3`, `Attention Is All You Need`) must not wait for a
+≥3-source gate; and judging every mention with an LLM explodes token cost. The answer is not loosening the durable gate — it
 is a **promotion ladder**. (Terminology: L0–L3 are the substrate *Layers*; T1–T4 below are the
 promotion *Tiers* within/toward L3. Do not conflate them.)
 
@@ -309,8 +312,10 @@ Failed arm → its layer is not built; this document is amended with the evidenc
 - MOC/Atlas/evergreen revival; eager ingest-time concept extraction; ConceptRegistry as authority.
 - Importing KMEM's KG/relations as a dependency (eval-only stays eval-only).
 - Vector DB service, graph DB, or any new daemon.
-- **A relation-extraction stage** — the claim is the edge (§5); LLM-asserted, unevidenced
-  `{relationships}` à la KMEM are structurally inferior to entity–claim–entity and are not built.
+- **A relation-extraction stage** — IF an anchor layer is ever built (§7 verdict pending), edges
+  come from claims (entity–claim–entity, quote-chained by construction) rather than a separate
+  LLM relation extractor. Whether that provenance advantage over KMEM-style `{relationships}`
+  translates into USER value is exactly what S2′ measures — it is not assumed here.
 - **Entity type taxonomy and merge/split governance UI in v1** (§5 cuts).
 - **Per-mention LLM judging** — LLM spend is confined to batched T3→T4 judgments.
 
