@@ -91,10 +91,10 @@ from KMEM: their memory is a self-contained summary; our unit is an evidence-anc
 
 | Pipeline | In → Out | Auth | Cost | Status | Failure states |
 |---|---|---|---|---|---|
-| grouping | packs → clusters/communities | D | L (target) / 0 (today) | 🟡 keyword buckets falsified at scale; embeddings = M34 decided, S1 pending | cap-overflow (warned + strict gate since Stage 0) · title-fallback |
-| crystal-synth | clusters → candidate claims | D | $ | 🟡 works; full coverage needs Stage 3a map-reduce | unrecoverable JSON (un-pinned) · cluster truncation |
+| grouping | packs → clusters/communities | D | L (target) / 0 (today) | 🟡 keyword buckets falsified at scale; embeddings = M34 decided, S1 pending | title-fallback · low-quality `misc` communities |
+| crystal-synth | clusters → candidate claims | D | $ | 🟡 Stage 3a full-coverage batching implemented; 994-corpus live run pending | unrecoverable JSON (un-pinned) · oversized internal batch · residual duplicates |
 | citation-lint | candidate → per-citation verbatim check | D | 0 | ✅ | defect → claim dropped, audited |
-| strength-judge | grounded claims → supported/caveated/reject | D | $ | ✅ (batched; chunking = Stage 3a) | incomplete coverage → fail-loud |
+| strength-judge | grounded claims → supported/caveated/reject | D | $ | ✅ chunked ≤20 claims/call | incomplete coverage → fail-loud |
 | crystal-write | durable claims → ledger, append-only, idempotent | **A** | 0 | ✅ | — (gate unsatisfied = no write) |
 
 ### G4 Review / Lifecycle — uncertainty and evolution, at the CLAIM layer
@@ -188,8 +188,8 @@ designed and doctor-visible. Until all five hold, crystal-synth stays a manual c
 
 ## 6. Gap list — current → mature (the actionable part)
 
-P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a full-coverage synth ·
-review-queue loop with weekly cadence · doctor crystal-integrity checks.
+P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a 994-corpus synth
+run/signoff · review-queue loop with weekly cadence · doctor crystal-integrity checks.
 P1: incremental dirty-group synth · cost report · minimal lineage (dedup/strengthen) ·
 **ask truth-gating** (post-answer citation parser + quote verifier — until then `ask` is
 retrieval-constrained only) · **MCP mature surface** (ask/project/crystal-status; deep doctor) ·
