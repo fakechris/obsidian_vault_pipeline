@@ -3,9 +3,11 @@
 //!
 //!   reader packs → units catalog + packs dir (deterministic)
 //!     → keyword theme clusters (deterministic)
-//!     → per-cluster cross-source synthesis (`crystal_synth/v1`, cassette-replayable)
+//!     → deterministic full-coverage sub-batches
+//!     → per-batch cross-source synthesis (`crystal_synth/v1`, cassette-replayable)
 //!     → grounded filter (drop ungrounded claims via the SAME `lint_candidate`)
-//!     → batched claim-strength verdicts (`crystal_strength/v1`, cassette-replayable)
+//!     → conservative citation-set dedup
+//!     → chunked claim-strength verdicts (`crystal_strength/v1`, cassette-replayable)
 //!     → durable write (delegates to `crystal_write::write_durable`)
 //!     → optional index/console refresh.
 //!
@@ -18,21 +20,24 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::synth::{
-    build_grounding_index as synth_build_index, cluster_by_keyword, collect_catalog,
-    count_durable_provenance, crystal_synth_request, filter_grounded, parse_strength_verdicts,
-    parse_synth_claims, strength_request, write_packs, SynthError,
+    SynthError, build_grounding_index as synth_build_index, cluster_batches, cluster_by_keyword,
+    collect_catalog, count_durable_provenance, crystal_synth_batch_request,
+    dedup_exact_citation_sets, filter_grounded, parse_strength_verdicts, parse_synth_claims,
+    strength_request, write_packs,
 };
 use ovp_domain::crystal::{
-    strength_coverage, ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader,
+    ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader, strength_coverage,
 };
-use ovp_domain::model_reply::{json_repair_request, parse_reply_value, JsonDefect};
+use ovp_domain::model_reply::{JsonDefect, json_repair_request, parse_reply_value};
 use ovp_domain::vault_layout::VaultLayout;
 use ovp_llm::ModelClient;
 
-use crate::commands::client::{build_client, ClientKind};
-use crate::commands::crystal_write::{write_durable, WriteInputs};
-use crate::commands::{console_cmd, index_cmd};
 use crate::CliError;
+use crate::commands::client::{ClientKind, build_client};
+use crate::commands::crystal_write::{WriteInputs, write_durable};
+use crate::commands::{console_cmd, index_cmd};
+
+const MAX_STRENGTH_CLAIMS_PER_CALL: usize = 20;
 
 pub struct CrystalSynthArgs {
     pub reader_dir: Option<PathBuf>,
@@ -69,19 +74,32 @@ struct Resolved {
 
 fn resolve_paths(args: &CrystalSynthArgs) -> Resolved {
     let layout = VaultLayout::new();
-    let reader_dir = args.reader_dir.clone().unwrap_or_else(|| match &args.vault_root {
-        Some(v) => v.join(layout.reader_root()),
-        None => args.work_dir.join("packs-src"),
-    });
-    let store = args.store.clone().unwrap_or_else(|| match &args.vault_root {
-        Some(v) => v.join(layout.crystal_store_dir()),
-        None => args.work_dir.join("store"),
-    });
-    let cache_dir = args.cache_dir.clone().unwrap_or_else(|| match &args.vault_root {
-        Some(v) => v.join(".ovp/cassettes/crystal"),
-        None => args.work_dir.join("cassettes"),
-    });
-    Resolved { reader_dir, store, cache_dir }
+    let reader_dir = args
+        .reader_dir
+        .clone()
+        .unwrap_or_else(|| match &args.vault_root {
+            Some(v) => v.join(layout.reader_root()),
+            None => args.work_dir.join("packs-src"),
+        });
+    let store = args
+        .store
+        .clone()
+        .unwrap_or_else(|| match &args.vault_root {
+            Some(v) => v.join(layout.crystal_store_dir()),
+            None => args.work_dir.join("store"),
+        });
+    let cache_dir = args
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| match &args.vault_root {
+            Some(v) => v.join(".ovp/cassettes/crystal"),
+            None => args.work_dir.join("cassettes"),
+        });
+    Resolved {
+        reader_dir,
+        store,
+        cache_dir,
+    }
 }
 
 fn synth_err(e: SynthError) -> CliError {
@@ -166,9 +184,23 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
             "crystal-synth: --refresh requires --vault-root and --date <YYYY-MM-DD>".into(),
         ));
     }
+    if args.max_cases_per_cluster == 0 {
+        return Err(CliError::Gate(
+            "crystal-synth: --max-cases-per-cluster must be greater than 0".into(),
+        ));
+    }
+    if args.max_units_per_case == 0 {
+        return Err(CliError::Gate(
+            "crystal-synth: --max-units-per-case must be greater than 0".into(),
+        ));
+    }
     let paths = resolve_paths(&args);
-    std::fs::create_dir_all(&args.work_dir)
-        .map_err(|e| CliError::Io(format!("creating work dir {}: {e}", args.work_dir.display())))?;
+    std::fs::create_dir_all(&args.work_dir).map_err(|e| {
+        CliError::Io(format!(
+            "creating work dir {}: {e}",
+            args.work_dir.display()
+        ))
+    })?;
 
     // (a) Collect the units catalog + canonical packs dir. ------------------
     let catalog = collect_catalog(&paths.reader_dir).map_err(synth_err)?;
@@ -179,13 +211,11 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     // (b) Deterministic keyword theme clusters. -----------------------------
     let clusters = cluster_by_keyword(&catalog);
 
-    // Surface degraded inputs BEFORE any model call, so they cannot silently
-    // shrink the synthesis (the M32 live repro's first attempt lost 18 of 34
-    // cases exactly this way): (1) cases whose title fell back to the directory
-    // name (no reader.md heading / run-status source) — keyword clustering
-    // degrades to `misc` for those; (2) clusters larger than the cap, whose
-    // overflow cases would be excluded from synthesis entirely. Both are
-    // warned on stderr and recorded in warnings.json for auditability.
+    // Surface degraded inputs BEFORE any model call: (1) cases whose title fell
+    // back to the directory name (no reader.md heading / run-status source) —
+    // keyword clustering degrades to `misc`; (2) clusters larger than the cap.
+    // Stage 3a no longer excludes the overflow; it records deterministic
+    // sub-batches so full coverage is auditably preserved.
     let fallback_title_cases: Vec<String> = catalog
         .cases
         .iter()
@@ -200,59 +230,61 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
             fallback_title_cases.join(", ")
         );
     }
-    let mut cap_overflow: Vec<serde_json::Value> = Vec::new();
+    let mut cluster_batching: Vec<serde_json::Value> = Vec::new();
     for cluster in &clusters {
         if cluster.cases.len() > args.max_cases_per_cluster {
-            let excluded = &cluster.cases[args.max_cases_per_cluster..];
+            let batches = cluster.cases.len().div_ceil(args.max_cases_per_cluster);
             eprintln!(
                 "crystal-synth: WARNING: cluster `{}` has {} case(s) but the cap is {} — \
-                 {} case(s) will NOT be synthesized: {}",
+                 Stage 3a will synthesize all cases across {} deterministic batch(es)",
                 cluster.key,
                 cluster.cases.len(),
                 args.max_cases_per_cluster,
-                excluded.len(),
-                excluded.join(", ")
+                batches
             );
-            cap_overflow.push(serde_json::json!({
+            cluster_batching.push(serde_json::json!({
                 "cluster": cluster.key,
                 "cases": cluster.cases.len(),
                 "cap": args.max_cases_per_cluster,
-                "excluded": excluded,
+                "batches": batches,
+                "mode": "split_all_cases",
             }));
         }
     }
+    let batches = cluster_batches(&clusters, args.max_cases_per_cluster);
     // Always written (empty on a clean run), so a rerun in the same work dir
     // can never leave a stale warning report behind.
     write_json(
         &args.work_dir.join("warnings.json"),
         &serde_json::json!({
             "fallback_title_cases": fallback_title_cases,
-            "cluster_cap_overflow": cap_overflow,
+            "cluster_cap_overflow": [],
+            "cluster_batching": cluster_batching,
         }),
     )?;
-    if args.strict_cluster_cap && !cap_overflow.is_empty() {
-        return Err(CliError::Gate(format!(
-            "crystal-synth: {} cluster(s) exceed --max-cases-per-cluster={} with \
-             --strict-cluster-cap set (details in {}). Raise the cap or split the run.",
-            cap_overflow.len(),
-            args.max_cases_per_cluster,
-            args.work_dir.join("warnings.json").display()
-        )));
+    // Stage 3a interprets the strict cap as a per-request invariant, not a
+    // cluster-size gate: every synthesized batch must stay within the cap.
+    if args.strict_cluster_cap
+        && batches
+            .iter()
+            .any(|b| b.cases.len() > args.max_cases_per_cluster)
+    {
+        return Err(CliError::Gate(
+            "crystal-synth: internal error: synthesized batch exceeds strict cluster cap".into(),
+        ));
     }
+    write_json(&args.work_dir.join("synth-batches.json"), &batches)?;
 
-    // (c) Per-cluster cross-source synthesis (model, cassette-replayable). ---
+    // (c) Per-batch cross-source synthesis (model, cassette-replayable). -----
     let mut base = build_client(args.client_kind, &paths.cache_dir)?;
     let mut repairs: Vec<RepairLog> = Vec::new();
     let mut all_claims: Vec<CrystalClaim> = Vec::new();
-    for cluster in &clusters {
-        let req = crystal_synth_request(
-            &catalog,
-            cluster,
-            args.max_cases_per_cluster,
-            args.max_units_per_case,
-        );
+    for batch in &batches {
+        let req = crystal_synth_batch_request(&catalog, batch, args.max_units_per_case);
         let (claims, log): (Vec<CrystalClaim>, Option<RepairLog>) =
-            call_and_parse(base.as_mut(), &req, "synth", |t| parse_synth_claims(t, &cluster.key))?;
+            call_and_parse(base.as_mut(), &req, "synth", |t| {
+                parse_synth_claims(t, &batch.claim_prefix())
+            })?;
         if let Some(l) = log {
             repairs.push(l);
         }
@@ -265,8 +297,14 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     // (d) Grounded filter — drop ungrounded/defective claims (same linter). --
     let index = synth_build_index(&packs_dir).map_err(synth_err)?;
     let (grounded, dropped) = filter_grounded(&candidate, &index);
-    write_json(&args.work_dir.join("candidate.grounded.json"), &grounded)?;
+    write_json(
+        &args.work_dir.join("candidate.grounded.pre-dedup.json"),
+        &grounded,
+    )?;
     let n_dropped = dropped.len();
+    let (grounded, deduped) = dedup_exact_citation_sets(&grounded);
+    write_json(&args.work_dir.join("candidate.grounded.json"), &grounded)?;
+    write_json(&args.work_dir.join("deduped-claims.json"), &deduped)?;
 
     if grounded.items.is_empty() {
         return Err(CliError::Gate(format!(
@@ -275,13 +313,26 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         )));
     }
 
-    // (e) Batched claim-strength verdicts (model, cassette-replayable). ------
-    let (verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) = {
-        let req = strength_request(&grounded, &catalog);
-        call_and_parse(base.as_mut(), &req, "strength", parse_strength_verdicts)?
-    };
-    if let Some(l) = log {
-        repairs.push(l);
+    // (e) Chunked claim-strength verdicts (model, cassette-replayable). ------
+    let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
+    for (idx, chunk) in grounded
+        .items
+        .chunks(MAX_STRENGTH_CLAIMS_PER_CALL)
+        .enumerate()
+    {
+        let req = strength_request(
+            &CrystalCandidate {
+                items: chunk.to_vec(),
+            },
+            &catalog,
+        );
+        let stage = format!("strength-b{:03}", idx + 1);
+        let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+            call_and_parse(base.as_mut(), &req, &stage, parse_strength_verdicts)?;
+        if let Some(l) = log {
+            repairs.push(l);
+        }
+        verdicts.extend(chunk_verdicts);
     }
     write_json(&args.work_dir.join("strength.json"), &verdicts)?;
 
@@ -316,12 +367,14 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     // --- Summary (mirrors crystal-write). ---
     println!("crystal-synth: run_id={}", outcome.run_id);
     println!(
-        "  collected: {} case(s) → {} cluster(s)",
+        "  collected: {} case(s) → {} cluster(s), {} synth batch(es)",
         catalog.cases.len(),
-        clusters.len()
+        clusters.len(),
+        batches.len()
     );
     println!(
-        "  synthesized {n_synthesized} claim(s); dropped_ungrounded={n_dropped}; durable-provenance={durable_provenance}"
+        "  synthesized {n_synthesized} claim(s); dropped_ungrounded={n_dropped}; deduped={}; durable-provenance={durable_provenance}",
+        deduped.len()
     );
     println!(
         "  durable: {} considered, {} newly appended ({} already active)",
@@ -329,8 +382,14 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         outcome.appended,
         outcome.considered - outcome.appended
     );
-    println!("  store: {} active durable claim(s) total", outcome.active_total);
-    println!("  review (NOT durable): {} caveated/reject claim(s)", outcome.review);
+    println!(
+        "  store: {} active durable claim(s) total",
+        outcome.active_total
+    );
+    println!(
+        "  review (NOT durable): {} caveated/reject claim(s)",
+        outcome.review
+    );
     for r in &repairs {
         println!("  json-repair[{}]: {}", r.stage, r.method);
     }
@@ -349,13 +408,17 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
 
     // (g) Optional index/console refresh. -----------------------------------
     if args.refresh {
-        let vault_root = args.vault_root.clone().ok_or_else(|| {
-            CliError::Io("crystal-synth: --refresh requires --vault-root".into())
-        })?;
+        let vault_root = args
+            .vault_root
+            .clone()
+            .ok_or_else(|| CliError::Io("crystal-synth: --refresh requires --vault-root".into()))?;
         let date = args.date.clone().ok_or_else(|| {
             CliError::Io("crystal-synth: --refresh requires --date <YYYY-MM-DD>".into())
         })?;
-        index_cmd::run_index(index_cmd::IndexArgs { vault_root: vault_root.clone(), date: date.clone() })?;
+        index_cmd::run_index(index_cmd::IndexArgs {
+            vault_root: vault_root.clone(),
+            date: date.clone(),
+        })?;
         console_cmd::run(console_cmd::ConsoleArgs { vault_root, date })?;
     }
 
@@ -372,8 +435,11 @@ fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ovp_domain::crystal::synth::{
+        cluster_batches, crystal_synth_batch_request, crystal_synth_request,
+    };
     use ovp_domain::source_doc::SourceDoc;
-    use ovp_domain::units::{validate, Unit};
+    use ovp_domain::units::{Unit, validate};
     use ovp_llm::request_key;
 
     /// Write a reader pack fixture (units.accepted.json + reader.md).
@@ -390,7 +456,10 @@ mod tests {
                 })
             })
             .collect();
-        let ex = validate(&raw, &SourceDoc::article("T", "https://e/x", None, None, vec![], body));
+        let ex = validate(
+            &raw,
+            &SourceDoc::article("T", "https://e/x", None, None, vec![], body),
+        );
         let units: Vec<Unit> = ex.accepted().cloned().collect();
         std::fs::write(
             case_dir.join("units.accepted.json"),
@@ -410,7 +479,10 @@ mod tests {
             model: "canned".into(),
             text: reply_text.to_string(),
             stop_reason: ovp_llm::StopReason::EndTurn,
-            usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+            usage: ovp_llm::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
         };
         std::fs::write(
             dir.join(format!("{key}.json")),
@@ -425,12 +497,23 @@ mod tests {
         let reader = tmp.path().join("reader");
         // Two cases in the "memory" bucket, both citing verbatim → cross-source.
         // Titles avoid "agent" so both land in the memory bucket (single cluster).
-        write_pack(&reader, "m18-01", "Working memory systems",
+        write_pack(
+            &reader,
+            "m18-01",
+            "Working memory systems",
             "Memory is scarce working memory in systems. It must be curated.",
-            &["Memory is scarce working memory in systems.", "It must be curated."]);
-        write_pack(&reader, "m18-02", "Context and retrieval",
+            &[
+                "Memory is scarce working memory in systems.",
+                "It must be curated.",
+            ],
+        );
+        write_pack(
+            &reader,
+            "m18-02",
+            "Context and retrieval",
             "Context windows are a scarce budget for retrieval.",
-            &["Context windows are a scarce budget for retrieval."]);
+            &["Context windows are a scarce budget for retrieval."],
+        );
 
         let work = tmp.path().join("work");
         let cache = work.join("cassettes");
@@ -506,19 +589,147 @@ mod tests {
         run(mk_args()).expect("second run ok");
         let ledger2 = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
         let lines2 = ledger2.lines().filter(|l| !l.trim().is_empty()).count();
-        assert_eq!(lines2, 1, "re-run appends nothing (idempotent by claim_key)");
+        assert_eq!(
+            lines2, 1,
+            "re-run appends nothing (idempotent by claim_key)"
+        );
+    }
+
+    #[test]
+    fn e2e_split_batches_cover_all_cases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        write_pack(
+            &reader,
+            "m18-01",
+            "Working memory systems one",
+            "Memory case one says working memory is scarce.",
+            &["working memory is scarce"],
+        );
+        write_pack(
+            &reader,
+            "m18-02",
+            "Working memory systems two",
+            "Memory case two says context must be curated.",
+            &["context must be curated"],
+        );
+        write_pack(
+            &reader,
+            "m18-03",
+            "Working memory systems three",
+            "Memory case three says retrieval should stay bounded.",
+            &["retrieval should stay bounded"],
+        );
+        write_pack(
+            &reader,
+            "m18-04",
+            "Working memory systems four",
+            "Memory case four says memory pressure creates review work.",
+            &["memory pressure creates review work"],
+        );
+
+        let work = tmp.path().join("work");
+        let cache = work.join("cassettes");
+        std::fs::create_dir_all(&cache).unwrap();
+        let catalog = collect_catalog(&reader).unwrap();
+        let clusters = cluster_by_keyword(&catalog);
+        assert_eq!(clusters.len(), 1);
+        let batches = cluster_batches(&clusters, 2);
+        assert_eq!(
+            batches.len(),
+            2,
+            "cap=2 should split four cases into two synth calls"
+        );
+
+        let mut all_claims = Vec::new();
+        for batch in &batches {
+            let ids = &batch.cases;
+            let u0 = catalog.cases[&ids[0]].units[0].unit_id.clone();
+            let u1 = catalog.cases[&ids[1]].units[0].unit_id.clone();
+            let synth_req = crystal_synth_batch_request(&catalog, batch, 22);
+            let synth_reply = format!(
+                r#"{{"claims":[{{"id":"1","claim":"Batch {} ties two memory cases into one bounded-memory claim.","theme":"memory","citations":[
+                    {{"case_id":"{}","unit_id":"{}","quote":"{}"}},
+                    {{"case_id":"{}","unit_id":"{}","quote":"{}"}}
+                ]}}]}}"#,
+                batch.batch_index + 1,
+                ids[0],
+                u0,
+                catalog.cases[&ids[0]].units[0].quote,
+                ids[1],
+                u1,
+                catalog.cases[&ids[1]].units[0].quote
+            );
+            write_cassette(&cache, &synth_req, &synth_reply);
+            all_claims.extend(parse_synth_claims(&synth_reply, &batch.claim_prefix()).unwrap());
+        }
+
+        let p = work.join("packs");
+        write_packs(&p, &reader, &catalog).unwrap();
+        let idx = synth_build_index(&p).unwrap();
+        let (grounded, _) = filter_grounded(&CrystalCandidate { items: all_claims }, &idx);
+        assert_eq!(grounded.items.len(), 2);
+        let strength_req = strength_request(&grounded, &catalog);
+        let strength_reply = format!(
+            r#"[{}]"#,
+            grounded
+                .items
+                .iter()
+                .map(|c| format!(
+                    r#"{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"two cited cases support the bounded-memory claim"}}"#,
+                    c.id
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        write_cassette(&cache, &strength_req, &strength_reply);
+
+        let store = work.join("store");
+        run(CrystalSynthArgs {
+            reader_dir: Some(reader.clone()),
+            vault_root: None,
+            work_dir: work.clone(),
+            store: Some(store.clone()),
+            client_kind: ClientKind::Replay,
+            cache_dir: Some(cache.clone()),
+            max_cases_per_cluster: 2,
+            max_units_per_case: 22,
+            run_id: None,
+            title: Some("Split Test".into()),
+            scope: None,
+            not_claiming: None,
+            refresh: false,
+            date: None,
+            strict: false,
+            strict_cluster_cap: true,
+        })
+        .expect("split batches run");
+
+        let ledger = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
+        assert_eq!(ledger.lines().filter(|l| !l.trim().is_empty()).count(), 2);
+        let synth_batches = std::fs::read_to_string(work.join("synth-batches.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&synth_batches).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 2);
     }
 
     #[test]
     fn incomplete_strength_fails_loud() {
         let tmp = tempfile::tempdir().unwrap();
         let reader = tmp.path().join("reader");
-        write_pack(&reader, "m18-01", "Working memory systems",
+        write_pack(
+            &reader,
+            "m18-01",
+            "Working memory systems",
             "Memory is scarce working memory in systems.",
-            &["Memory is scarce working memory in systems."]);
-        write_pack(&reader, "m18-02", "Context retrieval",
+            &["Memory is scarce working memory in systems."],
+        );
+        write_pack(
+            &reader,
+            "m18-02",
+            "Context retrieval",
             "Context windows are a scarce budget for retrieval.",
-            &["Context windows are a scarce budget for retrieval."]);
+            &["Context windows are a scarce budget for retrieval."],
+        );
 
         let work = tmp.path().join("work");
         let cache = work.join("cassettes");
@@ -537,7 +748,9 @@ mod tests {
         );
         write_cassette(&cache, &synth_req, &synth_reply);
         // Grounded candidate → strength request, but return an EMPTY verdict set.
-        let candidate = CrystalCandidate { items: parse_synth_claims(&synth_reply, "memory").unwrap() };
+        let candidate = CrystalCandidate {
+            items: parse_synth_claims(&synth_reply, "memory").unwrap(),
+        };
         let p = work.join("packs");
         write_packs(&p, &reader, &catalog).unwrap();
         let idx = synth_build_index(&p).unwrap();
@@ -563,7 +776,10 @@ mod tests {
             strict_cluster_cap: false,
         })
         .unwrap_err();
-        assert!(matches!(err, CliError::Gate(_)), "incomplete strength must fail loud, got {err:?}");
+        assert!(
+            matches!(err, CliError::Gate(_)),
+            "incomplete strength must fail loud, got {err:?}"
+        );
     }
 
     /// Minimal args for the warning-path tests: replay client, no cassettes.
@@ -589,37 +805,61 @@ mod tests {
     }
 
     #[test]
-    fn cluster_cap_overflow_strict_gates_before_model_calls() {
+    fn cluster_cap_overflow_records_batches_before_model_calls() {
         let tmp = tempfile::tempdir().unwrap();
         let reader = tmp.path().join("reader");
-        // Two cases in the same (memory) bucket with cap=1 → one excluded.
-        write_pack(&reader, "m18-01", "Working memory systems",
+        // Two cases in the same (memory) bucket with cap=1 → two full-coverage
+        // batches, not one synthesized case plus one exclusion.
+        write_pack(
+            &reader,
+            "m18-01",
+            "Working memory systems",
             "Memory is scarce working memory in systems.",
-            &["Memory is scarce working memory in systems."]);
-        write_pack(&reader, "m18-02", "Context and retrieval",
+            &["Memory is scarce working memory in systems."],
+        );
+        write_pack(
+            &reader,
+            "m18-02",
+            "Context and retrieval",
             "Context windows are a scarce budget for retrieval.",
-            &["Context windows are a scarce budget for retrieval."]);
+            &["Context windows are a scarce budget for retrieval."],
+        );
         let work = tmp.path().join("work");
         let mut args = bare_args(&reader, &work);
         args.max_cases_per_cluster = 1;
         args.strict_cluster_cap = true;
-        // No cassettes exist — gating BEFORE the model call is what makes this pass.
+        // No cassettes exist, so the run errors at the first synth call. The
+        // point is that Stage 3a no longer gates merely because the cluster
+        // exceeds the per-request cap; it records deterministic batches first.
         let err = run(args).unwrap_err();
-        assert!(matches!(err, CliError::Gate(_)), "expected cap gate, got {err:?}");
-        // The overflow is recorded for auditability even though the run gated.
+        assert!(
+            matches!(err, CliError::Io(_)),
+            "expected replay miss, got {err:?}"
+        );
+        // The split is recorded for auditability before the model call.
         let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&w).unwrap();
-        let overflow = v["cluster_cap_overflow"].as_array().unwrap();
-        assert_eq!(overflow.len(), 1);
-        assert_eq!(overflow[0]["cluster"], "memory");
-        assert_eq!(overflow[0]["excluded"], serde_json::json!(["m18-02"]));
+        assert_eq!(v["cluster_cap_overflow"].as_array().unwrap().len(), 0);
+        let batching = v["cluster_batching"].as_array().unwrap();
+        assert_eq!(batching.len(), 1);
+        assert_eq!(batching[0]["cluster"], "memory");
+        assert_eq!(batching[0]["batches"], serde_json::json!(2));
+        let b = std::fs::read_to_string(work.join("synth-batches.json")).unwrap();
+        let batches: serde_json::Value = serde_json::from_str(&b).unwrap();
+        assert_eq!(batches.as_array().unwrap().len(), 2);
     }
 
     #[test]
     fn title_fallback_is_recorded_in_warnings() {
         let tmp = tempfile::tempdir().unwrap();
         let reader = tmp.path().join("reader");
-        write_pack(&reader, "0951c213", "ignored", "A body sentence here.", &["A body sentence here."]);
+        write_pack(
+            &reader,
+            "0951c213",
+            "ignored",
+            "A body sentence here.",
+            &["A body sentence here."],
+        );
         // Strip reader.md so the title falls back to the directory name — the
         // exact degradation that collapsed the M32 live repro's first attempt.
         std::fs::remove_file(reader.join("0951c213").join("reader.md")).unwrap();
@@ -627,7 +867,10 @@ mod tests {
         // No cassettes → the run errors at the synth call, but warnings.json
         // must already be on disk by then.
         let err = run(bare_args(&reader, &work)).unwrap_err();
-        assert!(matches!(err, CliError::Io(_)), "expected cassette miss, got {err:?}");
+        assert!(
+            matches!(err, CliError::Io(_)),
+            "expected cassette miss, got {err:?}"
+        );
         let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&w).unwrap();
         assert_eq!(v["fallback_title_cases"], serde_json::json!(["0951c213"]));

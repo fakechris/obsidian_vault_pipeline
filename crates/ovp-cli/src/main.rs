@@ -427,10 +427,12 @@ enum Cmd {
         not_claiming: Option<String>,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
-    /// M32 turnkey Crystal synthesis: reader packs → units catalog + keyword
-    /// theme clusters → per-cluster cross-source synthesis (`crystal_synth/v1`)
-    /// → grounded filter → batched claim-strength (`crystal_strength/v1`) →
-    /// durable write (delegates to `crystal-write`). Offline by default
+    /// M32/M34 Stage 3a turnkey Crystal synthesis: reader packs → units catalog,
+    /// keyword theme clusters, deterministic full-coverage sub-batches,
+    /// cross-source synthesis (`crystal_synth/v1`), grounded filter,
+    /// conservative citation-set dedup, chunked claim-strength
+    /// (`crystal_strength/v1`), and durable write (delegates to
+    /// `crystal-write`). Offline by default
     /// (`--client replay`); reuses every gate/store fn so it cannot drift from
     /// `crystal-write`. NOT graph/canonical/evergreen/Referent.
     CrystalSynth {
@@ -478,10 +480,9 @@ enum Cmd {
         /// Default OFF — caveated claims go to review.json and the run succeeds.
         #[arg(long)]
         strict: bool,
-        /// Fail loud BEFORE any model call if a cluster exceeds
-        /// --max-cases-per-cluster (instead of silently excluding the overflow
-        /// cases from synthesis). Default OFF — overflow is warned + recorded
-        /// in warnings.json and the run proceeds on the capped slice.
+        /// Enforce the per-model-call case cap after Stage 3a sub-batching.
+        /// Large clusters are split and fully synthesized; this flag fails only
+        /// if an internal batching bug would send an oversized request.
         #[arg(long)]
         strict_cluster_cap: bool,
     },

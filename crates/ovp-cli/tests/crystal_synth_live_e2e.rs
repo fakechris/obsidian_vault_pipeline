@@ -10,8 +10,8 @@
 //! change that alters a request key breaks this test and must re-record.
 //!
 //! Fixture: `tests/fixtures/crystal-synth-live/` — the 34 pilot reader packs
-//! (units.accepted.json + reader.md) and the 6 live cassettes (5 synth
-//! clusters + 1 batched strength call), curated per AGENTS.md from the run
+//! (units.accepted.json + reader.md) and the 7 replay cassettes (5 synth
+//! clusters + 2 chunked strength calls), curated per AGENTS.md from the run
 //! whose verdict closed M32 P0 #2.
 
 use std::path::PathBuf;
@@ -58,8 +58,14 @@ fn live_repro_34_sources_to_22_durable_and_idempotent() {
 
     // First run: the exact live-run shape.
     let first = run("first run");
-    assert!(first.contains("collected: 34 case(s) → 5 cluster(s)"), "{first}");
-    assert!(first.contains("synthesized 28 claim(s); dropped_ungrounded=3"), "{first}");
+    assert!(
+        first.contains("collected: 34 case(s) → 5 cluster(s)"),
+        "{first}"
+    );
+    assert!(
+        first.contains("synthesized 28 claim(s); dropped_ungrounded=3"),
+        "{first}"
+    );
     assert!(first.contains("22 newly appended"), "{first}");
     assert!(first.contains("review (NOT durable): 3"), "{first}");
 
@@ -75,12 +81,23 @@ fn live_repro_34_sources_to_22_durable_and_idempotent() {
     // report is written but empty.
     let warnings = std::fs::read_to_string(work.join("warnings.json")).unwrap();
     let w: serde_json::Value = serde_json::from_str(&warnings).unwrap();
-    assert_eq!(w["fallback_title_cases"].as_array().unwrap().len(), 0, "{w}");
-    assert_eq!(w["cluster_cap_overflow"].as_array().unwrap().len(), 0, "{w}");
+    assert_eq!(
+        w["fallback_title_cases"].as_array().unwrap().len(),
+        0,
+        "{w}"
+    );
+    assert_eq!(
+        w["cluster_cap_overflow"].as_array().unwrap().len(),
+        0,
+        "{w}"
+    );
 
     // Second run into the same store: idempotent by claim_key.
     let second = run("second run");
-    assert!(second.contains("0 newly appended (22 already active)"), "{second}");
+    assert!(
+        second.contains("0 newly appended (22 already active)"),
+        "{second}"
+    );
     let ledger2 = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
     assert_eq!(ledger2.lines().filter(|l| !l.trim().is_empty()).count(), 22);
 }

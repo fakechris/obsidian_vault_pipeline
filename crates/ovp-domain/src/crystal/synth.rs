@@ -17,8 +17,8 @@ use ovp_llm::{ModelMessage, ModelRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::crystal::{
-    lint_candidate, score_candidate, Citation, CrystalCandidate, CrystalClaim, GroundingIndex,
-    ProvenanceClass,
+    Citation, CrystalCandidate, CrystalClaim, GroundingIndex, ProvenanceClass, lint_candidate,
+    score_candidate,
 };
 use crate::units::{Unit, UnitStatus};
 
@@ -81,6 +81,32 @@ pub struct Cluster {
     pub key: String,
     pub theme: String,
     pub cases: Vec<String>,
+}
+
+/// One bounded synthesis batch inside a theme cluster. Stage 3a keeps the
+/// existing cluster semantics but stops truncating large clusters: every case is
+/// assigned to exactly one deterministic batch, and each batch independently
+/// reuses the same `crystal_synth/v1` prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterBatch {
+    pub key: String,
+    pub theme: String,
+    pub batch_index: usize,
+    pub batch_count: usize,
+    pub cases: Vec<String>,
+}
+
+impl ClusterBatch {
+    /// Claim-id namespace for this batch. A one-batch cluster keeps the legacy
+    /// key so existing replay fixtures remain stable; multi-batch clusters add
+    /// a deterministic suffix to avoid claim-id collisions across batches.
+    pub fn claim_prefix(&self) -> String {
+        if self.batch_count <= 1 {
+            self.key.clone()
+        } else {
+            format!("{}-b{:03}", self.key, self.batch_index + 1)
+        }
+    }
 }
 
 /// Errors from the deterministic collection stage.
@@ -180,7 +206,9 @@ pub fn collect_catalog(reader_dir: &Path) -> Result<UnitsCatalog, SynthError> {
         if kept.is_empty() {
             continue;
         }
-        catalog.cases.insert(case_id, CatalogCase { title, units: kept });
+        catalog
+            .cases
+            .insert(case_id, CatalogCase { title, units: kept });
     }
     if catalog.cases.is_empty() {
         return Err(SynthError::Empty(reader_dir.display().to_string()));
@@ -195,13 +223,18 @@ pub fn collect_catalog(reader_dir: &Path) -> Result<UnitsCatalog, SynthError> {
 ///
 /// Takes the already-loaded units so it never re-reads or drifts from the
 /// catalog filter. Deterministic.
-pub fn write_packs(packs_dir: &Path, reader_dir: &Path, catalog: &UnitsCatalog) -> Result<(), SynthError> {
+pub fn write_packs(
+    packs_dir: &Path,
+    reader_dir: &Path,
+    catalog: &UnitsCatalog,
+) -> Result<(), SynthError> {
     // Clear any prior contents so a rerun with a narrower --reader-dir (or after
     // deleting reader packs) cannot leave stale cases the grounding index would
     // still scan and let out-of-scope citations satisfy.
     if packs_dir.exists() {
-        std::fs::remove_dir_all(packs_dir)
-            .map_err(|e| SynthError::Io(format!("clearing packs dir {}: {e}", packs_dir.display())))?;
+        std::fs::remove_dir_all(packs_dir).map_err(|e| {
+            SynthError::Io(format!("clearing packs dir {}: {e}", packs_dir.display()))
+        })?;
     }
     for case_id in catalog.cases.keys() {
         // Re-load the source units for this case and re-apply the same filter,
@@ -259,13 +292,71 @@ pub fn build_grounding_index(packs_dir: &Path) -> Result<GroundingIndex, SynthEr
 pub fn bucket_for(title: &str) -> (&'static str, &'static str) {
     let t = title.to_lowercase();
     const BUCKETS: &[(&str, &str, &[&str])] = &[
-        ("agents", "Agents & agentic systems", &["agent", "agentic", "autonomy", "tool use", "tool-use"]),
-        ("memory", "Memory & context", &["memory", "context", "retrieval", "rag", "recall", "embedding"]),
-        ("coding", "Coding & software", &["code", "coding", "software", "programming", "compiler", "refactor"]),
-        ("models", "Models & training", &["model", "llm", "training", "fine-tune", "fine tuning", "transformer", "weights"]),
-        ("prompting", "Prompting & evaluation", &["prompt", "prompting", "eval", "benchmark", "evaluation"]),
-        ("product", "Product & design", &["product", "design", "ux", "user", "workflow", "interface"]),
-        ("infra", "Infrastructure & systems", &["infra", "infrastructure", "system", "database", "server", "distributed", "cache"]),
+        (
+            "agents",
+            "Agents & agentic systems",
+            &["agent", "agentic", "autonomy", "tool use", "tool-use"],
+        ),
+        (
+            "memory",
+            "Memory & context",
+            &[
+                "memory",
+                "context",
+                "retrieval",
+                "rag",
+                "recall",
+                "embedding",
+            ],
+        ),
+        (
+            "coding",
+            "Coding & software",
+            &[
+                "code",
+                "coding",
+                "software",
+                "programming",
+                "compiler",
+                "refactor",
+            ],
+        ),
+        (
+            "models",
+            "Models & training",
+            &[
+                "model",
+                "llm",
+                "training",
+                "fine-tune",
+                "fine tuning",
+                "transformer",
+                "weights",
+            ],
+        ),
+        (
+            "prompting",
+            "Prompting & evaluation",
+            &["prompt", "prompting", "eval", "benchmark", "evaluation"],
+        ),
+        (
+            "product",
+            "Product & design",
+            &["product", "design", "ux", "user", "workflow", "interface"],
+        ),
+        (
+            "infra",
+            "Infrastructure & systems",
+            &[
+                "infra",
+                "infrastructure",
+                "system",
+                "database",
+                "server",
+                "distributed",
+                "cache",
+            ],
+        ),
     ];
     for (key, theme, needles) in BUCKETS {
         if needles.iter().any(|n| t.contains(n)) {
@@ -280,20 +371,59 @@ pub fn bucket_for(title: &str) -> (&'static str, &'static str) {
 /// in the fixed bucket order above then `misc`.
 pub fn cluster_by_keyword(catalog: &UnitsCatalog) -> Vec<Cluster> {
     // Preserve bucket declaration order via an index map keyed on bucket key.
-    let order = ["agents", "memory", "coding", "models", "prompting", "product", "infra", "misc"];
+    let order = [
+        "agents",
+        "memory",
+        "coding",
+        "models",
+        "prompting",
+        "product",
+        "infra",
+        "misc",
+    ];
     let mut by_key: BTreeMap<&str, (&str, Vec<String>)> = BTreeMap::new();
     for (case_id, case) in &catalog.cases {
         let (key, theme) = bucket_for(&case.title);
-        by_key.entry(key).or_insert_with(|| (theme, Vec::new())).1.push(case_id.clone());
+        by_key
+            .entry(key)
+            .or_insert_with(|| (theme, Vec::new()))
+            .1
+            .push(case_id.clone());
     }
     let mut clusters = Vec::new();
     for key in order {
         if let Some((theme, mut cases)) = by_key.remove(key) {
             cases.sort();
-            clusters.push(Cluster { key: key.to_string(), theme: theme.to_string(), cases });
+            clusters.push(Cluster {
+                key: key.to_string(),
+                theme: theme.to_string(),
+                cases,
+            });
         }
     }
     clusters
+}
+
+/// Split clusters into deterministic bounded batches. Returns an empty vec only
+/// when `clusters` is empty; callers must reject `max_cases_per_batch == 0`.
+pub fn cluster_batches(clusters: &[Cluster], max_cases_per_batch: usize) -> Vec<ClusterBatch> {
+    let mut out = Vec::new();
+    if max_cases_per_batch == 0 {
+        return out;
+    }
+    for cluster in clusters {
+        let batch_count = cluster.cases.len().div_ceil(max_cases_per_batch);
+        for (batch_index, chunk) in cluster.cases.chunks(max_cases_per_batch).enumerate() {
+            out.push(ClusterBatch {
+                key: cluster.key.clone(),
+                theme: cluster.theme.clone(),
+                batch_index,
+                batch_count,
+                cases: chunk.to_vec(),
+            });
+        }
+    }
+    out
 }
 
 // ---- Synthesis model stage ----
@@ -312,20 +442,26 @@ struct SlicedCase<'a> {
 }
 
 /// Build the sliced case JSON for one cluster (caps applied), sorted by case_id.
-fn slice_cluster<'a>(
+fn slice_cases<'a>(
     catalog: &'a UnitsCatalog,
-    cluster: &'a Cluster,
-    max_cases: usize,
+    theme: &'a str,
+    cases_iter: impl IntoIterator<Item = &'a String>,
     max_units: usize,
 ) -> ClusterSlice<'a> {
     let mut cases: BTreeMap<&str, SlicedCase> = BTreeMap::new();
-    for case_id in cluster.cases.iter().take(max_cases) {
+    for case_id in cases_iter {
         if let Some(case) = catalog.cases.get(case_id) {
             let units: Vec<&CatalogUnit> = case.units.iter().take(max_units).collect();
-            cases.insert(case_id.as_str(), SlicedCase { title: &case.title, units });
+            cases.insert(
+                case_id.as_str(),
+                SlicedCase {
+                    title: &case.title,
+                    units,
+                },
+            );
         }
     }
-    ClusterSlice { theme: &cluster.theme, cases }
+    ClusterSlice { theme, cases }
 }
 
 /// Build the synthesis `ModelRequest` for one cluster (namespace = synth/v1).
@@ -335,14 +471,40 @@ pub fn crystal_synth_request(
     max_cases: usize,
     max_units: usize,
 ) -> ModelRequest {
+    synth_request_for_cases(
+        catalog,
+        &cluster.theme,
+        cluster.cases.iter().take(max_cases),
+        max_units,
+    )
+}
+
+/// Build the synthesis `ModelRequest` for one Stage 3a batch. If a cluster has
+/// only one batch and the same caps are used, this request is byte-identical to
+/// the legacy cluster request, preserving existing cassette keys.
+pub fn crystal_synth_batch_request(
+    catalog: &UnitsCatalog,
+    batch: &ClusterBatch,
+    max_units: usize,
+) -> ModelRequest {
+    synth_request_for_cases(catalog, &batch.theme, batch.cases.iter(), max_units)
+}
+
+fn synth_request_for_cases<'a>(
+    catalog: &'a UnitsCatalog,
+    theme: &'a str,
+    cases_iter: impl IntoIterator<Item = &'a String>,
+    max_units: usize,
+) -> ModelRequest {
     let marker = "## Cases";
-    let (system, _) = SYNTH_TEMPLATE.split_once(marker).unwrap_or((SYNTH_TEMPLATE, ""));
-    let slice = slice_cluster(catalog, cluster, max_cases, max_units);
+    let (system, _) = SYNTH_TEMPLATE
+        .split_once(marker)
+        .unwrap_or((SYNTH_TEMPLATE, ""));
+    let slice = slice_cases(catalog, theme, cases_iter, max_units);
     let user = format!(
         "{marker}\n\nTheme: {theme}\n\n{cases}\n",
-        theme = cluster.theme,
-        cases = serde_json::to_string_pretty(&slice.cases)
-            .unwrap_or_else(|_| "{}".to_string()),
+        theme = theme,
+        cases = serde_json::to_string_pretty(&slice.cases).unwrap_or_else(|_| "{}".to_string()),
     );
     ModelRequest {
         model: DEFAULT_MODEL.to_string(),
@@ -384,7 +546,10 @@ struct RawCitation {
 /// `CrystalClaim`s. Claim ids are prefixed with the cluster key (`<key>-<id>`)
 /// to avoid collisions across clusters; malformed claims (empty text or no
 /// citations) are dropped, not fatal. Returns `Err(detail)` if no claims array.
-pub fn parse_synth_claims(reply_text: &str, cluster_key: &str) -> Result<Vec<CrystalClaim>, String> {
+pub fn parse_synth_claims(
+    reply_text: &str,
+    cluster_key: &str,
+) -> Result<Vec<CrystalClaim>, String> {
     let (value, _note) =
         crate::model_reply::parse_reply_value(reply_text).map_err(|d| d.to_string())?;
     let arr = value
@@ -408,7 +573,11 @@ pub fn parse_synth_claims(reply_text: &str, cluster_key: &str) -> Result<Vec<Cry
         let citations: Vec<Citation> = rc
             .citations
             .into_iter()
-            .filter(|c| !c.case_id.trim().is_empty() && !c.unit_id.trim().is_empty() && !c.quote.trim().is_empty())
+            .filter(|c| {
+                !c.case_id.trim().is_empty()
+                    && !c.unit_id.trim().is_empty()
+                    && !c.quote.trim().is_empty()
+            })
             .map(|c| Citation {
                 case_id: c.case_id.trim().to_string(),
                 unit_id: c.unit_id.trim().to_string(),
@@ -422,7 +591,11 @@ pub fn parse_synth_claims(reply_text: &str, cluster_key: &str) -> Result<Vec<Cry
         out.push(CrystalClaim {
             id,
             claim: rc.claim.trim().to_string(),
-            theme: if rc.theme.trim().is_empty() { cluster_key.to_string() } else { rc.theme.trim().to_string() },
+            theme: if rc.theme.trim().is_empty() {
+                cluster_key.to_string()
+            } else {
+                rc.theme.trim().to_string()
+            },
             citations,
             caveat: rc.caveat.filter(|s| !s.trim().is_empty()),
         });
@@ -437,7 +610,10 @@ pub fn parse_synth_claims(reply_text: &str, cluster_key: &str) -> Result<Vec<Cry
 /// citations). The survivors are guaranteed defect-free, so a downstream
 /// `crystal-write` gate is satisfied by construction. Returns the pruned
 /// candidate plus the ids that were dropped (for auditability). Deterministic.
-pub fn filter_grounded(candidate: &CrystalCandidate, index: &GroundingIndex) -> (CrystalCandidate, Vec<String>) {
+pub fn filter_grounded(
+    candidate: &CrystalCandidate,
+    index: &GroundingIndex,
+) -> (CrystalCandidate, Vec<String>) {
     let report = lint_candidate(candidate, index);
     let grounded_ids: std::collections::BTreeSet<&str> = report
         .claims
@@ -452,6 +628,57 @@ pub fn filter_grounded(candidate: &CrystalCandidate, index: &GroundingIndex) -> 
             kept.push(item.clone());
         } else {
             dropped.push(item.id.clone());
+        }
+    }
+    (CrystalCandidate { items: kept }, dropped)
+}
+
+/// One deterministic duplicate removed before the strength judge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DedupedClaim {
+    pub kept_claim_id: String,
+    pub dropped_claim_id: String,
+    pub reason: String,
+}
+
+fn citation_signature(citations: &[Citation]) -> String {
+    let mut parts: Vec<String> = citations
+        .iter()
+        .map(|c| {
+            format!(
+                "{}\u{1f}{}\u{1f}{}",
+                c.case_id.trim(),
+                c.unit_id.trim(),
+                c.quote.trim()
+            )
+        })
+        .collect();
+    parts.sort();
+    parts.dedup();
+    parts.join("\u{1e}")
+}
+
+/// Conservative Stage 3a reduce: if two grounded claims cite the exact same
+/// evidence set, keep the first deterministic emission and drop later repeats.
+/// This avoids spending strength-judge tokens on obvious duplicates without
+/// claiming semantic equivalence between merely similar claims.
+pub fn dedup_exact_citation_sets(
+    candidate: &CrystalCandidate,
+) -> (CrystalCandidate, Vec<DedupedClaim>) {
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for item in &candidate.items {
+        let sig = citation_signature(&item.citations);
+        if let Some(kept_claim_id) = seen.get(&sig) {
+            dropped.push(DedupedClaim {
+                kept_claim_id: kept_claim_id.clone(),
+                dropped_claim_id: item.id.clone(),
+                reason: "exact_citation_set".to_string(),
+            });
+        } else {
+            seen.insert(sig, item.id.clone());
+            kept.push(item.clone());
         }
     }
     (CrystalCandidate { items: kept }, dropped)
@@ -475,7 +702,9 @@ pub fn strength_request(candidate: &CrystalCandidate, catalog: &UnitsCatalog) ->
         }
     }
     let marker = "## Claims and their cited evidence";
-    let (system, _) = STRENGTH_TEMPLATE.split_once(marker).unwrap_or((STRENGTH_TEMPLATE, ""));
+    let (system, _) = STRENGTH_TEMPLATE
+        .split_once(marker)
+        .unwrap_or((STRENGTH_TEMPLATE, ""));
     let mut user = format!("{marker}\n\n");
     for item in &candidate.items {
         user.push_str(&format!("### claim_id: {}\n", item.id));
@@ -562,7 +791,10 @@ mod tests {
                 })
             })
             .collect();
-        let ex = validate(&raw, &SourceDoc::article("T", "https://e/x", None, None, vec![], body));
+        let ex = validate(
+            &raw,
+            &SourceDoc::article("T", "https://e/x", None, None, vec![], body),
+        );
         ex.accepted().cloned().collect()
     }
 
@@ -581,15 +813,22 @@ mod tests {
     #[test]
     fn collect_catalog_keys_by_dirname_and_filters_unquoted() {
         let tmp = tempfile::tempdir().unwrap();
-        write_pack(tmp.path(), "m18-01", "Agent memory systems",
+        write_pack(
+            tmp.path(),
+            "m18-01",
+            "Agent memory systems",
             "A chunk is a structurally neutral container.",
-            &["A chunk is a structurally neutral container."]);
+            &["A chunk is a structurally neutral container."],
+        );
         // A dir with NO units file is skipped.
         std::fs::create_dir_all(tmp.path().join("empty-case")).unwrap();
         let cat = collect_catalog(tmp.path()).unwrap();
         assert_eq!(cat.cases.len(), 1);
         let case = &cat.cases["m18-01"];
-        assert_eq!(case.title, "Agent memory systems", "title from reader.md heading");
+        assert_eq!(
+            case.title, "Agent memory systems",
+            "title from reader.md heading"
+        );
         assert_eq!(case.units.len(), 1);
         assert!(!case.units[0].quote.is_empty());
     }
@@ -620,9 +859,27 @@ mod tests {
     #[test]
     fn cluster_is_deterministic_and_drops_empty() {
         let mut cat = UnitsCatalog::default();
-        cat.cases.insert("c-b".into(), CatalogCase { title: "Memory and retrieval".into(), units: vec![] });
-        cat.cases.insert("c-a".into(), CatalogCase { title: "Agentic systems".into(), units: vec![] });
-        cat.cases.insert("c-c".into(), CatalogCase { title: "Another memory piece".into(), units: vec![] });
+        cat.cases.insert(
+            "c-b".into(),
+            CatalogCase {
+                title: "Memory and retrieval".into(),
+                units: vec![],
+            },
+        );
+        cat.cases.insert(
+            "c-a".into(),
+            CatalogCase {
+                title: "Agentic systems".into(),
+                units: vec![],
+            },
+        );
+        cat.cases.insert(
+            "c-c".into(),
+            CatalogCase {
+                title: "Another memory piece".into(),
+                units: vec![],
+            },
+        );
         let clusters = cluster_by_keyword(&cat);
         // agents bucket emitted before memory (declaration order).
         assert_eq!(clusters[0].key, "agents");
@@ -633,11 +890,37 @@ mod tests {
     }
 
     #[test]
+    fn cluster_batches_cover_every_case_without_truncation() {
+        let cluster = Cluster {
+            key: "memory".into(),
+            theme: "Memory & context".into(),
+            cases: vec![
+                "c1".into(),
+                "c2".into(),
+                "c3".into(),
+                "c4".into(),
+                "c5".into(),
+            ],
+        };
+        let batches = cluster_batches(&[cluster], 2);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].cases, vec!["c1", "c2"]);
+        assert_eq!(batches[1].cases, vec!["c3", "c4"]);
+        assert_eq!(batches[2].cases, vec!["c5"]);
+        assert_eq!(batches[0].claim_prefix(), "memory-b001");
+        assert_eq!(batches[2].claim_prefix(), "memory-b003");
+    }
+
+    #[test]
     fn write_packs_and_index_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
-        write_pack(tmp.path(), "m18-01", "Agents",
+        write_pack(
+            tmp.path(),
+            "m18-01",
+            "Agents",
             "A chunk is a structurally neutral container.",
-            &["A chunk is a structurally neutral container."]);
+            &["A chunk is a structurally neutral container."],
+        );
         let cat = collect_catalog(tmp.path()).unwrap();
         let packs = tmp.path().join("packs");
         write_packs(&packs, tmp.path(), &cat).unwrap();
@@ -667,16 +950,32 @@ mod tests {
         let mut index = GroundingIndex::new();
         index.insert("m18-01".to_string(), units);
         let good = CrystalClaim {
-            id: "memory-1".into(), claim: "grounded".into(), theme: "memory".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral".into(), claimed_line: None }],
+            id: "memory-1".into(),
+            claim: "grounded".into(),
+            theme: "memory".into(),
+            citations: vec![Citation {
+                case_id: "m18-01".into(),
+                unit_id: uid,
+                quote: "structurally neutral".into(),
+                claimed_line: None,
+            }],
             caveat: None,
         };
         let bad = CrystalClaim {
-            id: "memory-2".into(), claim: "ungrounded".into(), theme: "memory".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: "u-nope".into(), quote: "nope".into(), claimed_line: None }],
+            id: "memory-2".into(),
+            claim: "ungrounded".into(),
+            theme: "memory".into(),
+            citations: vec![Citation {
+                case_id: "m18-01".into(),
+                unit_id: "u-nope".into(),
+                quote: "nope".into(),
+                claimed_line: None,
+            }],
             caveat: None,
         };
-        let cand = CrystalCandidate { items: vec![good, bad] };
+        let cand = CrystalCandidate {
+            items: vec![good, bad],
+        };
         let (kept, dropped) = filter_grounded(&cand, &index);
         assert_eq!(kept.items.len(), 1);
         assert_eq!(kept.items[0].id, "memory-1");
@@ -684,6 +983,52 @@ mod tests {
         // The survivor is defect-free by construction.
         let report = lint_candidate(&kept, &index);
         assert_eq!(report.n_with_defects, 0);
+    }
+
+    #[test]
+    fn dedup_exact_citation_sets_keeps_first_claim_only() {
+        let cite = Citation {
+            case_id: "m18-01".into(),
+            unit_id: "u-1".into(),
+            quote: "same quote".into(),
+            claimed_line: None,
+        };
+        let first = CrystalClaim {
+            id: "memory-b001-1".into(),
+            claim: "first wording".into(),
+            theme: "memory".into(),
+            citations: vec![cite.clone()],
+            caveat: None,
+        };
+        let duplicate = CrystalClaim {
+            id: "memory-b002-1".into(),
+            claim: "second wording".into(),
+            theme: "memory".into(),
+            citations: vec![cite],
+            caveat: None,
+        };
+        let distinct = CrystalClaim {
+            id: "memory-b002-2".into(),
+            claim: "different evidence".into(),
+            theme: "memory".into(),
+            citations: vec![Citation {
+                case_id: "m18-02".into(),
+                unit_id: "u-2".into(),
+                quote: "other quote".into(),
+                claimed_line: None,
+            }],
+            caveat: None,
+        };
+        let (kept, dropped) = dedup_exact_citation_sets(&CrystalCandidate {
+            items: vec![first, duplicate, distinct],
+        });
+        assert_eq!(
+            kept.items.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["memory-b001-1", "memory-b002-2"]
+        );
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].kept_claim_id, "memory-b001-1");
+        assert_eq!(dropped[0].dropped_claim_id, "memory-b002-1");
     }
 
     #[test]
@@ -700,20 +1045,25 @@ mod tests {
     #[test]
     fn synth_request_carries_namespace_and_cases() {
         let mut cat = UnitsCatalog::default();
-        cat.cases.insert("m18-01".into(), CatalogCase {
-            title: "Agents".into(),
-            units: vec![CatalogUnit {
-                unit_id: "u-0".into(),
-                line: Some(3),
-                quote: "a quote".into(),
-                attribution: "author".into(),
-                modality: "asserted".into(),
-            }],
-        });
+        cat.cases.insert(
+            "m18-01".into(),
+            CatalogCase {
+                title: "Agents".into(),
+                units: vec![CatalogUnit {
+                    unit_id: "u-0".into(),
+                    line: Some(3),
+                    quote: "a quote".into(),
+                    attribution: "author".into(),
+                    modality: "asserted".into(),
+                }],
+            },
+        );
         let clusters = cluster_by_keyword(&cat);
         let req = crystal_synth_request(&cat, &clusters[0], 16, 22);
         assert_eq!(req.cache_namespace.as_deref(), Some("crystal_synth/v1"));
-        let ModelMessage::User { content } = &req.messages[0] else { panic!() };
+        let ModelMessage::User { content } = &req.messages[0] else {
+            panic!()
+        };
         assert!(content.contains("m18-01"));
         assert!(content.contains("a quote"));
         assert!(req.system.unwrap().contains("crystal_synth/v1"));
