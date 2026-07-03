@@ -70,7 +70,7 @@ Legend — Auth: A=authority-writing, D=derived-writing. Cost: 0/L/$. Status: �
 | pinboard-sync | API/export → capture files + `pinboard-sync.jsonl` | A | 0 | ✅ | fetch-fail (retry next run) |
 | intake sweep | Clippings/00-Capture/02-Pinboard → 01-Raw, normalize | A | 0 | ✅ | needs_content · duplicate(parked) · thin/broken(flagged) |
 | dedup | URL + content-sha256 | A | 0 | ✅ | — (dupes parked, ledgered) |
-| web-fetch enrich | bare bookmarks → body | A | 0 | 🟡 wired, live unvalidated; enriched files land a day late (known bug) | fetch-fail → needs_content persists |
+| web-fetch enrich | bare bookmarks → body | A | 0 | 🟡 wired, live unvalidated; same-run vs next-run reader pickup needs fixture verification | fetch-fail → needs_content persists |
 | github enrich | repo URLs → README/metadata | A | 0 | 🟡 wired, live unvalidated | api-fail → unenriched, readable anyway |
 | image/attachment | download to attachments, source hash untouched | A | 0 | 🟡 wired (Phase 4.5), live unvalidated | 404/timeout behavior undefined — validate |
 | paper route | arXiv → dedicated reader? | — | — | ⬜ decision pending (M32 §11 A/B) | — |

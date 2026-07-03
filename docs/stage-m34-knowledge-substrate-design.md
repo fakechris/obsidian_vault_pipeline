@@ -61,10 +61,10 @@ which is an identity question, which needs a similarity substrate.
 
 ### 2b. Hypotheses — require the §7 comparative experiment before ANY implementation
 
-- **H1 (entities):** an explicit identity layer improves the student product (browse, review,
-  trust) enough to justify its machinery. Counter-hypothesis: query-time LLM aggregation over a
-  good index (arm D) delivers the same product functions with no persistent identity at all —
-  current industry practice increasingly favors compute-at-read over precomputed structure, and
+- **H1 (entities):** an explicit identity layer improves the knowledge-work product (browse,
+  review, trust) enough to justify its machinery. Counter-hypothesis: query-time LLM aggregation
+  over a good index (arm D) delivers the same product functions with no persistent identity at all
+  — current industry practice increasingly favors compute-at-read over precomputed structure, and
   a well-prompted model may simply beat a rule ladder.
 - **H2 (ladder shape):** IF entities win, the T1–T4 ladder (§5) is the right shape — and even
   then, **projection-first**: anchors derived (rebuildable) from durable claims' citations,
@@ -103,12 +103,14 @@ L1 similarity (new)             embeddings over cases/units; soft structure; con
 L2 grouping   (new)             communities on the L1 kNN graph (deterministic label
                                 propagation, sort-based tie-breaks); EPHEMERAL — exists only
                                 to feed synthesis; rebuilt freely; never user-facing identity
-L3 identity   (new, slow)       grounded entities via the T1→T4 promotion ladder (§5):
+L3 identity   (hypothesis)      grounded entities via the T1→T4 promotion ladder (§5), only if
+                                the §7 experiment selects C-lite:
                                 cheap tiers (topics/common anchors) exist from day one at
                                 zero LLM cost; durable identity ONLY through the T4
                                 evidence gate; claims subject-bind progressively
-lifecycle     (redesign)        claim lineage = (subject, intent); strengthen / append /
-                                contradict; append-only ledger + superseded_by (§6)
+lifecycle     (hypothesis)      claim lineage = (subject, intent); strengthen / append /
+                                contradict; append-only ledger + superseded_by (§6), otherwise
+                                retrieval-based lineage stays the near-term mechanism
 ```
 
 Layer discipline (each layer is FORBIDDEN to do the next layer's job):
@@ -159,10 +161,13 @@ promotion *Tiers* within/toward L3. Do not conflate them.)
    including 中英 alias binding — is exclusively a T4 operation**, done only on co-mention evidence
    + embedding candidacy + judge, never model assertion alone. This is what makes T1/T2 safe at
    zero LLM cost: common sense needs no proof because low tiers assert no identity.
-2. **Genericity ceiling (deterministic).** A surface form whose document frequency exceeds a
-   corpus threshold (`AI`, `agent`, `context`, `模型`…) is capped at T1 forever and never enters
-   the candidate queue. Zero tokens, pure statistics — this is the guard KMEM lacks (its live
-   graph carries `context`/`Agent`/`Skills` as high-confidence entities; observed 2026-07-02).
+2. **Genericity ceiling (deterministic).** A naked, unqualified surface form whose document
+   frequency exceeds a corpus threshold (`AI`, `agent`, `context`, `模型`…) is capped at T1 and
+   never enters the candidate queue by itself. Scoped phrases, titles, code symbols, and
+   disambiguated anchors (`attention mechanism`, `agent architecture`, `memory system`,
+   `Attention Is All You Need`, `BGE-M3`) are scored separately and may progress to T2/T3 if their
+   own evidence supports it. Zero tokens, pure statistics — the guard is against promoting
+   undifferentiated generic words, not against core course/project concepts.
 3. **Graceful degradation of lifecycle by tier.** Claims may *display-reference* anchors of any
    tier from day one (navigation/aggregation work immediately); **supersede/contradict activate
    only when the subject is T4**. Until then, lineage falls back to soft dedup
@@ -181,11 +186,13 @@ on the 994-pack corpus; batch judging puts a full-corpus pass at ~5–15 LLM cal
 incremental daily path at amortized near-zero. LLM spend concentrates exclusively on high-value
 candidates at the T3→T4 boundary.
 
-**Relations need no extractor — the claim IS the edge.** A durable claim citing units under two
-anchors is an evidence-backed edge between them, by construction. The graph is
-entity–claim–entity with every edge quote-chained. KMEM must ask the LLM for
-`{relationships}` (unevidenced); OVP gets a stronger graph structurally, for free. A separate
-relation-extraction stage is a **non-goal** (§9).
+**Relation extraction remains unproven; C-lite tests whether claims can serve as edges.** In the
+candidate-C design, a durable claim citing units under two anchors can be projected as an
+evidence-backed edge between them. That would give an entity–claim–entity graph where every edge
+quote-chains through the claim, without a separate LLM relation extractor. Whether this provenance
+advantage creates enough user value versus KMEM-style relationship extraction is exactly what the
+§7 experiment must measure. A separate relation-extraction stage is a **non-goal** unless the
+experiment falsifies this assumption (§9).
 
 **Product surface:** users see three natural things — **Topics** (fast, allowed to be imperfect),
 **Crystals** (cross-source conclusions), **Evidence** (one click to the quote). "Durable
@@ -195,11 +202,11 @@ identity", tiers, and gates are internal mechanics, never user-facing vocabulary
 (person/org/tool… — metadata, not gate input; an open tag at most), relation extraction (see
 above), and merge/split governance UI (the append-only ledger records enough to build it later).
 
-This EXTENDS the moat rather than betraying it: "every durable thing traces to source quotes" now
-covers claims AND entities. The design sentence: **KMEM proved the product value of
-entity/community/crystal; OVP proves those can exist under quote-grounded, audit-first
-constraints** — fast tiers carry the product experience, earned identity carries the long-term
-trusted structure.
+If C-lite wins, it extends the moat rather than betraying it: "every durable thing traces to source
+quotes" would cover claims and anchors. The design sentence becomes: **KMEM demonstrates the
+product value of entity/community/crystal surfaces; OVP must prove those surfaces can exist under
+quote-grounded, audit-first constraints** — fast tiers carry the product experience, earned
+identity carries the long-term trusted structure.
 
 **Kill criterion:** if S2 (§7) fails human check the way M13 did, T3/T4 stay out (T1/T2 are
 harmless and keep working), this section is marked DEAD, and we document why bottom-up +
@@ -261,7 +268,7 @@ One experiment replaces the former S2/S3 mechanism-spikes. S1 is kept (it serves
   AND ≥3 genuinely bilingual communities. Baseline: keyword buckets on the same sample.
 
 - **S2′ — four-arm product comparison** on 50–100 real historical sources (papers, web, notes,
-  GitHub, 中文材料 — the student mix), artifacts under `.run/m34-spikes/`:
+  GitHub, 中文材料 — a general knowledge-work mix), artifacts under `.run/m34-spikes/`:
   - **A — KMEM-style:** memory → LLM entity/relations → community → crystal summary. Use the live
     Nowledge instance where its 0.9.1 stability allows; fall back to existing captures (M21/M26
     machinery) — sample size may shrink, record it.
@@ -275,7 +282,8 @@ One experiment replaces the former S2/S3 mechanism-spikes. S1 is kept (it serves
     LLM that aggregates "everything about X" / "what does this corpus say" on demand, answers
     verified through the existing citation gate. The "a good prompt beats a rule ladder"
     null-hypothesis arm.
-  - **Task-anchored metrics** (student tasks, reusing the M26 workbench pattern; human-judged):
+  - **Task-anchored metrics** (knowledge-work tasks, reusing the M26 workbench pattern;
+    human-judged):
     "这批资料讲了什么" comprehension speed/quality · important-concept recall vs a human
     reference list (precision AND recall) · wrong-merge count · unsupported-claim count ·
     crystal→quote traceability (one click, verbatim) · token cost per source and per query ·
