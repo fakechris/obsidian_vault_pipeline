@@ -385,6 +385,61 @@ on.
 
 Failed arm → its layer is not built; this document is amended with the evidence either way.
 
+### 7.3 Round-2 result (2026-07-04, S2v2 partial compliance) — scoped citability + audit
+
+Run: 100 sources · 30 corpus-derived tasks (6 intents × 5) · 4 arms · single blinded judge ·
+0 parse errors. Winners: **A 16/30 · B 5/30 · D 5/30 · C 4/30.** Averages: B best
+factual_correctness (3.83) + traceability (3.67); A best task_success (3.93) + coverage (3.90).
+Full-corpus substrate facts: OVP durable = **158 active claims / 994 packs (~0.16/source)** + 120
+caveated pending review; KMEM extracted memories on only **223/994 sources (22%)**, crystals
+touch 82. Artifacts: `.run/m34-s2v2-20260704/`.
+
+**Genuine improvements over round 1 (credit where due):** neutral task phrasing (no
+evidence-format instructions), blinded randomized labels, judge told not to reward citations per
+se, C-lite rebuilt over units (not claims), B fielded full-corpus claims + unit fallback,
+stratified deterministic sampling with bucket balancing, retries → zero empty answers.
+
+**Verified deviations — this round's biases run PRO-A (mirror image of round 1):**
+1. **Sample conditioned on KMEM coverage** (`eligible = memories > 0` in the script): 100% of the
+   sample has KMEM memories vs a 22% base rate. A's 16/30 is a home-game score on the fifth of
+   the vault KMEM covers; OVP packs cover 98%. No whole-vault frame was reported.
+2. **factual_correctness judged against the arm's OWN evidence, not the sources** (§7.2 requires
+   source-truth). A's evidence is itself LLM-written summaries whose faithfulness was never
+   checked; OVP arms carry verbatim quotes. The moat dimension was effectively removed from the
+   metric. Also: judge = the answer-writing model family, single judge (acknowledged).
+3. **OVP was fielded without its own breadth layer.** Reader cards — grounded per-source
+   summaries with cited units, SHIPPED since M17 — are the direct analog of KMEM memories, and no
+   arm included them. B fought orientation/review tasks with 29 claims + raw units against A's
+   776 memories + 71 crystals. The fair OVP stack is claims + cards + units.
+4. Minor: A's entity/community items were corpus-wide (not sample-scoped); §7.2's behavioral
+   trust probe and per-arm corpus-coverage columns were not implemented; `unsupported_risk`
+   naming ambiguous (rename next round).
+
+**Cross-round convergent signals (robust — survived opposite biases in rounds 1 and 2):**
+- Grounded durable claims: best factuality/traceability, worst coverage — BOTH rounds.
+- Orientation/breadth tasks favor summary-style surfaces — BOTH rounds.
+- C (anchors): weak in both rounds even when rebuilt over units — H1 still has NO supporting
+  evidence; the entity route remains unproven.
+- D: useful for lookup/evidence tasks, unstable without synthesis/ranking — both rounds.
+
+**May be cited for:** the convergent signals; the substrate facts (0.16 claims/source; KMEM 22%
+coverage); "on KMEM-covered sources, judged without source-truth verification, KMEM's surface
+wins user-facing breadth tasks."
+**May NOT be cited for:** "KMEM beats OVP" (home-game sample + no source-truth check), any
+whole-vault verdict, or killing/keeping the entity layer.
+
+**Round-3 (S2v3) required fixes:** dual-frame sampling (50 KMEM-covered + 50 uniform whole-vault,
+both frames reported) · factual_correctness verified against source quotes/packs for ALL arms
+(exposes summary unfaithfulness symmetrically) · B+ arm = claims + reader cards + units (the real
+product stack) · second judge from a different model family · per-arm corpus-coverage and
+whole-vault expected-score columns · trust probe · rename `unsupported_risk` →
+`unsupported_penalty`.
+
+**Product actions safe under ALL remaining outcomes** (no further eval needed to justify):
+(a) surface reader cards in the retrieval/ask/index path — the breadth layer largely EXISTS and
+was simply not fielded; (b) the review queue is now 120 caveated claims (was 6 at pilot scale) —
+the G4 weekly review loop is urgent, exactly as `product-pipeline.md` predicted.
+
 ## 8. Execution order
 
 1. **Stage 3a (independent, ships first):** map-reduce execution layer — deterministic sub-batches
