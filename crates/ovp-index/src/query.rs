@@ -3,7 +3,9 @@
 
 use serde::Serialize;
 
+use crate::evidence::EvidenceModel;
 use crate::model::{ClaimStatus, IndexModel, SourceStatus};
+use crate::score::lexical_score;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryKind {
@@ -11,6 +13,8 @@ pub enum QueryKind {
     Packs,
     Claims,
     Runs,
+    Cards,
+    Units,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -102,7 +106,11 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
                     p.title,
                     p.cards,
                     p.units,
-                    if p.json_repaired { " [json-repaired]" } else { "" }
+                    if p.json_repaired {
+                        " [json-repaired]"
+                    } else {
+                        ""
+                    }
                 ),
                 path: Some(format!("{}/reader.md", p.pack_dir)),
             });
@@ -124,7 +132,12 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             if !c.sources.is_empty() {
                 line.push_str(&format!(" ({} sources)", c.sources.len()));
             }
-            hits.push(Hit { kind: "claim".into(), status: status.into(), line, path: None });
+            hits.push(Hit {
+                kind: "claim".into(),
+                status: status.into(),
+                line,
+                path: None,
+            });
         }
     }
 
@@ -151,6 +164,108 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     hits
 }
 
+pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> Vec<Hit> {
+    let status_ok = |s: &str| q.status.as_deref().map(|want| want == s).unwrap_or(true);
+    let kind_ok = |k: QueryKind| q.kind.map(|want| want == k).unwrap_or(true);
+    let term = q.term.as_deref().unwrap_or("");
+    let mut scored: Vec<(f64, String, Hit)> = Vec::new();
+
+    if q.date.is_some() {
+        return Vec::new();
+    }
+
+    if kind_ok(QueryKind::Cards) && status_ok("card") {
+        for card in &evidence.cards {
+            let score = match q.term.as_deref() {
+                None => 1.0,
+                Some(_) => lexical_score(
+                    term,
+                    &[
+                        &card.source_title,
+                        &card.title,
+                        &card.content,
+                        &card.pack_dir,
+                    ],
+                ),
+            };
+            if score <= 0.0 {
+                continue;
+            }
+            scored.push((
+                score,
+                card.id.clone(),
+                Hit {
+                    kind: "card".into(),
+                    status: "card".into(),
+                    line: format!(
+                        "{} — {}{}",
+                        card.source_title,
+                        card.title,
+                        preview_suffix(&card.content)
+                    ),
+                    path: Some(format!("{}/reader.md", card.pack_dir)),
+                },
+            ));
+        }
+    }
+
+    if kind_ok(QueryKind::Units) && status_ok("unit") {
+        for unit in &evidence.units {
+            let line_str = unit.line.map(|n| format!(" line {n}")).unwrap_or_default();
+            let score = match q.term.as_deref() {
+                None => 1.0,
+                Some(_) => lexical_score(
+                    term,
+                    &[&unit.source_title, &unit.text, &unit.quote, &unit.pack_dir],
+                ),
+            };
+            if score <= 0.0 {
+                continue;
+            }
+            scored.push((
+                score,
+                unit.id.clone(),
+                Hit {
+                    kind: "unit".into(),
+                    status: "unit".into(),
+                    line: format!(
+                        "{}{} — {}{}",
+                        unit.source_title,
+                        line_str,
+                        unit.text,
+                        preview_suffix(&unit.quote)
+                    ),
+                    path: Some(format!("{}/reader.md", unit.pack_dir)),
+                },
+            ));
+        }
+    }
+
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, hit)| hit)
+        .collect()
+}
+
+fn preview_suffix(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let preview: String = trimmed.chars().take(160).collect();
+    if trimmed.chars().count() > 160 {
+        format!(" — {preview}...")
+    } else {
+        format!(" — {preview}")
+    }
+}
+
 pub fn source_status_str(s: SourceStatus) -> &'static str {
     match s {
         SourceStatus::Queued => "queued",
@@ -169,5 +284,83 @@ pub fn claim_status_str(s: ClaimStatus) -> &'static str {
         ClaimStatus::Superseded => "superseded",
         ClaimStatus::Retracted => "retracted",
         ClaimStatus::Caveated => "caveated",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::evidence::{CardEvidenceRow, EvidenceModel, UnitEvidenceRow, EVIDENCE_SCHEMA};
+    use crate::query::{run_evidence_query, Query, QueryKind};
+
+    fn evidence() -> EvidenceModel {
+        EvidenceModel {
+            schema: EVIDENCE_SCHEMA.into(),
+            date: "2026-07-06".into(),
+            cards: vec![CardEvidenceRow {
+                id: "card:40-Resources/Reader/a:0".into(),
+                pack_dir: "40-Resources/Reader/a".into(),
+                source_sha256: Some("sha-a".into()),
+                source_title: "Agent Memory Systems".into(),
+                title: "Memory as state".into(),
+                content: "Agent memory should be treated as persistent state.".into(),
+                unit_type: Some("claim".into()),
+                cited_unit_ids: vec!["u-001".into()],
+            }],
+            units: vec![UnitEvidenceRow {
+                id: "unit:40-Resources/Reader/a:u-001".into(),
+                pack_dir: "40-Resources/Reader/a".into(),
+                source_sha256: Some("sha-a".into()),
+                source_title: "Agent Memory Systems".into(),
+                unit_id: "u-001".into(),
+                text: "代理记忆是持久状态。".into(),
+                quote: "Agent memory should be treated as persistent state.".into(),
+                line: Some(12),
+                attribution: "author".into(),
+                modality: "asserted".into(),
+            }],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn evidence_query_searches_card_content() {
+        let hits = run_evidence_query(
+            &evidence(),
+            &Query {
+                kind: Some(QueryKind::Cards),
+                term: Some("persistent state".into()),
+                ..Default::default()
+            },
+            10,
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].kind, "card");
+        assert!(hits[0].line.contains("Memory as state"));
+        assert_eq!(
+            hits[0].path.as_deref(),
+            Some("40-Resources/Reader/a/reader.md")
+        );
+    }
+
+    #[test]
+    fn evidence_query_searches_cjk_units_and_returns_stable_path() {
+        let hits = run_evidence_query(
+            &evidence(),
+            &Query {
+                kind: Some(QueryKind::Units),
+                term: Some("记忆".into()),
+                ..Default::default()
+            },
+            10,
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].kind, "unit");
+        assert!(hits[0].line.contains("代理记忆"));
+        assert_eq!(
+            hits[0].path.as_deref(),
+            Some("40-Resources/Reader/a/reader.md")
+        );
     }
 }

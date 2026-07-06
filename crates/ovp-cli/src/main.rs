@@ -263,14 +263,15 @@ enum Cmd {
         date: Option<String>,
     },
     /// PRODUCT — query the read model: list/search/filter sources, reader
-    /// packs, crystal claims, and runs. `ovp-next find --vault-root V chunks`
+    /// packs, crystal claims, runs, and deep evidence cards/units.
+    /// `ovp-next find --vault-root V chunks`
     /// or `--kind sources --status blocked`. Run `index` (or `daily`) first.
     Find {
         #[arg(long)]
         vault_root: PathBuf,
         /// Case-insensitive substring over titles/URLs/paths/cards/claims.
         term: Option<String>,
-        /// Restrict to one kind: sources|packs|claims|runs.
+        /// Restrict to one kind: sources|packs|claims|runs|cards|units.
         #[arg(long)]
         kind: Option<String>,
         /// Status filter (queued|processed|failed|blocked|needs_content|

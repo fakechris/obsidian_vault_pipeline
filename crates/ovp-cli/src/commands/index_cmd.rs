@@ -5,7 +5,10 @@
 
 use std::path::PathBuf;
 
-use ovp_index::{build_index, read_index, run_query, write_index, Query, QueryKind};
+use ovp_index::{
+    build_evidence, build_index, read_evidence, read_index, run_evidence_query, run_query,
+    write_evidence, write_index, Query, QueryKind,
+};
 
 use crate::CliError;
 
@@ -17,8 +20,16 @@ pub struct IndexArgs {
 pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
     let model = build_index(&args.vault_root, &args.date, None).map_err(CliError::Io)?;
     let rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
+    let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
+    let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
     let t = &model.totals;
     println!("index [{}]: {rel}", args.date);
+    println!(
+        "  evidence: {evidence_rel} (cards={} units={} warnings={})",
+        evidence.cards.len(),
+        evidence.units.len(),
+        evidence.warnings.len()
+    );
     println!(
         "  sources={} (queued={} processed={} failed={} blocked={} needs_content={} dup={})",
         t.sources, t.queued, t.processed, t.failed, t.blocked, t.needs_content, t.duplicates
@@ -47,17 +58,33 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         Some("packs") => Some(QueryKind::Packs),
         Some("claims") => Some(QueryKind::Claims),
         Some("runs") => Some(QueryKind::Runs),
+        Some("cards") => Some(QueryKind::Cards),
+        Some("units") => Some(QueryKind::Units),
         Some(other) => {
             return Err(CliError::Io(format!(
-                "unknown --kind `{other}` (sources|packs|claims|runs)"
+                "unknown --kind `{other}` (sources|packs|claims|runs|cards|units)"
             )))
         }
     };
-    let query = Query { kind, status: args.status, date: args.date, term: args.term };
-    let hits = run_query(&model, &query);
+    let query = Query {
+        kind,
+        status: args.status,
+        date: args.date,
+        term: args.term,
+    };
+    let hits = match kind {
+        Some(QueryKind::Cards | QueryKind::Units) => {
+            let evidence = read_evidence(&args.vault_root).map_err(CliError::Io)?;
+            run_evidence_query(&evidence, &query, 200)
+        }
+        _ => run_query(&model, &query),
+    };
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits).map_err(|e| CliError::Io(e.to_string()))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&hits).map_err(|e| CliError::Io(e.to_string()))?
+        );
         return Ok(());
     }
     if hits.is_empty() {

@@ -184,8 +184,8 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 1, "bare bookmark left");
     for state in [
         ".ovp/daily-runs.jsonl", ".ovp/intake.jsonl", ".ovp/pinboard-sync.jsonl",
-        ".ovp/reports/daily-e2e.json", ".ovp/index/index.json", ".ovp/console/index.html",
-        "60-Logs/pipeline.jsonl",
+        ".ovp/reports/daily-e2e.json", ".ovp/index/index.json", ".ovp/index/evidence.json",
+        ".ovp/console/index.html", "60-Logs/pipeline.jsonl",
     ] {
         assert!(vault.join(state).exists(), "missing {state}");
     }
@@ -274,6 +274,16 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         "find", "--vault-root", vault.to_str().unwrap(), "chunk",
     ]));
     assert!(stdout.contains("The Chunk Problem"), "{stdout}");
+    let stdout = run_ok(bin().args([
+        "find", "--vault-root", vault.to_str().unwrap(),
+        "--kind", "cards", "structurally neutral",
+    ]));
+    assert!(stdout.contains("[card") && stdout.contains("Card for The Chunk Problem"), "{stdout}");
+    let stdout = run_ok(bin().args([
+        "find", "--vault-root", vault.to_str().unwrap(),
+        "--kind", "units", "structurally neutral",
+    ]));
+    assert!(stdout.contains("[unit") && stdout.contains("A chunk is structurally neutral"), "{stdout}");
 
     // === Failure → retry → blocked: a source with NO cassettes. ===
     std::fs::write(
