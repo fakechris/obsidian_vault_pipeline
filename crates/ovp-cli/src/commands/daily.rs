@@ -19,7 +19,7 @@ use ovp_daily::{
     RunStatus,
 };
 use ovp_domain::VaultLayout;
-use ovp_index::{build_index, write_index};
+use ovp_index::{build_evidence, build_index, write_evidence, write_index};
 use ovp_enrich::github::{
     enrich_github_repos, parse_github_repo_url, FixtureGitHubFetch, GitHubFetch,
 };
@@ -305,6 +305,8 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     let model = build_index(&args.vault_root, &args.date, Some(&args.run_id))
         .map_err(CliError::Io)?;
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
+    let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
+    let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
     let _ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
 
@@ -336,7 +338,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         "  done: {} processed, {failed} failed, {} skipped (report: {report_rel})",
         daily.processed.len(), daily.skipped
     );
-    println!("  index: {index_rel} · console: {console_rel}");
+    println!("  index: {index_rel} · evidence: {evidence_rel} · console: {console_rel}");
 
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now

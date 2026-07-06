@@ -18,12 +18,17 @@
 //! where a different backend would slot in.
 
 pub mod build;
+pub mod evidence;
 pub mod model;
 pub mod query;
+pub mod score;
 
 pub use build::{build_index, read_index, write_index};
+pub use evidence::{build_evidence, read_evidence, write_evidence, EvidenceModel};
 pub use model::{
     BlockedSource, ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, RunRow, RunStats,
     SourceRow, SourceStatus, Totals, INDEX_SCHEMA,
 };
-pub use query::{claim_status_str, run_query, source_status_str, Hit, Query, QueryKind};
+pub use query::{
+    claim_status_str, run_evidence_query, run_query, source_status_str, Hit, Query, QueryKind,
+};
