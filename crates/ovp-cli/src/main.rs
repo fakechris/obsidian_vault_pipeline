@@ -329,7 +329,7 @@ enum Cmd {
         no_llm: bool,
     },
     /// PRODUCT — retrieval-augmented Q&A over OVP product state. Queries
-    /// the JSON index for context, sends to LLM, prints a cited answer.
+    /// the evidence index for claim/card/unit context, sends to LLM, prints a cited answer.
     /// Ephemeral reuse surface — never enters ledger.
     Ask {
         #[arg(long)]

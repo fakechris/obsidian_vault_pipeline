@@ -15,10 +15,12 @@ use ovp_domain::units::{
     critic_model_request, extract_units, read_source_from_path, unit_model_request, Unit,
 };
 use ovp_domain::SourceDoc;
+use ovp_index::{read_evidence, read_index};
 use ovp_llm::{
     CacheMode, CachedModelClient, CallError, ModelClient, ModelReply, ModelRequest, StopReason,
     Usage,
 };
+use ovp_memory::ask::{ask_with_evidence, AskArgs};
 
 const DATE: &str = "2026-06-09";
 
@@ -284,6 +286,31 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         "--kind", "units", "structurally neutral",
     ]));
     assert!(stdout.contains("[unit") && stdout.contains("A chunk is structurally neutral"), "{stdout}");
+
+    let ask_question = "What does OVP say about structurally neutral chunks?";
+    let model = read_index(&vault).unwrap();
+    let evidence = read_evidence(&vault).unwrap();
+    let mut rec = CachedModelClient::new(
+        Canned("OVP ask uses evidence cards and units.".into()),
+        &cache_dir,
+        "seed",
+        CacheMode::Record,
+    )
+    .unwrap();
+    ask_with_evidence(
+        &model,
+        &evidence,
+        &mut rec,
+        &AskArgs { question: ask_question.into(), ..Default::default() },
+        &vault,
+    )
+    .unwrap();
+    let stdout = run_ok(bin().args([
+        "ask", "--vault-root", vault.to_str().unwrap(),
+        "--cache-dir", cache_dir.to_str().unwrap(),
+        ask_question,
+    ]));
+    assert!(stdout.contains("OVP ask uses evidence cards and units."), "{stdout}");
 
     // === Failure → retry → blocked: a source with NO cassettes. ===
     std::fs::write(
