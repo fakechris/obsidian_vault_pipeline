@@ -362,6 +362,7 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         store: paths.store.clone(),
         run_id: args.run_id.clone(),
         header,
+        processed_review_ids: std::collections::BTreeSet::new(),
     })?;
 
     // --- Summary (mirrors crystal-write). ---

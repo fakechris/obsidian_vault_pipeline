@@ -101,7 +101,7 @@ from KMEM: their memory is a self-contained summary; our unit is an evidence-anc
 
 | Pipeline | In → Out | Auth | Cost | Status | Failure states |
 |---|---|---|---|---|---|
-| review-queue | caveated/reject → human decision → revised candidate → RE-GATE | A (via write) | 0+human | 🟡 `crystal-review` exists, NOT in the loop — **unbounded-growth rot vector** (6 caveated already) | stale queue (needs weekly SLA) |
+| review-queue | caveated/reject → human decision → revised candidate → RE-GATE | A (via write) | 0+human | 🟡 queue preservation + bounded `crystal-review-session` prepare shipped; turnkey apply→strength→write chain still pending | stale queue (needs weekly SLA) |
 | lineage: dedup/strengthen | new claims vs active (text+citation overlap+grouping) | A (via write) | 0/$ | ⬜ near-term, minimal form | wrong-merge (conservative default: append) |
 | supersede | strengthened claim replaces old, `superseded_by` | A | 0 | ⬜ mid-term | — |
 | contradiction | opposing claims, same subject | A | $ | ⬜ long-term; needs stable subject — **M34 experiment decides** | — |
@@ -189,7 +189,7 @@ designed and doctor-visible. Until all five hold, crystal-synth stays a manual c
 ## 6. Gap list — current → mature (the actionable part)
 
 P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a 994-corpus synth
-run/signoff · review-queue loop with weekly cadence · doctor crystal-integrity checks.
+run/signoff · review-queue apply loop with weekly cadence · doctor crystal-integrity checks.
 P1: incremental dirty-group synth · cost report · minimal lineage (dedup/strengthen) ·
 **ask semantic verifier** (the shipped deterministic citation verifier checks evidence ids and
 quote-backed unit presence; it does not yet prove every answer sentence is semantically entailed) ·
