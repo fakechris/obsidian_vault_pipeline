@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 
 use ovp_index::{read_evidence, read_index};
-use ovp_memory::ask::{AskArgs, ask_with_optional_evidence};
+use ovp_memory::ask::{ask_with_optional_evidence, AskArgs};
 
+use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
-use crate::commands::client::{ClientKind, build_client};
 
 pub struct AskCliArgs {
     pub vault_root: PathBuf,
@@ -17,6 +17,7 @@ pub struct AskCliArgs {
     pub client_kind: ClientKind,
     pub cache_dir: Option<PathBuf>,
     pub save: bool,
+    pub strict_ask: bool,
 }
 
 pub fn run(args: AskCliArgs) -> Result<(), CliError> {
@@ -54,6 +55,21 @@ pub fn run(args: AskCliArgs) -> Result<(), CliError> {
     if let Some(path) = &result.chat_file {
         let rel = path.strip_prefix(&args.vault_root).unwrap_or(path);
         eprintln!("\n(saved to {})", rel.display());
+    }
+    if let Some(report) = &result.verification {
+        eprintln!("verified citations: {}/{}", report.verified, report.cited);
+        if !report.missing.is_empty() {
+            eprintln!("missing citations: {}", report.missing.join(", "));
+        }
+        if !report.warnings.is_empty() {
+            eprintln!("citation warnings: {}", report.warnings.join(", "));
+        }
+        if args.strict_ask && (report.cited == 0 || report.verified < report.cited) {
+            return Err(CliError::Gate(format!(
+                "strict ask citation verification failed: verified {}/{}",
+                report.verified, report.cited
+            )));
+        }
     }
     eprintln!("({} context hits)", result.context_hits);
 

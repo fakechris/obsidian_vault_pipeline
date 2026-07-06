@@ -343,6 +343,9 @@ enum Cmd {
         /// Save the Q&A to `.ovp/chats/<timestamp>.md`.
         #[arg(long)]
         save: bool,
+        /// Fail if the answer has no citations or cites ids not present in the supplied evidence.
+        #[arg(long)]
+        strict_ask: bool,
     },
     /// PRODUCT — health checks over OVP vault state: ledger↔fs consistency,
     /// orphan packs, stale index, crystal integrity, disk usage. Exits non-zero
@@ -1010,7 +1013,7 @@ fn main() -> ExitCode {
             let date = date.unwrap_or_else(today_iso);
             commands::digest::run(commands::digest::DigestArgs { vault_root, date, no_llm })
         }
-        Cmd::Ask { vault_root, question, client, cache_dir, save } => {
+        Cmd::Ask { vault_root, question, client, cache_dir, save, strict_ask } => {
             use commands::client::ClientKind;
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
@@ -1022,6 +1025,7 @@ fn main() -> ExitCode {
                 client_kind,
                 cache_dir,
                 save,
+                strict_ask,
             })
         }
         Cmd::Doctor { vault_root, fix, json } => {
