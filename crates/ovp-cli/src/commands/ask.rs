@@ -5,11 +5,11 @@
 
 use std::path::PathBuf;
 
-use ovp_index::read_index;
-use ovp_memory::ask::{ask, AskArgs};
+use ovp_index::{read_evidence, read_index};
+use ovp_memory::ask::{AskArgs, ask_with_optional_evidence};
 
-use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
+use crate::commands::client::{ClientKind, build_client};
 
 pub struct AskCliArgs {
     pub vault_root: PathBuf,
@@ -21,6 +21,13 @@ pub struct AskCliArgs {
 
 pub fn run(args: AskCliArgs) -> Result<(), CliError> {
     let model = read_index(&args.vault_root).map_err(|e| CliError::Io(e.to_string()))?;
+    let evidence = match read_evidence(&args.vault_root) {
+        Ok(evidence) => Some(evidence),
+        Err(e) => {
+            eprintln!("warning: evidence sidecar unavailable; using claims-only ask context. {e}");
+            None
+        }
+    };
 
     let cassette_root = args
         .cache_dir
@@ -33,8 +40,14 @@ pub fn run(args: AskCliArgs) -> Result<(), CliError> {
         ..Default::default()
     };
 
-    let result =
-        ask(&model, client.as_mut(), &ask_args, &args.vault_root).map_err(CliError::Io)?;
+    let result = ask_with_optional_evidence(
+        &model,
+        evidence.as_ref(),
+        client.as_mut(),
+        &ask_args,
+        &args.vault_root,
+    )
+    .map_err(CliError::Io)?;
 
     println!("{}", result.answer);
 
