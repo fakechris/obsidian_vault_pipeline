@@ -15,6 +15,8 @@ use ovp_index::score::lexical_score;
 use ovp_llm::{ModelClient, ModelMessage, ModelRequest};
 use serde::{Deserialize, Serialize};
 
+use crate::verify::{verify_answer, VerificationReport};
+
 pub struct AskArgs {
     pub question: String,
     pub max_context_hits: usize,
@@ -22,6 +24,7 @@ pub struct AskArgs {
     pub max_tokens: u32,
     pub model_name: String,
     pub save_chat: bool,
+    pub verify_citations: bool,
 }
 
 impl Default for AskArgs {
@@ -33,6 +36,7 @@ impl Default for AskArgs {
             max_tokens: 2048,
             model_name: "claude-sonnet-4-20250514".into(),
             save_chat: false,
+            verify_citations: true,
         }
     }
 }
@@ -80,6 +84,7 @@ pub struct AskResult {
     pub answer: String,
     pub context_hits: usize,
     pub evidence: Vec<EvidenceItem>,
+    pub verification: Option<VerificationReport>,
     pub chat_file: Option<PathBuf>,
 }
 
@@ -143,6 +148,11 @@ pub fn ask_with_optional_evidence(
     };
 
     let reply = client.call(&request).map_err(|e| format!("ask LLM: {e}"))?;
+    let verification = if args.verify_citations {
+        Some(verify_answer(&reply.text, &evidence_items))
+    } else {
+        None
+    };
 
     let chat_file = if args.save_chat {
         let ts = chrono_like_timestamp();
@@ -154,11 +164,12 @@ pub fn ask_with_optional_evidence(
             std::fs::create_dir_all(parent).map_err(|e| format!("create chats dir: {e}"))?;
         }
         let chat_content = format!(
-            "# Ask — {}\n\n**Q:** {}\n\n**A:** {}\n\n---\n\n## Evidence\n\n{}\n\nContext hits: {context_hits}\n",
+            "# Ask — {}\n\n**Q:** {}\n\n**A:** {}\n\n---\n\n## Evidence\n\n{}\n\n## Verification\n\n{}\n\nContext hits: {context_hits}\n",
             ts,
             args.question,
             reply.text,
-            render_evidence_markdown(&evidence_items)
+            render_evidence_markdown(&evidence_items),
+            render_verification_markdown(verification.as_ref())
         );
         std::fs::write(&chat_path, chat_content).map_err(|e| format!("write chat: {e}"))?;
         Some(chat_path)
@@ -170,6 +181,7 @@ pub fn ask_with_optional_evidence(
         answer: reply.text,
         context_hits,
         evidence: evidence_items,
+        verification,
         chat_file,
     })
 }
@@ -354,6 +366,27 @@ fn render_evidence_markdown(items: &[EvidenceItem]) -> String {
     out
 }
 
+fn render_verification_markdown(report: Option<&VerificationReport>) -> String {
+    match report {
+        None => "not run".into(),
+        Some(report) => format!(
+            "verified citations: {}/{}\nmissing: {}\nwarnings: {}",
+            report.verified,
+            report.cited,
+            empty_dash(&report.missing),
+            empty_dash(&report.warnings)
+        ),
+    }
+}
+
+fn empty_dash(items: &[String]) -> String {
+    if items.is_empty() {
+        "-".into()
+    } else {
+        items.join(", ")
+    }
+}
+
 fn evidence_kind_label(kind: EvidenceKind) -> &'static str {
     match kind {
         EvidenceKind::Unit => "unit",
@@ -390,16 +423,17 @@ fn chrono_like_timestamp() -> String {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use ovp_index::evidence::{CardEvidenceRow, EVIDENCE_SCHEMA, EvidenceModel, UnitEvidenceRow};
+    use ovp_index::evidence::{CardEvidenceRow, EvidenceModel, UnitEvidenceRow, EVIDENCE_SCHEMA};
     use ovp_index::model::{
-        ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, Totals,
+        ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, Totals, INDEX_SCHEMA,
     };
     use ovp_llm::{CallError, ModelClient, ModelReply, ModelRequest, StopReason, Usage};
 
-    use crate::ask::{AskArgs, EvidenceKind, EvidenceQuotas, ask_with_evidence, assemble_evidence};
+    use crate::ask::{ask_with_evidence, assemble_evidence, AskArgs, EvidenceKind, EvidenceQuotas};
 
     struct CapturingClient {
         request: Arc<Mutex<Option<ModelRequest>>>,
+        reply_text: String,
     }
 
     impl ModelClient for CapturingClient {
@@ -407,7 +441,7 @@ mod tests {
             *self.request.lock().unwrap() = Some(request.clone());
             Ok(ModelReply {
                 model: request.model.clone(),
-                text: "answer".into(),
+                text: self.reply_text.clone(),
                 stop_reason: StopReason::EndTurn,
                 usage: Usage {
                     input_tokens: 1,
@@ -483,6 +517,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let mut client = CapturingClient {
             request: captured.clone(),
+            reply_text: "answer".into(),
         };
         let args = AskArgs {
             question: "How should agent memory be treated?".into(),
@@ -501,26 +536,20 @@ mod tests {
 
         assert_eq!(result.context_hits, 3);
         assert_eq!(result.evidence.len(), 3);
-        assert!(
-            result
-                .evidence
-                .iter()
-                .any(|item| item.kind == EvidenceKind::Claim && item.id == "claim-memory-1")
-        );
-        assert!(
-            result
-                .evidence
-                .iter()
-                .any(|item| item.kind == EvidenceKind::Card
-                    && item.id == "card:40-Resources/Reader/memory:0")
-        );
-        assert!(
-            result
-                .evidence
-                .iter()
-                .any(|item| item.kind == EvidenceKind::Unit
-                    && item.id == "unit:40-Resources/Reader/memory:u-001")
-        );
+        assert!(result
+            .evidence
+            .iter()
+            .any(|item| item.kind == EvidenceKind::Claim && item.id == "claim-memory-1"));
+        assert!(result
+            .evidence
+            .iter()
+            .any(|item| item.kind == EvidenceKind::Card
+                && item.id == "card:40-Resources/Reader/memory:0"));
+        assert!(result
+            .evidence
+            .iter()
+            .any(|item| item.kind == EvidenceKind::Unit
+                && item.id == "unit:40-Resources/Reader/memory:u-001"));
         let request = captured.lock().unwrap().clone().unwrap();
         assert_eq!(request.cache_namespace.as_deref(), Some("ask/v2"));
         let user = match &request.messages[0] {
@@ -542,6 +571,34 @@ mod tests {
             "{user}"
         );
         assert!(user.contains("line 42"), "{user}");
+    }
+
+    #[test]
+    fn ask_result_verifies_answer_citations_against_supplied_evidence() {
+        let captured = Arc::new(Mutex::new(None));
+        let mut client = CapturingClient {
+            request: captured,
+            reply_text: "Memory persists [unit:unit:40-Resources/Reader/memory:u-001].".into(),
+        };
+        let args = AskArgs {
+            question: "How should agent memory be treated?".into(),
+            max_context_hits: 10,
+            ..Default::default()
+        };
+
+        let result = ask_with_evidence(
+            &model(),
+            &evidence(),
+            &mut client,
+            &args,
+            std::path::Path::new("."),
+        )
+        .unwrap();
+
+        let report = result.verification.expect("verification report");
+        assert_eq!(report.cited, 1);
+        assert_eq!(report.verified, 1);
+        assert!(report.missing.is_empty());
     }
 
     #[test]
@@ -586,11 +643,9 @@ mod tests {
             },
         );
 
-        assert!(
-            items
-                .iter()
-                .any(|item| item.kind == EvidenceKind::Card && item.body.contains("长期状态"))
-        );
+        assert!(items
+            .iter()
+            .any(|item| item.kind == EvidenceKind::Card && item.body.contains("长期状态")));
         assert!(items.iter().any(|item| {
             item.kind == EvidenceKind::Unit
                 && item

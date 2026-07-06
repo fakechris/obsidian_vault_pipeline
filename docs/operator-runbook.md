@@ -93,11 +93,22 @@ ovp-next console --vault-root "$VAULT"                     # rebuild console (+i
 ovp-next find --vault-root "$VAULT" <term>                 # search everything
 ovp-next find --vault-root "$VAULT" --kind sources --status needs_content
 ovp-next find --vault-root "$VAULT" --kind claims --status durable
+ovp-next find --vault-root "$VAULT" --kind cards "agent memory"
+ovp-next find --vault-root "$VAULT" --kind units "verbatim quote"
 ovp-next find --vault-root "$VAULT" --kind runs --date 2026-06
+ovp-next ask --vault-root "$VAULT" --client live "What does the vault say about agent memory?"
+ovp-next ask --vault-root "$VAULT" --client live --strict-ask "What evidence supports that?"
 ```
 
 Pinboard without live credentials: export from <https://pinboard.in/export/>
 (JSON) and use `--fixture`. The note format and dedup are identical to live.
+
+`ask` uses the rebuilt evidence sidecar (`.ovp/index/evidence.json`) plus the
+Crystal claim rows. It prints a verification summary such as
+`verified citations: 2/2` after the answer. `--strict-ask` exits non-zero when
+the answer has no citations or cites ids that were not supplied as evidence.
+This is deterministic citation verification, not a semantic proof of every
+sentence in the answer.
 
 ## 4. Crystal (durable claims) on the vault store
 

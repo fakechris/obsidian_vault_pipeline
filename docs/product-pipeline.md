@@ -126,7 +126,7 @@ console/graph`.
 | project --write | `10-Knowledge/Crystal/*.md` (machine-managed marker) | 0 | ✅ |
 | digest | `.ovp/digests/<date>.md` — ops digest (new packs/blocked/claim counts) | 0 today · $ optional (`render_llm_digest` exists, unwired) | ✅ plain |
 | working-memory | `.ovp/working-memory.md` | 0 today | ✅ |
-| ask / find | on-demand answers — **retrieval-constrained, NOT truth-gated yet**: `ask` feeds index hits into the prompt and prints the model answer; no post-answer citation parser / quote verifier exists. Calling it citation-gated requires building that verifier (gap, §6) | $/0 | 🟡 |
+| ask / find | on-demand answers. `find` is deterministic lexical search over the read model and evidence sidecar. `ask/v2` is retrieval-constrained over claims + cards + units and runs a deterministic citation verifier after the model answer: cited evidence ids must be among the blocks supplied to the model; unit citations must retain quote-backed evidence; card citations must retain cited units. Strict mode can fail an uncited/unverified answer. This is **citation verification, not whole-answer semantic truth-gating**. | $/0 | 🟡 |
 | serve / MCP | localhost UI · MCP tools (find/search/status + shallow doctor only; no ask/project/crystal-status) | 0 | ✅ minimal |
 
 Boundary: these can be deleted and rebuilt at any time and MUST NOT write back into authorities.
@@ -161,7 +161,7 @@ Do not conflate what `daily` does TODAY with the mature scheduler — the gap is
 | per ingest | intake → dedup → enrich(fixture-gated) → reader → lifecycle move → ledgers ✅ | same, with live-validated enrich + paper route |
 | daily | report → index → console → plain digest → working-memory | + **incremental crystal-synth on dirty groups** (entry conditions below) + doctor summary |
 | weekly | — (manual) | recluster (churn-bounded) → dirty-community resynth → **review-queue session** |
-| on demand | ask · find · project · serve · MCP · compare-run ✅ | same, with truth-gated ask |
+| on demand | ask · find · project · serve · MCP · compare-run ✅ | same, with deeper answer verification |
 | on prompt change | evolve candidate → AB → cassette replay gate ✅ | same |
 
 **Entry conditions before auto-synth joins the daily tier** (it does NOT get scheduled by
@@ -191,7 +191,8 @@ designed and doctor-visible. Until all five hold, crystal-synth stays a manual c
 P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a 994-corpus synth
 run/signoff · review-queue loop with weekly cadence · doctor crystal-integrity checks.
 P1: incremental dirty-group synth · cost report · minimal lineage (dedup/strengthen) ·
-**ask truth-gating** (post-answer citation parser + quote verifier — until then `ask` is
-retrieval-constrained only) · **MCP mature surface** (ask/project/crystal-status; deep doctor) ·
+**ask semantic verifier** (the shipped deterministic citation verifier checks evidence ids and
+quote-backed unit presence; it does not yet prove every answer sentence is semantically entailed) ·
+**MCP mature surface** (ask/project/crystal-status; deep doctor) ·
 web-fetch same-run fix · UTC→local date · live validation of enrich paths · paper-route A/B.
 Gated on M34 experiment: everything in G5-undecided, supersede-by-subject, contradiction.

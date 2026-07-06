@@ -89,11 +89,15 @@ fn bin() -> Command {
 }
 
 fn run_ok(cmd: &mut Command) -> String {
+    run_ok_full(cmd).0
+}
+
+fn run_ok_full(cmd: &mut Command) -> (String, String) {
     let out = cmd.output().expect("binary runs");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "expected success.\nstdout:\n{stdout}\nstderr:\n{stderr}");
-    stdout
+    (stdout, stderr)
 }
 
 fn run_fail(cmd: &mut Command) -> (String, String) {
@@ -290,8 +294,14 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     let ask_question = "What does OVP say about structurally neutral chunks?";
     let model = read_index(&vault).unwrap();
     let evidence = read_evidence(&vault).unwrap();
+    let cited_unit_id = evidence
+        .units
+        .iter()
+        .find(|unit| unit.quote == CLIP_QUOTE)
+        .map(|unit| unit.id.clone())
+        .expect("clip unit evidence");
     let mut rec = CachedModelClient::new(
-        Canned("OVP ask uses evidence cards and units.".into()),
+        Canned(format!("OVP ask uses evidence cards and units [unit:{cited_unit_id}].")),
         &cache_dir,
         "seed",
         CacheMode::Record,
@@ -305,12 +315,37 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         &vault,
     )
     .unwrap();
-    let stdout = run_ok(bin().args([
+    let (stdout, stderr) = run_ok_full(bin().args([
         "ask", "--vault-root", vault.to_str().unwrap(),
         "--cache-dir", cache_dir.to_str().unwrap(),
         ask_question,
     ]));
-    assert!(stdout.contains("OVP ask uses evidence cards and units."), "{stdout}");
+    assert!(stdout.contains("OVP ask uses evidence cards and units"), "{stdout}");
+    assert!(stderr.contains("verified citations: 1/1"), "{stderr}");
+
+    let strict_question = "Give a strict answer about chunks.";
+    let mut rec = CachedModelClient::new(
+        Canned("This answer has no citation.".into()),
+        &cache_dir,
+        "seed",
+        CacheMode::Record,
+    )
+    .unwrap();
+    ask_with_evidence(
+        &model,
+        &evidence,
+        &mut rec,
+        &AskArgs { question: strict_question.into(), ..Default::default() },
+        &vault,
+    )
+    .unwrap();
+    let (_stdout, stderr) = run_fail(bin().args([
+        "ask", "--vault-root", vault.to_str().unwrap(),
+        "--cache-dir", cache_dir.to_str().unwrap(),
+        "--strict-ask",
+        strict_question,
+    ]));
+    assert!(stderr.contains("strict ask citation verification failed"), "{stderr}");
 
     // === Failure → retry → blocked: a source with NO cassettes. ===
     std::fs::write(
