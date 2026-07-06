@@ -504,6 +504,17 @@ enum Cmd {
         #[arg(long, default_value = ".run/m25/revised-candidate.json")]
         out: PathBuf,
     },
+    /// PRODUCT — prepare a bounded human review session from the vault-local
+    /// Crystal review queue. Writes a review sheet, decisions template, and
+    /// selected ids. This does not run the strength gate or write durable truth.
+    CrystalReviewSession {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long, default_value_t = 20)]
+        batch: usize,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
@@ -1072,6 +1083,14 @@ fn main() -> ExitCode {
         Cmd::CrystalReview { candidate, decisions, out } => {
             use commands::crystal_review::CrystalReviewArgs;
             commands::crystal_review::run(CrystalReviewArgs { candidate, decisions, out })
+        }
+        Cmd::CrystalReviewSession { vault_root, batch, out } => {
+            use commands::crystal_review_session::CrystalReviewSessionPrepareArgs;
+            commands::crystal_review_session::run_prepare(CrystalReviewSessionPrepareArgs {
+                vault_root,
+                batch,
+                out,
+            })
         }
         Cmd::ExtractReferents { units, out, cache_dir, client } => {
             use commands::client::ClientKind;

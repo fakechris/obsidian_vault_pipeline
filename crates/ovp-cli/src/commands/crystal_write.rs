@@ -5,6 +5,7 @@
 //! review file (NEVER durable truth), and renders a human-readable `crystal.md`.
 //! No model call, no vault write, no graph.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
@@ -42,6 +43,7 @@ pub struct WriteInputs {
     pub store: PathBuf,
     pub run_id: Option<String>,
     pub header: CrystalHeader,
+    pub processed_review_ids: BTreeSet<String>,
 }
 
 /// What a durable write produced (returned so callers can print their own summary).
@@ -57,6 +59,27 @@ pub struct WriteOutcome {
     pub review: usize,
     pub ledger_path: PathBuf,
     pub crystal_md_path: PathBuf,
+}
+
+pub fn merge_review_queue(
+    existing: Vec<ReviewEntry>,
+    processed_ids: &BTreeSet<String>,
+    new_entries: Vec<ReviewEntry>,
+) -> Vec<ReviewEntry> {
+    let mut by_id: BTreeMap<String, ReviewEntry> = BTreeMap::new();
+    for entry in existing {
+        if !processed_ids.contains(&entry.claim_id) {
+            by_id.insert(entry.claim_id.clone(), entry);
+        }
+    }
+    for entry in new_entries {
+        by_id.insert(entry.claim_id.clone(), entry);
+    }
+    let mut merged: Vec<_> = by_id.into_values().collect();
+    merged.sort_by(|a, b| {
+        (a.theme.as_str(), a.claim_id.as_str()).cmp(&(b.theme.as_str(), b.claim_id.as_str()))
+    });
+    merged
 }
 
 /// Build the grounding index by reading `<packs_dir>/<case>/units.accepted.json`.
@@ -104,6 +127,30 @@ fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
     Ok(events)
 }
 
+pub fn read_review_queue(path: &std::path::Path) -> Result<Vec<ReviewEntry>, CliError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| CliError::Io(format!("reading review queue {}: {e}", path.display())))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| CliError::Io(format!("parsing review queue {}: {e}", path.display())))?;
+    let entries = value
+        .get("review")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    serde_json::from_value(entries)
+        .map_err(|e| CliError::Io(format!("parsing review entries {}: {e}", path.display())))
+}
+
+fn write_review_queue(path: &std::path::Path, review: &[ReviewEntry]) -> Result<(), CliError> {
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&serde_json::json!({ "review": review })).unwrap() + "\n",
+    )
+    .map_err(|e| CliError::Io(format!("writing review.json: {e}")))
+}
+
 pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     let candidate: CrystalCandidate = serde_json::from_str(
         &std::fs::read_to_string(&args.candidate)
@@ -129,6 +176,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         store: args.store.clone(),
         run_id: args.run_id.clone(),
         header,
+        processed_review_ids: BTreeSet::new(),
     })?;
 
     println!("crystal-write: run_id={}", out.run_id);
@@ -150,7 +198,15 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
 /// (idempotent by `claim_key`), record caveated/reject in `review.json`, and
 /// render `crystal.md`. Refuses loudly on any gate gap. Reused by `crystal-synth`.
 pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
-    let WriteInputs { candidate, verdicts, index, store, run_id: run_id_override, header } = inputs;
+    let WriteInputs {
+        candidate,
+        verdicts,
+        index,
+        store,
+        run_id: run_id_override,
+        header,
+        processed_review_ids,
+    } = inputs;
     let report = lint_candidate(&candidate, &index);
     let scores = score_candidate(&report);
     let claim_ids: Vec<String> = candidate.items.iter().map(|c| c.id.clone()).collect();
@@ -274,15 +330,15 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
         .cloned()
         .collect();
-    let md = render_crystal_md(&header, &active_now, &review);
+    let review_path = store.join("review.json");
+    let existing_review = read_review_queue(&review_path)?;
+    let merged_review = merge_review_queue(existing_review, &processed_review_ids, review.clone());
+
+    let md = render_crystal_md(&header, &active_now, &merged_review);
     let crystal_md_path = store.join("crystal.md");
     std::fs::write(&crystal_md_path, md)
         .map_err(|e| CliError::Io(format!("writing crystal.md: {e}")))?;
-    std::fs::write(
-        store.join("review.json"),
-        serde_json::to_string_pretty(&serde_json::json!({"review": review})).unwrap() + "\n",
-    )
-    .map_err(|e| CliError::Io(format!("writing review.json: {e}")))?;
+    write_review_queue(&review_path, &merged_review)?;
 
     Ok(WriteOutcome {
         run_id,
@@ -293,4 +349,50 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         ledger_path,
         crystal_md_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use ovp_domain::crystal::{FinalClass, StrengthClass};
+
+    use super::{merge_review_queue, ReviewEntry};
+
+    fn entry(id: &str, theme: &str) -> ReviewEntry {
+        ReviewEntry {
+            claim_id: id.into(),
+            claim: format!("claim {id}"),
+            theme: theme.into(),
+            final_class: FinalClass::Caveated,
+            strength: StrengthClass::Supported,
+            evidence_sufficient: true,
+            rationale: format!("rationale {id}"),
+        }
+    }
+
+    #[test]
+    fn crystal_review_preserves_unprocessed_queue() {
+        let existing = vec![entry("a", "t1"), entry("b", "t1"), entry("c", "t2")];
+        let processed = BTreeSet::from(["a".to_string()]);
+        let new_entries = vec![entry("d", "t3")];
+
+        let merged = merge_review_queue(existing, &processed, new_entries);
+        let ids: Vec<_> = merged.iter().map(|entry| entry.claim_id.as_str()).collect();
+
+        assert_eq!(ids, vec!["b", "c", "d"]);
+    }
+
+    #[test]
+    fn crystal_review_merge_prefers_new_entries_on_duplicate_ids() {
+        let existing = vec![entry("a", "old")];
+        let processed = BTreeSet::new();
+        let new_entries = vec![entry("a", "new")];
+
+        let merged = merge_review_queue(existing, &processed, new_entries);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].claim_id, "a");
+        assert_eq!(merged[0].theme, "new");
+    }
 }

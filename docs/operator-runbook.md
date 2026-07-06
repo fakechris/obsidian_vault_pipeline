@@ -127,6 +127,22 @@ ovp-next console --vault-root "$VAULT"     # claims appear under Crystal · 结�
 `40-Resources/Reader/`. Daily packs already write `units.accepted.json` in
 exactly the layout the gates expect.
 
+Prepare a bounded review session for caveated claims:
+
+```bash
+ovp-next crystal-review-session \
+  --vault-root "$VAULT" \
+  --batch 20 \
+  --out .run/review-session-$(date +%Y%m%d)
+```
+
+This writes `review-sheet.md`, `decisions.template.json`, and
+`selected-claim-ids.txt`. The command does not decide durability and does not
+write the Crystal ledger. Rewrites/splits must still carry full citations and
+re-enter the normal strength gate + `crystal-write` path. `crystal-write`
+preserves unprocessed `review.json` entries when new caveated claims are
+written, so a small review batch no longer erases the rest of the queue.
+
 ## 5. Recovery / rebuild
 
 Everything under `.ovp/index/` and `.ovp/console/` is a derived projection:
