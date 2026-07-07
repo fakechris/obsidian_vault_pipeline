@@ -143,7 +143,7 @@ pub fn read_review_queue(path: &std::path::Path) -> Result<Vec<ReviewEntry>, Cli
         .map_err(|e| CliError::Io(format!("parsing review entries {}: {e}", path.display())))
 }
 
-fn write_review_queue(path: &std::path::Path, review: &[ReviewEntry]) -> Result<(), CliError> {
+pub(crate) fn write_review_queue(path: &std::path::Path, review: &[ReviewEntry]) -> Result<(), CliError> {
     std::fs::write(
         path,
         serde_json::to_string_pretty(&serde_json::json!({ "review": review })).unwrap() + "\n",
