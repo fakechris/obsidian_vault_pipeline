@@ -144,11 +144,24 @@ pub fn read_review_queue(path: &std::path::Path) -> Result<Vec<ReviewEntry>, Cli
 }
 
 pub(crate) fn write_review_queue(path: &std::path::Path, review: &[ReviewEntry]) -> Result<(), CliError> {
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(&serde_json::json!({ "review": review })).unwrap() + "\n",
-    )
-    .map_err(|e| CliError::Io(format!("writing review.json: {e}")))
+    write_review_queue_with_collapsed(path, review, &[])
+}
+
+/// Write the queue plus the record of near-duplicate collapses performed this
+/// write (additive `collapsed` key; `read_review_queue` only reads `review`).
+pub(crate) fn write_review_queue_with_collapsed(
+    path: &std::path::Path,
+    review: &[ReviewEntry],
+    collapsed: &[ovp_domain::crystal::CollapsedDuplicate],
+) -> Result<(), CliError> {
+    let mut body = serde_json::json!({ "review": review });
+    if !collapsed.is_empty() {
+        body["collapsed"] = serde_json::json!(collapsed);
+    }
+    let body = serde_json::to_string_pretty(&body)
+        .map_err(|e| CliError::Io(format!("serializing review queue: {e}")))?;
+    std::fs::write(path, body + "\n")
+        .map_err(|e| CliError::Io(format!("writing review.json: {e}")))
 }
 
 pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
@@ -284,6 +297,11 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
                     strength: v.strength,
                     evidence_sufficient: v.evidence_sufficient,
                     rationale: v.rationale.clone(),
+                    citations: item.citations.clone(),
+                    lane: ovp_domain::crystal::review_lane(
+                        lint_of(&item.id).distinct_sources,
+                        Some(v),
+                    ),
                 });
             }
         }
@@ -333,12 +351,20 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     let review_path = store.join("review.json");
     let existing_review = read_review_queue(&review_path)?;
     let merged_review = merge_review_queue(existing_review, &processed_review_ids, review.clone());
+    // Near-duplicate collapse BEFORE the queue is written (decidable signals
+    // only; recorded in review.json, never silent). Pre-M35 entries without
+    // citations can never match and are left alone.
+    let (merged_review, collapsed) =
+        ovp_domain::crystal::collapse_review_duplicates(merged_review);
+    for c in &collapsed {
+        println!("  review-queue: collapsed near-duplicate {} into {} ({})", c.dropped, c.kept, c.reason);
+    }
 
     let md = render_crystal_md(&header, &active_now, &merged_review);
     let crystal_md_path = store.join("crystal.md");
     std::fs::write(&crystal_md_path, md)
         .map_err(|e| CliError::Io(format!("writing crystal.md: {e}")))?;
-    write_review_queue(&review_path, &merged_review)?;
+    write_review_queue_with_collapsed(&review_path, &merged_review, &collapsed)?;
 
     Ok(WriteOutcome {
         run_id,
@@ -368,6 +394,8 @@ mod tests {
             strength: StrengthClass::Supported,
             evidence_sufficient: true,
             rationale: format!("rationale {id}"),
+            citations: Vec::new(),
+            lane: Default::default(),
         }
     }
 

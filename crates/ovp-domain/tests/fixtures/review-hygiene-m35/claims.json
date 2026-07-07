@@ -1,0 +1,554 @@
+{
+  "claims": [
+    {
+      "id": "agents-b002-3",
+      "claim": "The agent evaluation literature converges on a principle that directly measuring a few carefully chosen behaviors produces better results than adding large numbers of tests, and that correctness should be measured before efficiency.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "1a3a5a99-2026-03-26_How_we_build_evals_for_Deep_Agents_",
+          "unit_id": "u-005-a8952b39",
+          "quote": "Every eval is a vector that shifts the behavior of your agentic system."
+        },
+        {
+          "case_id": "1a3a5a99-2026-03-26_How_we_build_evals_for_Deep_Agents_",
+          "unit_id": "u-006-f2e902dc",
+          "quote": "More evals ≠ better agents."
+        },
+        {
+          "case_id": "1a3a5a99-2026-03-26_How_we_build_evals_for_Deep_Agents_",
+          "unit_id": "u-014-c9546d1a",
+          "quote": "Measuring correctness depends on what's being tested."
+        },
+        {
+          "case_id": "1a3a5a99-2026-03-26_How_we_build_evals_for_Deep_Agents_",
+          "unit_id": "u-015-3e4b1773",
+          "quote": "Once several models clear that bar, we move to efficiency."
+        }
+      ],
+      "strength": "over_synthesized",
+      "evidence_sufficient": false
+    },
+    {
+      "id": "agents-b002-5",
+      "claim": "The security paradigm for AI agents is shifting from model-centric gateways toward endpoint-level visibility and control, where agents actually perform actions with user permissions.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "1a915338-2026-05-14_jqdsouza_-_Introducing_Beacon_Endpoint_Telemetry_for_AI_Agent",
+          "unit_id": "u-003-36782661",
+          "quote": "The first generation of AI security centered on the model gateway. The next will move to the endpoint, where agents actually do the work."
+        },
+        {
+          "case_id": "1a915338-2026-05-14_jqdsouza_-_Introducing_Beacon_Endpoint_Telemetry_for_AI_Agent",
+          "unit_id": "u-005-a430294c",
+          "quote": "It's what an agent can do: use the user's tools, inherit their permissions, and change state inside sensitive environments."
+        },
+        {
+          "case_id": "1a915338-2026-05-14_jqdsouza_-_Introducing_Beacon_Endpoint_Telemetry_for_AI_Agent",
+          "unit_id": "u-018-18cf2001",
+          "quote": "Visibility comes before control. Teams cannot enforce configurations, gate sensitive actions, govern MCP access, or protect secrets until they know which agents are running, what permissions they have, and what actions they are taking."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b002-6",
+      "claim": "Multi-agent team coordination commonly uses a lead-plus-teammates topology with shared task boards and file-based message passing, where each teammate runs as a separate process with its own isolated context.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "2232b72d-2026-03-29_Reverse-Engineering_Claude_Code_Agent_Teams________",
+          "unit_id": "u-000-d8a3f6a2",
+          "quote": "Claude Code (v2.1.47) ships with an experimental feature called Agent Teams: multiple Claude Code sessions coordinate on shared work through a lead-and-teammates topology."
+        },
+        {
+          "case_id": "2232b72d-2026-03-29_Reverse-Engineering_Claude_Code_Agent_Teams________",
+          "unit_id": "u-002-c02f8b8c",
+          "quote": "The entire coordination layer is file-based."
+        },
+        {
+          "case_id": "2232b72d-2026-03-29_Reverse-Engineering_Claude_Code_Agent_Teams________",
+          "unit_id": "u-012-5056fbe9",
+          "quote": "The lead's conversation history does NOT carry over. Each teammate starts fresh with only the spawn prompt as context."
+        }
+      ],
+      "strength": "overreach",
+      "evidence_sufficient": false
+    },
+    {
+      "id": "agents-b002-8",
+      "claim": "Agent failure modes include unauthorized compliance, information disclosure, destructive actions, and identity spoofing—often compounded when agents interact with each other and when they lack coherent stakeholder models.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "1914ffad-Agents_of_Chaos_",
+          "unit_id": "u-003-7cd91950",
+          "quote": "Observed behaviors include unauthorized compliance with non-owners, disclosure of sensitive information, execution of destructive system-level actions, denial-of-service conditions, uncontrolled resource consumption, identity spoofing vulnerabilities, cross-agent propagation of unsafe practices, and partial system takeover"
+        },
+        {
+          "case_id": "1914ffad-Agents_of_Chaos_",
+          "unit_id": "u-006-aadc4e45",
+          "quote": "Current agentic systems lack an explicit stakeholder model — a coherent representation of who they serve, who they interact with, who might be affected by their actions, and what obligations they have to each"
+        },
+        {
+          "case_id": "1914ffad-Agents_of_Chaos_",
+          "unit_id": "u-011-25823485",
+          "quote": "When agents interact with each other, individual failures compound and qualitatively new failure modes emerge"
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b003-2",
+      "claim": "The harness or infrastructure layer significantly affects agent performance — the same model can differ by 10–20 percentage points depending on runtime design — making it a key competitive differentiator rather than a mere implementation detail.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "3622b18d-2026-05-17_Agent_Runtime______________AI_______________________",
+          "unit_id": "u-006-cf89f647",
+          "quote": "同样的模型，有无针对性的 harness profile 可以差 10-20 个百分点"
+        },
+        {
+          "case_id": "3622b18d-2026-05-17_Agent_Runtime______________AI_______________________",
+          "unit_id": "u-007-0c1dd695",
+          "quote": "Harness 不是可选的性能优化，而是决定模型在 Agent 场景下能不能跑起来的关键层"
+        },
+        {
+          "case_id": "2edd556b-2026-03-29_Your_Agent_Needs_a_Harness_Not_a_Framework________",
+          "unit_id": "u-001-5af251f5",
+          "quote": "The LLM is the engine.\nTools are the peripherals.\nMemory is storage.\nBut what connects them?"
+        },
+        {
+          "case_id": "2fb35026-2026-05-07_Scaling_Managed_Agents_Decoupling_the_brain_from_the_hands_",
+          "unit_id": "u-005-fadaaf57",
+          "quote": "the \"brain\" (Claude and its harness) from both the \"hands\" (sandboxes and tools that perform actions)"
+        }
+      ],
+      "strength": "overreach",
+      "evidence_sufficient": false
+    },
+    {
+      "id": "agents-b003-7",
+      "claim": "Multi-agent systems should be decomposed by context needs rather than by role — most multi-agent designs fail because splitting by role instead of context leads to overlapping information needs and incompatible assumptions, particularly in parallel coding agents.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "2e3a828e-2026-05-04_Claude_Subagents_vs._Agent_Teams__clearly_explained_",
+          "unit_id": "u-002-020e19c2",
+          "quote": "The right mental model is context-centric decomposition."
+        },
+        {
+          "case_id": "2e3a828e-2026-05-04_Claude_Subagents_vs._Agent_Teams__clearly_explained_",
+          "unit_id": "u-015-255b8a9d",
+          "quote": "Most multi-agent designs fail because people split work by role instead of by context."
+        },
+        {
+          "case_id": "2e3a828e-2026-05-04_Claude_Subagents_vs._Agent_Teams__clearly_explained_",
+          "unit_id": "u-021-958e3c5a",
+          "quote": "One specific warning for coding: parallel agents writing code make incompatible assumptions."
+        },
+        {
+          "case_id": "2e3a828e-2026-05-04_Claude_Subagents_vs._Agent_Teams__clearly_explained_",
+          "unit_id": "u-014-127e5c8f",
+          "quote": "Ask what context does this subtask actually needs? If two subtasks need deeply overlapping information, they probably belong to the same agent."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b003-8",
+      "claim": "Agent skills (natural-language procedural instructions) can be self-evolved using validation-gated editing that mirrors neural network training — bounded edits per step, score-based acceptance gates, and failure memory — yielding the biggest gains on procedural tasks where the model is capable but inconsistent.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "2f6c1324-2026-06-03_hooeem_-_I_want_to_create_self-evolving_agent_skills._",
+          "unit_id": "u-000-286920e9",
+          "quote": "a \"skill\" is just a block of natural-language instructions you hand an agent before it works: procedures, output rules, do's and don'ts."
+        },
+        {
+          "case_id": "2f6c1324-2026-06-03_hooeem_-_I_want_to_create_self-evolving_agent_skills._",
+          "unit_id": "u-002-d35999d7",
+          "quote": "it runs as a loop with four moving parts, and the loop deliberately mirrors how you would train a neural network"
+        },
+        {
+          "case_id": "2f6c1324-2026-06-03_hooeem_-_I_want_to_create_self-evolving_agent_skills._",
+          "unit_id": "u-003-2b3248bc",
+          "quote": "A bounded edit budget caps how much the skill can change in one step, so it improves gradually instead of being rewritten into something unrecognisable. the paper calls this the \"textual learning rate.\""
+        },
+        {
+          "case_id": "2f6c1324-2026-06-03_hooeem_-_I_want_to_create_self-evolving_agent_skills._",
+          "unit_id": "u-004-db2c41a8",
+          "quote": "A validation gate runs the edited skill on a held-out set and only accepts the edit if the score goes up. edits that fail are rejected and remembered, so the optimiser stops re-proposing them."
+        },
+        {
+          "case_id": "2f6c1324-2026-06-03_hooeem_-_I_want_to_create_self-evolving_agent_skills._",
+          "unit_id": "u-008-8d99ed81",
+          "quote": "the biggest gains land on procedural tasks. the ones where the model needs discipline about tool use and output format, not more raw knowledge. that tells you where SkillOpt earns its keep. tasks where the model is capable but sloppy."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b004-2",
+      "claim": "Agents can learn at three distinct layers: model weights, harness configuration, and external context (instructions/skills), with the harness layer typically updated at the agent level rather than the model level.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "3f49b10e-2026-04-05_Continual_learning_for_AI_agents_",
+          "unit_id": "u-000-1609e84c",
+          "quote": "for AI agents, learning can happen at three distinct layers: the model, the harness, and the context"
+        },
+        {
+          "case_id": "3f49b10e-2026-04-05_Continual_learning_for_AI_agents_",
+          "unit_id": "u-001-20a647c5",
+          "quote": "Model: the model weights themselves"
+        },
+        {
+          "case_id": "3f49b10e-2026-04-05_Continual_learning_for_AI_agents_",
+          "unit_id": "u-002-43337d98",
+          "quote": "Harness: the harness around the model that powers all instances of the agent"
+        },
+        {
+          "case_id": "3f49b10e-2026-04-05_Continual_learning_for_AI_agents_",
+          "unit_id": "u-003-a998ebeb",
+          "quote": "Context: additional context (instructions, skills) that lives outside the harness"
+        },
+        {
+          "case_id": "3f49b10e-2026-04-05_Continual_learning_for_AI_agents_",
+          "unit_id": "u-011-88e7143d",
+          "quote": "in practice this is mostly done at the agent level"
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b004-4",
+      "claim": "The distinction between an SDK (primitives for building agentic software) and a harness (opinionated execution environment around a model) is a common architectural split, with both being valid and often used together.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "3f067764-2026-04-30_AgentOS_now_supports_Claude_Code__LangGraph__and_DSPy_",
+          "unit_id": "u-001-a41fab01",
+          "quote": "An SDK is a set of primitives for building agentic software."
+        },
+        {
+          "case_id": "3f067764-2026-04-30_AgentOS_now_supports_Claude_Code__LangGraph__and_DSPy_",
+          "unit_id": "u-003-e0c868f7",
+          "quote": "A harness is an opinionated execution environment around a model."
+        },
+        {
+          "case_id": "3f067764-2026-04-30_AgentOS_now_supports_Claude_Code__LangGraph__and_DSPy_",
+          "unit_id": "u-004-9fded0ad",
+          "quote": "Claude Code, Codex, and Cursor's background agent are all harnesses."
+        },
+        {
+          "case_id": "3f067764-2026-04-30_AgentOS_now_supports_Claude_Code__LangGraph__and_DSPy_",
+          "unit_id": "u-018-510c4da6",
+          "quote": "Both are valid and you'll often use both together."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b004-5",
+      "claim": "Agent frameworks have historically been tightly coupled to specific patterns, making them brittle as patterns evolve, and production agent deployment requires durable orchestration with primitives for steps, retries, state, and observability.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "4bbb0ab3-2026-05-10_djfarrelly_-_Background_agents_are_here._Your_orchestration_i",
+          "unit_id": "u-001-fe76151c",
+          "quote": "Agent frameworks aren't libraries. They're bets on which agent pattern wins. When the pattern shifts, you don't refactor; you rewrite."
+        },
+        {
+          "case_id": "4bbb0ab3-2026-05-10_djfarrelly_-_Background_agents_are_here._Your_orchestration_i",
+          "unit_id": "u-005-49777638",
+          "quote": "If you coupled your infrastructure to any one of these patterns, you've already rebuilt at least twice. And you'll rebuild again."
+        },
+        {
+          "case_id": "4bbb0ab3-2026-05-10_djfarrelly_-_Background_agents_are_here._Your_orchestration_i",
+          "unit_id": "u-012-782bd690",
+          "quote": "Background agents aren't coming. They're here."
+        },
+        {
+          "case_id": "4bbb0ab3-2026-05-10_djfarrelly_-_Background_agents_are_here._Your_orchestration_i",
+          "unit_id": "u-023-df4e0390",
+          "quote": "When you have step.run(), step.invoke(), step.waitForEvent(), and step.sleep(), you can build things that don't fit neatly into any existing taxonomy"
+        }
+      ],
+      "strength": "overreach",
+      "evidence_sufficient": false
+    },
+    {
+      "id": "agents-b004-6",
+      "claim": "Governance and safety mechanisms for agents include deterministic policy enforcement before action execution, capability models that define sandbox boundaries, and emergency termination mechanisms, with failure modes typically defaulting to deny rather than allow.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "3eb72a30-2026-04-03_microsoft_agent-governance-toolkit_",
+          "unit_id": "u-014-dc827f16",
+          "quote": "The toolkit governs what agents do , not just what they say."
+        },
+        {
+          "case_id": "3eb72a30-2026-04-03_microsoft_agent-governance-toolkit_",
+          "unit_id": "u-015-171b4a97",
+          "quote": "Deterministic Policy Enforcement : Every agent action is evaluated against policies before execution with sub-millisecond latency (<0.1 ms)"
+        },
+        {
+          "case_id": "3eb72a30-2026-04-03_microsoft_agent-governance-toolkit_",
+          "unit_id": "u-003-c59a19cc",
+          "quote": "CapabilityModel : Defines the \"sandbox\" for an agent, including allowed_tools, blocked_patterns, and max_tool_calls"
+        },
+        {
+          "case_id": "3eb72a30-2026-04-03_microsoft_agent-governance-toolkit_",
+          "unit_id": "u-010-02cf88be",
+          "quote": "KillSwitch : Provides an emergency mechanism for instant agent termination"
+        },
+        {
+          "case_id": "3eb72a30-2026-04-03_microsoft_agent-governance-toolkit_",
+          "unit_id": "u-020-41a42c8c",
+          "quote": "Policy evaluation failures result in fail-closed behavior: if evaluation throws an exception, the action is matched (typically resulting in a \"deny\") by default"
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b004-7",
+      "claim": "Agentic thinking differs from reasoning thinking in that it optimizes for sustained effective action through environmental interaction rather than quality of internal deliberation before a final answer.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "49647420-2026-05-07_JustinLin610_-_From_Reasoning_Thinking_to_Agentic_Thinking_",
+          "unit_id": "u-001-5f963090",
+          "quote": "Reasoning thinking is usually judged by the quality of internal deliberation before a final answer: can the model solve the theorem, write the proof, produce the correct code, or pass the benchmark."
+        },
+        {
+          "case_id": "49647420-2026-05-07_JustinLin610_-_From_Reasoning_Thinking_to_Agentic_Thinking_",
+          "unit_id": "u-002-b2dd4850",
+          "quote": "Agentic thinking is about whether the model can keep making progress while interacting with an environment."
+        },
+        {
+          "case_id": "49647420-2026-05-07_JustinLin610_-_From_Reasoning_Thinking_to_Agentic_Thinking_",
+          "unit_id": "u-003-4f6050d5",
+          "quote": "The central question shifts from \"Can the model think long enough?\" to \"Can the model think in a way that sustains effective action?\""
+        },
+        {
+          "case_id": "49647420-2026-05-07_JustinLin610_-_From_Reasoning_Thinking_to_Agentic_Thinking_",
+          "unit_id": "u-015-b19e3b80",
+          "quote": "The deeper transition is from reasoning thinking to agentic thinking: from thinking longer to thinking in order to act."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b005-2",
+      "claim": "Multi-agent systems fail when agents share the same memory and tone; successful multi-agent teams require isolation, distinct role boundaries, and clear handoffs rather than better prompting.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "55e1317e-2026-04-13_How_to_Build_a_Multi-Agent_Team_in_Hermes_",
+          "unit_id": "u-012-e888f2a0",
+          "quote": "multi-agent systems fail when everything shares the same memory and tone."
+        },
+        {
+          "case_id": "55e1317e-2026-04-13_How_to_Build_a_Multi-Agent_Team_in_Hermes_",
+          "unit_id": "u-010-90c78ad8",
+          "quote": "the leap from one agent to a real multi-agent team starts with isolation, not with better prompting."
+        },
+        {
+          "case_id": "55e1317e-2026-04-13_How_to_Build_a_Multi-Agent_Team_in_Hermes_",
+          "unit_id": "u-021-77a87019",
+          "quote": "the smartest multi-agent team is not the biggest one. It is the one with the clearest role boundaries."
+        },
+        {
+          "case_id": "55e1317e-2026-04-13_How_to_Build_a_Multi-Agent_Team_in_Hermes_",
+          "unit_id": "u-000-ea2aae05",
+          "quote": "They are isolated agent environments that can separate memory, sessions, skills, personality, configuration, cron state, and gateway behavior."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b005-4",
+      "claim": "Infrastructure configuration alone can produce eval score differences comparable to model improvements; resource allocation and enforcement methodology can change what benchmarks actually measure.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "5c9f7366-2026-03-29_Quantifying_infrastructure_noise_in_agentic_coding_evals_",
+          "unit_id": "u-004-6e82594b",
+          "quote": "we've found that infrastructure configuration alone can produce differences that exceed those margins."
+        },
+        {
+          "case_id": "5c9f7366-2026-03-29_Quantifying_infrastructure_noise_in_agentic_coding_evals_",
+          "unit_id": "u-003-a093da2e",
+          "quote": "specifying resources isn't the same as enforcing them consistently. Moreover, we discovered that enforcement methodology can change what the benchmark ends up actually measuring."
+        },
+        {
+          "case_id": "5c9f7366-2026-03-29_Quantifying_infrastructure_noise_in_agentic_coding_evals_",
+          "unit_id": "u-005-717c4933",
+          "quote": "the gap between the most- and least-resourced setups on Terminal-Bench 2.0 was 6 percentage points (p < 0.01)."
+        },
+        {
+          "case_id": "5c9f7366-2026-03-29_Quantifying_infrastructure_noise_in_agentic_coding_evals_",
+          "unit_id": "u-018-ba130260",
+          "quote": "the boundary between \"model capability\" and \"infrastructure behavior\" is blurrier than a single benchmark score suggests."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b005-5",
+      "claim": "Multiple agent architectures independently converge on a pattern of compressing lower-level context and delegating to sub-agents, with the main thread maintaining shared context rather than isolating subagent contexts.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "5481ca27-2026-03-12_RLM_Coding_Swarm_Agents_",
+          "unit_id": "u-002-91994cd4",
+          "quote": "The general idea of a thread is that rather than isolating subagent context, we genuinely want to share it with the main orchestration thread."
+        },
+        {
+          "case_id": "5481ca27-2026-03-12_RLM_Coding_Swarm_Agents_",
+          "unit_id": "u-010-184f21da",
+          "quote": "@cognition, @fundamental, and @ManusAI all operate on the same principles of think at a high level and delegate at a lower level, compressing the lower level context to something that is understandable by the agent doing the strategizing."
+        },
+        {
+          "case_id": "5481ca27-2026-03-12_RLM_Coding_Swarm_Agents_",
+          "unit_id": "u-008-679f2fba",
+          "quote": "Because we delegate simple tactical actions to threads, one at a time, it gives us an almost perfect boundary over which we can compress the context."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b008-3",
+      "claim": "Skills should extend an agent's capabilities rather than compensate for missing core functionality.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "768aefe5-2026-05-17_Ctrl_Alt_Zaid_-_Fact_your_agent_should_not_need_a_skill_for_e",
+          "unit_id": "u-000-7a79a47d",
+          "quote": "If your agent needs a skill for everything, it is not ready."
+        },
+        {
+          "case_id": "768aefe5-2026-05-17_Ctrl_Alt_Zaid_-_Fact_your_agent_should_not_need_a_skill_for_e",
+          "unit_id": "u-012-64a8d570",
+          "quote": "Skills should extend the agent. They should not compensate for an empty core."
+        },
+        {
+          "case_id": "768aefe5-2026-05-17_Ctrl_Alt_Zaid_-_Fact_your_agent_should_not_need_a_skill_for_e",
+          "unit_id": "u-016-f1be91ea",
+          "quote": "A real agent needs to be useful before you install anything extra."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "agents-b010-7",
+      "claim": "Skill systems where natural-language instruction files can be evolved through feedback loops—using bounded edits, validation gates, and held-out test sets—can transfer across models and harnesses, with larger gains on procedural tasks.",
+      "theme": "Agents & agentic systems",
+      "citations": [
+        {
+          "case_id": "a182db94-2026-06-01_I_want_to_create_self-evolving_agent_skills.-a182db94_",
+          "unit_id": "u-001-9e598dfc",
+          "quote": "SkillOpt treats that file as something you can train, like training a model, except the thing being trained is the text, not the weights."
+        },
+        {
+          "case_id": "a182db94-2026-06-01_I_want_to_create_self-evolving_agent_skills.-a182db94_",
+          "unit_id": "u-004-db2c41a8",
+          "quote": "A validation gate runs the edited skill on a held-out set and only accepts the edit if the score goes up."
+        },
+        {
+          "case_id": "a182db94-2026-06-01_I_want_to_create_self-evolving_agent_skills.-a182db94_",
+          "unit_id": "u-009-c3554874",
+          "quote": "because the output is plain text calling a frozen model, the authors report a trained skill transferred across settings: a spreadsheet skill trained inside the Codex harness moved to the Claude Code harness with a reported +59.7 point gain"
+        },
+        {
+          "case_id": "a182db94-2026-06-01_I_want_to_create_self-evolving_agent_skills.-a182db94_",
+          "unit_id": "u-008-8d99ed81",
+          "quote": "the biggest gains land on procedural tasks. the ones where the model needs discipline about tool use and output format, not more raw knowledge."
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "coding-b001-3",
+      "claim": "AI coding agents currently operate primarily at junior-to-senior engineer execution level, not at staff engineer strategic altitude, requiring human review for higher-order decisions.",
+      "theme": "Coding & software",
+      "citations": [
+        {
+          "case_id": "15286b55-2026-05-22_dhasandev_-_The_Software_Factory_Trap_",
+          "unit_id": "u-017-bce3f774",
+          "quote": "Current coding agents mostly operate at junior-to-senior altitude"
+        },
+        {
+          "case_id": "15286b55-2026-05-22_dhasandev_-_The_Software_Factory_Trap_",
+          "unit_id": "u-018-ef437c22",
+          "quote": "That altitude gap is where the babysitting tax lives. It is not that agents cannot write code. It is that every output still requires a human to perform the staff engineer check that the agent skipped"
+        }
+      ],
+      "strength": "supported",
+      "evidence_sufficient": true
+    },
+    {
+      "id": "coding-b001-4",
+      "claim": "AI amplifies existing team strengths and weaknesses rather than independently raising baseline quality, making underlying process quality critical.",
+      "theme": "Coding & software",
+      "citations": [
+        {
+          "case_id": "15286b55-2026-05-22_dhasandev_-_The_Software_Factory_Trap_",
+          "unit_id": "u-010-98204327",
+          "quote": "AI is an amplifier of whatever is already there. Strong teams get stronger. Weak processes get weaker faster"
+        },
+        {
+          "case_id": "4d399bdb-2026-02-22_How-I-Use-Claude-Code________",
+          "unit_id": "u-000-61659fc2",
+          "quote": "never let Claude write code until you've reviewed and approved a written plan"
+        },
+        {
+          "case_id": "4d399bdb-2026-02-22_How-I-Use-Claude-Code________",
+          "unit_id": "u-013-bd0152d1",
+          "quote": "This is the most distinctive part of my workflow, and the part where I add the most value"
+        }
+      ],
+      "strength": "over_synthesized",
+      "evidence_sufficient": false
+    },
+    {
+      "id": "coding-b001-5",
+      "claim": "Orchestrating AI agents at the workflow level (beyond individual coding sessions) can dramatically increase output, particularly for routine implementation work.",
+      "theme": "Coding & software",
+      "citations": [
+        {
+          "case_id": "0c7aead5-2026-04-30_An_open-source_spec_for_Codex_orchestration_Symphony._",
+          "unit_id": "u-007-198bf58a",
+          "quote": "we saw the number of landed PRs increase by 500% in the first three weeks"
+        },
+        {
+          "case_id": "0c7aead5-2026-04-30_An_open-source_spec_for_Codex_orchestration_Symphony._",
+          "unit_id": "u-011-5a2f9f02",
+          "quote": "Symphony decouples work from sessions and from pull requests"
+        },
+        {
+          "case_id": "0c7aead5-2026-04-30_An_open-source_spec_for_Codex_orchestration_Symphony._",
+          "unit_id": "u-016-daeabd07",
+          "quote": "Some problems still require engineers working directly with interactive Codex sessions, especially ambiguous problems or work that requires strong judgment and expertise"
+        }
+      ],
+      "strength": "overreach",
+      "evidence_sufficient": true
+    }
+  ]
+}

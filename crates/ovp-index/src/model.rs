@@ -94,6 +94,10 @@ pub struct ClaimRow {
     pub strength: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// Review lane for caveated claims (`review` | `source_insight`).
+    /// None for durable/superseded/retracted rows and pre-M35 indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

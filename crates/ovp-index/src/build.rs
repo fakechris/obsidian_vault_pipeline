@@ -444,6 +444,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             sources: rec.source_cases.clone(),
             strength: enum_str(&rec.strength),
             run_id: Some(rec.run_id.clone()),
+            lane: None,
         });
     }
 
@@ -456,14 +457,22 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
         let file: ReviewFile = serde_json::from_str(&raw)
             .map_err(|e| format!("parsing {}/review.json: {e}", store.display()))?;
         for entry in file.review {
+            let sources: Vec<String> = {
+                let mut s: Vec<String> =
+                    entry.citations.iter().map(|c| c.case_id.clone()).collect();
+                s.sort_unstable();
+                s.dedup();
+                s
+            };
             claims.push(ClaimRow {
                 claim_id: entry.claim_id,
                 claim: entry.claim,
                 theme: (!entry.theme.is_empty()).then_some(entry.theme),
                 status: ClaimStatus::Caveated,
-                sources: Vec::new(),
+                sources,
                 strength: enum_str(&entry.strength),
                 run_id: None,
+                lane: enum_str(&entry.lane),
             });
         }
     }

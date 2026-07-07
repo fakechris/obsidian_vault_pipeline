@@ -378,6 +378,7 @@ mod tests {
                     sources: vec!["case-a".into(), "case-b".into()],
                     strength: Some("supported".into()),
                     run_id: Some("crystal-1".into()),
+                    lane: None,
                 },
                 ClaimRow {
                     claim_id: "c02".into(),
@@ -387,6 +388,7 @@ mod tests {
                     sources: vec![],
                     strength: Some("opinion_as_fact".into()),
                     run_id: None,
+                    lane: None,
                 },
             ],
             runs: vec![RunRow {
