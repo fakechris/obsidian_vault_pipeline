@@ -128,5 +128,5 @@ fn main() {
         "wrote {claims} claims over {n_sources} sources to {}",
         ledger_path.display()
     );
-    eprintln!("serve with: ovp-next serve --vault-root {}", out.display());
+    eprintln!("serve with: ovp2 serve --vault-root {}", out.display());
 }

@@ -302,7 +302,7 @@ where
                 append_pipeline_event(log_path, &PipelineLogEvent {
                     event_type: "reader_pack_write".into(),
                     target: pack_rel.clone(),
-                    reason: format!("ovp-next daily: new source {}", item.rel),
+                    reason: format!("ovp2 daily: new source {}", item.rel),
                     date: cfg.date.clone(),
                     run_id: cfg.run_id.clone(),
                 })?;
@@ -352,7 +352,7 @@ fn move_to_processed(
             if let Err(e) = append_pipeline_event(log_path, &PipelineLogEvent {
                 event_type: "source_processed_move".into(),
                 target: to_rel.clone(),
-                reason: format!("ovp-next daily: source {} processed", item.rel),
+                reason: format!("ovp2 daily: source {} processed", item.rel),
                 date: cfg.date.clone(),
                 run_id: cfg.run_id.clone(),
             }) {

@@ -238,7 +238,7 @@ pub fn sync_pinboard(
             append_pipeline_event(&log_path, &PipelineLogEvent {
                 event_type: "pinboard_note_write".into(),
                 target: to_rel.clone(),
-                reason: format!("ovp-next pinboard-sync: new bookmark {url}"),
+                reason: format!("ovp2 pinboard-sync: new bookmark {url}"),
                 date: cfg.date.clone(),
                 run_id: cfg.run_id.clone(),
             })?;

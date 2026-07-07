@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn concept_overlap_partitions_shared_and_only_with_full_counts() {
-        let o = subj("ovp-next", &["rag", "agent", "moc"]);
+        let o = subj("ovp2", &["rag", "agent", "moc"]);
         let n = subj("nowledge-mem", &["rag", "memory", "agent"]);
         let c = concept_overlap(&o, &n);
         assert_eq!(c.shared, vec!["agent".to_string(), "rag".to_string()]);
@@ -625,7 +625,7 @@ mod tests {
         let ovp_keys: Vec<String> = vec!["shared".into()];
         let now_keys: Vec<String> =
             std::iter::once("shared".to_string()).chain((0..30).map(|i| format!("n{i:02}"))).collect();
-        let o = subj("ovp-next", &ovp_keys.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let o = subj("ovp2", &ovp_keys.iter().map(|s| s.as_str()).collect::<Vec<_>>());
         let n = subj("nowledge-mem", &now_keys.iter().map(|s| s.as_str()).collect::<Vec<_>>());
         let c = concept_overlap(&o, &n);
         assert_eq!(c.nowledge_only_count, 30, "exact count preserved");
@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn build_with_missing_nowledge_yields_partial_with_findings() {
-        let o = subj("ovp-next", &["a"]);
+        let o = subj("ovp2", &["a"]);
         let queries = vec!["q1".to_string()];
         let cmp = build(inputs(
             Some(&o),
@@ -661,7 +661,7 @@ mod tests {
         // ovp 0 in the scoped lane, Nowledge 0 in the scoped lane, but Nowledge
         // global has hits → there must be NO ovp-deficiency finding (global is
         // background only). This is the M8.1 honesty fix.
-        let o = subj("ovp-next", &["a"]);
+        let o = subj("ovp2", &["a"]);
         let n = subj("nowledge-mem", &["b"]); // both empty scoped retrieval
         let queries = vec!["q1".to_string()];
         let global = vec![NormRetrievalHit {
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn split_mode_emits_byte_identical_and_grounding_caveats() {
-        let o = subj("ovp-next", &["a"]);
+        let o = subj("ovp2", &["a"]);
         let n = subj("nowledge-mem", &["b"]);
         let queries = vec!["q1".to_string()];
         let mut inp = inputs(Some(&o), Some(&n), SideStatus::ok(), SideStatus::ok(), &queries, &[]);
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn scoped_row_counts_hits_and_grounding() {
-        let mut o = subj("ovp-next", &[]);
+        let mut o = subj("ovp2", &[]);
         o.retrieval = vec![
             NormRetrievalHit { query: "q".into(), rank: 0, title: "A".into(), snippet: "x".into(), grounded: true },
             NormRetrievalHit { query: "q".into(), rank: 1, title: "B".into(), snippet: "y".into(), grounded: false },

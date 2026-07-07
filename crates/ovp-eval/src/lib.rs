@@ -2,7 +2,7 @@
 //!
 //! Given one input (a URL and/or a local markdown file) it runs BOTH systems
 //! end-to-end and emits a deterministic, human-inspectable comparison pack:
-//!   1. **ovp-next** — via the M7 [`ovp_review::ReviewRun`] harness (the real
+//!   1. **ovp2** — via the M7 [`ovp_review::ReviewRun`] harness (the real
 //!      pipeline: note + canonical + MOC + knowledge index + RAG), reusing it
 //!      wholesale (no pipeline logic is reimplemented here);
 //!   2. **Nowledge Mem** — an EXTERNAL reference system, reached only through the

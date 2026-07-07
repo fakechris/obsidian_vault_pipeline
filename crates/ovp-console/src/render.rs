@@ -36,7 +36,7 @@ fn header(model: &IndexModel) -> String {
 <style>{CSS}</style></head>
 <body><main>
 <h1>OVP Console <span class="zh">工作台</span></h1>
-<p class="sub">read model built {date}{run} · product state only · regenerate: <code>ovp-next console --vault-root …</code></p>
+<p class="sub">read model built {date}{run} · product state only · regenerate: <code>ovp2 console --vault-root …</code></p>
 <div class="strip">
 {queued}{processed}{failed}{blocked}{needs}{packs}{durable}{caveated}
 </div>

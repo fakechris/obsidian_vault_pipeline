@@ -8,12 +8,12 @@ authors.workspace = true
 description = "OVP Next CLI"
 
 [[bin]]
-name = "ovp-next"
+name = "ovp2"
 path = "src/main.rs"
 
 [features]
 default = []
-# Forwards to ovp-llm/anthropic so `ovp-next interpret-article/run-cycle --client
+# Forwards to ovp-llm/anthropic so `ovp2 interpret-article/run-cycle --client
 # live` can make real *LLM* API calls. The LLM transport stays feature-gated and
 # OFF by default. NOTE: the binary is NOT HTTP-free regardless — `compare-run`
 # (via ovp-eval) links reqwest to reach the external Nowledge Mem service. That

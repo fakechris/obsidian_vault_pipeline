@@ -27,7 +27,7 @@ impl std::fmt::Display for CliError {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "ovp-next", version, about = "OVP Next — clean-core Rust pipeline")]
+#[command(name = "ovp2", version, about = "OVP Next — clean-core Rust pipeline")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -264,7 +264,7 @@ enum Cmd {
     },
     /// PRODUCT — query the read model: list/search/filter sources, reader
     /// packs, crystal claims, runs, and deep evidence cards/units.
-    /// `ovp-next find --vault-root V chunks`
+    /// `ovp2 find --vault-root V chunks`
     /// or `--kind sources --status blocked`. Run `index` (or `daily`) first.
     Find {
         #[arg(long)]
@@ -757,7 +757,7 @@ enum Cmd {
         dry_run: bool,
     },
     /// DIAGNOSTIC — experimental/eval harness; not a product path.
-    /// External E2E comparator (M8): run ONE input through both the ovp-next
+    /// External E2E comparator (M8): run ONE input through both the ovp2
     /// pipeline (via the review harness) and the external Nowledge Mem HTTP
     /// service, normalize both, and write a deterministic comparison pack
     /// (concept overlap, claim diff, grounding, structure, retrieval). Nowledge
@@ -865,7 +865,7 @@ fn main() -> ExitCode {
         }
         Cmd::Run { manifest, fake, run_id, out } => {
             if !fake {
-                eprintln!("ovp-next: v0.1 only supports --fake runs. Pass --fake to proceed.");
+                eprintln!("ovp2: v0.1 only supports --fake runs. Pass --fake to proceed.");
                 return ExitCode::from(2);
             }
             commands::run::run(manifest, run_id, out)

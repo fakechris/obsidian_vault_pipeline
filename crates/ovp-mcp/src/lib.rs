@@ -268,7 +268,7 @@ fn tool_doctor(state: &McpState) -> Result<Value, RpcError> {
 
     match model.as_ref() {
         None => {
-            findings.push("FAIL: Index not available — run `ovp-next index` first.");
+            findings.push("FAIL: Index not available — run `ovp2 index` first.");
         }
         Some(m) => {
             if m.ops.blocked_sources.is_empty() {
@@ -320,7 +320,7 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
         "ovp://working-memory" => {
             let wm_path = state.vault_root.join(".ovp/working-memory.md");
             let text = std::fs::read_to_string(&wm_path)
-                .unwrap_or_else(|_| "(working memory not yet generated — run `ovp-next daily`)".into());
+                .unwrap_or_else(|_| "(working memory not yet generated — run `ovp2 daily`)".into());
             Ok(serde_json::json!({
                 "contents": [{ "uri": uri, "mimeType": "text/markdown", "text": text }]
             }))
