@@ -23,13 +23,27 @@ Environment for live runs (put in your shell profile or `.env`, NEVER in the rep
 | Var | Used by | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_BASE_URL`, `OVP_LLM_MODEL`, `OVP_LLM_MAX_TOKENS`, `OVP_LLM_NO_PROXY=1`) | `--client live` | see `docs/live-capture.md`; this sandbox/provider setup needs `OVP_LLM_NO_PROXY=1` |
+| `OVP_LLM_TIMEOUT_SECS=480` | `--client live` | REQUIRED for dogfood: the default 180s total-request timeout mis-kills slow provider responses and amplifies load with retries (2026-07-06 live hang was exactly this class) |
 | `PINBOARD_TOKEN` (`username:TOKEN`) | `--pinboard-live` / `pinboard-sync --live` | same env var the legacy processor used; never logged, never persisted |
 
 ## 1. The daily loop
 
 ```bash
-ovp2 daily --vault-root "$VAULT" --client live
+OVP_LLM_NO_PROXY=1 OVP_LLM_TIMEOUT_SECS=480 \
+  ovp2 daily --vault-root "$VAULT" --client live --date "$(date +%F)"
 ```
+
+Two traps this exact line avoids (both bit real dogfood runs on 2026-07-06):
+
+- **`--date "$(date +%F)"` is not optional.** The internal default date is UTC:
+  a morning run (before 08:00 UTC+8) stamps YESTERDAY, an evening run (after
+  16:00 UTC+8) stamps TOMORROW — the ledger really did record `2026-07-07`
+  entries on the local evening of 07-06. Always pass the local date; ledgers
+  are append-only, mis-stamped entries are never rewritten (note them in
+  `.run/dogfood/issues/` instead).
+- **A plain `cargo build` binary is replay-only.** `--client live` needs the
+  `--features anthropic` release build from §0; the replay-only binary fails
+  live with a clear error, but only after you've waited on it.
 
 What one run does, in order:
 
@@ -60,11 +74,38 @@ Useful variants:
 
 ```bash
 ovp2 daily --vault-root "$VAULT" --dry-run            # plan only, writes nothing
-ovp2 daily --vault-root "$VAULT" --client live --max-sources 3
-ovp2 daily --vault-root "$VAULT" --client live --retry-blocked
+ovp2 daily --vault-root "$VAULT" --client live --date "$(date +%F)" --max-sources 3
+ovp2 daily --vault-root "$VAULT" --client live --date "$(date +%F)" --retry-blocked
 ovp2 daily --vault-root "$VAULT" --no-intake          # reader phase only
 ovp2 daily --vault-root "$VAULT" --no-lifecycle       # leave sources in 01-Raw
 ```
+
+### Scheduled runs (dogfood day 4+)
+
+After 3 stable manual days, schedule the daily at a fixed local time (e.g.
+09:30). macOS launchd example — `~/Library/LaunchAgents/com.ovp.daily.plist`
+calling a small wrapper script so env + date stay in one place:
+
+```bash
+#!/bin/zsh
+# ~/bin/ovp-daily.sh — the ONLY canonical scheduled invocation
+set -euo pipefail
+source ~/.ovp-live-env                # ANTHROPIC_API_KEY etc.; never in the repo
+export OVP_LLM_NO_PROXY=1 OVP_LLM_TIMEOUT_SECS=480
+mkdir -p ~/Documents/ovp-vault/.ovp
+~/Documents/obsidian-vault-pipeline/target/release/ovp2 daily \
+  --vault-root ~/Documents/ovp-vault \
+  --client live \
+  --date "$(date +%F)" \
+  >> ~/Documents/ovp-vault/.ovp/dogfood-cron.log 2>&1
+```
+
+Notes: exit code is non-zero when ANY source fails (partial success included) —
+the cron log, not the exit code, is the thing to read; check
+`.ovp/daily-runs.jsonl` and run `ovp2 doctor` weekly. A stale `run.lock` from a
+crashed run is reclaimed automatically (dead-PID probe); a lock held by a live
+run makes the scheduled run exit with "another OVP run appears to be in
+progress" — that is correct behavior, not a failure to fix.
 
 Exit codes: `0` clean; non-zero when any source failed (failures are in the
 ledger and will be retried next run — nothing is lost).
