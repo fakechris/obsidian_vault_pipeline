@@ -16,7 +16,7 @@ use crate::nowledge::SourceDetail;
 /// A system's output, normalized for comparison.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedSubject {
-    /// `"ovp-next"` or `"nowledge-mem"`.
+    /// `"ovp2"` or `"nowledge-mem"`.
     pub system: String,
     pub source: NormSource,
     pub concepts: Vec<NormConcept>,
@@ -114,7 +114,7 @@ pub fn normalize_ovp(canonical: &CanonicalSummary, note_md: Option<&str>) -> Nor
     let section_count = distinct_sections(&claims);
 
     NormalizedSubject {
-        system: "ovp-next".to_string(),
+        system: "ovp2".to_string(),
         source: NormSource { url, title, text_len: 0 },
         structure: NormStructure {
             concept_count: concepts.len(),
@@ -468,7 +468,7 @@ mod tests {
         };
         let note = "---\ntitle: \"A Guide\"\nsource: https://e.x/a\n---\n## 一句话定义\n\n> 这是一个关于代理原生产品管理的完整指南介绍\n\n## Details\n\n- a detail line with plenty of english words here\n";
         let subj = normalize_ovp(&canonical, Some(note));
-        assert_eq!(subj.system, "ovp-next");
+        assert_eq!(subj.system, "ovp2");
         assert_eq!(subj.source.title, "A Guide");
         assert_eq!(subj.source.url, "https://e.x/a");
         assert_eq!(subj.concepts.len(), 2);

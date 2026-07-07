@@ -1,5 +1,5 @@
 //! Read-only queries over the index model: list / filter / substring search
-//! across sources, packs, claims, and runs. Powers `ovp-next find`.
+//! across sources, packs, claims, and runs. Powers `ovp2 find`.
 
 use serde::Serialize;
 

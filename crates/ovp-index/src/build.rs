@@ -1,7 +1,7 @@
 //! Build the read model from product state. Full rebuild every time — at
 //! vault scale (hundreds of sources) this is milliseconds, and a projection
 //! that can always be regenerated from the ledgers needs no migration story:
-//! `ovp-next index` IS the migration.
+//! `ovp2 index` IS the migration.
 //!
 //! Inputs (all optional except the vault root):
 //! - `.ovp/daily-runs.jsonl` + `.ovp/intake.jsonl` + `.ovp/pinboard-sync.jsonl`
@@ -98,7 +98,7 @@ pub fn read_index(vault_root: &Path) -> Result<IndexModel, String> {
     let path = vault_root.join(layout.index_file());
     let raw = std::fs::read_to_string(&path).map_err(|e| {
         format!(
-            "reading {}: {e} (run `ovp-next index --vault-root …` to build it)",
+            "reading {}: {e} (run `ovp2 index --vault-root …` to build it)",
             path.display()
         )
     })?;

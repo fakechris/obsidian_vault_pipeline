@@ -156,7 +156,7 @@ incremental mechanism** shared by index/console/synth/recluster — no pipeline 
 
 Do not conflate what `daily` does TODAY with the mature scheduler — the gap is the work:
 
-| Tier | **Current** (`ovp-next daily` today) | **Mature scheduler** (target) |
+| Tier | **Current** (`ovp2 daily` today) | **Mature scheduler** (target) |
 |---|---|---|
 | per ingest | intake → dedup → enrich(fixture-gated) → reader → lifecycle move → ledgers ✅ | same, with live-validated enrich + paper route |
 | daily | report → index → console → plain digest → working-memory | + **incremental crystal-synth on dirty groups** (entry conditions below) + doctor summary |

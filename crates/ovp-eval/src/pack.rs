@@ -102,14 +102,14 @@ fn status_line(c: &Comparison) -> String {
             format!("UNAVAILABLE — {}", s.detail.clone().unwrap_or_default())
         }
     };
-    format!("ovp-next: {} | nowledge-mem: {}", side(&c.ovp), side(&c.nowledge))
+    format!("ovp2: {} | nowledge-mem: {}", side(&c.ovp), side(&c.nowledge))
 }
 
 fn render_review(p: &PackInputs<'_>) -> String {
     let c = p.comparison;
     let mut s = String::new();
     s.push_str(&format!("# External E2E comparison — `{}`\n\n", c.case_id));
-    s.push_str("> ovp-next vs **Nowledge Mem** (external reference system). All cross-system\n");
+    s.push_str("> ovp2 vs **Nowledge Mem** (external reference system). All cross-system\n");
     s.push_str("> metrics are LEXICAL — they flag things to inspect, not semantic verdicts.\n\n");
     s.push_str(&format!("**Sides:** {}\n\n", status_line(c)));
     s.push_str(&format!("**Input mode:** {}\n\n", p.input_mode));

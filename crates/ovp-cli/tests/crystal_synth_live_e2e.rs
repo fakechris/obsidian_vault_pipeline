@@ -24,7 +24,7 @@ fn fixture(sub: &str) -> PathBuf {
 }
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ovp-next"))
+    Command::new(env!("CARGO_BIN_EXE_ovp2"))
 }
 
 #[test]

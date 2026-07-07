@@ -150,7 +150,7 @@ pub fn read_evidence(vault_root: &Path) -> Result<EvidenceModel, String> {
     let path = vault_root.join(EVIDENCE_FILE);
     let raw = std::fs::read_to_string(&path).map_err(|e| {
         format!(
-            "reading {}: {e} (run `ovp-next index --vault-root …` to build it)",
+            "reading {}: {e} (run `ovp2 index --vault-root …` to build it)",
             path.display()
         )
     })?;

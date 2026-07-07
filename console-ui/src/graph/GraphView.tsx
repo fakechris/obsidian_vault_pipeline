@@ -114,7 +114,7 @@ export default function GraphView() {
           <div className="rounded-lg border border-red-500/30 bg-red-950/40 px-4 py-3 text-sm text-red-300">
             Failed to load graph 图谱加载失败: {error}
             <div className="mt-1 text-xs text-red-400/80">
-              Is `ovp-next serve` running? 请确认服务已启动
+              Is `ovp2 serve` running? 请确认服务已启动
             </div>
           </div>
         </div>

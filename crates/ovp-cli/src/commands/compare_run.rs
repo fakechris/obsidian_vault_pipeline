@@ -110,7 +110,7 @@ pub fn run(args: CompareRunArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::Io(format!("compare-run: {e}")))?;
 
     println!("comparison pack: {}", report.out_dir.display());
-    println!("ovp-next:        {}", if report.ovp_available { "available" } else { "UNAVAILABLE" });
+    println!("ovp2:        {}", if report.ovp_available { "available" } else { "UNAVAILABLE" });
     println!("nowledge-mem:    {}", if report.nowledge_available { "available" } else { "UNAVAILABLE" });
     println!("findings:        {}", report.comparison.findings.len());
     for f in &report.comparison.findings {

@@ -1,4 +1,4 @@
-//! M31 end-to-end dogfood over the REAL `ovp-next` binary on a fixture vault:
+//! M31 end-to-end dogfood over the REAL `ovp2` binary on a fixture vault:
 //! pinboard fixture → intake → daily reader (replay over pre-seeded cassettes)
 //! → lifecycle moves → run report → index → console → crystal-write into the
 //! vault-local store → find. Then: idempotent rerun, and the failure → retry →
@@ -85,7 +85,7 @@ fn seed_cassettes(cache_dir: &Path, source: &SourceDoc, quote: &str, text: &str)
 }
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ovp-next"))
+    Command::new(env!("CARGO_BIN_EXE_ovp2"))
 }
 
 fn run_ok(cmd: &mut Command) -> String {

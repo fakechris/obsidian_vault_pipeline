@@ -27,7 +27,7 @@ README.md
 AGENTS.md
 ```
 
-There should be no nested `rust/ovp-next/` project and no root `src/ovp_pipeline/`, `pyproject.toml`, `requirements.txt`, or `MANIFEST.in`.
+There should be no nested `rust/ovp2/` project and no root `src/ovp_pipeline/`, `pyproject.toml`, `requirements.txt`, or `MANIFEST.in`.
 
 ## Development Commands
 
@@ -74,8 +74,8 @@ When modifying LLM prompt templates or pipeline behavior:
 1. Write a Candidate Spec (`evolution/candidates/<id>.json`) BEFORE editing
 2. Identify the target Change Surface: prompt | parser | runtime | gate | model
 3. State a falsifiable hypothesis with predicted metric delta
-4. Run `ovp-next evolve validate --candidate <spec>` to confirm spec validity
-5. Run `ovp-next evolve ab --candidate <spec>` to generate paired comparison (Phase 2+)
+4. Run `ovp2 evolve validate --candidate <spec>` to confirm spec validity
+5. Run `ovp2 evolve ab --candidate <spec>` to generate paired comparison (Phase 2+)
 6. Accept only if hard gates pass and guardrails hold
 7. Record in Evolution Ledger with git SHA and rollback plan
 8. Bump the prompt namespace version constant after acceptance

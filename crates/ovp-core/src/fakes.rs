@@ -1,4 +1,4 @@
-//! In-tree fake filters used by tests and `ovp-next run --fake`.
+//! In-tree fake filters used by tests and `ovp2 run --fake`.
 //!
 //! Available only when the `fakes` feature is enabled. `FakeBody` is the
 //! concrete body type the v0.1 demo pipeline uses — domain crates will

@@ -173,7 +173,7 @@ pub fn sweep_intake(
                 append_pipeline_event(&log_path, &PipelineLogEvent {
                     event_type: "intake_move".into(),
                     target: to_rel.clone(),
-                    reason: format!("ovp-next intake: normalized capture {from}"),
+                    reason: format!("ovp2 intake: normalized capture {from}"),
                     date: cfg.date.clone(),
                     run_id: cfg.run_id.clone(),
                 })?;
@@ -221,7 +221,7 @@ fn dispose_duplicate(
         append_pipeline_event(log_path, &PipelineLogEvent {
             event_type: "intake_duplicate_move".into(),
             target: to_rel.clone(),
-            reason: format!("ovp-next intake: duplicate of {dup_of} (was {from})"),
+            reason: format!("ovp2 intake: duplicate of {dup_of} (was {from})"),
             date: cfg.date.clone(),
             run_id: cfg.run_id.clone(),
         })?;

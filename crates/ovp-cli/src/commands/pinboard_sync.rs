@@ -53,6 +53,6 @@ pub fn run(args: PinboardSyncArgs) -> Result<(), CliError> {
         outcome.skipped_empty_url,
         if outcome.dry_run { " — dry-run, nothing written" } else { "" },
     );
-    println!("  next: `ovp-next intake` (or `daily`) moves readable notes into 01-Raw");
+    println!("  next: `ovp2 intake` (or `daily`) moves readable notes into 01-Raw");
     Ok(())
 }

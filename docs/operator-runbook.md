@@ -14,7 +14,7 @@ cargo build --release -p ovp-cli            # offline build (replay-only)
 cargo build --release -p ovp-cli --features anthropic
 # + live pinboard (optional):
 cargo build --release -p ovp-cli --features anthropic,pinboard-live
-alias ovp-next=~/Documents/obsidian-vault-pipeline/target/release/ovp-next
+alias ovp2=~/Documents/obsidian-vault-pipeline/target/release/ovp2
 export VAULT=~/Documents/ovp-vault
 ```
 
@@ -28,7 +28,7 @@ Environment for live runs (put in your shell profile or `.env`, NEVER in the rep
 ## 1. The daily loop
 
 ```bash
-ovp-next daily --vault-root "$VAULT" --client live
+ovp2 daily --vault-root "$VAULT" --client live
 ```
 
 What one run does, in order:
@@ -59,11 +59,11 @@ Open the console: `open "$VAULT/.ovp/console/index.html"`.
 Useful variants:
 
 ```bash
-ovp-next daily --vault-root "$VAULT" --dry-run            # plan only, writes nothing
-ovp-next daily --vault-root "$VAULT" --client live --max-sources 3
-ovp-next daily --vault-root "$VAULT" --client live --retry-blocked
-ovp-next daily --vault-root "$VAULT" --no-intake          # reader phase only
-ovp-next daily --vault-root "$VAULT" --no-lifecycle       # leave sources in 01-Raw
+ovp2 daily --vault-root "$VAULT" --dry-run            # plan only, writes nothing
+ovp2 daily --vault-root "$VAULT" --client live --max-sources 3
+ovp2 daily --vault-root "$VAULT" --client live --retry-blocked
+ovp2 daily --vault-root "$VAULT" --no-intake          # reader phase only
+ovp2 daily --vault-root "$VAULT" --no-lifecycle       # leave sources in 01-Raw
 ```
 
 Exit codes: `0` clean; non-zero when any source failed (failures are in the
@@ -85,19 +85,19 @@ ledger and will be retried next run — nothing is lost).
 ## 3. Pieces, run separately
 
 ```bash
-ovp-next intake --vault-root "$VAULT" [--dry-run]          # capture sweep only
-ovp-next pinboard-sync --vault-root "$VAULT" --fixture export.json [--dry-run]
-ovp-next pinboard-sync --vault-root "$VAULT" --live        # needs pinboard-live build
-ovp-next index --vault-root "$VAULT"                       # rebuild read model
-ovp-next console --vault-root "$VAULT"                     # rebuild console (+index)
-ovp-next find --vault-root "$VAULT" <term>                 # search everything
-ovp-next find --vault-root "$VAULT" --kind sources --status needs_content
-ovp-next find --vault-root "$VAULT" --kind claims --status durable
-ovp-next find --vault-root "$VAULT" --kind cards "agent memory"
-ovp-next find --vault-root "$VAULT" --kind units "verbatim quote"
-ovp-next find --vault-root "$VAULT" --kind runs --date 2026-06
-ovp-next ask --vault-root "$VAULT" --client live "What does the vault say about agent memory?"
-ovp-next ask --vault-root "$VAULT" --client live --strict-ask "What evidence supports that?"
+ovp2 intake --vault-root "$VAULT" [--dry-run]          # capture sweep only
+ovp2 pinboard-sync --vault-root "$VAULT" --fixture export.json [--dry-run]
+ovp2 pinboard-sync --vault-root "$VAULT" --live        # needs pinboard-live build
+ovp2 index --vault-root "$VAULT"                       # rebuild read model
+ovp2 console --vault-root "$VAULT"                     # rebuild console (+index)
+ovp2 find --vault-root "$VAULT" <term>                 # search everything
+ovp2 find --vault-root "$VAULT" --kind sources --status needs_content
+ovp2 find --vault-root "$VAULT" --kind claims --status durable
+ovp2 find --vault-root "$VAULT" --kind cards "agent memory"
+ovp2 find --vault-root "$VAULT" --kind units "verbatim quote"
+ovp2 find --vault-root "$VAULT" --kind runs --date 2026-06
+ovp2 ask --vault-root "$VAULT" --client live "What does the vault say about agent memory?"
+ovp2 ask --vault-root "$VAULT" --client live --strict-ask "What evidence supports that?"
 ```
 
 Pinboard without live credentials: export from <https://pinboard.in/export/>
@@ -116,11 +116,11 @@ The vault-local store is `"$VAULT"/.ovp/crystal`. The gates are unchanged
 (M22/M23); only the store location is a product convention now:
 
 ```bash
-ovp-next crystal-lint  --candidate cand.json --packs-dir "$VAULT/40-Resources/Reader" \
+ovp2 crystal-lint  --candidate cand.json --packs-dir "$VAULT/40-Resources/Reader" \
     --strength verdicts.json --out /tmp/lint.json
-ovp-next crystal-write --candidate cand.json --packs-dir "$VAULT/40-Resources/Reader" \
+ovp2 crystal-write --candidate cand.json --packs-dir "$VAULT/40-Resources/Reader" \
     --strength verdicts.json --store "$VAULT/.ovp/crystal" --title "…" --scope "…"
-ovp-next console --vault-root "$VAULT"     # claims appear under Crystal · 结晶主张
+ovp2 console --vault-root "$VAULT"     # claims appear under Crystal · 结晶主张
 ```
 
 `case_id` in candidate citations = the pack directory name under
@@ -130,7 +130,7 @@ exactly the layout the gates expect.
 Prepare a bounded review session for caveated claims:
 
 ```bash
-ovp-next crystal-review-session \
+ovp2 crystal-review-session \
   --vault-root "$VAULT" \
   --batch 20 \
   --out .run/review-session-$(date +%Y%m%d)
@@ -146,7 +146,7 @@ written, so a small review batch no longer erases the rest of the queue.
 ## 5. Recovery / rebuild
 
 Everything under `.ovp/index/` and `.ovp/console/` is a derived projection:
-delete freely, rebuild with `ovp-next index` / `ovp-next console`.
+delete freely, rebuild with `ovp2 index` / `ovp2 console`.
 Authoritative state = the ledgers (`.ovp/*.jsonl`), the reader packs, the
 crystal store, and the vault notes themselves. Reports are append-only
 snapshots. Cassettes (`.ovp/cassettes/`) are replayable model replies —

@@ -11,7 +11,7 @@ description = "OVP Next M7: E2E review harness — runs the L4 cycle and reads i
 ovp-core = { path = "../ovp-core" }
 # `testing` enables ovp-domain's contract-assertion engine so the comparison
 # step can defer to it instead of hand-rolling a verdict on the produced note.
-# Tradeoff: this compiles that engine into the production `ovp-next` binary
+# Tradeoff: this compiles that engine into the production `ovp2` binary
 # (ovp-cli → ovp-review → ovp-domain). Accepted deliberately — review-run is a
 # first-class diagnostic command, the engine is the right (and only) tool for a
 # contract verdict, and it pulls in no extra external dependencies.

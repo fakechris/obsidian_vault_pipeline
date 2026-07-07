@@ -10,7 +10,7 @@ description = "OVP Next clean core: Record, Filter, GraphRunner, WritePlan, Even
 [features]
 default = []
 # Enables the in-tree fake Source/Transform/Sink trio for tests and the
-# `ovp-next run --fake` demo command. Not for production builds.
+# `ovp2 run --fake` demo command. Not for production builds.
 fakes = []
 
 [dependencies]
