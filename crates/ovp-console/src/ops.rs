@@ -218,27 +218,48 @@ fn candidates_header(model: &IndexModel) -> String {
 }
 
 fn caveated_claims(model: &IndexModel) -> String {
-    let caveated: Vec<_> = model
+    // The HUMAN queue is the Review lane only; single-source Supported claims
+    // (lane = source_insight) are parked per-source insights, not review debt.
+    let (insights, review): (Vec<_>, Vec<_>) = model
         .claims
         .iter()
         .filter(|c| c.status == ClaimStatus::Caveated)
-        .collect();
-    if caveated.is_empty() {
-        return "<section><p class=\"empty\">No caveated claims pending review. 无待审保留意见主张。</p></section>\n".into();
+        .partition(|c| c.lane.as_deref() == Some("source_insight"));
+    let mut out = String::new();
+    if review.is_empty() {
+        out.push_str("<section><p class=\"empty\">No caveated claims pending review. 无待审保留意见主张。</p></section>\n");
+    } else {
+        out.push_str(
+            "<section><h2>Caveated Claims <span class=\"zh\">保留意见主张</span></h2>\n<table><thead><tr><th>Theme</th><th>Claim</th><th>Strength</th></tr></thead><tbody>\n",
+        );
+        for c in &review {
+            let (_, _, class) = claim_status_label(c.status);
+            out.push_str(&format!(
+                "<tr class=\"lv-{class}\"><td>{theme}</td><td>{claim}</td><td>{strength}</td></tr>\n",
+                theme = esc(c.theme.as_deref().unwrap_or("—")),
+                claim = esc(&c.claim),
+                strength = esc(c.strength.as_deref().unwrap_or("—")),
+            ));
+        }
+        out.push_str("</tbody></table></section>\n");
     }
-    let mut out = String::from(
-        "<section><h2>Caveated Claims <span class=\"zh\">保留意见主张</span></h2>\n<table><thead><tr><th>Theme</th><th>Claim</th><th>Strength</th></tr></thead><tbody>\n",
-    );
-    for c in &caveated {
-        let (_, _, class) = claim_status_label(c.status);
+    if !insights.is_empty() {
         out.push_str(&format!(
-            "<tr class=\"lv-{class}\"><td>{theme}</td><td>{claim}</td><td>{strength}</td></tr>\n",
-            theme = esc(c.theme.as_deref().unwrap_or("—")),
-            claim = esc(&c.claim),
-            strength = esc(c.strength.as_deref().unwrap_or("—")),
+            "<section><h2>Source Insights <span class=\"zh\">单源洞见（待第二来源）</span></h2>\n\
+             <p class=\"empty\">{} grounded, Supported, single-source claim(s) — parked \
+             outside the review queue until more sources arrive. 已接地且判定成立，但仅有单一来源。</p>\n\
+             <details><summary>Show list · 展开</summary><table><thead><tr><th>Theme</th><th>Claim</th></tr></thead><tbody>\n",
+            insights.len()
         ));
+        for c in &insights {
+            out.push_str(&format!(
+                "<tr><td>{theme}</td><td>{claim}</td></tr>\n",
+                theme = esc(c.theme.as_deref().unwrap_or("—")),
+                claim = esc(&c.claim),
+            ));
+        }
+        out.push_str("</tbody></table></details></section>\n");
     }
-    out.push_str("</tbody></table></section>\n");
     out
 }
 

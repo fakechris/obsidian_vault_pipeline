@@ -26,6 +26,16 @@ pub struct CrystalReviewSessionPrepareArgs {
 pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError> {
     let review_path = args.vault_root.join(".ovp/crystal/review.json");
     let mut review = read_review_queue(&review_path)?;
+    // Human sessions review the Review lane only — source-scoped insights
+    // (single-source + Supported) are parked, not human debt (M35).
+    let parked = review
+        .iter()
+        .filter(|e| e.lane == ovp_domain::crystal::ReviewLane::SourceInsight)
+        .count();
+    review.retain(|e| e.lane == ovp_domain::crystal::ReviewLane::Review);
+    if parked > 0 {
+        println!("  ({parked} source-insight entr(ies) parked outside the human queue)");
+    }
     review.sort_by(|a, b| {
         (a.theme.as_str(), a.claim_id.as_str()).cmp(&(b.theme.as_str(), b.claim_id.as_str()))
     });
@@ -322,6 +332,23 @@ fn render_review_sheet(review: &[ReviewEntry]) -> String {
             entry.evidence_sufficient,
             entry.rationale.trim()
         ));
+        if entry.citations.is_empty() {
+            out.push_str(
+                "_No citations on this entry (pre-M35 queue) — regenerate the queue with a \
+                 replay `crystal-synth` run to populate them._\n\n",
+            );
+        } else {
+            out.push_str("Citations (copy into `revisions` for rewrite/split):\n\n");
+            for c in &entry.citations {
+                out.push_str(&format!(
+                    "- `{}` · `{}` — \"{}\"\n",
+                    c.case_id,
+                    c.unit_id,
+                    c.quote.trim()
+                ));
+            }
+            out.push('\n');
+        }
     }
     out
 }

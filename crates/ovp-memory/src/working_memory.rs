@@ -148,6 +148,7 @@ mod tests {
                 sources: vec!["case-a".into()],
                 strength: Some("supported".into()),
                 run_id: None,
+                lane: None,
             })
             .collect();
         IndexModel {

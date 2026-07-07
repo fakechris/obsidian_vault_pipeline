@@ -476,6 +476,7 @@ mod tests {
                 sources: vec!["40-Resources/Reader/memory".into()],
                 strength: Some("supported".into()),
                 run_id: Some("run-1".into()),
+                    lane: None,
             }],
             runs: vec![],
             ops: OpsState::default(),

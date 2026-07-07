@@ -405,6 +405,42 @@ pub fn final_routing(provenance: ProvenanceClass, strength: Option<&ClaimStrengt
     }
 }
 
+/// The lane a NON-durable claim occupies. Decided by DECIDABLE structure only
+/// (distinct source count + the strength verdict) — never by wording
+/// heuristics (M35 review-hygiene rule): a single-source claim the judge
+/// already found Supported is not review debt, it is a source-scoped insight
+/// waiting for a second independent source. Evidence: 11 of the first
+/// 20-claim human review batch were exactly this shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewLane {
+    /// Needs a human decision (overreach / over-synthesis / opinion-as-fact /
+    /// insufficient evidence — anything the judge flagged, or a cross-source
+    /// claim that missed durable for a reason worth a call).
+    #[default]
+    Review,
+    /// Grounded + Supported but single-source: parked outside the human
+    /// queue, surfaced as a per-source insight until more sources arrive.
+    SourceInsight,
+}
+
+/// Route a non-durable claim to its review lane. Deterministic + total.
+pub fn review_lane(
+    distinct_sources: usize,
+    strength: Option<&ClaimStrengthVerdict>,
+) -> ReviewLane {
+    match strength {
+        Some(v)
+            if distinct_sources <= 1
+                && v.strength == StrengthClass::Supported
+                && v.evidence_sufficient =>
+        {
+            ReviewLane::SourceInsight
+        }
+        _ => ReviewLane::Review,
+    }
+}
+
 // ---- M23 minimal durable Crystal store ----
 //
 // Markdown/HTML is a VIEW; this is the truth layer. The store is an append-only
@@ -579,7 +615,9 @@ pub fn active_keys(events: &[StoreEvent]) -> std::collections::BTreeSet<String> 
 }
 
 /// A non-durable (caveated/reject) claim, with enough context to be read on its
-/// own — so a human reviewer does not have to re-open the candidate (M23 P2).
+/// own — so a human reviewer does not have to re-open the candidate (M23 P2;
+/// M35 made that literal: the entry carries its citations, so review sheets
+/// are self-contained and rewrite decisions can start from real evidence).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewEntry {
     pub claim_id: String,
@@ -589,6 +627,89 @@ pub struct ReviewEntry {
     pub strength: StrengthClass,
     pub evidence_sufficient: bool,
     pub rationale: String,
+    /// The claim's citations (verbatim quotes). `default` so pre-M35 queues load.
+    #[serde(default)]
+    pub citations: Vec<Citation>,
+    /// Which queue this entry occupies (§`review_lane`). `default` = Review.
+    #[serde(default)]
+    pub lane: ReviewLane,
+}
+
+/// A near-duplicate collapse performed before the review queue is written —
+/// recorded (never silent) alongside the queue itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollapsedDuplicate {
+    pub kept: String,
+    pub dropped: String,
+    pub reason: String,
+}
+
+/// Collapse near-duplicate review entries using DECIDABLE signals only:
+/// same theme + at least one shared cited (case_id, unit_id) + token-set
+/// Jaccard ≥ 0.5 over the claim text. Deterministic: entries are processed in
+/// claim_id order and the earliest id wins. Entries without citations (pre-M35
+/// queues) never match the shared-unit condition and are left alone.
+pub fn collapse_review_duplicates(
+    entries: Vec<ReviewEntry>,
+) -> (Vec<ReviewEntry>, Vec<CollapsedDuplicate>) {
+    fn tokens(s: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut cur = String::new();
+        for ch in s.chars() {
+            let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch);
+            if ch.is_alphanumeric() && !is_cjk {
+                cur.extend(ch.to_lowercase());
+            } else {
+                if !cur.is_empty() {
+                    out.insert(std::mem::take(&mut cur));
+                }
+                if is_cjk {
+                    out.insert(ch.to_string());
+                }
+            }
+        }
+        if !cur.is_empty() {
+            out.insert(cur);
+        }
+        out
+    }
+    let cited_units = |e: &ReviewEntry| -> std::collections::BTreeSet<(String, String)> {
+        e.citations.iter().map(|c| (c.case_id.clone(), c.unit_id.clone())).collect()
+    };
+
+    let mut sorted = entries;
+    sorted.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));
+    let mut kept: Vec<ReviewEntry> = Vec::new();
+    let mut collapsed: Vec<CollapsedDuplicate> = Vec::new();
+    'outer: for e in sorted {
+        let e_units = cited_units(&e);
+        let e_tokens = tokens(&e.claim);
+        for k in &kept {
+            // Never collapse ACROSS lanes or strength verdicts: a judge-flagged
+            // Review entry must not be absorbed by an earlier-sorting parked
+            // source-insight (or vice versa) — that would silently drop a
+            // human-queue item. Only true same-disposition duplicates collapse.
+            if k.lane != e.lane || k.strength != e.strength || k.theme != e.theme {
+                continue;
+            }
+            if cited_units(k).intersection(&e_units).next().is_none() {
+                continue;
+            }
+            let k_tokens = tokens(&k.claim);
+            let inter = k_tokens.intersection(&e_tokens).count();
+            let union = k_tokens.union(&e_tokens).count();
+            if union > 0 && (inter as f64) / (union as f64) >= 0.5 {
+                collapsed.push(CollapsedDuplicate {
+                    kept: k.claim_id.clone(),
+                    dropped: e.claim_id.clone(),
+                    reason: "same theme + shared cited unit + claim-text jaccard >= 0.5".into(),
+                });
+                continue 'outer;
+            }
+        }
+        kept.push(e);
+    }
+    (kept, collapsed)
 }
 
 /// Scope/policy header for a rendered Crystal view (M24). Counts are computed
@@ -610,14 +731,18 @@ pub fn render_crystal_md(
     review: &[ReviewEntry],
 ) -> String {
     let title = if header.title.trim().is_empty() { "Crystal" } else { header.title.trim() };
+    let n_insights = review.iter().filter(|e| e.lane == ReviewLane::SourceInsight).count();
+    let n_human = review.len() - n_insights;
     let mut m = format!("# {title} — durable knowledge\n\n");
     if !header.scope.trim().is_empty() {
         m.push_str(&format!("**Scope:** {}\n\n", header.scope.trim()));
     }
     m.push_str(&format!(
-        "**Durable claims:** {} · **Review (caveated/rejected, not durable):** {}\n\n",
+        "**Durable claims:** {} · **Review (caveated/rejected, not durable):** {} · \
+         **Source insights (parked, single-source):** {}\n\n",
         active.len(),
-        review.len()
+        n_human,
+        n_insights
     ));
     m.push_str(
         "**Evidence policy:** every durable claim is grounded — claim → cited accepted unit → \
@@ -643,11 +768,13 @@ pub fn render_crystal_md(
         }
         m.push_str("\n</details>\n\n");
     }
+    let (insights, human): (Vec<&ReviewEntry>, Vec<&ReviewEntry>) =
+        review.iter().partition(|e| e.lane == ReviewLane::SourceInsight);
     m.push_str("---\n\n## Review (NOT durable) — caveated / rejected\n\n");
-    if review.is_empty() {
-        m.push_str("_none_\n");
+    if human.is_empty() {
+        m.push_str("_none_\n\n");
     } else {
-        for e in review {
+        for e in human {
             m.push_str(&format!("### {} [{:?}] — {}\n\n", e.claim_id, e.final_class, e.theme));
             m.push_str(&format!("{}\n\n", e.claim.trim()));
             m.push_str(&format!(
@@ -655,6 +782,17 @@ pub fn render_crystal_md(
                 e.strength, e.evidence_sufficient, e.rationale.trim()
             ));
         }
+    }
+    if !insights.is_empty() {
+        m.push_str(&format!(
+            "---\n\n## Source insights (NOT durable, NOT awaiting review) — {}\n\n\
+             _Grounded, Supported, single-source — parked until more sources arrive._\n\n",
+            insights.len()
+        ));
+        for e in insights {
+            m.push_str(&format!("- **{}** [{}] {}\n", e.claim_id, e.theme, e.claim.trim()));
+        }
+        m.push('\n');
     }
     m
 }
@@ -1012,6 +1150,8 @@ mod tests {
             strength: StrengthClass::OverSynthesized,
             evidence_sufficient: false,
             rationale: "fuses single-source quotes into a universal".into(),
+            citations: Vec::new(),
+            lane: Default::default(),
         }];
         let md = render_crystal_md(&header, &[rec("ck-a", "c1")], &review);
         assert!(md.contains("Agent Memory — durable knowledge"));

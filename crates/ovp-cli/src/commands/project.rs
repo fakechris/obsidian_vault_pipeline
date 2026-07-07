@@ -77,11 +77,17 @@ pub fn run(args: ProjectArgs) -> Result<(), CliError> {
 }
 
 fn print_summary(active: &[&DurableRecord], review: &[ReviewEntry]) {
-    let n_caveated = review.iter().filter(|r| r.final_class == FinalClass::Caveated).count();
+    use ovp_domain::crystal::ReviewLane;
+    let n_caveated = review
+        .iter()
+        .filter(|r| r.final_class == FinalClass::Caveated && r.lane == ReviewLane::Review)
+        .count();
+    let n_parked = review.iter().filter(|r| r.lane == ReviewLane::SourceInsight).count();
     let n_reject = review.iter().filter(|r| r.final_class == FinalClass::Reject).count();
     println!("=== Projection Lanes ===");
     println!("  Durable (AUTO):     {} active claim(s)", active.len());
     println!("  Review (ESCALATE):  {} caveated claim(s) awaiting human review", n_caveated);
+    println!("  Source insights:    {} single-source claim(s) parked (not review debt)", n_parked);
     println!("  Reject:             {} claim(s) rejected", n_reject);
 }
 
@@ -105,11 +111,21 @@ fn print_durable_lane(active: &[&DurableRecord], verbose: bool) {
 }
 
 fn print_review_lane(review: &[ReviewEntry], verbose: bool) {
+    let parked = review
+        .iter()
+        .filter(|r| r.lane == ovp_domain::crystal::ReviewLane::SourceInsight)
+        .count();
     let caveated: Vec<&ReviewEntry> = review
         .iter()
-        .filter(|r| r.final_class == FinalClass::Caveated)
+        .filter(|r| {
+            r.final_class == FinalClass::Caveated
+                && r.lane == ovp_domain::crystal::ReviewLane::Review
+        })
         .collect();
     println!("--- Review Lane (ESCALATE — awaiting human decision) ---");
+    if parked > 0 {
+        println!("  ({parked} single-source insight(s) parked outside the human queue)");
+    }
     if caveated.is_empty() {
         println!("  (no caveated claims pending review)");
         return;
