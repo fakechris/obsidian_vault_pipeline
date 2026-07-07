@@ -92,6 +92,7 @@ calling a small wrapper script so env + date stay in one place:
 set -euo pipefail
 source ~/.ovp-live-env                # ANTHROPIC_API_KEY etc.; never in the repo
 export OVP_LLM_NO_PROXY=1 OVP_LLM_TIMEOUT_SECS=480
+mkdir -p ~/Documents/ovp-vault/.ovp
 ~/Documents/obsidian-vault-pipeline/target/release/ovp2 daily \
   --vault-root ~/Documents/ovp-vault \
   --client live \
