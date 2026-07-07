@@ -101,7 +101,7 @@ from KMEM: their memory is a self-contained summary; our unit is an evidence-anc
 
 | Pipeline | In → Out | Auth | Cost | Status | Failure states |
 |---|---|---|---|---|---|
-| review-queue | caveated/reject → human decision → revised candidate → RE-GATE | A (via write) | 0+human | ✅ loop shipped: bounded `crystal-review-session` prepare + turnkey `crystal-review-session-apply` (decisions → strength gate → durable write → project/index/console refresh; reviewed entries retire, unprocessed queue preserved) | stale queue (weekly SLA is now an operator ritual, not a tooling gap) |
+| review-queue | caveated/reject → repair (text/evidence/lineage ops) → RE-GATE | A (via write) | 0+human→agent | ✅ v1 loop shipped (prepare + turnkey apply); M35 lanes route single-source Supported out of the human queue; **redesign anchor = [`stage-m36-review-loop-design.md`](./stage-m36-review-loop-design.md)** (repair-workshop model, typed actions, agent-executable gate-re-entrant repairs, phased R0–R3 subordinate to the M32 clock) | stale queue (weekly SLA; defer_until triggers from R1) |
 | lineage: dedup/strengthen | new claims vs active (text+citation overlap+grouping) | A (via write) | 0/$ | ⬜ near-term, minimal form | wrong-merge (conservative default: append) |
 | supersede | strengthened claim replaces old, `superseded_by` | A | 0 | ⬜ mid-term | — |
 | contradiction | opposing claims, same subject | A | $ | ⬜ long-term; needs stable subject — **M34 experiment decides** | — |
