@@ -158,7 +158,9 @@ pub(crate) fn write_review_queue_with_collapsed(
     if !collapsed.is_empty() {
         body["collapsed"] = serde_json::json!(collapsed);
     }
-    std::fs::write(path, serde_json::to_string_pretty(&body).unwrap() + "\n")
+    let body = serde_json::to_string_pretty(&body)
+        .map_err(|e| CliError::Io(format!("serializing review queue: {e}")))?;
+    std::fs::write(path, body + "\n")
         .map_err(|e| CliError::Io(format!("writing review.json: {e}")))
 }
 

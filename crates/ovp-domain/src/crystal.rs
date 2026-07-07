@@ -676,10 +676,15 @@ pub fn collapse_review_duplicates(
     let cited_units = |e: &ReviewEntry| -> std::collections::BTreeSet<(String, String)> {
         e.citations.iter().map(|c| (c.case_id.clone(), c.unit_id.clone())).collect()
     };
+    struct CachedEntry {
+        entry: ReviewEntry,
+        units: std::collections::BTreeSet<(String, String)>,
+        tokens: std::collections::BTreeSet<String>,
+    }
 
     let mut sorted = entries;
     sorted.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));
-    let mut kept: Vec<ReviewEntry> = Vec::new();
+    let mut kept: Vec<CachedEntry> = Vec::new();
     let mut collapsed: Vec<CollapsedDuplicate> = Vec::new();
     'outer: for e in sorted {
         let e_units = cited_units(&e);
@@ -689,26 +694,26 @@ pub fn collapse_review_duplicates(
             // Review entry must not be absorbed by an earlier-sorting parked
             // source-insight (or vice versa) — that would silently drop a
             // human-queue item. Only true same-disposition duplicates collapse.
-            if k.lane != e.lane || k.strength != e.strength || k.theme != e.theme {
+            if k.entry.lane != e.lane || k.entry.strength != e.strength || k.entry.theme != e.theme {
                 continue;
             }
-            if cited_units(k).intersection(&e_units).next().is_none() {
+            if k.units.intersection(&e_units).next().is_none() {
                 continue;
             }
-            let k_tokens = tokens(&k.claim);
-            let inter = k_tokens.intersection(&e_tokens).count();
-            let union = k_tokens.union(&e_tokens).count();
+            let inter = k.tokens.intersection(&e_tokens).count();
+            let union = k.tokens.len() + e_tokens.len() - inter;
             if union > 0 && (inter as f64) / (union as f64) >= 0.5 {
                 collapsed.push(CollapsedDuplicate {
-                    kept: k.claim_id.clone(),
+                    kept: k.entry.claim_id.clone(),
                     dropped: e.claim_id.clone(),
                     reason: "same theme + shared cited unit + claim-text jaccard >= 0.5".into(),
                 });
                 continue 'outer;
             }
         }
-        kept.push(e);
+        kept.push(CachedEntry { entry: e, units: e_units, tokens: e_tokens });
     }
+    let kept = kept.into_iter().map(|cached| cached.entry).collect();
     (kept, collapsed)
 }
 

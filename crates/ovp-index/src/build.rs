@@ -460,7 +460,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             let sources: Vec<String> = {
                 let mut s: Vec<String> =
                     entry.citations.iter().map(|c| c.case_id.clone()).collect();
-                s.sort();
+                s.sort_unstable();
                 s.dedup();
                 s
             };
