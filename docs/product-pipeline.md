@@ -101,7 +101,7 @@ from KMEM: their memory is a self-contained summary; our unit is an evidence-anc
 
 | Pipeline | In → Out | Auth | Cost | Status | Failure states |
 |---|---|---|---|---|---|
-| review-queue | caveated/reject → human decision → revised candidate → RE-GATE | A (via write) | 0+human | 🟡 queue preservation + bounded `crystal-review-session` prepare shipped; turnkey apply→strength→write chain still pending | stale queue (needs weekly SLA) |
+| review-queue | caveated/reject → human decision → revised candidate → RE-GATE | A (via write) | 0+human | ✅ loop shipped: bounded `crystal-review-session` prepare + turnkey `crystal-review-session-apply` (decisions → strength gate → durable write → project/index/console refresh; reviewed entries retire, unprocessed queue preserved) | stale queue (weekly SLA is now an operator ritual, not a tooling gap) |
 | lineage: dedup/strengthen | new claims vs active (text+citation overlap+grouping) | A (via write) | 0/$ | ⬜ near-term, minimal form | wrong-merge (conservative default: append) |
 | supersede | strengthened claim replaces old, `superseded_by` | A | 0 | ⬜ mid-term | — |
 | contradiction | opposing claims, same subject | A | $ | ⬜ long-term; needs stable subject — **M34 experiment decides** | — |

@@ -138,10 +138,27 @@ ovp2 crystal-review-session \
 
 This writes `review-sheet.md`, `decisions.template.json`, and
 `selected-claim-ids.txt`. The command does not decide durability and does not
-write the Crystal ledger. Rewrites/splits must still carry full citations and
-re-enter the normal strength gate + `crystal-write` path. `crystal-write`
-preserves unprocessed `review.json` entries when new caveated claims are
-written, so a small review batch no longer erases the rest of the queue.
+write the Crystal ledger.
+
+Fill the template (`rewrite`/`split` decisions must carry full revised claims
+with verbatim citations; `keep_caveated` leaves the entry queued; `reject`
+retires it), then apply the whole chain in one command:
+
+```bash
+ovp2 crystal-review-session-apply \
+  --vault-root "$VAULT" \
+  --decisions .run/review-session-$(date +%Y%m%d)/decisions.json \
+  --client live --refresh --date $(date +%F)
+```
+
+This runs decisions → revised claims → strength gate → durable write →
+Crystal Notes + index + console refresh. Human decisions never bypass the
+gate. Malformed decisions (a `rewrite`/`split` with missing revisions) and
+revisions with defective citations fail LOUD before anything is mutated —
+fix `decisions.json` and re-run. Revisions that pass grounding but fail the
+strength gate route back into `review.json` with their rationale. Reviewed
+entries retire from the queue; unprocessed entries are preserved, so a small
+batch never erases the rest of the queue.
 
 ## 5. Recovery / rebuild
 

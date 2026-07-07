@@ -515,6 +515,35 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// PRODUCT — apply a filled review-session decisions file against the
+    /// vault-local review queue: decisions → revised claims → strength gate →
+    /// durable write (reviewed entries retire from the queue) → optional
+    /// project/index/console refresh. Human decisions NEVER bypass the gate.
+    /// Malformed decisions and citation defects fail LOUD before anything is
+    /// mutated; revisions that pass grounding but fail strength route back
+    /// into the review queue with their rationale.
+    CrystalReviewSessionApply {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Filled decisions JSON (from `crystal-review-session`'s template).
+        #[arg(long)]
+        decisions: PathBuf,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Cassette root. Default: `<vault-root>/.ovp/cassettes/crystal`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Crystal view header title (forwarded to the durable write).
+        #[arg(long)]
+        title: Option<String>,
+        /// After the write, refresh Crystal Notes + index + console (requires --date).
+        #[arg(long)]
+        refresh: bool,
+        #[arg(long)]
+        date: Option<String>,
+    },
     /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
@@ -1083,6 +1112,19 @@ fn main() -> ExitCode {
         Cmd::CrystalReview { candidate, decisions, out } => {
             use commands::crystal_review::CrystalReviewArgs;
             commands::crystal_review::run(CrystalReviewArgs { candidate, decisions, out })
+        }
+        Cmd::CrystalReviewSessionApply {
+            vault_root, decisions, client, cache_dir, run_id, title, refresh, date,
+        } => {
+            use commands::client::ClientKind;
+            use commands::crystal_review_session::CrystalReviewSessionApplyArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::crystal_review_session::run_apply(CrystalReviewSessionApplyArgs {
+                vault_root, decisions, client_kind, cache_dir, run_id, title, refresh, date,
+            })
         }
         Cmd::CrystalReviewSession { vault_root, batch, out } => {
             use commands::crystal_review_session::CrystalReviewSessionPrepareArgs;

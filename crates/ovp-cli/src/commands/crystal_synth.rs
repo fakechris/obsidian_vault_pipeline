@@ -37,7 +37,7 @@ use crate::commands::client::{ClientKind, build_client};
 use crate::commands::crystal_write::{WriteInputs, write_durable};
 use crate::commands::{console_cmd, index_cmd};
 
-const MAX_STRENGTH_CLAIMS_PER_CALL: usize = 20;
+pub(crate) const MAX_STRENGTH_CLAIMS_PER_CALL: usize = 20;
 
 pub struct CrystalSynthArgs {
     pub reader_dir: Option<PathBuf>,
@@ -107,16 +107,16 @@ fn synth_err(e: SynthError) -> CliError {
 }
 
 /// A record of a JSON salvage, surfaced in the run summary.
-struct RepairLog {
-    stage: String,
-    method: String,
+pub(crate) struct RepairLog {
+    pub(crate) stage: String,
+    pub(crate) method: String,
 }
 
 /// Call the model for `request`, parse via `parse` with tolerant recovery + ONE
 /// bounded JSON-repair follow-up (same contract as the reader trunk). Returns the
 /// parsed value plus an optional repair note. Fails loud (never silent) when both
 /// the parser-local recovery and the repair call cannot yield valid JSON.
-fn call_and_parse<T>(
+pub(crate) fn call_and_parse<T>(
     client: &mut dyn ModelClient,
     request: &ovp_llm::ModelRequest,
     stage: &str,
