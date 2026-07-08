@@ -70,7 +70,7 @@ Every action is machine-executable, replayable, and ledger-audited:
 | `backfill_evidence` | evidence | agent-executable | targeted retrieval over the EXISTING corpus (evidence sidecar / `find --kind units`) → add citations → re-gate |
 | `merge_into` / `strengthen` | lineage | agent-executable | union citations into an existing claim → re-gate (the semantic-dup resolution) |
 | `demote_to_source_insight` | lane | agent-executable | true-but-narrow (impl detail) → parked insight, not deleted |
-| `defer_until <trigger>` | parking | agent-executable | e.g. "new sources in theme X"; the trigger is checkable, so deferred items stop re-presenting |
+| `defer_until <trigger>` | parking | agent-executable | trigger comes from a CLOSED, checkable vocabulary (e.g. `new_sources_in_theme`, `corpus_grows_by_n`) — no free-text never-firing triggers; deferred items stay visible in queue accounting and the spot-audit sample, so deferral can never become silent value loss |
 | `request_external_source` | capture | drafts a "wanted source" entry | feeds capture priorities; no claim mutation |
 | `reject_as_noise` | destructive | **human-confirmed, always** | permanent removal with reason |
 
@@ -89,12 +89,13 @@ write to**:
   shared-evidence dedup — plus one NEW decidable guard (below).
 
 **Anti-gaming guard (new, decidable).** The known failure mode of "agent narrows until it
-passes" is a claim collapsed into a worthless quote restatement. Triviality proxy: flag a
-repaired claim whose text has jaccard ≥ 0.7 against the concatenation of its own citations'
-quotes (it restates evidence instead of synthesizing) or that lost the cross-source property
-its parent had. Flag → route to human sample, never auto-durable. Backstop: the human spot
-audit (§5). This follows the decidability rule: a decidable proxy plus audit, not a prompt
-admonition.
+passes" is a claim collapsed into a worthless quote restatement. Triviality proxy:
+**token containment, not symmetric jaccard** — flag a repaired claim when ≥ ~80% of its
+content tokens are contained in its own citations' quotes (symmetric jaccard is length-biased:
+a short claim against long concatenated quotes scores low even when it is a pure restatement).
+Also flag when a repair lost the cross-source property its parent had. Flag → route to human
+sample, never auto-durable. Backstop: the human spot audit (§5). This follows the decidability
+rule: a decidable proxy plus audit, not a prompt admonition.
 
 **The human's irreducible role** (end state = exception-only): confirm rejects (batch) ·
 theme-level value/priority calls (is this theme crystal-worthy at all) · spot audits of the
@@ -129,7 +130,7 @@ system (not of every item) · the metrics review that decides each phase gate.
 
 | Phase | What | Automation | Ledger | Human | Kill criteria |
 |---|---|---|---|---|---|
-| **R0 — experiment, NO code (this week)** | (a) current 20-item session: agent drafts decisions with existing vocabulary, operator confirms, apply via existing command — baselines human-minutes + yield; (b) **backfill probe**: for 3–5 SourceInsights, hunt second sources in the existing corpus via `find --kind units` BY HAND — measures backfill hit rate | drafts only | normal apply path only | confirms everything | backfill hit rate ~0 → deprioritize backfill; drafting saves <50% human time → rethink R1 scope |
+| **R0 — experiment, NO code (this week)** | (a) current 20-item session: agent drafts decisions with existing vocabulary, operator confirms, apply via existing command — baselines human-minutes + yield; (b) **backfill probe**: for **10** SourceInsights (¼ of the pool — enough to distinguish ~0% from ~20% hit rates; 3–5 could zero out by chance), hunt second sources in the existing corpus via `find --kind units` BY HAND | drafts only | normal apply path only | confirms everything | backfill hits 0–1 of 10 → deprioritize corpus-internal backfill (external capture outranks it); drafting saves <50% human time → rethink R1 scope |
 | **R1 — operator assist (1 PR, after R0 numbers)** | typed action vocabulary (additive `ReviewDecision` schema) + `review-session suggest` (agent drafts into the template, citations included) + triviality proxy (warn-only) + `defer_until` trigger checking in prepare | agent drafts, human applies | apply path unchanged | confirms per batch | yield/time metrics flat vs R0 → stop |
 | **R2 — semi-auto (gated on R1 scorecard AND M32 go/no-go PASSED)** | gate-re-entrant actions auto-apply when lint+strength pass AND triviality clean; rejects remain human-batched; weekly scheduler tier runs the loop; every auto action = audited ledger event | narrow/backfill/merge auto | auto events, replayable | rejects + 20% spot audit | false-durable > 0 in audit → back to R1; triviality flags trending up → tighten proxy or stop |
 | **R3 — productionized (≥2 weeks of clean R2 metrics)** | exception-only review; `request_external_source` feeds capture priorities ("wanted sources"); `strengthen` automated for the zero-shared-unit semantic-dup class | full loop | full | exceptions + audits | any hard-constraint breach → freeze to R1 |
