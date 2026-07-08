@@ -1,0 +1,553 @@
+/* ============================================================
+   OVP2 portal v2 — component styles (B1).
+   Every color comes from the DS tokens in colors_and_type.css;
+   the only derivations allowed are color-mix() over --c-3/--c-4/--c-6
+   for semantic status pills (design doc §6 ext.2).
+   Visual rules (DS README): 1px borders · radius 10/12/16/20/999 ·
+   single shell shadow · zero gradients/icons · text-first · pills ·
+   centered column max-width 1180 · top-nav text links.
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--ovp-font-sans);
+  font-size: var(--ovp-text-base);
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition:
+    background 200ms ease,
+    color 200ms ease;
+}
+.portal a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.portal a:hover {
+  text-decoration: underline;
+}
+.portal h1,
+.portal h2,
+.portal h3 {
+  margin: 0 0 0.5rem;
+  line-height: 1.2;
+  font-weight: 700;
+  text-wrap: balance;
+}
+.portal h1 {
+  font-size: var(--ovp-text-2xl);
+  letter-spacing: -0.01em;
+}
+.portal h2 {
+  font-size: var(--ovp-text-xl);
+}
+.portal h3 {
+  font-size: var(--ovp-text-lg);
+}
+.portal p {
+  margin: 0 0 0.75rem;
+  text-wrap: pretty;
+}
+.portal .muted {
+  color: var(--muted);
+}
+.portal .tiny {
+  font-size: var(--ovp-text-xs);
+}
+.portal .sm {
+  font-size: var(--ovp-text-sm);
+}
+.portal .mono {
+  font-family: var(--ovp-font-mono);
+}
+
+/* ---------- layout: centered single column, rounded shell ---------- */
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 3rem;
+}
+.shell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-shell);
+  box-shadow: var(--shadow-shell); /* the ONLY shadow in the system */
+  transition:
+    background 200ms,
+    border-color 200ms,
+    box-shadow 200ms;
+}
+.shell-head {
+  padding: 1.1rem 1.25rem 0;
+}
+.shell-body {
+  padding: 0.4rem 1.25rem 1.5rem;
+}
+
+/* ---------- top nav: text links, not tabs ---------- */
+.nav {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.nav .brand {
+  font-family: var(--ovp-font-mono);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-right: 0.4rem;
+  text-transform: lowercase;
+}
+.nav .brand .dot {
+  color: var(--accent);
+}
+.nav a {
+  color: var(--muted);
+  font-weight: 500;
+}
+.nav a.active {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.nav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* ---------- status dot: ok / attention / failed ---------- */
+.status-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+}
+.status-light .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ovp-radius-pill);
+  display: inline-block;
+}
+.status-light.ok {
+  color: var(--c-3);
+}
+.status-light.ok .dot {
+  background: var(--c-3);
+}
+.status-light.attention {
+  color: var(--warn-text);
+}
+.status-light.attention .dot {
+  background: var(--warn-border);
+}
+.status-light.failed {
+  color: var(--c-6);
+}
+.status-light.failed .dot {
+  background: var(--c-6);
+}
+
+/* ---------- toggles (theme + language): text buttons in a pill ---------- */
+.seg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--surface);
+}
+.seg-toggle button {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  letter-spacing: 0.04em;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--ovp-radius-pill);
+  cursor: pointer;
+  transition:
+    opacity 120ms,
+    background 120ms,
+    color 120ms;
+}
+.seg-toggle button:hover {
+  opacity: 0.92;
+}
+.seg-toggle button.active {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+/* ---------- breadcrumb ---------- */
+.crumbs {
+  margin: 1rem 0 0.35rem;
+  font-size: var(--ovp-text-sm);
+  color: var(--muted);
+}
+.crumbs a {
+  font-weight: 500;
+}
+
+/* ---------- "What is this page?" help block ---------- */
+.page-help {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  padding: 0.25rem 0.9rem;
+  margin: 0.75rem 0 1.25rem;
+  font-size: var(--ovp-text-sm);
+}
+.page-help summary {
+  cursor: pointer;
+  padding: 0.55rem 0;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: none;
+}
+.page-help summary::-webkit-details-marker {
+  display: none;
+}
+.page-help summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms;
+}
+.page-help[open] summary::before {
+  transform: rotate(90deg);
+}
+.page-help p {
+  margin: 0.15rem 0 0.7rem;
+}
+
+/* ---------- cards ---------- */
+.card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--ovp-radius-card);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  transition:
+    background 200ms,
+    border-color 200ms;
+}
+.card.warning {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+}
+
+/* ---------- stat grid ---------- */
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+.grid.stats {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 1.5rem;
+}
+.grid.stats .card {
+  margin: 0;
+}
+.metric-label {
+  color: var(--muted);
+  font-size: var(--ovp-text-xs);
+}
+.metric-num {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 4px;
+}
+.metric-num.warn {
+  color: var(--warn-text);
+}
+.metric-sub {
+  color: var(--muted);
+  font-size: var(--ovp-text-xs);
+  margin-top: 6px;
+}
+
+/* ---------- pills ---------- */
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--ovp-radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+/* DS extension #2: semantic status pills derived from the community palette.
+   green --c-3 = healthy/durable · gold --c-4 = attention-soft/caveated ·
+   barn red --c-6 = blocked/failed. */
+.pill.processed,
+.pill.durable {
+  color: var(--c-3);
+  border: 1px solid var(--c-3);
+  background: color-mix(in srgb, var(--c-3) 10%, transparent);
+}
+.pill.caveated,
+.pill.needs-content,
+.pill.unparseable {
+  color: var(--c-4);
+  border: 1px solid var(--c-4);
+  background: color-mix(in srgb, var(--c-4) 10%, transparent);
+}
+.pill.blocked,
+.pill.failed {
+  color: var(--c-6);
+  border: 1px solid var(--c-6);
+  background: color-mix(in srgb, var(--c-6) 10%, transparent);
+}
+.pill.duplicate {
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+}
+/* queued keeps the default accent pill */
+
+/* ---------- attention card ---------- */
+.attention-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.attention-reason {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  color: var(--warn-text);
+  margin: 0.5rem 0 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- claim cards ---------- */
+.claim-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.claim-text {
+  font-weight: 600;
+  font-size: var(--ovp-text-lg);
+  line-height: 1.4;
+  margin-bottom: 0.5rem;
+}
+.claim-meta {
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+}
+
+/* ---------- list rows (read-today, library) ---------- */
+.row-list {
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-card);
+  background: var(--surface);
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+.row-list .row {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--ovp-text-sm);
+}
+.row-list .row:last-child {
+  border-bottom: 0;
+}
+.row-list .row .meta {
+  color: var(--muted);
+  font-size: var(--ovp-text-xs);
+  white-space: nowrap;
+  font-family: var(--ovp-font-mono);
+}
+.row-list .row .row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.row-list .row .fail-note {
+  flex-basis: 100%;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  color: var(--warn-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- sections / footer timeline ---------- */
+.section {
+  margin-top: 1.75rem;
+}
+.foot {
+  margin-top: 2rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+}
+
+/* ---------- library: side facets + month groups ---------- */
+.grid.library {
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  align-items: start;
+  margin-top: 1.25rem;
+}
+@media (max-width: 780px) {
+  .grid.library {
+    grid-template-columns: 1fr;
+  }
+}
+.facet-group {
+  margin-bottom: 1.25rem;
+}
+.facet-group h3 {
+  font-size: var(--ovp-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+.facet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--ovp-text-sm);
+}
+.facet-list li {
+  margin: 0;
+}
+.facet-list button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--ovp-radius-input);
+  cursor: pointer;
+}
+.facet-list button:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.facet-list button.active {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+}
+.facet-list .count {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+}
+
+/* status filter row above the list */
+.filter-row {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: var(--ovp-text-sm);
+}
+.filter-row button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--ovp-text-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.filter-row button:hover {
+  text-decoration: underline;
+}
+.filter-row button.active {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+.month-group {
+  margin-bottom: 1.25rem;
+}
+.month-head {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+/* ---------- source detail meta ---------- */
+.src-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+.meta-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0.7rem 0 0;
+  font-size: var(--ovp-text-sm);
+}
+.meta-rows dt {
+  color: var(--muted);
+}
+.meta-rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- empty state ---------- */
+.empty-state {
+  font-size: var(--ovp-text-sm);
+  color: var(--muted);
+}
+.empty-state p {
+  margin-bottom: 0.4rem;
+}
+
+/* ---------- loading / error ---------- */
+.portal-note {
+  padding: 2rem 0;
+  color: var(--muted);
+  font-size: var(--ovp-text-sm);
+}
