@@ -64,11 +64,7 @@ impl GraphParams {
         let mode = match params.get("mode").map(String::as_str) {
             None | Some("overview") => GraphMode::Overview,
             Some("neighborhood") => GraphMode::Neighborhood,
-            Some(other) => {
-                return Err(GraphError::bad_request(&format!(
-                    "unknown mode: {other}"
-                )))
-            }
+            Some(other) => return Err(GraphError::bad_request(&format!("unknown mode: {other}"))),
         };
         let limit = params
             .get("limit")
@@ -104,11 +100,17 @@ pub struct GraphError {
 
 impl GraphError {
     fn bad_request(msg: &str) -> Self {
-        GraphError { status: 400, message: msg.to_string() }
+        GraphError {
+            status: 400,
+            message: msg.to_string(),
+        }
     }
 
     fn not_found(msg: &str) -> Self {
-        GraphError { status: 404, message: msg.to_string() }
+        GraphError {
+            status: 404,
+            message: msg.to_string(),
+        }
     }
 }
 
@@ -234,10 +236,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             id: claim_id.clone(),
             node_type: "claim".into(),
             label: if rec.claim.chars().count() > MAX_CLAIM_LABEL_LEN {
-                format!(
-                    "{}…",
-                    truncate_chars(&rec.claim, TRUNCATED_CLAIM_LABEL_LEN)
-                )
+                format!("{}…", truncate_chars(&rec.claim, TRUNCATED_CLAIM_LABEL_LEN))
             } else {
                 rec.claim.clone()
             },
@@ -257,10 +256,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                 id: unit_id.clone(),
                 node_type: "unit".into(),
                 label: if cit.quote.chars().count() > MAX_QUOTE_LABEL_LEN {
-                    format!(
-                        "{}…",
-                        truncate_chars(&cit.quote, TRUNCATED_QUOTE_LABEL_LEN)
-                    )
+                    format!("{}…", truncate_chars(&cit.quote, TRUNCATED_QUOTE_LABEL_LEN))
                 } else {
                     cit.quote.clone()
                 },
@@ -281,9 +277,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                 weight: None,
             });
 
-            let source_node_id = if let Some(pack) =
-                pack_lookup.get(cit.case_id.as_str())
-            {
+            let source_node_id = if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
                 let sha = pack.source_sha256.as_deref().unwrap_or(&cit.case_id);
                 let sid = format!("source:{}", sha);
                 let src = source_lookup.get(sha);
@@ -335,7 +329,11 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
         }
     }
 
-    BaseGraph { nodes, edges, claim_sources }
+    BaseGraph {
+        nodes,
+        edges,
+        claim_sources,
+    }
 }
 
 /// source node id → claim node ids citing it. Values sorted (deterministic).
@@ -343,7 +341,10 @@ fn source_claims_index(base: &BaseGraph) -> BTreeMap<String, Vec<String>> {
     let mut source_claims: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (claim_id, srcs) in &base.claim_sources {
         for s in srcs {
-            source_claims.entry(s.clone()).or_default().push(claim_id.clone());
+            source_claims
+                .entry(s.clone())
+                .or_default()
+                .push(claim_id.clone());
         }
     }
     source_claims
@@ -357,17 +358,13 @@ fn source_claims_index(base: &BaseGraph) -> BTreeMap<String, Vec<String>> {
 /// Standalone (not a `BaseGraph` method) so overview can REBUILD edges over
 /// the truncated claim set: filtering the full edge list would break chains
 /// whose middle claims were dropped and leave the overview fragmented.
-fn related_edges(
-    claim_sources: &BTreeMap<String, BTreeSet<String>>,
-) -> Vec<GEdge> {
+fn related_edges(claim_sources: &BTreeMap<String, BTreeSet<String>>) -> Vec<GEdge> {
     let mut edges = Vec::new();
     if claim_sources.len() <= 400 {
-        let claim_src_vec: Vec<(&String, &BTreeSet<String>)> =
-            claim_sources.iter().collect();
+        let claim_src_vec: Vec<(&String, &BTreeSet<String>)> = claim_sources.iter().collect();
         for i in 0..claim_src_vec.len() {
             for j in (i + 1)..claim_src_vec.len() {
-                let shared =
-                    claim_src_vec[i].1.intersection(claim_src_vec[j].1).count();
+                let shared = claim_src_vec[i].1.intersection(claim_src_vec[j].1).count();
                 if shared > 0 {
                     edges.push(GEdge {
                         source: claim_src_vec[i].0.clone(),
@@ -450,9 +447,7 @@ fn assign_clusters(base: &mut BaseGraph) {
         if e.edge_type != "related" {
             continue;
         }
-        if let (Some(&a), Some(&b)) =
-            (idx.get(e.source.as_str()), idx.get(e.target.as_str()))
-        {
+        if let (Some(&a), Some(&b)) = (idx.get(e.source.as_str()), idx.get(e.target.as_str())) {
             let w = e.weight.unwrap_or(1) as f64;
             adj[a].push((b, w));
             adj[b].push((a, w));
@@ -501,8 +496,7 @@ fn assign_clusters(base: &mut BaseGraph) {
     for (i, l) in label.iter().enumerate() {
         members_by_label.entry(*l).or_default().push(i);
     }
-    let mut ordered: Vec<(usize, Vec<usize>)> =
-        members_by_label.into_iter().collect();
+    let mut ordered: Vec<(usize, Vec<usize>)> = members_by_label.into_iter().collect();
     ordered.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let mut claim_cluster: HashMap<String, usize> = HashMap::new();
@@ -563,8 +557,7 @@ fn compute_importance(base: &mut BaseGraph, records: &[DurableRecord]) {
             *related_degree.entry(e.target.clone()).or_default() += 1;
         }
     }
-    let max_related =
-        related_degree.values().copied().max().unwrap_or(0).max(1) as f64;
+    let max_related = related_degree.values().copied().max().unwrap_or(0).max(1) as f64;
 
     let rec_by_id: HashMap<String, &DurableRecord> = records
         .iter()
@@ -587,17 +580,16 @@ fn compute_importance(base: &mut BaseGraph, records: &[DurableRecord]) {
                 let (prov, strength) = rec_by_id
                     .get(&node.id)
                     .map(|r| {
-                        (r.provenance_score.clamp(0.0, 1.0),
-                         strength_weight(r.strength))
+                        (
+                            r.provenance_score.clamp(0.0, 1.0),
+                            strength_weight(r.strength),
+                        )
                     })
                     .unwrap_or((0.0, 0.0));
                 node.importance = 0.45 * hub + 0.35 * prov + 0.20 * strength;
             }
             "source" => {
-                let citing = source_claims
-                    .get(&node.id)
-                    .map(|v| v.len())
-                    .unwrap_or(0) as f64;
+                let citing = source_claims.get(&node.id).map(|v| v.len()).unwrap_or(0) as f64;
                 node.importance = (1.0 + citing).ln() / (1.0 + max_citing).ln();
             }
             _ => node.importance = 0.0,
@@ -725,8 +717,14 @@ fn neighborhood_response(
 
     let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in &base.edges {
-        adjacency.entry(e.source.as_str()).or_default().push(e.target.as_str());
-        adjacency.entry(e.target.as_str()).or_default().push(e.source.as_str());
+        adjacency
+            .entry(e.source.as_str())
+            .or_default()
+            .push(e.target.as_str());
+        adjacency
+            .entry(e.target.as_str())
+            .or_default()
+            .push(e.source.as_str());
     }
 
     // BFS layer by layer; within a layer higher-importance nodes win the cap.
@@ -776,8 +774,7 @@ fn neighborhood_response(
         if kept.len() >= MAX_NEIGHBORHOOD_NODES {
             break;
         }
-        if e.edge_type == "extracted_from" && focus_units.contains(e.source.as_str())
-        {
+        if e.edge_type == "extracted_from" && focus_units.contains(e.source.as_str()) {
             kept.insert(e.target.as_str());
         }
     }
@@ -809,14 +806,11 @@ fn neighborhood_response(
     let edges: Vec<GEdge> = base
         .edges
         .iter()
-        .filter(|e| {
-            kept.contains(e.source.as_str()) && kept.contains(e.target.as_str())
-        })
+        .filter(|e| kept.contains(e.source.as_str()) && kept.contains(e.target.as_str()))
         .cloned()
         .collect();
 
-    let claim_refs: Vec<&GNode> =
-        nodes.iter().filter(|n| n.node_type == "claim").collect();
+    let claim_refs: Vec<&GNode> = nodes.iter().filter(|n| n.node_type == "claim").collect();
     let communities = build_communities(&claim_refs);
     let truncated = reachable > kept.len();
     let total_nodes = base.nodes.len();
@@ -947,36 +941,18 @@ pub fn theme_counts(records: &[DurableRecord]) -> Vec<(String, usize)> {
     for r in records {
         *counts.entry(r.theme.as_str()).or_default() += 1;
     }
-    let mut v: Vec<(String, usize)> =
-        counts.into_iter().map(|(t, c)| (t.to_string(), c)).collect();
+    let mut v: Vec<(String, usize)> = counts
+        .into_iter()
+        .map(|(t, c)| (t.to_string(), c))
+        .collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     v
-}
-
-/// SPA client-side routes under `/viz/` (extensionless paths) must fall back
-/// to the SPA's index.html instead of 404ing. `.html` paths that missed on
-/// disk also fall back: pre-M33 multi-page links (`/viz/graph.html`, …) still
-/// live in bookmarks and old consoles, and the router redirects unknown
-/// paths to /graph. Real files win — this only runs after a read miss.
-pub fn is_spa_route(relative: &str) -> bool {
-    let Some(rest) = relative.strip_prefix("viz/") else {
-        return false;
-    };
-    // Malformed paths (absolute rest via `/viz//…`, empty segments) are not
-    // client routes — they must 404, not get a 200 SPA shell.
-    if rest.starts_with('/') || rest.contains("//") || rest.is_empty() {
-        return false;
-    }
-    let last = rest.rsplit('/').next().unwrap_or(rest);
-    !last.contains('.') || last.ends_with(".html")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ovp_domain::crystal::{
-        CrystalStatus, DurableCitation, FinalClass, ProvenanceClass,
-    };
+    use ovp_domain::crystal::{CrystalStatus, DurableCitation, FinalClass, ProvenanceClass};
 
     fn rec(
         key: &str,
@@ -1023,19 +999,41 @@ mod tests {
     /// Three claims on a shared source + one isolated claim.
     fn sample_records() -> Vec<DurableRecord> {
         vec![
-            rec("a", "alpha", StrengthClass::Supported, 0.9,
-                &[("case1", "u1"), ("case2", "u2")]),
-            rec("b", "alpha", StrengthClass::Supported, 0.8, &[("case1", "u3")]),
-            rec("c", "beta", StrengthClass::Overreach, 0.6, &[("case1", "u4")]),
-            rec("d", "gamma", StrengthClass::Supported, 0.7, &[("case9", "u9")]),
+            rec(
+                "a",
+                "alpha",
+                StrengthClass::Supported,
+                0.9,
+                &[("case1", "u1"), ("case2", "u2")],
+            ),
+            rec(
+                "b",
+                "alpha",
+                StrengthClass::Supported,
+                0.8,
+                &[("case1", "u3")],
+            ),
+            rec(
+                "c",
+                "beta",
+                StrengthClass::Overreach,
+                0.6,
+                &[("case1", "u4")],
+            ),
+            rec(
+                "d",
+                "gamma",
+                StrengthClass::Supported,
+                0.7,
+                &[("case9", "u9")],
+            ),
         ]
     }
 
     #[test]
     fn overview_returns_claims_only_ranked_by_importance() {
         let records = sample_records();
-        let resp =
-            build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
+        let resp = build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         assert!(resp.nodes.iter().all(|n| n.node_type == "claim"));
         assert_eq!(resp.nodes.len(), 4);
         // claim:a — most shared sources + best provenance — ranks first.
@@ -1071,10 +1069,11 @@ mod tests {
         p.theme = Some("alpha".into());
         let resp = build_graph(&records, None, &p).unwrap();
         assert_eq!(resp.nodes.len(), 2);
-        assert!(resp
-            .nodes
-            .iter()
-            .all(|n| n.theme.as_deref() == Some("alpha")));
+        assert!(
+            resp.nodes
+                .iter()
+                .all(|n| n.theme.as_deref() == Some("alpha"))
+        );
     }
 
     #[test]
@@ -1082,13 +1081,22 @@ mod tests {
         // Same source (same hub degree), same provenance — only strength
         // differs, so the supported claim must outrank the opinion.
         let records = vec![
-            rec("weak", "t", StrengthClass::OpinionAsFact, 0.7,
-                &[("case1", "u1")]),
-            rec("strong", "t", StrengthClass::Supported, 0.7,
-                &[("case1", "u2")]),
+            rec(
+                "weak",
+                "t",
+                StrengthClass::OpinionAsFact,
+                0.7,
+                &[("case1", "u1")],
+            ),
+            rec(
+                "strong",
+                "t",
+                StrengthClass::Supported,
+                0.7,
+                &[("case1", "u2")],
+            ),
         ];
-        let resp =
-            build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
+        let resp = build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         assert_eq!(resp.nodes[0].id, "claim:strong");
     }
 
@@ -1170,8 +1178,7 @@ mod tests {
         let resp = build_graph(&records, None, &p).unwrap();
         assert!(resp.nodes.len() <= MAX_NEIGHBORHOOD_NODES);
         assert!(resp.truncated);
-        let ids: HashSet<&str> =
-            resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains("claim:k000"));
         assert!(
             ids.contains("unit:u000"),
@@ -1186,8 +1193,7 @@ mod tests {
     #[test]
     fn community_label_is_dominant_theme() {
         let records = sample_records();
-        let resp =
-            build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
+        let resp = build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         // a, b, c share case1 → one community; d is isolated (size 1 → skipped).
         assert_eq!(resp.communities.len(), 1);
         let c = &resp.communities[0];
@@ -1208,8 +1214,7 @@ mod tests {
             rec("e", "t3", StrengthClass::Supported, 0.8, &[("case1", "u5")]),
             rec("f", "t4", StrengthClass::Supported, 0.8, &[("case1", "u6")]),
         ];
-        let resp =
-            build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
+        let resp = build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         assert_eq!(resp.communities[0].label, "t1 / t2");
     }
 
@@ -1253,24 +1258,6 @@ mod tests {
         let t = theme_counts(&records);
         assert_eq!(t[0], ("alpha".to_string(), 2));
         assert_eq!(t.len(), 3);
-    }
-
-    #[test]
-    fn spa_route_detection() {
-        assert!(is_spa_route("viz/graph"));
-        assert!(is_spa_route("viz/explore"));
-        assert!(is_spa_route("viz/graph/deep/link"));
-        // Legacy multi-page links fall back to the SPA shell (only reached
-        // when the file is absent on disk).
-        assert!(is_spa_route("viz/graph.html"));
-        assert!(is_spa_route("viz/monitor.html"));
-        assert!(!is_spa_route("viz/assets/graph-abc.js"));
-        assert!(!is_spa_route("index.html"));
-        assert!(!is_spa_route("ops.html"));
-        // Malformed / absolute-smuggling paths are not client routes.
-        assert!(!is_spa_route("viz//etc/hosts"));
-        assert!(!is_spa_route("viz/a//b"));
-        assert!(!is_spa_route("viz/"));
     }
 
     #[test]
