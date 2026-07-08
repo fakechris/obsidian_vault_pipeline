@@ -31,15 +31,22 @@ pub struct CrystalReviewSessionPrepareArgs {
     pub suggest: bool,
 }
 
+/// Does a pack title fall in the claim's theme? Claim themes carry EITHER the
+/// bucket key ("memory" — `parse_synth_claims`' fallback) or the bucket
+/// description ("Memory & context" — what models echo from the synth prompt),
+/// so both must match (gemini PR review).
+fn theme_matches(title: &str, theme: &str) -> bool {
+    let (key, description) = bucket_for(title);
+    key == theme || description == theme
+}
+
 /// The count a defer trigger is measured against, from the read model.
 fn trigger_count(model: &IndexModel, trigger: DeferTrigger, theme: &str) -> usize {
     match trigger {
         DeferTrigger::CorpusGrowsBy => model.packs.len(),
-        DeferTrigger::NewSourcesInTheme => model
-            .packs
-            .iter()
-            .filter(|p| bucket_for(&p.title).1 == theme)
-            .count(),
+        DeferTrigger::NewSourcesInTheme => {
+            model.packs.iter().filter(|p| theme_matches(&p.title, theme)).count()
+        }
     }
 }
 
@@ -905,6 +912,16 @@ mod tests {
         .unwrap();
         let ids = fs::read_to_string(out.join("selected-claim-ids.txt")).unwrap();
         assert!(ids.trim().is_empty(), "nothing left for the human queue: {ids}");
+    }
+
+    #[test]
+    fn theme_matches_accepts_bucket_key_and_description() {
+        // "Agent memory design" buckets to agents (first-match-wins).
+        assert!(super::theme_matches("Agent memory design", "agents"));
+        assert!(super::theme_matches("Agent memory design", "Agents & agentic systems"));
+        assert!(!super::theme_matches("Agent memory design", "memory"));
+        assert!(super::theme_matches("Context windows and memory", "Memory & context"));
+        assert!(super::theme_matches("Something entirely unrelated", "Miscellaneous"));
     }
 
     #[test]
