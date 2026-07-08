@@ -392,6 +392,12 @@ body {
   align-items: baseline;
   gap: 0.6rem;
   flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+/* Long titles wrap in place next to the pill instead of dropping below it. */
+.row-list .row .row-main > a {
+  flex: 1 0 0;
   min-width: 0;
 }
 .row-list .row .fail-note {
