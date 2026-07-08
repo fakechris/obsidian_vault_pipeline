@@ -174,8 +174,31 @@ Prepare a bounded review session for caveated claims:
 ovp2 crystal-review-session \
   --vault-root "$VAULT" \
   --batch 20 \
+  --suggest \
   --out .run/review-session-$(date +%Y%m%d)
 ```
+
+`--suggest` additionally writes `backfill-candidates.md/json` — zero-LLM,
+evidence-sidecar retrieval of corpus units from cases each entry does NOT yet
+cite. A relevant candidate becomes a `narrow` decision whose citations are the
+union of old + new (the R0 pattern that promoted 4 claims to durable in one
+session). Deferred entries (unfired triggers) and parked source-insights are
+skipped automatically.
+
+Decision actions (M36 R1 typed vocabulary; the M25 verbs remain as aliases):
+
+| action | revisions | meaning |
+|---|---|---|
+| `narrow` (= `rewrite`) | exactly 1 | one narrower claim, re-gated |
+| `split_by_evidence` (= `split`) | ≥2 | evidence partitioned into narrower claims |
+| `demote_to_source_insight` | 0 | true-but-narrow → parked insight, no re-gate, no deletion |
+| `defer_until` + `defer:{trigger,n}` | 0 | park with a checkable trigger (`corpus_grows_by` / `new_sources_in_theme`); prepare skips it until fired |
+| `reject_as_noise` (= `reject`) | 0 | permanent removal — the only destructive action |
+| `keep_caveated` | 0 | explicit no-op (prefer `defer_until`, which stops re-presenting) |
+
+Apply also warns (never blocks) on **triviality** (a revision that mostly
+restates its own quotes — containment ≥ 0.8) and on **cross-source loss** (a
+repair that dropped the parent's ≥2-source property).
 
 This writes `review-sheet.md`, `decisions.template.json`, and
 `selected-claim-ids.txt`. The command does not decide durability and does not

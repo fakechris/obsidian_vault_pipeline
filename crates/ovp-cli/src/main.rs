@@ -514,6 +514,10 @@ enum Cmd {
         batch: usize,
         #[arg(long)]
         out: PathBuf,
+        /// Also emit zero-LLM backfill candidates per entry (top corpus units
+        /// from not-yet-cited cases, via the evidence sidecar).
+        #[arg(long)]
+        suggest: bool,
     },
     /// PRODUCT — apply a filled review-session decisions file against the
     /// vault-local review queue: decisions → revised claims → strength gate →
@@ -1126,9 +1130,10 @@ fn main() -> ExitCode {
                 vault_root, decisions, client_kind, cache_dir, run_id, title, refresh, date,
             })
         }
-        Cmd::CrystalReviewSession { vault_root, batch, out } => {
+        Cmd::CrystalReviewSession { vault_root, batch, out, suggest } => {
             use commands::crystal_review_session::CrystalReviewSessionPrepareArgs;
             commands::crystal_review_session::run_prepare(CrystalReviewSessionPrepareArgs {
+                suggest,
                 vault_root,
                 batch,
                 out,
