@@ -633,6 +633,10 @@ pub struct ReviewEntry {
     /// Which queue this entry occupies (§`review_lane`). `default` = Review.
     #[serde(default)]
     pub lane: ReviewLane,
+    /// Set by a `DeferUntil` decision — prepare skips the entry until the
+    /// trigger fires (M36 R1). `default` so pre-R1 queues load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defer: Option<DeferState>,
 }
 
 /// A near-duplicate collapse performed before the review queue is written —
@@ -649,30 +653,53 @@ pub struct CollapsedDuplicate {
 /// Jaccard ≥ 0.5 over the claim text. Deterministic: entries are processed in
 /// claim_id order and the earliest id wins. Entries without citations (pre-M35
 /// queues) never match the shared-unit condition and are left alone.
+/// Bilingual content tokens: lowercased ASCII-alphanumeric runs + individual
+/// CJK characters. Shared by the duplicate collapse and the triviality proxy.
+fn text_tokens(s: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch);
+        if ch.is_alphanumeric() && !is_cjk {
+            cur.extend(ch.to_lowercase());
+        } else {
+            if !cur.is_empty() {
+                out.insert(std::mem::take(&mut cur));
+            }
+            if is_cjk {
+                out.insert(ch.to_string());
+            }
+        }
+    }
+    if !cur.is_empty() {
+        out.insert(cur);
+    }
+    out
+}
+
+/// M36 anti-gaming proxy: the fraction of a claim's content tokens contained
+/// in the union of its own citations' quote tokens. High containment
+/// (≥ ~0.8) means the claim mostly RESTATES its evidence instead of
+/// synthesizing across it. Containment, not symmetric jaccard — jaccard is
+/// length-biased for a short claim against a long quote union. Warn-only in
+/// R1; it never blocks the mechanical gate.
+pub fn triviality_containment(claim: &str, citations: &[Citation]) -> f64 {
+    let claim_toks = text_tokens(claim);
+    if claim_toks.is_empty() {
+        return 0.0;
+    }
+    let mut quote_toks = std::collections::BTreeSet::new();
+    for c in citations {
+        quote_toks.extend(text_tokens(&c.quote));
+    }
+    let contained = claim_toks.iter().filter(|t| quote_toks.contains(*t)).count();
+    contained as f64 / claim_toks.len() as f64
+}
+
 pub fn collapse_review_duplicates(
     entries: Vec<ReviewEntry>,
 ) -> (Vec<ReviewEntry>, Vec<CollapsedDuplicate>) {
-    fn tokens(s: &str) -> std::collections::BTreeSet<String> {
-        let mut out = std::collections::BTreeSet::new();
-        let mut cur = String::new();
-        for ch in s.chars() {
-            let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch);
-            if ch.is_alphanumeric() && !is_cjk {
-                cur.extend(ch.to_lowercase());
-            } else {
-                if !cur.is_empty() {
-                    out.insert(std::mem::take(&mut cur));
-                }
-                if is_cjk {
-                    out.insert(ch.to_string());
-                }
-            }
-        }
-        if !cur.is_empty() {
-            out.insert(cur);
-        }
-        out
-    }
+    let tokens = text_tokens;
     let cited_units = |e: &ReviewEntry| -> std::collections::BTreeSet<(String, String)> {
         e.citations.iter().map(|c| (c.case_id.clone(), c.unit_id.clone())).collect()
     };
@@ -822,6 +849,61 @@ pub enum ReviewAction {
     KeepCaveated,
     /// Discard it (no candidate produced).
     Reject,
+    // ---- M36 R1 typed vocabulary. Narrow/SplitByEvidence/RejectAsNoise are
+    // intent-precise aliases of the M25 verbs (same mechanics, clearer audit
+    // trail); Demote/Defer are QUEUE-state operations that produce no claims
+    // and never touch the ledger.
+    /// Alias of `Rewrite` with the M36 text-operation name: exactly ONE
+    /// narrower claim, re-gated.
+    Narrow,
+    /// Alias of `Split` with the M36 name: ≥2 claims, evidence partitioned.
+    SplitByEvidence,
+    /// Alias of `Reject`: permanent removal — the ONLY destructive action;
+    /// always human-confirmed by construction (decisions files are applied by
+    /// the operator).
+    RejectAsNoise,
+    /// True-but-narrow (e.g. an implementation detail): park it as a
+    /// source-scoped insight instead of deleting or re-gating. Queue-only.
+    DemoteToSourceInsight,
+    /// Park with a CHECKABLE trigger (closed vocabulary — see `DeferTrigger`);
+    /// `crystal-review-session` prepare skips it until the trigger fires, so
+    /// deferral is visible parking, never silent loss. Queue-only.
+    DeferUntil,
+}
+
+/// The closed trigger vocabulary for `DeferUntil` (M36: no free-text
+/// never-firing triggers). All triggers are decidable against the read model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeferTrigger {
+    /// Fires when the corpus (reader packs) has grown by ≥ n since deferral.
+    CorpusGrowsBy,
+    /// Fires when the entry's theme has gained ≥ n new sources since deferral.
+    NewSourcesInTheme,
+}
+
+/// What the reviewer asks for in a `DeferUntil` decision (baseline is stamped
+/// by the apply command from the read model, not by the reviewer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferSpec {
+    pub trigger: DeferTrigger,
+    pub n: usize,
+}
+
+/// The persisted defer state on a queue entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferState {
+    pub trigger: DeferTrigger,
+    pub n: usize,
+    /// The relevant count (corpus size / theme size) at deferral time.
+    pub baseline: usize,
+}
+
+/// Has a deferred entry's trigger fired, given the CURRENT relevant count?
+/// (The caller resolves which count applies to the trigger kind.) Total,
+/// deterministic.
+pub fn defer_fired(state: &DeferState, current_count: usize) -> bool {
+    current_count >= state.baseline.saturating_add(state.n)
 }
 
 /// A reviewer's decision for one caveated claim. `revisions` carries the new
@@ -834,6 +916,9 @@ pub struct ReviewDecision {
     pub action: ReviewAction,
     #[serde(default)]
     pub revisions: Vec<CrystalClaim>,
+    /// Required iff `action == DeferUntil` (baseline stamped at apply time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defer: Option<DeferSpec>,
     #[serde(default)]
     pub note: String,
 }
@@ -865,11 +950,14 @@ pub fn apply_decisions(original: &CrystalCandidate, decisions: &[ReviewDecision]
             continue;
         }
         let n = match d.action {
-            ReviewAction::Rewrite | ReviewAction::Split => {
+            ReviewAction::Rewrite | ReviewAction::Narrow | ReviewAction::Split
+            | ReviewAction::SplitByEvidence => {
+                let single =
+                    matches!(d.action, ReviewAction::Rewrite | ReviewAction::Narrow);
                 for (i, rev) in d.revisions.iter().enumerate() {
                     let mut c = rev.clone();
                     if c.id.trim().is_empty() {
-                        c.id = if d.action == ReviewAction::Rewrite {
+                        c.id = if single {
                             format!("{}r", d.claim_id)
                         } else {
                             format!("{}s{}", d.claim_id, i + 1)
@@ -879,7 +967,11 @@ pub fn apply_decisions(original: &CrystalCandidate, decisions: &[ReviewDecision]
                 }
                 d.revisions.len()
             }
-            ReviewAction::KeepCaveated | ReviewAction::Reject => 0,
+            ReviewAction::KeepCaveated
+            | ReviewAction::Reject
+            | ReviewAction::RejectAsNoise
+            | ReviewAction::DemoteToSourceInsight
+            | ReviewAction::DeferUntil => 0,
         };
         log.push((d.claim_id.clone(), d.action, n));
     }
@@ -1157,6 +1249,7 @@ mod tests {
             rationale: "fuses single-source quotes into a universal".into(),
             citations: Vec::new(),
             lane: Default::default(),
+            defer: None,
         }];
         let md = render_crystal_md(&header, &[rec("ck-a", "c1")], &review);
         assert!(md.contains("Agent Memory — durable knowledge"));
@@ -1186,11 +1279,11 @@ mod tests {
         let mut rw = claim("");
         rw.claim = "narrower c1".into();
         let decisions = vec![
-            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rw], note: "narrow".into() },
+            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rw], defer: None, note: "narrow".into() },
             ReviewDecision { claim_id: "c2".into(), action: ReviewAction::Split,
-                revisions: vec![{ let mut a = claim(""); a.claim = "part a".into(); a }, { let mut b = claim(""); b.claim = "part b".into(); b }], note: String::new() },
-            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::KeepCaveated, revisions: vec![], note: String::new() },
-            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Reject, revisions: vec![], note: String::new() },
+                revisions: vec![{ let mut a = claim(""); a.claim = "part a".into(); a }, { let mut b = claim(""); b.claim = "part b".into(); b }], defer: None, note: String::new() },
+            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, note: String::new() },
+            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Reject, revisions: vec![], defer: None, note: String::new() },
         ];
         let out = apply_decisions(&orig, &decisions);
         let ids: Vec<&str> = out.revised.items.iter().map(|c| c.id.as_str()).collect();
@@ -1202,7 +1295,7 @@ mod tests {
     #[test]
     fn apply_flags_unknown_claim_id() {
         let orig = CrystalCandidate { items: vec![claim("c1")] };
-        let decisions = vec![ReviewDecision { claim_id: "c9".into(), action: ReviewAction::KeepCaveated, revisions: vec![], note: String::new() }];
+        let decisions = vec![ReviewDecision { claim_id: "c9".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, note: String::new() }];
         let out = apply_decisions(&orig, &decisions);
         assert_eq!(out.unknown, vec!["c9"]);
         assert!(out.revised.items.is_empty());
@@ -1213,9 +1306,51 @@ mod tests {
         let orig = CrystalCandidate { items: vec![claim("c1")] };
         let mut rev = claim("c1-narrow");
         rev.claim = "x".into();
-        let decisions = vec![ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rev], note: String::new() }];
+        let decisions = vec![ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rev], defer: None, note: String::new() }];
         let out = apply_decisions(&orig, &decisions);
         assert_eq!(out.revised.items[0].id, "c1-narrow", "explicit id kept");
+    }
+
+    #[test]
+    fn apply_m36_actions_narrow_aliases_and_queue_ops_produce_no_claims() {
+        let orig = CrystalCandidate { items: vec![claim("c1"), claim("c2"), claim("c3")] };
+        let mut rw = claim("");
+        rw.claim = "narrower".into();
+        let decisions = vec![
+            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Narrow, revisions: vec![rw], defer: None, note: String::new() },
+            ReviewDecision { claim_id: "c2".into(), action: ReviewAction::DemoteToSourceInsight, revisions: vec![], defer: None, note: String::new() },
+            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::DeferUntil, revisions: vec![], defer: Some(DeferSpec { trigger: DeferTrigger::CorpusGrowsBy, n: 10 }), note: String::new() },
+        ];
+        let out = apply_decisions(&orig, &decisions);
+        let ids: Vec<&str> = out.revised.items.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["c1r"], "narrow derives the rewrite id; queue ops produce no claims");
+        assert_eq!(out.log.len(), 3);
+        assert!(out.unknown.is_empty());
+    }
+
+    #[test]
+    fn defer_fired_is_baseline_plus_n() {
+        let s = DeferState { trigger: DeferTrigger::CorpusGrowsBy, n: 5, baseline: 100 };
+        assert!(!defer_fired(&s, 104));
+        assert!(defer_fired(&s, 105));
+        assert!(defer_fired(&s, 1000));
+    }
+
+    #[test]
+    fn triviality_containment_flags_restatement_not_synthesis() {
+        let cites = vec![
+            Citation { case_id: "a".into(), unit_id: "u1".into(), quote: "Memory is scarce working memory in systems.".into(), claimed_line: None },
+            Citation { case_id: "b".into(), unit_id: "u2".into(), quote: "Context windows are a scarce budget.".into(), claimed_line: None },
+        ];
+        // Pure restatement of the quotes → high containment.
+        let restated = "Memory is scarce working memory; context windows are a scarce budget.";
+        assert!(triviality_containment(restated, &cites) >= 0.8, "restatement flagged");
+        // A synthesis introduces vocabulary beyond the quotes → low containment.
+        let synthesis = "Independent practitioners converge on treating attention as a rationed resource requiring explicit curation policies.";
+        assert!(triviality_containment(synthesis, &cites) < 0.5, "synthesis passes");
+        // CJK claims tokenize per character and behave the same way.
+        let cjk_cites = vec![Citation { case_id: "c".into(), unit_id: "u3".into(), quote: "记忆是稀缺资源".into(), claimed_line: None }];
+        assert!(triviality_containment("记忆是稀缺资源", &cjk_cites) >= 0.8);
     }
 
     #[test]

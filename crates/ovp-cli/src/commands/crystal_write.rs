@@ -302,6 +302,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
                         lint_of(&item.id).distinct_sources,
                         Some(v),
                     ),
+                    defer: None,
                 });
             }
         }
@@ -396,6 +397,7 @@ mod tests {
             rationale: format!("rationale {id}"),
             citations: Vec::new(),
             lane: Default::default(),
+            defer: None,
         }
     }
 

@@ -31,6 +31,27 @@ pub fn run(args: CrystalReviewArgs) -> Result<(), CliError> {
     )
     .map_err(|e| CliError::Io(format!("parsing decisions: {e}")))?;
 
+    // Queue-state actions (M36 R1) mutate the vault review queue — a thing
+    // this candidate-file workbench cannot do. Accepting them here would
+    // "succeed" with zero revised claims and no parking; refuse instead.
+    let queue_only: Vec<&str> = decisions
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.action,
+                ovp_domain::crystal::ReviewAction::DemoteToSourceInsight
+                    | ovp_domain::crystal::ReviewAction::DeferUntil
+            )
+        })
+        .map(|d| d.claim_id.as_str())
+        .collect();
+    if !queue_only.is_empty() {
+        return Err(CliError::Gate(format!(
+            "decisions contain queue-state action(s) ({queue_only:?}) that only \
+             `crystal-review-session-apply` can execute. Nothing written."
+        )));
+    }
+
     let outcome = apply_decisions(&original, &decisions);
 
     // Fail loud: a decision referencing a claim not in the candidate is an error,

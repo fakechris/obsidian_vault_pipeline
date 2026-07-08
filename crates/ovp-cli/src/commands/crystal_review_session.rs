@@ -1,12 +1,16 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use ovp_domain::crystal::synth::{collect_catalog, parse_strength_verdicts, strength_request};
+use ovp_domain::crystal::synth::{
+    bucket_for, collect_catalog, parse_strength_verdicts, strength_request,
+};
 use ovp_domain::crystal::{
-    apply_decisions, strength_coverage, ClaimStrengthVerdict, CrystalCandidate, CrystalClaim,
-    CrystalHeader, ReviewAction, ReviewDecision, ReviewEntry,
+    apply_decisions, defer_fired, strength_coverage, triviality_containment,
+    ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader, DeferState,
+    DeferTrigger, ReviewAction, ReviewDecision, ReviewEntry,
 };
 use ovp_domain::vault_layout::VaultLayout;
+use ovp_index::model::IndexModel;
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::commands::crystal_synth::{call_and_parse, RepairLog, MAX_STRENGTH_CLAIMS_PER_CALL};
@@ -21,6 +25,29 @@ pub struct CrystalReviewSessionPrepareArgs {
     pub vault_root: PathBuf,
     pub batch: usize,
     pub out: PathBuf,
+    /// Also emit zero-LLM backfill suggestions per selected entry (top-k
+    /// corpus units from the evidence sidecar that could become second
+    /// sources). Productizes the R0 manual probe.
+    pub suggest: bool,
+}
+
+/// Does a pack title fall in the claim's theme? Claim themes carry EITHER the
+/// bucket key ("memory" — `parse_synth_claims`' fallback) or the bucket
+/// description ("Memory & context" — what models echo from the synth prompt),
+/// so both must match (gemini PR review).
+fn theme_matches(title: &str, theme: &str) -> bool {
+    let (key, description) = bucket_for(title);
+    key == theme || description == theme
+}
+
+/// The count a defer trigger is measured against, from the read model.
+fn trigger_count(model: &IndexModel, trigger: DeferTrigger, theme: &str) -> usize {
+    match trigger {
+        DeferTrigger::CorpusGrowsBy => model.packs.len(),
+        DeferTrigger::NewSourcesInTheme => {
+            model.packs.iter().filter(|p| theme_matches(&p.title, theme)).count()
+        }
+    }
 }
 
 pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError> {
@@ -35,6 +62,28 @@ pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError
     review.retain(|e| e.lane == ovp_domain::crystal::ReviewLane::Review);
     if parked > 0 {
         println!("  ({parked} source-insight entr(ies) parked outside the human queue)");
+    }
+    // Deferred entries stay skipped until their trigger fires (M36 R1). If the
+    // read model is unavailable we INCLUDE them — deferral must never hide
+    // items just because the index was not built.
+    let has_defers = review.iter().any(|e| e.defer.is_some());
+    if has_defers {
+        match ovp_index::read_index(&args.vault_root) {
+            Ok(model) => {
+                let before = review.len();
+                review.retain(|e| match &e.defer {
+                    Some(d) => defer_fired(d, trigger_count(&model, d.trigger, &e.theme)),
+                    None => true,
+                });
+                let skipped = before - review.len();
+                if skipped > 0 {
+                    println!("  ({skipped} deferred entr(ies) skipped — trigger not fired)");
+                }
+            }
+            Err(e) => eprintln!(
+                "  warning: cannot check defer triggers ({e}); including deferred entries"
+            ),
+        }
     }
     review.sort_by(|a, b| {
         (a.theme.as_str(), a.claim_id.as_str()).cmp(&(b.theme.as_str(), b.claim_id.as_str()))
@@ -67,7 +116,87 @@ pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError
     println!("  review-sheet.md");
     println!("  decisions.template.json");
     println!("  selected-claim-ids.txt");
+    if args.suggest {
+        let n = write_backfill_suggestions(&args.vault_root, &review, &args.out)?;
+        println!("  backfill-candidates.md ({n} candidate unit(s) across the batch)");
+    }
     Ok(())
+}
+
+/// Zero-LLM backfill suggestions: for each selected entry, the top corpus
+/// units (evidence sidecar) from cases the entry does NOT already cite —
+/// candidate second sources for a `narrow`/`rewrite` with unioned citations.
+/// This productizes the R0 manual probe (4/10 strict hit rate by hand).
+fn write_backfill_suggestions(
+    vault_root: &std::path::Path,
+    review: &[ReviewEntry],
+    out: &std::path::Path,
+) -> Result<usize, CliError> {
+    const PER_ENTRY: usize = 5;
+    let evidence = ovp_index::read_evidence(vault_root)
+        .map_err(|e| CliError::Io(format!("reading evidence sidecar: {e}")))?;
+    let mut md = String::from(
+        "# Backfill candidates (zero-LLM, evidence-sidecar retrieval)\n\n\
+         For each entry: top corpus units from NOT-yet-cited cases. A hit becomes a\n\
+         `narrow`/`rewrite` decision whose citations are the union of old + new (the R0\n\
+         backfill pattern: 4 promotions, all durable). Judge relevance yourself — the\n\
+         ranking is lexical.\n\n",
+    );
+    let mut total = 0usize;
+    let mut json_rows = Vec::new();
+    for e in review {
+        let cited: BTreeSet<&str> = e.citations.iter().map(|c| c.case_id.as_str()).collect();
+        let mut scored: Vec<(f64, &ovp_index::evidence::UnitEvidenceRow)> = evidence
+            .units
+            .iter()
+            .filter(|u| !cited.contains(u.pack_dir.as_str()))
+            .map(|u| {
+                (
+                    ovp_index::score::lexical_score(&e.claim, &[&u.text, &u.quote]),
+                    u,
+                )
+            })
+            .filter(|(s, _)| *s > 0.0)
+            .collect();
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| (a.1.pack_dir.as_str(), a.1.unit_id.as_str())
+                    .cmp(&(b.1.pack_dir.as_str(), b.1.unit_id.as_str())))
+        });
+        scored.truncate(PER_ENTRY);
+        md.push_str(&format!("## `{}` [{}]\n\n{}\n\n", e.claim_id, e.theme, e.claim.trim()));
+        if scored.is_empty() {
+            md.push_str("_no candidate units found in uncited cases_\n\n");
+            continue;
+        }
+        for (score, u) in &scored {
+            md.push_str(&format!(
+                "- ({score:.1}) `{}` · `{}`{} — \"{}\"\n",
+                u.pack_dir,
+                u.unit_id,
+                u.line.map(|l| format!(" · line {l}")).unwrap_or_default(),
+                u.quote.trim().chars().take(180).collect::<String>()
+            ));
+            json_rows.push(serde_json::json!({
+                "claim_id": e.claim_id,
+                "case_id": u.pack_dir,
+                "unit_id": u.unit_id,
+                "quote": u.quote,
+                "score": score,
+            }));
+            total += 1;
+        }
+        md.push('\n');
+    }
+    std::fs::write(out.join("backfill-candidates.md"), md)
+        .map_err(|e| CliError::Io(format!("writing backfill candidates: {e}")))?;
+    std::fs::write(
+        out.join("backfill-candidates.json"),
+        serde_json::to_string_pretty(&json_rows).unwrap() + "\n",
+    )
+    .map_err(|e| CliError::Io(format!("writing backfill candidates json: {e}")))?;
+    Ok(total)
 }
 
 fn selected_ids(review: &[ReviewEntry]) -> String {
@@ -125,16 +254,40 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
     let mut malformed: Vec<String> = Vec::new();
     for d in &decisions {
         match d.action {
-            ReviewAction::Rewrite if d.revisions.len() != 1 => malformed.push(format!(
-                "{}: rewrite requires exactly 1 revision (got {})",
-                d.claim_id,
-                d.revisions.len()
+            ReviewAction::Rewrite | ReviewAction::Narrow if d.revisions.len() != 1 => {
+                malformed.push(format!(
+                    "{}: {:?} requires exactly 1 revision (got {})",
+                    d.claim_id,
+                    d.action,
+                    d.revisions.len()
+                ))
+            }
+            ReviewAction::Split | ReviewAction::SplitByEvidence if d.revisions.len() < 2 => {
+                malformed.push(format!(
+                    "{}: {:?} requires >=2 revisions (got {})",
+                    d.claim_id,
+                    d.action,
+                    d.revisions.len()
+                ))
+            }
+            ReviewAction::DeferUntil if d.defer.is_none() => malformed.push(format!(
+                "{}: defer_until requires `defer: {{trigger, n}}`",
+                d.claim_id
             )),
-            ReviewAction::Split if d.revisions.len() < 2 => malformed.push(format!(
-                "{}: split requires >=2 revisions (got {})",
-                d.claim_id,
-                d.revisions.len()
-            )),
+            ReviewAction::KeepCaveated
+            | ReviewAction::Reject
+            | ReviewAction::RejectAsNoise
+            | ReviewAction::DemoteToSourceInsight
+            | ReviewAction::DeferUntil
+                if !d.revisions.is_empty() =>
+            {
+                malformed.push(format!(
+                    "{}: {:?} must not carry revisions (got {})",
+                    d.claim_id,
+                    d.action,
+                    d.revisions.len()
+                ))
+            }
             _ => {}
         }
     }
@@ -168,23 +321,114 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
             outcome.unknown
         )));
     }
-    // Reviewed ids leave the queue: rewrite/split (replaced by revisions that
-    // re-enter the gate) and reject. keep_caveated stays queued.
+    // Reviewed ids leave the queue: rewrite/narrow/split (replaced by
+    // revisions that re-enter the gate) and reject. keep_caveated stays, and
+    // the queue-state ops (demote/defer) MUTATE their entry in place.
     let processed: BTreeSet<String> = outcome
         .log
         .iter()
-        .filter(|(_, action, _)| !matches!(action, ReviewAction::KeepCaveated))
+        .filter(|(_, action, _)| {
+            matches!(
+                action,
+                ReviewAction::Rewrite
+                    | ReviewAction::Narrow
+                    | ReviewAction::Split
+                    | ReviewAction::SplitByEvidence
+                    | ReviewAction::Reject
+                    | ReviewAction::RejectAsNoise
+            )
+        })
         .map(|(id, _, _)| id.clone())
         .collect();
     for (id, action, n) in &outcome.log {
         println!("  decision {id}: {action:?} -> {n} revision(s)");
     }
 
+    // Pre-validate EVERYTHING before any mutation (codex P2: a mixed decisions
+    // file must not persist its queue ops and then fail the revision lint —
+    // "nothing was changed" must be literally true on every error path).
     let revised = outcome.revised;
-    if revised.items.is_empty() {
-        // reject/keep-only session: no model call, no ledger change — just
-        // retire the processed entries. crystal.md's review section refreshes
-        // on the next durable write.
+    let regate = if revised.items.is_empty() {
+        None
+    } else {
+        // Build the grounding context + pre-lint the revisions BEFORE any
+        // model spend or mutation: write_durable fails loud on citation
+        // defects, so one typo'd citation would abort the whole batch. Failing
+        // here keeps decisions.json the single thing to fix and never discards
+        // the reviewer's citation work.
+        let reader_root = args.vault_root.join(layout.reader_root());
+        let index = build_grounding_index(&reader_root)?;
+        let catalog = collect_catalog(&reader_root)
+            .map_err(|e| CliError::Io(format!("crystal-review-session-apply: {e}")))?;
+        let lint = ovp_domain::crystal::lint_candidate(&revised, &index);
+        let defective: Vec<String> = lint
+            .claims
+            .iter()
+            .filter(|c| !c.fully_grounded)
+            .map(|c| {
+                let details: Vec<String> = c
+                    .citations
+                    .iter()
+                    .filter_map(|cc| cc.defect.as_ref().map(|d| format!("{}:{d:?}", cc.unit_id)))
+                    .collect();
+                let detail =
+                    if details.is_empty() { "no citations".to_string() } else { details.join(", ") };
+                format!("{} ({detail})", c.claim_id)
+            })
+            .collect();
+        if !defective.is_empty() {
+            return Err(CliError::Gate(format!(
+                "crystal-review-session-apply: {} revision(s) have citation defects — {} — \
+                 nothing was changed; fix the revisions' citations and re-run",
+                defective.len(),
+                defective.join("; ")
+            )));
+        }
+        Some((index, catalog))
+    };
+
+    // Queue-state operations (M36 R1): all validation has passed — persist
+    // them now, BEFORE any model call, so a later transport failure cannot
+    // lose a human decision that needs no gate.
+    let mut entries = entries;
+    let mut n_queue_ops = 0usize;
+    let mut index_model: Option<IndexModel> = None;
+    for d in &decisions {
+        match d.action {
+            ReviewAction::DemoteToSourceInsight => {
+                if let Some(e) = entries.iter_mut().find(|e| e.claim_id == d.claim_id) {
+                    e.lane = ovp_domain::crystal::ReviewLane::SourceInsight;
+                    n_queue_ops += 1;
+                }
+            }
+            ReviewAction::DeferUntil => {
+                let spec = d.defer.expect("validated above");
+                if index_model.is_none() {
+                    index_model = Some(ovp_index::read_index(&args.vault_root).map_err(|e| {
+                        CliError::Io(format!(
+                            "defer_until needs the read model for its baseline: {e}"
+                        ))
+                    })?);
+                }
+                let model = index_model.as_ref().expect("just loaded");
+                if let Some(e) = entries.iter_mut().find(|e| e.claim_id == d.claim_id) {
+                    let baseline = trigger_count(model, spec.trigger, &e.theme);
+                    e.defer = Some(DeferState { trigger: spec.trigger, n: spec.n, baseline });
+                    n_queue_ops += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    if n_queue_ops > 0 {
+        write_review_queue(&review_path, &entries)?;
+        println!("  queue ops persisted: {n_queue_ops} entr(ies) demoted/deferred");
+    }
+
+    let Some((index, catalog)) = regate else {
+        // reject/keep/queue-op-only session: no model call, no ledger change —
+        // just retire the processed entries. crystal.md's review section
+        // refreshes on the next durable write.
         let merged = merge_review_queue(entries, &processed, Vec::new());
         write_review_queue(&review_path, &merged)?;
         println!(
@@ -196,41 +440,39 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         );
         refresh_views(&args)?;
         return Ok(());
-    }
+    };
 
-    // Re-gate the revisions through the SAME machinery as crystal-synth:
-    // grounding index + chunked strength verdicts + the shared durable write.
-    let reader_root = args.vault_root.join(layout.reader_root());
-    let index = build_grounding_index(&reader_root)?;
-    let catalog = collect_catalog(&reader_root)
-        .map_err(|e| CliError::Io(format!("crystal-review-session-apply: {e}")))?;
-
-    // Pre-lint the revisions BEFORE any model spend or mutation: write_durable
-    // fails loud on citation defects, so one typo'd citation would abort the
-    // whole batch after the queue math. Failing here keeps decisions.json the
-    // single thing to fix and never discards the reviewer's citation work.
-    let lint = ovp_domain::crystal::lint_candidate(&revised, &index);
-    let defective: Vec<String> = lint
-        .claims
-        .iter()
-        .filter(|c| !c.fully_grounded)
-        .map(|c| {
-            let details: Vec<String> = c
-                .citations
-                .iter()
-                .filter_map(|cc| cc.defect.as_ref().map(|d| format!("{}:{d:?}", cc.unit_id)))
-                .collect();
-            let detail = if details.is_empty() { "no citations".to_string() } else { details.join(", ") };
-            format!("{} ({detail})", c.claim_id)
-        })
-        .collect();
-    if !defective.is_empty() {
-        return Err(CliError::Gate(format!(
-            "crystal-review-session-apply: {} revision(s) have citation defects — {} — \
-             nothing was changed; fix the revisions' citations and re-run",
-            defective.len(),
-            defective.join("; ")
-        )));
+    // M36 anti-gaming warnings (R1: warn-only, never blocks). (a) triviality:
+    // a revision that mostly restates its own quotes adds no synthesis value;
+    // (b) cross-source loss: a repair that dropped the parent's cross-source
+    // property may have narrowed away the claim's whole point.
+    for item in &revised.items {
+        let containment = triviality_containment(&item.claim, &item.citations);
+        if containment >= 0.8 {
+            eprintln!(
+                "  WARNING: {} restates its evidence (containment {:.2}) — \
+                 consider whether it still synthesizes anything",
+                item.id, containment
+            );
+        }
+        let parent_id = item.id.trim_end_matches(char::is_numeric);
+        let parent_id = parent_id.strip_suffix('s').unwrap_or(parent_id);
+        let parent_id = parent_id.strip_suffix('r').unwrap_or(parent_id);
+        if let Some(parent) = entries.iter().find(|e| e.claim_id == parent_id) {
+            let parent_sources: BTreeSet<&str> =
+                parent.citations.iter().map(|c| c.case_id.as_str()).collect();
+            let rev_sources: BTreeSet<&str> =
+                item.citations.iter().map(|c| c.case_id.as_str()).collect();
+            if parent_sources.len() >= 2 && rev_sources.len() < 2 {
+                eprintln!(
+                    "  WARNING: {} lost the parent's cross-source property \
+                     ({} sources -> {})",
+                    item.id,
+                    parent_sources.len(),
+                    rev_sources.len()
+                );
+            }
+        }
     }
     let cache_dir = args
         .cache_dir
@@ -364,7 +606,10 @@ fn render_decisions_template(review: &[ReviewEntry]) -> Result<String, CliError>
             claim_id: entry.claim_id.clone(),
             action: ReviewAction::KeepCaveated,
             revisions: Vec::new(),
-            note: "TODO: rewrite | split | keep_caveated | reject".into(),
+            defer: None,
+            note: "TODO: narrow | split_by_evidence | demote_to_source_insight | \
+                   defer_until (+defer{trigger,n}) | reject_as_noise | keep_caveated"
+                .into(),
         })
         .collect();
     serde_json::to_string_pretty(&decisions)
@@ -419,6 +664,7 @@ mod tests {
             vault_root: vault,
             batch: 1,
             out: out.clone(),
+            suggest: false,
         })
         .unwrap();
 
@@ -600,6 +846,259 @@ mod tests {
             "queue untouched on defective revision"
         );
         assert!(!store.join("ledger.jsonl").exists(), "no durable write happened");
+    }
+
+    #[test]
+    fn apply_demote_and_defer_mutate_the_queue_without_model_or_ledger() {
+        use ovp_domain::crystal::{DeferTrigger, ReviewLane};
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        let store = vault.join(".ovp/crystal");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(
+            store.join("review.json"),
+            review_json(json!([
+                caveated_entry("c1", "impl detail, true but narrow", "agents"),
+                caveated_entry("c2", "needs more sources someday", "memory"),
+            ])),
+        )
+        .unwrap();
+        // defer_until needs the read model for its baseline — build a minimal
+        // empty-vault index (0 packs → baseline 0).
+        let model = ovp_index::build_index(&vault, "2026-07-07", None).unwrap();
+        ovp_index::write_index(&vault, &model).unwrap();
+
+        let decisions = tmp.path().join("decisions.json");
+        fs::write(
+            &decisions,
+            serde_json::to_string_pretty(&json!([
+                { "claim_id": "c1", "action": "demote_to_source_insight", "revisions": [], "note": "reader material" },
+                { "claim_id": "c2", "action": "defer_until", "revisions": [],
+                  "defer": { "trigger": "corpus_grows_by", "n": 5 }, "note": "wait for corpus" }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        super::run_apply(super::CrystalReviewSessionApplyArgs {
+            vault_root: vault.clone(),
+            decisions,
+            client_kind: crate::commands::client::ClientKind::Replay,
+            cache_dir: None,
+            run_id: None,
+            title: None,
+            refresh: false,
+            date: None,
+        })
+        .expect("queue-op session applies with no model calls");
+
+        assert!(!store.join("ledger.jsonl").exists(), "no durable write");
+        let queue = crate::commands::crystal_write::read_review_queue(&store.join("review.json")).unwrap();
+        let c1 = queue.iter().find(|e| e.claim_id == "c1").expect("c1 stays");
+        assert_eq!(c1.lane, ReviewLane::SourceInsight, "demoted in place");
+        let c2 = queue.iter().find(|e| e.claim_id == "c2").expect("c2 stays");
+        let d = c2.defer.expect("defer stamped");
+        assert_eq!(d.trigger, DeferTrigger::CorpusGrowsBy);
+        assert_eq!((d.n, d.baseline), (5, 0), "baseline from the (empty) read model");
+
+        // prepare skips the unfired defer AND the demoted insight.
+        let out = tmp.path().join("session");
+        super::run_prepare(super::CrystalReviewSessionPrepareArgs {
+            vault_root: vault.clone(),
+            batch: 20,
+            out: out.clone(),
+            suggest: false,
+        })
+        .unwrap();
+        let ids = fs::read_to_string(out.join("selected-claim-ids.txt")).unwrap();
+        assert!(ids.trim().is_empty(), "nothing left for the human queue: {ids}");
+    }
+
+    #[test]
+    fn theme_matches_accepts_bucket_key_and_description() {
+        // "Agent memory design" buckets to agents (first-match-wins).
+        assert!(super::theme_matches("Agent memory design", "agents"));
+        assert!(super::theme_matches("Agent memory design", "Agents & agentic systems"));
+        assert!(!super::theme_matches("Agent memory design", "memory"));
+        assert!(super::theme_matches("Context windows and memory", "Memory & context"));
+        assert!(super::theme_matches("Something entirely unrelated", "Miscellaneous"));
+    }
+
+    #[test]
+    fn mixed_file_with_defective_revision_persists_no_queue_ops() {
+        use ovp_domain::crystal::ReviewLane;
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        // A real pack so the grounding index builds; the revision cites a
+        // NONEXISTENT unit → pre-lint must fail before ANY mutation.
+        use ovp_domain::source_doc::SourceDoc;
+        use ovp_domain::units::{validate, Unit};
+        let reader = vault.join("40-Resources/Reader");
+        let case_dir = reader.join("m18-01");
+        fs::create_dir_all(&case_dir).unwrap();
+        let raw = vec![json!({
+            "kind": "assertion", "text": "t0", "evidence_ref": "p001",
+            "evidence_quote": "Memory is scarce.",
+            "attribution": "author", "modality": "asserted", "arguments": []
+        })];
+        let ex = validate(
+            &raw,
+            &SourceDoc::article("T", "https://e/x", None, None, vec![], "Memory is scarce."),
+        );
+        let units: Vec<Unit> = ex.accepted().cloned().collect();
+        fs::write(
+            case_dir.join("units.accepted.json"),
+            serde_json::to_string_pretty(&units).unwrap(),
+        )
+        .unwrap();
+        fs::write(case_dir.join("reader.md"), "# T\n\nbody\n").unwrap();
+        let store = vault.join(".ovp/crystal");
+        fs::create_dir_all(&store).unwrap();
+        let queue_before = review_json(json!([
+            caveated_entry("c1", "to demote", "agents"),
+            caveated_entry("c2", "to rewrite badly", "memory"),
+        ]));
+        fs::write(store.join("review.json"), &queue_before).unwrap();
+
+        let decisions = tmp.path().join("decisions.json");
+        fs::write(
+            &decisions,
+            serde_json::to_string_pretty(&json!([
+                { "claim_id": "c1", "action": "demote_to_source_insight", "revisions": [], "note": "" },
+                { "claim_id": "c2", "action": "narrow", "revisions": [{
+                    "id": "", "claim": "bad", "theme": "memory",
+                    "citations": [{"case_id": "m18-01", "unit_id": "u-nope", "quote": "nope"}]
+                }], "note": "" }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let err = super::run_apply(super::CrystalReviewSessionApplyArgs {
+            vault_root: vault.clone(),
+            decisions,
+            client_kind: crate::commands::client::ClientKind::Replay,
+            cache_dir: None,
+            run_id: None,
+            title: None,
+            refresh: false,
+            date: None,
+        })
+        .expect_err("defective revision fails the whole file");
+        assert!(matches!(err, crate::CliError::Gate(_)), "got {err:?}");
+        // codex P2: "nothing was changed" must be literally true — the demote
+        // in the same file must NOT have been persisted.
+        let queue = crate::commands::crystal_write::read_review_queue(&store.join("review.json")).unwrap();
+        let c1 = queue.iter().find(|e| e.claim_id == "c1").unwrap();
+        assert_eq!(c1.lane, ReviewLane::Review, "queue op not persisted on failed validation");
+    }
+
+    #[test]
+    fn legacy_crystal_review_rejects_queue_state_actions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cand = tmp.path().join("candidate.json");
+        fs::write(
+            &cand,
+            serde_json::to_string_pretty(&json!({"items":[{
+                "id":"c1","claim":"x","theme":"t",
+                "citations":[{"case_id":"a","unit_id":"u","quote":"q"}]}]}))
+            .unwrap(),
+        )
+        .unwrap();
+        let dec = tmp.path().join("decisions.json");
+        fs::write(
+            &dec,
+            serde_json::to_string_pretty(&json!([
+                { "claim_id": "c1", "action": "demote_to_source_insight", "revisions": [], "note": "" }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let out = tmp.path().join("revised.json");
+        let err = crate::commands::crystal_review::run(crate::commands::crystal_review::CrystalReviewArgs {
+            candidate: cand,
+            decisions: dec,
+            out: out.clone(),
+        })
+        .expect_err("queue-state action must be refused by the candidate workbench");
+        assert!(matches!(err, crate::CliError::Gate(_)), "got {err:?}");
+        assert!(!out.exists(), "nothing written");
+    }
+
+    #[test]
+    fn suggest_lists_units_only_from_uncited_cases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        let store = vault.join(".ovp/crystal");
+        fs::create_dir_all(&store).unwrap();
+        // Entry cites m18-01 and mentions "scarce memory budget".
+        fs::write(
+            store.join("review.json"),
+            review_json(json!([{
+                "claim_id": "c1",
+                "claim": "Memory is a scarce budget for agent systems.",
+                "theme": "memory",
+                "final_class": "caveated",
+                "strength": "supported",
+                "evidence_sufficient": true,
+                "rationale": "single source",
+                "lane": "review",
+                "citations": [
+                    {"case_id": "m18-01", "unit_id": "u-0", "quote": "Memory is scarce."}
+                ]
+            }])),
+        )
+        .unwrap();
+        // Hand-built evidence sidecar: one unit in the cited case, one in another.
+        let ev = ovp_index::EvidenceModel {
+            schema: ovp_index::evidence::EVIDENCE_SCHEMA.into(),
+            date: "2026-07-07".into(),
+            cards: vec![],
+            units: vec![
+                ovp_index::evidence::UnitEvidenceRow {
+                    id: "u:m18-01:u-0".into(),
+                    pack_dir: "m18-01".into(),
+                    source_sha256: None,
+                    source_title: "Working memory systems".into(),
+                    unit_id: "u-0".into(),
+                    text: "Memory is a scarce budget.".into(),
+                    quote: "Memory is scarce.".into(),
+                    line: Some(3),
+                    attribution: "author".into(),
+                    modality: "asserted".into(),
+                },
+                ovp_index::evidence::UnitEvidenceRow {
+                    id: "u:m18-02:u-1".into(),
+                    pack_dir: "m18-02".into(),
+                    source_sha256: None,
+                    source_title: "Context budgets".into(),
+                    unit_id: "u-1".into(),
+                    text: "Context windows are a scarce memory budget for agents.".into(),
+                    quote: "Context windows are a scarce budget.".into(),
+                    line: Some(7),
+                    attribution: "author".into(),
+                    modality: "asserted".into(),
+                },
+            ],
+            warnings: vec![],
+        };
+        ovp_index::write_evidence(&vault, &ev).unwrap();
+
+        let out = tmp.path().join("session");
+        super::run_prepare(super::CrystalReviewSessionPrepareArgs {
+            vault_root: vault.clone(),
+            batch: 20,
+            out: out.clone(),
+            suggest: true,
+        })
+        .unwrap();
+        let md = fs::read_to_string(out.join("backfill-candidates.md")).unwrap();
+        assert!(md.contains("m18-02"), "uncited case suggested: {md}");
+        assert!(!md.contains("u:m18-01"), "cited case excluded");
+        let rows: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(out.join("backfill-candidates.json")).unwrap()).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["case_id"], "m18-02");
     }
 
     #[test]

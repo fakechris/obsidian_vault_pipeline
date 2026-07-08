@@ -89,6 +89,7 @@ fn entry(case: &Case) -> ReviewEntry {
         rationale: String::new(),
         citations: case.citations.clone(),
         lane: review_lane(distinct_sources(case), Some(&verdict(case))),
+        defer: None,
     }
 }
 
