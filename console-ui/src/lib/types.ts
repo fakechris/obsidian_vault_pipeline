@@ -89,6 +89,75 @@ export interface ThemeCount {
   count: number;
 }
 
+export type SourceStatus =
+  | 'blocked'
+  | 'failed'
+  | 'queued'
+  | 'needs_content'
+  | 'unparseable'
+  | 'processed'
+  | 'duplicate';
+
+export interface SourceRow {
+  sha256: string;
+  status: SourceStatus;
+  title?: string;
+  url?: string;
+  rel_path?: string;
+  date?: string;
+  last_run_id?: string;
+  pack_dir?: string;
+  fail_count: number;
+  last_reason?: string;
+}
+
+export interface PackRow {
+  pack_dir: string;
+  title: string;
+  date?: string;
+  units: number;
+  cards: number;
+  json_repaired: boolean;
+  card_titles: string[];
+  source_sha256?: string;
+}
+
+export type ClaimStatus = 'durable' | 'superseded' | 'retracted' | 'caveated';
+
+export interface ClaimRow {
+  claim_id: string;
+  claim: string;
+  theme?: string;
+  status: ClaimStatus;
+  sources: string[];
+  strength?: string;
+  run_id?: string;
+  lane?: string;
+}
+
+export interface BlockedSource {
+  sha256: string;
+  title?: string;
+  fail_count: number;
+  last_reason?: string;
+  last_attempt?: string;
+}
+
+export interface RunStats {
+  window_days: number;
+  total_runs: number;
+  succeeded: number;
+  failed: number;
+  success_rate_pct: number;
+  avg_processed_per_run: number;
+}
+
+export interface OpsState {
+  blocked_sources: BlockedSource[];
+  queue_depth: number;
+  run_stats?: RunStats | null;
+}
+
 export interface RunRow {
   run_id: string;
   date: string;
@@ -122,5 +191,9 @@ export interface IndexModel {
   date: string;
   run_id?: string;
   totals: Totals;
+  sources: SourceRow[];
+  packs: PackRow[];
+  claims: ClaimRow[];
   runs: RunRow[];
+  ops: OpsState;
 }

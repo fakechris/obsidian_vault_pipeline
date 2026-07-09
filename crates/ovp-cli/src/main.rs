@@ -380,8 +380,10 @@ enum Cmd {
         /// Host to bind. Default: 127.0.0.1 (localhost only).
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
-        /// Fallback dir for /viz/* SPA assets (e.g. <repo>/.ovp/console/viz).
-        /// Lets a dev checkout serve any vault without copying the build in.
+        /// Fallback dir for the portal SPA build (e.g. <repo>/console-ui/dist).
+        /// Serves the portal at `/` when the vault has no deployed
+        /// `.ovp/console/app/` — a dev checkout can serve any vault without
+        /// copying the build in.
         #[arg(long)]
         viz_dir: Option<PathBuf>,
     },
@@ -888,22 +890,36 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Graph { manifest } => commands::graph::run(manifest),
-        Cmd::ApplyPlan { plan, vault_root, dry_run, report } => {
-            commands::apply_plan::run(commands::apply_plan::ApplyPlanArgs {
-                plan_path: plan,
-                vault_root,
-                dry_run,
-                report_path: report,
-            })
-        }
-        Cmd::Run { manifest, fake, run_id, out } => {
+        Cmd::ApplyPlan {
+            plan,
+            vault_root,
+            dry_run,
+            report,
+        } => commands::apply_plan::run(commands::apply_plan::ApplyPlanArgs {
+            plan_path: plan,
+            vault_root,
+            dry_run,
+            report_path: report,
+        }),
+        Cmd::Run {
+            manifest,
+            fake,
+            run_id,
+            out,
+        } => {
             if !fake {
                 eprintln!("ovp2: v0.1 only supports --fake runs. Pass --fake to proceed.");
                 return ExitCode::from(2);
             }
             commands::run::run(manifest, run_id, out)
         }
-        Cmd::CopyProbe { input, out, cache_dir, client, max_spans } => {
+        Cmd::CopyProbe {
+            input,
+            out,
+            cache_dir,
+            client,
+            max_spans,
+        } => {
             use commands::client::ClientKind;
             use commands::copy_probe::CopyProbeArgs;
             let client_kind = match client {
@@ -918,7 +934,14 @@ fn main() -> ExitCode {
                 max_spans,
             })
         }
-        Cmd::ExtractUnits { input, out, cache_dir, client, repair, critic_cache_dir } => {
+        Cmd::ExtractUnits {
+            input,
+            out,
+            cache_dir,
+            client,
+            repair,
+            critic_cache_dir,
+        } => {
             use commands::client::ClientKind;
             use commands::extract_units::ExtractUnitsArgs;
             let client_kind = match client {
@@ -935,7 +958,16 @@ fn main() -> ExitCode {
                 critic_cache_dir: critic_cache,
             })
         }
-        Cmd::ReadSource { input, out, cache_dir, critic_cache_dir, client, render_only, units_json, cards_json } => {
+        Cmd::ReadSource {
+            input,
+            out,
+            cache_dir,
+            critic_cache_dir,
+            client,
+            render_only,
+            units_json,
+            cards_json,
+        } => {
             use commands::client::ClientKind;
             use commands::read_source::ReadSourceArgs;
             let client_kind = match client {
@@ -1009,12 +1041,29 @@ fn main() -> ExitCode {
                 no_digest,
             })
         }
-        Cmd::Intake { vault_root, date, run_id, dry_run } => {
+        Cmd::Intake {
+            vault_root,
+            date,
+            run_id,
+            dry_run,
+        } => {
             let date = date.unwrap_or_else(today_iso);
             let run_id = run_id.unwrap_or_else(|| format!("intake-{date}"));
-            commands::intake::run(commands::intake::IntakeArgs { vault_root, date, run_id, dry_run })
+            commands::intake::run(commands::intake::IntakeArgs {
+                vault_root,
+                date,
+                run_id,
+                dry_run,
+            })
         }
-        Cmd::PinboardSync { vault_root, fixture, live, date, run_id, dry_run } => {
+        Cmd::PinboardSync {
+            vault_root,
+            fixture,
+            live,
+            date,
+            run_id,
+            dry_run,
+        } => {
             let date = date.unwrap_or_else(today_iso);
             let run_id = run_id.unwrap_or_else(|| format!("pinboard-{date}"));
             commands::pinboard_sync::run(commands::pinboard_sync::PinboardSyncArgs {
@@ -1030,34 +1079,66 @@ fn main() -> ExitCode {
             let date = date.unwrap_or_else(today_iso);
             commands::index_cmd::run_index(commands::index_cmd::IndexArgs { vault_root, date })
         }
-        Cmd::Find { vault_root, term, kind, status, date, json } => {
-            commands::index_cmd::run_find(commands::index_cmd::FindArgs {
-                vault_root,
-                term,
-                kind,
-                status,
-                date,
-                json,
-            })
-        }
+        Cmd::Find {
+            vault_root,
+            term,
+            kind,
+            status,
+            date,
+            json,
+        } => commands::index_cmd::run_find(commands::index_cmd::FindArgs {
+            vault_root,
+            term,
+            kind,
+            status,
+            date,
+            json,
+        }),
         Cmd::Console { vault_root, date } => {
             let date = date.unwrap_or_else(today_iso);
             commands::console_cmd::run(commands::console_cmd::ConsoleArgs { vault_root, date })
         }
-        Cmd::Project { vault_root, lane, verbose, write, rebuild } => {
+        Cmd::Project {
+            vault_root,
+            lane,
+            verbose,
+            write,
+            rebuild,
+        } => {
             use commands::project::{LaneFilter, ProjectArgs};
             let lane = match lane.as_deref() {
                 Some("durable") => LaneFilter::Durable,
                 Some("review") => LaneFilter::Review,
                 _ => LaneFilter::All,
             };
-            commands::project::run(ProjectArgs { vault_root, lane, verbose, write, rebuild })
+            commands::project::run(ProjectArgs {
+                vault_root,
+                lane,
+                verbose,
+                write,
+                rebuild,
+            })
         }
-        Cmd::Digest { vault_root, date, no_llm } => {
+        Cmd::Digest {
+            vault_root,
+            date,
+            no_llm,
+        } => {
             let date = date.unwrap_or_else(today_iso);
-            commands::digest::run(commands::digest::DigestArgs { vault_root, date, no_llm })
+            commands::digest::run(commands::digest::DigestArgs {
+                vault_root,
+                date,
+                no_llm,
+            })
         }
-        Cmd::Ask { vault_root, question, client, cache_dir, save, strict_ask } => {
+        Cmd::Ask {
+            vault_root,
+            question,
+            client,
+            cache_dir,
+            save,
+            strict_ask,
+        } => {
             use commands::client::ClientKind;
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
@@ -1072,34 +1153,80 @@ fn main() -> ExitCode {
                 strict_ask,
             })
         }
-        Cmd::Doctor { vault_root, fix, json } => {
-            commands::doctor::run(commands::doctor::DoctorArgs { vault_root, fix, json })
-        }
-        Cmd::Mcp { vault_root } => {
-            commands::mcp::run(commands::mcp::McpArgs { vault_root })
-        }
-        Cmd::Serve { vault_root, port, host, viz_dir } => {
-            commands::serve::run(commands::serve::ServeArgs {
-                vault_root,
-                host,
-                port,
-                viz_dir,
+        Cmd::Doctor {
+            vault_root,
+            fix,
+            json,
+        } => commands::doctor::run(commands::doctor::DoctorArgs {
+            vault_root,
+            fix,
+            json,
+        }),
+        Cmd::Mcp { vault_root } => commands::mcp::run(commands::mcp::McpArgs { vault_root }),
+        Cmd::Serve {
+            vault_root,
+            port,
+            host,
+            viz_dir,
+        } => commands::serve::run(commands::serve::ServeArgs {
+            vault_root,
+            host,
+            port,
+            viz_dir,
+        }),
+        Cmd::CrystalLint {
+            candidate,
+            packs_dir,
+            out,
+            strength,
+        } => {
+            use commands::crystal_lint::CrystalLintArgs;
+            commands::crystal_lint::run(CrystalLintArgs {
+                candidate,
+                packs_dir,
+                out,
+                strength,
             })
         }
-        Cmd::CrystalLint { candidate, packs_dir, out, strength } => {
-            use commands::crystal_lint::CrystalLintArgs;
-            commands::crystal_lint::run(CrystalLintArgs { candidate, packs_dir, out, strength })
-        }
-        Cmd::CrystalWrite { candidate, packs_dir, strength, store, run_id, title, scope, not_claiming } => {
+        Cmd::CrystalWrite {
+            candidate,
+            packs_dir,
+            strength,
+            store,
+            run_id,
+            title,
+            scope,
+            not_claiming,
+        } => {
             use commands::crystal_write::CrystalWriteArgs;
             commands::crystal_write::run(CrystalWriteArgs {
-                candidate, packs_dir, strength, store, run_id, title, scope, not_claiming,
+                candidate,
+                packs_dir,
+                strength,
+                store,
+                run_id,
+                title,
+                scope,
+                not_claiming,
             })
         }
         Cmd::CrystalSynth {
-            reader_dir, vault_root, work_dir, store, client, cache_dir,
-            max_cases_per_cluster, max_units_per_case, run_id, title, scope,
-            not_claiming, refresh, date, strict, strict_cluster_cap,
+            reader_dir,
+            vault_root,
+            work_dir,
+            store,
+            client,
+            cache_dir,
+            max_cases_per_cluster,
+            max_units_per_case,
+            run_id,
+            title,
+            scope,
+            not_claiming,
+            refresh,
+            date,
+            strict,
+            strict_cluster_cap,
         } => {
             use commands::client::ClientKind;
             use commands::crystal_synth::CrystalSynthArgs;
@@ -1108,17 +1235,45 @@ fn main() -> ExitCode {
                 ClientKindArg::Live => ClientKind::Live,
             };
             commands::crystal_synth::run(CrystalSynthArgs {
-                reader_dir, vault_root, work_dir, store, client_kind, cache_dir,
-                max_cases_per_cluster, max_units_per_case, run_id, title, scope,
-                not_claiming, refresh, date, strict, strict_cluster_cap,
+                reader_dir,
+                vault_root,
+                work_dir,
+                store,
+                client_kind,
+                cache_dir,
+                max_cases_per_cluster,
+                max_units_per_case,
+                run_id,
+                title,
+                scope,
+                not_claiming,
+                refresh,
+                date,
+                strict,
+                strict_cluster_cap,
             })
         }
-        Cmd::CrystalReview { candidate, decisions, out } => {
+        Cmd::CrystalReview {
+            candidate,
+            decisions,
+            out,
+        } => {
             use commands::crystal_review::CrystalReviewArgs;
-            commands::crystal_review::run(CrystalReviewArgs { candidate, decisions, out })
+            commands::crystal_review::run(CrystalReviewArgs {
+                candidate,
+                decisions,
+                out,
+            })
         }
         Cmd::CrystalReviewSessionApply {
-            vault_root, decisions, client, cache_dir, run_id, title, refresh, date,
+            vault_root,
+            decisions,
+            client,
+            cache_dir,
+            run_id,
+            title,
+            refresh,
+            date,
         } => {
             use commands::client::ClientKind;
             use commands::crystal_review_session::CrystalReviewSessionApplyArgs;
@@ -1127,10 +1282,22 @@ fn main() -> ExitCode {
                 ClientKindArg::Live => ClientKind::Live,
             };
             commands::crystal_review_session::run_apply(CrystalReviewSessionApplyArgs {
-                vault_root, decisions, client_kind, cache_dir, run_id, title, refresh, date,
+                vault_root,
+                decisions,
+                client_kind,
+                cache_dir,
+                run_id,
+                title,
+                refresh,
+                date,
             })
         }
-        Cmd::CrystalReviewSession { vault_root, batch, out, suggest } => {
+        Cmd::CrystalReviewSession {
+            vault_root,
+            batch,
+            out,
+            suggest,
+        } => {
             use commands::crystal_review_session::CrystalReviewSessionPrepareArgs;
             commands::crystal_review_session::run_prepare(CrystalReviewSessionPrepareArgs {
                 suggest,
@@ -1139,7 +1306,12 @@ fn main() -> ExitCode {
                 out,
             })
         }
-        Cmd::ExtractReferents { units, out, cache_dir, client } => {
+        Cmd::ExtractReferents {
+            units,
+            out,
+            cache_dir,
+            client,
+        } => {
             use commands::client::ClientKind;
             use commands::extract_referents::ExtractReferentsArgs;
             let client_kind = match client {
@@ -1217,7 +1389,13 @@ fn main() -> ExitCode {
                 report_path: report,
             })
         }
-        Cmd::Query { vault_root, canonical_root, kind, term, json } => {
+        Cmd::Query {
+            vault_root,
+            canonical_root,
+            kind,
+            term,
+            json,
+        } => {
             use commands::query::{QueryArgs, QueryKind};
             let kind = match kind {
                 QueryKindArg::List => QueryKind::List,
@@ -1226,16 +1404,32 @@ fn main() -> ExitCode {
                 QueryKindArg::Backlinks => QueryKind::Backlinks,
                 QueryKindArg::Stats => QueryKind::Stats,
             };
-            commands::query::run(QueryArgs { vault_root, canonical_root, kind, term, json })
+            commands::query::run(QueryArgs {
+                vault_root,
+                canonical_root,
+                kind,
+                term,
+                json,
+            })
         }
-        Cmd::Lint { vault_root, canonical_root, max_severity, json } => {
+        Cmd::Lint {
+            vault_root,
+            canonical_root,
+            max_severity,
+            json,
+        } => {
             use commands::lint::{LintArgs, SeverityArg as LintSeverity};
             let max_severity = match max_severity {
                 SeverityArg::Info => LintSeverity::Info,
                 SeverityArg::Warning => LintSeverity::Warning,
                 SeverityArg::Error => LintSeverity::Error,
             };
-            commands::lint::run(LintArgs { vault_root, canonical_root, max_severity, json })
+            commands::lint::run(LintArgs {
+                vault_root,
+                canonical_root,
+                max_severity,
+                json,
+            })
         }
         Cmd::AutoRun {
             inbox_root,
@@ -1278,7 +1472,15 @@ fn main() -> ExitCode {
                 json,
             })
         }
-        Cmd::Evolve { action, registry_path, candidate, vault_root, run_id, source, symptom } => {
+        Cmd::Evolve {
+            action,
+            registry_path,
+            candidate,
+            vault_root,
+            run_id,
+            source,
+            symptom,
+        } => {
             use commands::evolve::{EvolveArgs, EvolveSubcmd};
             let sub = match action {
                 EvolveAction::Registry => EvolveSubcmd::Registry,
@@ -1305,14 +1507,30 @@ fn main() -> ExitCode {
                         eprintln!("evolve diagnose requires --source <name>");
                         std::process::exit(2);
                     });
-                    EvolveSubcmd::Diagnose { run_id: rid, source: src, symptoms: symptom }
+                    EvolveSubcmd::Diagnose {
+                        run_id: rid,
+                        source: src,
+                        symptoms: symptom,
+                    }
                 }
             };
             commands::evolve::run(EvolveArgs { sub, registry_path })
         }
-        Cmd::Rag { vault_root, canonical_root, query, limit, json } => {
+        Cmd::Rag {
+            vault_root,
+            canonical_root,
+            query,
+            limit,
+            json,
+        } => {
             use commands::rag::RagArgs;
-            commands::rag::run(RagArgs { vault_root, canonical_root, query, limit, json })
+            commands::rag::run(RagArgs {
+                vault_root,
+                canonical_root,
+                query,
+                limit,
+                json,
+            })
         }
         Cmd::ReviewRun {
             manifest,
@@ -1447,7 +1665,16 @@ fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
     let months: [i64; 12] = [
         31,
         if is_leap(year) { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month: u32 = 1;
     for m in months.iter() {
