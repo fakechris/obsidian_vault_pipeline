@@ -101,10 +101,17 @@ export default function KnowledgeGraph({
   const { model } = useModel();
   // Shas that actually have a /library/:sha page (handoff note 5): while
   // the model is loading — or in a crystal-only vault — nothing navigates.
+  // The dblclick handler reads it through a ref so a model refresh does
+  // NOT destroy and rebuild the whole graph just to update navigability;
+  // the memoized set stays for render-time use (info-panel hint).
   const knownShas = useMemo(
     () => new Set((model?.sources ?? []).map((s) => s.sha256)),
     [model],
   );
+  const knownShasRef = useRef(knownShas);
+  useEffect(() => {
+    knownShasRef.current = knownShas;
+  }, [knownShas]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -265,7 +272,7 @@ export default function KnowledgeGraph({
           // Sha-less legacy sources (`source:<case_id>`) have no
           // /library/:sha page — never navigate to a 404.
           const sha = nodeId.slice('source:'.length);
-          if (knownShas.has(sha)) navigate(`/library/${sha}`);
+          if (knownShasRef.current.has(sha)) navigate(`/library/${sha}`);
         } else if (nodeId.startsWith('claim:')) {
           // Node ids carry the ledger claim_key; portal anchors resolve the
           // index claim_id — use the payload field, not the id suffix.
@@ -287,7 +294,10 @@ export default function KnowledgeGraph({
       cleanup?.();
     };
     // themeVersion intentionally re-runs this effect: same data, new tokens.
-  }, [data, id, scope, knownShas, navigate, themeVersion]);
+    // scope must be a dep: switching scopes swaps the dataset, and only a
+    // re-run destroys the old graph instance. knownShas is read through a
+    // ref so a model refresh does NOT tear the graph down.
+  }, [data, id, scope, navigate, themeVersion]);
 
   const kindLabel = (type: string) =>
     type === 'claim'

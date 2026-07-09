@@ -73,25 +73,44 @@ export default function SearchOmnibox({ variant, onClose }: SearchOmniboxProps) 
   const { model } = useModel();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Page variant: the query IS the URL (?q=), shareable like every other
-  // portal filter. Overlay variant: ephemeral local state.
+  // Page variant: the query lands in the URL (?q=), shareable like every
+  // other portal filter — but the INPUT is driven by local state and the
+  // URL syncs inside the debounce window, so typing never re-renders the
+  // router tree per keystroke. Overlay variant: ephemeral local state only.
   const urlQuery = searchParams.get('q') ?? '';
   const [localQuery, setLocalQuery] = useState(variant === 'page' ? urlQuery : '');
-  const query = variant === 'page' ? urlQuery : localQuery;
-  const setQuery = (next: string) => {
-    setLocalQuery(next);
-    if (variant === 'page') {
+  // Distinguishes our own debounced URL writes from external changes
+  // (back/forward, deep-links) that must be adopted into the input.
+  const lastSyncedRef = useRef(urlQuery);
+  const query = localQuery;
+  const setQuery = setLocalQuery;
+
+  useEffect(() => {
+    if (variant !== 'page') return;
+    if (urlQuery !== lastSyncedRef.current) {
+      lastSyncedRef.current = urlQuery;
+      setLocalQuery(urlQuery);
+    }
+  }, [variant, urlQuery]);
+
+  // Debounced URL sync; replace:true so history holds one /search entry,
+  // not one per keystroke.
+  useEffect(() => {
+    if (variant !== 'page' || localQuery === lastSyncedRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedRef.current = localQuery;
       setSearchParams(
         (prev) => {
           const p = new URLSearchParams(prev);
-          if (next) p.set('q', next);
+          if (localQuery) p.set('q', localQuery);
           else p.delete('q');
           return p;
         },
         { replace: true },
       );
-    }
-  };
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [variant, localQuery, setSearchParams]);
 
   const [hits, setHits] = useState<FindHit[]>([]);
   const [themes, setThemes] = useState<ThemeCount[]>([]);
@@ -250,8 +269,6 @@ export default function SearchOmnibox({ variant, onClose }: SearchOmniboxProps) 
     !error &&
     results.length === 0;
 
-  let lastGroup: Group | null = null;
-
   return (
     <div className={`omnibox ${variant}`}>
       <input
@@ -278,8 +295,10 @@ export default function SearchOmnibox({ variant, onClose }: SearchOmniboxProps) 
       {results.length > 0 && (
         <ul className="omni-results">
           {results.map((item, i) => {
-            const header = item.group !== lastGroup;
-            lastGroup = item.group;
+            // Pure derivation — results are grouped in GROUPS order, so a
+            // header renders wherever the group differs from the previous
+            // row (no mutation during render).
+            const header = i === 0 || results[i - 1].group !== item.group;
             return (
               <li key={item.key}>
                 {header && (

@@ -6,7 +6,7 @@
  * same anchor pattern the source page uses for unit line anchors. Cited
  * sources link to /library/:sha; legacy case ids whose pack has no source
  * sha render as plain text (handoff note 5: never navigate to a 404). */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
@@ -87,15 +87,21 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
   const byCase = useMemo(() => sourcesByCase(model), [model]);
 
   // Anchor handling: #<claim_id> scrolls to + highlights the claim card
-  // (same pattern as the source page's unit line anchors).
+  // (same pattern as the source page's unit line anchors). Scroll fires
+  // ONCE per hash value — the ref guard keeps claims/model refreshes from
+  // yanking the viewport back to the anchor while the user reads.
   const [anchor, setAnchor] = useState<string | null>(null);
+  const scrolledHashRef = useRef<string | null>(null);
   useEffect(() => {
     const id = decodeURIComponent(location.hash.replace(/^#/, ''));
     if (!id) {
       setAnchor(null);
+      scrolledHashRef.current = null;
       return;
     }
     setAnchor(id);
+    if (scrolledHashRef.current === location.hash) return;
+    scrolledHashRef.current = location.hash;
     // The cards render in this same commit; scroll on the next frame.
     const frame = requestAnimationFrame(() => {
       document
@@ -103,7 +109,7 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     return () => cancelAnimationFrame(frame);
-  }, [location.hash, claims]);
+  }, [location.hash]);
 
   const durable = claims.filter((c) => c.status === 'durable').length;
 

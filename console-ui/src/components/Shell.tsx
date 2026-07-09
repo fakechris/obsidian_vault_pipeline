@@ -92,11 +92,16 @@ export default function Shell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        // Composing surfaces (the Ask textarea) opt out of the global
-        // shortcut — B4 handoff rule.
+        // Never steal ⌘K from an active editing context (inputs, textareas,
+        // selects, contenteditable) — the browser/user owns it there — and
+        // composing surfaces (the Ask textarea) opt out explicitly via
+        // [data-omnibox-suppress].
+        const el = e.target instanceof HTMLElement ? e.target : null;
         if (
-          e.target instanceof HTMLElement &&
-          e.target.closest('[data-omnibox-suppress]')
+          el &&
+          (el.isContentEditable ||
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
+            el.closest('[data-omnibox-suppress]'))
         ) {
           return;
         }

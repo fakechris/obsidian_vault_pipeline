@@ -27,7 +27,8 @@ pub use ledger::{
 };
 pub use pinboard::{
     read_pinboard_ledger, sync_pinboard, synced_urls, FixturePinboardFetch, PinboardFetch,
-    PinboardPost, PinboardSyncOutcome, PinboardSyncRecord, PINBOARD_SCHEMA,
+    PinboardPost, PinboardSyncOptions, PinboardSyncOutcome, PinboardSyncRecord,
+    FIRST_SYNC_GUARD_MAX_NEW, PINBOARD_SCHEMA,
 };
 #[cfg(feature = "pinboard-live")]
 pub use pinboard::LivePinboardFetch;
