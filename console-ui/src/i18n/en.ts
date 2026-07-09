@@ -49,9 +49,9 @@ export const en = {
   'today.whyNeedsContent':
     'this capture is too thin to read — enrich it with real content so it can enter grounded memory.',
   'today.attentionAction': 'Open source detail',
-  'today.recentClaims': 'Recent claims',
-  'today.recentClaimsNote':
-    'Latest crystallized claims (per-day attribution lands in B2).',
+  'today.claimsSample': 'From the crystal store',
+  'today.claimsSampleNote':
+    'A durable-first sample — per-day attribution lands in B2.',
   'today.claimSources': 'Sources',
   'today.strength': 'strength',
   'today.readToday': 'Read today',

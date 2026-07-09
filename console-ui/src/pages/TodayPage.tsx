@@ -11,7 +11,7 @@ import { useI18n } from '../i18n';
 import {
   attentionSources,
   readToday,
-  recentClaims,
+  claimsSample,
   timeline,
   todayStats,
 } from '../lib/derive';
@@ -106,12 +106,12 @@ function Attention({ model }: { model: IndexModel }) {
 
 function RecentClaims({ model }: { model: IndexModel }) {
   const { t } = useI18n();
-  const claims = recentClaims(model, RECENT_CLAIMS);
+  const claims = claimsSample(model, RECENT_CLAIMS);
   if (claims.length === 0) return null;
   return (
     <div className="section">
-      <h2>{t('today.recentClaims')}</h2>
-      <p className="muted tiny">{t('today.recentClaimsNote')}</p>
+      <h2>{t('today.claimsSample')}</h2>
+      <p className="muted tiny">{t('today.claimsSampleNote')}</p>
       {claims.map((c) => (
         <div className="card" key={c.claim_id}>
           <div className="claim-top">

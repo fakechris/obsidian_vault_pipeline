@@ -49,8 +49,8 @@ export const zh: Record<keyof typeof en, string> = {
   'today.whyNeedsContent':
     '这条捕获内容太薄无法阅读——补充正文后才能进入有据记忆。',
   'today.attentionAction': '打开资料详情',
-  'today.recentClaims': '最新结晶',
-  'today.recentClaimsNote': '最近结晶的主张（按日归因将在 B2 落地）。',
+  'today.claimsSample': '来自结晶库',
+  'today.claimsSampleNote': 'durable 优先的样本——按日归因将在 B2 落地。',
   'today.claimSources': '来源',
   'today.strength': '强度',
   'today.readToday': '今日读完',

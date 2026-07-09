@@ -89,15 +89,18 @@ export function attentionSources(model: IndexModel): SourceRow[] {
   );
 }
 
-/** Latest N claims for the "Recent claims" section. ClaimRow has no date and
- * its run_id namespace (`run-*`) does not join to RunRow (`daily-*`), so
- * per-day attribution is NOT derivable in B1 — we show the tail of the
- * claims projection (newest last in ledger order) instead. */
-export function recentClaims(model: IndexModel, n: number): ClaimRow[] {
+/** Sample of claims for the Today page. ClaimRow has no date, its run_id
+ * namespace (`run-*`) does not join to RunRow (`daily-*`), AND the index
+ * projection sorts claims by (claim_id, claim) — so no recency order is
+ * derivable in B1 (codex review P2). Present a durable-first sample and
+ * label it as such; true "crystallized today" needs a date/run join key
+ * on ClaimRow (B2 read-model change). */
+export function claimsSample(model: IndexModel, n: number): ClaimRow[] {
+  const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
   return model.claims
     .filter((c) => c.status === 'durable' || c.status === 'caveated')
-    .slice(-n)
-    .reverse();
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, n);
 }
 
 export interface TimelineDay {

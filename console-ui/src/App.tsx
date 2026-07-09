@@ -85,7 +85,8 @@ function LegacyLayout() {
 function VizRedirect() {
   const location = useLocation();
   const rest = location.pathname.replace(/^\/viz\/?/, '/');
-  return <Navigate to={rest === '/' ? '/graph' : rest} replace />;
+  const path = rest === '/' ? '/graph' : rest;
+  return <Navigate to={{ pathname: path, search: location.search, hash: location.hash }} replace />;
 }
 
 export default function App() {
