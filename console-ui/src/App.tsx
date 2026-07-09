@@ -9,30 +9,25 @@ import {
 } from 'react-router-dom';
 import Shell from './components/Shell';
 import { ModelProvider } from './model';
+import { AskPage, SystemPage } from './pages/PlaceholderPages';
+import KnowledgePage from './pages/KnowledgePage';
 import LibraryPage from './pages/LibraryPage';
-import {
-  AskPage,
-  KnowledgePage,
-  SearchPage,
-  SystemPage,
-} from './pages/PlaceholderPages';
+import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
+import ThemeDetailPage from './pages/ThemeDetailPage';
 import TodayPage from './pages/TodayPage';
 import { cn } from './lib/cn';
 
-// The graph route carries @antv/g6 (~1MB min) — lazy so the portal pages
-// stay light.
-const GraphView = lazy(() => import('./graph/GraphView'));
-const ExplorePage = lazy(() => import('./pages/ExplorePage'));
+// Flow/Monitor carry d3 — lazy so the portal pages stay light.
 const FlowPage = lazy(() => import('./pages/FlowPage'));
 const MonitorPage = lazy(() => import('./pages/MonitorPage'));
 
-// Pre-B1 console routes — functional but OUT of the portal top nav
-// (design §2: graph becomes a component in B2/B3, flow/monitor fold into
-// System in B5). They keep their own dark layout until rethemed.
+// The last two pre-B1 console routes. The standalone viz navigation is
+// retired in B3 (design §2/§9): the old Graph page folded into
+// /knowledge?view=graph, Explore into /search. Flow and Monitor remain
+// reachable ONLY from the System placeholder link list until B5 rethemes
+// them into System panels — so this bar links back to the portal only.
 const LEGACY_NAV = [
-  { to: '/graph', label: 'Graph 图谱' },
-  { to: '/explore', label: 'Explore 检索' },
   { to: '/flow', label: 'Flow 流程' },
   { to: '/monitor', label: 'Monitor 监控' },
 ];
@@ -59,7 +54,7 @@ function LegacyLayout() {
           </NavLink>
         ))}
         <NavLink
-          to="/"
+          to="/system"
           className="ml-auto rounded-md px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
         >
           ← ovp2 portal
@@ -81,12 +76,23 @@ function LegacyLayout() {
 }
 
 /** Old /viz/* deep links (pre-B1 the SPA was mounted under /viz) redirect
- * to the same route at the root: /viz/graph → /graph. */
+ * to the pages that absorbed them: graph → the Knowledge graph view,
+ * explore → search; flow/monitor keep their (legacy-themed) routes. */
 function VizRedirect() {
   const location = useLocation();
   const rest = location.pathname.replace(/^\/viz\/?/, '/');
-  const path = rest === '/' ? '/graph' : rest;
-  return <Navigate to={{ pathname: path, search: location.search, hash: location.hash }} replace />;
+  if (rest === '/' || rest === '/graph') {
+    return <Navigate to="/knowledge?view=graph" replace />;
+  }
+  if (rest === '/explore') {
+    return <Navigate to="/search" replace />;
+  }
+  return (
+    <Navigate
+      to={{ pathname: rest, search: location.search, hash: location.hash }}
+      replace
+    />
+  );
 }
 
 export default function App() {
@@ -99,12 +105,17 @@ export default function App() {
           <Route path="/library/:sha" element={<SourceDetailPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
+          <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
           <Route path="/ask" element={<AskPage />} />
           <Route path="/system" element={<SystemPage />} />
         </Route>
+        {/* Retired standalone viz routes → their portal homes (design §2). */}
+        <Route
+          path="/graph"
+          element={<Navigate to="/knowledge?view=graph" replace />}
+        />
+        <Route path="/explore" element={<Navigate to="/search" replace />} />
         <Route element={<LegacyLayout />}>
-          <Route path="/graph" element={<GraphView />} />
-          <Route path="/explore" element={<ExplorePage />} />
           <Route path="/flow" element={<FlowPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
         </Route>

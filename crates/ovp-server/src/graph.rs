@@ -143,6 +143,12 @@ pub struct GNode {
     pub importance: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<f64>,
+    /// Claims only: the index/ledger `claim_id` (the identifier the portal
+    /// links with — /knowledge#<claim_id>, /api/claim/:id). The node `id`
+    /// keeps the deterministic `claim_key` (the graph identity); the two
+    /// differ by construction, so the payload carries both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -213,6 +219,15 @@ pub(crate) fn last_path_segment(dir: &str) -> Option<&str> {
     dir.rsplit(['/', '\\']).next().filter(|s| !s.is_empty())
 }
 
+/// Claim text clipped for the graph payload (full text via /api/claim/:id).
+fn claim_label(claim: &str) -> String {
+    if claim.chars().count() > MAX_CLAIM_LABEL_LEN {
+        format!("{}…", truncate_chars(claim, TRUNCATED_CLAIM_LABEL_LEN))
+    } else {
+        claim.to_string()
+    }
+}
+
 fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGraph {
     let source_lookup: HashMap<&str, &ovp_index::SourceRow> = model
         .map(|m| m.sources.iter().map(|s| (s.sha256.as_str(), s)).collect())
@@ -235,11 +250,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
         nodes.entry(claim_id.clone()).or_insert_with(|| GNode {
             id: claim_id.clone(),
             node_type: "claim".into(),
-            label: if rec.claim.chars().count() > MAX_CLAIM_LABEL_LEN {
-                format!("{}…", truncate_chars(&rec.claim, TRUNCATED_CLAIM_LABEL_LEN))
-            } else {
-                rec.claim.clone()
-            },
+            label: claim_label(&rec.claim),
             theme: Some(rec.theme.clone()),
             strength: Some(format!("{:?}", rec.strength).to_lowercase()),
             url: None,
@@ -248,6 +259,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             importance: 0.0,
             hit: false,
             provenance: Some(rec.provenance_score),
+            claim_id: Some(rec.claim_id.clone()),
         });
 
         for cit in &rec.citations {
@@ -268,6 +280,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                 importance: 0.0,
                 hit: false,
                 provenance: None,
+                claim_id: None,
             });
 
             edges.push(GEdge {
@@ -295,6 +308,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     importance: 0.0,
                     hit: false,
                     provenance: None,
+                    claim_id: None,
                 });
                 sid
             } else {
@@ -311,6 +325,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     importance: 0.0,
                     hit: false,
                     provenance: None,
+                    claim_id: None,
                 });
                 sid
             };
@@ -881,6 +896,7 @@ pub fn source_neighborhood(
             importance: 1.0,
             hit: false,
             provenance: None,
+            claim_id: None,
         };
         return Ok(GraphResponse {
             mode: GraphMode::Neighborhood.as_str().into(),
@@ -943,6 +959,255 @@ pub fn source_neighborhood(
 
     Ok(GraphResponse {
         mode: GraphMode::Neighborhood.as_str().into(),
+        nodes,
+        edges,
+        communities,
+        total_nodes,
+        truncated,
+    })
+}
+
+/// A caveated claim merged into the theme subgraph from the index model,
+/// with the source node ids it cites.
+struct ExtraClaim {
+    node: GNode,
+    sources: BTreeSet<String>,
+}
+
+/// Caveated claims for `theme` from the index model — they live in
+/// review.json (indexed as ClaimRow), never in the ledger, so the
+/// ledger-built base graph cannot see them. Returns synthetic claim nodes
+/// (deduped against ledger records by claim_id) plus any cited source nodes
+/// the base graph doesn't already contain. Deterministic: sorted by node id.
+fn caveated_theme_claims(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    theme: &str,
+    base: &BaseGraph,
+) -> (Vec<ExtraClaim>, HashMap<String, GNode>) {
+    let Some(model) = model else {
+        return (Vec::new(), HashMap::new());
+    };
+    let ledger_ids: HashSet<&str> = records
+        .iter()
+        .filter(|r| r.theme == theme)
+        .map(|r| r.claim_id.as_str())
+        .collect();
+    let source_lookup: HashMap<&str, &ovp_index::SourceRow> =
+        model.sources.iter().map(|s| (s.sha256.as_str(), s)).collect();
+    let pack_lookup: HashMap<&str, &ovp_index::PackRow> = model
+        .packs
+        .iter()
+        .filter_map(|p| Some((last_path_segment(&p.pack_dir)?, p)))
+        .collect();
+
+    let mut extras: Vec<ExtraClaim> = Vec::new();
+    let mut synthetic: HashMap<String, GNode> = HashMap::new();
+    for row in &model.claims {
+        if row.status != ovp_index::ClaimStatus::Caveated
+            || row.theme.as_deref() != Some(theme)
+            || ledger_ids.contains(row.claim_id.as_str())
+        {
+            continue;
+        }
+        let node_id = format!("claim:{}", row.claim_id);
+        if base.nodes.contains_key(&node_id) {
+            continue;
+        }
+        let mut sources = BTreeSet::new();
+        for case in &row.sources {
+            // Same node-id rule as build_base: pack → sha when known, else
+            // the raw case id (the client's sha-guard treats it as legacy).
+            let (sid, label, url) = match pack_lookup.get(case.as_str()) {
+                Some(pack) => {
+                    let sha = pack.source_sha256.as_deref().unwrap_or(case);
+                    let src = source_lookup.get(sha);
+                    (
+                        format!("source:{sha}"),
+                        src.and_then(|s| s.title.clone())
+                            .unwrap_or_else(|| pack.title.clone()),
+                        src.and_then(|s| s.url.clone()),
+                    )
+                }
+                None => (format!("source:{case}"), case.clone(), None),
+            };
+            if !base.nodes.contains_key(&sid) {
+                synthetic.entry(sid.clone()).or_insert_with(|| GNode {
+                    id: sid.clone(),
+                    node_type: "source".into(),
+                    label,
+                    theme: None,
+                    strength: None,
+                    url,
+                    degree: 0,
+                    cluster: 0,
+                    importance: 0.0,
+                    hit: false,
+                    provenance: None,
+                    claim_id: None,
+                });
+            }
+            sources.insert(sid);
+        }
+        extras.push(ExtraClaim {
+            node: GNode {
+                id: node_id.clone(),
+                node_type: "claim".into(),
+                label: claim_label(&row.claim),
+                theme: Some(theme.to_string()),
+                strength: row.strength.clone(),
+                url: None,
+                degree: sources.len(),
+                cluster: 0,
+                // Caveated claims rank below every durable claim: no
+                // provenance/hub signal exists for them in the ledger.
+                importance: 0.0,
+                hit: false,
+                provenance: None,
+                claim_id: Some(row.claim_id.clone()),
+            },
+            sources,
+        });
+    }
+    extras.sort_by(|a, b| a.node.id.cmp(&b.node.id));
+    (extras, synthetic)
+}
+
+/// Theme-scoped subgraph for the portal's KnowledgeGraph component
+/// (design §4, `scope=theme&theme=<t>`): the theme's claims plus the sources
+/// they draw evidence from. Durable claims come from the ledger; caveated
+/// claims live only in the index (review.json) and are merged in so a
+/// caveated-only theme still gets a graph rail. Edges are bipartite
+/// claim→source `cites` (units collapsed, same compact view as
+/// `source_neighborhood`) plus `related` edges among the theme's ledger
+/// claims. A theme neither layer knows is a 404 — fail loud, never render
+/// an empty rail for a typo.
+pub fn theme_subgraph(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    theme: &str,
+) -> Result<GraphResponse, GraphError> {
+    let mut base = build_base(records, model);
+    add_related_edges(&mut base);
+    compute_degrees(&mut base);
+    assign_clusters(&mut base);
+    compute_importance(&mut base, records);
+
+    // Ledger claims for the theme, importance-ranked so a huge theme keeps
+    // its strongest claims under the shared node cap.
+    let mut ledger_claims: Vec<(String, f64)> = base
+        .nodes
+        .values()
+        .filter(|n| n.node_type == "claim" && n.theme.as_deref() == Some(theme))
+        .map(|n| (n.id.clone(), n.importance))
+        .collect();
+    ledger_claims.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let (extras, mut synthetic_sources) = caveated_theme_claims(records, model, theme, &base);
+
+    if ledger_claims.is_empty() && extras.is_empty() {
+        return Err(GraphError::not_found(&format!("theme not found: {theme}")));
+    }
+
+    // Keep claims + their sources under the shared cap — same accounting as
+    // source_neighborhood: a claim only enters with its whole citation set.
+    // Ledger (durable) claims fill first; caveated extras follow.
+    let mut kept: BTreeSet<String> = BTreeSet::new();
+    let mut truncated = false;
+    let empty = BTreeSet::new();
+    for (claim, _) in &ledger_claims {
+        let srcs = base.claim_sources.get(claim.as_str()).unwrap_or(&empty);
+        let new_sources = srcs.iter().filter(|s| !kept.contains(s.as_str())).count();
+        if kept.len() + 1 + new_sources > MAX_NEIGHBORHOOD_NODES {
+            truncated = true;
+            break;
+        }
+        kept.insert(claim.clone());
+        for s in srcs {
+            kept.insert(s.clone());
+        }
+    }
+    let mut kept_extras: Vec<&ExtraClaim> = Vec::new();
+    for extra in &extras {
+        if truncated {
+            break;
+        }
+        let new_sources = extra
+            .sources
+            .iter()
+            .filter(|s| !kept.contains(s.as_str()))
+            .count();
+        if kept.len() + 1 + new_sources > MAX_NEIGHBORHOOD_NODES {
+            truncated = true;
+            break;
+        }
+        kept.insert(extra.node.id.clone());
+        for s in &extra.sources {
+            kept.insert(s.clone());
+        }
+        kept_extras.push(extra);
+    }
+
+    let mut nodes: Vec<GNode> = base
+        .nodes
+        .values()
+        .filter(|n| kept.contains(n.id.as_str()))
+        .cloned()
+        .collect();
+    nodes.extend(kept_extras.iter().map(|e| e.node.clone()));
+    synthetic_sources.retain(|id, _| kept.contains(id.as_str()));
+    nodes.extend(synthetic_sources.into_values());
+    sort_by_importance(&mut nodes);
+
+    // Bipartite claim→source `cites` (units collapsed) …
+    let mut edges: Vec<GEdge> = Vec::new();
+    for (claim, srcs) in &base.claim_sources {
+        if !kept.contains(claim.as_str()) {
+            continue;
+        }
+        for s in srcs {
+            if kept.contains(s.as_str()) {
+                edges.push(GEdge {
+                    source: claim.clone(),
+                    target: s.clone(),
+                    edge_type: "cites".into(),
+                    weight: None,
+                });
+            }
+        }
+    }
+    for extra in &kept_extras {
+        for s in &extra.sources {
+            if kept.contains(s.as_str()) {
+                edges.push(GEdge {
+                    source: extra.node.id.clone(),
+                    target: s.clone(),
+                    edge_type: "cites".into(),
+                    weight: None,
+                });
+            }
+        }
+    }
+    // …plus `related` connectivity among the kept ledger claims, rebuilt
+    // over the kept subset so weights stay exact.
+    let kept_sources: BTreeMap<String, BTreeSet<String>> = base
+        .claim_sources
+        .iter()
+        .filter(|(c, _)| kept.contains(c.as_str()))
+        .map(|(c, s)| (c.clone(), s.clone()))
+        .collect();
+    edges.extend(related_edges(&kept_sources));
+
+    let claim_refs: Vec<&GNode> = nodes.iter().filter(|n| n.node_type == "claim").collect();
+    let communities = build_communities(&claim_refs);
+    let total_nodes = base.nodes.len();
+
+    Ok(GraphResponse {
+        mode: "theme".into(),
         nodes,
         edges,
         communities,
@@ -1453,6 +1718,131 @@ mod tests {
         assert_eq!(resp.nodes[0].label, "Fresh Source");
         assert!(resp.edges.is_empty());
         assert!(!resp.truncated);
+    }
+
+    #[test]
+    fn theme_subgraph_filters_to_theme_claims_and_their_sources() {
+        let records = sample_records();
+        let model = model_for_cases(&[
+            ("case1", "sha1", "Source One"),
+            ("case2", "sha2", "Source Two"),
+            ("case9", "sha9", "Source Nine"),
+        ]);
+        let resp = theme_subgraph(&records, Some(&model), "alpha").unwrap();
+        assert_eq!(resp.mode, "theme");
+
+        let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        // Theme alpha = claims a + b, drawing on sources sha1 (case1) and
+        // sha2 (case2, via claim a).
+        assert!(ids.contains("claim:a"));
+        assert!(ids.contains("claim:b"));
+        assert!(ids.contains("source:sha1"));
+        assert!(ids.contains("source:sha2"));
+        // Other themes' claims and their sources never enter the subgraph.
+        assert!(!ids.contains("claim:c"));
+        assert!(!ids.contains("claim:d"));
+        assert!(!ids.contains("source:sha9"));
+        // Units are collapsed in this compact view.
+        assert!(resp.nodes.iter().all(|n| n.node_type != "unit"));
+
+        // Bipartite cites edges plus related connectivity among theme claims.
+        for e in &resp.edges {
+            assert!(ids.contains(e.source.as_str()));
+            assert!(ids.contains(e.target.as_str()));
+        }
+        assert!(
+            resp.edges.iter().any(|e| e.edge_type == "cites"
+                && e.source == "claim:a"
+                && e.target == "source:sha1")
+        );
+        assert!(
+            resp.edges.iter().any(|e| e.edge_type == "related"
+                && e.weight == Some(1)
+                && ((e.source == "claim:a" && e.target == "claim:b")
+                    || (e.source == "claim:b" && e.target == "claim:a"))),
+            "related edge between the theme's claims missing"
+        );
+        assert!(!resp.truncated);
+    }
+
+    #[test]
+    fn theme_subgraph_unknown_theme_is_404() {
+        let records = sample_records();
+        let err = theme_subgraph(&records, None, "no-such-theme").unwrap_err();
+        assert_eq!(err.status, 404);
+    }
+
+    #[test]
+    fn claim_nodes_carry_index_claim_id_for_portal_links() {
+        // Graph identity is the ledger claim_key ("a"); portal links resolve
+        // the index claim_id ("id-a") — the fixture makes them differ on
+        // purpose (codex review P2: double-click deep links broke wherever
+        // the two diverged).
+        let records = sample_records();
+        let resp = theme_subgraph(&records, None, "alpha").unwrap();
+        let claim = resp
+            .nodes
+            .iter()
+            .find(|n| n.id == "claim:a")
+            .expect("claim:a in theme graph");
+        assert_eq!(claim.claim_id.as_deref(), Some("id-a"));
+        let source = resp
+            .nodes
+            .iter()
+            .find(|n| n.node_type == "source")
+            .expect("a source node");
+        assert!(source.claim_id.is_none());
+    }
+
+    #[test]
+    fn caveated_only_theme_gets_a_graph_not_404() {
+        // Themes that exist only as caveated review.json claims have a
+        // working theme wall + detail page; the graph rail must not 404
+        // (codex review P2). Unknown themes still fail loud.
+        let records = sample_records(); // no "gamma" in the ledger
+        let mut model = model_for_cases(&[("case1", "sha1", "Source One")]);
+        model.claims.push(ovp_index::ClaimRow {
+            claim_id: "cav-1".into(),
+            claim: "caveated-only claim".into(),
+            theme: Some("gamma".into()),
+            status: ovp_index::ClaimStatus::Caveated,
+            sources: vec!["case1".into()],
+            strength: Some("weak".into()),
+            run_id: None,
+            lane: None,
+        });
+        let resp = theme_subgraph(&records, Some(&model), "gamma").unwrap();
+        let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"claim:cav-1"), "caveated claim node present");
+        assert!(ids.contains(&"source:sha1"), "cited source resolved via pack");
+        let claim = resp.nodes.iter().find(|n| n.id == "claim:cav-1").unwrap();
+        assert_eq!(claim.claim_id.as_deref(), Some("cav-1"));
+        assert!(
+            resp.edges
+                .iter()
+                .any(|e| e.source == "claim:cav-1" && e.target == "source:sha1"),
+            "cites edge from caveated claim to its source"
+        );
+        assert!(theme_subgraph(&records, Some(&model), "still-unknown").is_err());
+    }
+
+    #[test]
+    fn theme_subgraph_respects_node_cap() {
+        // One theme, 400 claims on a shared hub source — past the cap.
+        let mut records = Vec::new();
+        for i in 0..400 {
+            records.push(rec(
+                &format!("k{i:03}"),
+                "big",
+                StrengthClass::Supported,
+                0.8,
+                &[("hub", &format!("u{i:03}"))],
+            ));
+        }
+        let resp = theme_subgraph(&records, None, "big").unwrap();
+        assert!(resp.nodes.len() <= MAX_NEIGHBORHOOD_NODES);
+        assert!(resp.truncated);
+        assert!(resp.nodes.iter().any(|n| n.id == "source:hub"));
     }
 
     #[test]

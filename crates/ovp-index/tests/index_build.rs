@@ -6,12 +6,12 @@
 use std::path::Path;
 
 use ovp_daily::{
-    append_daily_record, DailyRunRecord, RunReport, RunStatus as DailyStatus, DAILY_SCHEMA,
+    DAILY_SCHEMA, DailyRunRecord, RunReport, RunStatus as DailyStatus, append_daily_record,
 };
 use ovp_index::{
-    build_index, read_index, run_query, write_index, ClaimStatus, Query, QueryKind, SourceStatus,
+    ClaimStatus, Query, QueryKind, SourceStatus, build_index, read_index, run_query, write_index,
 };
-use ovp_intake::{append_intake_record, hex_sha256, IntakeAction, IntakeRecord, INTAKE_SCHEMA};
+use ovp_intake::{INTAKE_SCHEMA, IntakeAction, IntakeRecord, append_intake_record, hex_sha256};
 
 fn daily_rec(
     hash: &str,
@@ -71,7 +71,9 @@ fn write_pack(root: &Path, dir_name: &str, title: &str, cards: usize) -> String 
     std::fs::create_dir_all(&pack).unwrap();
     std::fs::write(
         pack.join("run-status.json"),
-        format!(r#"{{"source":"{title}","accepted_units":2,"cards":{cards},"json_repaired":false}}"#),
+        format!(
+            r#"{{"source":"{title}","accepted_units":2,"cards":{cards},"json_repaired":false}}"#
+        ),
     )
     .unwrap();
     std::fs::write(
@@ -138,43 +140,121 @@ fn build_fixture_vault(root: &Path) -> Fixture {
     );
     append_daily_record(
         &daily_ledger,
-        &daily_rec(&processed_sha, "50-Inbox/01-Raw/2026-06/good.md", DailyStatus::Succeeded, Some(&pack_rel), None),
+        &daily_rec(
+            &processed_sha,
+            "50-Inbox/01-Raw/2026-06/good.md",
+            DailyStatus::Succeeded,
+            Some(&pack_rel),
+            None,
+        ),
     )
     .unwrap();
 
     // FAILED ×2 (retryable) — file still sits in 01-Raw.
-    let failed_sha = place(root, "50-Inbox/01-Raw/2026-06/flaky.md", "flaky source bytes");
+    let failed_sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-06/flaky.md",
+        "flaky source bytes",
+    );
     for _ in 0..2 {
         append_daily_record(
             &daily_ledger,
-            &daily_rec(&failed_sha, "50-Inbox/01-Raw/2026-06/flaky.md", DailyStatus::Failed, None, Some("truth-layer error: 0 units")),
+            &daily_rec(
+                &failed_sha,
+                "50-Inbox/01-Raw/2026-06/flaky.md",
+                DailyStatus::Failed,
+                None,
+                Some("truth-layer error: 0 units"),
+            ),
         )
         .unwrap();
     }
 
     // BLOCKED (3 failures) — file still in 01-Raw.
-    let blocked_sha = place(root, "50-Inbox/01-Raw/2026-06/cursed.md", "cursed source bytes");
+    let blocked_sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-06/cursed.md",
+        "cursed source bytes",
+    );
     for _ in 0..3 {
         append_daily_record(
             &daily_ledger,
-            &daily_rec(&blocked_sha, "50-Inbox/01-Raw/2026-06/cursed.md", DailyStatus::Failed, None, Some("card synthesis did not parse")),
+            &daily_rec(
+                &blocked_sha,
+                "50-Inbox/01-Raw/2026-06/cursed.md",
+                DailyStatus::Failed,
+                None,
+                Some("card synthesis did not parse"),
+            ),
         )
         .unwrap();
     }
 
     // QUEUED via intake; NEEDS-CONTENT in place; DUPLICATE parked.
-    let queued_sha = place(root, "50-Inbox/01-Raw/2026-06/queued.md", "queued piece bytes");
-    append_intake_record(&intake_ledger, &intake_rec(&queued_sha, IntakeAction::Ingested, "Queued Piece", "https://e.x/q", "Clippings/Queued Piece.md", Some("50-Inbox/01-Raw/2026-06/queued.md"))).unwrap();
+    let queued_sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-06/queued.md",
+        "queued piece bytes",
+    );
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &queued_sha,
+            IntakeAction::Ingested,
+            "Queued Piece",
+            "https://e.x/q",
+            "Clippings/Queued Piece.md",
+            Some("50-Inbox/01-Raw/2026-06/queued.md"),
+        ),
+    )
+    .unwrap();
 
     let bare_sha = place(root, "50-Inbox/02-Pinboard/bare.md", "bare bookmark bytes");
-    append_intake_record(&intake_ledger, &intake_rec(&bare_sha, IntakeAction::NeedsContent, "Bare Bookmark", "https://e.x/bare", "50-Inbox/02-Pinboard/bare.md", None)).unwrap();
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &bare_sha,
+            IntakeAction::NeedsContent,
+            "Bare Bookmark",
+            "https://e.x/bare",
+            "50-Inbox/02-Pinboard/bare.md",
+            None,
+        ),
+    )
+    .unwrap();
 
-    let dup_sha = place(root, "50-Inbox/03-Processed/duplicates/2026-06/reclip.md", "duplicate bytes");
-    append_intake_record(&intake_ledger, &intake_rec(&dup_sha, IntakeAction::Duplicate, "Reclip", "https://e.x/q", "Clippings/reclip.md", Some("50-Inbox/03-Processed/duplicates/2026-06/reclip.md"))).unwrap();
+    let dup_sha = place(
+        root,
+        "50-Inbox/03-Processed/duplicates/2026-06/reclip.md",
+        "duplicate bytes",
+    );
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &dup_sha,
+            IntakeAction::Duplicate,
+            "Reclip",
+            "https://e.x/q",
+            "Clippings/reclip.md",
+            Some("50-Inbox/03-Processed/duplicates/2026-06/reclip.md"),
+        ),
+    )
+    .unwrap();
 
     // GHOST: flagged needs-content whose file no longer exists (operator fixed
     // it elsewhere) — must be dropped by the index, not shown forever.
-    append_intake_record(&intake_ledger, &intake_rec("9999ghost", IntakeAction::NeedsContent, "Ghost", "https://e.x/ghost", "Clippings/ghost.md", None)).unwrap();
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            "9999ghost",
+            IntakeAction::NeedsContent,
+            "Ghost",
+            "https://e.x/ghost",
+            "Clippings/ghost.md",
+            None,
+        ),
+    )
+    .unwrap();
 
     write_crystal_store(root);
 
@@ -183,16 +263,28 @@ fn build_fixture_vault(root: &Path) -> Fixture {
     let mut report = RunReport::new("daily-2026-06-09", "2026-06-09");
     report.reader.succeeded = 1;
     report.reader.failed = 2;
-    let mut moved = daily_rec(&processed_sha, "50-Inbox/01-Raw/2026-06/good.md", DailyStatus::Succeeded, Some(&pack_rel), None);
+    let mut moved = daily_rec(
+        &processed_sha,
+        "50-Inbox/01-Raw/2026-06/good.md",
+        DailyStatus::Succeeded,
+        Some(&pack_rel),
+        None,
+    );
     moved.moved_to = Some("50-Inbox/03-Processed/2026-06/good.md".into());
     report.records = vec![moved];
     ovp_daily::write_run_report(root, &report).unwrap();
 
     // A manually-dropped raw file no ledger knows.
-    place(root, "50-Inbox/01-Raw/2026-06/manual.md",
-        "---\ntitle: Manual Drop\nsource: https://e.x/manual\n---\nbody text here\n");
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/manual.md",
+        "---\ntitle: Manual Drop\nsource: https://e.x/manual\n---\nbody text here\n",
+    );
 
-    Fixture { processed_sha, blocked_sha }
+    Fixture {
+        processed_sha,
+        blocked_sha,
+    }
 }
 
 #[test]
@@ -211,7 +303,10 @@ fn builds_folds_cleans_and_queries_the_full_model() {
     assert_eq!(model.totals.queued, 2, "ingested + manual drop");
     assert_eq!(model.totals.needs_content, 1, "ghost needs_content dropped");
     assert_eq!(model.totals.duplicates, 1);
-    assert!(!model.sources.iter().any(|s| s.sha256 == "9999ghost"), "ghost row cleaned");
+    assert!(
+        !model.sources.iter().any(|s| s.sha256 == "9999ghost"),
+        "ghost row cleaned"
+    );
     assert_eq!(model.totals.packs, 1);
     assert_eq!(model.totals.claims_durable, 1);
     assert_eq!(model.totals.claims_caveated, 1);
@@ -219,24 +314,48 @@ fn builds_folds_cleans_and_queries_the_full_model() {
 
     // Processed row: located at its post-move path (from the run report),
     // titled from the pack.
-    let processed = model.sources.iter().find(|s| s.sha256 == fx.processed_sha).unwrap();
+    let processed = model
+        .sources
+        .iter()
+        .find(|s| s.sha256 == fx.processed_sha)
+        .unwrap();
     assert_eq!(processed.status, SourceStatus::Processed);
     assert_eq!(processed.title.as_deref(), Some("Good Article"));
-    assert_eq!(processed.rel_path.as_deref(), Some("50-Inbox/03-Processed/2026-06/good.md"));
+    assert_eq!(
+        processed.rel_path.as_deref(),
+        Some("50-Inbox/03-Processed/2026-06/good.md")
+    );
     assert!(processed.pack_dir.is_some());
 
     // Blocked row carries the fail count + last reason.
-    let blocked = model.sources.iter().find(|s| s.sha256 == fx.blocked_sha).unwrap();
+    let blocked = model
+        .sources
+        .iter()
+        .find(|s| s.sha256 == fx.blocked_sha)
+        .unwrap();
     assert_eq!(blocked.status, SourceStatus::Blocked);
     assert_eq!(blocked.fail_count, 3);
-    assert!(blocked.last_reason.as_deref().unwrap().contains("card synthesis"));
+    assert!(
+        blocked
+            .last_reason
+            .as_deref()
+            .unwrap()
+            .contains("card synthesis")
+    );
 
     // Manual drop discovered by the raw scan.
-    let manual = model.sources.iter().find(|s| s.title.as_deref() == Some("Manual Drop")).unwrap();
+    let manual = model
+        .sources
+        .iter()
+        .find(|s| s.title.as_deref() == Some("Manual Drop"))
+        .unwrap();
     assert_eq!(manual.status, SourceStatus::Queued);
 
     // Pack row links back to its source.
-    assert_eq!(model.packs[0].source_sha256.as_deref(), Some(fx.processed_sha.as_str()));
+    assert_eq!(
+        model.packs[0].source_sha256.as_deref(),
+        Some(fx.processed_sha.as_str())
+    );
     assert_eq!(model.packs[0].card_titles, vec!["Chunks are neutral"]);
 
     // Claims from ledger + review.
@@ -248,20 +367,38 @@ fn builds_folds_cleans_and_queries_the_full_model() {
     assert_eq!(caveated.strength.as_deref(), Some("opinion_as_fact"));
 
     // Search: term over claims; status filter over sources.
-    let hits = run_query(&model, &Query { term: Some("moat".into()), ..Default::default() });
+    let hits = run_query(
+        &model,
+        &Query {
+            term: Some("moat".into()),
+            ..Default::default()
+        },
+    );
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].kind, "claim");
 
-    let hits = run_query(&model, &Query {
-        kind: Some(QueryKind::Sources),
-        status: Some("blocked".into()),
-        ..Default::default()
-    });
+    let hits = run_query(
+        &model,
+        &Query {
+            kind: Some(QueryKind::Sources),
+            status: Some("blocked".into()),
+            ..Default::default()
+        },
+    );
     assert_eq!(hits.len(), 1);
     assert!(hits[0].line.contains("fails=3"));
 
-    let hits = run_query(&model, &Query { term: Some("chunks are neutral".into()), ..Default::default() });
-    assert!(hits.iter().any(|h| h.kind == "pack"), "card titles searchable: {hits:?}");
+    let hits = run_query(
+        &model,
+        &Query {
+            term: Some("chunks are neutral".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        hits.iter().any(|h| h.kind == "pack"),
+        "card titles searchable: {hits:?}"
+    );
 }
 
 #[test]
@@ -272,14 +409,44 @@ fn duplicate_record_never_masks_a_queued_source() {
 
     // Canonical copy ingested and still queued in 01-Raw…
     let sha = place(root, "50-Inbox/01-Raw/2026-06/piece.md", "the piece bytes");
-    append_intake_record(&intake_ledger, &intake_rec(&sha, IntakeAction::Ingested, "Piece", "https://e.x/p", "Clippings/Piece.md", Some("50-Inbox/01-Raw/2026-06/piece.md"))).unwrap();
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &sha,
+            IntakeAction::Ingested,
+            "Piece",
+            "https://e.x/p",
+            "Clippings/Piece.md",
+            Some("50-Inbox/01-Raw/2026-06/piece.md"),
+        ),
+    )
+    .unwrap();
     // …then an identical re-clip gets parked as a duplicate.
-    place(root, "50-Inbox/03-Processed/duplicates/2026-06/piece.md", "the piece bytes");
-    append_intake_record(&intake_ledger, &intake_rec(&sha, IntakeAction::Duplicate, "Piece", "https://e.x/p", "Clippings/Piece again.md", Some("50-Inbox/03-Processed/duplicates/2026-06/piece.md"))).unwrap();
+    place(
+        root,
+        "50-Inbox/03-Processed/duplicates/2026-06/piece.md",
+        "the piece bytes",
+    );
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &sha,
+            IntakeAction::Duplicate,
+            "Piece",
+            "https://e.x/p",
+            "Clippings/Piece again.md",
+            Some("50-Inbox/03-Processed/duplicates/2026-06/piece.md"),
+        ),
+    )
+    .unwrap();
 
     let model = build_index(root, "2026-06-09", None).unwrap();
     let row = model.sources.iter().find(|s| s.sha256 == sha).unwrap();
-    assert_eq!(row.status, SourceStatus::Queued, "queued copy must win over the parked dup");
+    assert_eq!(
+        row.status,
+        SourceStatus::Queued,
+        "queued copy must win over the parked dup"
+    );
     assert_eq!(model.totals.queued, 1);
     assert_eq!(model.totals.duplicates, 0);
 }

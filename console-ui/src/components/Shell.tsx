@@ -1,12 +1,18 @@
 /** OVP2 portal shell — DS top-nav shell (design §6 ext.1): centered column
  * max-width 1180, rounded outer shell on --bg, brand "ovp2." with accent
  * period, text-link nav, status dot + theme + language toggles on the right.
- * Single-locale UI — no inline bilingual pairs (design §0.6). */
+ * Single-locale UI — no inline bilingual pairs (design §0.6).
+ *
+ * B3: hosts the global search overlay — ⌘K / Ctrl+K anywhere (and the ⌕
+ * button in the top bar) open the same SearchOmnibox the /search page
+ * renders (design §3.4). */
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { healthLevel } from '../lib/derive';
 import { useModel } from '../model';
 import { useTheme } from '../theme';
+import SearchOmnibox from './SearchOmnibox';
 
 const NAV = [
   { to: '/', key: 'nav.today', end: true },
@@ -81,6 +87,29 @@ function LangToggle() {
 
 export default function Shell() {
   const { t } = useI18n();
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        // Never steal ⌘K from an active editing context (inputs, textareas,
+        // selects, contenteditable) — the browser/user owns it there.
+        const el = e.target as HTMLElement | null;
+        if (
+          el &&
+          (el.isContentEditable ||
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+        ) {
+          return;
+        }
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div className="portal">
       <div className="page">
@@ -101,6 +130,15 @@ export default function Shell() {
                 </NavLink>
               ))}
               <span className="nav-right">
+                <button
+                  type="button"
+                  className="omni-open"
+                  onClick={() => setSearchOpen(true)}
+                  aria-label={t('search.open')}
+                  title={t('search.open')}
+                >
+                  ⌕ <span className="mono tiny">⌘K</span>
+                </button>
                 <StatusLight />
                 <ThemeToggle />
                 <LangToggle />
@@ -112,6 +150,25 @@ export default function Shell() {
           </div>
         </div>
       </div>
+      {searchOpen && (
+        <div
+          className="omni-backdrop"
+          onClick={() => setSearchOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="omni-panel"
+            role="dialog"
+            aria-label={t('search.title')}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SearchOmnibox
+              variant="overlay"
+              onClose={() => setSearchOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

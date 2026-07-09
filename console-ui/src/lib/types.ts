@@ -2,7 +2,7 @@
 
 export type NodeType = 'claim' | 'unit' | 'source';
 export type EdgeType = 'cites' | 'extracted_from' | 'related';
-export type GraphMode = 'overview' | 'neighborhood' | 'search';
+export type GraphMode = 'overview' | 'neighborhood' | 'search' | 'theme';
 
 export interface GraphNode {
   id: string;
@@ -19,6 +19,9 @@ export interface GraphNode {
   importance: number;
   /** Provenance score 0..1 (claims only). */
   provenance?: number;
+  /** Claims only: index claim_id for portal links — the node `id` carries
+   * the ledger claim_key, which can differ. */
+  claim_id?: string;
 }
 
 export interface GraphEdge {
@@ -76,12 +79,15 @@ export interface FlowData {
   flows: FlowLink[];
 }
 
-/** /api/find hit — a display line, not a structured record. */
+/** /api/find and /api/search hit — a display line plus a kind-specific
+ * stable id for entity links (source → sha256, pack → pack_dir,
+ * claim → claim_id, run → run_id). */
 export interface FindHit {
   kind: string;
   status: string;
   line: string;
   path?: string;
+  id?: string;
 }
 
 export interface ThemeCount {

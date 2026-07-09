@@ -13,17 +13,17 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ovp_daily::{read_daily_ledger, RunReport, RunStatus, MAX_FAILURES_BEFORE_BLOCKED};
-use ovp_domain::crystal::{fold_ledger, CrystalStatus, ReviewEntry, StoreEvent};
-use ovp_domain::units::read_source_from_path;
+use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
+use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
-use ovp_intake::{read_intake_ledger, IntakeAction};
+use ovp_intake::{IntakeAction, read_intake_ledger};
 use serde::Deserialize;
 
 use crate::model::{
-    BlockedSource, ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, RunRow, RunStats,
-    SourceRow, SourceStatus, Totals, INDEX_SCHEMA,
+    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, RunRow,
+    RunStats, SourceRow, SourceStatus, Totals,
 };
 
 /// Build the full read model. `date`/`run_id` only stamp the header.
@@ -56,8 +56,14 @@ pub fn build_index(
         unparseable: count(&sources, SourceStatus::Unparseable),
         duplicates: count(&sources, SourceStatus::Duplicate),
         packs: packs.len(),
-        claims_durable: claims.iter().filter(|c| c.status == ClaimStatus::Durable).count(),
-        claims_caveated: claims.iter().filter(|c| c.status == ClaimStatus::Caveated).count(),
+        claims_durable: claims
+            .iter()
+            .filter(|c| c.status == ClaimStatus::Durable)
+            .count(),
+        claims_caveated: claims
+            .iter()
+            .filter(|c| c.status == ClaimStatus::Caveated)
+            .count(),
         runs: runs.len(),
     };
 
@@ -85,8 +91,8 @@ pub fn write_index(vault_root: &Path, model: &IndexModel) -> Result<String, Stri
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
-    let body = serde_json::to_string_pretty(model)
-        .map_err(|e| format!("serializing index: {e}"))?;
+    let body =
+        serde_json::to_string_pretty(model).map_err(|e| format!("serializing index: {e}"))?;
     std::fs::write(&target, format!("{body}\n"))
         .map_err(|e| format!("writing {}: {e}", target.display()))?;
     Ok(rel_to(vault_root, &target))
@@ -133,40 +139,47 @@ fn build_sources(
         // COPY was parked — it must not mask the canonical copy still queued
         // in 01-Raw.
         if status == SourceStatus::Duplicate
-            && rows.get(&rec.sha256).is_some_and(|r| r.status == SourceStatus::Queued)
+            && rows
+                .get(&rec.sha256)
+                .is_some_and(|r| r.status == SourceStatus::Queued)
         {
             continue;
         }
-        rows.insert(rec.sha256.clone(), SourceRow {
-            sha256: rec.sha256.clone(),
-            status,
-            title: rec.title.clone(),
-            url: rec.url.clone(),
-            rel_path: rec.to.clone().or_else(|| Some(rec.from.clone())),
-            date: Some(rec.date.clone()),
-            last_run_id: Some(rec.run_id.clone()),
-            pack_dir: None,
-            fail_count: 0,
-            last_reason: rec.note.clone(),
-        });
+        rows.insert(
+            rec.sha256.clone(),
+            SourceRow {
+                sha256: rec.sha256.clone(),
+                status,
+                title: rec.title.clone(),
+                url: rec.url.clone(),
+                rel_path: rec.to.clone().or_else(|| Some(rec.from.clone())),
+                date: Some(rec.date.clone()),
+                last_run_id: Some(rec.run_id.clone()),
+                pack_dir: None,
+                fail_count: 0,
+                last_reason: rec.note.clone(),
+            },
+        );
     }
 
     // Daily attempts override intake state (later lifecycle stage). Records
     // are in append order, so the last one per hash wins.
     let mut fail_counts: HashMap<String, usize> = HashMap::new();
     for rec in &daily {
-        let entry = rows.entry(rec.source_sha256.clone()).or_insert_with(|| SourceRow {
-            sha256: rec.source_sha256.clone(),
-            status: SourceStatus::Queued,
-            title: None,
-            url: None,
-            rel_path: None,
-            date: None,
-            last_run_id: None,
-            pack_dir: None,
-            fail_count: 0,
-            last_reason: None,
-        });
+        let entry = rows
+            .entry(rec.source_sha256.clone())
+            .or_insert_with(|| SourceRow {
+                sha256: rec.source_sha256.clone(),
+                status: SourceStatus::Queued,
+                title: None,
+                url: None,
+                rel_path: None,
+                date: None,
+                last_run_id: None,
+                pack_dir: None,
+                fail_count: 0,
+                last_reason: None,
+            });
         entry.date = Some(rec.date.clone());
         entry.last_run_id = Some(rec.run_id.clone());
         match rec.status {
@@ -247,7 +260,9 @@ fn build_sources(
             if row.status == SourceStatus::Processed {
                 return true;
             }
-            let Some(rel) = row.rel_path.as_deref() else { return true };
+            let Some(rel) = row.rel_path.as_deref() else {
+                return true;
+            };
             match std::fs::read(vault_root.join(rel)) {
                 Ok(bytes) => hex_sha256(&bytes) == row.sha256,
                 Err(_) => false,
@@ -255,8 +270,16 @@ fn build_sources(
         })
         .collect();
     out.sort_by(|a, b| {
-        (a.status, a.title.as_deref().unwrap_or(""), a.sha256.as_str())
-            .cmp(&(b.status, b.title.as_deref().unwrap_or(""), b.sha256.as_str()))
+        (
+            a.status,
+            a.title.as_deref().unwrap_or(""),
+            a.sha256.as_str(),
+        )
+            .cmp(&(
+                b.status,
+                b.title.as_deref().unwrap_or(""),
+                b.sha256.as_str(),
+            ))
     });
     Ok(out)
 }
@@ -265,14 +288,19 @@ fn build_sources(
 /// files (`<run_id> -2.json`) sort AFTER their base by (date, stem, seq) —
 /// plain filename order would put `" -2"` before `".json"` and corrupt
 /// "latest run".
-fn read_reports(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<(String, RunReport)>, String> {
+fn read_reports(
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<Vec<(String, RunReport)>, String> {
     let dir = vault_root.join(layout.reports_dir());
     let mut reports = Vec::new();
     if !dir.is_dir() {
         return Ok(reports);
     }
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))? {
-        let path = entry.map_err(|e| format!("reading {}: {e}", dir.display()))?.path();
+        let path = entry
+            .map_err(|e| format!("reading {}: {e}", dir.display()))?
+            .path();
         if path.extension().is_none_or(|e| e != "json") {
             continue;
         }
@@ -283,7 +311,11 @@ fn read_reports(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<(String, 
         reports.push((rel_to(vault_root, &path), report));
     }
     reports.sort_by_key(|(file, report)| {
-        let stem = file.rsplit('/').next().unwrap_or(file).trim_end_matches(".json");
+        let stem = file
+            .rsplit('/')
+            .next()
+            .unwrap_or(file)
+            .trim_end_matches(".json");
         let (base, seq) = match stem.rsplit_once(" -") {
             Some((b, n)) if n.bytes().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
                 (b.to_string(), n.parse::<u32>().unwrap_or(0))
@@ -392,13 +424,20 @@ fn build_packs(
             .unwrap_or_default();
 
         let pack_rel = rel_to(vault_root, &dir);
-        let dir_name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir_name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let date = dir_name
             .get(..10)
             .filter(|d| d.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
             .map(String::from);
         packs.push(PackRow {
-            title: if status.source.is_empty() { dir_name } else { status.source },
+            title: if status.source.is_empty() {
+                dir_name
+            } else {
+                status.source
+            },
             date,
             units: status.accepted_units,
             cards: status.cards,
@@ -413,8 +452,7 @@ fn build_packs(
 
 /// Processed sources carry no title in the daily ledger; the pack knows it.
 fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
-    let by_pack: HashMap<&str, &PackRow> =
-        packs.iter().map(|p| (p.pack_dir.as_str(), p)).collect();
+    let by_pack: HashMap<&str, &PackRow> = packs.iter().map(|p| (p.pack_dir.as_str(), p)).collect();
     for s in sources.iter_mut() {
         if s.title.is_none() {
             if let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
@@ -477,13 +515,17 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
         }
     }
 
-    claims.sort_by(|a, b| (a.claim_id.as_str(), a.claim.as_str()).cmp(&(b.claim_id.as_str(), b.claim.as_str())));
+    claims.sort_by(|a, b| {
+        (a.claim_id.as_str(), a.claim.as_str()).cmp(&(b.claim_id.as_str(), b.claim.as_str()))
+    });
     Ok(claims)
 }
 
 /// Stringify a serde snake_case enum without hand-maintaining a mapping.
 fn enum_str<T: serde::Serialize>(v: &T) -> Option<String> {
-    serde_json::to_value(v).ok().and_then(|j| j.as_str().map(String::from))
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|j| j.as_str().map(String::from))
 }
 
 fn collect_markdown(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
@@ -494,8 +536,7 @@ fn collect_markdown(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
 }
 
 fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("reading {}: {e}", dir.display()))?;
         let path = entry.path();
@@ -524,7 +565,10 @@ fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsSt
         })
         .collect();
 
-    let queue_depth = sources.iter().filter(|s| s.status == SourceStatus::Queued).count();
+    let queue_depth = sources
+        .iter()
+        .filter(|s| s.status == SourceStatus::Queued)
+        .count();
 
     let run_stats = compute_run_stats(runs, today);
 
@@ -623,7 +667,16 @@ fn from_days(total: u32) -> String {
     let mdays = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut m = 0;
     for (i, &md) in mdays.iter().enumerate() {

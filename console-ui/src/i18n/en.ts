@@ -114,19 +114,64 @@ export const en = {
   'graph.loading': 'Loading graph…',
   'graph.error': 'Could not load the graph.',
   'graph.empty': 'No neighborhood yet — nothing cites this source.',
-  'graph.b3': 'Global and theme graph scopes land in B3.',
+  'graph.emptyGlobal': 'No claims in the crystal store yet — run crystallization first.',
+  'graph.emptyTheme': 'No claims carry this theme yet.',
   'graph.fullscreen': 'EXPAND',
   'graph.exitFullscreen': 'CLOSE',
-  'graph.truncated': 'Neighborhood truncated — showing the strongest claims.',
+  'graph.truncated': 'Truncated — showing the strongest claims.',
   'graph.kindClaim': 'claim',
   'graph.kindSource': 'source',
   'graph.kindUnit': 'unit',
   'graph.openHint': 'Double-click to open.',
+  'graph.noPage': 'Legacy source — no detail page in this vault.',
+
+  // knowledge home
+  'knowledge.title': 'Knowledge',
+  'knowledge.help':
+    'What the knowledge base currently believes, grouped by theme. Durable claims passed every evidence gate; caveated claims carry a known weakness and await review.',
+  'knowledge.helpLayers':
+    'Three layers ground every claim: the source (the original markdown), its memory (cards and quoted units with line anchors), and the crystal (cross-source claims citing those units). Click through any claim to verify the chain.',
+  'knowledge.viewList': 'List',
+  'knowledge.viewGraph': 'Graph',
+  'knowledge.empty':
+    'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
+  'knowledge.untitledTheme': '(no theme)',
+  'knowledge.claimCount': '{n} claims',
+  'knowledge.ratioLine': 'durable {durable} · caveated {caveated}',
+  'knowledge.graphCaption':
+    'All claims, colored by community. Click a node for a summary, double-click to open its theme.',
+  'knowledge.unknownClaim':
+    'No active claim "{id}" — it may have been superseded or retracted.',
+
+  // theme detail
+  'theme.counts': 'durable {durable} · caveated {caveated}',
+  'theme.citedSources': 'Sources:',
+  'theme.legacySource': 'Legacy source — no detail page in this vault.',
+  'theme.strength': 'strength',
+  'theme.empty': 'No active claims carry this theme.',
+  'theme.backToKnowledge': 'All themes',
+  'theme.graph': 'Theme graph',
+  'theme.graphCaption':
+    'This theme’s claims and the sources they cite. Click a node for a summary, double-click to open.',
+
+  // search page + ⌘K overlay
+  'search.title': 'Search',
+  'search.help':
+    'One box across everything: sources, reader packs, crystal claims and themes. Results link straight to the entity — press ⌘K (Ctrl+K) anywhere to search without leaving the page.',
+  'search.placeholder': 'Search sources, claims, themes…',
+  'search.keys': '↑↓ navigate · Enter open · Esc close',
+  'search.error': 'Search failed — is the server running against a vault?',
+  'search.empty': 'No matches. Try a shorter term — search is substring-based.',
+  'search.noPage': 'No detail page for this entry in this vault.',
+  'search.open': 'Search (⌘K)',
+  'search.group.claim': 'Claims',
+  'search.group.source': 'Sources',
+  'search.group.pack': 'Reader packs',
+  'search.group.theme': 'Themes',
 
   // placeholders
-  'placeholder.search': 'Search across sources, cards, units, claims and themes lands in B3.',
-  'placeholder.knowledge': 'Theme walls, claim detail and the scoped knowledge graph land in B3.',
-  'placeholder.knowledgeInterim': 'Interim graph view',
   'placeholder.ask': 'Cited answers over your knowledge base land in B4.',
   'placeholder.system': 'Runs, flow, doctor and settings land in B5.',
+  'placeholder.systemFlow': 'Legacy flow view',
+  'placeholder.systemMonitor': 'Legacy monitor view',
 } as const;
