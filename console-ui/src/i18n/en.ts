@@ -201,7 +201,12 @@ export const en = {
   'ask.example3': 'What is the strongest evidence about retrieval quality?',
   'ask.errNotConfigured':
     'The server has no LLM configured — restart `ovp2 serve` with ANTHROPIC_API_KEY set (build with --features anthropic).',
-  'ask.errTimeout': 'The answer timed out — try again, or ask a narrower question.',
+  'ask.errIndexUnavailable':
+    'The index is not available — run `ovp2 index` against this vault, and check the server was started with the right --vault-root.',
+  'ask.errBusy':
+    'Ask is busy — the in-flight answer limit is reached. Wait for the current answers and retry shortly.',
+  'ask.errTimeout':
+    'No answer within the time limit. The request was not cancelled — if the model finishes, the saved transcript still appears in History.',
   'ask.errGeneric': 'Ask failed — is the server running against a vault?',
 
   // system page (B5)

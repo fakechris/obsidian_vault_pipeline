@@ -17,11 +17,21 @@ pub struct ServeArgs {
 
 pub fn run(args: ServeArgs) -> Result<(), CliError> {
     let ask_client = ask_client_factory(&args.vault_root);
-    if ask_client.is_none() {
-        eprintln!(
+    match &ask_client {
+        None => eprintln!(
             "  ask:     NOT CONFIGURED — POST /api/ask answers 503. Build with \
              `--features anthropic` and set ANTHROPIC_API_KEY to enable."
-        );
+        ),
+        // Fail loud at startup, not on the first ask: with a key present but
+        // another live setting invalid (ANTHROPIC_BASE_URL, OVP_LLM_MAX_TOKENS,
+        // OVP_LLM_TIMEOUT_SECS…) every request would 502 with a generic error
+        // (codex review P2). Building one client validates the shared live
+        // config the same way `ovp2 ask --client live` does.
+        Some(factory) => {
+            factory().map_err(|e| {
+                CliError::Io(format!("ask client configuration invalid: {e}"))
+            })?;
+        }
     }
     let config = ServeConfig {
         vault_root: args.vault_root,
@@ -29,6 +39,11 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         port: args.port,
         viz_dir: args.viz_dir,
         ask_client,
+        // Server defaults: the ask guard derives from OVP_LLM_TIMEOUT_SECS
+        // (the same env the live client reads), the in-flight cap from
+        // DEFAULT_MAX_CONCURRENT_ASKS.
+        ask_timeout: None,
+        max_concurrent_asks: None,
     };
     run_server(config).map_err(CliError::Io)
 }

@@ -193,7 +193,11 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.example3': '关于检索质量，最有力的证据是什么？',
   'ask.errNotConfigured':
     '服务端未配置 LLM——请设置 ANTHROPIC_API_KEY 并重启 `ovp2 serve`（构建时加 --features anthropic）。',
-  'ask.errTimeout': '回答超时——请重试，或换一个更具体的问题。',
+  'ask.errIndexUnavailable':
+    '索引不可用——请对该 vault 运行 `ovp2 index`，并确认服务启动时的 --vault-root 指向正确。',
+  'ask.errBusy': '对话繁忙——同时进行的回答已达上限，请稍候再试。',
+  'ask.errTimeout':
+    '在时限内没有等到回答。请求并未被取消——如果模型最终完成，保存的会话仍会出现在历史中。',
   'ask.errGeneric': '提问失败——服务是否已连接 vault？',
 
   // system page (B5)
