@@ -5,14 +5,15 @@
 //! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
 //! legacy generated console pages by exact filename, and JSON API endpoints
 //! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
-//! `/api/source/:sha`, `/api/flow`).
+//! `/api/source/:sha`, `/api/flow`, `POST /api/ask`, `/api/chats`).
 //! Uses `tiny_http` to avoid any async runtime dependency.
 
 mod graph;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
+use std::time::Duration;
 
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
@@ -21,12 +22,70 @@ use ovp_index::{
     EvidenceModel, IndexModel, Query, QueryKind, read_evidence, read_index, run_query,
 };
 use ovp_intake::read_jsonl;
+use ovp_llm::ModelClient;
+use ovp_memory::ask::{AskArgs, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence};
+use ovp_memory::verify::{citation_key, citations_in_order};
 use tiny_http::{Header, Method, Response, Server};
 
 /// Cap for source markdown shipped in the /api/source payload — beyond this
 /// the response truncates with an explicit flag instead of shipping megabytes
 /// of JSON (same limit the v1 server-rendered page used).
 pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
+
+/// Cap for POST request bodies (`/api/ask` questions are short; anything
+/// bigger is a mistake, not a question).
+pub const MAX_POST_BODY_BYTES: usize = 64 * 1024;
+
+/// Default LLM transport timeout. Restates
+/// `ovp_llm::anthropic` `DEFAULT_TIMEOUT_SECS` (feature-gated behind
+/// `anthropic` there, so not importable from this transport-free crate);
+/// `OVP_LLM_TIMEOUT_SECS` supersedes both, exactly like the client itself.
+const DEFAULT_TRANSPORT_TIMEOUT_SECS: u64 = 180;
+
+/// Margin the /api/ask wall-clock guard adds ON TOP of the transport
+/// timeout — retrieval, citation shaping and the chat write around the LLM
+/// call. A guard shorter than the transport timeout would 504 the portal
+/// while the billable call keeps running.
+const ASK_GUARD_MARGIN_SECS: u64 = 30;
+
+/// Guard when the operator DISABLED the transport timeout
+/// (`OVP_LLM_TIMEOUT_SECS=0`): the guard is then the only bound on how
+/// long a request handle stays open.
+const ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS: u64 = 600;
+
+/// Cap on concurrently running ask pipelines. Every in-flight ask is a
+/// paid LLM call holding a worker thread; a stuck provider holds its slot
+/// until the transport gives up. Saturation answers 429 immediately — no
+/// queue. Override via [`ServeConfig::max_concurrent_asks`].
+pub const DEFAULT_MAX_CONCURRENT_ASKS: usize = 2;
+
+/// The /api/ask wall-clock guard, derived from the SAME `OVP_LLM_TIMEOUT_SECS`
+/// the live client reads, plus [`ASK_GUARD_MARGIN_SECS`]. NOTE: the guard
+/// firing does NOT cancel the provider call — the worker finishes (and
+/// saves the chat) in the background; the 504 body says so.
+pub fn ask_guard_from_env() -> Duration {
+    ask_guard(|k| std::env::var(k).ok())
+}
+
+/// Testable core of [`ask_guard_from_env`] (same lookup-injection pattern
+/// as the CLI's `LiveClientConfig::from_lookup`). Unparseable values fall
+/// back to the default rather than failing — the CLIENT validates the var
+/// fail-loud at startup; the guard just needs a sane bound.
+fn ask_guard(lookup: impl Fn(&str) -> Option<String>) -> Duration {
+    let transport = lookup("OVP_LLM_TIMEOUT_SECS").and_then(|v| v.trim().parse::<u64>().ok());
+    let secs = match transport {
+        Some(0) => return Duration::from_secs(ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS),
+        Some(n) => n,
+        None => DEFAULT_TRANSPORT_TIMEOUT_SECS,
+    };
+    Duration::from_secs(secs + ASK_GUARD_MARGIN_SECS)
+}
+
+/// Builds the LLM client for `POST /api/ask` on demand. Injected by the CLI,
+/// which owns the feature-gated live transport and the key check — the
+/// server itself stays transport-free. `None` = ask answers 503.
+pub type AskClientFactory =
+    Arc<dyn Fn() -> Result<Box<dyn ModelClient>, String> + Send + Sync>;
 
 pub struct ServeConfig {
     pub vault_root: PathBuf,
@@ -37,6 +96,64 @@ pub struct ServeConfig {
     /// served from here — so a dev checkout can serve ANY vault without
     /// copying the build in.
     pub viz_dir: Option<PathBuf>,
+    /// LLM client factory for `POST /api/ask` — `None` when no live LLM is
+    /// configured (missing key / feature); ask then answers 503.
+    pub ask_client: Option<AskClientFactory>,
+    /// Override the /api/ask wall-clock guard (tests). `None` derives it
+    /// from the transport timeout env — see [`ask_guard_from_env`].
+    pub ask_timeout: Option<Duration>,
+    /// Override the in-flight ask cap (tests). `None` =
+    /// [`DEFAULT_MAX_CONCURRENT_ASKS`].
+    pub max_concurrent_asks: Option<usize>,
+}
+
+/// Counting semaphore for in-flight asks — no queue, `try_acquire` only.
+/// The slot travels INTO the pipeline thread and releases on drop, so an
+/// ask that outlived its 504 guard still counts against the cap until the
+/// provider call actually returns.
+struct AskSlots {
+    active: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+impl AskSlots {
+    fn new(max: usize) -> Arc<Self> {
+        Arc::new(Self {
+            active: std::sync::atomic::AtomicUsize::new(0),
+            max,
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<AskSlot> {
+        use std::sync::atomic::Ordering;
+        let mut current = self.active.load(Ordering::Relaxed);
+        loop {
+            if current >= self.max {
+                return None;
+            }
+            match self.active.compare_exchange(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(AskSlot(Arc::clone(self))),
+                Err(now) => current = now,
+            }
+        }
+    }
+}
+
+/// RAII slot — dropping it (pipeline done, success or panic-unwind) frees
+/// the concurrency unit.
+struct AskSlot(Arc<AskSlots>);
+
+impl Drop for AskSlot {
+    fn drop(&mut self) {
+        self.0
+            .active
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
@@ -56,6 +173,12 @@ struct AppState {
     /// like the index model, refreshed together on /api/refresh.
     evidence: RwLock<EvidenceCache>,
     viz_dir: Option<PathBuf>,
+    ask_client: Option<AskClientFactory>,
+    /// The /api/ask wall-clock guard — [`ask_guard_from_env`] unless
+    /// overridden via [`ServeConfig::ask_timeout`].
+    ask_timeout: Duration,
+    /// In-flight ask cap — see [`AskSlots`].
+    ask_slots: Arc<AskSlots>,
 }
 
 impl AppState {
@@ -117,6 +240,13 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         model: RwLock::new(None),
         evidence: RwLock::new(EvidenceCache::Unloaded),
         viz_dir: config.viz_dir,
+        ask_client: config.ask_client,
+        ask_timeout: config.ask_timeout.unwrap_or_else(ask_guard_from_env),
+        ask_slots: AskSlots::new(
+            config
+                .max_concurrent_asks
+                .unwrap_or(DEFAULT_MAX_CONCURRENT_ASKS),
+        ),
     });
 
     // Pre-load model
@@ -139,28 +269,89 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         }
     }
 
-    for request in server.incoming_requests() {
-        let path = request.url().to_string();
-        let method = request.method().clone();
-        let resp = dispatch(&state, method, &path);
-        let _ = request.respond(resp);
-    }
+    serve_loop(&server, &state);
 
     Ok(())
+}
+
+/// The accept loop, extracted from `run_server` so tests can drive it on an
+/// ephemeral port. `POST /api/ask` is the one long-running route (it makes
+/// an LLM call): the WHOLE request moves to a detached worker thread
+/// (`tiny_http::Request` is Send) which reads the body, runs the pipeline
+/// (with its own wall-clock guard) and responds itself — the loop continues
+/// immediately, so every other request stays snappy while an ask is in
+/// flight.
+fn serve_loop(server: &Server, state: &Arc<AppState>) {
+    for mut request in server.incoming_requests() {
+        let path = request.url().to_string();
+        let method = request.method().clone();
+        if method == Method::Post && path.split('?').next().unwrap_or(&path) == "/api/ask" {
+            // Bounded admission BEFORE any body bytes are read: a client
+            // that sends headers with a nonzero Content-Length and then
+            // withholds the body would otherwise pin an unbounded number
+            // of reader threads despite the ask cap (codex review P2).
+            // Saturation answers 429 inline — nothing spawned, nothing read.
+            let slot = match admit_ask_slot(state) {
+                Ok(slot) => slot,
+                Err(resp) => {
+                    let _ = request.respond(resp);
+                    continue;
+                }
+            };
+            let state = Arc::clone(state);
+            std::thread::spawn(move || {
+                let headers = AskHeaders::of(&request);
+                let body = read_post_body(&mut request);
+                let resp = handle_ask(&state, &headers, &body, slot);
+                let _ = request.respond(resp);
+            });
+            continue;
+        }
+        let body = if method == Method::Post {
+            read_post_body(&mut request)
+        } else {
+            String::new()
+        };
+        let resp = dispatch(state, method, &path, &body);
+        let _ = request.respond(resp);
+    }
+}
+
+/// Read a POST body up to one byte past [`MAX_POST_BODY_BYTES`] — the
+/// handler rejects oversize bodies with a 400 instead of parsing a silent
+/// truncation. Read/encoding errors yield an unparseable body (→ 400 too).
+fn read_post_body(request: &mut tiny_http::Request) -> String {
+    use std::io::Read;
+    let mut body = String::new();
+    let limit = (MAX_POST_BODY_BYTES + 1) as u64;
+    let _ = request.as_reader().take(limit).read_to_string(&mut body);
+    body
 }
 
 /// Route one request. Extracted from the accept loop so routing is unit
 /// testable. Matching runs on the path WITHOUT the query string (so exact
 /// routes like `/api/model?x=1` still hit their handler); handlers get the
-/// full url and parse their own params. Anything under `/api/` that matches
-/// no route is a JSON 404 — it must never fall through to the SPA shell.
-fn dispatch(state: &AppState, method: Method, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+/// full url and parse their own params. `body` is only populated for POST.
+/// `POST /api/ask` never reaches here — `serve_loop` hands it to a detached
+/// worker before dispatch so the accept loop can't block on an LLM call.
+/// Anything under `/api/` that matches no route is a JSON 404 — it must
+/// never fall through to the SPA shell.
+fn dispatch(
+    state: &AppState,
+    method: Method,
+    url: &str,
+    // POST bodies are consumed pre-dispatch today (ask is the only POST
+    // route); the parameter stays so a future body-taking route slots in.
+    _body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = url.split('?').next().unwrap_or(url);
     match (method, path) {
         (Method::Get, "/api/refresh") => {
             state.refresh_model();
             json_response(200, r#"{"ok":true}"#)
         }
+        (Method::Get, "/api/chats") => handle_chats_list(state),
+        (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
         (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
         (Method::Get, p) if p.starts_with("/api/search") => handle_search(state, url),
         (Method::Get, "/api/model") => handle_model(state),
@@ -633,6 +824,360 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(200, &body.to_string())
 }
 
+/// The request headers `POST /api/ask` validates — the endpoint triggers
+/// paid LLM calls, so it gets cross-site hardening (see `handle_ask`).
+struct AskHeaders {
+    content_type: Option<String>,
+    origin: Option<String>,
+}
+
+impl AskHeaders {
+    fn of(request: &tiny_http::Request) -> Self {
+        let get = |name: &str| {
+            request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                .map(|h| h.value.as_str().to_string())
+        };
+        Self {
+            content_type: get("content-type"),
+            origin: get("origin"),
+        }
+    }
+}
+
+/// `Origin` values a locally-served page legitimately sends: http(s) on a
+/// loopback host. Any PORT is accepted — the vite dev server proxies /api
+/// from its own port, so pinning the serve port would break `npm run dev`.
+/// The trust boundary is "pages served from this machine"; `null` and
+/// foreign hosts are rejected.
+fn is_loopback_origin(origin: &str) -> bool {
+    let rest = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    let host_port = rest.split('/').next().unwrap_or(rest);
+    let host = if let Some(v6) = host_port.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+/// Bounded admission for `/api/ask` — the slot is acquired BEFORE any body
+/// bytes are read (slow-loris posts must not pin reader threads), and a
+/// saturated server answers 429 without spawning or reading anything.
+fn admit_ask_slot(state: &AppState) -> Result<AskSlot, Response<std::io::Cursor<Vec<u8>>>> {
+    state
+        .ask_slots
+        .try_acquire()
+        .ok_or_else(|| json_response(429, r#"{"error":"ask busy","code":"ask_busy"}"#))
+}
+
+/// POST /api/ask `{"question": "..."}` — the portal Ask page (design §3.5).
+/// Runs the `ovp-memory::ask` pipeline against the cached model/evidence
+/// with the injected LLM client factory, saves the chat like `ovp2 ask
+/// --save`, and answers `{answer, citations, verified, context_hits, chat}`.
+/// The LLM call runs on a worker thread with a wall-clock guard; the whole
+/// handler already sits on a detached thread (see `serve_loop`), so a slow
+/// provider can never stall other requests.
+///
+/// Cross-site hardening (a webpage anywhere can POST at localhost): the
+/// body must be declared `application/json` — a CORS-"simple" text/plain
+/// POST is refused with 415, and a real JSON POST from a foreign origin
+/// needs a CORS preflight this server never grants. Belt-and-braces, any
+/// attached `Origin` must additionally be loopback (403 otherwise).
+fn handle_ask(
+    state: &AppState,
+    headers: &AskHeaders,
+    body: &str,
+    slot: AskSlot,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let is_json = headers
+        .content_type
+        .as_deref()
+        .and_then(|v| v.split(';').next())
+        .map(|v| v.trim().eq_ignore_ascii_case("application/json"))
+        .unwrap_or(false);
+    if !is_json {
+        return json_response(415, r#"{"error":"content-type must be application/json"}"#);
+    }
+    if let Some(origin) = headers.origin.as_deref() {
+        if !is_loopback_origin(origin) {
+            return json_response(403, r#"{"error":"cross-origin ask rejected"}"#);
+        }
+    }
+    if body.len() > MAX_POST_BODY_BYTES {
+        return json_response(400, r#"{"error":"request body too large"}"#);
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            let body = serde_json::json!({ "error": format!("invalid JSON body: {e}") });
+            return json_response(400, &body.to_string());
+        }
+    };
+    let question = parsed
+        .get("question")
+        .and_then(|q| q.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if question.is_empty() {
+        return json_response(
+            400,
+            r#"{"error":"body must be {\"question\": \"<non-empty string>\"}"}"#,
+        );
+    }
+
+    // Fail-loud config checks BEFORE spawning anything. The `code` field is
+    // a stable machine-readable discriminator for the portal (the human
+    // `error` text may change).
+    let Some(factory) = state.ask_client.clone() else {
+        return json_response(
+            503,
+            r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+        );
+    };
+    let Some(model) = state.current_model() else {
+        return json_response(
+            503,
+            r#"{"error":"index not available","code":"index_unavailable"}"#,
+        );
+    };
+
+    // The slot was acquired at admission (before the body was even read —
+    // see serve_loop) and moves INTO the pipeline thread: even after the
+    // guard 504s below, the still-running provider call keeps its slot
+    // until it returns. Validation failures above drop it immediately.
+
+    let evidence = state.current_evidence();
+    let vault_root = state.vault_root.clone();
+    let question = question.to_string();
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _slot = slot; // held for the WHOLE pipeline, freed on drop
+        let result = run_ask(&factory, &model, evidence.as_ref(), &question, &vault_root);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(state.ask_timeout) {
+        Ok(Ok(payload)) => json_response(200, &payload.to_string()),
+        Ok(Err(e)) => {
+            let body = serde_json::json!({ "error": e });
+            json_response(502, &body.to_string())
+        }
+        Err(_) => {
+            // Honest 504: recv_timeout does NOT cancel the provider call —
+            // it finishes in the background (and still saves the chat).
+            let body = serde_json::json!({
+                "error": format!(
+                    "no answer within {}s; the request was not cancelled and may \
+                     still complete in the background",
+                    state.ask_timeout.as_secs()
+                ),
+                "code": "ask_timeout",
+            });
+            json_response(504, &body.to_string())
+        }
+    }
+}
+
+/// The worker side of /api/ask: build the client, run the pipeline (chat
+/// always saved — parity with `ovp2 ask --save`), shape the JSON payload.
+fn run_ask(
+    factory: &AskClientFactory,
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    vault_root: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    let mut client = factory()?;
+    let args = AskArgs {
+        question: question.to_string(),
+        save_chat: true,
+        ..Default::default()
+    };
+    let result = ask_with_optional_evidence(model, evidence, client.as_mut(), &args, vault_root)?;
+    Ok(ask_response_json(model, &result))
+}
+
+/// Shape the /api/ask response. `citations` lists the keys the answer
+/// actually cites, in first-appearance order (the UI numbers its `[1][2]`
+/// markers by this order); each entry resolves to the evidence item behind
+/// it, with a portal deep link: claims → `/knowledge#<claim_id>`,
+/// cards/units → `/library/<sha>` via the pack lookup. Legacy packs without
+/// a source sha get NO link (never a 404 target); citations the verifier
+/// could not back get `verified: false`.
+fn ask_response_json(model: &IndexModel, result: &AskResult) -> serde_json::Value {
+    let pack_sha: HashMap<&str, &str> = model
+        .packs
+        .iter()
+        .filter_map(|p| Some((p.pack_dir.as_str(), p.source_sha256.as_deref()?)))
+        .collect();
+    let missing: HashSet<&str> = result
+        .verification
+        .as_ref()
+        .map(|r| r.missing.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    let citations: Vec<serde_json::Value> = citations_in_order(&result.answer)
+        .into_iter()
+        .map(|key| {
+            let item = result.evidence.iter().find(|e| citation_key(e) == key);
+            let verified = item.is_some() && !missing.contains(key.as_str());
+            match item {
+                Some(item) => serde_json::json!({
+                    "id": key,
+                    "kind": kind_str(item.kind),
+                    "title": item.title,
+                    "snippet": citation_snippet(item),
+                    "link_target": citation_link(item, &pack_sha),
+                    "verified": verified,
+                }),
+                // Cited but never supplied as evidence — surfaced so the UI
+                // can render the warn pill instead of dropping the marker.
+                None => serde_json::json!({
+                    "id": key,
+                    "kind": key.split(':').next().unwrap_or(""),
+                    "title": serde_json::Value::Null,
+                    "snippet": serde_json::Value::Null,
+                    "link_target": serde_json::Value::Null,
+                    "verified": false,
+                }),
+            }
+        })
+        .collect();
+
+    serde_json::json!({
+        "answer": result.answer,
+        "citations": citations,
+        "verified": result.verification,
+        "context_hits": result.context_hits,
+        "chat": result
+            .chat_file
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str()),
+    })
+}
+
+fn kind_str(kind: EvidenceKind) -> &'static str {
+    match kind {
+        EvidenceKind::Unit => "unit",
+        EvidenceKind::Card => "card",
+        EvidenceKind::Claim => "claim",
+    }
+}
+
+/// Short display text for a citation panel entry: the exact quote for
+/// units, the body payload (sans the `Content:`/`Claim:` field prefix) for
+/// cards and claims. Char-safe clipped.
+fn citation_snippet(item: &EvidenceItem) -> String {
+    const MAX: usize = 240;
+    let raw = match (&item.quote, item.kind) {
+        (Some(quote), EvidenceKind::Unit) => quote.as_str(),
+        _ => item
+            .body
+            .lines()
+            .next()
+            .map(|l| {
+                l.strip_prefix("Claim: ")
+                    .or_else(|| l.strip_prefix("Content: "))
+                    .or_else(|| l.strip_prefix("Text: "))
+                    .unwrap_or(l)
+            })
+            .unwrap_or(""),
+    };
+    if raw.chars().count() <= MAX {
+        return raw.to_string();
+    }
+    let mut clipped: String = raw.chars().take(MAX - 1).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Portal deep link for a citation (or None — the sha-guard: legacy packs
+/// without a source sha must not produce a dead `/library/...` link).
+fn citation_link(item: &EvidenceItem, pack_sha: &HashMap<&str, &str>) -> Option<String> {
+    match item.kind {
+        EvidenceKind::Claim => Some(format!("/knowledge#{}", item.id)),
+        EvidenceKind::Card | EvidenceKind::Unit => {
+            let pack_dir = item.path.as_deref()?.strip_suffix("/reader.md")?;
+            let sha = pack_sha.get(pack_dir)?;
+            Some(format!("/library/{sha}"))
+        }
+    }
+}
+
+fn chats_dir(state: &AppState) -> PathBuf {
+    // Same location `ovp-memory::ask` writes to (`.ovp/chats/<ts>.md`).
+    state.vault_root.join(".ovp").join("chats")
+}
+
+/// GET /api/chats — saved ask transcripts, newest first:
+/// `[{name, mtime}]` (mtime = unix seconds; the client formats the date).
+/// A vault without any chats answers an empty list, not an error.
+fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut rows: Vec<(u64, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(chats_dir(state)) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            rows.push((mtime, name.to_string()));
+        }
+    }
+    rows.sort_by(|a, b| b.cmp(a));
+    let list: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(mtime, name)| serde_json::json!({ "name": name, "mtime": mtime }))
+        .collect();
+    let body = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
+    json_response(200, &body)
+}
+
+/// GET /api/chats/:name — one saved transcript as raw markdown (the client
+/// renders it with the same escape-first renderer as source bodies). Names
+/// are single path components; anything else is rejected, never joined.
+fn handle_chat_detail(state: &AppState, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let name = url_decode(path.strip_prefix("/api/chats/").unwrap_or(""));
+    let name = name.strip_suffix(".md").unwrap_or(&name);
+    let valid = !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !valid {
+        return json_response(400, r#"{"error":"invalid chat name"}"#);
+    }
+    match std::fs::read_to_string(chats_dir(state).join(format!("{name}.md"))) {
+        Ok(md) => {
+            let header =
+                Header::from_bytes("Content-Type", "text/markdown; charset=utf-8").unwrap();
+            Response::from_data(md.into_bytes())
+                .with_header(header)
+                .with_status_code(200)
+        }
+        Err(_) => json_response(404, r#"{"error":"chat not found"}"#),
+    }
+}
+
 /// Result of static-path resolution — kept separate from `Response` so the
 /// routing precedence is testable on content, not just status codes.
 enum Resolved {
@@ -881,7 +1426,72 @@ mod tests {
             model: RwLock::new(None),
             evidence: RwLock::new(EvidenceCache::Unloaded),
             viz_dir,
+            ask_client: None,
+            // Fixed (not env-derived) so tests stay deterministic on
+            // machines that export OVP_LLM_TIMEOUT_SECS.
+            ask_timeout: Duration::from_secs(60),
+            ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
         }
+    }
+
+    /// A ModelClient that replies with a fixed answer (or blocks) — the
+    /// /api/ask tests never touch a real transport.
+    struct ScriptedClient {
+        text: String,
+        delay: Duration,
+    }
+
+    impl ModelClient for ScriptedClient {
+        fn call(
+            &mut self,
+            request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            std::thread::sleep(self.delay);
+            Ok(ovp_llm::ModelReply {
+                model: request.model.clone(),
+                text: self.text.clone(),
+                stop_reason: ovp_llm::StopReason::EndTurn,
+                usage: ovp_llm::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+            })
+        }
+    }
+
+    fn scripted_factory(text: &str, delay: Duration) -> AskClientFactory {
+        let text = text.to_string();
+        Arc::new(move || {
+            Ok(Box::new(ScriptedClient {
+                text: text.clone(),
+                delay,
+            }) as Box<dyn ModelClient>)
+        })
+    }
+
+    /// The headers a well-behaved local client (the portal fetch) sends.
+    fn json_headers() -> AskHeaders {
+        AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: None,
+        }
+    }
+
+    /// Drive the full admission + handle path like serve_loop does.
+    fn ask_with(
+        st: &AppState,
+        headers: &AskHeaders,
+        body: &str,
+    ) -> Response<std::io::Cursor<Vec<u8>>> {
+        match admit_ask_slot(st) {
+            Ok(slot) => handle_ask(st, headers, body, slot),
+            Err(resp) => resp,
+        }
+    }
+
+    /// Drive handle_ask like serve_loop's worker does, with good headers.
+    fn ask(st: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+        ask_with(st, &json_headers(), body)
     }
 
     /// Unwrap the resolved body for content assertions.
@@ -1233,7 +1843,7 @@ mod tests {
         write_ledger(&vault);
         let st = state(vault.clone(), None);
 
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global", "");
         assert_eq!(resp.status_code(), 200);
         let v = body_json(resp);
         assert_eq!(v["mode"], "overview");
@@ -1250,6 +1860,7 @@ mod tests {
             &st,
             Method::Get,
             "/api/graph?scope=global&limit=1",
+            "",
         ));
         assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
         assert_eq!(v["truncated"], true);
@@ -1263,7 +1874,7 @@ mod tests {
         write_ledger(&vault);
         let st = state(vault.clone(), None);
 
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha", "");
         assert_eq!(resp.status_code(), 200);
         let v = body_json(resp);
         assert_eq!(v["mode"], "theme");
@@ -1280,11 +1891,11 @@ mod tests {
         assert!(!ids.contains(&"claim:b"));
 
         // Unknown theme → 404; missing/unknown scope params → 400.
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope", "");
         assert_eq!(resp.status_code(), 404);
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme", "");
         assert_eq!(resp.status_code(), 400);
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy", "");
         assert_eq!(resp.status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
@@ -1303,19 +1914,19 @@ mod tests {
         let st = state(vault, Some(overlay));
 
         for path in ["/api/nonexistent", "/api", "/api/", "/api/nope?x=1"] {
-            let resp = dispatch(&st, Method::Get, path);
+            let resp = dispatch(&st, Method::Get, path, "");
             assert_eq!(resp.status_code(), 404, "path {path}");
             let v = body_json(resp);
             assert_eq!(v["error"], "unknown api route", "path {path}");
         }
 
         // Non-API client routes still reach the SPA shell…
-        assert_eq!(dispatch(&st, Method::Get, "/library").status_code(), 200);
+        assert_eq!(dispatch(&st, Method::Get, "/library", "").status_code(), 200);
         // …exact API routes keep working even with a query string…
-        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1");
+        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1", "");
         assert_eq!(resp.status_code(), 200);
         // …and non-GET stays 405.
-        assert_eq!(dispatch(&st, Method::Post, "/api/model").status_code(), 405);
+        assert_eq!(dispatch(&st, Method::Post, "/api/model", "").status_code(), 405);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1380,6 +1991,436 @@ mod tests {
         assert_eq!(v["memory"]["evidence_available"], false);
         assert!(v["memory"]["cards"].as_array().unwrap().is_empty());
         assert!(v["memory"]["units"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_without_llm_config_is_503_json() {
+        let vault = portal_vault("ask-no-llm", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None); // ask_client: None
+
+        let resp = ask(&st, r#"{"question":"anything"}"#);
+        assert_eq!(resp.status_code(), 503);
+        let v = body_json(resp);
+        assert_eq!(v["error"], "llm not configured");
+        assert_eq!(v["code"], "llm_not_configured");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_503s_disambiguate_missing_index_from_missing_llm() {
+        // An LLM IS configured but the vault has no index — the portal
+        // must be able to tell this apart from the missing-key case, so
+        // the `code` field differs.
+        let root = temp_root("ask-no-index");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let mut st = state(vault, None);
+        st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+
+        let resp = ask(&st, r#"{"question":"anything"}"#);
+        assert_eq!(resp.status_code(), 503);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "index_unavailable");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ask_guard_derives_from_transport_timeout_env() {
+        let with = |v: Option<&str>| {
+            ask_guard(|k| {
+                assert_eq!(k, "OVP_LLM_TIMEOUT_SECS");
+                v.map(str::to_string)
+            })
+        };
+        // Absent → provider default (180s) + margin.
+        assert_eq!(
+            with(None),
+            Duration::from_secs(DEFAULT_TRANSPORT_TIMEOUT_SECS + ASK_GUARD_MARGIN_SECS)
+        );
+        // Runbook value 480 → 480 + margin: the guard must outlive the
+        // billable call, never 504 while the transport is still waiting.
+        assert_eq!(with(Some("480")), Duration::from_secs(480 + 30));
+        // 0 = transport timeout disabled → the guard becomes the only
+        // bound, at its own generous cap.
+        assert_eq!(
+            with(Some("0")),
+            Duration::from_secs(ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS)
+        );
+        // Garbage falls back to the default (the CLIENT fails loud on it).
+        assert_eq!(
+            with(Some("lots")),
+            Duration::from_secs(DEFAULT_TRANSPORT_TIMEOUT_SECS + ASK_GUARD_MARGIN_SECS)
+        );
+    }
+
+    #[test]
+    fn ask_concurrency_cap_answers_429_and_slot_survives_the_504() {
+        use std::time::Instant;
+
+        let vault = portal_vault("ask-429", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("answer", Duration::from_millis(400)));
+        st.ask_timeout = Duration::from_millis(50); // guard fires mid-pipeline
+        st.ask_slots = AskSlots::new(1);
+        let st = Arc::new(st);
+
+        // First ask: the guard 504s, but the pipeline is still running…
+        let body = r#"{"question":"memory"}"#;
+        assert_eq!(ask(&st, body).status_code(), 504);
+
+        // …so its slot is STILL taken: the next ask is refused immediately
+        // (429, no queue) — a timed-out billable call must keep counting
+        // against the cap until the provider returns.
+        let started = Instant::now();
+        let resp = ask(&st, body);
+        assert_eq!(resp.status_code(), 429);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "429 must be immediate, not queued"
+        );
+        let v = body_json(resp);
+        assert_eq!(v["code"], "ask_busy");
+
+        // Once the pipeline actually finishes, the slot frees: the next
+        // ask gets a real attempt again (504 via the tiny guard — the
+        // point is it is NOT a 429).
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(ask(&st, body).status_code(), 504);
+
+        // Let that last pipeline drain before removing its vault.
+        std::thread::sleep(Duration::from_millis(600));
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_malformed_body_is_400() {
+        let vault = portal_vault("ask-bad-body", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Not JSON / wrong shape / blank question — all 400 with a JSON
+        // error, and all checked BEFORE the llm-config 503.
+        for body in ["not json", "{}", r#"{"question":"   "}"#, r#"{"question":7}"#] {
+            let resp = ask(&st, body);
+            assert_eq!(resp.status_code(), 400, "body {body}");
+            let v = body_json(resp);
+            assert!(v["error"].is_string(), "body {body}");
+        }
+
+        // Oversize bodies are rejected, not silently truncated.
+        let huge = format!(
+            r#"{{"question":"{}"}}"#,
+            "x".repeat(MAX_POST_BODY_BYTES + 10)
+        );
+        assert_eq!(
+            ask(&st, &huge).status_code(),
+            400
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_answers_with_ordered_citations_and_saves_chat() {
+        let vault = portal_vault("ask-e2e", "50-Inbox/03-Processed/good.md", "body\n");
+        let answer = "Filesystem is memory [claim:c01], grounded \
+                      [unit:unit:40-Resources/Reader/good:u-001], and a ghost [card:nope].";
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory(answer, Duration::ZERO));
+
+        let body = r#"{"question":"filesystem memory card unit text"}"#;
+        let resp = ask(&st, body);
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["answer"], answer);
+        assert!(v["context_hits"].as_u64().unwrap() >= 3);
+
+        // Citations come back in first-appearance order with deep links.
+        let cits = v["citations"].as_array().unwrap();
+        assert_eq!(cits.len(), 3);
+        assert_eq!(cits[0]["id"], "claim:c01");
+        assert_eq!(cits[0]["kind"], "claim");
+        assert_eq!(cits[0]["link_target"], "/knowledge#c01");
+        assert_eq!(cits[0]["verified"], true);
+        assert_eq!(cits[1]["kind"], "unit");
+        // Unit resolves through the pack lookup to the source page…
+        assert_eq!(cits[1]["link_target"], "/library/aaaa1111");
+        assert_eq!(cits[1]["snippet"], "the exact quote");
+        assert_eq!(cits[1]["verified"], true);
+        // …and a citation that was never in evidence is kept, unverified,
+        // with no link (never a dead target).
+        assert_eq!(cits[2]["id"], "card:nope");
+        assert_eq!(cits[2]["verified"], false);
+        assert!(cits[2]["link_target"].is_null());
+
+        assert_eq!(v["verified"]["cited"], 3);
+        assert_eq!(v["verified"]["verified"], 2);
+        assert_eq!(v["verified"]["missing"][0], "card:nope");
+
+        // The chat was saved like `ovp2 ask --save` and is listed + readable.
+        let chat = v["chat"].as_str().expect("chat name").to_string();
+        assert!(vault.join(".ovp/chats").join(format!("{chat}.md")).is_file());
+
+        let list = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], chat.as_str());
+        assert!(rows[0]["mtime"].as_u64().unwrap() > 0);
+
+        let detail = dispatch(&st, Method::Get, &format!("/api/chats/{chat}"), "");
+        assert_eq!(detail.status_code(), 200);
+        let ct = detail
+            .headers()
+            .iter()
+            .find(|h| {
+                h.field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("content-type")
+            })
+            .map(|h| h.value.as_str().to_string());
+        assert_eq!(ct.as_deref(), Some("text/markdown; charset=utf-8"));
+        use std::io::Read;
+        let mut md = String::new();
+        detail.into_reader().read_to_string(&mut md).unwrap();
+        assert!(md.contains("filesystem memory card unit text"));
+        assert!(md.contains("[claim:c01]"));
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_timeout_guard_answers_504() {
+        let vault = portal_vault("ask-timeout", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("late", Duration::from_millis(300)));
+        st.ask_timeout = Duration::from_millis(50);
+
+        let resp = ask(&st, r#"{"question":"memory"}"#);
+        assert_eq!(resp.status_code(), 504);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "ask_timeout");
+        // Honest copy: the guard does NOT cancel the provider call.
+        assert!(v["error"].as_str().unwrap().contains("not cancelled"));
+
+        // Let the detached worker finish before tearing the vault down.
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_rejects_non_json_content_type_with_415() {
+        // A cross-origin CORS-"simple" POST (text/plain, form enctype, or
+        // no content-type at all) must never reach the paid LLM pipeline.
+        let vault = portal_vault("ask-415", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+
+        let body = r#"{"question":"memory"}"#;
+        for ct in [
+            None,
+            Some("text/plain"),
+            Some("text/plain;charset=UTF-8"),
+            Some("application/x-www-form-urlencoded"),
+            Some("multipart/form-data"),
+        ] {
+            let headers = AskHeaders {
+                content_type: ct.map(str::to_string),
+                origin: None,
+            };
+            let resp = ask_with(&st, &headers, body);
+            assert_eq!(resp.status_code(), 415, "content-type {ct:?}");
+        }
+        // …while a charset suffix on real JSON is fine (reaches the
+        // pipeline and answers 200).
+        let headers = AskHeaders {
+            content_type: Some("application/json; charset=utf-8".into()),
+            origin: None,
+        };
+        assert_eq!(ask_with(&st, &headers, body).status_code(), 200);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_rejects_foreign_origins_and_allows_loopback() {
+        let vault = portal_vault("ask-origin", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None); // no LLM: pass-through = 503
+
+        let body = r#"{"question":"memory"}"#;
+        let with_origin = |origin: &str| AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: Some(origin.into()),
+        };
+
+        // Foreign / opaque origins are refused before ANY other work.
+        for evil in [
+            "https://evil.example",
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            "null",
+            "file://",
+        ] {
+            let resp = ask_with(&st, &with_origin(evil), body);
+            assert_eq!(resp.status_code(), 403, "origin {evil}");
+        }
+
+        // Loopback origins (any port — the vite dev proxy) pass the gate:
+        // with no LLM configured they fall through to the 503, not a 403.
+        for ok in [
+            "http://localhost:5173",
+            "http://127.0.0.1:8794",
+            "http://[::1]:3141",
+            "https://localhost",
+        ] {
+            let resp = ask_with(&st, &with_origin(ok), body);
+            assert_eq!(resp.status_code(), 503, "origin {ok}");
+        }
+        // Absent Origin (curl, same-origin GET-navigations) also passes.
+        assert_eq!(ask(&st, body).status_code(), 503);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    /// P1 regression: a slow ask must NOT block the accept loop. Drives the
+    /// real serve_loop over TCP: fire an ask whose scripted client sleeps
+    /// 1.2s (saturating the 1-slot cap), then a concurrent GET /api/model
+    /// AND a second ask — the GET must answer well before the first ask
+    /// completes, and the second ask must be refused (429) immediately
+    /// instead of queueing behind the paid call.
+    #[test]
+    fn ask_does_not_block_the_accept_loop() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Instant;
+
+        let vault = portal_vault("ask-nonblock", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        const ASK_DELAY: Duration = Duration::from_millis(1200);
+        st.ask_client = Some(scripted_factory("answer [claim:c01]", ASK_DELAY));
+        st.ask_slots = AskSlots::new(1);
+        let state = Arc::new(st);
+
+        let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("ip listener")
+            .port();
+        {
+            let server = Arc::clone(&server);
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || serve_loop(&server, &state));
+        }
+
+        // Fire the slow ask; don't read its response yet.
+        let ask_started = Instant::now();
+        let body = r#"{"question":"memory"}"#;
+        let mut ask_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            ask_conn,
+            "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        ask_conn.flush().unwrap();
+
+        // Give the loop a beat to hand the ask to its worker…
+        std::thread::sleep(Duration::from_millis(150));
+
+        // …then the concurrent GET must answer while the ask is in flight.
+        let get_started = Instant::now();
+        let mut get_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            get_conn,
+            "GET /api/model HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut get_resp = String::new();
+        get_conn.read_to_string(&mut get_resp).unwrap();
+        let get_elapsed = get_started.elapsed();
+        assert!(get_resp.starts_with("HTTP/1.1 200"), "{get_resp}");
+        assert!(
+            get_elapsed < Duration::from_millis(800),
+            "GET /api/model blocked behind the ask: {get_elapsed:?}"
+        );
+        assert!(
+            ask_started.elapsed() < ASK_DELAY,
+            "ask finished too early to prove anything"
+        );
+
+        // A second ask while the slot is taken: refused fast with 429 —
+        // never queued behind the in-flight paid call.
+        let busy_started = Instant::now();
+        let mut busy_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            busy_conn,
+            "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut busy_resp = String::new();
+        busy_conn.read_to_string(&mut busy_resp).unwrap();
+        assert!(busy_resp.starts_with("HTTP/1.1 429"), "{busy_resp}");
+        assert!(busy_resp.contains("ask_busy"), "{busy_resp}");
+        assert!(
+            busy_started.elapsed() < Duration::from_millis(500),
+            "429 must be immediate while saturated"
+        );
+
+        // The first ask itself still completes fine after its delay.
+        let mut ask_resp = String::new();
+        ask_conn.read_to_string(&mut ask_resp).unwrap();
+        assert!(ask_resp.starts_with("HTTP/1.1 200"), "{ask_resp}");
+        assert!(ask_started.elapsed() >= ASK_DELAY);
+
+        server.unblock(); // let the loop thread exit
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn loopback_origin_matcher() {
+        assert!(is_loopback_origin("http://localhost:5173"));
+        assert!(is_loopback_origin("http://127.0.0.1:8794"));
+        assert!(is_loopback_origin("https://localhost"));
+        assert!(is_loopback_origin("http://[::1]:3141"));
+        assert!(!is_loopback_origin("https://evil.example"));
+        assert!(!is_loopback_origin("http://localhost.evil.example"));
+        assert!(!is_loopback_origin("null"));
+        assert!(!is_loopback_origin("file://"));
+        assert!(!is_loopback_origin(""));
+    }
+
+    #[test]
+    fn chats_list_is_empty_without_dir_and_detail_rejects_bad_names() {
+        let vault = portal_vault("chats-empty", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // No .ovp/chats dir yet — empty list, not an error.
+        let list = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
+        assert_eq!(list.as_array().unwrap().len(), 0);
+
+        // Traversal-ish names are rejected outright; unknown names are 404.
+        for bad in [
+            "/api/chats/..%2f..%2fsecret",
+            "/api/chats/../secret",
+            "/api/chats/a%2Fb",
+            "/api/chats/",
+        ] {
+            let resp = dispatch(&st, Method::Get, bad, "");
+            assert_eq!(resp.status_code(), 400, "path {bad}");
+        }
+        assert_eq!(
+            dispatch(&st, Method::Get, "/api/chats/1751812345", "").status_code(),
+            404
+        );
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

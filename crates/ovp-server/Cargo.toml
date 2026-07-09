@@ -10,6 +10,8 @@ authors.workspace = true
 ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
 ovp-intake = { path = "../ovp-intake" }
+ovp-memory = { path = "../ovp-memory" }
+ovp-llm = { path = "../ovp-llm" }
 serde.workspace = true
 serde_json.workspace = true
 tiny_http = "0.12"

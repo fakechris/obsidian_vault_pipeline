@@ -62,6 +62,28 @@ fn extract_citations(answer: &str) -> Vec<String> {
     out.into_iter().collect()
 }
 
+/// Citation keys in order of FIRST appearance in the answer (deduplicated).
+/// The `verify_answer` report sorts keys; presentation surfaces (the portal's
+/// `[1][2]` markers) need the reading order instead — same tokenizer, so the
+/// two views can never disagree on what counts as a citation.
+pub fn citations_in_order(answer: &str) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let mut rest = answer;
+    while let Some(start) = rest.find('[') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find(']') else {
+            break;
+        };
+        let candidate = after_start[..end].trim();
+        if is_citation_candidate(candidate) && seen.insert(candidate.to_string()) {
+            out.push(candidate.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    out
+}
+
 fn is_citation_candidate(candidate: &str) -> bool {
     !candidate.is_empty()
         && matches!(
@@ -70,7 +92,8 @@ fn is_citation_candidate(candidate: &str) -> bool {
         )
 }
 
-fn citation_key(item: &EvidenceItem) -> String {
+/// The `<kind>:<id>` key an answer must use to cite this evidence item.
+pub fn citation_key(item: &EvidenceItem) -> String {
     format!("{}:{}", kind_label(item.kind), item.id)
 }
 
@@ -200,6 +223,16 @@ mod tests {
         assert_eq!(report.cited, 2);
         assert_eq!(report.verified, 2);
         assert!(report.missing.is_empty());
+    }
+
+    #[test]
+    fn citations_in_order_keeps_first_appearance_order_and_dedupes() {
+        let answer = "B first [claim:b]. Then A [unit:a], b again [claim:b], \
+                      not-a-citation [see note], unterminated [unit:x";
+        assert_eq!(
+            crate::verify::citations_in_order(answer),
+            vec!["claim:b".to_string(), "unit:a".to_string()],
+        );
     }
 
     #[test]

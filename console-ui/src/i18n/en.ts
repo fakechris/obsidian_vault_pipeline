@@ -169,8 +169,44 @@ export const en = {
   'search.group.pack': 'Reader packs',
   'search.group.theme': 'Themes',
 
+  // ask page
+  'ask.title': 'Ask',
+  'ask.help':
+    'Ask questions in natural language; answers are grounded in your evidence index — crystal claims, reader cards and quoted units — with numbered citations you can verify. Every answer is saved to the history on the left. Unverified citations are flagged.',
+  'ask.historyTitle': 'History',
+  'ask.historyEmpty': 'No saved chats yet — every answer is saved here automatically.',
+  'ask.savedChat': 'Saved chat',
+  'ask.closeChat': 'Back to conversation',
+  'ask.chatLoadError': 'Could not load this chat — is the server running?',
+  'ask.citationsTitle': 'Citations',
+  'ask.citationsEmpty':
+    'Citations for the latest answer land here — hover a [1] marker in the answer to highlight its evidence.',
+  'ask.unverified': 'unverified',
+  'ask.openCitation': 'Open',
+  'ask.noLink': 'No detail page in this vault.',
+  'ask.verifiedLine': 'verified citations {verified}/{cited}',
+  'ask.contextHits': '{n} context hits',
+  'ask.placeholder': 'Ask about your knowledge base…',
+  'ask.hint': 'Enter to send · Shift+Enter for a new line',
+  'ask.send': 'Send',
+  'ask.pending': 'Thinking…',
+  'ask.emptyTitle': 'Ask your knowledge base',
+  'ask.emptyBody':
+    'Answers come only from what you have read and crystallized — no outside knowledge, no invented citations. Try one of these:',
+  'ask.example1': 'What does my knowledge base believe about agent memory?',
+  'ask.example2': 'Which sources discuss context engineering, and what do they claim?',
+  'ask.example3': 'What is the strongest evidence about retrieval quality?',
+  'ask.errNotConfigured':
+    'The server has no LLM configured — restart `ovp2 serve` with ANTHROPIC_API_KEY set (build with --features anthropic).',
+  'ask.errIndexUnavailable':
+    'The index is not available — run `ovp2 index` against this vault, and check the server was started with the right --vault-root.',
+  'ask.errBusy':
+    'Ask is busy — the in-flight answer limit is reached. Wait for the current answers and retry shortly.',
+  'ask.errTimeout':
+    'No answer within the time limit. The request was not cancelled — if the model finishes, the saved transcript still appears in History.',
+  'ask.errGeneric': 'Ask failed — is the server running against a vault?',
+
   // placeholders
-  'placeholder.ask': 'Cited answers over your knowledge base land in B4.',
   'placeholder.system': 'Runs, flow, doctor and settings land in B5.',
   'placeholder.systemFlow': 'Legacy flow view',
   'placeholder.systemMonitor': 'Legacy monitor view',

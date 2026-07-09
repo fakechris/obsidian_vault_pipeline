@@ -162,8 +162,43 @@ export const zh: Record<keyof typeof en, string> = {
   'search.group.pack': '阅读包',
   'search.group.theme': '主题',
 
+  // ask page
+  'ask.title': '对话',
+  'ask.help':
+    '用自然语言提问；回答只依据你的证据索引——结晶主张、阅读卡片与带引文的单元——并附可核查的编号引用。每次回答都会保存到左侧历史。未通过校验的引用会被标注。',
+  'ask.historyTitle': '历史会话',
+  'ask.historyEmpty': '还没有保存的会话——每次回答都会自动保存到这里。',
+  'ask.savedChat': '已保存会话',
+  'ask.closeChat': '返回对话',
+  'ask.chatLoadError': '无法加载该会话——服务是否在运行？',
+  'ask.citationsTitle': '引用',
+  'ask.citationsEmpty':
+    '最新回答的引用会显示在这里——悬停回答中的 [1] 标记可高亮对应证据。',
+  'ask.unverified': '未核实',
+  'ask.openCitation': '打开',
+  'ask.noLink': '该条目在此 vault 中没有详情页。',
+  'ask.verifiedLine': '引用校验 {verified}/{cited}',
+  'ask.contextHits': '{n} 条上下文',
+  'ask.placeholder': '向你的知识库提问…',
+  'ask.hint': 'Enter 发送 · Shift+Enter 换行',
+  'ask.send': '发送',
+  'ask.pending': '思考中…',
+  'ask.emptyTitle': '向你的知识库提问',
+  'ask.emptyBody':
+    '回答只来自你读过并结晶的内容——不引入外部知识，不编造引用。试试这些问题：',
+  'ask.example1': '我的知识库对 agent 记忆有什么看法？',
+  'ask.example2': '哪些来源讨论了上下文工程？它们的主张是什么？',
+  'ask.example3': '关于检索质量，最有力的证据是什么？',
+  'ask.errNotConfigured':
+    '服务端未配置 LLM——请设置 ANTHROPIC_API_KEY 并重启 `ovp2 serve`（构建时加 --features anthropic）。',
+  'ask.errIndexUnavailable':
+    '索引不可用——请对该 vault 运行 `ovp2 index`，并确认服务启动时的 --vault-root 指向正确。',
+  'ask.errBusy': '对话繁忙——同时进行的回答已达上限，请稍候再试。',
+  'ask.errTimeout':
+    '在时限内没有等到回答。请求并未被取消——如果模型最终完成，保存的会话仍会出现在历史中。',
+  'ask.errGeneric': '提问失败——服务是否已连接 vault？',
+
   // placeholders
-  'placeholder.ask': '带引用的问答将在 B4 上线。',
   'placeholder.system': '运行记录、流程、诊断与设置将在 B5 上线。',
   'placeholder.systemFlow': '旧版流程视图',
   'placeholder.systemMonitor': '旧版监控视图',

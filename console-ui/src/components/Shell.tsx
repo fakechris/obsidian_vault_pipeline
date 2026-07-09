@@ -93,12 +93,15 @@ export default function Shell() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         // Never steal ⌘K from an active editing context (inputs, textareas,
-        // selects, contenteditable) — the browser/user owns it there.
-        const el = e.target as HTMLElement | null;
+        // selects, contenteditable) — the browser/user owns it there — and
+        // composing surfaces (the Ask textarea) opt out explicitly via
+        // [data-omnibox-suppress].
+        const el = e.target instanceof HTMLElement ? e.target : null;
         if (
           el &&
           (el.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
+            el.closest('[data-omnibox-suppress]'))
         ) {
           return;
         }
