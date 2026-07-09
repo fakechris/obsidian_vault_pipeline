@@ -4,7 +4,8 @@
 //! Serves the portal SPA at the site root (deployed `.ovp/console/app/` or
 //! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
 //! legacy generated console pages by exact filename, and JSON API endpoints
-//! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`, `/api/flow`).
+//! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
+//! `/api/source/:sha`, `/api/flow`).
 //! Uses `tiny_http` to avoid any async runtime dependency.
 
 mod graph;
@@ -16,9 +17,16 @@ use std::sync::{Arc, RwLock};
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_domain::units::Unit;
-use ovp_index::{IndexModel, Query, QueryKind, read_index, run_query};
+use ovp_index::{
+    EvidenceModel, IndexModel, Query, QueryKind, read_evidence, read_index, run_query,
+};
 use ovp_intake::read_jsonl;
 use tiny_http::{Header, Method, Response, Server};
+
+/// Cap for source markdown shipped in the /api/source payload — beyond this
+/// the response truncates with an explicit flag instead of shipping megabytes
+/// of JSON (same limit the v1 server-rendered page used).
+pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
 
 pub struct ServeConfig {
     pub vault_root: PathBuf,
@@ -35,6 +43,9 @@ struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
     model: RwLock<Option<IndexModel>>,
+    /// Card/unit bodies for the /api/source/:sha memory layer — lazy-loaded
+    /// like the index model, refreshed together on /api/refresh.
+    evidence: RwLock<Option<EvidenceModel>>,
     viz_dir: Option<PathBuf>,
 }
 
@@ -56,11 +67,27 @@ impl AppState {
         Some(fresh)
     }
 
+    fn current_evidence(&self) -> Option<EvidenceModel> {
+        {
+            let guard = self.evidence.read().unwrap();
+            if guard.is_some() {
+                return guard.clone();
+            }
+        }
+        let fresh = read_evidence(&self.vault_root).ok()?;
+        let mut guard = self.evidence.write().unwrap();
+        *guard = Some(fresh.clone());
+        Some(fresh)
+    }
+
     fn refresh_model(&self) {
         if let Ok(m) = read_index(&self.vault_root) {
             let mut guard = self.model.write().unwrap();
             *guard = Some(m);
         }
+        // Reload the evidence sidecar too; it may legitimately be absent
+        // (pre-M31 vaults) — the source API then reports it as unavailable.
+        *self.evidence.write().unwrap() = read_evidence(&self.vault_root).ok();
     }
 
     fn console_dir(&self) -> PathBuf {
@@ -76,6 +103,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(None),
+        evidence: RwLock::new(None),
         viz_dir: config.viz_dir,
     });
 
@@ -115,6 +143,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
             (Method::Get, "/api/flow") => handle_flow(&state),
             (Method::Get, "/api/themes") => handle_themes(&state),
             (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(&state, &path),
+            (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(&state, &path),
             (Method::Get, _) => serve_static(&state, &path),
             _ => text_response(405, "Method Not Allowed"),
         };
@@ -217,7 +246,40 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    let params = match graph::GraphParams::from_query(&parse_query_string(url)) {
+    let query = parse_query_string(url);
+
+    // Portal v2 scoped-component API (design §4): `scope=neighborhood&
+    // source=<sha>` returns the source-centric neighborhood (this source →
+    // claims citing it → sibling sources). `scope=global|theme` land in B3 —
+    // unknown scopes fail loud, never guess.
+    if let Some(scope) = query.get("scope") {
+        if scope != "neighborhood" {
+            let body = serde_json::json!({
+                "error": format!("unknown scope: {scope} (only scope=neighborhood is available; global/theme land in B3)"),
+            });
+            return json_response(400, &body.to_string());
+        }
+        let Some(sha) = query.get("source").filter(|s| !s.is_empty()) else {
+            return json_response(
+                400,
+                r#"{"error":"scope=neighborhood requires source=<sha256>"}"#,
+            );
+        };
+        let records = load_active_records(state);
+        let model = state.current_model();
+        return match graph::source_neighborhood(&records, model.as_ref(), sha) {
+            Ok(resp) => {
+                let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
+                json_response(200, &body)
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "error": e.message });
+                json_response(e.status, &body.to_string())
+            }
+        };
+    }
+
+    let params = match graph::GraphParams::from_query(&query) {
         Ok(p) => p,
         Err(e) => {
             let body = serde_json::json!({ "error": e.message });
@@ -324,6 +386,140 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         "citations": citations,
     });
     json_response(200, &body.to_string())
+}
+
+/// GET /api/source/<sha256> — JSON for the portal's three-layer source
+/// detail page (B2): full SourceRow meta, the memory layer (cards + grounded
+/// units from the evidence sidecar), crystal claims citing this source, and
+/// the raw source markdown (size-capped, traversal-safe). The markdown is
+/// DATA in a JSON string — the client renders it safely; nothing here emits
+/// HTML.
+fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let model = match state.current_model() {
+        Some(m) => m,
+        None => return json_response(503, r#"{"error":"index not available"}"#),
+    };
+
+    let raw = url.split('?').next().unwrap_or(url);
+    let sha = url_decode(
+        raw.strip_prefix("/api/source/")
+            .unwrap_or("")
+            .trim_end_matches('/'),
+    );
+    if sha.is_empty() {
+        return json_response(400, r#"{"error":"missing source sha"}"#);
+    }
+
+    let Some(source) = model.sources.iter().find(|s| s.sha256 == sha) else {
+        let body = serde_json::json!({ "error": format!("source not found: {sha}") });
+        return json_response(404, &body.to_string());
+    };
+
+    // Memory layer: evidence rows keyed by the source sha or its pack dir.
+    let evidence = state.current_evidence();
+    let evidence_available = evidence.is_some();
+    let pack_dir = source.pack_dir.as_deref();
+    let belongs = |row_sha: Option<&str>, row_pack: &str| {
+        row_sha == Some(sha.as_str()) || pack_dir == Some(row_pack)
+    };
+    let cards: Vec<serde_json::Value> = evidence
+        .as_ref()
+        .map(|ev| {
+            ev.cards
+                .iter()
+                .filter(|c| belongs(c.source_sha256.as_deref(), &c.pack_dir))
+                .map(|c| serde_json::json!({ "title": c.title, "content": c.content }))
+                .collect()
+        })
+        .unwrap_or_default();
+    let units: Vec<serde_json::Value> = evidence
+        .as_ref()
+        .map(|ev| {
+            ev.units
+                .iter()
+                .filter(|u| belongs(u.source_sha256.as_deref(), &u.pack_dir))
+                .map(|u| {
+                    serde_json::json!({
+                        "unit_id": u.unit_id,
+                        "text": u.text,
+                        "quote": u.quote,
+                        "line": u.line,
+                        "attribution": u.attribution,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Crystal layer: ClaimRow.sources holds case ids (last pack_dir segment).
+    let case_id = pack_dir.and_then(graph::last_path_segment);
+    let mut citing: Vec<&ovp_index::ClaimRow> = match case_id {
+        Some(case) => model
+            .claims
+            .iter()
+            .filter(|c| c.sources.iter().any(|s| s == case))
+            .collect(),
+        None => Vec::new(),
+    };
+    citing.sort_by_key(|c| {
+        (
+            match c.status {
+                ovp_index::ClaimStatus::Durable => 0u8,
+                ovp_index::ClaimStatus::Caveated => 1,
+                _ => 2,
+            },
+            c.claim_id.clone(),
+        )
+    });
+
+    let (markdown, truncated, doc_error) = read_source_doc(state, source.rel_path.as_deref());
+
+    let body = serde_json::json!({
+        "source": source,
+        "memory": {
+            "evidence_available": evidence_available,
+            "cards": cards,
+            "units": units,
+        },
+        "citing_claims": citing,
+        "doc": {
+            "markdown": markdown,
+            "truncated": truncated,
+            "error": doc_error,
+        },
+    });
+    json_response(200, &body.to_string())
+}
+
+/// Read the source markdown from the vault, capped at MAX_SOURCE_DOC_BYTES.
+/// All failure modes become an explicit error string — the endpoint always
+/// answers.
+fn read_source_doc(
+    state: &AppState,
+    rel_path: Option<&str>,
+) -> (Option<String>, bool, Option<String>) {
+    let Some(rel) = rel_path else {
+        return (None, false, None);
+    };
+    // rel_path comes from our own index, but never trust a path with parent
+    // components or an absolute root anyway.
+    if rel.contains("..") || std::path::Path::new(rel).is_absolute() {
+        return (None, false, Some("source path rejected".into()));
+    }
+    match std::fs::read_to_string(state.vault_root.join(rel)) {
+        Ok(mut text) => {
+            let truncated = text.len() > MAX_SOURCE_DOC_BYTES;
+            if truncated {
+                let mut cut = MAX_SOURCE_DOC_BYTES;
+                while cut > 0 && !text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                text.truncate(cut);
+            }
+            (Some(text), truncated, None)
+        }
+        Err(e) => (None, false, Some(format!("{rel}: {e}"))),
+    }
 }
 
 fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -583,6 +779,7 @@ mod tests {
             vault_root: vault,
             layout: VaultLayout::new(),
             model: RwLock::new(None),
+            evidence: RwLock::new(None),
             viz_dir,
         }
     }
@@ -690,6 +887,208 @@ mod tests {
         assert!(is_not_found(resolve_static(&st, "/viz/graph")));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn body_json(resp: Response<std::io::Cursor<Vec<u8>>>) -> serde_json::Value {
+        use std::io::Read;
+        let mut out = Vec::new();
+        resp.into_reader().read_to_end(&mut out).unwrap();
+        serde_json::from_slice(&out).expect("response body must be valid JSON")
+    }
+
+    /// Vault with one processed source (hostile markdown body), its pack,
+    /// evidence sidecar (one card + one grounded unit) and one claim citing
+    /// the case — the /api/source three-layer fixture.
+    fn portal_vault(name: &str, rel_path: &str, body: &str) -> PathBuf {
+        use ovp_index::evidence::{CardEvidenceRow, UnitEvidenceRow};
+        use ovp_index::{
+            ClaimRow, ClaimStatus, EvidenceModel, OpsState, PackRow, SourceRow, SourceStatus,
+            Totals,
+        };
+        let root = temp_root(name);
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join("50-Inbox/03-Processed")).unwrap();
+        std::fs::write(vault.join("50-Inbox/03-Processed/good.md"), body).unwrap();
+
+        let model = IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: "2026-07-09".into(),
+            run_id: None,
+            totals: Totals {
+                sources: 1,
+                processed: 1,
+                packs: 1,
+                ..Default::default()
+            },
+            sources: vec![SourceRow {
+                sha256: "aaaa1111".into(),
+                status: SourceStatus::Processed,
+                title: Some("Good Article".into()),
+                url: Some("https://example.com/good".into()),
+                rel_path: Some(rel_path.into()),
+                date: Some("2026-07-09".into()),
+                last_run_id: None,
+                pack_dir: Some("40-Resources/Reader/good".into()),
+                fail_count: 0,
+                last_reason: None,
+            }],
+            packs: vec![PackRow {
+                pack_dir: "40-Resources/Reader/good".into(),
+                title: "Good Article".into(),
+                date: Some("2026-07-09".into()),
+                units: 1,
+                cards: 1,
+                json_repaired: false,
+                card_titles: vec!["Card One".into()],
+                source_sha256: Some("aaaa1111".into()),
+            }],
+            claims: vec![ClaimRow {
+                claim_id: "c01".into(),
+                claim: "Filesystem works as memory.".into(),
+                theme: Some("memory".into()),
+                status: ClaimStatus::Durable,
+                sources: vec!["good".into()],
+                strength: Some("supported".into()),
+                run_id: None,
+                lane: None,
+            }],
+            runs: vec![],
+            ops: OpsState::default(),
+        };
+        ovp_index::write_index(&vault, &model).unwrap();
+
+        let evidence = EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: "2026-07-09".into(),
+            cards: vec![CardEvidenceRow {
+                id: "card:40-Resources/Reader/good:0".into(),
+                pack_dir: "40-Resources/Reader/good".into(),
+                source_sha256: Some("aaaa1111".into()),
+                source_title: "Good Article".into(),
+                title: "Card One".into(),
+                content: "Body of card one.".into(),
+                unit_type: None,
+                cited_unit_ids: vec!["u-001".into()],
+            }],
+            units: vec![UnitEvidenceRow {
+                id: "unit:40-Resources/Reader/good:u-001".into(),
+                pack_dir: "40-Resources/Reader/good".into(),
+                source_sha256: Some("aaaa1111".into()),
+                source_title: "Good Article".into(),
+                unit_id: "u-001".into(),
+                text: "The unit text.".into(),
+                quote: "the exact quote".into(),
+                line: Some(14),
+                attribution: "author".into(),
+                modality: "asserted".into(),
+            }],
+            warnings: vec![],
+        };
+        ovp_index::write_evidence(&vault, &evidence).unwrap();
+        vault
+    }
+
+    #[test]
+    fn source_api_returns_three_layers_as_json_data() {
+        // Hostile markdown must pass through as DATA in the JSON payload —
+        // never HTML-escaped (the client renders it safely), never live.
+        let vault = portal_vault(
+            "source-api",
+            "50-Inbox/03-Processed/good.md",
+            "# Heading\n\nbody with <script>alert(1)</script>\n",
+        );
+        let st = state(vault.clone(), None);
+
+        let resp = handle_source_api(&st, "/api/source/aaaa1111");
+        assert_eq!(resp.status_code(), 200);
+        let ct = resp
+            .headers()
+            .iter()
+            .find(|h| {
+                h.field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("content-type")
+            })
+            .map(|h| h.value.as_str().to_string());
+        assert_eq!(ct.as_deref(), Some("application/json; charset=utf-8"));
+
+        let v = body_json(resp);
+        assert_eq!(v["source"]["sha256"], "aaaa1111");
+        assert_eq!(v["source"]["title"], "Good Article");
+        assert_eq!(v["memory"]["evidence_available"], true);
+        assert_eq!(v["memory"]["cards"][0]["title"], "Card One");
+        assert_eq!(v["memory"]["units"][0]["unit_id"], "u-001");
+        assert_eq!(v["memory"]["units"][0]["line"], 14);
+        assert_eq!(v["citing_claims"][0]["claim_id"], "c01");
+        assert_eq!(v["citing_claims"][0]["status"], "durable");
+        // The XSS payload survives as a JSON string, exactly as written.
+        let md = v["doc"]["markdown"].as_str().unwrap();
+        assert!(md.contains("<script>alert(1)</script>"));
+        assert!(!md.contains("&lt;script&gt;"));
+        assert_eq!(v["doc"]["truncated"], false);
+        assert!(v["doc"]["error"].is_null());
+
+        // Unknown sha → JSON 404, not HTML.
+        let missing = handle_source_api(&st, "/api/source/deadbeef");
+        assert_eq!(missing.status_code(), 404);
+        let v = body_json(missing);
+        assert!(v["error"].as_str().unwrap().contains("deadbeef"));
+
+        // Missing sha segment → 400.
+        assert_eq!(handle_source_api(&st, "/api/source/").status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_rejects_traversal_paths() {
+        let vault = portal_vault("source-traversal", "../secret.md", "body\n");
+        // A secret OUTSIDE the vault that `..` would reach.
+        std::fs::write(vault.parent().unwrap().join("secret.md"), "TOP SECRET").unwrap();
+        let st = state(vault.clone(), None);
+
+        let resp = handle_source_api(&st, "/api/source/aaaa1111");
+        assert_eq!(resp.status_code(), 200); // meta still served
+        let v = body_json(resp);
+        assert!(v["doc"]["markdown"].is_null());
+        assert_eq!(v["doc"]["error"], "source path rejected");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_truncates_oversized_markdown() {
+        let big = "x".repeat(MAX_SOURCE_DOC_BYTES + 100);
+        let vault = portal_vault("source-big", "50-Inbox/03-Processed/good.md", &big);
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert_eq!(v["doc"]["truncated"], true);
+        assert_eq!(
+            v["doc"]["markdown"].as_str().unwrap().len(),
+            MAX_SOURCE_DOC_BYTES
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_without_evidence_reports_unavailable() {
+        let vault = portal_vault(
+            "source-no-evidence",
+            "50-Inbox/03-Processed/good.md",
+            "body\n",
+        );
+        std::fs::remove_file(vault.join(".ovp/index/evidence.json")).unwrap();
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert_eq!(v["memory"]["evidence_available"], false);
+        assert!(v["memory"]["cards"].as_array().unwrap().is_empty());
+        assert!(v["memory"]["units"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
 
     #[test]

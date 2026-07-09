@@ -825,6 +825,132 @@ fn neighborhood_response(
     })
 }
 
+/// Source-centric neighborhood for the portal's KnowledgeGraph component
+/// (design §4, `scope=neighborhood&source=<sha>`): the source node, claims
+/// citing it, and the sibling sources those claims also draw from. Units are
+/// deliberately excluded — the source detail page shows them as text; the
+/// graph tells the claim/sibling story. Cards are not modeled in the graph.
+///
+/// A source known to the index but cited by no claim returns a single-node
+/// graph (the page still shows the component with an empty-neighborhood
+/// hint); an entirely unknown sha is a 404.
+pub fn source_neighborhood(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    sha: &str,
+) -> Result<GraphResponse, GraphError> {
+    let mut base = build_base(records, model);
+    add_related_edges(&mut base);
+    compute_degrees(&mut base);
+    assign_clusters(&mut base);
+    compute_importance(&mut base, records);
+
+    let focus_id = format!("source:{sha}");
+
+    // Claims citing this source, importance-ranked so a hub source keeps its
+    // strongest claims under the node cap.
+    let mut citing: Vec<&String> = base
+        .claim_sources
+        .iter()
+        .filter(|(_, srcs)| srcs.contains(&focus_id))
+        .map(|(claim, _)| claim)
+        .collect();
+    citing.sort_by(|a, b| {
+        let ia = base.nodes.get(*a).map(|n| n.importance).unwrap_or(0.0);
+        let ib = base.nodes.get(*b).map(|n| n.importance).unwrap_or(0.0);
+        ib.partial_cmp(&ia)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.cmp(b))
+    });
+
+    if citing.is_empty() && !base.nodes.contains_key(&focus_id) {
+        // Not in the crystal graph at all — fall back to the index so a
+        // freshly processed (or blocked) source still gets its focus node.
+        let Some(src) = model.and_then(|m| m.sources.iter().find(|s| s.sha256 == sha)) else {
+            return Err(GraphError::not_found(&format!("source not found: {sha}")));
+        };
+        let node = GNode {
+            id: focus_id.clone(),
+            node_type: "source".into(),
+            label: src.title.clone().unwrap_or_else(|| sha.to_string()),
+            theme: None,
+            strength: None,
+            url: src.url.clone(),
+            degree: 0,
+            cluster: 0,
+            importance: 1.0,
+            hit: false,
+            provenance: None,
+        };
+        return Ok(GraphResponse {
+            mode: GraphMode::Neighborhood.as_str().into(),
+            nodes: vec![node],
+            edges: Vec::new(),
+            communities: Vec::new(),
+            total_nodes: base.nodes.len() + 1,
+            truncated: false,
+        });
+    }
+
+    // Keep focus + claims + their sibling sources under the shared cap.
+    let mut kept: BTreeSet<&str> = BTreeSet::new();
+    kept.insert(focus_id.as_str());
+    let mut truncated = false;
+    for claim in &citing {
+        let srcs = &base.claim_sources[claim.as_str()];
+        // +1 for the claim itself; siblings may already be kept.
+        let new_sources = srcs.iter().filter(|s| !kept.contains(s.as_str())).count();
+        if kept.len() + 1 + new_sources > MAX_NEIGHBORHOOD_NODES {
+            truncated = true;
+            break;
+        }
+        kept.insert(claim.as_str());
+        for s in srcs {
+            kept.insert(s.as_str());
+        }
+    }
+
+    let mut nodes: Vec<GNode> = base
+        .nodes
+        .values()
+        .filter(|n| kept.contains(n.id.as_str()))
+        .cloned()
+        .collect();
+    sort_by_importance(&mut nodes);
+
+    // Bipartite claim→source edges (`cites`): the units in between are
+    // collapsed for this compact view.
+    let mut edges: Vec<GEdge> = Vec::new();
+    for (claim, srcs) in &base.claim_sources {
+        if !kept.contains(claim.as_str()) {
+            continue;
+        }
+        for s in srcs {
+            if kept.contains(s.as_str()) {
+                edges.push(GEdge {
+                    source: claim.clone(),
+                    target: s.clone(),
+                    edge_type: "cites".into(),
+                    weight: None,
+                });
+            }
+        }
+    }
+
+    let claim_refs: Vec<&GNode> = nodes.iter().filter(|n| n.node_type == "claim").collect();
+    let communities = build_communities(&claim_refs);
+    let total_nodes = base.nodes.len();
+
+    Ok(GraphResponse {
+        mode: GraphMode::Neighborhood.as_str().into(),
+        nodes,
+        edges,
+        communities,
+        total_nodes,
+        truncated,
+    })
+}
+
 pub const MAX_SEARCH_HITS: usize = 40;
 const MAX_SEARCH_CONTEXT: usize = 80;
 
@@ -1216,6 +1342,125 @@ mod tests {
         ];
         let resp = build_graph(&records, None, &params(GraphMode::Overview)).unwrap();
         assert_eq!(resp.communities[0].label, "t1 / t2");
+    }
+
+    /// Index model mapping `(case_id, sha, title)` triples to sources+packs
+    /// so build_base resolves `source:<sha>` node ids.
+    fn model_for_cases(cases: &[(&str, &str, &str)]) -> IndexModel {
+        use ovp_index::{OpsState, PackRow, SourceRow, SourceStatus, Totals};
+        IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: "2026-07-09".into(),
+            run_id: None,
+            totals: Totals::default(),
+            sources: cases
+                .iter()
+                .map(|(case, sha, title)| SourceRow {
+                    sha256: (*sha).into(),
+                    status: SourceStatus::Processed,
+                    title: Some((*title).into()),
+                    url: None,
+                    rel_path: None,
+                    date: None,
+                    last_run_id: None,
+                    pack_dir: Some(format!("40-Resources/Reader/{case}")),
+                    fail_count: 0,
+                    last_reason: None,
+                })
+                .collect(),
+            packs: cases
+                .iter()
+                .map(|(case, sha, title)| PackRow {
+                    pack_dir: format!("40-Resources/Reader/{case}"),
+                    title: (*title).into(),
+                    date: None,
+                    units: 0,
+                    cards: 0,
+                    json_repaired: false,
+                    card_titles: vec![],
+                    source_sha256: Some((*sha).into()),
+                })
+                .collect(),
+            claims: vec![],
+            runs: vec![],
+            ops: OpsState::default(),
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_returns_citing_claims_and_sibling_sources() {
+        let records = sample_records();
+        let model = model_for_cases(&[
+            ("case1", "sha1", "Source One"),
+            ("case2", "sha2", "Source Two"),
+            ("case9", "sha9", "Source Nine"),
+        ]);
+        let resp = source_neighborhood(&records, Some(&model), "sha1").unwrap();
+        assert_eq!(resp.mode, "neighborhood");
+
+        let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        // Focus source, its citing claims a/b/c, and the sibling source of
+        // claim a (case2 → sha2).
+        assert!(ids.contains("source:sha1"));
+        assert!(ids.contains("claim:a"));
+        assert!(ids.contains("claim:b"));
+        assert!(ids.contains("claim:c"));
+        assert!(ids.contains("source:sha2"));
+        // Unrelated claim d and its source never enter the neighborhood.
+        assert!(!ids.contains("claim:d"));
+        assert!(!ids.contains("source:case9"));
+        assert!(!ids.contains("source:sha9"));
+        // No unit nodes in this compact view.
+        assert!(resp.nodes.iter().all(|n| n.node_type != "unit"));
+
+        // Edges are bipartite claim→source `cites`, endpoints all kept.
+        assert!(!resp.edges.is_empty());
+        for e in &resp.edges {
+            assert_eq!(e.edge_type, "cites");
+            assert!(e.source.starts_with("claim:"));
+            assert!(e.target.starts_with("source:"));
+            assert!(ids.contains(e.source.as_str()));
+            assert!(ids.contains(e.target.as_str()));
+        }
+        assert!(
+            resp.edges
+                .iter()
+                .any(|e| e.source == "claim:a" && e.target == "source:sha2"),
+            "sibling edge missing"
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_uncited_source_is_single_node() {
+        let records = sample_records();
+        let mut model = model_for_cases(&[("case1", "sha1", "Source One")]);
+        // A source the index knows but no crystal claim cites.
+        model.sources.push(ovp_index::SourceRow {
+            sha256: "freshsha".into(),
+            status: ovp_index::SourceStatus::Processed,
+            title: Some("Fresh Source".into()),
+            url: None,
+            rel_path: None,
+            date: None,
+            last_run_id: None,
+            pack_dir: None,
+            fail_count: 0,
+            last_reason: None,
+        });
+        let resp = source_neighborhood(&records, Some(&model), "freshsha").unwrap();
+        assert_eq!(resp.nodes.len(), 1);
+        assert_eq!(resp.nodes[0].id, "source:freshsha");
+        assert_eq!(resp.nodes[0].label, "Fresh Source");
+        assert!(resp.edges.is_empty());
+        assert!(!resp.truncated);
+    }
+
+    #[test]
+    fn source_neighborhood_unknown_sha_is_404() {
+        let records = sample_records();
+        let model = model_for_cases(&[("case1", "sha1", "Source One")]);
+        let err = source_neighborhood(&records, Some(&model), "nope").unwrap_err();
+        assert_eq!(err.status, 404);
     }
 
     #[test]
