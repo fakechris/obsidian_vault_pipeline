@@ -43,6 +43,11 @@ pub struct DailyArgs {
     pub no_intake: bool,
     pub pinboard_fixture: Option<PathBuf>,
     pub pinboard_live: bool,
+    /// Pinboard capture: only bookmarks posted on/after this date
+    /// (YYYY-MM-DD). Passthrough to the pinboard first-sync flood guard.
+    pub pinboard_since: Option<String>,
+    /// Pinboard capture: at most N of the newest new bookmarks.
+    pub pinboard_max: Option<usize>,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
     /// Web fetch fixture directory for enriching needs-content sources.
@@ -80,15 +85,32 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     let mut report = RunReport::new(&args.run_id, &args.date);
     println!("daily [{}]: vault {}", args.date, args.vault_root.display());
 
-    // Phase 1 — pinboard capture (optional).
+    // Phase 1 — pinboard capture (optional). Inherits the first-sync flood
+    // guard: an unfiltered sync with >500 NEW bookmarks fails this phase
+    // loudly (no --yes-all here; a deliberate full sync is `ovp2
+    // pinboard-sync --yes-all`).
     if args.pinboard_fixture.is_some() || args.pinboard_live {
         let mut fetch = build_pinboard_fetch(&args)?;
-        let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run)
+        let opts = ovp_intake::PinboardSyncOptions {
+            since: args.pinboard_since.clone(),
+            max: args.pinboard_max,
+            yes_all: false,
+        };
+        let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts)
             .map_err(CliError::Io)?;
         println!(
             "  pinboard: {} fetched, {} new note(s), {} known ({})",
             outcome.fetched, outcome.new_notes.len(), outcome.skipped_known, outcome.origin
         );
+        if outcome.guard_would_abort {
+            println!(
+                "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
+                 exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
+                 (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
+                outcome.new_notes.len(),
+                ovp_intake::FIRST_SYNC_GUARD_MAX_NEW,
+            );
+        }
         report.pinboard = Some((&outcome).into());
     }
 

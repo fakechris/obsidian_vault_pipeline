@@ -178,6 +178,17 @@ enum Cmd {
         /// pinboard-live` build + PINBOARD_TOKEN).
         #[arg(long)]
         pinboard_live: bool,
+        /// Pinboard capture: only materialize bookmarks posted on/after this
+        /// date (YYYY-MM-DD). The Pinboard API returns the account's ENTIRE
+        /// history, so a first sync can flood the vault with tens of
+        /// thousands of notes; this narrows it to recent bookmarks.
+        #[arg(long)]
+        pinboard_since: Option<String>,
+        /// Pinboard capture: materialize at most N of the NEWEST new
+        /// bookmarks (older ones wait for later runs). Guards a first sync
+        /// against an old account from flooding the vault.
+        #[arg(long)]
+        pinboard_max: Option<usize>,
         /// Leave succeeded sources in 01-Raw instead of moving them to
         /// 03-Processed.
         #[arg(long)]
@@ -250,6 +261,21 @@ enum Cmd {
         run_id: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Only materialize bookmarks posted on/after this date (YYYY-MM-DD).
+        /// The API returns the account's ENTIRE history, so a first sync
+        /// against an old account otherwise floods the vault with tens of
+        /// thousands of notes.
+        #[arg(long)]
+        since: Option<String>,
+        /// Materialize at most N of the NEWEST new bookmarks; older ones wait
+        /// for later runs (first-sync flood guard).
+        #[arg(long)]
+        max: Option<usize>,
+        /// Deliberately materialize EVERYTHING. Without --since/--max, a run
+        /// that would create more than 500 new notes aborts before writing
+        /// anything (first-sync flood guard); this flag overrides the guard.
+        #[arg(long)]
+        yes_all: bool,
     },
     /// PRODUCT — rebuild the persistent read model
     /// (`.ovp/index/index.json`) from the ledgers, reader packs, crystal
@@ -998,6 +1024,8 @@ fn main() -> ExitCode {
             no_intake,
             pinboard_fixture,
             pinboard_live,
+            pinboard_since,
+            pinboard_max,
             no_lifecycle,
             retry_blocked,
             web_fetch_fixture,
@@ -1029,6 +1057,8 @@ fn main() -> ExitCode {
                 no_intake,
                 pinboard_fixture,
                 pinboard_live,
+                pinboard_since,
+                pinboard_max,
                 no_lifecycle,
                 retry_blocked,
                 web_fetch_fixture,
@@ -1063,6 +1093,9 @@ fn main() -> ExitCode {
             date,
             run_id,
             dry_run,
+            since,
+            max,
+            yes_all,
         } => {
             let date = date.unwrap_or_else(today_iso);
             let run_id = run_id.unwrap_or_else(|| format!("pinboard-{date}"));
@@ -1073,6 +1106,9 @@ fn main() -> ExitCode {
                 date,
                 run_id,
                 dry_run,
+                since,
+                max,
+                yes_all,
             })
         }
         Cmd::Index { vault_root, date } => {

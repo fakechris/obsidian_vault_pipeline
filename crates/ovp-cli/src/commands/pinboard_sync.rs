@@ -5,7 +5,10 @@
 
 use std::path::PathBuf;
 
-use ovp_intake::{sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch};
+use ovp_intake::{
+    sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch, PinboardSyncOptions,
+    FIRST_SYNC_GUARD_MAX_NEW,
+};
 
 use crate::commands::daily::live_pinboard_fetch;
 use crate::CliError;
@@ -17,6 +20,12 @@ pub struct PinboardSyncArgs {
     pub date: String,
     pub run_id: String,
     pub dry_run: bool,
+    /// Only materialize bookmarks posted on/after this date (YYYY-MM-DD).
+    pub since: Option<String>,
+    /// Materialize at most N of the newest new bookmarks.
+    pub max: Option<usize>,
+    /// Override the first-sync flood guard and materialize everything.
+    pub yes_all: bool,
 }
 
 pub fn run(args: PinboardSyncArgs) -> Result<(), CliError> {
@@ -39,7 +48,12 @@ pub fn run(args: PinboardSyncArgs) -> Result<(), CliError> {
         Some(ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?)
     };
     let cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id);
-    let outcome = sync_pinboard(&cfg, fetch.as_mut(), args.dry_run).map_err(CliError::Io)?;
+    let opts = PinboardSyncOptions {
+        since: args.since.clone(),
+        max: args.max,
+        yes_all: args.yes_all,
+    };
+    let outcome = sync_pinboard(&cfg, fetch.as_mut(), args.dry_run, &opts).map_err(CliError::Io)?;
 
     println!("pinboard-sync [{}]: {}", args.date, outcome.origin);
     for rec in &outcome.new_notes {
@@ -53,6 +67,20 @@ pub fn run(args: PinboardSyncArgs) -> Result<(), CliError> {
         outcome.skipped_empty_url,
         if outcome.dry_run { " — dry-run, nothing written" } else { "" },
     );
+    if outcome.skipped_since > 0 || outcome.skipped_over_max > 0 {
+        println!(
+            "  filtered: {} before --since, {} beyond --max (left for later runs)",
+            outcome.skipped_since, outcome.skipped_over_max,
+        );
+    }
+    if outcome.guard_would_abort {
+        println!(
+            "  WARNING: a REAL run would ABORT — {} new bookmark(s) exceed the \
+             {FIRST_SYNC_GUARD_MAX_NEW}-note first-sync guard; rerun with --since, --max, \
+             or --yes-all",
+            outcome.new_notes.len(),
+        );
+    }
     println!("  next: `ovp2 intake` (or `daily`) moves readable notes into 01-Raw");
     Ok(())
 }

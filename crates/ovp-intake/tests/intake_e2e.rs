@@ -7,7 +7,7 @@ use std::path::Path;
 
 use ovp_intake::{
     read_intake_ledger, read_pinboard_ledger, sweep_intake, sync_pinboard, FixturePinboardFetch,
-    IntakeConfig,
+    IntakeConfig, PinboardSyncOptions, FIRST_SYNC_GUARD_MAX_NEW,
 };
 
 const LONG_BODY: &str = "A chunk is a structurally neutral container. It knows nothing about \
@@ -123,7 +123,7 @@ fn pinboard_sync_materializes_dedups_and_feeds_sweep() {
 
     // Sync: 2 notes materialized (empty-URL skipped).
     let mut fetch = FixturePinboardFetch::new(&export);
-    let out = sync_pinboard(&cfg(root), &mut fetch, false).unwrap();
+    let out = sync_pinboard(&cfg(root), &mut fetch, false, &Default::default()).unwrap();
     assert_eq!(out.fetched, 3);
     assert_eq!(out.new_notes.len(), 2);
     assert_eq!(out.skipped_empty_url, 1);
@@ -133,7 +133,13 @@ fn pinboard_sync_materializes_dedups_and_feeds_sweep() {
     }
 
     // Second sync is a no-op.
-    let out2 = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false).unwrap();
+    let out2 = sync_pinboard(
+        &cfg(root),
+        &mut FixturePinboardFetch::new(&export),
+        false,
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(out2.new_notes.len(), 0);
     assert_eq!(out2.skipped_known, 2);
     assert_eq!(read_pinboard_ledger(&root.join(".ovp/pinboard-sync.jsonl")).unwrap().len(), 2);
@@ -145,4 +151,147 @@ fn pinboard_sync_materializes_dedups_and_feeds_sweep() {
     let to = sweep.ingested[0].to.as_ref().unwrap();
     assert!(to.starts_with("50-Inbox/01-Raw/2026-06/2026-06-02_Rich bookmark-"), "got {to}");
     assert_eq!(sweep.ingested[0].url.as_deref(), Some("https://rich.example/post"));
+}
+
+/// Export with `n` bare bookmarks at distinct ascending timestamps.
+fn write_flood_export(path: &Path, n: usize) {
+    let posts: Vec<serde_json::Value> = (0..n)
+        .map(|i| {
+            serde_json::json!({
+                "href": format!("https://e.x/p{i}"),
+                "description": format!("Post {i}"),
+                "extended": "",
+                "time": format!("2020-01-01T{:02}:{:02}:00Z", i / 60, i % 60),
+                "tags": ""
+            })
+        })
+        .collect();
+    std::fs::write(path, serde_json::to_string(&posts).unwrap()).unwrap();
+}
+
+#[test]
+fn pinboard_since_filters_older_and_undated_bookmarks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    std::fs::write(&export, r#"[
+      {"href":"https://e.x/old","description":"Old","extended":"","time":"2026-06-01T10:00:00Z","tags":""},
+      {"href":"https://e.x/edge","description":"On the cutoff","extended":"","time":"2026-06-03T00:00:00Z","tags":""},
+      {"href":"https://e.x/new","description":"New","extended":"","time":"2026-06-05T10:00:00Z","tags":""},
+      {"href":"https://e.x/undated","description":"No timestamp","extended":"","time":"","tags":""}
+    ]"#).unwrap();
+
+    let opts = PinboardSyncOptions { since: Some("2026-06-03".into()), ..Default::default() };
+    let out = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
+        .unwrap();
+    assert_eq!(out.fetched, 4);
+    assert_eq!(out.skipped_since, 2, "old + undated excluded: {out:?}");
+    let urls: Vec<&str> = out.new_notes.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(urls, ["https://e.x/edge", "https://e.x/new"], "on/after cutoff, oldest first");
+    assert_eq!(read_pinboard_ledger(&root.join(".ovp/pinboard-sync.jsonl")).unwrap().len(), 2);
+}
+
+#[test]
+fn pinboard_since_rejects_malformed_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    write_flood_export(&export, 1);
+    let opts = PinboardSyncOptions { since: Some("06/03/2026".into()), ..Default::default() };
+    let err = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
+        .unwrap_err();
+    assert!(err.contains("YYYY-MM-DD"), "{err}");
+}
+
+#[test]
+fn pinboard_max_takes_newest_and_drains_incrementally() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    write_flood_export(&export, 4); // p0 oldest … p3 newest
+
+    let opts = PinboardSyncOptions { max: Some(2), ..Default::default() };
+    let out = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
+        .unwrap();
+    assert_eq!(out.skipped_over_max, 2);
+    let urls: Vec<&str> = out.new_notes.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(urls, ["https://e.x/p2", "https://e.x/p3"], "the 2 NEWEST, processed oldest-first");
+
+    // Second capped run: the newest are now ledger-known, so the next-newest
+    // drain through — filters narrow, dedup semantics unchanged.
+    let out2 = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
+        .unwrap();
+    assert_eq!(out2.skipped_known, 2);
+    let urls2: Vec<&str> = out2.new_notes.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(urls2, ["https://e.x/p0", "https://e.x/p1"]);
+    assert_eq!(read_pinboard_ledger(&root.join(".ovp/pinboard-sync.jsonl")).unwrap().len(), 4);
+}
+
+#[test]
+fn pinboard_first_sync_guard_aborts_unfiltered_flood_before_any_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    write_flood_export(&export, FIRST_SYNC_GUARD_MAX_NEW + 1);
+
+    let err = sync_pinboard(
+        &cfg(root),
+        &mut FixturePinboardFetch::new(&export),
+        false,
+        &Default::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("501 NEW bookmarks"), "states the count: {err}");
+    assert!(err.contains("--since") && err.contains("--max") && err.contains("--yes-all"),
+        "names every way forward: {err}");
+
+    // ABORT means nothing on disk: no notes, no ledger, no write-log events.
+    assert!(!root.join("50-Inbox/02-Pinboard").exists(), "no notes written");
+    assert!(!root.join(".ovp/pinboard-sync.jsonl").exists(), "no ledger");
+    assert!(!root.join("60-Logs/pipeline.jsonl").exists(), "no events");
+}
+
+#[test]
+fn pinboard_first_sync_guard_yes_all_overrides_then_stays_quiet() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    write_flood_export(&export, FIRST_SYNC_GUARD_MAX_NEW + 1);
+
+    let opts = PinboardSyncOptions { yes_all: true, ..Default::default() };
+    let out = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
+        .unwrap();
+    assert_eq!(out.new_notes.len(), FIRST_SYNC_GUARD_MAX_NEW + 1);
+
+    // Rerun WITHOUT the override: everything is ledger-known, 0 new → the
+    // guard counts NEW bookmarks only, so no abort.
+    let out2 = sync_pinboard(
+        &cfg(root),
+        &mut FixturePinboardFetch::new(&export),
+        false,
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(out2.new_notes.len(), 0);
+    assert_eq!(out2.skipped_known, FIRST_SYNC_GUARD_MAX_NEW + 1);
+}
+
+#[test]
+fn pinboard_first_sync_guard_exempts_dry_run_but_reports_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export.json");
+    write_flood_export(&export, FIRST_SYNC_GUARD_MAX_NEW + 1);
+
+    let out = sync_pinboard(
+        &cfg(root),
+        &mut FixturePinboardFetch::new(&export),
+        true,
+        &Default::default(),
+    )
+    .unwrap();
+    assert!(out.guard_would_abort, "dry run reports the would-be abort");
+    assert_eq!(out.new_notes.len(), FIRST_SYNC_GUARD_MAX_NEW + 1, "count is reported");
+    assert!(!root.join("50-Inbox/02-Pinboard").exists(), "dry run writes nothing");
+    assert!(!root.join(".ovp/pinboard-sync.jsonl").exists());
 }
