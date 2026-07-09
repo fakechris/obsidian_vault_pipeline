@@ -1,6 +1,7 @@
-/** B1 placeholder routes — shell + title + one-line EmptyState naming the
- * phase each destination ships in (Search/Knowledge = B3, Ask = B4,
- * System = B5). Knowledge links to the pre-B1 graph as an interim view. */
+/** Remaining placeholder routes — Ask ships in B4, System in B5.
+ * The System placeholder is ALSO the only navigation into the legacy
+ * Flow / Monitor views until B5 rethemes them into System panels
+ * (design §2: /viz standalone navigation is retired in B3). */
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/ui';
@@ -27,29 +28,26 @@ function Placeholder({
   );
 }
 
-export function SearchPage() {
-  return <Placeholder titleKey="nav.search" bodyKey="placeholder.search" />;
-}
-
-export function KnowledgePage() {
-  const { t } = useI18n();
-  return (
-    <Placeholder
-      titleKey="nav.knowledge"
-      bodyKey="placeholder.knowledge"
-      extra={
-        <p>
-          <Link to="/graph">{t('placeholder.knowledgeInterim')} →</Link>
-        </p>
-      }
-    />
-  );
-}
-
 export function AskPage() {
   return <Placeholder titleKey="nav.ask" bodyKey="placeholder.ask" />;
 }
 
 export function SystemPage() {
-  return <Placeholder titleKey="nav.system" bodyKey="placeholder.system" />;
+  const { t } = useI18n();
+  return (
+    <Placeholder
+      titleKey="nav.system"
+      bodyKey="placeholder.system"
+      extra={
+        <ul className="legacy-links">
+          <li>
+            <Link to="/flow">{t('placeholder.systemFlow')} →</Link>
+          </li>
+          <li>
+            <Link to="/monitor">{t('placeholder.systemMonitor')} →</Link>
+          </li>
+        </ul>
+      }
+    />
+  );
 }

@@ -187,6 +187,96 @@ export function groupByMonth(sources: SourceRow[]): MonthGroup[] {
     }));
 }
 
+// ---------------------------------------------------------------- knowledge
+
+/** One card of the Knowledge-home theme wall. */
+export interface ThemeGroup {
+  theme: string;
+  total: number;
+  durable: number;
+  caveated: number;
+  /** First durable (else first caveated) claim text — the wall snippet. */
+  topClaim?: string;
+}
+
+/** Active claims only — the knowledge surface never lists superseded or
+ * retracted claims (they remain reachable through the ledger/CLI). */
+export function activeClaims(claims: ClaimRow[]): ClaimRow[] {
+  return claims.filter(
+    (c) => c.status === 'durable' || c.status === 'caveated',
+  );
+}
+
+/** Theme wall from /api/model claims + /api/themes: ledger themes keep the
+ * ledger order (count desc); index-only themes append after. Claims without
+ * a theme group under '' — the caller decides how to label it. */
+export function themeWall(
+  claims: ClaimRow[],
+  ledgerThemes: { theme: string; count: number }[],
+): ThemeGroup[] {
+  const groups = new Map<string, ThemeGroup>();
+  const ensure = (theme: string): ThemeGroup => {
+    let g = groups.get(theme);
+    if (!g) {
+      g = { theme, total: 0, durable: 0, caveated: 0 };
+      groups.set(theme, g);
+    }
+    return g;
+  };
+  for (const t of ledgerThemes) {
+    ensure(t.theme);
+  }
+  for (const c of activeClaims(claims)) {
+    const g = ensure(c.theme ?? '');
+    if (c.status === 'durable') {
+      // The first durable claim is the wall snippet, even when a caveated
+      // one was seen first.
+      if (g.durable === 0) g.topClaim = c.claim;
+      g.durable += 1;
+    } else {
+      g.caveated += 1;
+      g.topClaim ??= c.claim;
+    }
+  }
+  for (const t of ledgerThemes) {
+    const g = groups.get(t.theme);
+    // Ledger and index normally agree; when they drift mid-run, show the
+    // larger count rather than hiding claims.
+    if (g) g.total = Math.max(t.count, g.durable + g.caveated);
+  }
+  for (const g of groups.values()) {
+    g.total = Math.max(g.total, g.durable + g.caveated);
+  }
+  return [...groups.values()].sort(
+    (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
+  );
+}
+
+/** Theme claims for the detail page: durable first, then caveated;
+ * stable claim_id order within each band. */
+export function themeClaims(claims: ClaimRow[], theme: string): ClaimRow[] {
+  const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
+  return activeClaims(claims)
+    .filter((c) => (c.theme ?? '') === theme)
+    .sort((a, b) => rank(a) - rank(b) || a.claim_id.localeCompare(b.claim_id));
+}
+
+/** case id (last pack_dir segment) → source row, via the packs' sha link.
+ * ClaimRow.sources hold case ids; a case whose pack lacks a source sha is a
+ * legacy source with NO /library page (portal handoff note: never navigate
+ * to a 404 for those). */
+export function sourcesByCase(model: IndexModel): Map<string, SourceRow> {
+  const bySha = new Map(model.sources.map((s) => [s.sha256, s]));
+  const out = new Map<string, SourceRow>();
+  for (const p of model.packs) {
+    const caseId = p.pack_dir.split(/[/\\]/).filter(Boolean).pop();
+    if (!caseId || !p.source_sha256) continue;
+    const src = bySha.get(p.source_sha256);
+    if (src) out.set(caseId, src);
+  }
+  return out;
+}
+
 export function countBy<T, K>(items: T[], key: (item: T) => K): Map<K, number> {
   const counts = new Map<K, number>();
   for (const item of items) {

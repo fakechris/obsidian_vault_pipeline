@@ -111,19 +111,60 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.loading': '图谱加载中…',
   'graph.error': '无法加载图谱。',
   'graph.empty': '暂无邻域——还没有内容引用本源。',
-  'graph.b3': '全局与主题作用域将在 B3 上线。',
+  'graph.emptyGlobal': '结晶库还没有主张——先运行结晶流程。',
+  'graph.emptyTheme': '还没有主张属于这个主题。',
   'graph.fullscreen': '全屏',
   'graph.exitFullscreen': '关闭',
-  'graph.truncated': '邻域已截断——仅显示最强的主张。',
+  'graph.truncated': '已截断——仅显示最强的主张。',
   'graph.kindClaim': '主张',
   'graph.kindSource': '源',
   'graph.kindUnit': '单元',
   'graph.openHint': '双击打开详情。',
+  'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
+
+  // knowledge home
+  'knowledge.title': '知识',
+  'knowledge.help':
+    '知识库当前"相信"的内容，按主题分组。durable（持久）主张通过了全部证据门；caveated（存疑）主张带有已知弱点，等待复核。',
+  'knowledge.helpLayers':
+    '每条主张由三层支撑：原文（markdown 源文件）、记忆（卡片与带行号锚点的引文单元）、结晶（引用这些单元的跨源主张）。点进任意主张即可核查全链。',
+  'knowledge.viewList': '列表',
+  'knowledge.viewGraph': '图谱',
+  'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
+  'knowledge.untitledTheme': '（无主题）',
+  'knowledge.claimCount': '{n} 条主张',
+  'knowledge.ratioLine': '持久 {durable} · 存疑 {caveated}',
+  'knowledge.graphCaption': '全部主张，按社区着色。单击节点看摘要，双击进入其主题。',
+  'knowledge.unknownClaim': '没有活跃主张 "{id}"——它可能已被取代或撤回。',
+
+  // theme detail
+  'theme.counts': '持久 {durable} · 存疑 {caveated}',
+  'theme.citedSources': '来源：',
+  'theme.legacySource': '旧源——该 vault 中没有对应的详情页。',
+  'theme.strength': '强度',
+  'theme.empty': '没有活跃主张属于这个主题。',
+  'theme.backToKnowledge': '全部主题',
+  'theme.graph': '主题图谱',
+  'theme.graphCaption': '本主题的主张与其引用的源。单击节点看摘要，双击打开详情。',
+
+  // search page + ⌘K overlay
+  'search.title': '搜索',
+  'search.help':
+    '一个输入框搜全部实体：源、阅读包、结晶主张与主题。结果直达对应详情——在任何页面按 ⌘K（Ctrl+K）即可随处唤起搜索。',
+  'search.placeholder': '搜索源、主张、主题…',
+  'search.keys': '↑↓ 选择 · Enter 打开 · Esc 关闭',
+  'search.error': '搜索失败——服务是否已连接 vault？',
+  'search.empty': '没有匹配结果。试试更短的词——搜索按子串匹配。',
+  'search.noPage': '该条目在此 vault 中没有详情页。',
+  'search.open': '搜索（⌘K）',
+  'search.group.claim': '主张',
+  'search.group.source': '源',
+  'search.group.pack': '阅读包',
+  'search.group.theme': '主题',
 
   // placeholders
-  'placeholder.search': '跨源/卡片/单元/主张/主题的搜索将在 B3 上线。',
-  'placeholder.knowledge': '主题墙、主张详情与带作用域的知识图谱将在 B3 上线。',
-  'placeholder.knowledgeInterim': '临时图谱视图',
   'placeholder.ask': '带引用的问答将在 B4 上线。',
   'placeholder.system': '运行记录、流程、诊断与设置将在 B5 上线。',
+  'placeholder.systemFlow': '旧版流程视图',
+  'placeholder.systemMonitor': '旧版监控视图',
 };

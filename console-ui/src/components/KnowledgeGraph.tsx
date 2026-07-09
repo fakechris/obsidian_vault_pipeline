@@ -2,24 +2,32 @@
  * One component, three scopes, one rendering engine:
  *
  *   scope='neighborhood' id=<source sha>  → this source, citing claims,
- *                                           sibling sources (B2, live)
- *   scope='global'                        → knowledge-page graph view (B3)
- *   scope='theme'        id=<theme>       → theme detail rail (B3)
+ *                                           sibling sources (B2)
+ *   scope='global'                        → the overview/density graph —
+ *                                           the Knowledge page graph view (B3)
+ *   scope='theme'        id=<theme>       → the theme's claims + their
+ *                                           sources — theme detail rail (B3)
  *
  * All colors are read from the DS custom properties (--graph-*, --c-*,
  * --accent, --text…) at render time, and the graph re-renders when
  * `data-theme` flips (MutationObserver on <html>). Interactions: click →
  * in-component info card; double-click → navigate (source → /library/:sha,
- * claim → /knowledge#<claim_id> placeholder anchor until B3). Embedded
- * height defaults to ~360px with an expand-to-fullscreen toggle.
+ * claim → /knowledge#<claim_id> anchor). Sha-less legacy sources
+ * (`source:<case_id>` nodes without an index page) never navigate — the
+ * info card says so instead of routing to a 404. Embedded height defaults
+ * to ~360px with an expand-to-fullscreen toggle.
  *
- * @antv/g6 (~1MB min) loads via dynamic import so portal pages stay light —
- * same policy as the lazy legacy /graph route. */
-import { useEffect, useRef, useState } from 'react';
+ * @antv/g6 (~1MB min) loads via dynamic import so portal pages stay light. */
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { fetchSourceNeighborhood } from '../lib/api';
+import {
+  fetchGlobalGraph,
+  fetchSourceNeighborhood,
+  fetchThemeGraph,
+} from '../lib/api';
 import type { GraphNode, GraphResponse } from '../lib/types';
+import { useModel } from '../model';
 import { EmptyState } from './ui';
 
 export type KnowledgeGraphScope = 'neighborhood' | 'global' | 'theme';
@@ -68,6 +76,15 @@ function nodeFill(type: string, t: DsTokens): string {
   return t.community[1];
 }
 
+/** Global scope colors claims by community (that's what the view is FOR);
+ * the focused scopes color by entity kind. */
+function scopedFill(scope: KnowledgeGraphScope, n: GraphNode, t: DsTokens): string {
+  if (scope === 'global' && n.cluster > 0) {
+    return t.community[(n.cluster - 1) % t.community.length];
+  }
+  return nodeFill(n.type, t);
+}
+
 function nodeSize(n: GraphNode, isFocus: boolean): number {
   if (isFocus) return 22;
   if (n.type === 'source') return 12 + 8 * (n.importance ?? 0);
@@ -81,6 +98,13 @@ export default function KnowledgeGraph({
 }: KnowledgeGraphProps) {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const { model } = useModel();
+  // Shas that actually have a /library/:sha page (handoff note 5): while
+  // the model is loading — or in a crystal-only vault — nothing navigates.
+  const knownShas = useMemo(
+    () => new Set((model?.sources ?? []).map((s) => s.sha256)),
+    [model],
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,11 +123,25 @@ export default function KnowledgeGraph({
   }, []);
 
   useEffect(() => {
-    if (scope !== 'neighborhood' || !id) return;
+    // Scope → endpoint switch. neighborhood/theme without an id is a
+    // caller bug — surface it, don't fetch garbage.
+    const request =
+      scope === 'global'
+        ? fetchGlobalGraph()
+        : id
+          ? scope === 'neighborhood'
+            ? fetchSourceNeighborhood(id)
+            : fetchThemeGraph(id)
+          : null;
     let cancelled = false;
     setData(null);
     setError(null);
-    fetchSourceNeighborhood(id)
+    setSelected(null);
+    if (!request) {
+      setError(`KnowledgeGraph scope=${scope} requires id`);
+      return;
+    }
+    request
       .then((resp) => {
         if (!cancelled) setData(resp);
       })
@@ -125,7 +163,8 @@ export default function KnowledgeGraph({
     void import('@antv/g6').then(({ Graph, NodeEvent, CanvasEvent }) => {
       if (destroyed || !containerRef.current) return;
       const tokens = readTokens();
-      const focusId = id ? `source:${id}` : null;
+      const focusId =
+        scope === 'neighborhood' && id ? `source:${id}` : null;
       const nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 
       const graph = new Graph({
@@ -152,8 +191,10 @@ export default function KnowledgeGraph({
               const n = nodeById.get(d.id ?? '');
               return n ? nodeSize(n, n.id === focusId) : 10;
             },
-            fill: (d: { id?: string }) =>
-              nodeFill(nodeById.get(d.id ?? '')?.type ?? '', tokens),
+            fill: (d: { id?: string }) => {
+              const n = nodeById.get(d.id ?? '');
+              return n ? scopedFill(scope, n, tokens) : tokens.muted;
+            },
             fillOpacity: 0.92,
             lineWidth: (d: { id?: string }) => (d.id === focusId ? 1.5 : 0),
             stroke: tokens.accent,
@@ -221,9 +262,11 @@ export default function KnowledgeGraph({
       graph.on(NodeEvent.DBLCLICK, (evt: unknown) => {
         const nodeId = targetId(evt);
         if (nodeId.startsWith('source:')) {
-          navigate(`/library/${nodeId.slice('source:'.length)}`);
+          // Sha-less legacy sources (`source:<case_id>`) have no
+          // /library/:sha page — never navigate to a 404.
+          const sha = nodeId.slice('source:'.length);
+          if (knownShas.has(sha)) navigate(`/library/${sha}`);
         } else if (nodeId.startsWith('claim:')) {
-          // Knowledge page is a B3 placeholder; the anchor carries the claim.
           navigate(`/knowledge#${nodeId.slice('claim:'.length)}`);
         }
       });
@@ -241,15 +284,7 @@ export default function KnowledgeGraph({
       cleanup?.();
     };
     // themeVersion intentionally re-runs this effect: same data, new tokens.
-  }, [data, id, navigate, themeVersion]);
-
-  if (scope !== 'neighborhood') {
-    return (
-      <EmptyState>
-        <p>{t('graph.b3')}</p>
-      </EmptyState>
-    );
-  }
+  }, [data, id, scope, knownShas, navigate, themeVersion]);
 
   const kindLabel = (type: string) =>
     type === 'claim'
@@ -270,7 +305,13 @@ export default function KnowledgeGraph({
       )}
       {!error && data && data.nodes.length === 0 && (
         <EmptyState>
-          <p>{t('graph.empty')}</p>
+          <p>
+            {scope === 'neighborhood'
+              ? t('graph.empty')
+              : scope === 'theme'
+                ? t('graph.emptyTheme')
+                : t('graph.emptyGlobal')}
+          </p>
         </EmptyState>
       )}
       {!error && !data && <div className="graph-note">{t('graph.loading')}</div>}
@@ -301,7 +342,12 @@ export default function KnowledgeGraph({
               {selected.theme && (
                 <div className="tiny muted">{selected.theme}</div>
               )}
-              <div className="tiny muted">{t('graph.openHint')}</div>
+              <div className="tiny muted">
+                {selected.type === 'source' &&
+                !knownShas.has(selected.id.slice('source:'.length))
+                  ? t('graph.noPage')
+                  : t('graph.openHint')}
+              </div>
             </div>
           )}
         </>
