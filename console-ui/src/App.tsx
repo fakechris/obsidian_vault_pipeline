@@ -9,7 +9,8 @@ import {
 } from 'react-router-dom';
 import Shell from './components/Shell';
 import { ModelProvider } from './model';
-import { AskPage, SystemPage } from './pages/PlaceholderPages';
+import { SystemPage } from './pages/PlaceholderPages';
+import AskPage from './pages/AskPage';
 import KnowledgePage from './pages/KnowledgePage';
 import LibraryPage from './pages/LibraryPage';
 import SearchPage from './pages/SearchPage';

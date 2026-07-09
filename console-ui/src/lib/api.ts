@@ -1,4 +1,6 @@
 import type {
+  AskResponse,
+  ChatEntry,
   ClaimDetail,
   FindHit,
   FlowData,
@@ -94,4 +96,50 @@ export function fetchThemeGraph(theme: string): Promise<GraphResponse> {
  * stable ids (FindHit.id) for entity links. */
 export function fetchSearchHits(q: string): Promise<FindHit[]> {
   return fetchJson<FindHit[]>(`/api/search?q=${encodeURIComponent(q)}`);
+}
+
+/** Non-2xx /api/ask outcome with the HTTP status kept — the Ask page maps
+ * 503 (llm not configured) and 504 (timeout) to specific guidance. */
+export class AskError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** POST /api/ask — cited answer over the grounded evidence index. The
+ * server saves the transcript to `.ovp/chats/` as a side effect. */
+export async function postAsk(question: string): Promise<AskResponse> {
+  const res = await fetch('/api/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const data = (await res.json()) as { error?: unknown };
+      if (data && typeof data.error === 'string') message = data.error;
+    } catch {
+      /* non-JSON error body — keep the status line */
+    }
+    throw new AskError(res.status, message);
+  }
+  return res.json() as Promise<AskResponse>;
+}
+
+/** Saved ask transcripts, newest first. */
+export function fetchChats(): Promise<ChatEntry[]> {
+  return fetchJson<ChatEntry[]>('/api/chats');
+}
+
+/** One saved transcript as raw markdown (rendered client-side). */
+export async function fetchChatMarkdown(name: string): Promise<string> {
+  const res = await fetch(`/api/chats/${encodeURIComponent(name)}`);
+  if (!res.ok) {
+    throw new Error(`API /api/chats/${name}: ${res.status} ${res.statusText}`);
+  }
+  return res.text();
 }

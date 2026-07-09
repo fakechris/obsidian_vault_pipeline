@@ -1016,6 +1016,242 @@ body {
   max-width: 640px;
 }
 
+/* ---------- ask page (B4): history | thread | citations ---------- */
+.grid.ask {
+  grid-template-columns: minmax(170px, 210px) minmax(0, 1fr) minmax(240px, 300px);
+  align-items: start;
+  margin-top: 1.25rem;
+}
+@media (max-width: 900px) {
+  .grid.ask {
+    grid-template-columns: 1fr;
+  }
+}
+.chat-list .chat-date {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+}
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.chat-q {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  padding: 0.55rem 0.8rem;
+  font-size: var(--ovp-text-sm);
+  overflow-wrap: anywhere;
+}
+.chat-a {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--ovp-radius-card);
+  padding: 0.9rem 1rem;
+}
+.chat-a.chat-error {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--ovp-text-sm);
+}
+.chat-a.chat-pending {
+  font-size: var(--ovp-text-sm);
+}
+.answer-text {
+  white-space: pre-wrap;
+  font-size: var(--ovp-text-sm);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.cite-marker {
+  border: 0;
+  background: transparent;
+  padding: 0 1px;
+  cursor: pointer;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  vertical-align: baseline;
+}
+.cite-marker:hover {
+  text-decoration: underline;
+}
+.cite-marker.warn {
+  color: var(--c-4);
+}
+.chat-verify {
+  margin-top: 0.5rem;
+  letter-spacing: 0.02em;
+}
+.ask-composer {
+  margin-top: 1rem;
+}
+.ask-composer textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: var(--ovp-text-sm);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-input);
+  padding: 0.55rem 0.8rem;
+}
+.ask-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ask-composer textarea:disabled {
+  opacity: 0.6;
+}
+.composer-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+.send-btn {
+  border: 1px solid var(--accent);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--accent);
+  color: var(--surface);
+  font: inherit;
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  padding: 0.25rem 0.8rem;
+  cursor: pointer;
+  transition: opacity 120ms;
+}
+.send-btn:hover {
+  opacity: 0.92;
+}
+.send-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* citations panel (right rail) */
+.cite-entry {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--ovp-radius-md);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+  font-size: var(--ovp-text-sm);
+  transition:
+    background 200ms,
+    border-color 120ms;
+}
+.cite-entry.hover-hit {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.cite-entry-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+.cite-num {
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  color: var(--accent);
+}
+.cite-title {
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  margin-bottom: 0.25rem;
+}
+.cite-entry blockquote {
+  margin: 0 0 0.35rem;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  line-height: 1.55;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+.cite-open {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  color: var(--accent);
+}
+.cite-open:hover {
+  text-decoration: underline;
+}
+/* the warn pill for citations the verifier could not back */
+.pill.unverified {
+  color: var(--c-4);
+  border: 1px solid var(--c-4);
+  background: color-mix(in srgb, var(--c-4) 10%, transparent);
+}
+/* saved-chat reader header */
+.chat-reader-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+.tab-like {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--ovp-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.tab-like:hover {
+  text-decoration: underline;
+}
+/* example questions in the empty state */
+.example-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+.example-list li {
+  padding: 0.15rem 0;
+}
+.example-list button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--ovp-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.example-list button:hover {
+  text-decoration: underline;
+}
+
 /* legacy deep links on the System placeholder */
 .legacy-links {
   list-style: none;

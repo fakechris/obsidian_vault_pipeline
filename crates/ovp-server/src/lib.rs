@@ -5,14 +5,15 @@
 //! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
 //! legacy generated console pages by exact filename, and JSON API endpoints
 //! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
-//! `/api/source/:sha`, `/api/flow`).
+//! `/api/source/:sha`, `/api/flow`, `POST /api/ask`, `/api/chats`).
 //! Uses `tiny_http` to avoid any async runtime dependency.
 
 mod graph;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
+use std::time::Duration;
 
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
@@ -21,12 +22,30 @@ use ovp_index::{
     EvidenceModel, IndexModel, Query, QueryKind, read_evidence, read_index, run_query,
 };
 use ovp_intake::read_jsonl;
+use ovp_llm::ModelClient;
+use ovp_memory::ask::{AskArgs, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence};
+use ovp_memory::verify::{citation_key, citations_in_order};
 use tiny_http::{Header, Method, Response, Server};
 
 /// Cap for source markdown shipped in the /api/source payload — beyond this
 /// the response truncates with an explicit flag instead of shipping megabytes
 /// of JSON (same limit the v1 server-rendered page used).
 pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
+
+/// Cap for POST request bodies (`/api/ask` questions are short; anything
+/// bigger is a mistake, not a question).
+pub const MAX_POST_BODY_BYTES: usize = 64 * 1024;
+
+/// Wall-clock guard for one `/api/ask` round trip (retrieval + LLM call).
+/// On expiry the request answers 504 — the worker thread is left to finish
+/// (or fail) in the background so the accept loop never hangs on it.
+pub const ASK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Builds the LLM client for `POST /api/ask` on demand. Injected by the CLI,
+/// which owns the feature-gated live transport and the key check — the
+/// server itself stays transport-free. `None` = ask answers 503.
+pub type AskClientFactory =
+    Arc<dyn Fn() -> Result<Box<dyn ModelClient>, String> + Send + Sync>;
 
 pub struct ServeConfig {
     pub vault_root: PathBuf,
@@ -37,6 +56,9 @@ pub struct ServeConfig {
     /// served from here — so a dev checkout can serve ANY vault without
     /// copying the build in.
     pub viz_dir: Option<PathBuf>,
+    /// LLM client factory for `POST /api/ask` — `None` when no live LLM is
+    /// configured (missing key / feature); ask then answers 503.
+    pub ask_client: Option<AskClientFactory>,
 }
 
 struct AppState {
@@ -47,6 +69,9 @@ struct AppState {
     /// like the index model, refreshed together on /api/refresh.
     evidence: RwLock<Option<EvidenceModel>>,
     viz_dir: Option<PathBuf>,
+    ask_client: Option<AskClientFactory>,
+    /// Test-tunable copy of [`ASK_TIMEOUT`].
+    ask_timeout: Duration,
 }
 
 impl AppState {
@@ -105,6 +130,8 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         model: RwLock::new(None),
         evidence: RwLock::new(None),
         viz_dir: config.viz_dir,
+        ask_client: config.ask_client,
+        ask_timeout: ASK_TIMEOUT,
     });
 
     // Pre-load model
@@ -127,28 +154,53 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         }
     }
 
-    for request in server.incoming_requests() {
+    for mut request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
-        let resp = dispatch(&state, method, &path);
+        let body = if method == Method::Post {
+            read_post_body(&mut request)
+        } else {
+            String::new()
+        };
+        let resp = dispatch(&state, method, &path, &body);
         let _ = request.respond(resp);
     }
 
     Ok(())
 }
 
+/// Read a POST body up to one byte past [`MAX_POST_BODY_BYTES`] — the
+/// handler rejects oversize bodies with a 400 instead of parsing a silent
+/// truncation. Read/encoding errors yield an unparseable body (→ 400 too).
+fn read_post_body(request: &mut tiny_http::Request) -> String {
+    use std::io::Read;
+    let mut body = String::new();
+    let limit = (MAX_POST_BODY_BYTES + 1) as u64;
+    let _ = request.as_reader().take(limit).read_to_string(&mut body);
+    body
+}
+
 /// Route one request. Extracted from the accept loop so routing is unit
 /// testable. Matching runs on the path WITHOUT the query string (so exact
 /// routes like `/api/model?x=1` still hit their handler); handlers get the
-/// full url and parse their own params. Anything under `/api/` that matches
-/// no route is a JSON 404 — it must never fall through to the SPA shell.
-fn dispatch(state: &AppState, method: Method, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+/// full url and parse their own params. `body` is only populated for POST.
+/// Anything under `/api/` that matches no route is a JSON 404 — it must
+/// never fall through to the SPA shell.
+fn dispatch(
+    state: &AppState,
+    method: Method,
+    url: &str,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = url.split('?').next().unwrap_or(url);
     match (method, path) {
         (Method::Get, "/api/refresh") => {
             state.refresh_model();
             json_response(200, r#"{"ok":true}"#)
         }
+        (Method::Post, "/api/ask") => handle_ask(state, body),
+        (Method::Get, "/api/chats") => handle_chats_list(state),
+        (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
         (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
         (Method::Get, p) if p.starts_with("/api/search") => handle_search(state, url),
         (Method::Get, "/api/model") => handle_model(state),
@@ -619,6 +671,258 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(200, &body.to_string())
 }
 
+/// POST /api/ask `{"question": "..."}` — the portal Ask page (design §3.5).
+/// Runs the `ovp-memory::ask` pipeline against the cached model/evidence
+/// with the injected LLM client factory, saves the chat like `ovp2 ask
+/// --save`, and answers `{answer, citations, verified, context_hits, chat}`.
+/// The LLM call runs on a worker thread with a wall-clock guard so the
+/// single-threaded accept loop can never hang on a stuck provider.
+fn handle_ask(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    if body.len() > MAX_POST_BODY_BYTES {
+        return json_response(400, r#"{"error":"request body too large"}"#);
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            let body = serde_json::json!({ "error": format!("invalid JSON body: {e}") });
+            return json_response(400, &body.to_string());
+        }
+    };
+    let question = parsed
+        .get("question")
+        .and_then(|q| q.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if question.is_empty() {
+        return json_response(
+            400,
+            r#"{"error":"body must be {\"question\": \"<non-empty string>\"}"}"#,
+        );
+    }
+
+    // Fail-loud config checks BEFORE spawning anything.
+    let Some(factory) = state.ask_client.clone() else {
+        return json_response(503, r#"{"error":"llm not configured"}"#);
+    };
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    let evidence = state.current_evidence();
+    let vault_root = state.vault_root.clone();
+    let question = question.to_string();
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_ask(&factory, &model, evidence.as_ref(), &question, &vault_root);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(state.ask_timeout) {
+        Ok(Ok(payload)) => json_response(200, &payload.to_string()),
+        Ok(Err(e)) => {
+            let body = serde_json::json!({ "error": e });
+            json_response(502, &body.to_string())
+        }
+        Err(_) => {
+            let body = serde_json::json!({
+                "error": format!("ask timed out after {}s", state.ask_timeout.as_secs()),
+            });
+            json_response(504, &body.to_string())
+        }
+    }
+}
+
+/// The worker side of /api/ask: build the client, run the pipeline (chat
+/// always saved — parity with `ovp2 ask --save`), shape the JSON payload.
+fn run_ask(
+    factory: &AskClientFactory,
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    vault_root: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    let mut client = factory()?;
+    let args = AskArgs {
+        question: question.to_string(),
+        save_chat: true,
+        ..Default::default()
+    };
+    let result = ask_with_optional_evidence(model, evidence, client.as_mut(), &args, vault_root)?;
+    Ok(ask_response_json(model, &result))
+}
+
+/// Shape the /api/ask response. `citations` lists the keys the answer
+/// actually cites, in first-appearance order (the UI numbers its `[1][2]`
+/// markers by this order); each entry resolves to the evidence item behind
+/// it, with a portal deep link: claims → `/knowledge#<claim_id>`,
+/// cards/units → `/library/<sha>` via the pack lookup. Legacy packs without
+/// a source sha get NO link (never a 404 target); citations the verifier
+/// could not back get `verified: false`.
+fn ask_response_json(model: &IndexModel, result: &AskResult) -> serde_json::Value {
+    let pack_sha: HashMap<&str, &str> = model
+        .packs
+        .iter()
+        .filter_map(|p| Some((p.pack_dir.as_str(), p.source_sha256.as_deref()?)))
+        .collect();
+    let missing: HashSet<&str> = result
+        .verification
+        .as_ref()
+        .map(|r| r.missing.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    let citations: Vec<serde_json::Value> = citations_in_order(&result.answer)
+        .into_iter()
+        .map(|key| {
+            let item = result.evidence.iter().find(|e| citation_key(e) == key);
+            let verified = item.is_some() && !missing.contains(key.as_str());
+            match item {
+                Some(item) => serde_json::json!({
+                    "id": key,
+                    "kind": kind_str(item.kind),
+                    "title": item.title,
+                    "snippet": citation_snippet(item),
+                    "link_target": citation_link(item, &pack_sha),
+                    "verified": verified,
+                }),
+                // Cited but never supplied as evidence — surfaced so the UI
+                // can render the warn pill instead of dropping the marker.
+                None => serde_json::json!({
+                    "id": key,
+                    "kind": key.split(':').next().unwrap_or(""),
+                    "title": serde_json::Value::Null,
+                    "snippet": serde_json::Value::Null,
+                    "link_target": serde_json::Value::Null,
+                    "verified": false,
+                }),
+            }
+        })
+        .collect();
+
+    serde_json::json!({
+        "answer": result.answer,
+        "citations": citations,
+        "verified": result.verification,
+        "context_hits": result.context_hits,
+        "chat": result
+            .chat_file
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str()),
+    })
+}
+
+fn kind_str(kind: EvidenceKind) -> &'static str {
+    match kind {
+        EvidenceKind::Unit => "unit",
+        EvidenceKind::Card => "card",
+        EvidenceKind::Claim => "claim",
+    }
+}
+
+/// Short display text for a citation panel entry: the exact quote for
+/// units, the body payload (sans the `Content:`/`Claim:` field prefix) for
+/// cards and claims. Char-safe clipped.
+fn citation_snippet(item: &EvidenceItem) -> String {
+    const MAX: usize = 240;
+    let raw = match (&item.quote, item.kind) {
+        (Some(quote), EvidenceKind::Unit) => quote.as_str(),
+        _ => item
+            .body
+            .lines()
+            .next()
+            .map(|l| {
+                l.strip_prefix("Claim: ")
+                    .or_else(|| l.strip_prefix("Content: "))
+                    .or_else(|| l.strip_prefix("Text: "))
+                    .unwrap_or(l)
+            })
+            .unwrap_or(""),
+    };
+    if raw.chars().count() <= MAX {
+        return raw.to_string();
+    }
+    let mut clipped: String = raw.chars().take(MAX - 1).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Portal deep link for a citation (or None — the sha-guard: legacy packs
+/// without a source sha must not produce a dead `/library/...` link).
+fn citation_link(item: &EvidenceItem, pack_sha: &HashMap<&str, &str>) -> Option<String> {
+    match item.kind {
+        EvidenceKind::Claim => Some(format!("/knowledge#{}", item.id)),
+        EvidenceKind::Card | EvidenceKind::Unit => {
+            let pack_dir = item.path.as_deref()?.strip_suffix("/reader.md")?;
+            let sha = pack_sha.get(pack_dir)?;
+            Some(format!("/library/{sha}"))
+        }
+    }
+}
+
+fn chats_dir(state: &AppState) -> PathBuf {
+    // Same location `ovp-memory::ask` writes to (`.ovp/chats/<ts>.md`).
+    state.vault_root.join(".ovp").join("chats")
+}
+
+/// GET /api/chats — saved ask transcripts, newest first:
+/// `[{name, mtime}]` (mtime = unix seconds; the client formats the date).
+/// A vault without any chats answers an empty list, not an error.
+fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut rows: Vec<(u64, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(chats_dir(state)) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            rows.push((mtime, name.to_string()));
+        }
+    }
+    rows.sort_by(|a, b| b.cmp(a));
+    let list: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(mtime, name)| serde_json::json!({ "name": name, "mtime": mtime }))
+        .collect();
+    let body = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
+    json_response(200, &body)
+}
+
+/// GET /api/chats/:name — one saved transcript as raw markdown (the client
+/// renders it with the same escape-first renderer as source bodies). Names
+/// are single path components; anything else is rejected, never joined.
+fn handle_chat_detail(state: &AppState, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let name = url_decode(path.strip_prefix("/api/chats/").unwrap_or(""));
+    let name = name.strip_suffix(".md").unwrap_or(&name);
+    let valid = !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !valid {
+        return json_response(400, r#"{"error":"invalid chat name"}"#);
+    }
+    match std::fs::read_to_string(chats_dir(state).join(format!("{name}.md"))) {
+        Ok(md) => {
+            let header =
+                Header::from_bytes("Content-Type", "text/markdown; charset=utf-8").unwrap();
+            Response::from_data(md.into_bytes())
+                .with_header(header)
+                .with_status_code(200)
+        }
+        Err(_) => json_response(404, r#"{"error":"chat not found"}"#),
+    }
+}
+
 /// Result of static-path resolution — kept separate from `Response` so the
 /// routing precedence is testable on content, not just status codes.
 enum Resolved {
@@ -854,7 +1158,44 @@ mod tests {
             model: RwLock::new(None),
             evidence: RwLock::new(None),
             viz_dir,
+            ask_client: None,
+            ask_timeout: ASK_TIMEOUT,
         }
+    }
+
+    /// A ModelClient that replies with a fixed answer (or blocks) — the
+    /// /api/ask tests never touch a real transport.
+    struct ScriptedClient {
+        text: String,
+        delay: Duration,
+    }
+
+    impl ModelClient for ScriptedClient {
+        fn call(
+            &mut self,
+            request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            std::thread::sleep(self.delay);
+            Ok(ovp_llm::ModelReply {
+                model: request.model.clone(),
+                text: self.text.clone(),
+                stop_reason: ovp_llm::StopReason::EndTurn,
+                usage: ovp_llm::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+            })
+        }
+    }
+
+    fn scripted_factory(text: &str, delay: Duration) -> AskClientFactory {
+        let text = text.to_string();
+        Arc::new(move || {
+            Ok(Box::new(ScriptedClient {
+                text: text.clone(),
+                delay,
+            }) as Box<dyn ModelClient>)
+        })
     }
 
     /// Unwrap the resolved body for content assertions.
@@ -1196,7 +1537,7 @@ mod tests {
         write_ledger(&vault);
         let st = state(vault.clone(), None);
 
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global", "");
         assert_eq!(resp.status_code(), 200);
         let v = body_json(resp);
         assert_eq!(v["mode"], "overview");
@@ -1213,6 +1554,7 @@ mod tests {
             &st,
             Method::Get,
             "/api/graph?scope=global&limit=1",
+            "",
         ));
         assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
         assert_eq!(v["truncated"], true);
@@ -1226,7 +1568,7 @@ mod tests {
         write_ledger(&vault);
         let st = state(vault.clone(), None);
 
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha", "");
         assert_eq!(resp.status_code(), 200);
         let v = body_json(resp);
         assert_eq!(v["mode"], "theme");
@@ -1243,11 +1585,11 @@ mod tests {
         assert!(!ids.contains(&"claim:b"));
 
         // Unknown theme → 404; missing/unknown scope params → 400.
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope", "");
         assert_eq!(resp.status_code(), 404);
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme", "");
         assert_eq!(resp.status_code(), 400);
-        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy");
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy", "");
         assert_eq!(resp.status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
@@ -1266,19 +1608,19 @@ mod tests {
         let st = state(vault, Some(overlay));
 
         for path in ["/api/nonexistent", "/api", "/api/", "/api/nope?x=1"] {
-            let resp = dispatch(&st, Method::Get, path);
+            let resp = dispatch(&st, Method::Get, path, "");
             assert_eq!(resp.status_code(), 404, "path {path}");
             let v = body_json(resp);
             assert_eq!(v["error"], "unknown api route", "path {path}");
         }
 
         // Non-API client routes still reach the SPA shell…
-        assert_eq!(dispatch(&st, Method::Get, "/library").status_code(), 200);
+        assert_eq!(dispatch(&st, Method::Get, "/library", "").status_code(), 200);
         // …exact API routes keep working even with a query string…
-        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1");
+        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1", "");
         assert_eq!(resp.status_code(), 200);
         // …and non-GET stays 405.
-        assert_eq!(dispatch(&st, Method::Post, "/api/model").status_code(), 405);
+        assert_eq!(dispatch(&st, Method::Post, "/api/model", "").status_code(), 405);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1329,6 +1671,159 @@ mod tests {
         assert_eq!(v["memory"]["evidence_available"], false);
         assert!(v["memory"]["cards"].as_array().unwrap().is_empty());
         assert!(v["memory"]["units"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_without_llm_config_is_503_json() {
+        let vault = portal_vault("ask-no-llm", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None); // ask_client: None
+
+        let resp = dispatch(&st, Method::Post, "/api/ask", r#"{"question":"anything"}"#);
+        assert_eq!(resp.status_code(), 503);
+        let v = body_json(resp);
+        assert_eq!(v["error"], "llm not configured");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_malformed_body_is_400() {
+        let vault = portal_vault("ask-bad-body", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Not JSON / wrong shape / blank question — all 400 with a JSON
+        // error, and all checked BEFORE the llm-config 503.
+        for body in ["not json", "{}", r#"{"question":"   "}"#, r#"{"question":7}"#] {
+            let resp = dispatch(&st, Method::Post, "/api/ask", body);
+            assert_eq!(resp.status_code(), 400, "body {body}");
+            let v = body_json(resp);
+            assert!(v["error"].is_string(), "body {body}");
+        }
+
+        // Oversize bodies are rejected, not silently truncated.
+        let huge = format!(
+            r#"{{"question":"{}"}}"#,
+            "x".repeat(MAX_POST_BODY_BYTES + 10)
+        );
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/ask", &huge).status_code(),
+            400
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_answers_with_ordered_citations_and_saves_chat() {
+        let vault = portal_vault("ask-e2e", "50-Inbox/03-Processed/good.md", "body\n");
+        let answer = "Filesystem is memory [claim:c01], grounded \
+                      [unit:unit:40-Resources/Reader/good:u-001], and a ghost [card:nope].";
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory(answer, Duration::ZERO));
+
+        let body = r#"{"question":"filesystem memory card unit text"}"#;
+        let resp = dispatch(&st, Method::Post, "/api/ask", body);
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["answer"], answer);
+        assert!(v["context_hits"].as_u64().unwrap() >= 3);
+
+        // Citations come back in first-appearance order with deep links.
+        let cits = v["citations"].as_array().unwrap();
+        assert_eq!(cits.len(), 3);
+        assert_eq!(cits[0]["id"], "claim:c01");
+        assert_eq!(cits[0]["kind"], "claim");
+        assert_eq!(cits[0]["link_target"], "/knowledge#c01");
+        assert_eq!(cits[0]["verified"], true);
+        assert_eq!(cits[1]["kind"], "unit");
+        // Unit resolves through the pack lookup to the source page…
+        assert_eq!(cits[1]["link_target"], "/library/aaaa1111");
+        assert_eq!(cits[1]["snippet"], "the exact quote");
+        assert_eq!(cits[1]["verified"], true);
+        // …and a citation that was never in evidence is kept, unverified,
+        // with no link (never a dead target).
+        assert_eq!(cits[2]["id"], "card:nope");
+        assert_eq!(cits[2]["verified"], false);
+        assert!(cits[2]["link_target"].is_null());
+
+        assert_eq!(v["verified"]["cited"], 3);
+        assert_eq!(v["verified"]["verified"], 2);
+        assert_eq!(v["verified"]["missing"][0], "card:nope");
+
+        // The chat was saved like `ovp2 ask --save` and is listed + readable.
+        let chat = v["chat"].as_str().expect("chat name").to_string();
+        assert!(vault.join(".ovp/chats").join(format!("{chat}.md")).is_file());
+
+        let list = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], chat.as_str());
+        assert!(rows[0]["mtime"].as_u64().unwrap() > 0);
+
+        let detail = dispatch(&st, Method::Get, &format!("/api/chats/{chat}"), "");
+        assert_eq!(detail.status_code(), 200);
+        let ct = detail
+            .headers()
+            .iter()
+            .find(|h| {
+                h.field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("content-type")
+            })
+            .map(|h| h.value.as_str().to_string());
+        assert_eq!(ct.as_deref(), Some("text/markdown; charset=utf-8"));
+        use std::io::Read;
+        let mut md = String::new();
+        detail.into_reader().read_to_string(&mut md).unwrap();
+        assert!(md.contains("filesystem memory card unit text"));
+        assert!(md.contains("[claim:c01]"));
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_timeout_guard_answers_504() {
+        let vault = portal_vault("ask-timeout", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("late", Duration::from_millis(300)));
+        st.ask_timeout = Duration::from_millis(50);
+
+        let resp = dispatch(&st, Method::Post, "/api/ask", r#"{"question":"memory"}"#);
+        assert_eq!(resp.status_code(), 504);
+        let v = body_json(resp);
+        assert!(v["error"].as_str().unwrap().contains("timed out"));
+
+        // Let the detached worker finish before tearing the vault down.
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn chats_list_is_empty_without_dir_and_detail_rejects_bad_names() {
+        let vault = portal_vault("chats-empty", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // No .ovp/chats dir yet — empty list, not an error.
+        let list = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
+        assert_eq!(list.as_array().unwrap().len(), 0);
+
+        // Traversal-ish names are rejected outright; unknown names are 404.
+        for bad in [
+            "/api/chats/..%2f..%2fsecret",
+            "/api/chats/../secret",
+            "/api/chats/a%2Fb",
+            "/api/chats/",
+        ] {
+            let resp = dispatch(&st, Method::Get, bad, "");
+            assert_eq!(resp.status_code(), 400, "path {bad}");
+        }
+        assert_eq!(
+            dispatch(&st, Method::Get, "/api/chats/1751812345", "").status_code(),
+            404
+        );
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

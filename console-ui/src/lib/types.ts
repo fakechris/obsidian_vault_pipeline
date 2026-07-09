@@ -179,6 +179,46 @@ export interface SourceDetail {
   doc: SourceDocPayload;
 }
 
+// ---- POST /api/ask + /api/chats (B4 Ask page) ----
+
+export type AskCitationKind = 'claim' | 'card' | 'unit';
+
+/** One citation the answer text actually uses, in first-appearance order —
+ * the UI numbers its [1][2] markers by array position. `id` is the full
+ * citation key as written in the answer (e.g. `claim:c01`). `link_target`
+ * is null for legacy evidence with no portal page (sha-guard) and for
+ * citations the model invented (`verified: false`). */
+export interface AskCitation {
+  id: string;
+  kind: AskCitationKind | string;
+  title: string | null;
+  snippet: string | null;
+  link_target: string | null;
+  verified: boolean;
+}
+
+export interface AskVerification {
+  cited: number;
+  verified: number;
+  missing: string[];
+  warnings: string[];
+}
+
+export interface AskResponse {
+  answer: string;
+  citations: AskCitation[];
+  verified: AskVerification | null;
+  context_hits: number;
+  /** Stem of the saved `.ovp/chats/<name>.md` transcript. */
+  chat: string | null;
+}
+
+/** /api/chats entry — `mtime` is unix seconds; the client formats it. */
+export interface ChatEntry {
+  name: string;
+  mtime: number;
+}
+
 export interface BlockedSource {
   sha256: string;
   title?: string;

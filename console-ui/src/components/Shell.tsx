@@ -92,6 +92,14 @@ export default function Shell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        // Composing surfaces (the Ask textarea) opt out of the global
+        // shortcut — B4 handoff rule.
+        if (
+          e.target instanceof HTMLElement &&
+          e.target.closest('[data-omnibox-suppress]')
+        ) {
+          return;
+        }
         e.preventDefault();
         setSearchOpen(true);
       }
