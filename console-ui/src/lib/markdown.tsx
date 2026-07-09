@@ -16,7 +16,7 @@
  * dependencies and gives exact source-line tracking for unit anchors, which
  * react-markdown would only approximate.
  */
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 // ------------------------------------------------------------------ parser
 
@@ -46,7 +46,11 @@ function heading(line: string): { level: number; text: string } | null {
 }
 
 export function parseMarkdown(md: string): MdBlock[] {
-  const lines = md.split('\n');
+  // CRLF sources (Windows-authored clippings): strip the trailing \r so
+  // trim-based matches (frontmatter fence, hr, headings) see clean lines.
+  const lines = md
+    .split('\n')
+    .map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
   const blocks: MdBlock[] = [];
   let i = 0;
 
@@ -301,7 +305,9 @@ export function MarkdownView({
   anchoredLines,
   highlightLine,
 }: MarkdownViewProps) {
-  const blocks = parseMarkdown(markdown);
+  // Parsing walks the whole document — memoize per markdown string so
+  // unrelated re-renders (highlight changes, anchor sets) don't re-parse.
+  const blocks = useMemo(() => parseMarkdown(markdown), [markdown]);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   useEffect(() => {

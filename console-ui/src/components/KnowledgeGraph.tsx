@@ -241,7 +241,9 @@ export default function KnowledgeGraph({
       cleanup?.();
     };
     // themeVersion intentionally re-runs this effect: same data, new tokens.
-  }, [data, id, navigate, themeVersion]);
+    // scope must be a dep: flipping away from 'neighborhood' unmounts the
+    // container, and only a re-run destroys the old graph instance.
+  }, [data, id, navigate, scope, themeVersion]);
 
   if (scope !== 'neighborhood') {
     return (

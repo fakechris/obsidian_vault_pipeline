@@ -39,13 +39,22 @@ pub struct ServeConfig {
     pub viz_dir: Option<PathBuf>,
 }
 
+/// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
+/// `Loaded(None)` (attempted, legitimately absent — pre-M31 vaults): without
+/// the distinction an absent sidecar would re-stat/re-read on EVERY
+/// /api/source request. `/api/refresh` re-attempts by writing `Loaded(...)`.
+enum EvidenceCache {
+    Unloaded,
+    Loaded(Option<EvidenceModel>),
+}
+
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
     model: RwLock<Option<IndexModel>>,
     /// Card/unit bodies for the /api/source/:sha memory layer — lazy-loaded
     /// like the index model, refreshed together on /api/refresh.
-    evidence: RwLock<Option<EvidenceModel>>,
+    evidence: RwLock<EvidenceCache>,
     viz_dir: Option<PathBuf>,
 }
 
@@ -70,14 +79,14 @@ impl AppState {
     fn current_evidence(&self) -> Option<EvidenceModel> {
         {
             let guard = self.evidence.read().unwrap();
-            if guard.is_some() {
-                return guard.clone();
+            if let EvidenceCache::Loaded(ev) = &*guard {
+                return ev.clone();
             }
         }
-        let fresh = read_evidence(&self.vault_root).ok()?;
+        let fresh = read_evidence(&self.vault_root).ok();
         let mut guard = self.evidence.write().unwrap();
-        *guard = Some(fresh.clone());
-        Some(fresh)
+        *guard = EvidenceCache::Loaded(fresh.clone());
+        fresh
     }
 
     fn refresh_model(&self) {
@@ -87,7 +96,10 @@ impl AppState {
         }
         // Reload the evidence sidecar too; it may legitimately be absent
         // (pre-M31 vaults) — the source API then reports it as unavailable.
-        *self.evidence.write().unwrap() = read_evidence(&self.vault_root).ok();
+        // Marking the load COMPLETED (even when absent) is what stops
+        // current_evidence from re-reading disk on every request.
+        *self.evidence.write().unwrap() =
+            EvidenceCache::Loaded(read_evidence(&self.vault_root).ok());
     }
 
     fn console_dir(&self) -> PathBuf {
@@ -103,7 +115,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(None),
-        evidence: RwLock::new(None),
+        evidence: RwLock::new(EvidenceCache::Unloaded),
         viz_dir: config.viz_dir,
     });
 
@@ -512,9 +524,11 @@ fn read_source_doc(
     let Some(rel) = rel_path else {
         return (None, false, None);
     };
-    // rel_path comes from our own index, but never trust a path with parent
-    // components or an absolute root anyway.
-    if rel.contains("..") || std::path::Path::new(rel).is_absolute() {
+    // rel_path comes from our own index, but never trust it anyway: reject
+    // parent components and absolute roots — including Windows prefixes
+    // (`C:\…`, `\\srv\share`) that `is_absolute()` misses on Unix and that
+    // would make `Path::join` discard the vault root entirely.
+    if !is_plain_relative(rel) {
         return (None, false, Some("source path rejected".into()));
     }
     let recorded = state.vault_root.join(rel);
@@ -829,7 +843,7 @@ mod tests {
             vault_root: vault,
             layout: VaultLayout::new(),
             model: RwLock::new(None),
-            evidence: RwLock::new(None),
+            evidence: RwLock::new(EvidenceCache::Unloaded),
             viz_dir,
         }
     }
@@ -1168,6 +1182,20 @@ mod tests {
         let resp = handle_source_api(&st, "/api/source/aaaa1111");
         assert_eq!(resp.status_code(), 200); // meta still served
         let v = body_json(resp);
+        assert!(v["doc"]["markdown"].is_null());
+        assert_eq!(v["doc"]["error"], "source path rejected");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_rejects_windows_absolute_rel_path() {
+        // `C:\evil` is NOT absolute per is_absolute() on Unix, but on a
+        // Windows host Path::join would discard the vault root — rejected.
+        let vault = portal_vault("source-win-abs", "C:\\evil", "body\n");
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
         assert!(v["doc"]["markdown"].is_null());
         assert_eq!(v["doc"]["error"], "source path rejected");
 
