@@ -98,14 +98,18 @@ export function fetchSearchHits(q: string): Promise<FindHit[]> {
   return fetchJson<FindHit[]>(`/api/search?q=${encodeURIComponent(q)}`);
 }
 
-/** Non-2xx /api/ask outcome with the HTTP status kept — the Ask page maps
- * 503 (llm not configured) and 504 (timeout) to specific guidance. */
+/** Non-2xx /api/ask outcome with the HTTP status and the server's stable
+ * machine-readable `code` kept — the Ask page maps 503 llm_not_configured /
+ * 503 index_unavailable / 429 ask_busy / 504 ask_timeout to specific
+ * guidance. */
 export class AskError extends Error {
   status: number;
+  code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -119,13 +123,15 @@ export async function postAsk(question: string): Promise<AskResponse> {
   });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
+    let code: string | null = null;
     try {
-      const data = (await res.json()) as { error?: unknown };
+      const data = (await res.json()) as { error?: unknown; code?: unknown };
       if (data && typeof data.error === 'string') message = data.error;
+      if (data && typeof data.code === 'string') code = data.code;
     } catch {
       /* non-JSON error body — keep the status line */
     }
-    throw new AskError(res.status, message);
+    throw new AskError(res.status, message, code);
   }
   return res.json() as Promise<AskResponse>;
 }

@@ -40,7 +40,13 @@ const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?)\s*\]/g;
 
 function errorKeyFor(err: unknown): MsgKey {
   if (err instanceof AskError) {
-    if (err.status === 503) return 'ask.errNotConfigured';
+    if (err.status === 503) {
+      // Same status, different remedies — branch on the stable code.
+      return err.code === 'index_unavailable'
+        ? 'ask.errIndexUnavailable'
+        : 'ask.errNotConfigured';
+    }
+    if (err.status === 429) return 'ask.errBusy';
     if (err.status === 504) return 'ask.errTimeout';
   }
   return 'ask.errGeneric';

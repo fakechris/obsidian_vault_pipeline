@@ -29,6 +29,11 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         port: args.port,
         viz_dir: args.viz_dir,
         ask_client,
+        // Server defaults: the ask guard derives from OVP_LLM_TIMEOUT_SECS
+        // (the same env the live client reads), the in-flight cap from
+        // DEFAULT_MAX_CONCURRENT_ASKS.
+        ask_timeout: None,
+        max_concurrent_asks: None,
     };
     run_server(config).map_err(CliError::Io)
 }

@@ -36,10 +36,50 @@ pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
 /// bigger is a mistake, not a question).
 pub const MAX_POST_BODY_BYTES: usize = 64 * 1024;
 
-/// Wall-clock guard for one `/api/ask` round trip (retrieval + LLM call).
-/// On expiry the request answers 504 — the worker thread is left to finish
-/// (or fail) in the background so the accept loop never hangs on it.
-pub const ASK_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default LLM transport timeout. Restates
+/// `ovp_llm::anthropic` `DEFAULT_TIMEOUT_SECS` (feature-gated behind
+/// `anthropic` there, so not importable from this transport-free crate);
+/// `OVP_LLM_TIMEOUT_SECS` supersedes both, exactly like the client itself.
+const DEFAULT_TRANSPORT_TIMEOUT_SECS: u64 = 180;
+
+/// Margin the /api/ask wall-clock guard adds ON TOP of the transport
+/// timeout — retrieval, citation shaping and the chat write around the LLM
+/// call. A guard shorter than the transport timeout would 504 the portal
+/// while the billable call keeps running.
+const ASK_GUARD_MARGIN_SECS: u64 = 30;
+
+/// Guard when the operator DISABLED the transport timeout
+/// (`OVP_LLM_TIMEOUT_SECS=0`): the guard is then the only bound on how
+/// long a request handle stays open.
+const ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS: u64 = 600;
+
+/// Cap on concurrently running ask pipelines. Every in-flight ask is a
+/// paid LLM call holding a worker thread; a stuck provider holds its slot
+/// until the transport gives up. Saturation answers 429 immediately — no
+/// queue. Override via [`ServeConfig::max_concurrent_asks`].
+pub const DEFAULT_MAX_CONCURRENT_ASKS: usize = 2;
+
+/// The /api/ask wall-clock guard, derived from the SAME `OVP_LLM_TIMEOUT_SECS`
+/// the live client reads, plus [`ASK_GUARD_MARGIN_SECS`]. NOTE: the guard
+/// firing does NOT cancel the provider call — the worker finishes (and
+/// saves the chat) in the background; the 504 body says so.
+pub fn ask_guard_from_env() -> Duration {
+    ask_guard(|k| std::env::var(k).ok())
+}
+
+/// Testable core of [`ask_guard_from_env`] (same lookup-injection pattern
+/// as the CLI's `LiveClientConfig::from_lookup`). Unparseable values fall
+/// back to the default rather than failing — the CLIENT validates the var
+/// fail-loud at startup; the guard just needs a sane bound.
+fn ask_guard(lookup: impl Fn(&str) -> Option<String>) -> Duration {
+    let transport = lookup("OVP_LLM_TIMEOUT_SECS").and_then(|v| v.trim().parse::<u64>().ok());
+    let secs = match transport {
+        Some(0) => return Duration::from_secs(ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS),
+        Some(n) => n,
+        None => DEFAULT_TRANSPORT_TIMEOUT_SECS,
+    };
+    Duration::from_secs(secs + ASK_GUARD_MARGIN_SECS)
+}
 
 /// Builds the LLM client for `POST /api/ask` on demand. Injected by the CLI,
 /// which owns the feature-gated live transport and the key check — the
@@ -59,6 +99,61 @@ pub struct ServeConfig {
     /// LLM client factory for `POST /api/ask` — `None` when no live LLM is
     /// configured (missing key / feature); ask then answers 503.
     pub ask_client: Option<AskClientFactory>,
+    /// Override the /api/ask wall-clock guard (tests). `None` derives it
+    /// from the transport timeout env — see [`ask_guard_from_env`].
+    pub ask_timeout: Option<Duration>,
+    /// Override the in-flight ask cap (tests). `None` =
+    /// [`DEFAULT_MAX_CONCURRENT_ASKS`].
+    pub max_concurrent_asks: Option<usize>,
+}
+
+/// Counting semaphore for in-flight asks — no queue, `try_acquire` only.
+/// The slot travels INTO the pipeline thread and releases on drop, so an
+/// ask that outlived its 504 guard still counts against the cap until the
+/// provider call actually returns.
+struct AskSlots {
+    active: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+impl AskSlots {
+    fn new(max: usize) -> Arc<Self> {
+        Arc::new(Self {
+            active: std::sync::atomic::AtomicUsize::new(0),
+            max,
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<AskSlot> {
+        use std::sync::atomic::Ordering;
+        let mut current = self.active.load(Ordering::Relaxed);
+        loop {
+            if current >= self.max {
+                return None;
+            }
+            match self.active.compare_exchange(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(AskSlot(Arc::clone(self))),
+                Err(now) => current = now,
+            }
+        }
+    }
+}
+
+/// RAII slot — dropping it (pipeline done, success or panic-unwind) frees
+/// the concurrency unit.
+struct AskSlot(Arc<AskSlots>);
+
+impl Drop for AskSlot {
+    fn drop(&mut self) {
+        self.0
+            .active
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
@@ -79,8 +174,11 @@ struct AppState {
     evidence: RwLock<EvidenceCache>,
     viz_dir: Option<PathBuf>,
     ask_client: Option<AskClientFactory>,
-    /// Test-tunable copy of [`ASK_TIMEOUT`].
+    /// The /api/ask wall-clock guard — [`ask_guard_from_env`] unless
+    /// overridden via [`ServeConfig::ask_timeout`].
     ask_timeout: Duration,
+    /// In-flight ask cap — see [`AskSlots`].
+    ask_slots: Arc<AskSlots>,
 }
 
 impl AppState {
@@ -143,7 +241,12 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         evidence: RwLock::new(EvidenceCache::Unloaded),
         viz_dir: config.viz_dir,
         ask_client: config.ask_client,
-        ask_timeout: ASK_TIMEOUT,
+        ask_timeout: config.ask_timeout.unwrap_or_else(ask_guard_from_env),
+        ask_slots: AskSlots::new(
+            config
+                .max_concurrent_asks
+                .unwrap_or(DEFAULT_MAX_CONCURRENT_ASKS),
+        ),
     });
 
     // Pre-load model
@@ -807,19 +910,37 @@ fn handle_ask(
         );
     }
 
-    // Fail-loud config checks BEFORE spawning anything.
+    // Fail-loud config checks BEFORE spawning anything. The `code` field is
+    // a stable machine-readable discriminator for the portal (the human
+    // `error` text may change).
     let Some(factory) = state.ask_client.clone() else {
-        return json_response(503, r#"{"error":"llm not configured"}"#);
+        return json_response(
+            503,
+            r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+        );
     };
     let Some(model) = state.current_model() else {
-        return json_response(503, r#"{"error":"index not available"}"#);
+        return json_response(
+            503,
+            r#"{"error":"index not available","code":"index_unavailable"}"#,
+        );
     };
+
+    // Bound the paid concurrency LAST (a rejected request must not burn a
+    // slot). The slot moves INTO the pipeline thread: even after the guard
+    // 504s below, the still-running provider call keeps its slot until it
+    // returns. Saturation answers immediately — no queue.
+    let Some(slot) = state.ask_slots.try_acquire() else {
+        return json_response(429, r#"{"error":"ask busy","code":"ask_busy"}"#);
+    };
+
     let evidence = state.current_evidence();
     let vault_root = state.vault_root.clone();
     let question = question.to_string();
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _slot = slot; // held for the WHOLE pipeline, freed on drop
         let result = run_ask(&factory, &model, evidence.as_ref(), &question, &vault_root);
         let _ = tx.send(result);
     });
@@ -831,8 +952,15 @@ fn handle_ask(
             json_response(502, &body.to_string())
         }
         Err(_) => {
+            // Honest 504: recv_timeout does NOT cancel the provider call —
+            // it finishes in the background (and still saves the chat).
             let body = serde_json::json!({
-                "error": format!("ask timed out after {}s", state.ask_timeout.as_secs()),
+                "error": format!(
+                    "no answer within {}s; the request was not cancelled and may \
+                     still complete in the background",
+                    state.ask_timeout.as_secs()
+                ),
+                "code": "ask_timeout",
             });
             json_response(504, &body.to_string())
         }
@@ -1279,7 +1407,10 @@ mod tests {
             evidence: RwLock::new(EvidenceCache::Unloaded),
             viz_dir,
             ask_client: None,
-            ask_timeout: ASK_TIMEOUT,
+            // Fixed (not env-derived) so tests stay deterministic on
+            // machines that export OVP_LLM_TIMEOUT_SECS.
+            ask_timeout: Duration::from_secs(60),
+            ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
         }
     }
 
@@ -1841,7 +1972,95 @@ mod tests {
         assert_eq!(resp.status_code(), 503);
         let v = body_json(resp);
         assert_eq!(v["error"], "llm not configured");
+        assert_eq!(v["code"], "llm_not_configured");
 
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_503s_disambiguate_missing_index_from_missing_llm() {
+        // An LLM IS configured but the vault has no index — the portal
+        // must be able to tell this apart from the missing-key case, so
+        // the `code` field differs.
+        let root = temp_root("ask-no-index");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let mut st = state(vault, None);
+        st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+
+        let resp = ask(&st, r#"{"question":"anything"}"#);
+        assert_eq!(resp.status_code(), 503);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "index_unavailable");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ask_guard_derives_from_transport_timeout_env() {
+        let with = |v: Option<&str>| {
+            ask_guard(|k| {
+                assert_eq!(k, "OVP_LLM_TIMEOUT_SECS");
+                v.map(str::to_string)
+            })
+        };
+        // Absent → provider default (180s) + margin.
+        assert_eq!(
+            with(None),
+            Duration::from_secs(DEFAULT_TRANSPORT_TIMEOUT_SECS + ASK_GUARD_MARGIN_SECS)
+        );
+        // Runbook value 480 → 480 + margin: the guard must outlive the
+        // billable call, never 504 while the transport is still waiting.
+        assert_eq!(with(Some("480")), Duration::from_secs(480 + 30));
+        // 0 = transport timeout disabled → the guard becomes the only
+        // bound, at its own generous cap.
+        assert_eq!(
+            with(Some("0")),
+            Duration::from_secs(ASK_GUARD_NO_TRANSPORT_TIMEOUT_SECS)
+        );
+        // Garbage falls back to the default (the CLIENT fails loud on it).
+        assert_eq!(
+            with(Some("lots")),
+            Duration::from_secs(DEFAULT_TRANSPORT_TIMEOUT_SECS + ASK_GUARD_MARGIN_SECS)
+        );
+    }
+
+    #[test]
+    fn ask_concurrency_cap_answers_429_and_slot_survives_the_504() {
+        use std::time::Instant;
+
+        let vault = portal_vault("ask-429", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("answer", Duration::from_millis(400)));
+        st.ask_timeout = Duration::from_millis(50); // guard fires mid-pipeline
+        st.ask_slots = AskSlots::new(1);
+        let st = Arc::new(st);
+
+        // First ask: the guard 504s, but the pipeline is still running…
+        let body = r#"{"question":"memory"}"#;
+        assert_eq!(ask(&st, body).status_code(), 504);
+
+        // …so its slot is STILL taken: the next ask is refused immediately
+        // (429, no queue) — a timed-out billable call must keep counting
+        // against the cap until the provider returns.
+        let started = Instant::now();
+        let resp = ask(&st, body);
+        assert_eq!(resp.status_code(), 429);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "429 must be immediate, not queued"
+        );
+        let v = body_json(resp);
+        assert_eq!(v["code"], "ask_busy");
+
+        // Once the pipeline actually finishes, the slot frees: the next
+        // ask gets a real attempt again (504 via the tiny guard — the
+        // point is it is NOT a 429).
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(ask(&st, body).status_code(), 504);
+
+        // Let that last pipeline drain before removing its vault.
+        std::thread::sleep(Duration::from_millis(600));
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
 
@@ -1951,7 +2170,9 @@ mod tests {
         let resp = ask(&st, r#"{"question":"memory"}"#);
         assert_eq!(resp.status_code(), 504);
         let v = body_json(resp);
-        assert!(v["error"].as_str().unwrap().contains("timed out"));
+        assert_eq!(v["code"], "ask_timeout");
+        // Honest copy: the guard does NOT cancel the provider call.
+        assert!(v["error"].as_str().unwrap().contains("not cancelled"));
 
         // Let the detached worker finish before tearing the vault down.
         std::thread::sleep(Duration::from_millis(400));
@@ -2034,8 +2255,10 @@ mod tests {
 
     /// P1 regression: a slow ask must NOT block the accept loop. Drives the
     /// real serve_loop over TCP: fire an ask whose scripted client sleeps
-    /// 1.2s, then a concurrent GET /api/model — the GET must answer well
-    /// before the ask completes.
+    /// 1.2s (saturating the 1-slot cap), then a concurrent GET /api/model
+    /// AND a second ask — the GET must answer well before the first ask
+    /// completes, and the second ask must be refused (429) immediately
+    /// instead of queueing behind the paid call.
     #[test]
     fn ask_does_not_block_the_accept_loop() {
         use std::io::{Read, Write};
@@ -2046,6 +2269,7 @@ mod tests {
         let mut st = state(vault.clone(), None);
         const ASK_DELAY: Duration = Duration::from_millis(1200);
         st.ask_client = Some(scripted_factory("answer [claim:c01]", ASK_DELAY));
+        st.ask_slots = AskSlots::new(1);
         let state = Arc::new(st);
 
         let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
@@ -2098,7 +2322,28 @@ mod tests {
             "ask finished too early to prove anything"
         );
 
-        // The ask itself still completes fine after its delay.
+        // A second ask while the slot is taken: refused fast with 429 —
+        // never queued behind the in-flight paid call.
+        let busy_started = Instant::now();
+        let mut busy_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            busy_conn,
+            "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut busy_resp = String::new();
+        busy_conn.read_to_string(&mut busy_resp).unwrap();
+        assert!(busy_resp.starts_with("HTTP/1.1 429"), "{busy_resp}");
+        assert!(busy_resp.contains("ask_busy"), "{busy_resp}");
+        assert!(
+            busy_started.elapsed() < Duration::from_millis(500),
+            "429 must be immediate while saturated"
+        );
+
+        // The first ask itself still completes fine after its delay.
         let mut ask_resp = String::new();
         ask_conn.read_to_string(&mut ask_resp).unwrap();
         assert!(ask_resp.starts_with("HTTP/1.1 200"), "{ask_resp}");
