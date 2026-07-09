@@ -51,7 +51,7 @@ export const en = {
   'today.attentionAction': 'Open source detail',
   'today.claimsSample': 'From the crystal store',
   'today.claimsSampleNote':
-    'A durable-first sample — per-day attribution lands in B2.',
+    'A durable-first sample — the crystal ledger records no dates, so per-day attribution is not derivable yet.',
   'today.claimSources': 'Sources',
   'today.strength': 'strength',
   'today.readToday': 'Read today',
@@ -78,7 +78,7 @@ export const en = {
   'library.empty': 'No sources match the current filters.',
   'library.noDate': 'no date',
 
-  // source detail (B1 stub)
+  // source detail
   'source.title': 'Source',
   'source.url': 'url',
   'source.date': 'date',
@@ -89,9 +89,39 @@ export const en = {
   'source.lastReason': 'last error',
   'source.notFound': 'No source with this id in the index.',
   'source.backToLibrary': 'Library',
-  'source.b2Empty': 'Memory & source view coming in B2.',
-  'source.b2EmptyDetail':
-    'The three-layer drill-down (memory cards, grounded units, original markdown, neighborhood graph) ships in phase B2.',
+  'source.loadError': 'Could not load the source detail — is the server running?',
+  'source.tabMemory': 'Memory',
+  'source.tabMemoryCounts': '{cards} cards · {units} units',
+  'source.tabSource': 'Source',
+  'source.groundedUnits': 'Grounded units',
+  'source.unitNoLine': 'no line anchor',
+  'source.noMemory':
+    'No memory yet — this source has no cards or grounded units in its reader pack.',
+  'source.evidenceMissing':
+    'Evidence index not built — run `ovp2 index` against this vault to load cards and units.',
+  'source.docEmpty': 'No markdown file on disk for this source.',
+  'source.docError': 'Could not read the source file: {error}',
+  'source.docTruncated':
+    'Preview truncated at 200 KB — open the file in the vault for the full text.',
+  'source.neighborhood': 'Neighborhood',
+  'source.neighborhoodCaption':
+    'This source → citing claims → sibling sources. Click a node for a summary, double-click to open it.',
+  'source.citingClaims': 'Citing claims',
+  'source.citingEmpty': 'No crystal claims cite this source yet.',
+  'source.citingEmptyHint': '→ Knowledge: how claims crystallize',
+
+  // knowledge graph component
+  'graph.loading': 'Loading graph…',
+  'graph.error': 'Could not load the graph.',
+  'graph.empty': 'No neighborhood yet — nothing cites this source.',
+  'graph.b3': 'Global and theme graph scopes land in B3.',
+  'graph.fullscreen': 'EXPAND',
+  'graph.exitFullscreen': 'CLOSE',
+  'graph.truncated': 'Neighborhood truncated — showing the strongest claims.',
+  'graph.kindClaim': 'claim',
+  'graph.kindSource': 'source',
+  'graph.kindUnit': 'unit',
+  'graph.openHint': 'Double-click to open.',
 
   // placeholders
   'placeholder.search': 'Search across sources, cards, units, claims and themes lands in B3.',

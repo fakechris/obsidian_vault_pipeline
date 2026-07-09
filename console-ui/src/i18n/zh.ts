@@ -50,7 +50,8 @@ export const zh: Record<keyof typeof en, string> = {
     '这条捕获内容太薄无法阅读——补充正文后才能进入有据记忆。',
   'today.attentionAction': '打开资料详情',
   'today.claimsSample': '来自结晶库',
-  'today.claimsSampleNote': 'durable 优先的样本——按日归因将在 B2 落地。',
+  'today.claimsSampleNote':
+    'durable 优先的样本——结晶账本尚未记录日期，暂无法按日归因。',
   'today.claimSources': '来源',
   'today.strength': '强度',
   'today.readToday': '今日读完',
@@ -76,7 +77,7 @@ export const zh: Record<keyof typeof en, string> = {
   'library.empty': '当前筛选下没有匹配的源。',
   'library.noDate': '无日期',
 
-  // source detail (B1 stub)
+  // source detail
   'source.title': '资料',
   'source.url': '链接',
   'source.date': '日期',
@@ -87,9 +88,37 @@ export const zh: Record<keyof typeof en, string> = {
   'source.lastReason': '最近错误',
   'source.notFound': '索引中没有这个 id 对应的源。',
   'source.backToLibrary': '资料',
-  'source.b2Empty': '记忆与原文视图将在 B2 上线。',
-  'source.b2EmptyDetail':
-    '三层钻取（记忆卡片、接地单元、原文 markdown、邻域图谱）在 B2 期交付。',
+  'source.loadError': '无法加载资料详情——服务是否在运行？',
+  'source.tabMemory': '记忆',
+  'source.tabMemoryCounts': '{cards} 卡片 · {units} 单元',
+  'source.tabSource': '原文',
+  'source.groundedUnits': '接地单元',
+  'source.unitNoLine': '无行号锚点',
+  'source.noMemory': '还没有记忆——该源的阅读包中没有卡片或接地单元。',
+  'source.evidenceMissing':
+    '证据索引尚未构建——对该 vault 运行 `ovp2 index` 以加载卡片与单元。',
+  'source.docEmpty': '磁盘上没有该源的 markdown 文件。',
+  'source.docError': '无法读取原文文件：{error}',
+  'source.docTruncated': '预览在 200 KB 处截断——完整内容请在 vault 中打开原文件。',
+  'source.neighborhood': '关联图谱 · 邻域',
+  'source.neighborhoodCaption':
+    '本源 → 引用它的主张 → 兄弟源。单击节点看摘要，双击打开详情。',
+  'source.citingClaims': '结晶引用',
+  'source.citingEmpty': '暂无结晶主张引用本源。',
+  'source.citingEmptyHint': '→ 知识：了解结晶如何产生',
+
+  // knowledge graph component
+  'graph.loading': '图谱加载中…',
+  'graph.error': '无法加载图谱。',
+  'graph.empty': '暂无邻域——还没有内容引用本源。',
+  'graph.b3': '全局与主题作用域将在 B3 上线。',
+  'graph.fullscreen': '全屏',
+  'graph.exitFullscreen': '关闭',
+  'graph.truncated': '邻域已截断——仅显示最强的主张。',
+  'graph.kindClaim': '主张',
+  'graph.kindSource': '源',
+  'graph.kindUnit': '单元',
+  'graph.openHint': '双击打开详情。',
 
   // placeholders
   'placeholder.search': '跨源/卡片/单元/主张/主题的搜索将在 B3 上线。',
