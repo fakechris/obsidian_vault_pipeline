@@ -31,6 +31,10 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 authors = ["OVP Next"]
+# Required by dist for GitHub release hosting. NOTE: this repo is currently
+# PRIVATE — see docs/install.md for what that means for installers.
+repository = "https://github.com/fakechris/obsidian_vault_pipeline"
+homepage = "https://github.com/fakechris/obsidian_vault_pipeline"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -50,3 +54,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -8,6 +8,59 @@ Clean-core Rust rewrite of the Obsidian Vault Pipeline — the **current trunk a
 
 This repo intentionally has zero dependency on the legacy Python `ovp_pipeline` package: no import, no subprocess, no embedded runtime. The legacy Python implementation has been removed from this branch's working tree **to keep architecture judgments clean — the Rust crates are the single source of truth — NOT because the Rust trunk is yet feature-equivalent to legacy Python.** Historical fixtures and docs may describe legacy behavior as a frozen contract, but current development happens in the Rust crates. Any `scripts/*.py` here are offline eval/diagnostic helpers, not a runtime architecture source.
 
+## Install & Quick Start (prebuilt — no Rust toolchain needed)
+
+> **⚠️ Private-repo caveat.** This repository is currently **private**
+> (`fakechris/obsidian_vault_pipeline`). The curl installer and Homebrew both
+> download from GitHub Releases, so until the repo (or a public mirror) is
+> public they need authentication: teammates can fetch artifacts with
+> `gh release download vX.Y.Z` and untar manually. The Homebrew path also
+> requires the tap repo `github.com/fakechris/homebrew-ovp2` to exist and be
+> **public**. Details and the operator release process: `docs/install.md`.
+
+1. **Install** (macOS arm64/x64, Linux x64):
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -LsSf \
+     https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+   ```
+
+   or, once the tap is published: `brew install fakechris/ovp2/ovp2`
+
+2. **Check it runs**: `ovp2 --version`
+
+3. **Configure the LLM** for live runs — put these in your shell profile or a
+   private `.env` you `source` (NEVER in the repo or the vault); conventions in
+   `docs/operator-runbook.md` §0:
+
+   ```sh
+   export ANTHROPIC_API_KEY=sk-ant-...
+   export OVP_LLM_TIMEOUT_SECS=480   # required for live runs; default 180s mis-kills slow responses
+   # optional: ANTHROPIC_BASE_URL, OVP_LLM_MODEL, OVP_LLM_MAX_TOKENS, OVP_LLM_NO_PROXY=1
+   ```
+
+4. **First daily run** against your vault (use `--dry-run` first to see the
+   plan without writing anything):
+
+   ```sh
+   ovp2 daily --vault-root ~/Documents/ovp-vault --client live
+   ```
+
+5. **Open the console**:
+
+   ```sh
+   ovp2 serve --vault-root ~/Documents/ovp-vault
+   ```
+
+   then open <http://127.0.0.1:3141> in your browser.
+
+Prebuilt binaries ship with the live capabilities (`anthropic`,
+`pinboard-live`, `web-fetch-live`, `github-live`) compiled in; runtime behavior
+stays opt-in via flags/env. Releases are cut by pushing a `vX.Y.Z` tag —
+`.github/workflows/release.yml` (cargo-dist) builds and uploads the artifacts.
+Building from source (`cargo build --release -p ovp-cli --features anthropic`)
+remains a dev-only path.
+
 ## What works today
 
 21 crates; **626 tests pass (1 ignored)** + a binary-level end-to-end dogfood. The blessed product path (M30/M31):
