@@ -13,6 +13,15 @@
 //! `50-Inbox/02-Pinboard/`, where the normal intake sweep picks it up: notes
 //! with enough body text flow to `01-Raw` and the reader; bare bookmarks are
 //! flagged `needs_content` for the operator to enrich.
+//!
+//! FIRST-SYNC FLOOD GUARD: `posts/all` returns the account's ENTIRE history,
+//! so a first sync against an old Pinboard account can materialize tens of
+//! thousands of notes in one run (observed live: 50,714 notes / 198MB) and
+//! flood the next intake sweep + live web enrichment. `sync_pinboard` takes
+//! [`PinboardSyncOptions`] (`since` / `max` narrowing) and, when neither is
+//! given, aborts before writing anything if more than
+//! [`FIRST_SYNC_GUARD_MAX_NEW`] new bookmarks would be created — unless
+//! `yes_all` is set. Dry runs report instead of aborting.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -30,6 +39,29 @@ use crate::vaultops::{
 
 /// Schema tag for pinboard-sync ledger records.
 pub const PINBOARD_SCHEMA: &str = "ovp.pinboard/v1";
+
+/// Hard ceiling on NEW bookmarks in an unfiltered sync. Beyond this the run
+/// aborts before writing anything and the operator must narrow with
+/// `since`/`max` or opt in explicitly with `yes_all` (see module docs for the
+/// first-sync flood this prevents).
+pub const FIRST_SYNC_GUARD_MAX_NEW: usize = 500;
+
+/// Candidate-narrowing and flood-guard options for [`sync_pinboard`].
+/// Filters only NARROW the candidate set — ledger/dedup semantics are
+/// unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct PinboardSyncOptions {
+    /// Only materialize bookmarks whose Pinboard timestamp is on/after this
+    /// date (`YYYY-MM-DD`). Bookmarks without a usable timestamp are
+    /// excluded when this is set (they cannot be shown to be recent).
+    pub since: Option<String>,
+    /// Materialize at most this many of the NEWEST new bookmarks; older ones
+    /// are left for later runs.
+    pub max: Option<usize>,
+    /// Explicitly allow an unfiltered sync past the first-sync flood guard
+    /// ([`FIRST_SYNC_GUARD_MAX_NEW`]).
+    pub yes_all: bool,
+}
 
 /// One bookmark in Pinboard's `posts/all` JSON format (export file and live
 /// API agree on this shape). Unknown fields are ignored.
@@ -162,6 +194,13 @@ pub struct PinboardSyncOutcome {
     pub new_notes: Vec<PinboardSyncRecord>,
     pub skipped_known: usize,
     pub skipped_empty_url: usize,
+    /// Excluded by `since` (older than the cutoff, or no timestamp).
+    pub skipped_since: usize,
+    /// New bookmarks beyond the `max` newest, left for later runs.
+    pub skipped_over_max: usize,
+    /// Dry-run only: a REAL run with these options would hit the first-sync
+    /// flood guard and abort.
+    pub guard_would_abort: bool,
     pub origin: String,
     pub dry_run: bool,
 }
@@ -178,11 +217,20 @@ pub fn synced_urls(records: &[PinboardSyncRecord]) -> HashSet<String> {
 /// Fetch all bookmarks and materialize the new ones as notes in
 /// `50-Inbox/02-Pinboard/`. Write → write-log event → ledger record, per the
 /// audit-ordering invariant. Idempotent: URL-known posts are skipped.
+///
+/// `opts` narrows the candidate set (`since`/`max`) and controls the
+/// first-sync flood guard: without `since`/`max`/`yes_all`, more than
+/// [`FIRST_SYNC_GUARD_MAX_NEW`] NEW bookmarks abort the run before any write
+/// (dry runs report via [`PinboardSyncOutcome::guard_would_abort`] instead).
 pub fn sync_pinboard(
     cfg: &IntakeConfig,
     fetch: &mut dyn PinboardFetch,
     dry_run: bool,
+    opts: &PinboardSyncOptions,
 ) -> Result<PinboardSyncOutcome, String> {
+    if let Some(since) = &opts.since {
+        validate_since(since)?;
+    }
     let layout = VaultLayout::new();
     let pin_ledger_path = cfg.vault_root.join(layout.pinboard_ledger());
     let intake_ledger_path = cfg.vault_root.join(layout.intake_ledger());
@@ -202,17 +250,56 @@ pub fn sync_pinboard(
         ..Default::default()
     };
 
+    // Narrow + dedup into the NEW candidate set BEFORE writing anything, so
+    // the flood guard can abort with nothing on disk. Stays oldest-first.
+    let mut candidates: Vec<(String, PinboardPost)> = Vec::new();
     for post in posts {
         let url = post.href.trim().to_string();
         if url.is_empty() {
             outcome.skipped_empty_url += 1;
             continue;
         }
+        if let Some(since) = &opts.since {
+            let on_or_after = post.time.get(..10).is_some_and(|d| d >= since.as_str());
+            if !on_or_after {
+                outcome.skipped_since += 1;
+                continue;
+            }
+        }
         if known.contains(&url) {
             outcome.skipped_known += 1;
             continue;
         }
+        known.insert(url.clone());
+        candidates.push((url, post));
+    }
 
+    // `max`: keep only the N newest new bookmarks. Candidates are sorted
+    // oldest-first, so the newest sit at the tail; processing order (and thus
+    // filenames/ledger) stays oldest-first.
+    if let Some(max) = opts.max {
+        if candidates.len() > max {
+            outcome.skipped_over_max = candidates.len() - max;
+            candidates.drain(..candidates.len() - max);
+        }
+    }
+
+    // First-sync flood guard: no narrowing flags + a huge NEW set means this
+    // is almost certainly `posts/all` history, not a daily delta. Abort
+    // before any write; dry runs report instead.
+    if opts.since.is_none()
+        && opts.max.is_none()
+        && !opts.yes_all
+        && candidates.len() > FIRST_SYNC_GUARD_MAX_NEW
+    {
+        if dry_run {
+            outcome.guard_would_abort = true;
+        } else {
+            return Err(first_sync_guard_message(candidates.len()));
+        }
+    }
+
+    for (url, post) in candidates {
         let title = if post.description.trim().is_empty() {
             url.clone()
         } else {
@@ -247,7 +334,7 @@ pub fn sync_pinboard(
             schema: PINBOARD_SCHEMA.into(),
             run_id: cfg.run_id.clone(),
             date: cfg.date.clone(),
-            url: url.clone(),
+            url,
             to: to_rel,
             title,
             posted_at: (!post.time.is_empty()).then(|| post.time.clone()),
@@ -255,10 +342,39 @@ pub fn sync_pinboard(
         if !dry_run {
             append_jsonl(&pin_ledger_path, &rec)?;
         }
-        known.insert(url);
         outcome.new_notes.push(rec);
     }
     Ok(outcome)
+}
+
+/// The abort message for the first-sync flood guard. States the count and
+/// every explicit way forward (per-command flag spellings included so the
+/// operator can act from either `pinboard-sync` or `daily`).
+fn first_sync_guard_message(new_count: usize) -> String {
+    format!(
+        "pinboard-sync guard: {new_count} NEW bookmarks would be materialized (limit without \
+         filters is {FIRST_SYNC_GUARD_MAX_NEW}). A first sync against a long-lived Pinboard \
+         account pulls the ENTIRE history and floods the vault, the next intake sweep, and live \
+         web enrichment. Nothing was written. Narrow the run with --since <YYYY-MM-DD> or \
+         --max <N> (daily: --pinboard-since / --pinboard-max), or pass --yes-all to \
+         `ovp2 pinboard-sync` to materialize everything deliberately."
+    )
+}
+
+/// `since` must be a plain ISO date so the lexicographic compare against the
+/// bookmark timestamps is sound.
+fn validate_since(s: &str) -> Result<(), String> {
+    let b = s.as_bytes();
+    let ok = b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            _ => c.is_ascii_digit(),
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("--since must be an ISO date (YYYY-MM-DD), got `{s}`"))
+    }
 }
 
 /// Render the bookmark note in the exact frontmatter dialect the clipping

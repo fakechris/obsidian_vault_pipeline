@@ -134,6 +134,115 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// First-sync flood guard through the REAL binary: an unfiltered pinboard
+/// capture of >500 NEW bookmarks aborts `daily` and `pinboard-sync` before
+/// any write; `--pinboard-since`/`--pinboard-max` (daily) and
+/// `--since`/`--max`/`--yes-all` (pinboard-sync) are plumbed through; dry
+/// runs report instead of aborting.
+#[test]
+fn daily_and_pinboard_sync_inherit_first_sync_flood_guard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    // A real vault always has the raw inbox; the plan phase requires it.
+    std::fs::create_dir_all(vault.join("50-Inbox/01-Raw")).unwrap();
+
+    // 503 bare bookmarks (all in 2020) — a classic old-account first sync.
+    let export = tmp.path().join("pinboard-flood.json");
+    let posts: Vec<serde_json::Value> = (0..503)
+        .map(|i| {
+            serde_json::json!({
+                "href": format!("https://e.x/p{i}"),
+                "description": format!("Post {i}"),
+                "extended": "",
+                "time": format!("2020-01-01T{:02}:{:02}:00Z", i / 60, i % 60),
+                "tags": ""
+            })
+        })
+        .collect();
+    std::fs::write(&export, serde_json::to_string(&posts).unwrap()).unwrap();
+
+    // Unfiltered daily: the pinboard phase fails LOUDLY, nothing is written.
+    let (_stdout, stderr) = run_fail(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-guard",
+        "--pinboard-fixture", export.to_str().unwrap(),
+    ]));
+    assert!(stderr.contains("pinboard-sync guard"), "{stderr}");
+    assert!(stderr.contains("503 NEW bookmarks"), "{stderr}");
+    assert!(!vault.join("50-Inbox/02-Pinboard").exists(), "abort before any write");
+    assert!(!vault.join(".ovp/pinboard-sync.jsonl").exists());
+
+    // Dry run is exempt: reports the would-be abort, writes nothing.
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-guard-dry",
+        "--pinboard-fixture", export.to_str().unwrap(),
+        "--dry-run",
+    ]));
+    assert!(stdout.contains("a REAL run would ABORT at the pinboard phase"), "{stdout}");
+    assert!(!vault.join("50-Inbox/02-Pinboard").exists());
+
+    // --pinboard-max passthrough: only the 2 newest are materialized.
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-guard-max",
+        "--pinboard-fixture", export.to_str().unwrap(),
+        "--pinboard-max", "2",
+    ]));
+    assert!(stdout.contains("pinboard: 503 fetched, 2 new note(s)"), "{stdout}");
+    assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 2);
+
+    // --pinboard-since passthrough: everything predates the cutoff → 0 new.
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-guard-since",
+        "--pinboard-fixture", export.to_str().unwrap(),
+        "--pinboard-since", "2021-01-01",
+    ]));
+    assert!(stdout.contains("pinboard: 503 fetched, 0 new note(s)"), "{stdout}");
+    assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 2, "nothing added");
+
+    // pinboard-sync: same guard, same message.
+    let (_stdout, stderr) = run_fail(bin().args([
+        "pinboard-sync",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "pin-guard",
+        "--fixture", export.to_str().unwrap(),
+    ]));
+    assert!(stderr.contains("pinboard-sync guard"), "{stderr}");
+    assert!(stderr.contains("501 NEW bookmarks"), "2 already known: {stderr}");
+
+    // pinboard-sync --max 1 narrows; --yes-all deliberately takes the rest.
+    let stdout = run_ok(bin().args([
+        "pinboard-sync",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "pin-max",
+        "--fixture", export.to_str().unwrap(),
+        "--max", "1",
+    ]));
+    assert!(stdout.contains("done: 503 fetched, 1 new, 2 known"), "{stdout}");
+    let stdout = run_ok(bin().args([
+        "pinboard-sync",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "pin-yes-all",
+        "--fixture", export.to_str().unwrap(),
+        "--yes-all",
+    ]));
+    assert!(stdout.contains("done: 503 fetched, 500 new, 3 known"), "{stdout}");
+    assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 503);
+}
+
 #[test]
 fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     let tmp = tempfile::tempdir().unwrap();
@@ -162,7 +271,8 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         std::fs::create_dir_all(&scratch).unwrap();
         let cfg = ovp_intake::IntakeConfig::new(scratch.clone(), DATE.into(), "seed".into());
         let mut fetch = ovp_intake::FixturePinboardFetch::new(&export);
-        let out = ovp_intake::sync_pinboard(&cfg, &mut fetch, false).unwrap();
+        let out =
+            ovp_intake::sync_pinboard(&cfg, &mut fetch, false, &Default::default()).unwrap();
         let rich = out.new_notes.iter().find(|r| r.url.contains("benchmaxx")).unwrap();
         let doc = read_source_from_path(&scratch.join(&rich.to)).unwrap();
         seed_cassettes(&cache_dir, &doc, PIN_QUOTE, "Benchmark maxxing augments experts.");
