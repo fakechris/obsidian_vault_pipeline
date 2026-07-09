@@ -55,7 +55,7 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# The profile that 'dist' will build with
+# The profile that 'dist' will build with. Inherits release wholesale —
+# lto/opt-level/strip come from [profile.release]; don't re-set them here.
 [profile.dist]
 inherits = "release"
-lto = "thin"
