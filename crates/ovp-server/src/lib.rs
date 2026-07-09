@@ -1,7 +1,11 @@
-//! `ovp-server` — synchronous localhost HTTP server for OVP console and API.
+//! `ovp-server` — synchronous localhost HTTP server for the OVP2 portal
+//! and API.
 //!
-//! Serves static console HTML from `.ovp/console/` and JSON API endpoints
-//! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`, `/api/flow`).
+//! Serves the portal SPA at the site root (deployed `.ovp/console/app/` or
+//! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
+//! legacy generated console pages by exact filename, and JSON API endpoints
+//! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
+//! `/api/source/:sha`, `/api/flow`).
 //! Uses `tiny_http` to avoid any async runtime dependency.
 
 mod graph;
@@ -10,27 +14,47 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use ovp_domain::crystal::{fold_ledger, CrystalStatus, DurableRecord, StoreEvent};
-use ovp_domain::units::Unit;
 use ovp_domain::VaultLayout;
-use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
+use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
+use ovp_domain::units::Unit;
+use ovp_index::{
+    EvidenceModel, IndexModel, Query, QueryKind, read_evidence, read_index, run_query,
+};
 use ovp_intake::read_jsonl;
 use tiny_http::{Header, Method, Response, Server};
+
+/// Cap for source markdown shipped in the /api/source payload — beyond this
+/// the response truncates with an explicit flag instead of shipping megabytes
+/// of JSON (same limit the v1 server-rendered page used).
+pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
 
 pub struct ServeConfig {
     pub vault_root: PathBuf,
     pub host: String,
     pub port: u16,
-    /// Fallback directory for `/viz/*` assets (the SPA build output). When
-    /// the vault's `.ovp/console/viz/` misses, files are served from here —
-    /// so a dev checkout can serve ANY vault without copying the build in.
+    /// Fallback directory for the portal SPA build (`console-ui/dist`).
+    /// When the vault's deployed `.ovp/console/app/` misses, files are
+    /// served from here — so a dev checkout can serve ANY vault without
+    /// copying the build in.
     pub viz_dir: Option<PathBuf>,
+}
+
+/// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
+/// `Loaded(None)` (attempted, legitimately absent — pre-M31 vaults): without
+/// the distinction an absent sidecar would re-stat/re-read on EVERY
+/// /api/source request. `/api/refresh` re-attempts by writing `Loaded(...)`.
+enum EvidenceCache {
+    Unloaded,
+    Loaded(Option<EvidenceModel>),
 }
 
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
     model: RwLock<Option<IndexModel>>,
+    /// Card/unit bodies for the /api/source/:sha memory layer — lazy-loaded
+    /// like the index model, refreshed together on /api/refresh.
+    evidence: RwLock<EvidenceCache>,
     viz_dir: Option<PathBuf>,
 }
 
@@ -52,11 +76,30 @@ impl AppState {
         Some(fresh)
     }
 
+    fn current_evidence(&self) -> Option<EvidenceModel> {
+        {
+            let guard = self.evidence.read().unwrap();
+            if let EvidenceCache::Loaded(ev) = &*guard {
+                return ev.clone();
+            }
+        }
+        let fresh = read_evidence(&self.vault_root).ok();
+        let mut guard = self.evidence.write().unwrap();
+        *guard = EvidenceCache::Loaded(fresh.clone());
+        fresh
+    }
+
     fn refresh_model(&self) {
         if let Ok(m) = read_index(&self.vault_root) {
             let mut guard = self.model.write().unwrap();
             *guard = Some(m);
         }
+        // Reload the evidence sidecar too; it may legitimately be absent
+        // (pre-M31 vaults) — the source API then reports it as unavailable.
+        // Marking the load COMPLETED (even when absent) is what stops
+        // current_evidence from re-reading disk on every request.
+        *self.evidence.write().unwrap() =
+            EvidenceCache::Loaded(read_evidence(&self.vault_root).ok());
     }
 
     fn console_dir(&self) -> PathBuf {
@@ -66,13 +109,13 @@ impl AppState {
 
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
     let bind = format!("{}:{}", config.host, config.port);
-    let server =
-        Server::http(&bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
+    let server = Server::http(&bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
 
     let state = Arc::new(AppState {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(None),
+        evidence: RwLock::new(EvidenceCache::Unloaded),
         viz_dir: config.viz_dir,
     });
 
@@ -84,12 +127,13 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     eprintln!("  API:     http://{bind}/api/find?term=...");
     eprintln!("  reload:  http://{bind}/api/refresh");
     match &state.viz_dir {
-        Some(dir) => eprintln!("  viz:     overlay from {}", dir.display()),
+        Some(dir) => eprintln!("  portal:  overlay from {}", dir.display()),
         None => {
-            if !state.console_dir().join("viz").join("index.html").exists() {
+            if !state.console_dir().join("app").join("index.html").exists() {
                 eprintln!(
-                    "  viz:     NOT DEPLOYED in this vault — pass --viz-dir \
-                     <repo>/.ovp/console/viz to serve the SPA build"
+                    "  portal:  NOT DEPLOYED in this vault — pass --viz-dir \
+                     <repo>/console-ui/dist to serve the SPA build \
+                     (legacy console pages still served)"
                 );
             }
         }
@@ -98,35 +142,39 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     for request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
-
-        let resp = match (method, path.as_str()) {
-            (Method::Get, "/api/refresh") => {
-                state.refresh_model();
-                json_response(200, r#"{"ok":true}"#)
-            }
-            (Method::Get, p) if p.starts_with("/api/find") => {
-                handle_find(&state, &path)
-            }
-            (Method::Get, p) if p.starts_with("/api/search") => {
-                handle_search(&state, &path)
-            }
-            (Method::Get, "/api/model") => handle_model(&state),
-            (Method::Get, p) if p.starts_with("/api/graph") => {
-                handle_graph(&state, &path)
-            }
-            (Method::Get, "/api/flow") => handle_flow(&state),
-            (Method::Get, "/api/themes") => handle_themes(&state),
-            (Method::Get, p) if p.starts_with("/api/claim/") => {
-                handle_claim(&state, &path)
-            }
-            (Method::Get, _) => serve_static(&state, &path),
-            _ => text_response(405, "Method Not Allowed"),
-        };
-
+        let resp = dispatch(&state, method, &path);
         let _ = request.respond(resp);
     }
 
     Ok(())
+}
+
+/// Route one request. Extracted from the accept loop so routing is unit
+/// testable. Matching runs on the path WITHOUT the query string (so exact
+/// routes like `/api/model?x=1` still hit their handler); handlers get the
+/// full url and parse their own params. Anything under `/api/` that matches
+/// no route is a JSON 404 — it must never fall through to the SPA shell.
+fn dispatch(state: &AppState, method: Method, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = url.split('?').next().unwrap_or(url);
+    match (method, path) {
+        (Method::Get, "/api/refresh") => {
+            state.refresh_model();
+            json_response(200, r#"{"ok":true}"#)
+        }
+        (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
+        (Method::Get, p) if p.starts_with("/api/search") => handle_search(state, url),
+        (Method::Get, "/api/model") => handle_model(state),
+        (Method::Get, p) if p.starts_with("/api/graph") => handle_graph(state, url),
+        (Method::Get, "/api/flow") => handle_flow(state),
+        (Method::Get, "/api/themes") => handle_themes(state),
+        (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
+        (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
+        (Method::Get, p) if p == "/api" || p.starts_with("/api/") => {
+            json_response(404, r#"{"error":"unknown api route"}"#)
+        }
+        (Method::Get, _) => serve_static(state, url),
+        _ => text_response(405, "Method Not Allowed"),
+    }
 }
 
 fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -175,7 +223,12 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
-    let query = Query { kind: None, status: None, date: None, term };
+    let query = Query {
+        kind: None,
+        status: None,
+        date: None,
+        term,
+    };
     let hits = run_query(&model, &query);
     let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
     json_response(200, &body)
@@ -216,7 +269,76 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    let params = match graph::GraphParams::from_query(&parse_query_string(url)) {
+    let query = parse_query_string(url);
+
+    // Portal v2 scoped-component API (design §4) — one KnowledgeGraph
+    // component, three scopes:
+    //   scope=neighborhood&source=<sha>  this source → citing claims →
+    //                                    sibling sources (B2)
+    //   scope=global[&limit=n]           the overview/density graph (claims
+    //                                    + community metadata) — the
+    //                                    knowledge-page graph view (B3)
+    //   scope=theme&theme=<t>            the theme's claims + their sources
+    //                                    — the theme-detail rail (B3)
+    // Unknown scopes fail loud, never guess.
+    if let Some(scope) = query.get("scope") {
+        let result = match scope.as_str() {
+            "neighborhood" => {
+                let Some(sha) = query.get("source").filter(|s| !s.is_empty()) else {
+                    return json_response(
+                        400,
+                        r#"{"error":"scope=neighborhood requires source=<sha256>"}"#,
+                    );
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::source_neighborhood(&records, model.as_ref(), sha)
+            }
+            "global" => {
+                let limit = query
+                    .get("limit")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(graph::DEFAULT_OVERVIEW_LIMIT)
+                    .max(1);
+                let params = graph::GraphParams {
+                    mode: graph::GraphMode::Overview,
+                    limit,
+                    theme: None,
+                    focus: None,
+                    hops: graph::MAX_HOPS,
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::build_graph(&records, model.as_ref(), &params)
+            }
+            "theme" => {
+                let Some(theme) = query.get("theme").filter(|t| !t.is_empty()) else {
+                    return json_response(400, r#"{"error":"scope=theme requires theme=<theme>"}"#);
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::theme_subgraph(&records, model.as_ref(), theme)
+            }
+            other => {
+                let body = serde_json::json!({
+                    "error": format!("unknown scope: {other} (neighborhood|global|theme)"),
+                });
+                return json_response(400, &body.to_string());
+            }
+        };
+        return match result {
+            Ok(resp) => {
+                let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
+                json_response(200, &body)
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "error": e.message });
+                json_response(e.status, &body.to_string())
+            }
+        };
+    }
+
+    let params = match graph::GraphParams::from_query(&query) {
         Ok(p) => p,
         Err(e) => {
             let body = serde_json::json!({ "error": e.message });
@@ -277,24 +399,21 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     let mut citations = Vec::new();
 
     for cit in &rec.citations {
-        let units_path = reader_root
-            .join(&cit.case_id)
-            .join("units.accepted.json");
+        let units_path = reader_root.join(&cit.case_id).join("units.accepted.json");
         let unit_text = std::fs::read_to_string(&units_path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Vec<Unit>>(&raw).ok())
             .and_then(|units| {
-                units.into_iter().find(|u| u.id == cit.unit_id).map(|u| u.text)
+                units
+                    .into_iter()
+                    .find(|u| u.id == cit.unit_id)
+                    .map(|u| u.text)
             })
             .unwrap_or_default();
 
         let (source_title, source_url, source_sha) =
             if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
-                let sha = pack
-                    .source_sha256
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_string();
+                let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
                 let src = source_lookup.get(&sha);
                 (
                     src.and_then(|s| s.title.clone())
@@ -328,6 +447,168 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     json_response(200, &body.to_string())
 }
 
+/// GET /api/source/<sha256> — JSON for the portal's three-layer source
+/// detail page (B2): full SourceRow meta, the memory layer (cards + grounded
+/// units from the evidence sidecar), crystal claims citing this source, and
+/// the raw source markdown (size-capped, traversal-safe). The markdown is
+/// DATA in a JSON string — the client renders it safely; nothing here emits
+/// HTML.
+fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let model = match state.current_model() {
+        Some(m) => m,
+        None => return json_response(503, r#"{"error":"index not available"}"#),
+    };
+
+    let raw = url.split('?').next().unwrap_or(url);
+    let sha = url_decode(
+        raw.strip_prefix("/api/source/")
+            .unwrap_or("")
+            .trim_end_matches('/'),
+    );
+    if sha.is_empty() {
+        return json_response(400, r#"{"error":"missing source sha"}"#);
+    }
+
+    let Some(source) = model.sources.iter().find(|s| s.sha256 == sha) else {
+        let body = serde_json::json!({ "error": format!("source not found: {sha}") });
+        return json_response(404, &body.to_string());
+    };
+
+    // Memory layer: evidence rows keyed by the source sha or its pack dir.
+    let evidence = state.current_evidence();
+    let evidence_available = evidence.is_some();
+    let pack_dir = source.pack_dir.as_deref();
+    let belongs = |row_sha: Option<&str>, row_pack: &str| {
+        row_sha == Some(sha.as_str()) || pack_dir == Some(row_pack)
+    };
+    let cards: Vec<serde_json::Value> = evidence
+        .as_ref()
+        .map(|ev| {
+            ev.cards
+                .iter()
+                .filter(|c| belongs(c.source_sha256.as_deref(), &c.pack_dir))
+                .map(|c| serde_json::json!({ "title": c.title, "content": c.content }))
+                .collect()
+        })
+        .unwrap_or_default();
+    let units: Vec<serde_json::Value> = evidence
+        .as_ref()
+        .map(|ev| {
+            ev.units
+                .iter()
+                .filter(|u| belongs(u.source_sha256.as_deref(), &u.pack_dir))
+                .map(|u| {
+                    serde_json::json!({
+                        "unit_id": u.unit_id,
+                        "text": u.text,
+                        "quote": u.quote,
+                        "line": u.line,
+                        "attribution": u.attribution,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Crystal layer: ClaimRow.sources holds case ids (last pack_dir segment).
+    let case_id = pack_dir.and_then(graph::last_path_segment);
+    let mut citing: Vec<&ovp_index::ClaimRow> = match case_id {
+        Some(case) => model
+            .claims
+            .iter()
+            .filter(|c| c.sources.iter().any(|s| s == case))
+            .collect(),
+        None => Vec::new(),
+    };
+    citing.sort_by_key(|c| {
+        (
+            match c.status {
+                ovp_index::ClaimStatus::Durable => 0u8,
+                ovp_index::ClaimStatus::Caveated => 1,
+                _ => 2,
+            },
+            c.claim_id.clone(),
+        )
+    });
+
+    let (markdown, truncated, doc_error) = read_source_doc(state, source.rel_path.as_deref());
+
+    let body = serde_json::json!({
+        "source": source,
+        "memory": {
+            "evidence_available": evidence_available,
+            "cards": cards,
+            "units": units,
+        },
+        "citing_claims": citing,
+        "doc": {
+            "markdown": markdown,
+            "truncated": truncated,
+            "error": doc_error,
+        },
+    });
+    json_response(200, &body.to_string())
+}
+
+/// Read the source markdown from the vault, capped at MAX_SOURCE_DOC_BYTES.
+/// All failure modes become an explicit error string — the endpoint always
+/// answers.
+fn read_source_doc(
+    state: &AppState,
+    rel_path: Option<&str>,
+) -> (Option<String>, bool, Option<String>) {
+    let Some(rel) = rel_path else {
+        return (None, false, None);
+    };
+    // rel_path comes from our own index, but never trust it anyway: reject
+    // parent components and absolute roots — including Windows prefixes
+    // (`C:\…`, `\\srv\share`) that `is_absolute()` misses on Unix and that
+    // would make `Path::join` discard the vault root entirely.
+    if !is_plain_relative(rel) {
+        return (None, false, Some("source path rejected".into()));
+    }
+    let recorded = state.vault_root.join(rel);
+    let path = if recorded.is_file() {
+        recorded
+    } else if let Some(moved) = lifecycle_moved_path(state, rel) {
+        moved
+    } else {
+        recorded
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(mut text) => {
+            let truncated = text.len() > MAX_SOURCE_DOC_BYTES;
+            if truncated {
+                let mut cut = MAX_SOURCE_DOC_BYTES;
+                while cut > 0 && !text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                text.truncate(cut);
+            }
+            (Some(text), truncated, None)
+        }
+        Err(e) => (None, false, Some(format!("{rel}: {e}"))),
+    }
+}
+
+/// Lifecycle-move fallback: `SourceRow.rel_path` records the INTAKE location
+/// (`50-Inbox/01-Raw/<month>/…`), but the daily lifecycle step moves
+/// processed sources to `50-Inbox/03-Processed/<month>/…` keeping the same
+/// trailing subpath. When the recorded path misses and sits under the raw
+/// inbox dir, retry the processed dir — both directory names come from
+/// `VaultLayout`, never hardcoded here. `rel` is already traversal-checked
+/// by the caller. Returns the candidate only when it actually exists.
+fn lifecycle_moved_path(state: &AppState, rel: &str) -> Option<PathBuf> {
+    let raw_prefix = format!("{}/", state.layout.inbox_raw_dir());
+    let rest = rel.strip_prefix(&raw_prefix)?;
+    let (month, file) = rest.split_once('/')?;
+    let candidate = state
+        .vault_root
+        .join(state.layout.processed_dir(month))
+        .join(file);
+    candidate.is_file().then_some(candidate)
+}
+
 fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = match state.current_model() {
         Some(m) => m,
@@ -352,11 +633,53 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(200, &body.to_string())
 }
 
+/// Result of static-path resolution — kept separate from `Response` so the
+/// routing precedence is testable on content, not just status codes.
+enum Resolved {
+    File {
+        body: Vec<u8>,
+        content_type: &'static str,
+    },
+    BadRequest,
+    NotFound,
+}
+
 fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    match resolve_static(state, url_path) {
+        Resolved::File { body, content_type } => {
+            let header = Header::from_bytes("Content-Type", content_type).unwrap();
+            Response::from_data(body)
+                .with_header(header)
+                .with_status_code(200)
+        }
+        Resolved::BadRequest => text_response(400, "Bad Request"),
+        Resolved::NotFound => text_response(404, "Not Found"),
+    }
+}
+
+/// Static routing precedence (portal v2 B1) — the SPA owns the site root,
+/// legacy generated pages stay reachable by exact filename:
+///
+/// 1. `/api/*` never reaches here (dispatched in `run_server` first).
+/// 2. `/legacy-index.html` → the OLD generated console index
+///    (`<vault>/.ovp/console/index.html`), kept reachable after the SPA
+///    took over `/`.
+/// 3. SPA app build, exact file: deployed `<vault>/.ovp/console/app/`
+///    first, then the `--viz-dir` overlay. `/` maps to `index.html`, so
+///    the portal is the root whenever an app build is present.
+/// 4. Legacy console file under `<vault>/.ovp/console/` by exact filename
+///    (`ops.html`, `audit.html`, `candidates.html`, pre-B1 `/viz/*`
+///    assets, …). Without any app build this also serves the old console
+///    index at `/` — backward compatible.
+/// 5. Extensionless paths are SPA client routes (`/library`,
+///    `/library/:sha`, `/search`, old `/viz/graph` deep links) → the SPA
+///    `index.html`; the router takes over. Paths WITH an extension that
+///    missed on disk are plain 404s.
+fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
     let console_dir = state.console_dir();
 
-    // Deep links like /viz/graph?focus=… carry a query string; the file
-    // lookup (and SPA-route detection) must see the path only.
+    // Deep links like /library?c=pinboard carry a query string; file
+    // lookup (and client-route detection) must see the path only.
     let url_path = url_path.split('?').next().unwrap_or(url_path);
     let relative = if url_path == "/" || url_path.is_empty() {
         "index.html"
@@ -364,9 +687,29 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
         url_path.trim_start_matches('/')
     };
 
-    // Prevent directory traversal
-    if relative.contains("..") {
-        return text_response(400, "Bad Request");
+    // Prevent directory traversal / absolute-path escape. `Path::join`
+    // DISCARDS the base when the RHS is absolute — including Windows
+    // prefixes (`C:\evil`, `\\server\share`) that `is_absolute()` on Unix
+    // and a plain `..` substring check both miss.
+    if !is_plain_relative(relative) {
+        return Resolved::BadRequest;
+    }
+
+    if relative == "legacy-index.html" {
+        return match std::fs::read(console_dir.join("index.html")) {
+            Ok(body) => Resolved::File {
+                body,
+                content_type: "text/html; charset=utf-8",
+            },
+            Err(_) => Resolved::NotFound,
+        };
+    }
+
+    if let Some(body) = read_app_file(state, relative) {
+        return Resolved::File {
+            body,
+            content_type: content_type_for(relative),
+        };
     }
 
     let file_path = console_dir.join(relative);
@@ -375,81 +718,84 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
     } else {
         file_path
     };
-    match std::fs::read(&file_path) {
-        Ok(content) => {
-            let fname = file_path.to_string_lossy();
-            let ct = content_type_for(&fname);
-            let header = Header::from_bytes("Content-Type", ct).unwrap();
-            Response::from_data(content).with_header(header).with_status_code(200)
-        }
-        Err(_) => {
-            // Viz overlay: /viz/* assets missing from the vault fall back to
-            // the configured SPA build dir (--viz-dir), so a dev checkout
-            // serves any vault without copying .ovp/console/viz into it.
-            if let Some(rest) = relative.strip_prefix("viz/") {
-                if let Some(content) = read_viz_overlay(state, rest) {
-                    let ct = content_type_for(relative);
-                    let header = Header::from_bytes("Content-Type", ct).unwrap();
-                    return Response::from_data(content)
-                        .with_header(header)
-                        .with_status_code(200);
-                }
-            }
-            // SPA fallback: client-side routes like /viz/graph have no file
-            // on disk — serve the SPA shell (vault first, then overlay) and
-            // let the router take over.
-            if graph::is_spa_route(relative) {
-                let shell = std::fs::read(
-                    console_dir.join("viz").join("index.html"),
-                )
-                .ok()
-                .or_else(|| read_viz_overlay(state, "index.html"));
-                if let Some(content) = shell {
-                    let header = Header::from_bytes(
-                        "Content-Type",
-                        "text/html; charset=utf-8",
-                    )
-                    .unwrap();
-                    return Response::from_data(content)
-                        .with_header(header)
-                        .with_status_code(200);
-                }
-            }
-            text_response(404, "Not Found")
+    if let Ok(body) = std::fs::read(&file_path) {
+        let fname = file_path.to_string_lossy().to_string();
+        return Resolved::File {
+            body,
+            content_type: content_type_for(&fname),
+        };
+    }
+
+    if is_client_route(relative) {
+        if let Some(body) = read_app_file(state, "index.html") {
+            return Resolved::File {
+                body,
+                content_type: "text/html; charset=utf-8",
+            };
         }
     }
+
+    Resolved::NotFound
 }
 
-/// Read a `/viz/`-relative asset from the overlay build dir, if configured.
-/// `..` is already rejected by serve_static, but `rest` can still be
-/// absolute (`/viz//etc/passwd` → rest `/etc/passwd`) and `Path::join`
-/// DISCARDS the base for an absolute RHS — so only plain relative
-/// components are allowed through.
-fn read_viz_overlay(state: &AppState, rest: &str) -> Option<Vec<u8>> {
-    let dir = state.viz_dir.as_ref()?;
-    let rel = std::path::Path::new(rest);
-    if rel.is_absolute()
-        || rel
-            .components()
-            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-    {
+/// True only for a plain relative path: every `Path::components()` entry is
+/// `Component::Normal` — no `ParentDir`, no `RootDir`, no Windows
+/// `Component::Prefix` (`C:\`, `\\server\share`). Backslashes and drive
+/// colons are ALSO rejected as raw bytes: on Unix `C:\evil` parses as one
+/// Normal component, yet a Windows deployment would treat it as absolute
+/// and `Path::join` would silently replace the base directory.
+fn is_plain_relative(rel: &str) -> bool {
+    if rel.is_empty() || rel.contains('\\') || rel.contains(':') {
+        return false;
+    }
+    std::path::Path::new(rel)
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Read a root-relative asset from the SPA app build: the deployed
+/// `<vault>/.ovp/console/app/` wins, then the `--viz-dir` overlay — so a
+/// dev checkout can serve ANY vault without copying the build in.
+/// resolve_static already rejects unsafe paths, but this is the function
+/// that joins request input onto a directory, so it guards independently.
+fn read_app_file(state: &AppState, rest: &str) -> Option<Vec<u8>> {
+    if !is_plain_relative(rest) {
         return None;
     }
+    let rel = std::path::Path::new(rest);
+    let deployed = state.console_dir().join("app").join(rel);
+    if let Ok(body) = std::fs::read(&deployed) {
+        return Some(body);
+    }
+    let dir = state.viz_dir.as_ref()?;
     std::fs::read(dir.join(rel)).ok()
+}
+
+/// Extensionless path = SPA client route. Malformed paths (leading slash
+/// remnants, empty segments) are not client routes — they must 404, never
+/// get a 200 SPA shell.
+fn is_client_route(relative: &str) -> bool {
+    if relative.is_empty() || relative.starts_with('/') || relative.contains("//") {
+        return false;
+    }
+    let last = relative.rsplit('/').next().unwrap_or(relative);
+    !last.contains('.')
 }
 
 fn json_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let data = body.as_bytes().to_vec();
-    let header =
-        Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap();
-    Response::from_data(data).with_header(header).with_status_code(status)
+    let header = Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap();
+    Response::from_data(data)
+        .with_header(header)
+        .with_status_code(status)
 }
 
 fn text_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let data = body.as_bytes().to_vec();
-    let header =
-        Header::from_bytes("Content-Type", "text/plain; charset=utf-8").unwrap();
-    Response::from_data(data).with_header(header).with_status_code(status)
+    let header = Header::from_bytes("Content-Type", "text/plain; charset=utf-8").unwrap();
+    Response::from_data(data)
+        .with_header(header)
+        .with_status_code(status)
 }
 
 fn content_type_for(path: &str) -> &'static str {
@@ -463,6 +809,12 @@ fn content_type_for(path: &str) -> &'static str {
         "application/json; charset=utf-8"
     } else if path.ends_with(".svg") {
         "image/svg+xml"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".txt") {
+        "text/plain; charset=utf-8"
     } else {
         "application/octet-stream"
     }
@@ -515,8 +867,8 @@ mod tests {
     use super::*;
 
     fn temp_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("ovp-server-test-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ovp-server-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -527,57 +879,541 @@ mod tests {
             vault_root: vault,
             layout: VaultLayout::new(),
             model: RwLock::new(None),
+            evidence: RwLock::new(EvidenceCache::Unloaded),
             viz_dir,
         }
     }
 
+    /// Unwrap the resolved body for content assertions.
+    fn body(r: Resolved) -> Vec<u8> {
+        match r {
+            Resolved::File { body, .. } => body,
+            Resolved::BadRequest => panic!("expected file, got 400"),
+            Resolved::NotFound => panic!("expected file, got 404"),
+        }
+    }
+
+    fn is_not_found(r: Resolved) -> bool {
+        matches!(r, Resolved::NotFound)
+    }
+
     #[test]
-    fn viz_overlay_serves_assets_and_spa_shell_when_vault_misses() {
-        let root = temp_root("overlay");
+    fn spa_owns_root_and_client_routes_legacy_by_exact_filename() {
+        let root = temp_root("precedence");
         let vault = root.join("vault");
         std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
-        let overlay = root.join("viz-build");
+        std::fs::write(vault.join(".ovp/console/index.html"), "legacy-index").unwrap();
+        std::fs::write(vault.join(".ovp/console/ops.html"), "legacy-ops").unwrap();
+        let overlay = root.join("dist");
         std::fs::create_dir_all(overlay.join("assets")).unwrap();
-        std::fs::write(overlay.join("index.html"), "<html>spa</html>").unwrap();
+        std::fs::write(overlay.join("index.html"), "spa").unwrap();
         std::fs::write(overlay.join("assets/app.js"), "js").unwrap();
 
         let st = state(vault.clone(), Some(overlay));
-        // Asset missing in the vault → served from the overlay.
-        assert_eq!(serve_static(&st, "/viz/assets/app.js").status_code(), 200);
-        // Client-side route → SPA shell from the overlay.
-        assert_eq!(serve_static(&st, "/viz/graph").status_code(), 200);
-        // Legacy multi-page link → SPA shell too.
-        assert_eq!(serve_static(&st, "/viz/graph.html").status_code(), 200);
-        // Outside /viz/ the overlay must not apply.
-        assert_eq!(serve_static(&st, "/nope.html").status_code(), 404);
-        // Absolute-path smuggling: Path::join would swap in the RHS wholesale
-        // for `/viz//etc/...` — must be rejected, never read outside the
-        // overlay dir.
+
+        // The SPA owns the portal root and /index.html…
+        assert_eq!(body(resolve_static(&st, "/")), b"spa");
+        assert_eq!(body(resolve_static(&st, "/index.html")), b"spa");
+        // …and every client route (query strings stripped).
+        assert_eq!(body(resolve_static(&st, "/library")), b"spa");
+        assert_eq!(body(resolve_static(&st, "/library/84fbf6dc")), b"spa");
+        assert_eq!(body(resolve_static(&st, "/search?lang=zh")), b"spa");
+        // Pre-B1 deep links are client routes too (router redirects).
+        assert_eq!(body(resolve_static(&st, "/viz/graph")), b"spa");
+        // Hashed assets come from the overlay.
+        assert_eq!(body(resolve_static(&st, "/assets/app.js")), b"js");
+        // Legacy generated pages stay reachable by exact filename, and the
+        // old console index moves to /legacy-index.html.
+        assert_eq!(body(resolve_static(&st, "/ops.html")), b"legacy-ops");
+        assert_eq!(
+            body(resolve_static(&st, "/legacy-index.html")),
+            b"legacy-index"
+        );
+        // A missed path WITH an extension is a plain 404, not the SPA shell.
+        assert!(is_not_found(resolve_static(&st, "/nope.js")));
+        assert!(is_not_found(resolve_static(&st, "/nope.html")));
+        // Traversal / malformed paths never resolve.
+        assert!(matches!(
+            resolve_static(&st, "/../secret.txt"),
+            Resolved::BadRequest
+        ));
+        // Windows-absolute forms would replace the join base entirely on a
+        // Windows host (`is_absolute()` on Unix misses them) — rejected.
+        assert!(matches!(
+            resolve_static(&st, "/C:\\windows\\system32"),
+            Resolved::BadRequest
+        ));
+        assert!(matches!(
+            resolve_static(&st, "/\\\\srv\\share"),
+            Resolved::BadRequest
+        ));
         std::fs::write(root.join("secret.txt"), "nope").unwrap();
         let abs = format!("/viz/{}", root.join("secret.txt").display());
-        assert_eq!(serve_static(&st, &abs).status_code(), 404);
-        assert_eq!(serve_static(&st, "/viz//etc/hosts").status_code(), 404);
-
-        // Vault copy wins over the overlay when present.
-        std::fs::create_dir_all(vault.join(".ovp/console/viz")).unwrap();
-        std::fs::write(
-            vault.join(".ovp/console/viz/index.html"),
-            "<html>vault</html>",
-        )
-        .unwrap();
-        assert_eq!(serve_static(&st, "/viz/index.html").status_code(), 200);
+        assert!(is_not_found(resolve_static(&st, &abs)));
+        assert!(is_not_found(resolve_static(&st, "/viz//etc/hosts")));
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn without_overlay_missing_viz_is_404() {
-        let root = temp_root("no-overlay");
+    fn deployed_app_dir_wins_over_overlay() {
+        let root = temp_root("app-dir");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join(".ovp/console/app")).unwrap();
+        std::fs::write(vault.join(".ovp/console/app/index.html"), "deployed").unwrap();
+        let overlay = root.join("dist");
+        std::fs::create_dir_all(&overlay).unwrap();
+        std::fs::write(overlay.join("index.html"), "overlay").unwrap();
+
+        let st = state(vault.clone(), Some(overlay));
+        assert_eq!(body(resolve_static(&st, "/")), b"deployed");
+        assert_eq!(body(resolve_static(&st, "/library")), b"deployed");
+
+        // Deployed app also works with no overlay configured at all.
+        let st = state(vault, None);
+        assert_eq!(body(resolve_static(&st, "/")), b"deployed");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_app_build_legacy_console_stays_root() {
+        let root = temp_root("no-app");
         let vault = root.join("vault");
         std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
+        std::fs::write(vault.join(".ovp/console/index.html"), "legacy-index").unwrap();
+        std::fs::write(vault.join(".ovp/console/ops.html"), "legacy-ops").unwrap();
+
         let st = state(vault, None);
-        assert_eq!(serve_static(&st, "/viz/assets/app.js").status_code(), 404);
-        assert_eq!(serve_static(&st, "/viz/graph").status_code(), 404);
+        // Backward compatible: the old console remains the root…
+        assert_eq!(body(resolve_static(&st, "/")), b"legacy-index");
+        assert_eq!(body(resolve_static(&st, "/ops.html")), b"legacy-ops");
+        assert_eq!(
+            body(resolve_static(&st, "/legacy-index.html")),
+            b"legacy-index"
+        );
+        // …and client routes have no SPA to fall back to.
+        assert!(is_not_found(resolve_static(&st, "/library")));
+        assert!(is_not_found(resolve_static(&st, "/viz/graph")));
+
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn body_json(resp: Response<std::io::Cursor<Vec<u8>>>) -> serde_json::Value {
+        use std::io::Read;
+        let mut out = Vec::new();
+        resp.into_reader().read_to_end(&mut out).unwrap();
+        serde_json::from_slice(&out).expect("response body must be valid JSON")
+    }
+
+    /// Vault with one processed source (hostile markdown body), its pack,
+    /// evidence sidecar (one card + one grounded unit) and one claim citing
+    /// the case — the /api/source three-layer fixture.
+    fn portal_vault(name: &str, rel_path: &str, body: &str) -> PathBuf {
+        use ovp_index::evidence::{CardEvidenceRow, UnitEvidenceRow};
+        use ovp_index::{
+            ClaimRow, ClaimStatus, EvidenceModel, OpsState, PackRow, SourceRow, SourceStatus,
+            Totals,
+        };
+        let root = temp_root(name);
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join("50-Inbox/03-Processed")).unwrap();
+        std::fs::write(vault.join("50-Inbox/03-Processed/good.md"), body).unwrap();
+
+        let model = IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: "2026-07-09".into(),
+            run_id: None,
+            totals: Totals {
+                sources: 1,
+                processed: 1,
+                packs: 1,
+                ..Default::default()
+            },
+            sources: vec![SourceRow {
+                sha256: "aaaa1111".into(),
+                status: SourceStatus::Processed,
+                title: Some("Good Article".into()),
+                url: Some("https://example.com/good".into()),
+                rel_path: Some(rel_path.into()),
+                date: Some("2026-07-09".into()),
+                last_run_id: None,
+                pack_dir: Some("40-Resources/Reader/good".into()),
+                fail_count: 0,
+                last_reason: None,
+            }],
+            packs: vec![PackRow {
+                pack_dir: "40-Resources/Reader/good".into(),
+                title: "Good Article".into(),
+                date: Some("2026-07-09".into()),
+                units: 1,
+                cards: 1,
+                json_repaired: false,
+                card_titles: vec!["Card One".into()],
+                source_sha256: Some("aaaa1111".into()),
+            }],
+            claims: vec![ClaimRow {
+                claim_id: "c01".into(),
+                claim: "Filesystem works as memory.".into(),
+                theme: Some("memory".into()),
+                status: ClaimStatus::Durable,
+                sources: vec!["good".into()],
+                strength: Some("supported".into()),
+                run_id: None,
+                lane: None,
+            }],
+            runs: vec![],
+            ops: OpsState::default(),
+        };
+        ovp_index::write_index(&vault, &model).unwrap();
+
+        let evidence = EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: "2026-07-09".into(),
+            cards: vec![CardEvidenceRow {
+                id: "card:40-Resources/Reader/good:0".into(),
+                pack_dir: "40-Resources/Reader/good".into(),
+                source_sha256: Some("aaaa1111".into()),
+                source_title: "Good Article".into(),
+                title: "Card One".into(),
+                content: "Body of card one.".into(),
+                unit_type: None,
+                cited_unit_ids: vec!["u-001".into()],
+            }],
+            units: vec![UnitEvidenceRow {
+                id: "unit:40-Resources/Reader/good:u-001".into(),
+                pack_dir: "40-Resources/Reader/good".into(),
+                source_sha256: Some("aaaa1111".into()),
+                source_title: "Good Article".into(),
+                unit_id: "u-001".into(),
+                text: "The unit text.".into(),
+                quote: "the exact quote".into(),
+                line: Some(14),
+                attribution: "author".into(),
+                modality: "asserted".into(),
+            }],
+            warnings: vec![],
+        };
+        ovp_index::write_evidence(&vault, &evidence).unwrap();
+        vault
+    }
+
+    #[test]
+    fn source_api_returns_three_layers_as_json_data() {
+        // Hostile markdown must pass through as DATA in the JSON payload —
+        // never HTML-escaped (the client renders it safely), never live.
+        let vault = portal_vault(
+            "source-api",
+            "50-Inbox/03-Processed/good.md",
+            "# Heading\n\nbody with <script>alert(1)</script>\n",
+        );
+        let st = state(vault.clone(), None);
+
+        let resp = handle_source_api(&st, "/api/source/aaaa1111");
+        assert_eq!(resp.status_code(), 200);
+        let ct = resp
+            .headers()
+            .iter()
+            .find(|h| {
+                h.field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("content-type")
+            })
+            .map(|h| h.value.as_str().to_string());
+        assert_eq!(ct.as_deref(), Some("application/json; charset=utf-8"));
+
+        let v = body_json(resp);
+        assert_eq!(v["source"]["sha256"], "aaaa1111");
+        assert_eq!(v["source"]["title"], "Good Article");
+        assert_eq!(v["memory"]["evidence_available"], true);
+        assert_eq!(v["memory"]["cards"][0]["title"], "Card One");
+        assert_eq!(v["memory"]["units"][0]["unit_id"], "u-001");
+        assert_eq!(v["memory"]["units"][0]["line"], 14);
+        assert_eq!(v["citing_claims"][0]["claim_id"], "c01");
+        assert_eq!(v["citing_claims"][0]["status"], "durable");
+        // The XSS payload survives as a JSON string, exactly as written.
+        let md = v["doc"]["markdown"].as_str().unwrap();
+        assert!(md.contains("<script>alert(1)</script>"));
+        assert!(!md.contains("&lt;script&gt;"));
+        assert_eq!(v["doc"]["truncated"], false);
+        assert!(v["doc"]["error"].is_null());
+
+        // Unknown sha → JSON 404, not HTML.
+        let missing = handle_source_api(&st, "/api/source/deadbeef");
+        assert_eq!(missing.status_code(), 404);
+        let v = body_json(missing);
+        assert!(v["error"].as_str().unwrap().contains("deadbeef"));
+
+        // Missing sha segment → 400.
+        assert_eq!(handle_source_api(&st, "/api/source/").status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_follows_lifecycle_move_raw_to_processed() {
+        // rel_path records the intake location, but the daily lifecycle step
+        // moved the file to the processed dir (same month + filename). The
+        // doc must still resolve — via VaultLayout, not the stale path.
+        let vault = portal_vault(
+            "source-moved",
+            "50-Inbox/01-Raw/2026-06/good.md",
+            "unused body\n",
+        );
+        assert!(!vault.join("50-Inbox/01-Raw/2026-06/good.md").exists());
+        std::fs::create_dir_all(vault.join("50-Inbox/03-Processed/2026-06")).unwrap();
+        std::fs::write(
+            vault.join("50-Inbox/03-Processed/2026-06/good.md"),
+            "# Moved\n\nlifecycle-moved body\n",
+        )
+        .unwrap();
+
+        let st = state(vault.clone(), None);
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        let md = v["doc"]["markdown"].as_str().expect("markdown resolved");
+        assert!(md.contains("lifecycle-moved body"));
+        assert!(v["doc"]["error"].is_null());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    /// Write a two-theme crystal ledger into the vault so the scoped
+    /// /api/graph endpoints have real records to shape.
+    fn write_ledger(vault: &std::path::Path) {
+        use ovp_domain::crystal::{
+            DurableCitation, FinalClass, ProvenanceClass, StoreOp, StrengthClass,
+        };
+        let rec = |key: &str, theme: &str, case: &str, unit: &str| DurableRecord {
+            claim_key: key.into(),
+            claim_id: format!("id-{key}"),
+            claim: format!("claim text for {key}"),
+            theme: theme.into(),
+            source_cases: vec![case.into()],
+            citations: vec![DurableCitation {
+                case_id: case.into(),
+                unit_id: unit.into(),
+                quote: format!("quote {unit}"),
+                resolved_line: None,
+            }],
+            provenance_score: 0.8,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "test".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        };
+        let events = [
+            StoreEvent {
+                op: StoreOp::Write,
+                record: rec("a", "alpha", "good", "u-001"),
+                supersedes: None,
+                reason: None,
+            },
+            StoreEvent {
+                op: StoreOp::Write,
+                record: rec("b", "beta", "good", "u-002"),
+                supersedes: None,
+                reason: None,
+            },
+        ];
+        let dir = vault.join(VaultLayout::new().crystal_store_dir());
+        std::fs::create_dir_all(&dir).unwrap();
+        let lines: Vec<String> = events
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(dir.join("ledger.jsonl"), lines.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn graph_scope_global_returns_overview_shape() {
+        let vault = portal_vault("graph-global", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["mode"], "overview");
+        // Overview = claims only, with community metadata alongside.
+        let nodes = v["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|n| n["type"] == "claim"));
+        assert!(v["communities"].is_array());
+        assert_eq!(v["truncated"], false);
+        assert!(v["total_nodes"].as_u64().unwrap() >= 2);
+
+        // limit is honored and flags truncation.
+        let v = body_json(dispatch(
+            &st,
+            Method::Get,
+            "/api/graph?scope=global&limit=1",
+        ));
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(v["truncated"], true);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn graph_scope_theme_filters_and_unknown_theme_is_404() {
+        let vault = portal_vault("graph-theme", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["mode"], "theme");
+        let ids: Vec<&str> = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        // Theme alpha's claim + its source (case `good` → sha aaaa1111 via
+        // the pack lookup); theme beta's claim stays out.
+        assert!(ids.contains(&"claim:a"));
+        assert!(ids.contains(&"source:aaaa1111"));
+        assert!(!ids.contains(&"claim:b"));
+
+        // Unknown theme → 404; missing/unknown scope params → 400.
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope");
+        assert_eq!(resp.status_code(), 404);
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme");
+        assert_eq!(resp.status_code(), 400);
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy");
+        assert_eq!(resp.status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn unknown_api_routes_are_json_404_not_spa() {
+        // With an SPA overlay present, a bad /api/* path used to fall through
+        // to the extensionless-client-route rule and answer 200 + index.html.
+        let root = temp_root("api-404");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
+        let overlay = root.join("dist");
+        std::fs::create_dir_all(&overlay).unwrap();
+        std::fs::write(overlay.join("index.html"), "spa").unwrap();
+        let st = state(vault, Some(overlay));
+
+        for path in ["/api/nonexistent", "/api", "/api/", "/api/nope?x=1"] {
+            let resp = dispatch(&st, Method::Get, path);
+            assert_eq!(resp.status_code(), 404, "path {path}");
+            let v = body_json(resp);
+            assert_eq!(v["error"], "unknown api route", "path {path}");
+        }
+
+        // Non-API client routes still reach the SPA shell…
+        assert_eq!(dispatch(&st, Method::Get, "/library").status_code(), 200);
+        // …exact API routes keep working even with a query string…
+        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1");
+        assert_eq!(resp.status_code(), 200);
+        // …and non-GET stays 405.
+        assert_eq!(dispatch(&st, Method::Post, "/api/model").status_code(), 405);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn source_api_rejects_traversal_paths() {
+        let vault = portal_vault("source-traversal", "../secret.md", "body\n");
+        // A secret OUTSIDE the vault that `..` would reach.
+        std::fs::write(vault.parent().unwrap().join("secret.md"), "TOP SECRET").unwrap();
+        let st = state(vault.clone(), None);
+
+        let resp = handle_source_api(&st, "/api/source/aaaa1111");
+        assert_eq!(resp.status_code(), 200); // meta still served
+        let v = body_json(resp);
+        assert!(v["doc"]["markdown"].is_null());
+        assert_eq!(v["doc"]["error"], "source path rejected");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_rejects_windows_absolute_rel_path() {
+        // `C:\evil` is NOT absolute per is_absolute() on Unix, but on a
+        // Windows host Path::join would discard the vault root — rejected.
+        let vault = portal_vault("source-win-abs", "C:\\evil", "body\n");
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert!(v["doc"]["markdown"].is_null());
+        assert_eq!(v["doc"]["error"], "source path rejected");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_truncates_oversized_markdown() {
+        let big = "x".repeat(MAX_SOURCE_DOC_BYTES + 100);
+        let vault = portal_vault("source-big", "50-Inbox/03-Processed/good.md", &big);
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert_eq!(v["doc"]["truncated"], true);
+        assert_eq!(
+            v["doc"]["markdown"].as_str().unwrap().len(),
+            MAX_SOURCE_DOC_BYTES
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_without_evidence_reports_unavailable() {
+        let vault = portal_vault(
+            "source-no-evidence",
+            "50-Inbox/03-Processed/good.md",
+            "body\n",
+        );
+        std::fs::remove_file(vault.join(".ovp/index/evidence.json")).unwrap();
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert_eq!(v["memory"]["evidence_available"], false);
+        assert!(v["memory"]["cards"].as_array().unwrap().is_empty());
+        assert!(v["memory"]["units"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn client_route_detection() {
+        assert!(is_client_route("library"));
+        assert!(is_client_route("library/84fbf6dc"));
+        assert!(is_client_route("search"));
+        assert!(is_client_route("viz/graph"));
+        // Extensions (missed files) and malformed paths are not routes.
+        assert!(!is_client_route("index.html"));
+        assert!(!is_client_route("assets/app.js"));
+        assert!(!is_client_route("library/file.md"));
+        assert!(!is_client_route(""));
+        assert!(!is_client_route("/etc/hosts"));
+        assert!(!is_client_route("viz//etc"));
+    }
+
+    #[test]
+    fn plain_relative_rejects_windows_prefixes_and_traversal() {
+        assert!(is_plain_relative("index.html"));
+        assert!(is_plain_relative("assets/app.js"));
+        assert!(is_plain_relative("library/84fbf6dc"));
+        // Traversal and Unix-absolute.
+        assert!(!is_plain_relative(""));
+        assert!(!is_plain_relative("../secret.txt"));
+        assert!(!is_plain_relative("a/../../b"));
+        assert!(!is_plain_relative("/etc/hosts"));
+        // Windows prefix / rootdir forms — one Normal component on Unix,
+        // absolute on Windows, so raw-byte checks must catch them.
+        assert!(!is_plain_relative("C:\\windows\\system32"));
+        assert!(!is_plain_relative("C:/windows/system32"));
+        assert!(!is_plain_relative("\\\\srv\\share"));
+        assert!(!is_plain_relative("\\evil"));
     }
 }

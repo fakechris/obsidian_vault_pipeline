@@ -39,6 +39,12 @@ pub struct Hit {
     pub line: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Stable row id, kind-specific, so API consumers (the portal search)
+    /// can build entity links without parsing `line`: source → sha256,
+    /// pack → pack_dir, claim → claim_id, run → run_id, card/unit → the
+    /// evidence row id. Additive — CLI text output ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
@@ -85,6 +91,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
                 status: status.into(),
                 line,
                 path: s.rel_path.clone(),
+                id: Some(s.sha256.clone()),
             });
         }
     }
@@ -113,6 +120,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
                     }
                 ),
                 path: Some(format!("{}/reader.md", p.pack_dir)),
+                id: Some(p.pack_dir.clone()),
             });
         }
     }
@@ -137,6 +145,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
                 status: status.into(),
                 line,
                 path: None,
+                id: Some(c.claim_id.clone()),
             });
         }
     }
@@ -157,6 +166,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
                     r.date, r.run_id, r.succeeded, r.failed, r.skipped, r.ingested
                 ),
                 path: Some(r.report_file.clone()),
+                id: Some(r.run_id.clone()),
             });
         }
     }
@@ -204,6 +214,7 @@ pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> 
                         preview_suffix(&card.content)
                     ),
                     path: Some(format!("{}/reader.md", card.pack_dir)),
+                    id: Some(card.id.clone()),
                 },
             ));
         }
@@ -236,6 +247,7 @@ pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> 
                         preview_suffix(&unit.quote)
                     ),
                     path: Some(format!("{}/reader.md", unit.pack_dir)),
+                    id: Some(unit.id.clone()),
                 },
             ));
         }
@@ -289,8 +301,8 @@ pub fn claim_status_str(s: ClaimStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::evidence::{CardEvidenceRow, EvidenceModel, UnitEvidenceRow, EVIDENCE_SCHEMA};
-    use crate::query::{run_evidence_query, Query, QueryKind};
+    use crate::evidence::{CardEvidenceRow, EVIDENCE_SCHEMA, EvidenceModel, UnitEvidenceRow};
+    use crate::query::{Query, QueryKind, run_evidence_query};
 
     fn evidence() -> EvidenceModel {
         EvidenceModel {

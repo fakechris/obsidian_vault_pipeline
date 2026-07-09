@@ -4,6 +4,7 @@ import type {
   FlowData,
   GraphResponse,
   IndexModel,
+  SourceDetail,
   ThemeCount,
 } from './types';
 
@@ -59,4 +60,38 @@ export function fetchThemes(): Promise<ThemeCount[]> {
 
 export function fetchModel(): Promise<IndexModel> {
   return fetchJson<IndexModel>('/api/model');
+}
+
+/** Three-layer source detail: meta + memory + citing claims + raw md. */
+export function fetchSourceDetail(sha: string): Promise<SourceDetail> {
+  return fetchJson<SourceDetail>(`/api/source/${encodeURIComponent(sha)}`);
+}
+
+/** Source-centric neighborhood for the KnowledgeGraph component (design §4):
+ * this source → claims citing it → sibling sources. */
+export function fetchSourceNeighborhood(sha: string): Promise<GraphResponse> {
+  return fetchJson<GraphResponse>(
+    `/api/graph?scope=neighborhood&source=${encodeURIComponent(sha)}`,
+  );
+}
+
+/** Global scope for the KnowledgeGraph component: the overview/density graph
+ * (claims + community metadata). Capped so the embedded view stays snappy —
+ * the response flags truncation. */
+export function fetchGlobalGraph(limit = 400): Promise<GraphResponse> {
+  return fetchJson<GraphResponse>(`/api/graph?scope=global&limit=${limit}`);
+}
+
+/** Theme scope for the KnowledgeGraph component: the theme's claims + the
+ * sources they cite. 404s on an unknown theme. */
+export function fetchThemeGraph(theme: string): Promise<GraphResponse> {
+  return fetchJson<GraphResponse>(
+    `/api/graph?scope=theme&theme=${encodeURIComponent(theme)}`,
+  );
+}
+
+/** Text search over sources / packs / claims / runs — display lines with
+ * stable ids (FindHit.id) for entity links. */
+export function fetchSearchHits(q: string): Promise<FindHit[]> {
+  return fetchJson<FindHit[]>(`/api/search?q=${encodeURIComponent(q)}`);
 }

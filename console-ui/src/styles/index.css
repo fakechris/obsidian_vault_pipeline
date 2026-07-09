@@ -1,9 +1,12 @@
 @import 'tailwindcss';
 
+/* LEGACY tokens — only the pre-B1 G6 console routes (/graph /explore /flow
+   /monitor) still use these Tailwind colors. The portal itself is styled by
+   src/design/colors_and_type.css (DS tokens) + src/design/portal.css.
+   These pages get rethemed onto the DS in B2/B3, then this block dies. */
 @theme {
-  --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --font-sans: 'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, -apple-system, sans-serif;
 
-  /* OVP identity — carried over from the previous console (shared/theme.ts) */
   --color-bg: #0f1117;
   --color-surface: #161a24;
   --color-panel: rgba(15, 17, 23, 0.92);
@@ -15,12 +18,4 @@
   --color-source: #86efac;
   --color-source-deep: #22c55e;
   --color-highlight: #fbbf24;
-}
-
-:root {
-  color-scheme: dark;
-}
-
-body {
-  @apply bg-bg font-sans text-slate-200 antialiased;
 }

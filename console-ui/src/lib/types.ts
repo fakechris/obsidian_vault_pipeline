@@ -2,7 +2,7 @@
 
 export type NodeType = 'claim' | 'unit' | 'source';
 export type EdgeType = 'cites' | 'extracted_from' | 'related';
-export type GraphMode = 'overview' | 'neighborhood' | 'search';
+export type GraphMode = 'overview' | 'neighborhood' | 'search' | 'theme';
 
 export interface GraphNode {
   id: string;
@@ -19,6 +19,9 @@ export interface GraphNode {
   importance: number;
   /** Provenance score 0..1 (claims only). */
   provenance?: number;
+  /** Claims only: index claim_id for portal links — the node `id` carries
+   * the ledger claim_key, which can differ. */
+  claim_id?: string;
 }
 
 export interface GraphEdge {
@@ -76,17 +79,127 @@ export interface FlowData {
   flows: FlowLink[];
 }
 
-/** /api/find hit — a display line, not a structured record. */
+/** /api/find and /api/search hit — a display line plus a kind-specific
+ * stable id for entity links (source → sha256, pack → pack_dir,
+ * claim → claim_id, run → run_id). */
 export interface FindHit {
   kind: string;
   status: string;
   line: string;
   path?: string;
+  id?: string;
 }
 
 export interface ThemeCount {
   theme: string;
   count: number;
+}
+
+export type SourceStatus =
+  | 'blocked'
+  | 'failed'
+  | 'queued'
+  | 'needs_content'
+  | 'unparseable'
+  | 'processed'
+  | 'duplicate';
+
+export interface SourceRow {
+  sha256: string;
+  status: SourceStatus;
+  title?: string;
+  url?: string;
+  rel_path?: string;
+  date?: string;
+  last_run_id?: string;
+  pack_dir?: string;
+  fail_count: number;
+  last_reason?: string;
+}
+
+export interface PackRow {
+  pack_dir: string;
+  title: string;
+  date?: string;
+  units: number;
+  cards: number;
+  json_repaired: boolean;
+  card_titles: string[];
+  source_sha256?: string;
+}
+
+export type ClaimStatus = 'durable' | 'superseded' | 'retracted' | 'caveated';
+
+export interface ClaimRow {
+  claim_id: string;
+  claim: string;
+  theme?: string;
+  status: ClaimStatus;
+  sources: string[];
+  strength?: string;
+  run_id?: string;
+  lane?: string;
+}
+
+// ---- /api/source/:sha (B2 source detail) ----
+
+export interface MemoryCard {
+  title: string;
+  content: string;
+}
+
+export interface MemoryUnit {
+  unit_id: string;
+  text: string;
+  quote: string;
+  line: number | null;
+  attribution: string;
+}
+
+export interface SourceMemory {
+  /** False when the vault has no evidence sidecar (pre-M31) — the page
+   * shows a "run ovp2 index" hint instead of an empty memory layer. */
+  evidence_available: boolean;
+  cards: MemoryCard[];
+  units: MemoryUnit[];
+}
+
+export interface SourceDocPayload {
+  /** Raw markdown text (JSON data — rendered client-side, never as HTML). */
+  markdown: string | null;
+  /** True when the body was cut at the server's 200KB cap. */
+  truncated: boolean;
+  error: string | null;
+}
+
+export interface SourceDetail {
+  source: SourceRow;
+  memory: SourceMemory;
+  citing_claims: ClaimRow[];
+  doc: SourceDocPayload;
+}
+
+export interface BlockedSource {
+  sha256: string;
+  title?: string;
+  fail_count: number;
+  last_reason?: string;
+  last_attempt?: string;
+}
+
+export interface RunStats {
+  window_days: number;
+  total_runs: number;
+  succeeded: number;
+  failed: number;
+  success_rate_pct: number;
+  avg_processed_per_run: number;
+}
+
+export interface OpsState {
+  blocked_sources: BlockedSource[];
+  queue_depth: number;
+  run_stats?: RunStats | null;
 }
 
 export interface RunRow {
@@ -122,5 +235,9 @@ export interface IndexModel {
   date: string;
   run_id?: string;
   totals: Totals;
+  sources: SourceRow[];
+  packs: PackRow[];
+  claims: ClaimRow[];
   runs: RunRow[];
+  ops: OpsState;
 }
