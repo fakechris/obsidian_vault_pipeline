@@ -287,6 +287,8 @@ export default function KnowledgeGraph({
       cleanup?.();
     };
     // themeVersion intentionally re-runs this effect: same data, new tokens.
+    // scope must be a dep: switching scopes swaps the dataset, and only a
+    // re-run destroys the old graph instance.
   }, [data, id, scope, knownShas, navigate, themeVersion]);
 
   const kindLabel = (type: string) =>

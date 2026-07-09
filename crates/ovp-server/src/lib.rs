@@ -39,13 +39,22 @@ pub struct ServeConfig {
     pub viz_dir: Option<PathBuf>,
 }
 
+/// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
+/// `Loaded(None)` (attempted, legitimately absent — pre-M31 vaults): without
+/// the distinction an absent sidecar would re-stat/re-read on EVERY
+/// /api/source request. `/api/refresh` re-attempts by writing `Loaded(...)`.
+enum EvidenceCache {
+    Unloaded,
+    Loaded(Option<EvidenceModel>),
+}
+
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
     model: RwLock<Option<IndexModel>>,
     /// Card/unit bodies for the /api/source/:sha memory layer — lazy-loaded
     /// like the index model, refreshed together on /api/refresh.
-    evidence: RwLock<Option<EvidenceModel>>,
+    evidence: RwLock<EvidenceCache>,
     viz_dir: Option<PathBuf>,
 }
 
@@ -70,14 +79,14 @@ impl AppState {
     fn current_evidence(&self) -> Option<EvidenceModel> {
         {
             let guard = self.evidence.read().unwrap();
-            if guard.is_some() {
-                return guard.clone();
+            if let EvidenceCache::Loaded(ev) = &*guard {
+                return ev.clone();
             }
         }
-        let fresh = read_evidence(&self.vault_root).ok()?;
+        let fresh = read_evidence(&self.vault_root).ok();
         let mut guard = self.evidence.write().unwrap();
-        *guard = Some(fresh.clone());
-        Some(fresh)
+        *guard = EvidenceCache::Loaded(fresh.clone());
+        fresh
     }
 
     fn refresh_model(&self) {
@@ -87,7 +96,10 @@ impl AppState {
         }
         // Reload the evidence sidecar too; it may legitimately be absent
         // (pre-M31 vaults) — the source API then reports it as unavailable.
-        *self.evidence.write().unwrap() = read_evidence(&self.vault_root).ok();
+        // Marking the load COMPLETED (even when absent) is what stops
+        // current_evidence from re-reading disk on every request.
+        *self.evidence.write().unwrap() =
+            EvidenceCache::Loaded(read_evidence(&self.vault_root).ok());
     }
 
     fn console_dir(&self) -> PathBuf {
@@ -103,7 +115,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(None),
-        evidence: RwLock::new(None),
+        evidence: RwLock::new(EvidenceCache::Unloaded),
         viz_dir: config.viz_dir,
     });
 
@@ -548,9 +560,11 @@ fn read_source_doc(
     let Some(rel) = rel_path else {
         return (None, false, None);
     };
-    // rel_path comes from our own index, but never trust a path with parent
-    // components or an absolute root anyway.
-    if rel.contains("..") || std::path::Path::new(rel).is_absolute() {
+    // rel_path comes from our own index, but never trust it anyway: reject
+    // parent components and absolute roots — including Windows prefixes
+    // (`C:\…`, `\\srv\share`) that `is_absolute()` misses on Unix and that
+    // would make `Path::join` discard the vault root entirely.
+    if !is_plain_relative(rel) {
         return (None, false, Some("source path rejected".into()));
     }
     let recorded = state.vault_root.join(rel);
@@ -673,8 +687,11 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
         url_path.trim_start_matches('/')
     };
 
-    // Prevent directory traversal
-    if relative.contains("..") {
+    // Prevent directory traversal / absolute-path escape. `Path::join`
+    // DISCARDS the base when the RHS is absolute — including Windows
+    // prefixes (`C:\evil`, `\\server\share`) that `is_absolute()` on Unix
+    // and a plain `..` substring check both miss.
+    if !is_plain_relative(relative) {
         return Resolved::BadRequest;
     }
 
@@ -721,21 +738,31 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
     Resolved::NotFound
 }
 
+/// True only for a plain relative path: every `Path::components()` entry is
+/// `Component::Normal` — no `ParentDir`, no `RootDir`, no Windows
+/// `Component::Prefix` (`C:\`, `\\server\share`). Backslashes and drive
+/// colons are ALSO rejected as raw bytes: on Unix `C:\evil` parses as one
+/// Normal component, yet a Windows deployment would treat it as absolute
+/// and `Path::join` would silently replace the base directory.
+fn is_plain_relative(rel: &str) -> bool {
+    if rel.is_empty() || rel.contains('\\') || rel.contains(':') {
+        return false;
+    }
+    std::path::Path::new(rel)
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Read a root-relative asset from the SPA app build: the deployed
 /// `<vault>/.ovp/console/app/` wins, then the `--viz-dir` overlay — so a
-/// dev checkout can serve ANY vault without copying the build in. `..` is
-/// already rejected by resolve_static, but `Path::join` DISCARDS the base
-/// for an absolute RHS — so only plain relative components pass.
+/// dev checkout can serve ANY vault without copying the build in.
+/// resolve_static already rejects unsafe paths, but this is the function
+/// that joins request input onto a directory, so it guards independently.
 fn read_app_file(state: &AppState, rest: &str) -> Option<Vec<u8>> {
-    let rel = std::path::Path::new(rest);
-    if rel.as_os_str().is_empty()
-        || rel.is_absolute()
-        || rel
-            .components()
-            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-    {
+    if !is_plain_relative(rest) {
         return None;
     }
+    let rel = std::path::Path::new(rest);
     let deployed = state.console_dir().join("app").join(rel);
     if let Ok(body) = std::fs::read(&deployed) {
         return Some(body);
@@ -852,7 +879,7 @@ mod tests {
             vault_root: vault,
             layout: VaultLayout::new(),
             model: RwLock::new(None),
-            evidence: RwLock::new(None),
+            evidence: RwLock::new(EvidenceCache::Unloaded),
             viz_dir,
         }
     }
@@ -908,6 +935,16 @@ mod tests {
         // Traversal / malformed paths never resolve.
         assert!(matches!(
             resolve_static(&st, "/../secret.txt"),
+            Resolved::BadRequest
+        ));
+        // Windows-absolute forms would replace the join base entirely on a
+        // Windows host (`is_absolute()` on Unix misses them) — rejected.
+        assert!(matches!(
+            resolve_static(&st, "/C:\\windows\\system32"),
+            Resolved::BadRequest
+        ));
+        assert!(matches!(
+            resolve_static(&st, "/\\\\srv\\share"),
             Resolved::BadRequest
         ));
         std::fs::write(root.join("secret.txt"), "nope").unwrap();
@@ -1300,6 +1337,20 @@ mod tests {
     }
 
     #[test]
+    fn source_api_rejects_windows_absolute_rel_path() {
+        // `C:\evil` is NOT absolute per is_absolute() on Unix, but on a
+        // Windows host Path::join would discard the vault root — rejected.
+        let vault = portal_vault("source-win-abs", "C:\\evil", "body\n");
+        let st = state(vault.clone(), None);
+
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        assert!(v["doc"]["markdown"].is_null());
+        assert_eq!(v["doc"]["error"], "source path rejected");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
     fn source_api_truncates_oversized_markdown() {
         let big = "x".repeat(MAX_SOURCE_DOC_BYTES + 100);
         let vault = portal_vault("source-big", "50-Inbox/03-Processed/good.md", &big);
@@ -1346,5 +1397,23 @@ mod tests {
         assert!(!is_client_route(""));
         assert!(!is_client_route("/etc/hosts"));
         assert!(!is_client_route("viz//etc"));
+    }
+
+    #[test]
+    fn plain_relative_rejects_windows_prefixes_and_traversal() {
+        assert!(is_plain_relative("index.html"));
+        assert!(is_plain_relative("assets/app.js"));
+        assert!(is_plain_relative("library/84fbf6dc"));
+        // Traversal and Unix-absolute.
+        assert!(!is_plain_relative(""));
+        assert!(!is_plain_relative("../secret.txt"));
+        assert!(!is_plain_relative("a/../../b"));
+        assert!(!is_plain_relative("/etc/hosts"));
+        // Windows prefix / rootdir forms — one Normal component on Unix,
+        // absolute on Windows, so raw-byte checks must catch them.
+        assert!(!is_plain_relative("C:\\windows\\system32"));
+        assert!(!is_plain_relative("C:/windows/system32"));
+        assert!(!is_plain_relative("\\\\srv\\share"));
+        assert!(!is_plain_relative("\\evil"));
     }
 }
