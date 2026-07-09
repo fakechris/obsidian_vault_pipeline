@@ -12,18 +12,21 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use ovp_domain::crystal::{
-    CrystalStatus, DurableCitation, DurableRecord, FinalClass, ProvenanceClass,
-    StoreEvent, StoreOp, StrengthClass,
-};
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::{
+    CrystalStatus, DurableCitation, DurableRecord, FinalClass, ProvenanceClass, StoreEvent,
+    StoreOp, StrengthClass,
+};
 
 /// Deterministic LCG so runs are reproducible (no `rand` dependency).
 struct Lcg(u64);
 
 impl Lcg {
     fn next_f64(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((self.0 >> 11) as f64) / ((1u64 << 53) as f64)
     }
 

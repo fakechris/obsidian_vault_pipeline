@@ -24,11 +24,11 @@ pub mod query;
 pub mod score;
 
 pub use build::{build_index, read_index, write_index};
-pub use evidence::{build_evidence, read_evidence, write_evidence, EvidenceModel};
+pub use evidence::{EvidenceModel, build_evidence, read_evidence, write_evidence};
 pub use model::{
-    BlockedSource, ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, RunRow, RunStats,
-    SourceRow, SourceStatus, Totals, INDEX_SCHEMA,
+    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, RunRow,
+    RunStats, SourceRow, SourceStatus, Totals,
 };
 pub use query::{
-    claim_status_str, run_evidence_query, run_query, source_status_str, Hit, Query, QueryKind,
+    Hit, Query, QueryKind, claim_status_str, run_evidence_query, run_query, source_status_str,
 };

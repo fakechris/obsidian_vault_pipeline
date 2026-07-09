@@ -174,7 +174,7 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
 mod tests {
     use std::fs;
 
-    use crate::evidence::{build_evidence, read_evidence, write_evidence, EVIDENCE_SCHEMA};
+    use crate::evidence::{EVIDENCE_SCHEMA, build_evidence, read_evidence, write_evidence};
     use crate::model::{IndexModel, OpsState, PackRow, Totals};
 
     fn index_with_pack(pack_dir: &str) -> IndexModel {

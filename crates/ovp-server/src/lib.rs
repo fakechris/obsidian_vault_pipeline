@@ -259,26 +259,62 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let query = parse_query_string(url);
 
-    // Portal v2 scoped-component API (design §4): `scope=neighborhood&
-    // source=<sha>` returns the source-centric neighborhood (this source →
-    // claims citing it → sibling sources). `scope=global|theme` land in B3 —
-    // unknown scopes fail loud, never guess.
+    // Portal v2 scoped-component API (design §4) — one KnowledgeGraph
+    // component, three scopes:
+    //   scope=neighborhood&source=<sha>  this source → citing claims →
+    //                                    sibling sources (B2)
+    //   scope=global[&limit=n]           the overview/density graph (claims
+    //                                    + community metadata) — the
+    //                                    knowledge-page graph view (B3)
+    //   scope=theme&theme=<t>            the theme's claims + their sources
+    //                                    — the theme-detail rail (B3)
+    // Unknown scopes fail loud, never guess.
     if let Some(scope) = query.get("scope") {
-        if scope != "neighborhood" {
-            let body = serde_json::json!({
-                "error": format!("unknown scope: {scope} (only scope=neighborhood is available; global/theme land in B3)"),
-            });
-            return json_response(400, &body.to_string());
-        }
-        let Some(sha) = query.get("source").filter(|s| !s.is_empty()) else {
-            return json_response(
-                400,
-                r#"{"error":"scope=neighborhood requires source=<sha256>"}"#,
-            );
+        let result = match scope.as_str() {
+            "neighborhood" => {
+                let Some(sha) = query.get("source").filter(|s| !s.is_empty()) else {
+                    return json_response(
+                        400,
+                        r#"{"error":"scope=neighborhood requires source=<sha256>"}"#,
+                    );
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::source_neighborhood(&records, model.as_ref(), sha)
+            }
+            "global" => {
+                let limit = query
+                    .get("limit")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(graph::DEFAULT_OVERVIEW_LIMIT)
+                    .max(1);
+                let params = graph::GraphParams {
+                    mode: graph::GraphMode::Overview,
+                    limit,
+                    theme: None,
+                    focus: None,
+                    hops: graph::MAX_HOPS,
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::build_graph(&records, model.as_ref(), &params)
+            }
+            "theme" => {
+                let Some(theme) = query.get("theme").filter(|t| !t.is_empty()) else {
+                    return json_response(400, r#"{"error":"scope=theme requires theme=<theme>"}"#);
+                };
+                let records = load_active_records(state);
+                let model = state.current_model();
+                graph::theme_subgraph(&records, model.as_ref(), theme)
+            }
+            other => {
+                let body = serde_json::json!({
+                    "error": format!("unknown scope: {other} (neighborhood|global|theme)"),
+                });
+                return json_response(400, &body.to_string());
+            }
         };
-        let records = load_active_records(state);
-        let model = state.current_model();
-        return match graph::source_neighborhood(&records, model.as_ref(), sha) {
+        return match result {
             Ok(resp) => {
                 let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
                 json_response(200, &body)
@@ -1101,6 +1137,118 @@ mod tests {
         let md = v["doc"]["markdown"].as_str().expect("markdown resolved");
         assert!(md.contains("lifecycle-moved body"));
         assert!(v["doc"]["error"].is_null());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    /// Write a two-theme crystal ledger into the vault so the scoped
+    /// /api/graph endpoints have real records to shape.
+    fn write_ledger(vault: &std::path::Path) {
+        use ovp_domain::crystal::{
+            DurableCitation, FinalClass, ProvenanceClass, StoreOp, StrengthClass,
+        };
+        let rec = |key: &str, theme: &str, case: &str, unit: &str| DurableRecord {
+            claim_key: key.into(),
+            claim_id: format!("id-{key}"),
+            claim: format!("claim text for {key}"),
+            theme: theme.into(),
+            source_cases: vec![case.into()],
+            citations: vec![DurableCitation {
+                case_id: case.into(),
+                unit_id: unit.into(),
+                quote: format!("quote {unit}"),
+                resolved_line: None,
+            }],
+            provenance_score: 0.8,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "test".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        };
+        let events = [
+            StoreEvent {
+                op: StoreOp::Write,
+                record: rec("a", "alpha", "good", "u-001"),
+                supersedes: None,
+                reason: None,
+            },
+            StoreEvent {
+                op: StoreOp::Write,
+                record: rec("b", "beta", "good", "u-002"),
+                supersedes: None,
+                reason: None,
+            },
+        ];
+        let dir = vault.join(VaultLayout::new().crystal_store_dir());
+        std::fs::create_dir_all(&dir).unwrap();
+        let lines: Vec<String> = events
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(dir.join("ledger.jsonl"), lines.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn graph_scope_global_returns_overview_shape() {
+        let vault = portal_vault("graph-global", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=global");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["mode"], "overview");
+        // Overview = claims only, with community metadata alongside.
+        let nodes = v["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|n| n["type"] == "claim"));
+        assert!(v["communities"].is_array());
+        assert_eq!(v["truncated"], false);
+        assert!(v["total_nodes"].as_u64().unwrap() >= 2);
+
+        // limit is honored and flags truncation.
+        let v = body_json(dispatch(
+            &st,
+            Method::Get,
+            "/api/graph?scope=global&limit=1",
+        ));
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(v["truncated"], true);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn graph_scope_theme_filters_and_unknown_theme_is_404() {
+        let vault = portal_vault("graph-theme", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["mode"], "theme");
+        let ids: Vec<&str> = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        // Theme alpha's claim + its source (case `good` → sha aaaa1111 via
+        // the pack lookup); theme beta's claim stays out.
+        assert!(ids.contains(&"claim:a"));
+        assert!(ids.contains(&"source:aaaa1111"));
+        assert!(!ids.contains(&"claim:b"));
+
+        // Unknown theme → 404; missing/unknown scope params → 400.
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=nope");
+        assert_eq!(resp.status_code(), 404);
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme");
+        assert_eq!(resp.status_code(), 400);
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy");
+        assert_eq!(resp.status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

@@ -951,6 +951,108 @@ pub fn source_neighborhood(
     })
 }
 
+/// Theme-scoped subgraph for the portal's KnowledgeGraph component
+/// (design §4, `scope=theme&theme=<t>`): the theme's claims plus the sources
+/// they draw evidence from. Edges are bipartite claim→source `cites` (units
+/// collapsed, same compact view as `source_neighborhood`) plus `related`
+/// edges among the theme's own claims. A theme no active claim carries
+/// is a 404 — fail loud, never render an empty rail for a typo.
+pub fn theme_subgraph(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    theme: &str,
+) -> Result<GraphResponse, GraphError> {
+    if !records.iter().any(|r| r.theme == theme) {
+        return Err(GraphError::not_found(&format!("theme not found: {theme}")));
+    }
+
+    let mut base = build_base(records, model);
+    add_related_edges(&mut base);
+    compute_degrees(&mut base);
+    assign_clusters(&mut base);
+    compute_importance(&mut base, records);
+
+    // Theme claims, importance-ranked so a huge theme keeps its strongest
+    // claims under the shared node cap.
+    let mut theme_claims: Vec<&GNode> = base
+        .nodes
+        .values()
+        .filter(|n| n.node_type == "claim" && n.theme.as_deref() == Some(theme))
+        .collect();
+    theme_claims.sort_by(|a, b| {
+        b.importance
+            .partial_cmp(&a.importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    // Keep claims + their sources under the shared cap — same accounting as
+    // source_neighborhood: a claim only enters with its whole citation set.
+    let mut kept: BTreeSet<&str> = BTreeSet::new();
+    let mut truncated = false;
+    let empty = BTreeSet::new();
+    for claim in &theme_claims {
+        let srcs = base.claim_sources.get(claim.id.as_str()).unwrap_or(&empty);
+        let new_sources = srcs.iter().filter(|s| !kept.contains(s.as_str())).count();
+        if kept.len() + 1 + new_sources > MAX_NEIGHBORHOOD_NODES {
+            truncated = true;
+            break;
+        }
+        kept.insert(claim.id.as_str());
+        for s in srcs {
+            kept.insert(s.as_str());
+        }
+    }
+
+    let mut nodes: Vec<GNode> = base
+        .nodes
+        .values()
+        .filter(|n| kept.contains(n.id.as_str()))
+        .cloned()
+        .collect();
+    sort_by_importance(&mut nodes);
+
+    // Bipartite claim→source `cites` (units collapsed) …
+    let mut edges: Vec<GEdge> = Vec::new();
+    for (claim, srcs) in &base.claim_sources {
+        if !kept.contains(claim.as_str()) {
+            continue;
+        }
+        for s in srcs {
+            if kept.contains(s.as_str()) {
+                edges.push(GEdge {
+                    source: claim.clone(),
+                    target: s.clone(),
+                    edge_type: "cites".into(),
+                    weight: None,
+                });
+            }
+        }
+    }
+    // …plus `related` connectivity among the kept theme claims, rebuilt over
+    // the kept subset so weights stay exact.
+    let kept_sources: BTreeMap<String, BTreeSet<String>> = base
+        .claim_sources
+        .iter()
+        .filter(|(c, _)| kept.contains(c.as_str()))
+        .map(|(c, s)| (c.clone(), s.clone()))
+        .collect();
+    edges.extend(related_edges(&kept_sources));
+
+    let claim_refs: Vec<&GNode> = nodes.iter().filter(|n| n.node_type == "claim").collect();
+    let communities = build_communities(&claim_refs);
+    let total_nodes = base.nodes.len();
+
+    Ok(GraphResponse {
+        mode: "theme".into(),
+        nodes,
+        edges,
+        communities,
+        total_nodes,
+        truncated,
+    })
+}
+
 pub const MAX_SEARCH_HITS: usize = 40;
 const MAX_SEARCH_CONTEXT: usize = 80;
 
@@ -1453,6 +1555,77 @@ mod tests {
         assert_eq!(resp.nodes[0].label, "Fresh Source");
         assert!(resp.edges.is_empty());
         assert!(!resp.truncated);
+    }
+
+    #[test]
+    fn theme_subgraph_filters_to_theme_claims_and_their_sources() {
+        let records = sample_records();
+        let model = model_for_cases(&[
+            ("case1", "sha1", "Source One"),
+            ("case2", "sha2", "Source Two"),
+            ("case9", "sha9", "Source Nine"),
+        ]);
+        let resp = theme_subgraph(&records, Some(&model), "alpha").unwrap();
+        assert_eq!(resp.mode, "theme");
+
+        let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        // Theme alpha = claims a + b, drawing on sources sha1 (case1) and
+        // sha2 (case2, via claim a).
+        assert!(ids.contains("claim:a"));
+        assert!(ids.contains("claim:b"));
+        assert!(ids.contains("source:sha1"));
+        assert!(ids.contains("source:sha2"));
+        // Other themes' claims and their sources never enter the subgraph.
+        assert!(!ids.contains("claim:c"));
+        assert!(!ids.contains("claim:d"));
+        assert!(!ids.contains("source:sha9"));
+        // Units are collapsed in this compact view.
+        assert!(resp.nodes.iter().all(|n| n.node_type != "unit"));
+
+        // Bipartite cites edges plus related connectivity among theme claims.
+        for e in &resp.edges {
+            assert!(ids.contains(e.source.as_str()));
+            assert!(ids.contains(e.target.as_str()));
+        }
+        assert!(
+            resp.edges.iter().any(|e| e.edge_type == "cites"
+                && e.source == "claim:a"
+                && e.target == "source:sha1")
+        );
+        assert!(
+            resp.edges.iter().any(|e| e.edge_type == "related"
+                && e.weight == Some(1)
+                && ((e.source == "claim:a" && e.target == "claim:b")
+                    || (e.source == "claim:b" && e.target == "claim:a"))),
+            "related edge between the theme's claims missing"
+        );
+        assert!(!resp.truncated);
+    }
+
+    #[test]
+    fn theme_subgraph_unknown_theme_is_404() {
+        let records = sample_records();
+        let err = theme_subgraph(&records, None, "no-such-theme").unwrap_err();
+        assert_eq!(err.status, 404);
+    }
+
+    #[test]
+    fn theme_subgraph_respects_node_cap() {
+        // One theme, 400 claims on a shared hub source — past the cap.
+        let mut records = Vec::new();
+        for i in 0..400 {
+            records.push(rec(
+                &format!("k{i:03}"),
+                "big",
+                StrengthClass::Supported,
+                0.8,
+                &[("hub", &format!("u{i:03}"))],
+            ));
+        }
+        let resp = theme_subgraph(&records, None, "big").unwrap();
+        assert!(resp.nodes.len() <= MAX_NEIGHBORHOOD_NODES);
+        assert!(resp.truncated);
+        assert!(resp.nodes.iter().any(|n| n.id == "source:hub"));
     }
 
     #[test]
