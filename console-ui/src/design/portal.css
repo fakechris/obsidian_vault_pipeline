@@ -542,6 +542,288 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* ---------- source detail: two-column drill-down (B2) ---------- */
+.grid.two-col {
+  grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr);
+  align-items: start;
+  margin-top: 1.25rem;
+}
+@media (max-width: 780px) {
+  .grid.two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* tab row: text links, not boxed tabs */
+.tab-row {
+  display: flex;
+  gap: 1.1rem;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+.tab-row button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  font-size: var(--ovp-text-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.tab-row button:hover {
+  text-decoration: underline;
+}
+.tab-row button.active {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+/* memory cards */
+.mem-card .mem-title {
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.mem-card p {
+  margin-bottom: 0;
+  font-size: var(--ovp-text-sm);
+  color: var(--text-soft);
+}
+
+/* grounded units */
+.unit-row {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--ovp-radius-md);
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0.7rem;
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+}
+.unit-row blockquote {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+.line-anchor {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.line-anchor:hover {
+  text-decoration: underline;
+}
+
+/* markdown reading view (~720px measure + line-number gutter) */
+.md-preview {
+  max-width: calc(720px + 3.2rem);
+}
+.md-row {
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
+  gap: 0.6rem;
+  border-radius: var(--ovp-radius-input);
+  transition: background 300ms;
+}
+.md-row .gut {
+  font-family: var(--ovp-font-mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: right;
+  padding-top: 0.45em;
+  user-select: none;
+}
+.md-row.md-hit {
+  background: var(--accent-soft);
+}
+.md-block {
+  min-width: 0;
+}
+.md-block h2 {
+  margin-top: 0.25rem;
+}
+.md-block p,
+.md-block li {
+  font-size: var(--ovp-text-sm);
+  line-height: 1.65;
+}
+.md-block ul,
+.md-block ol {
+  margin: 0 0 0.9rem;
+  padding-left: 1.4rem;
+}
+.md-block pre {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-input);
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  line-height: 1.5;
+  margin: 0 0 0.9rem;
+}
+.md-block pre.md-frontmatter {
+  color: var(--muted);
+}
+.md-block code {
+  font-family: var(--ovp-font-mono);
+  font-size: 0.9em;
+}
+.md-block p code,
+.md-block li code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 0.25em;
+}
+.md-block blockquote {
+  margin: 0 0 0.9rem;
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-soft);
+  font-size: var(--ovp-text-sm);
+}
+.md-block hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
+.md-img-placeholder {
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--ovp-radius-input);
+  padding: 0.1rem 0.4rem;
+}
+.doc-note {
+  margin: 0.75rem 0;
+  color: var(--muted);
+}
+.doc-note.mono {
+  color: var(--warn-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- knowledge graph component ---------- */
+.graph-embed {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  background: var(--graph-bg);
+  overflow: hidden;
+}
+.graph-embed.fullscreen {
+  position: fixed;
+  inset: 1.25rem;
+  z-index: 50;
+  height: auto;
+  box-shadow: var(--shadow-pop);
+}
+.graph-canvas {
+  position: absolute;
+  inset: 0;
+}
+.graph-expand {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+}
+.graph-expand:hover {
+  color: var(--accent);
+}
+.graph-note {
+  padding: 0.9rem;
+  font-size: var(--ovp-text-sm);
+  color: var(--muted);
+}
+.graph-truncated {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  font-size: var(--ovp-text-xs);
+  padding: 0.35rem 0.6rem;
+}
+.graph-info {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 2;
+  max-width: min(320px, calc(100% - 1rem));
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  background: var(--surface);
+  padding: 0.6rem 0.75rem;
+  font-size: var(--ovp-text-sm);
+}
+.graph-info-kind {
+  margin-bottom: 0.3rem;
+}
+.graph-info-title {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 0.2rem;
+}
+.graph-embed .empty-state {
+  padding: 0.9rem;
+}
+.graph-caption {
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+/* citing claims rail */
+.citing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--ovp-text-sm);
+}
+.citing-list li {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.45;
+}
+.citing-list li:last-child {
+  border-bottom: 0;
+}
+.citing-list a {
+  font-weight: 500;
+  color: var(--text);
+}
+.citing-list a:hover {
+  color: var(--accent);
+}
+
 /* ---------- empty state ---------- */
 .empty-state {
   font-size: var(--ovp-text-sm);

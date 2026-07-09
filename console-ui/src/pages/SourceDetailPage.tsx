@@ -1,104 +1,299 @@
-/** Source detail `/library/:sha` — B1 stub: meta card from SourceRow plus a
- * guided empty state. The real three-layer drill-down (memory cards,
- * grounded units, markdown reading view, neighborhood graph) is phase B2. */
+/** Source detail `/library/:sha` — the three-layer drill-down (design §3.2):
+ * header meta, [Memory | Source md] tabs, grounded units with `L<n> →`
+ * anchors into the markdown reading view, and a right rail with the
+ * neighborhood KnowledgeGraph and citing crystal claims. Data comes from
+ * /api/source/:sha; the markdown is rendered client-side by the escape-first
+ * renderer in lib/markdown.tsx (raw text never becomes HTML). */
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { EmptyState, ModelGate, StatusPill } from '../components/ui';
+import KnowledgeGraph from '../components/KnowledgeGraph';
+import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
+import { fetchSourceDetail } from '../lib/api';
 import { collectionOf } from '../lib/derive';
-import { useModel } from '../model';
+import { MarkdownView } from '../lib/markdown';
+import type { ClaimRow, SourceDetail } from '../lib/types';
+
+type Tab = 'memory' | 'source';
+
+interface DetailState {
+  detail: SourceDetail | null;
+  status: 'loading' | 'ready' | 'notFound' | 'error';
+}
+
+function useSourceDetail(sha: string | undefined): DetailState {
+  const [state, setState] = useState<DetailState>({
+    detail: null,
+    status: 'loading',
+  });
+
+  useEffect(() => {
+    if (!sha) {
+      setState({ detail: null, status: 'notFound' });
+      return;
+    }
+    let cancelled = false;
+    setState({ detail: null, status: 'loading' });
+    fetchSourceDetail(sha)
+      .then((detail) => {
+        if (!cancelled) setState({ detail, status: 'ready' });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setState({
+            detail: null,
+            status: String(err).includes(': 404') ? 'notFound' : 'error',
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sha]);
+
+  return state;
+}
+
+function CitingClaims({ claims }: { claims: ClaimRow[] }) {
+  const { t } = useI18n();
+  if (claims.length === 0) {
+    return (
+      <EmptyState>
+        <p>{t('source.citingEmpty')}</p>
+        <Link className="tiny" to="/knowledge">
+          {t('source.citingEmptyHint')}
+        </Link>
+      </EmptyState>
+    );
+  }
+  return (
+    <ul className="citing-list">
+      {claims.map((c) => (
+        <li key={c.claim_id}>
+          {(c.status === 'durable' || c.status === 'caveated') && (
+            <ClaimPill status={c.status} />
+          )}{' '}
+          <Link to={`/knowledge#${c.claim_id}`}>{c.claim}</Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default function SourceDetailPage() {
   const { t } = useI18n();
-  const { model, error, loading } = useModel();
   const { sha } = useParams<{ sha: string }>();
+  const { detail, status } = useSourceDetail(sha);
+  const [tab, setTab] = useState<Tab>('memory');
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
 
-  const source = model?.sources.find((s) => s.sha256 === sha);
+  const anchoredLines = useMemo(
+    () =>
+      new Set(
+        (detail?.memory.units ?? [])
+          .map((u) => u.line)
+          .filter((l): l is number => l != null),
+      ),
+    [detail],
+  );
+
+  const jumpToLine = (line: number) => {
+    setTab('source');
+    setHighlightLine(line);
+  };
+
+  if (status === 'loading') {
+    return <div className="portal-note">{t('common.loading')}</div>;
+  }
+  if (status === 'error') {
+    return <div className="portal-note">{t('source.loadError')}</div>;
+  }
+  if (status === 'notFound' || !detail) {
+    return (
+      <>
+        <div className="crumbs">
+          <Link to="/library">{t('source.backToLibrary')}</Link> / {sha}
+        </div>
+        <EmptyState>
+          <p>{t('source.notFound')}</p>
+        </EmptyState>
+      </>
+    );
+  }
+
+  const { source, memory, citing_claims: citing, doc } = detail;
+  const title = source.title ?? source.sha256;
 
   return (
-    <ModelGate loading={loading} error={error}>
-      {model && (
-        <>
-          <div className="crumbs">
-            <Link to="/library">{t('source.backToLibrary')}</Link> /{' '}
-            {source?.title ?? sha}
+    <>
+      <div className="crumbs">
+        <Link to="/library">{t('source.backToLibrary')}</Link> / {title}
+      </div>
+
+      <div className="src-head">
+        <h1 style={{ marginBottom: '0.25rem' }}>{title}</h1>
+        <StatusPill status={source.status} />
+      </div>
+
+      <dl className="meta-rows">
+        {source.url && (
+          <>
+            <dt>{t('source.url')}</dt>
+            <dd>
+              <a className="mono tiny" href={source.url} target="_blank" rel="noreferrer">
+                {source.url}
+              </a>
+            </dd>
+          </>
+        )}
+        {source.date && (
+          <>
+            <dt>{t('source.date')}</dt>
+            <dd className="mono tiny">{source.date}</dd>
+          </>
+        )}
+        <dt>{t('source.origin')}</dt>
+        <dd className="tiny">{t(`library.${collectionOf(source)}`)}</dd>
+        {source.rel_path && (
+          <>
+            <dt>{t('source.location')}</dt>
+            <dd className="mono tiny">{source.rel_path}</dd>
+          </>
+        )}
+        {source.last_run_id && (
+          <>
+            <dt>{t('source.lastRun')}</dt>
+            <dd className="mono tiny">{source.last_run_id}</dd>
+          </>
+        )}
+        {source.fail_count > 0 && (
+          <>
+            <dt>{t('source.failCount')}</dt>
+            <dd className="mono tiny">{source.fail_count}</dd>
+          </>
+        )}
+        {source.last_reason && (
+          <>
+            <dt>{t('source.lastReason')}</dt>
+            <dd className="mono tiny">{source.last_reason}</dd>
+          </>
+        )}
+      </dl>
+
+      <div className="grid two-col">
+        {/* main column: Memory | Source tabs */}
+        <div>
+          <div className="tab-row">
+            <button
+              type="button"
+              className={tab === 'memory' ? 'active' : ''}
+              onClick={() => setTab('memory')}
+            >
+              {t('source.tabMemory')}{' '}
+              <span className="muted">
+                (
+                {t('source.tabMemoryCounts', {
+                  cards: memory.cards.length,
+                  units: memory.units.length,
+                })}
+                )
+              </span>
+            </button>
+            <button
+              type="button"
+              className={tab === 'source' ? 'active' : ''}
+              onClick={() => setTab('source')}
+            >
+              {t('source.tabSource')} <span className="mono muted tiny">md</span>
+            </button>
           </div>
-          {!source ? (
-            <EmptyState>
-              <p>{t('source.notFound')}</p>
-            </EmptyState>
-          ) : (
+
+          {tab === 'memory' && (
             <>
-              <div className="src-head">
-                <h1 style={{ marginBottom: '0.25rem' }}>
-                  {source.title ?? source.sha256}
-                </h1>
-                <StatusPill status={source.status} />
-              </div>
-              <dl className="meta-rows">
-                {source.url && (
-                  <>
-                    <dt>{t('source.url')}</dt>
-                    <dd>
-                      <a
-                        className="mono tiny"
-                        href={source.url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {source.url}
-                      </a>
-                    </dd>
-                  </>
-                )}
-                {source.date && (
-                  <>
-                    <dt>{t('source.date')}</dt>
-                    <dd className="mono tiny">{source.date}</dd>
-                  </>
-                )}
-                <dt>{t('source.origin')}</dt>
-                <dd className="tiny">
-                  {t(`library.${collectionOf(source)}`)}
-                </dd>
-                {source.rel_path && (
-                  <>
-                    <dt>{t('source.location')}</dt>
-                    <dd className="mono tiny">{source.rel_path}</dd>
-                  </>
-                )}
-                {source.last_run_id && (
-                  <>
-                    <dt>{t('source.lastRun')}</dt>
-                    <dd className="mono tiny">{source.last_run_id}</dd>
-                  </>
-                )}
-                {source.fail_count > 0 && (
-                  <>
-                    <dt>{t('source.failCount')}</dt>
-                    <dd className="mono tiny">{source.fail_count}</dd>
-                  </>
-                )}
-                {source.last_reason && (
-                  <>
-                    <dt>{t('source.lastReason')}</dt>
-                    <dd className="mono tiny">{source.last_reason}</dd>
-                  </>
-                )}
-              </dl>
-              <div className="section">
-                <div className="card">
-                  <EmptyState>
-                    <p>
-                      <strong>{t('source.b2Empty')}</strong>
-                    </p>
-                    <p>{t('source.b2EmptyDetail')}</p>
-                  </EmptyState>
+              {memory.cards.map((card, i) => (
+                <div className="card mem-card" key={`c${i}`}>
+                  <div className="mem-title">{card.title}</div>
+                  <p>{card.content}</p>
                 </div>
-              </div>
+              ))}
+              {memory.cards.length === 0 && memory.units.length === 0 && (
+                <EmptyState>
+                  <p>
+                    {memory.evidence_available
+                      ? t('source.noMemory')
+                      : t('source.evidenceMissing')}
+                  </p>
+                </EmptyState>
+              )}
+              {memory.units.length > 0 && (
+                <div className="section">
+                  <h3>{t('source.groundedUnits')}</h3>
+                  {memory.units.map((unit) => (
+                    <div className="unit-row" key={unit.unit_id}>
+                      <blockquote>“{unit.quote}”</blockquote>
+                      {unit.line != null ? (
+                        <button
+                          type="button"
+                          className="line-anchor"
+                          onClick={() => jumpToLine(unit.line as number)}
+                        >
+                          L{unit.line} →
+                        </button>
+                      ) : (
+                        <span className="tiny muted">
+                          {t('source.unitNoLine')}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
-        </>
-      )}
-    </ModelGate>
+
+          {tab === 'source' && (
+            <>
+              {doc.error && (
+                <div className="doc-note mono tiny">
+                  {t('source.docError', { error: doc.error })}
+                </div>
+              )}
+              {!doc.error && doc.markdown == null && (
+                <EmptyState>
+                  <p>{t('source.docEmpty')}</p>
+                </EmptyState>
+              )}
+              {doc.markdown != null && (
+                <>
+                  <MarkdownView
+                    markdown={doc.markdown}
+                    anchoredLines={anchoredLines}
+                    highlightLine={highlightLine}
+                  />
+                  {doc.truncated && (
+                    <div className="doc-note tiny muted">
+                      {t('source.docTruncated')}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* right rail: neighborhood graph + citing claims */}
+        <div>
+          <div className="card">
+            <h3 style={{ marginBottom: '0.6rem' }}>{t('source.neighborhood')}</h3>
+            <KnowledgeGraph scope="neighborhood" id={source.sha256} height={360} />
+            <div className="graph-caption">{t('source.neighborhoodCaption')}</div>
+          </div>
+          <div className="card">
+            <h3 style={{ marginBottom: '0.6rem' }}>{t('source.citingClaims')}</h3>
+            <CitingClaims claims={citing} />
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

@@ -135,6 +135,44 @@ export interface ClaimRow {
   lane?: string;
 }
 
+// ---- /api/source/:sha (B2 source detail) ----
+
+export interface MemoryCard {
+  title: string;
+  content: string;
+}
+
+export interface MemoryUnit {
+  unit_id: string;
+  text: string;
+  quote: string;
+  line: number | null;
+  attribution: string;
+}
+
+export interface SourceMemory {
+  /** False when the vault has no evidence sidecar (pre-M31) — the page
+   * shows a "run ovp2 index" hint instead of an empty memory layer. */
+  evidence_available: boolean;
+  cards: MemoryCard[];
+  units: MemoryUnit[];
+}
+
+export interface SourceDocPayload {
+  /** Raw markdown text (JSON data — rendered client-side, never as HTML). */
+  markdown: string | null;
+  /** True when the body was cut at the server's 200KB cap. */
+  truncated: boolean;
+  error: string | null;
+}
+
+export interface SourceDetail {
+  source: SourceRow;
+  memory: SourceMemory;
+  citing_claims: ClaimRow[];
+  doc: SourceDocPayload;
+}
+
 export interface BlockedSource {
   sha256: string;
   title?: string;

@@ -89,12 +89,13 @@ export function attentionSources(model: IndexModel): SourceRow[] {
   );
 }
 
-/** Sample of claims for the Today page. ClaimRow has no date, its run_id
- * namespace (`run-*`) does not join to RunRow (`daily-*`), AND the index
- * projection sorts claims by (claim_id, claim) — so no recency order is
- * derivable in B1 (codex review P2). Present a durable-first sample and
- * label it as such; true "crystallized today" needs a date/run join key
- * on ClaimRow (B2 read-model change). */
+/** Sample of claims for the Today page — durable-first, labeled as such.
+ * B2 verdict on the codex-review P2: NO date is derivable. The crystal
+ * ledger (StoreEvent/DurableRecord) carries no date/written-at field,
+ * `default_run_id` is a content hash with deliberately no wall-clock, and
+ * review.json entries are dateless too — so "crystallized today" would be
+ * an invention. Real per-day attribution needs a ledger schema change
+ * (timestamped StoreEvent), tracked for a later phase. */
 export function claimsSample(model: IndexModel, n: number): ClaimRow[] {
   const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
   return model.claims

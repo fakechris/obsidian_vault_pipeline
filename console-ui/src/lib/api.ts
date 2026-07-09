@@ -4,6 +4,7 @@ import type {
   FlowData,
   GraphResponse,
   IndexModel,
+  SourceDetail,
   ThemeCount,
 } from './types';
 
@@ -59,4 +60,17 @@ export function fetchThemes(): Promise<ThemeCount[]> {
 
 export function fetchModel(): Promise<IndexModel> {
   return fetchJson<IndexModel>('/api/model');
+}
+
+/** Three-layer source detail: meta + memory + citing claims + raw md. */
+export function fetchSourceDetail(sha: string): Promise<SourceDetail> {
+  return fetchJson<SourceDetail>(`/api/source/${encodeURIComponent(sha)}`);
+}
+
+/** Source-centric neighborhood for the KnowledgeGraph component (design §4):
+ * this source → claims citing it → sibling sources. */
+export function fetchSourceNeighborhood(sha: string): Promise<GraphResponse> {
+  return fetchJson<GraphResponse>(
+    `/api/graph?scope=neighborhood&source=${encodeURIComponent(sha)}`,
+  );
 }
