@@ -20,9 +20,12 @@
       GitHub Releases prebuilt 二进制 + curl-shell installer + Homebrew formula（tap 仓库）；
       npm wrapper 作为可选第二通道。二进制统一叫 `ovp2`（rename #289 已 merge，
       但 release build 一直没重编——07-07 已重编）。
-- [ ] README 增加 quick-start（≤10 步：装 → `.env` 配 LLM → 首次 `ovp2 daily` → `ovp2 serve`）。
-- [ ] 在一台"干净"环境（无 Rust toolchain）验证安装可用。
-**Status**: Not Started
+- [x] README 增加 quick-start（≤10 步：装 → `.env` 配 LLM → 首次 `ovp2 daily` → `ovp2 serve`）。
+- [x] 本地验证 installer→`ovp2 --version`（干净 prefix 模拟无 Rust 环境）。
+**Status**: **PR #298 待 review**（2026-07-09）——cargo-dist 0.32 + shell installer + brew formula 生成 +
+docs/install.md；prebuilt 默认编入 anthropic/pinboard-live/web-fetch-live/github-live。
+遗留给 operator：私有仓库使 curl/brew 匿名 404（需 public 化或 token）；tap 仓库需创建；
+release.yml 是 tag 触发的 CI 政策新增，随 PR 审。
 
 **P.2 Pinboard 源真实端到端（~1 天）**
 - [ ] 真实 vault 从未跑过 pinboard（无 `.ovp/pinboard-sync.jsonl`，`02-Pinboard/` 空）。
@@ -30,11 +33,13 @@
       书签 materialize 进 `02-Pinboard/` → 下一次 `daily` 消化 → ledger/report 可见。
 **Status**: Not Started
 
-**P.3 裸书签 / GitHub 源网页抓取（唯一真开发，2-4 天）**
-- [ ] M31 明确缺口："No web-page fetching for bare bookmarks; no GitHub/arXiv enrichment"。
-      没有它 pinboard 链等于装饰（裸书签全部卡在 needs-content）。实现 fetch → 可读 markdown →
-      needs-content 解除，带测试；GitHub 链接至少 README/正文可读。原 M31 P1 升级为 merge 阻塞。
-**Status**: Not Started
+**P.3 裸书签 / GitHub 源网页抓取（2026-07-09 重估：已建成，只差 live 验证，~半天）**
+- 发现：`ovp-enrich` crate 已存在且**已接进 daily**（`web_fetch::enrich_needs_content` +
+  GitHub 抓取 + 图片下载；feature 门 `web-fetch-live`/`github-live`，默认 OFF 走 fixtures）。
+  M31 文档"无 web-fetch"的说法已过时；P.1 的 prebuilt 已把 live 功能编入发行版。
+- [ ] 剩余 = 真实 vault live E2E：带 live features 构建跑 `daily`，验证 needs-content 裸书签
+      抓成可读正文、GitHub 链接出 README/正文、ledger/产物正确。缺陷走 PR。可与 P.2 同一次做。
+**Status**: 基础设施 Complete（在 trunk）；live 验证 Not Started
 
 **P.4 Web portal 重设计（operator 2026-07-07 定性：必做，当前版不可接受）**
 
@@ -68,16 +73,20 @@ OVP2 Portal（主导航 = 用户任务 + 三层内容）
 └── 系统 System      （角落入口，非主导航）runs/doctor/blocked、管线各步状态、
                      概念说明、设置（vault 路径/LLM/caps/语言，先只读）
 ```
-**实现底座已定案（operator 2026-07-08）：混合**——服务端渲染壳 + M28 设计语言，
-对话页小块 JS，viz 嵌 Knowledge。建造顺序：Today+Library+Knowledge（先让脸变样）
-→ Search → /api/ask 对话 → System。
-关键判断：`ask`/`digest`/`find`/crystal store 全部已是现成 CLI 能力——portal v1 的本质
-是**把已有产品能力接上 web**，不是造新功能；唯一新后端是 `/api/ask`（live LLM 通道）。
-- [ ] 实现方式定案（见开放问题 Q5）。
-- [ ] 恢复 M28 设计语言（`scripts/m28/generate_console.py` 里的 CSS/卡片/双语规范是现成参照）。
-- [ ] 修 `/viz/` 尾斜杠 404；viz 部署进真实 vault 日常流程。
-- [ ] `serve` 步骤写进 operator-runbook；operator 复查通过为验收。
-**Status**: In Progress（07-07 现状截图 + M28/KMEM 对比完成；IA 待 operator 确认后动工）
+**⚠ 底座决定已被推翻两次并最终定案（07-08）：全量 React SPA + operator 的 OVP Design System。**
+混合方案因主题不可迭代 + /viz 导航割裂被 operator 否决。完整产品设计（用户故事→页面→跳转→
+组件、三作用域图谱组件、双主题 Atelier/Vault、i18n 默认英文）见
+**`docs/design/portal-v2-product-design.md`（唯一权威，operator 已签字 + mockup 已验收）**；
+建造分期 B1-B5，每期截图验收。
+- [x] 设计闸门：mockup 深浅两版验收通过（07-08，三项裁决全过）。
+- [x] **B1 = PR #297 待 review**（07-09）：SPA 壳 + 设计系统落库（IBM Plex 含中文）+ 双主题 +
+      i18n（EN 默认/中文切换）+ Today + Library（集合×月×状态分面）+ server SPA 根路由 +
+      codex 门禁 PASS（2 P2 已修）。/viz/ 尾斜杠已顺带修复。
+- [ ] B2（进行中）：三层源详情 + `/api/source/:sha` + 邻域作用域 KnowledgeGraph + ClaimRow 日期。
+- [ ] B3：Knowledge 页（主题/主张详情 + 全局/主题图谱收编，/viz 独立导航下线）+ ⌘K 搜索。
+- [ ] B4：Ask 对话（/api/ask + 引用面板）。
+- [ ] B5：System 页收编 Flow/Monitor + 设置（语言/主题落位）+ 空态文案 + runbook 写入 serve 步骤。
+**Status**: In Progress——B1 出 PR，B2 后台构建中
 
 **P.5 终验 demo**
 - [ ] 全链演示由 operator 本人执行一遍（P.1-P.4 全绿后），录入 `.run/m32-product-walkthrough/`。
