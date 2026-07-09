@@ -1,8 +1,9 @@
 /** KnowledgeGraph — the scoped graph component (design §4, KMEM pattern).
  * One component, three scopes, one rendering engine:
  *
- *   scope='neighborhood' id=<source sha>  → this source, citing claims,
- *                                           sibling sources (B2)
+ *   scope='neighborhood' id=<source sha>  → this source, its memory cards,
+ *                                           citing claims, sibling sources
+ *                                           (B2; cards added in B5)
  *   scope='global'                        → the overview/density graph —
  *                                           the Knowledge page graph view (B3)
  *   scope='theme'        id=<theme>       → the theme's claims + their
@@ -14,8 +15,10 @@
  * in-component info card; double-click → navigate (source → /library/:sha,
  * claim → /knowledge#<claim_id> anchor). Sha-less legacy sources
  * (`source:<case_id>` nodes without an index page) never navigate — the
- * info card says so instead of routing to a 404. Embedded height defaults
- * to ~360px with an expand-to-fullscreen toggle.
+ * info card says so instead of routing to a 404 — and card nodes never
+ * navigate either: they are the focus source's own memory, explained in
+ * the info card (the Memory tab beside the graph has the full body).
+ * Embedded height defaults to ~360px with an expand-to-fullscreen toggle.
  *
  * @antv/g6 (~1MB min) loads via dynamic import so portal pages stay light. */
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -68,11 +71,12 @@ function readTokens(): DsTokens {
   };
 }
 
-/** Node fill by entity kind (mockup: sources --c-1, claims --c-3, units
- * --c-2 — the community palette read for the ACTIVE theme). */
+/** Node fill by entity kind (mockup: sources --c-1, claims --c-3, cards and
+ * units --c-2 — the community palette read for the ACTIVE theme). */
 function nodeFill(type: string, t: DsTokens): string {
   if (type === 'source') return t.community[0];
   if (type === 'claim') return t.community[2];
+  // 'card' and 'unit' share the memory-layer color (--c-2).
   return t.community[1];
 }
 
@@ -304,7 +308,9 @@ export default function KnowledgeGraph({
       ? t('graph.kindClaim')
       : type === 'source'
         ? t('graph.kindSource')
-        : t('graph.kindUnit');
+        : type === 'card'
+          ? t('graph.kindCard')
+          : t('graph.kindUnit');
 
   return (
     <div
@@ -356,10 +362,15 @@ export default function KnowledgeGraph({
                 <div className="tiny muted">{selected.theme}</div>
               )}
               <div className="tiny muted">
-                {selected.type === 'source' &&
-                !knownShas.has(selected.id.slice('source:'.length))
-                  ? t('graph.noPage')
-                  : t('graph.openHint')}
+                {selected.type === 'card'
+                  ? // Cards never navigate: they ARE this source's memory —
+                    // the full card body lives in the Memory tab beside the
+                    // graph.
+                    t('graph.cardHint')
+                  : selected.type === 'source' &&
+                      !knownShas.has(selected.id.slice('source:'.length))
+                    ? t('graph.noPage')
+                    : t('graph.openHint')}
               </div>
             </div>
           )}

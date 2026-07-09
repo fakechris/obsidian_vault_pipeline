@@ -1,7 +1,7 @@
 // Mirrors the JSON contracts of ovp-server (crates/ovp-server/src/graph.rs).
 
-export type NodeType = 'claim' | 'unit' | 'source';
-export type EdgeType = 'cites' | 'extracted_from' | 'related';
+export type NodeType = 'claim' | 'unit' | 'source' | 'card';
+export type EdgeType = 'cites' | 'extracted_from' | 'related' | 'has_memory';
 export type GraphMode = 'overview' | 'neighborhood' | 'search' | 'theme';
 
 export interface GraphNode {
@@ -217,6 +217,32 @@ export interface AskResponse {
 export interface ChatEntry {
   name: string;
   mtime: number;
+}
+
+// ---- GET /api/settings (B5 System page, read-only v1) ----
+
+export interface SettingsCounts {
+  sources: number;
+  packs: number;
+  claims: number;
+}
+
+export interface AskLimits {
+  timeout_secs: number;
+  /** Null = no server-side cap (each ask runs on its own worker). */
+  max_concurrent: number | null;
+}
+
+/** Read-only server/vault configuration. Index-derived fields are null when
+ * the vault has no index projection yet. */
+export interface SettingsPayload {
+  vault_root: string;
+  schema_version: string | null;
+  index_date: string | null;
+  counts: SettingsCounts | null;
+  llm_configured: boolean;
+  ask_limits: AskLimits;
+  version: string;
 }
 
 export interface BlockedSource {

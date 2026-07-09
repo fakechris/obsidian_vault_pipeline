@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use ovp_domain::crystal::{DurableRecord, StrengthClass};
 use ovp_domain::truncate_chars;
-use ovp_index::IndexModel;
+use ovp_index::{EvidenceModel, IndexModel};
 use serde::Serialize;
 
 pub const DEFAULT_OVERVIEW_LIMIT: usize = 2000;
@@ -840,18 +840,69 @@ fn neighborhood_response(
     })
 }
 
+/// The focus source's memory-layer cards from the evidence sidecar, as graph
+/// nodes (B5, operator finding 2026-07-09: 72% of sources have no citing
+/// claims — without the memory layer their neighborhood rendered a single
+/// lonely node). Row ids already carry the `card:` prefix
+/// (`card:<pack_dir>:<idx>`), so they double as graph node ids. Matching
+/// mirrors /api/source/:sha: rows keyed by the source sha OR its pack dir.
+fn memory_card_nodes(
+    evidence: Option<&EvidenceModel>,
+    model: Option<&IndexModel>,
+    sha: &str,
+) -> Vec<GNode> {
+    let Some(evidence) = evidence else {
+        return Vec::new();
+    };
+    let pack_dir = model.and_then(|m| {
+        m.sources
+            .iter()
+            .find(|s| s.sha256 == sha)
+            .and_then(|s| s.pack_dir.as_deref())
+    });
+    evidence
+        .cards
+        .iter()
+        .filter(|c| {
+            c.source_sha256.as_deref() == Some(sha) || pack_dir == Some(c.pack_dir.as_str())
+        })
+        .map(|c| GNode {
+            id: c.id.clone(),
+            node_type: "card".into(),
+            label: if c.title.chars().count() > MAX_QUOTE_LABEL_LEN {
+                format!("{}…", truncate_chars(&c.title, TRUNCATED_QUOTE_LABEL_LEN))
+            } else {
+                c.title.clone()
+            },
+            theme: None,
+            strength: None,
+            url: None,
+            degree: 1,
+            cluster: 0,
+            importance: 0.0,
+            hit: false,
+            provenance: None,
+            claim_id: None,
+        })
+        .collect()
+}
+
 /// Source-centric neighborhood for the portal's KnowledgeGraph component
-/// (design §4, `scope=neighborhood&source=<sha>`): the source node, claims
-/// citing it, and the sibling sources those claims also draw from. Units are
-/// deliberately excluded — the source detail page shows them as text; the
-/// graph tells the claim/sibling story. Cards are not modeled in the graph.
+/// (design §4, `scope=neighborhood&source=<sha>`): the source node, its
+/// memory-layer cards (`has_memory` edges), claims citing it, and the
+/// sibling sources those claims also draw from. Units are deliberately
+/// excluded — the source detail page shows them as text; the graph tells
+/// the memory/claim/sibling story.
 ///
-/// A source known to the index but cited by no claim returns a single-node
-/// graph (the page still shows the component with an empty-neighborhood
-/// hint); an entirely unknown sha is a 404.
+/// Cap accounting: claims (with their sibling sources) take precedence,
+/// then cards fill the remaining budget. A source known to the index but
+/// cited by no claim returns its focus node plus cards (the page shows the
+/// memory layer instead of a single lonely node); an entirely unknown sha
+/// is a 404.
 pub fn source_neighborhood(
     records: &[DurableRecord],
     model: Option<&IndexModel>,
+    evidence: Option<&EvidenceModel>,
     sha: &str,
 ) -> Result<GraphResponse, GraphError> {
     let mut base = build_base(records, model);
@@ -878,9 +929,16 @@ pub fn source_neighborhood(
             .then_with(|| a.cmp(b))
     });
 
+    // Memory-layer cards for the focus source; claims win the cap first,
+    // cards fill the remainder (see the fn docs).
+    let cards = memory_card_nodes(evidence, model, sha);
+    let total_cards = cards.len();
+
     if citing.is_empty() && !base.nodes.contains_key(&focus_id) {
         // Not in the crystal graph at all — fall back to the index so a
-        // freshly processed (or blocked) source still gets its focus node.
+        // freshly processed (or blocked) source still gets its focus node,
+        // plus its cards: an uncited source shows its memory layer instead
+        // of a single lonely node.
         let Some(src) = model.and_then(|m| m.sources.iter().find(|s| s.sha256 == sha)) else {
             return Err(GraphError::not_found(&format!("source not found: {sha}")));
         };
@@ -898,13 +956,26 @@ pub fn source_neighborhood(
             provenance: None,
             claim_id: None,
         };
+        let mut nodes = vec![node];
+        let budget = MAX_NEIGHBORHOOD_NODES.saturating_sub(nodes.len());
+        let truncated = total_cards > budget;
+        nodes.extend(cards.into_iter().take(budget));
+        let edges: Vec<GEdge> = nodes[1..]
+            .iter()
+            .map(|card| GEdge {
+                source: focus_id.clone(),
+                target: card.id.clone(),
+                edge_type: "has_memory".into(),
+                weight: None,
+            })
+            .collect();
         return Ok(GraphResponse {
             mode: GraphMode::Neighborhood.as_str().into(),
-            nodes: vec![node],
-            edges: Vec::new(),
+            nodes,
+            edges,
             communities: Vec::new(),
-            total_nodes: base.nodes.len() + 1,
-            truncated: false,
+            total_nodes: base.nodes.len() + 1 + total_cards,
+            truncated,
         });
     }
 
@@ -955,7 +1026,22 @@ pub fn source_neighborhood(
 
     let claim_refs: Vec<&GNode> = nodes.iter().filter(|n| n.node_type == "claim").collect();
     let communities = build_communities(&claim_refs);
-    let total_nodes = base.nodes.len();
+    let total_nodes = base.nodes.len() + total_cards;
+
+    // Cards last: claims and their sibling sources already won the cap.
+    let budget = MAX_NEIGHBORHOOD_NODES.saturating_sub(nodes.len());
+    if total_cards > budget {
+        truncated = true;
+    }
+    for card in cards.into_iter().take(budget) {
+        edges.push(GEdge {
+            source: focus_id.clone(),
+            target: card.id.clone(),
+            edge_type: "has_memory".into(),
+            weight: None,
+        });
+        nodes.push(card);
+    }
 
     Ok(GraphResponse {
         mode: GraphMode::Neighborhood.as_str().into(),
@@ -1660,7 +1746,7 @@ mod tests {
             ("case2", "sha2", "Source Two"),
             ("case9", "sha9", "Source Nine"),
         ]);
-        let resp = source_neighborhood(&records, Some(&model), "sha1").unwrap();
+        let resp = source_neighborhood(&records, Some(&model), None, "sha1").unwrap();
         assert_eq!(resp.mode, "neighborhood");
 
         let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -1712,12 +1798,145 @@ mod tests {
             fail_count: 0,
             last_reason: None,
         });
-        let resp = source_neighborhood(&records, Some(&model), "freshsha").unwrap();
+        let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
         assert_eq!(resp.nodes.len(), 1);
         assert_eq!(resp.nodes[0].id, "source:freshsha");
         assert_eq!(resp.nodes[0].label, "Fresh Source");
         assert!(resp.edges.is_empty());
         assert!(!resp.truncated);
+    }
+
+    /// Evidence sidecar with `n` cards for the given case, keyed by sha.
+    fn evidence_for(case: &str, sha: &str, n: usize) -> EvidenceModel {
+        use ovp_index::evidence::CardEvidenceRow;
+        EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: "2026-07-09".into(),
+            cards: (0..n)
+                .map(|i| CardEvidenceRow {
+                    id: format!("card:40-Resources/Reader/{case}:{i}"),
+                    pack_dir: format!("40-Resources/Reader/{case}"),
+                    source_sha256: Some(sha.into()),
+                    source_title: "Source".into(),
+                    title: format!("Card {i}"),
+                    content: format!("Body of card {i}."),
+                    unit_type: None,
+                    cited_unit_ids: vec![],
+                })
+                .collect(),
+            units: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_uncited_source_shows_its_cards() {
+        // The operator finding (2026-07-09): 72% of sources have no citing
+        // claims — the memory layer must render, not a single lonely node.
+        let records = sample_records();
+        let mut model = model_for_cases(&[("case1", "sha1", "Source One")]);
+        model.sources.push(ovp_index::SourceRow {
+            sha256: "freshsha".into(),
+            status: ovp_index::SourceStatus::Processed,
+            title: Some("Fresh Source".into()),
+            url: None,
+            rel_path: None,
+            date: None,
+            last_run_id: None,
+            pack_dir: Some("40-Resources/Reader/fresh".into()),
+            fail_count: 0,
+            last_reason: None,
+        });
+        let evidence = evidence_for("fresh", "freshsha", 2);
+        let resp =
+            source_neighborhood(&records, Some(&model), Some(&evidence), "freshsha").unwrap();
+
+        assert!(resp.nodes.len() > 1, "must not be a single lonely node");
+        assert_eq!(resp.nodes.len(), 3); // focus + 2 cards
+        assert_eq!(resp.nodes[0].id, "source:freshsha");
+        let cards: Vec<&GNode> = resp
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == "card")
+            .collect();
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].label, "Card 0");
+        // source→card has_memory edges, one per card.
+        assert_eq!(resp.edges.len(), 2);
+        for e in &resp.edges {
+            assert_eq!(e.edge_type, "has_memory");
+            assert_eq!(e.source, "source:freshsha");
+            assert!(e.target.starts_with("card:"));
+        }
+        assert!(!resp.truncated);
+
+        // Cards from another source never leak into this neighborhood.
+        let other = evidence_for("case1", "sha1", 1);
+        let resp =
+            source_neighborhood(&records, Some(&model), Some(&other), "freshsha").unwrap();
+        assert_eq!(resp.nodes.len(), 1);
+    }
+
+    #[test]
+    fn source_neighborhood_cited_source_keeps_claims_and_adds_cards() {
+        let records = sample_records();
+        let model = model_for_cases(&[
+            ("case1", "sha1", "Source One"),
+            ("case2", "sha2", "Source Two"),
+            ("case9", "sha9", "Source Nine"),
+        ]);
+        let evidence = evidence_for("case1", "sha1", 2);
+        let resp = source_neighborhood(&records, Some(&model), Some(&evidence), "sha1").unwrap();
+
+        let ids: HashSet<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        // The claim/sibling story is unchanged…
+        assert!(ids.contains("source:sha1"));
+        assert!(ids.contains("claim:a"));
+        assert!(ids.contains("claim:b"));
+        assert!(ids.contains("claim:c"));
+        assert!(ids.contains("source:sha2"));
+        assert!(!ids.contains("claim:d"));
+        // …plus the focus source's cards with has_memory edges.
+        assert!(ids.contains("card:40-Resources/Reader/case1:0"));
+        assert!(ids.contains("card:40-Resources/Reader/case1:1"));
+        let mem_edges: Vec<&GEdge> = resp
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "has_memory")
+            .collect();
+        assert_eq!(mem_edges.len(), 2);
+        assert!(mem_edges.iter().all(|e| e.source == "source:sha1"));
+        // Sibling sources do NOT pull their own cards in.
+        assert!(
+            resp.nodes
+                .iter()
+                .filter(|n| n.node_type == "card")
+                .count()
+                == 2
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_cap_prefers_claims_over_cards() {
+        // 400 claims on one hub source fill the cap before any card fits.
+        let mut records = Vec::new();
+        for i in 0..400 {
+            records.push(rec(
+                &format!("k{i:03}"),
+                "t",
+                StrengthClass::Supported,
+                0.8,
+                &[("hub", &format!("u{i:03}"))],
+            ));
+        }
+        let model = model_for_cases(&[("hub", "hubsha", "Hub Source")]);
+        let evidence = evidence_for("hub", "hubsha", 3);
+        let resp = source_neighborhood(&records, Some(&model), Some(&evidence), "hubsha").unwrap();
+        assert!(resp.nodes.len() <= MAX_NEIGHBORHOOD_NODES);
+        assert!(resp.truncated);
+        // Claims won the budget; the cards were dropped, not the claims.
+        assert!(resp.nodes.iter().any(|n| n.node_type == "claim"));
+        assert!(resp.nodes.iter().all(|n| n.node_type != "card"));
     }
 
     #[test]
@@ -1849,7 +2068,7 @@ mod tests {
     fn source_neighborhood_unknown_sha_is_404() {
         let records = sample_records();
         let model = model_for_cases(&[("case1", "sha1", "Source One")]);
-        let err = source_neighborhood(&records, Some(&model), "nope").unwrap_err();
+        let err = source_neighborhood(&records, Some(&model), None, "nope").unwrap_err();
         assert_eq!(err.status, 404);
     }
 

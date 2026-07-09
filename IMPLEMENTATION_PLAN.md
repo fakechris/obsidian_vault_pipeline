@@ -85,7 +85,10 @@ OVP2 Portal（主导航 = 用户任务 + 三层内容）
 - [ ] B2（进行中）：三层源详情 + `/api/source/:sha` + 邻域作用域 KnowledgeGraph + ClaimRow 日期。
 - [ ] B3：Knowledge 页（主题/主张详情 + 全局/主题图谱收编，/viz 独立导航下线）+ ⌘K 搜索。
 - [ ] B4：Ask 对话（/api/ask + 引用面板）。
-- [ ] B5：System 页收编 Flow/Monitor + 设置（语言/主题落位）+ 空态文案 + runbook 写入 serve 步骤。
+- [x] B5（本分支）：System 页真身（runs 表 + attention + 管线入口 + 概念说明 + 只读设置
+      `/api/settings`）；邻域图补记忆层（卡片节点 + `has_memory` 边——修 07-09 operator 发现的
+      72% 无引用源孤点问题）；Flow/Monitor 收进 portal Shell；zustand 移除；web_fetch 接受
+      markdown content-type；runbook 写入 serve 步骤。截图在 `.run/portal-v2-b5/`。
 **Status**: In Progress——B1 出 PR，B2 后台构建中
 
 **P.5 终验 demo**

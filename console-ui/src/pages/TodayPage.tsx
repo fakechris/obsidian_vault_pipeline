@@ -7,7 +7,8 @@
  * crystallized section renders as "Recent claims" — see lib/derive.ts. */
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
+import AttentionCard from '../components/AttentionCard';
+import { EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   attentionSources,
@@ -80,26 +81,7 @@ function Attention({ model }: { model: IndexModel }) {
     <div className="section">
       <h2>{t('today.attentionTitle')}</h2>
       {sources.map((s) => (
-        <div className="card warning" key={s.sha256}>
-          <div className="attention-title">
-            <StatusPill status={s.status} />
-            <strong>
-              <Link to={`/library/${s.sha256}`}>{s.title ?? s.sha256}</Link>
-            </strong>
-          </div>
-          {s.last_reason && (
-            <div className="attention-reason">{s.last_reason}</div>
-          )}
-          <p className="sm" style={{ marginBottom: '0.5rem' }}>
-            {t('today.whyItMatters')}:{' '}
-            {s.status === 'blocked'
-              ? t('today.whyBlocked')
-              : t('today.whyNeedsContent')}
-          </p>
-          <Link className="sm" to={`/library/${s.sha256}`}>
-            {t('today.attentionAction')} →
-          </Link>
-        </div>
+        <AttentionCard source={s} key={s.sha256} />
       ))}
     </div>
   );

@@ -190,7 +190,7 @@ impl WebFetch for LiveWebFetch {
             .unwrap_or("")
             .to_string();
 
-        if !content_type.contains("text/html") && !content_type.contains("text/plain") {
+        if !is_texty_content_type(&content_type) {
             return FetchResult {
                 url: url.to_string(),
                 content: None,
@@ -227,7 +227,7 @@ impl WebFetch for LiveWebFetch {
             };
         }
 
-        let (title, readable) = extract_readable(&body);
+        let (title, readable) = readable_from_body(&content_type, &body);
 
         FetchResult {
             url: url.to_string(),
@@ -240,6 +240,44 @@ impl WebFetch for LiveWebFetch {
 
     fn origin(&self) -> String {
         "live web fetch".to_string()
+    }
+}
+
+/// The mime essence: lowercase type/subtype with parameters (`; charset=…`)
+/// stripped.
+fn content_type_essence(content_type: &str) -> String {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// Content types the fetcher accepts as readable text. Dogfood 2026-07-09:
+/// `vercel.com/design.md` answers `text/markdown` and was rejected as
+/// "non-text content-type" — markdown (all three spellings seen in the
+/// wild) is text. An empty/missing header stays rejected: we never sniff.
+pub fn is_texty_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type_essence(content_type).as_str(),
+        "text/html"
+            | "text/plain"
+            | "text/markdown"
+            | "text/x-markdown"
+            | "application/markdown"
+    )
+}
+
+/// Body → (title, readable content) by content type: HTML goes through tag
+/// stripping; plain/markdown bodies pass through verbatim — running
+/// `strip_tags` on markdown would eat autolinks (`<https://…>`) and inline
+/// HTML, and whitespace collapse would destroy the line structure.
+pub fn readable_from_body(content_type: &str, body: &str) -> (Option<String>, String) {
+    if content_type_essence(content_type) == "text/html" {
+        extract_readable(body)
+    } else {
+        (None, body.trim().to_string())
     }
 }
 
@@ -493,6 +531,39 @@ mod tests {
         assert!(!text.contains("var x"));
         assert!(!text.contains(".a{}"));
         assert!(text.contains("Content"));
+    }
+
+    #[test]
+    fn texty_content_types_accept_markdown_and_reject_binary() {
+        // Dogfood 2026-07-09: vercel.com/design.md answers text/markdown.
+        assert!(is_texty_content_type("text/markdown"));
+        assert!(is_texty_content_type("text/markdown; charset=utf-8"));
+        assert!(is_texty_content_type("text/x-markdown"));
+        assert!(is_texty_content_type("application/markdown"));
+        assert!(is_texty_content_type("text/html; charset=UTF-8"));
+        assert!(is_texty_content_type("TEXT/PLAIN"));
+        // Non-text stays rejected — including an absent header (no sniffing).
+        assert!(!is_texty_content_type(""));
+        assert!(!is_texty_content_type("application/pdf"));
+        assert!(!is_texty_content_type("image/png"));
+        assert!(!is_texty_content_type("application/octet-stream"));
+        assert!(!is_texty_content_type("text/css"));
+    }
+
+    #[test]
+    fn readable_from_body_keeps_markdown_verbatim_and_strips_html() {
+        let md = "# Design\n\nSee <https://example.com> and `code`.\n\n- a\n- b";
+        let (title, content) = readable_from_body("text/markdown; charset=utf-8", md);
+        assert!(title.is_none());
+        // Markdown passes through verbatim: autolinks and line structure
+        // survive (strip_tags would have eaten `<https://…>`).
+        assert_eq!(content, md);
+
+        let html = "<html><head><title>T</title></head><body><p>Hello</p></body></html>";
+        let (title, content) = readable_from_body("text/html", html);
+        assert_eq!(title.as_deref(), Some("T"));
+        assert!(content.contains("Hello"));
+        assert!(!content.contains("<p>"));
     }
 
     #[test]

@@ -5,8 +5,8 @@
 //! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
 //! legacy generated console pages by exact filename, and JSON API endpoints
 //! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
-//! `/api/source/:sha`, `/api/flow`, `POST /api/ask`, `/api/chats`).
-//! Uses `tiny_http` to avoid any async runtime dependency.
+//! `/api/source/:sha`, `/api/flow`, `/api/settings`, `POST /api/ask`,
+//! `/api/chats`). Uses `tiny_http` to avoid any async runtime dependency.
 
 mod graph;
 
@@ -242,6 +242,7 @@ fn dispatch(
         (Method::Get, "/api/model") => handle_model(state),
         (Method::Get, p) if p.starts_with("/api/graph") => handle_graph(state, url),
         (Method::Get, "/api/flow") => handle_flow(state),
+        (Method::Get, "/api/settings") => handle_settings(state),
         (Method::Get, "/api/themes") => handle_themes(state),
         (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
         (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
@@ -368,7 +369,9 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                 };
                 let records = load_active_records(state);
                 let model = state.current_model();
-                graph::source_neighborhood(&records, model.as_ref(), sha)
+                // Evidence sidecar feeds the memory-layer card nodes (B5).
+                let evidence = state.current_evidence();
+                graph::source_neighborhood(&records, model.as_ref(), evidence.as_ref(), sha)
             }
             "global" => {
                 let limit = query
@@ -705,6 +708,35 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             { "from": "units", "to": "cards", "value": total_cards, "label": "cards kept" },
             { "from": "cards", "to": "crystal", "value": t.claims_durable, "label": "durable claims" },
         ],
+    });
+    json_response(200, &body.to_string())
+}
+
+/// GET /api/settings — read-only server/vault configuration for the System
+/// page (B5, v1). Everything here is display data: the vault path, the index
+/// projection's schema/date/counts (null when no index is built yet), whether
+/// ask has an LLM behind it, the ask guardrails, and the server version.
+/// Nothing is writable over HTTP — settings changes happen at the CLI.
+fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let model = state.current_model();
+    let body = serde_json::json!({
+        "vault_root": state.vault_root.display().to_string(),
+        "schema_version": model.as_ref().map(|m| m.schema.clone()),
+        "index_date": model.as_ref().map(|m| m.date.clone()),
+        "counts": model.as_ref().map(|m| serde_json::json!({
+            "sources": m.totals.sources,
+            "packs": m.totals.packs,
+            "claims": m.totals.claims_durable + m.totals.claims_caveated,
+        })),
+        "llm_configured": state.ask_client.is_some(),
+        "ask_limits": {
+            "timeout_secs": state.ask_timeout.as_secs(),
+            // No server-side concurrency cap exists today: each ask runs on
+            // its own detached worker (see serve_loop). Null = unbounded,
+            // reported honestly instead of inventing a number.
+            "max_concurrent": serde_json::Value::Null,
+        },
+        "version": env!("CARGO_PKG_VERSION"),
     });
     json_response(200, &body.to_string())
 }
@@ -1736,6 +1768,91 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn graph_neighborhood_includes_memory_cards_from_evidence() {
+        // The portal_vault fixture ships one card for source aaaa1111 in the
+        // evidence sidecar; the neighborhood must surface it (B5).
+        let vault = portal_vault("graph-cards", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(
+            &st,
+            Method::Get,
+            "/api/graph?scope=neighborhood&source=aaaa1111",
+            "",
+        );
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        let nodes = v["nodes"].as_array().unwrap();
+        let card = nodes
+            .iter()
+            .find(|n| n["type"] == "card")
+            .expect("card node from the evidence sidecar");
+        assert_eq!(card["label"], "Card One");
+        assert!(
+            v["edges"].as_array().unwrap().iter().any(|e| {
+                e["type"] == "has_memory"
+                    && e["source"] == "source:aaaa1111"
+                    && e["target"] == card["id"]
+            }),
+            "has_memory edge from the focus source to its card"
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn settings_endpoint_reports_readonly_config_shape() {
+        let vault = portal_vault("settings", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+
+        // No LLM configured, index present.
+        let resp = dispatch(&st, Method::Get, "/api/settings", "");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(
+            v["vault_root"].as_str().unwrap(),
+            vault.display().to_string()
+        );
+        assert_eq!(v["schema_version"], "ovp.index/v2");
+        assert_eq!(v["index_date"], "2026-07-09");
+        assert_eq!(v["counts"]["sources"], 1);
+        assert_eq!(v["counts"]["packs"], 1);
+        assert!(v["counts"]["claims"].is_u64());
+        assert_eq!(v["llm_configured"], false);
+        assert_eq!(v["ask_limits"]["timeout_secs"], ASK_TIMEOUT.as_secs());
+        assert!(v["ask_limits"]["max_concurrent"].is_null());
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+
+        // With an ask client the flag flips.
+        st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(v["llm_configured"], true);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn settings_endpoint_answers_without_an_index() {
+        // A vault with no index projection still gets settings (nulls, not
+        // a 503) — the System page must render the panel with guidance.
+        let root = temp_root("settings-no-index");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault, None);
+
+        let resp = dispatch(&st, Method::Get, "/api/settings", "");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert!(v["schema_version"].is_null());
+        assert!(v["index_date"].is_null());
+        assert!(v["counts"].is_null());
+        assert_eq!(v["llm_configured"], false);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

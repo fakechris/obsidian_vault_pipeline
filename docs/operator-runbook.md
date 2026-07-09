@@ -1,6 +1,6 @@
 # OVP Operator Runbook — the Rust daily workflow (M31)
 
-How to run OVP Next day to day on the real vault, without legacy Python.
+How to run OVP2 day to day on the real vault, without legacy Python.
 Product-state layout: [`product-state-layout.md`](./product-state-layout.md).
 
 ---
@@ -67,8 +67,21 @@ What one run does, in order:
    record; a per-run report lands in `.ovp/reports/<run_id>.json`.
 6. **Refresh**: read model (`.ovp/index/index.json`) + console
    (`.ovp/console/index.html`) are rebuilt.
+7. **Portal**: open the web portal to review the day —
 
-Open the console: `open "$VAULT/.ovp/console/index.html"`.
+```bash
+ovp2 serve --vault-root "$VAULT"        # default 127.0.0.1:3141
+open http://127.0.0.1:3141/
+```
+
+The portal SPA is served from the vault's deployed `.ovp/console/app/`
+directory when present. A dev checkout can serve ANY vault without deploying:
+build once (`cd console-ui && npm run build`) and pass the overlay —
+`ovp2 serve --vault-root "$VAULT" --viz-dir <repo>/console-ui/dist`.
+The old generated console stays reachable at `/legacy-index.html`
+(plus `/ops.html`, `/audit.html`, `/candidates.html` — also linked from the
+portal's System page). After a `daily` run while the server is up, hit
+`/api/refresh` (or restart) to reload the index.
 
 Useful variants:
 
@@ -235,9 +248,12 @@ deleting them only costs re-recording.
 
 ## 6. What this does NOT do (yet / by design)
 
-- No web-page fetching for bare bookmarks — enrich `needs-content` notes by
-  hand (or with the clipper) and the next run picks them up.
-- No GitHub/arXiv-specific enrichment; papers flow as ordinary articles.
+- Web-page fetching for bare bookmarks needs the `web-fetch-live` build
+  feature (prebuilt binaries include it; a plain `cargo build` does not) —
+  it accepts html / plain / markdown responses; anything else stays
+  `needs-content` for hand enrichment.
+- No arXiv-specific enrichment; papers flow as ordinary articles (GitHub
+  links get README enrichment behind `github-live`).
 - No daemon — run `daily` from cron/launchd if you want scheduling.
 - No embeddings/SQLite/graph; `find` is substring search over the read model.
 - Legacy `knowledge.db`, `/ops` UI, `ovp-ask`/digest remain Python-only.

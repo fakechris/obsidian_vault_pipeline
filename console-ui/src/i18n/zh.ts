@@ -102,7 +102,7 @@ export const zh: Record<keyof typeof en, string> = {
   'source.docTruncated': '预览在 200 KB 处截断——完整内容请在 vault 中打开原文件。',
   'source.neighborhood': '关联图谱 · 邻域',
   'source.neighborhoodCaption':
-    '本源 → 引用它的主张 → 兄弟源。单击节点看摘要，双击打开详情。',
+    '本源 → 它的记忆卡片 → 引用它的主张 → 兄弟源。单击节点看摘要，双击打开详情。',
   'source.citingClaims': '结晶引用',
   'source.citingEmpty': '暂无结晶主张引用本源。',
   'source.citingEmptyHint': '→ 知识：了解结晶如何产生',
@@ -119,8 +119,10 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.kindClaim': '主张',
   'graph.kindSource': '源',
   'graph.kindUnit': '单元',
+  'graph.kindCard': '卡片',
   'graph.openHint': '双击打开详情。',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
+  'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
 
   // knowledge home
   'knowledge.title': '知识',
@@ -194,8 +196,51 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.errTimeout': '回答超时——请重试，或换一个更具体的问题。',
   'ask.errGeneric': '提问失败——服务是否已连接 vault？',
 
-  // placeholders
-  'placeholder.system': '运行记录、流程、诊断与设置将在 B5 上线。',
-  'placeholder.systemFlow': '旧版流程视图',
-  'placeholder.systemMonitor': '旧版监控视图',
+  // system page (B5)
+  'system.help':
+    '机房页：全部运行记录、需要你处理的源、管线管理视图、三层模型说明，以及服务端配置（只读）。',
+  'system.runs': '运行记录',
+  'system.runsEmpty': '还没有运行记录——对该 vault 运行 `ovp2 daily`。',
+  'system.runDate': '日期',
+  'system.runOk': '成功',
+  'system.runFailed': '失败',
+  'system.runBlocked': '阻塞',
+  'system.runIngested': '摄入',
+  'system.runReport': '报告',
+  'system.attentionTitle': '需要你',
+  'system.attentionEmpty': '没有需要处理的源——无阻塞、无缺内容。',
+  'system.doctorHint': '更深入的诊断，在终端运行：',
+  'system.surfaces': '管线入口',
+  'system.surfacesNote':
+    '面向管理的水管视图——排查卡点时有用，不属于日常产品面。',
+  'system.flowLink': '流程 Flow（管线桑基图）',
+  'system.monitorLink': '监控 Monitor（运行流水）',
+  'system.adminPagesNote':
+    '旧版生成的控制台页面（该 vault 生成过控制台时可用）：',
+  'system.concepts': '概念说明',
+  'system.conceptLayers':
+    '三层内容，处处互链：原文 = 你捕获的 markdown 源文件；记忆 = 它的阅读包——可读卡片 + 锚定到原文行号的引文单元；结晶 = 引用这些单元的跨源主张。',
+  'system.conceptDurable':
+    'durable（持久）主张通过了全部证据门；caveated（存疑）主张带有已知弱点、等待复核——只会被标注，不会被隐藏。',
+  'system.conceptGate':
+    '"门"（gate）是写入结晶账本前的机械校验：每条引用必须对应真实的引文单元，主张强度会被评分——人的裁决也要过门，从不绕过。',
+  'system.settings': '设置',
+  'system.settingsReadonly':
+    'v1 只读——修改在 CLI 完成，这里展示服务端当前运行的配置。',
+  'system.settingsError': '无法加载设置——服务是否在运行？',
+  'system.vaultRoot': 'vault 路径',
+  'system.schema': '索引 schema',
+  'system.indexDate': '索引日期',
+  'system.counts': '统计',
+  'system.countsLine': '{sources} 源 · {packs} 阅读包 · {claims} 主张',
+  'system.noIndex': '索引未构建——运行 `ovp2 index`',
+  'system.llm': 'LLM（对话）',
+  'system.llmOn': '已配置——POST /api/ask 可用',
+  'system.llmOff':
+    '未配置——对话返回 503。设置 ANTHROPIC_API_KEY 后重启 `ovp2 serve`（构建时加 --features anthropic）。',
+  'system.askTimeout': '对话超时',
+  'system.askTimeoutValue': '每问 {secs} 秒 · 无并发上限',
+  'system.version': '服务端版本',
+  'system.togglesNote':
+    '主题与语言在顶栏切换（LIGHT/DARK · EN/中）——按浏览器持久化，每页可用。',
 };

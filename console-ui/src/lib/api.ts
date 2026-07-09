@@ -6,6 +6,7 @@ import type {
   FlowData,
   GraphResponse,
   IndexModel,
+  SettingsPayload,
   SourceDetail,
   ThemeCount,
 } from './types';
@@ -62,6 +63,11 @@ export function fetchThemes(): Promise<ThemeCount[]> {
 
 export function fetchModel(): Promise<IndexModel> {
   return fetchJson<IndexModel>('/api/model');
+}
+
+/** Read-only server/vault configuration for the System page (B5 v1). */
+export function fetchSettings(): Promise<SettingsPayload> {
+  return fetchJson<SettingsPayload>('/api/settings');
 }
 
 /** Three-layer source detail: meta + memory + citing claims + raw md. */

@@ -105,7 +105,7 @@ export const en = {
     'Preview truncated at 200 KB — open the file in the vault for the full text.',
   'source.neighborhood': 'Neighborhood',
   'source.neighborhoodCaption':
-    'This source → citing claims → sibling sources. Click a node for a summary, double-click to open it.',
+    'This source → its memory cards → citing claims → sibling sources. Click a node for a summary, double-click to open it.',
   'source.citingClaims': 'Citing claims',
   'source.citingEmpty': 'No crystal claims cite this source yet.',
   'source.citingEmptyHint': '→ Knowledge: how claims crystallize',
@@ -122,8 +122,11 @@ export const en = {
   'graph.kindClaim': 'claim',
   'graph.kindSource': 'source',
   'graph.kindUnit': 'unit',
+  'graph.kindCard': 'card',
   'graph.openHint': 'Double-click to open.',
   'graph.noPage': 'Legacy source — no detail page in this vault.',
+  'graph.cardHint':
+    "This source's memory — the full card is in the Memory tab.",
 
   // knowledge home
   'knowledge.title': 'Knowledge',
@@ -201,8 +204,53 @@ export const en = {
   'ask.errTimeout': 'The answer timed out — try again, or ask a narrower question.',
   'ask.errGeneric': 'Ask failed — is the server running against a vault?',
 
-  // placeholders
-  'placeholder.system': 'Runs, flow, doctor and settings land in B5.',
-  'placeholder.systemFlow': 'Legacy flow view',
-  'placeholder.systemMonitor': 'Legacy monitor view',
+  // system page (B5)
+  'system.help':
+    'The engine room: every recorded run, sources waiting on you, the pipeline admin views, what the three layers mean, and the server configuration (read-only).',
+  'system.runs': 'Runs',
+  'system.runsEmpty':
+    'No runs recorded yet — run `ovp2 daily` against this vault.',
+  'system.runDate': 'date',
+  'system.runOk': 'ok',
+  'system.runFailed': 'failed',
+  'system.runBlocked': 'blocked',
+  'system.runIngested': 'ingested',
+  'system.runReport': 'report',
+  'system.attentionTitle': 'Attention',
+  'system.attentionEmpty':
+    'Nothing needs you — no blocked or needs-content sources.',
+  'system.doctorHint': 'For a deeper diagnosis, run in a terminal:',
+  'system.surfaces': 'Pipeline surfaces',
+  'system.surfacesNote':
+    'Admin views onto the plumbing — useful when something is stuck, not part of the daily product surface.',
+  'system.flowLink': 'Flow (pipeline Sankey)',
+  'system.monitorLink': 'Monitor (run feed)',
+  'system.adminPagesNote':
+    'Legacy generated console pages (present when this vault has a generated console):',
+  'system.concepts': 'Concepts',
+  'system.conceptLayers':
+    'Three layers, always linked: the SOURCE is the original markdown you captured; its MEMORY is the reader pack — readable cards plus quoted units anchored to source lines; the CRYSTAL is cross-source claims that cite those units.',
+  'system.conceptDurable':
+    'DURABLE claims passed every evidence gate; CAVEATED claims carry a known weakness and wait for review — they are labeled, never hidden.',
+  'system.conceptGate':
+    'THE GATE is a mechanical check before anything is written to the crystal ledger: every citation must resolve to a real quoted unit, and claim strength is scored — human decisions go through it too, never around it.',
+  'system.settings': 'Settings',
+  'system.settingsReadonly':
+    'Read-only in v1 — changes happen at the CLI, this panel shows what the server is running with.',
+  'system.settingsError': 'Could not load settings — is the server running?',
+  'system.vaultRoot': 'vault',
+  'system.schema': 'index schema',
+  'system.indexDate': 'index date',
+  'system.counts': 'counts',
+  'system.countsLine': '{sources} sources · {packs} packs · {claims} claims',
+  'system.noIndex': 'no index built — run `ovp2 index`',
+  'system.llm': 'LLM (Ask)',
+  'system.llmOn': 'configured — POST /api/ask is live',
+  'system.llmOff':
+    'not configured — Ask answers 503. Set ANTHROPIC_API_KEY and restart `ovp2 serve` (built with --features anthropic).',
+  'system.askTimeout': 'ask timeout',
+  'system.askTimeoutValue': '{secs}s per question · no concurrency cap',
+  'system.version': 'server version',
+  'system.togglesNote':
+    'Theme and language switch in the top bar (LIGHT/DARK · EN/中) — persisted per browser, on every page.',
 } as const;
