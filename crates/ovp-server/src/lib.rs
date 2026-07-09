@@ -130,28 +130,39 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     for request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
-
-        let resp = match (method, path.as_str()) {
-            (Method::Get, "/api/refresh") => {
-                state.refresh_model();
-                json_response(200, r#"{"ok":true}"#)
-            }
-            (Method::Get, p) if p.starts_with("/api/find") => handle_find(&state, &path),
-            (Method::Get, p) if p.starts_with("/api/search") => handle_search(&state, &path),
-            (Method::Get, "/api/model") => handle_model(&state),
-            (Method::Get, p) if p.starts_with("/api/graph") => handle_graph(&state, &path),
-            (Method::Get, "/api/flow") => handle_flow(&state),
-            (Method::Get, "/api/themes") => handle_themes(&state),
-            (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(&state, &path),
-            (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(&state, &path),
-            (Method::Get, _) => serve_static(&state, &path),
-            _ => text_response(405, "Method Not Allowed"),
-        };
-
+        let resp = dispatch(&state, method, &path);
         let _ = request.respond(resp);
     }
 
     Ok(())
+}
+
+/// Route one request. Extracted from the accept loop so routing is unit
+/// testable. Matching runs on the path WITHOUT the query string (so exact
+/// routes like `/api/model?x=1` still hit their handler); handlers get the
+/// full url and parse their own params. Anything under `/api/` that matches
+/// no route is a JSON 404 — it must never fall through to the SPA shell.
+fn dispatch(state: &AppState, method: Method, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = url.split('?').next().unwrap_or(url);
+    match (method, path) {
+        (Method::Get, "/api/refresh") => {
+            state.refresh_model();
+            json_response(200, r#"{"ok":true}"#)
+        }
+        (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
+        (Method::Get, p) if p.starts_with("/api/search") => handle_search(state, url),
+        (Method::Get, "/api/model") => handle_model(state),
+        (Method::Get, p) if p.starts_with("/api/graph") => handle_graph(state, url),
+        (Method::Get, "/api/flow") => handle_flow(state),
+        (Method::Get, "/api/themes") => handle_themes(state),
+        (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
+        (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
+        (Method::Get, p) if p == "/api" || p.starts_with("/api/") => {
+            json_response(404, r#"{"error":"unknown api route"}"#)
+        }
+        (Method::Get, _) => serve_static(state, url),
+        _ => text_response(405, "Method Not Allowed"),
+    }
 }
 
 fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -506,7 +517,15 @@ fn read_source_doc(
     if rel.contains("..") || std::path::Path::new(rel).is_absolute() {
         return (None, false, Some("source path rejected".into()));
     }
-    match std::fs::read_to_string(state.vault_root.join(rel)) {
+    let recorded = state.vault_root.join(rel);
+    let path = if recorded.is_file() {
+        recorded
+    } else if let Some(moved) = lifecycle_moved_path(state, rel) {
+        moved
+    } else {
+        recorded
+    };
+    match std::fs::read_to_string(&path) {
         Ok(mut text) => {
             let truncated = text.len() > MAX_SOURCE_DOC_BYTES;
             if truncated {
@@ -520,6 +539,24 @@ fn read_source_doc(
         }
         Err(e) => (None, false, Some(format!("{rel}: {e}"))),
     }
+}
+
+/// Lifecycle-move fallback: `SourceRow.rel_path` records the INTAKE location
+/// (`50-Inbox/01-Raw/<month>/…`), but the daily lifecycle step moves
+/// processed sources to `50-Inbox/03-Processed/<month>/…` keeping the same
+/// trailing subpath. When the recorded path misses and sits under the raw
+/// inbox dir, retry the processed dir — both directory names come from
+/// `VaultLayout`, never hardcoded here. `rel` is already traversal-checked
+/// by the caller. Returns the candidate only when it actually exists.
+fn lifecycle_moved_path(state: &AppState, rel: &str) -> Option<PathBuf> {
+    let raw_prefix = format!("{}/", state.layout.inbox_raw_dir());
+    let rest = rel.strip_prefix(&raw_prefix)?;
+    let (month, file) = rest.split_once('/')?;
+    let candidate = state
+        .vault_root
+        .join(state.layout.processed_dir(month))
+        .join(file);
+    candidate.is_file().then_some(candidate)
 }
 
 fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1039,6 +1076,63 @@ mod tests {
         assert_eq!(handle_source_api(&st, "/api/source/").status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn source_api_follows_lifecycle_move_raw_to_processed() {
+        // rel_path records the intake location, but the daily lifecycle step
+        // moved the file to the processed dir (same month + filename). The
+        // doc must still resolve — via VaultLayout, not the stale path.
+        let vault = portal_vault(
+            "source-moved",
+            "50-Inbox/01-Raw/2026-06/good.md",
+            "unused body\n",
+        );
+        assert!(!vault.join("50-Inbox/01-Raw/2026-06/good.md").exists());
+        std::fs::create_dir_all(vault.join("50-Inbox/03-Processed/2026-06")).unwrap();
+        std::fs::write(
+            vault.join("50-Inbox/03-Processed/2026-06/good.md"),
+            "# Moved\n\nlifecycle-moved body\n",
+        )
+        .unwrap();
+
+        let st = state(vault.clone(), None);
+        let v = body_json(handle_source_api(&st, "/api/source/aaaa1111"));
+        let md = v["doc"]["markdown"].as_str().expect("markdown resolved");
+        assert!(md.contains("lifecycle-moved body"));
+        assert!(v["doc"]["error"].is_null());
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn unknown_api_routes_are_json_404_not_spa() {
+        // With an SPA overlay present, a bad /api/* path used to fall through
+        // to the extensionless-client-route rule and answer 200 + index.html.
+        let root = temp_root("api-404");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join(".ovp/console")).unwrap();
+        let overlay = root.join("dist");
+        std::fs::create_dir_all(&overlay).unwrap();
+        std::fs::write(overlay.join("index.html"), "spa").unwrap();
+        let st = state(vault, Some(overlay));
+
+        for path in ["/api/nonexistent", "/api", "/api/", "/api/nope?x=1"] {
+            let resp = dispatch(&st, Method::Get, path);
+            assert_eq!(resp.status_code(), 404, "path {path}");
+            let v = body_json(resp);
+            assert_eq!(v["error"], "unknown api route", "path {path}");
+        }
+
+        // Non-API client routes still reach the SPA shell…
+        assert_eq!(dispatch(&st, Method::Get, "/library").status_code(), 200);
+        // …exact API routes keep working even with a query string…
+        let resp = dispatch(&st, Method::Get, "/api/refresh?x=1");
+        assert_eq!(resp.status_code(), 200);
+        // …and non-GET stays 405.
+        assert_eq!(dispatch(&st, Method::Post, "/api/model").status_code(), 405);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
