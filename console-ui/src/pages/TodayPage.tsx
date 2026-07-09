@@ -5,6 +5,7 @@
  * B1 deviation (documented): per-day claim attribution is not derivable
  * from ClaimRow (no date; run_id namespace differs from RunRow), so the
  * crystallized section renders as "Recent claims" — see lib/derive.ts. */
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -15,15 +16,15 @@ import {
   timeline,
   todayStats,
 } from '../lib/derive';
+import type { TodayStats } from '../lib/derive';
 import type { IndexModel } from '../lib/types';
 import { useModel } from '../model';
 
 const RECENT_CLAIMS = 3;
 const TIMELINE_DAYS = 7;
 
-function Stats({ model }: { model: IndexModel }) {
+function Stats({ model, stats: s }: { model: IndexModel; stats: TodayStats }) {
   const { t } = useI18n();
-  const s = todayStats(model);
   const { totals } = model;
   return (
     <div className="grid stats">
@@ -188,24 +189,27 @@ function Timeline({ model }: { model: IndexModel }) {
 export default function TodayPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
+  // todayStats walks every run/pack row — compute once per model, not on
+  // every render and not once per consumer below.
+  const stats = useMemo(() => (model ? todayStats(model) : null), [model]);
   return (
     <ModelGate loading={loading} error={error}>
-      {model && (
+      {model && stats && (
         <>
           <h1 style={{ marginTop: '1rem' }}>{t('today.title')}</h1>
           <p className="muted sm" style={{ marginTop: '-2px' }}>
             <span className="mono">{model.date}</span>
-            {todayStats(model).dogfoodDay > 0 && (
-              <> · {t('common.day')} {todayStats(model).dogfoodDay}</>
+            {stats.dogfoodDay > 0 && (
+              <> · {t('common.day')} {stats.dogfoodDay}</>
             )}
           </p>
           <PageHelp>{t('today.help')}</PageHelp>
-          {todayStats(model).todayRuns.length === 0 && (
+          {stats.todayRuns.length === 0 && (
             <p className="muted tiny" style={{ marginTop: '-0.5rem' }}>
               {t('today.noRunsToday')}
             </p>
           )}
-          <Stats model={model} />
+          <Stats model={model} stats={stats} />
           <Attention model={model} />
           <RecentClaims model={model} />
           <ReadToday model={model} />
