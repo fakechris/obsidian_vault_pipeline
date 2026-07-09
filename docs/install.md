@@ -53,24 +53,20 @@ a plain run is still offline/replay.
 5. Smoke-test on a machine without Rust: run the curl installer line from the
    README, then `ovp2 --version`.
 
-## Private-repo caveats (current state)
+## Release-channel prerequisites
 
-`fakechris/obsidian_vault_pipeline` is currently **private**, which limits
-both channels until that changes:
+`fakechris/obsidian_vault_pipeline` is **public**, so both channels work
+anonymously once artifacts exist:
 
 - The README's `curl ... | sh` line hits
-  `releases/latest/download/ovp-cli-installer.sh`, which returns 404 for
-  anonymous users on a private repo. Workarounds until the repo (or a public
-  release mirror) is public: `gh release download vX.Y.Z --repo
-  fakechris/obsidian_vault_pipeline` then untar / run the installer locally,
-  or export `OVP_CLI_GITHUB_TOKEN=<token>` before running the installer (it
-  also honors `OVP_CLI_DOWNLOAD_URL` / `OVP_CLI_INSTALLER_GITHUB_BASE_URL`
-  overrides).
-- `brew install` fetches the tarball URL baked into the formula — same 404
-  problem. The tap repo itself must additionally be public.
-- **Do not** work around this by committing binaries to the repo or re-hosting
-  artifacts ad hoc; the decision to make the repo/tap public is the
-  operator's.
+  `releases/latest/download/ovp-cli-installer.sh` — this 404s only until the
+  first `vX.Y.Z` tag is pushed and the release workflow has published
+  artifacts. The installer also honors `OVP_CLI_DOWNLOAD_URL` /
+  `OVP_CLI_INSTALLER_GITHUB_BASE_URL` overrides for testing.
+- `brew install fakechris/ovp2/ovp2` additionally requires the tap repo
+  `github.com/fakechris/homebrew-ovp2` to exist and be public, with the
+  generated `ovp2.rb` pushed to it (manual step, see release process above).
+- Do not commit binaries to the repo or re-host artifacts ad hoc.
 
 ## Local verification (what was actually run)
 

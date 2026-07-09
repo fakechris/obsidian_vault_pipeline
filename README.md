@@ -10,13 +10,10 @@ This repo intentionally has zero dependency on the legacy Python `ovp_pipeline` 
 
 ## Install & Quick Start (prebuilt — no Rust toolchain needed)
 
-> **⚠️ Private-repo caveat.** This repository is currently **private**
-> (`fakechris/obsidian_vault_pipeline`). The curl installer and Homebrew both
-> download from GitHub Releases, so until the repo (or a public mirror) is
-> public they need authentication: teammates can fetch artifacts with
-> `gh release download vX.Y.Z` and untar manually. The Homebrew path also
-> requires the tap repo `github.com/fakechris/homebrew-ovp2` to exist and be
-> **public**. Details and the operator release process: `docs/install.md`.
+> **Note.** The curl installer and Homebrew download from GitHub Releases of
+> the public repo `fakechris/obsidian_vault_pipeline`. They work anonymously
+> once the first `vX.Y.Z` release exists (see `docs/install.md`); the Homebrew
+> path additionally needs the public tap repo `fakechris/homebrew-ovp2`.
 
 1. **Install** (macOS arm64/x64, Linux x64):
 
