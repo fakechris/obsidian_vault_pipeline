@@ -5,7 +5,7 @@
  * /api/source/:sha; the markdown is rendered client-side by the escape-first
  * renderer in lib/markdown.tsx (raw text never becomes HTML). */
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -84,7 +84,21 @@ export default function SourceDetailPage() {
   const { t } = useI18n();
   const { sha } = useParams<{ sha: string }>();
   const { detail, status } = useSourceDetail(sha);
-  const [tab, setTab] = useState<Tab>('memory');
+  // Tab is URL-parameterized (?tab=source) — shareable deep links, same
+  // rule as the Library facets (design §5).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: Tab = searchParams.get('tab') === 'source' ? 'source' : 'memory';
+  const setTab = (next: Tab) => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'source') p.set('tab', 'source');
+        else p.delete('tab');
+        return p;
+      },
+      { replace: true },
+    );
+  };
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
 
   const anchoredLines = useMemo(
