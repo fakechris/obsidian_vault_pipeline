@@ -286,11 +286,23 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
         let path = request.url().to_string();
         let method = request.method().clone();
         if method == Method::Post && path.split('?').next().unwrap_or(&path) == "/api/ask" {
+            // Bounded admission BEFORE any body bytes are read: a client
+            // that sends headers with a nonzero Content-Length and then
+            // withholds the body would otherwise pin an unbounded number
+            // of reader threads despite the ask cap (codex review P2).
+            // Saturation answers 429 inline — nothing spawned, nothing read.
+            let slot = match admit_ask_slot(state) {
+                Ok(slot) => slot,
+                Err(resp) => {
+                    let _ = request.respond(resp);
+                    continue;
+                }
+            };
             let state = Arc::clone(state);
             std::thread::spawn(move || {
                 let headers = AskHeaders::of(&request);
                 let body = read_post_body(&mut request);
-                let resp = handle_ask(&state, &headers, &body);
+                let resp = handle_ask(&state, &headers, &body, slot);
                 let _ = request.respond(resp);
             });
             continue;
@@ -856,6 +868,16 @@ fn is_loopback_origin(origin: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 
+/// Bounded admission for `/api/ask` — the slot is acquired BEFORE any body
+/// bytes are read (slow-loris posts must not pin reader threads), and a
+/// saturated server answers 429 without spawning or reading anything.
+fn admit_ask_slot(state: &AppState) -> Result<AskSlot, Response<std::io::Cursor<Vec<u8>>>> {
+    state
+        .ask_slots
+        .try_acquire()
+        .ok_or_else(|| json_response(429, r#"{"error":"ask busy","code":"ask_busy"}"#))
+}
+
 /// POST /api/ask `{"question": "..."}` — the portal Ask page (design §3.5).
 /// Runs the `ovp-memory::ask` pipeline against the cached model/evidence
 /// with the injected LLM client factory, saves the chat like `ovp2 ask
@@ -873,6 +895,7 @@ fn handle_ask(
     state: &AppState,
     headers: &AskHeaders,
     body: &str,
+    slot: AskSlot,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let is_json = headers
         .content_type
@@ -926,13 +949,10 @@ fn handle_ask(
         );
     };
 
-    // Bound the paid concurrency LAST (a rejected request must not burn a
-    // slot). The slot moves INTO the pipeline thread: even after the guard
-    // 504s below, the still-running provider call keeps its slot until it
-    // returns. Saturation answers immediately — no queue.
-    let Some(slot) = state.ask_slots.try_acquire() else {
-        return json_response(429, r#"{"error":"ask busy","code":"ask_busy"}"#);
-    };
+    // The slot was acquired at admission (before the body was even read —
+    // see serve_loop) and moves INTO the pipeline thread: even after the
+    // guard 504s below, the still-running provider call keeps its slot
+    // until it returns. Validation failures above drop it immediately.
 
     let evidence = state.current_evidence();
     let vault_root = state.vault_root.clone();
@@ -1457,9 +1477,21 @@ mod tests {
         }
     }
 
+    /// Drive the full admission + handle path like serve_loop does.
+    fn ask_with(
+        st: &AppState,
+        headers: &AskHeaders,
+        body: &str,
+    ) -> Response<std::io::Cursor<Vec<u8>>> {
+        match admit_ask_slot(st) {
+            Ok(slot) => handle_ask(st, headers, body, slot),
+            Err(resp) => resp,
+        }
+    }
+
     /// Drive handle_ask like serve_loop's worker does, with good headers.
     fn ask(st: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-        handle_ask(st, &json_headers(), body)
+        ask_with(st, &json_headers(), body)
     }
 
     /// Unwrap the resolved body for content assertions.
@@ -2199,7 +2231,7 @@ mod tests {
                 content_type: ct.map(str::to_string),
                 origin: None,
             };
-            let resp = handle_ask(&st, &headers, body);
+            let resp = ask_with(&st, &headers, body);
             assert_eq!(resp.status_code(), 415, "content-type {ct:?}");
         }
         // …while a charset suffix on real JSON is fine (reaches the
@@ -2208,7 +2240,7 @@ mod tests {
             content_type: Some("application/json; charset=utf-8".into()),
             origin: None,
         };
-        assert_eq!(handle_ask(&st, &headers, body).status_code(), 200);
+        assert_eq!(ask_with(&st, &headers, body).status_code(), 200);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
@@ -2232,7 +2264,7 @@ mod tests {
             "null",
             "file://",
         ] {
-            let resp = handle_ask(&st, &with_origin(evil), body);
+            let resp = ask_with(&st, &with_origin(evil), body);
             assert_eq!(resp.status_code(), 403, "origin {evil}");
         }
 
@@ -2244,7 +2276,7 @@ mod tests {
             "http://[::1]:3141",
             "https://localhost",
         ] {
-            let resp = handle_ask(&st, &with_origin(ok), body);
+            let resp = ask_with(&st, &with_origin(ok), body);
             assert_eq!(resp.status_code(), 503, "origin {ok}");
         }
         // Absent Origin (curl, same-origin GET-navigations) also passes.
