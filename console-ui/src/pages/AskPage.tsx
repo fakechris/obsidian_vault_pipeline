@@ -152,9 +152,18 @@ export default function AskPage() {
   const [chats, setChats] = useState<ChatEntry[]>([]);
   const [openChat, setOpenChat] = useState<string | null>(null);
   const [chatMd, setChatMd] = useState<string | null>(null);
+  // Mirrors openChat for async guards: a slow fetch for chat A must not
+  // render under chat B (or under the live thread) once the user moved on.
+  const openChatRef = useRef<string | null>(null);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const selectChat = (name: string | null) => {
+    openChatRef.current = name;
+    setOpenChat(name);
+    setChatMd(null);
+  };
 
   const refreshChats = () => {
     fetchChats()
@@ -173,8 +182,7 @@ export default function AskPage() {
   const submit = () => {
     const question = draft.trim();
     if (!question || pending) return;
-    setOpenChat(null);
-    setChatMd(null);
+    selectChat(null);
     setDraft('');
     setPending(true);
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
@@ -210,11 +218,14 @@ export default function AskPage() {
   };
 
   const showChat = (name: string) => {
-    setOpenChat(name);
-    setChatMd(null);
+    selectChat(name);
     fetchChatMarkdown(name)
-      .then(setChatMd)
-      .catch(() => setChatMd(t('ask.chatLoadError')));
+      .then((md) => {
+        if (openChatRef.current === name) setChatMd(md);
+      })
+      .catch(() => {
+        if (openChatRef.current === name) setChatMd(t('ask.chatLoadError'));
+      });
   };
 
   const applyExample = (text: string) => {
@@ -275,10 +286,7 @@ export default function AskPage() {
                 <button
                   type="button"
                   className="tab-like"
-                  onClick={() => {
-                    setOpenChat(null);
-                    setChatMd(null);
-                  }}
+                  onClick={() => selectChat(null)}
                 >
                   ← {t('ask.closeChat')}
                 </button>

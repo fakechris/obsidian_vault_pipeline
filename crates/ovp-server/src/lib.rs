@@ -166,19 +166,40 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         }
     }
 
+    serve_loop(&server, &state);
+
+    Ok(())
+}
+
+/// The accept loop, extracted from `run_server` so tests can drive it on an
+/// ephemeral port. `POST /api/ask` is the one long-running route (it makes
+/// an LLM call): the WHOLE request moves to a detached worker thread
+/// (`tiny_http::Request` is Send) which reads the body, runs the pipeline
+/// (with its own wall-clock guard) and responds itself — the loop continues
+/// immediately, so every other request stays snappy while an ask is in
+/// flight.
+fn serve_loop(server: &Server, state: &Arc<AppState>) {
     for mut request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
+        if method == Method::Post && path.split('?').next().unwrap_or(&path) == "/api/ask" {
+            let state = Arc::clone(state);
+            std::thread::spawn(move || {
+                let headers = AskHeaders::of(&request);
+                let body = read_post_body(&mut request);
+                let resp = handle_ask(&state, &headers, &body);
+                let _ = request.respond(resp);
+            });
+            continue;
+        }
         let body = if method == Method::Post {
             read_post_body(&mut request)
         } else {
             String::new()
         };
-        let resp = dispatch(&state, method, &path, &body);
+        let resp = dispatch(state, method, &path, &body);
         let _ = request.respond(resp);
     }
-
-    Ok(())
 }
 
 /// Read a POST body up to one byte past [`MAX_POST_BODY_BYTES`] — the
@@ -196,13 +217,17 @@ fn read_post_body(request: &mut tiny_http::Request) -> String {
 /// testable. Matching runs on the path WITHOUT the query string (so exact
 /// routes like `/api/model?x=1` still hit their handler); handlers get the
 /// full url and parse their own params. `body` is only populated for POST.
+/// `POST /api/ask` never reaches here — `serve_loop` hands it to a detached
+/// worker before dispatch so the accept loop can't block on an LLM call.
 /// Anything under `/api/` that matches no route is a JSON 404 — it must
 /// never fall through to the SPA shell.
 fn dispatch(
     state: &AppState,
     method: Method,
     url: &str,
-    body: &str,
+    // POST bodies are consumed pre-dispatch today (ask is the only POST
+    // route); the parameter stays so a future body-taking route slots in.
+    _body: &str,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = url.split('?').next().unwrap_or(url);
     match (method, path) {
@@ -210,7 +235,6 @@ fn dispatch(
             state.refresh_model();
             json_response(200, r#"{"ok":true}"#)
         }
-        (Method::Post, "/api/ask") => handle_ask(state, body),
         (Method::Get, "/api/chats") => handle_chats_list(state),
         (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
         (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
@@ -685,13 +709,82 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(200, &body.to_string())
 }
 
+/// The request headers `POST /api/ask` validates — the endpoint triggers
+/// paid LLM calls, so it gets cross-site hardening (see `handle_ask`).
+struct AskHeaders {
+    content_type: Option<String>,
+    origin: Option<String>,
+}
+
+impl AskHeaders {
+    fn of(request: &tiny_http::Request) -> Self {
+        let get = |name: &str| {
+            request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                .map(|h| h.value.as_str().to_string())
+        };
+        Self {
+            content_type: get("content-type"),
+            origin: get("origin"),
+        }
+    }
+}
+
+/// `Origin` values a locally-served page legitimately sends: http(s) on a
+/// loopback host. Any PORT is accepted — the vite dev server proxies /api
+/// from its own port, so pinning the serve port would break `npm run dev`.
+/// The trust boundary is "pages served from this machine"; `null` and
+/// foreign hosts are rejected.
+fn is_loopback_origin(origin: &str) -> bool {
+    let rest = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    let host_port = rest.split('/').next().unwrap_or(rest);
+    let host = if let Some(v6) = host_port.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
 /// POST /api/ask `{"question": "..."}` — the portal Ask page (design §3.5).
 /// Runs the `ovp-memory::ask` pipeline against the cached model/evidence
 /// with the injected LLM client factory, saves the chat like `ovp2 ask
 /// --save`, and answers `{answer, citations, verified, context_hits, chat}`.
-/// The LLM call runs on a worker thread with a wall-clock guard so the
-/// single-threaded accept loop can never hang on a stuck provider.
-fn handle_ask(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+/// The LLM call runs on a worker thread with a wall-clock guard; the whole
+/// handler already sits on a detached thread (see `serve_loop`), so a slow
+/// provider can never stall other requests.
+///
+/// Cross-site hardening (a webpage anywhere can POST at localhost): the
+/// body must be declared `application/json` — a CORS-"simple" text/plain
+/// POST is refused with 415, and a real JSON POST from a foreign origin
+/// needs a CORS preflight this server never grants. Belt-and-braces, any
+/// attached `Origin` must additionally be loopback (403 otherwise).
+fn handle_ask(
+    state: &AppState,
+    headers: &AskHeaders,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let is_json = headers
+        .content_type
+        .as_deref()
+        .and_then(|v| v.split(';').next())
+        .map(|v| v.trim().eq_ignore_ascii_case("application/json"))
+        .unwrap_or(false);
+    if !is_json {
+        return json_response(415, r#"{"error":"content-type must be application/json"}"#);
+    }
+    if let Some(origin) = headers.origin.as_deref() {
+        if !is_loopback_origin(origin) {
+            return json_response(403, r#"{"error":"cross-origin ask rejected"}"#);
+        }
+    }
     if body.len() > MAX_POST_BODY_BYTES {
         return json_response(400, r#"{"error":"request body too large"}"#);
     }
@@ -1225,6 +1318,19 @@ mod tests {
         })
     }
 
+    /// The headers a well-behaved local client (the portal fetch) sends.
+    fn json_headers() -> AskHeaders {
+        AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: None,
+        }
+    }
+
+    /// Drive handle_ask like serve_loop's worker does, with good headers.
+    fn ask(st: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+        handle_ask(st, &json_headers(), body)
+    }
+
     /// Unwrap the resolved body for content assertions.
     fn body(r: Resolved) -> Vec<u8> {
         match r {
@@ -1731,7 +1837,7 @@ mod tests {
         let vault = portal_vault("ask-no-llm", "50-Inbox/03-Processed/good.md", "body\n");
         let st = state(vault.clone(), None); // ask_client: None
 
-        let resp = dispatch(&st, Method::Post, "/api/ask", r#"{"question":"anything"}"#);
+        let resp = ask(&st, r#"{"question":"anything"}"#);
         assert_eq!(resp.status_code(), 503);
         let v = body_json(resp);
         assert_eq!(v["error"], "llm not configured");
@@ -1747,7 +1853,7 @@ mod tests {
         // Not JSON / wrong shape / blank question — all 400 with a JSON
         // error, and all checked BEFORE the llm-config 503.
         for body in ["not json", "{}", r#"{"question":"   "}"#, r#"{"question":7}"#] {
-            let resp = dispatch(&st, Method::Post, "/api/ask", body);
+            let resp = ask(&st, body);
             assert_eq!(resp.status_code(), 400, "body {body}");
             let v = body_json(resp);
             assert!(v["error"].is_string(), "body {body}");
@@ -1759,7 +1865,7 @@ mod tests {
             "x".repeat(MAX_POST_BODY_BYTES + 10)
         );
         assert_eq!(
-            dispatch(&st, Method::Post, "/api/ask", &huge).status_code(),
+            ask(&st, &huge).status_code(),
             400
         );
 
@@ -1775,7 +1881,7 @@ mod tests {
         st.ask_client = Some(scripted_factory(answer, Duration::ZERO));
 
         let body = r#"{"question":"filesystem memory card unit text"}"#;
-        let resp = dispatch(&st, Method::Post, "/api/ask", body);
+        let resp = ask(&st, body);
         assert_eq!(resp.status_code(), 200);
         let v = body_json(resp);
         assert_eq!(v["answer"], answer);
@@ -1842,7 +1948,7 @@ mod tests {
         st.ask_client = Some(scripted_factory("late", Duration::from_millis(300)));
         st.ask_timeout = Duration::from_millis(50);
 
-        let resp = dispatch(&st, Method::Post, "/api/ask", r#"{"question":"memory"}"#);
+        let resp = ask(&st, r#"{"question":"memory"}"#);
         assert_eq!(resp.status_code(), 504);
         let v = body_json(resp);
         assert!(v["error"].as_str().unwrap().contains("timed out"));
@@ -1850,6 +1956,169 @@ mod tests {
         // Let the detached worker finish before tearing the vault down.
         std::thread::sleep(Duration::from_millis(400));
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_rejects_non_json_content_type_with_415() {
+        // A cross-origin CORS-"simple" POST (text/plain, form enctype, or
+        // no content-type at all) must never reach the paid LLM pipeline.
+        let vault = portal_vault("ask-415", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+
+        let body = r#"{"question":"memory"}"#;
+        for ct in [
+            None,
+            Some("text/plain"),
+            Some("text/plain;charset=UTF-8"),
+            Some("application/x-www-form-urlencoded"),
+            Some("multipart/form-data"),
+        ] {
+            let headers = AskHeaders {
+                content_type: ct.map(str::to_string),
+                origin: None,
+            };
+            let resp = handle_ask(&st, &headers, body);
+            assert_eq!(resp.status_code(), 415, "content-type {ct:?}");
+        }
+        // …while a charset suffix on real JSON is fine (reaches the
+        // pipeline and answers 200).
+        let headers = AskHeaders {
+            content_type: Some("application/json; charset=utf-8".into()),
+            origin: None,
+        };
+        assert_eq!(handle_ask(&st, &headers, body).status_code(), 200);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn ask_rejects_foreign_origins_and_allows_loopback() {
+        let vault = portal_vault("ask-origin", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None); // no LLM: pass-through = 503
+
+        let body = r#"{"question":"memory"}"#;
+        let with_origin = |origin: &str| AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: Some(origin.into()),
+        };
+
+        // Foreign / opaque origins are refused before ANY other work.
+        for evil in [
+            "https://evil.example",
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            "null",
+            "file://",
+        ] {
+            let resp = handle_ask(&st, &with_origin(evil), body);
+            assert_eq!(resp.status_code(), 403, "origin {evil}");
+        }
+
+        // Loopback origins (any port — the vite dev proxy) pass the gate:
+        // with no LLM configured they fall through to the 503, not a 403.
+        for ok in [
+            "http://localhost:5173",
+            "http://127.0.0.1:8794",
+            "http://[::1]:3141",
+            "https://localhost",
+        ] {
+            let resp = handle_ask(&st, &with_origin(ok), body);
+            assert_eq!(resp.status_code(), 503, "origin {ok}");
+        }
+        // Absent Origin (curl, same-origin GET-navigations) also passes.
+        assert_eq!(ask(&st, body).status_code(), 503);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    /// P1 regression: a slow ask must NOT block the accept loop. Drives the
+    /// real serve_loop over TCP: fire an ask whose scripted client sleeps
+    /// 1.2s, then a concurrent GET /api/model — the GET must answer well
+    /// before the ask completes.
+    #[test]
+    fn ask_does_not_block_the_accept_loop() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Instant;
+
+        let vault = portal_vault("ask-nonblock", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        const ASK_DELAY: Duration = Duration::from_millis(1200);
+        st.ask_client = Some(scripted_factory("answer [claim:c01]", ASK_DELAY));
+        let state = Arc::new(st);
+
+        let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("ip listener")
+            .port();
+        {
+            let server = Arc::clone(&server);
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || serve_loop(&server, &state));
+        }
+
+        // Fire the slow ask; don't read its response yet.
+        let ask_started = Instant::now();
+        let body = r#"{"question":"memory"}"#;
+        let mut ask_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            ask_conn,
+            "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        ask_conn.flush().unwrap();
+
+        // Give the loop a beat to hand the ask to its worker…
+        std::thread::sleep(Duration::from_millis(150));
+
+        // …then the concurrent GET must answer while the ask is in flight.
+        let get_started = Instant::now();
+        let mut get_conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            get_conn,
+            "GET /api/model HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut get_resp = String::new();
+        get_conn.read_to_string(&mut get_resp).unwrap();
+        let get_elapsed = get_started.elapsed();
+        assert!(get_resp.starts_with("HTTP/1.1 200"), "{get_resp}");
+        assert!(
+            get_elapsed < Duration::from_millis(800),
+            "GET /api/model blocked behind the ask: {get_elapsed:?}"
+        );
+        assert!(
+            ask_started.elapsed() < ASK_DELAY,
+            "ask finished too early to prove anything"
+        );
+
+        // The ask itself still completes fine after its delay.
+        let mut ask_resp = String::new();
+        ask_conn.read_to_string(&mut ask_resp).unwrap();
+        assert!(ask_resp.starts_with("HTTP/1.1 200"), "{ask_resp}");
+        assert!(ask_started.elapsed() >= ASK_DELAY);
+
+        server.unblock(); // let the loop thread exit
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn loopback_origin_matcher() {
+        assert!(is_loopback_origin("http://localhost:5173"));
+        assert!(is_loopback_origin("http://127.0.0.1:8794"));
+        assert!(is_loopback_origin("https://localhost"));
+        assert!(is_loopback_origin("http://[::1]:3141"));
+        assert!(!is_loopback_origin("https://evil.example"));
+        assert!(!is_loopback_origin("http://localhost.evil.example"));
+        assert!(!is_loopback_origin("null"));
+        assert!(!is_loopback_origin("file://"));
+        assert!(!is_loopback_origin(""));
     }
 
     #[test]

@@ -156,13 +156,8 @@ pub fn ask_with_optional_evidence(
 
     let chat_file = if args.save_chat {
         let ts = chrono_like_timestamp();
-        let chat_path = vault_root
-            .join(".ovp")
-            .join("chats")
-            .join(format!("{ts}.md"));
-        if let Some(parent) = chat_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("create chats dir: {e}"))?;
-        }
+        let chats_dir = vault_root.join(".ovp").join("chats");
+        std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
         let chat_content = format!(
             "# Ask — {}\n\n**Q:** {}\n\n**A:** {}\n\n---\n\n## Evidence\n\n{}\n\n## Verification\n\n{}\n\nContext hits: {context_hits}\n",
             ts,
@@ -171,8 +166,7 @@ pub fn ask_with_optional_evidence(
             render_evidence_markdown(&evidence_items),
             render_verification_markdown(verification.as_ref())
         );
-        std::fs::write(&chat_path, chat_content).map_err(|e| format!("write chat: {e}"))?;
-        Some(chat_path)
+        Some(write_unique_chat(&chats_dir, &ts, &chat_content)?)
     } else {
         None
     };
@@ -419,6 +413,38 @@ fn chrono_like_timestamp() -> String {
     format!("{}", now.as_secs())
 }
 
+/// Create `<ts>.md` in `dir`, falling back to `<ts>-2.md`, `<ts>-3.md`, …
+/// when the second-resolution timestamp collides — two answers in the same
+/// second must both survive, never silently overwrite. `create_new` makes
+/// the existence check atomic (no check-then-write race).
+fn write_unique_chat(dir: &Path, ts: &str, content: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    for attempt in 1..=100u32 {
+        let name = if attempt == 1 {
+            format!("{ts}.md")
+        } else {
+            format!("{ts}-{attempt}.md")
+        };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(content.as_bytes())
+                    .map_err(|e| format!("write chat: {e}"))?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("write chat {}: {e}", path.display())),
+        }
+    }
+    Err(format!(
+        "write chat: no free filename for {ts} after 100 attempts"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -600,6 +626,45 @@ mod tests {
         assert_eq!(report.cited, 1);
         assert_eq!(report.verified, 1);
         assert!(report.missing.is_empty());
+    }
+
+    #[test]
+    fn saving_two_chats_in_the_same_second_creates_two_files() {
+        let vault = std::env::temp_dir().join(format!(
+            "ovp-memory-chat-collision-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&vault);
+        std::fs::create_dir_all(&vault).unwrap();
+
+        // Deterministic collision: same timestamp twice, straight through
+        // the uniquifier.
+        let dir = vault.join(".ovp/chats");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = crate::ask::write_unique_chat(&dir, "1751812345", "one").unwrap();
+        let second = crate::ask::write_unique_chat(&dir, "1751812345", "two").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "one");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "two");
+        assert!(second.to_string_lossy().ends_with("1751812345-2.md"));
+
+        // And the full pipeline: two immediate saves both survive.
+        let args = AskArgs {
+            question: "How should agent memory be treated?".into(),
+            save_chat: true,
+            ..Default::default()
+        };
+        let mut client = CapturingClient {
+            request: Arc::new(Mutex::new(None)),
+            reply_text: "answer".into(),
+        };
+        let a = ask_with_evidence(&model(), &evidence(), &mut client, &args, &vault).unwrap();
+        let b = ask_with_evidence(&model(), &evidence(), &mut client, &args, &vault).unwrap();
+        let (a, b) = (a.chat_file.unwrap(), b.chat_file.unwrap());
+        assert_ne!(a, b);
+        assert!(a.is_file() && b.is_file());
+
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
