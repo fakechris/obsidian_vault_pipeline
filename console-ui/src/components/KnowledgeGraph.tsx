@@ -160,7 +160,7 @@ export default function KnowledgeGraph({
             labelText: (d: { id?: string }) =>
               nodeById.get(d.id ?? '')?.label ?? '',
             labelFill: tokens.text,
-            labelFontSize: 11,
+            labelFontSize: 10,
             labelFontFamily:
               "'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, sans-serif",
             labelBackground: true,
@@ -169,7 +169,7 @@ export default function KnowledgeGraph({
             labelBackgroundRadius: 4,
             labelPadding: [1, 4],
             labelPlacement: 'bottom',
-            labelMaxWidth: 180,
+            labelMaxWidth: 130,
             labelWordWrap: true,
             labelMaxLines: 2,
           },
@@ -189,9 +189,9 @@ export default function KnowledgeGraph({
         },
         layout: {
           type: 'd3-force',
-          link: { distance: 70, strength: 0.7 },
-          collide: { radius: 26, strength: 1.1 },
-          manyBody: { strength: -160 },
+          link: { distance: 110, strength: 0.7 },
+          collide: { radius: 48, strength: 1.1 },
+          manyBody: { strength: -300 },
           velocityDecay: 0.68,
           alphaDecay: 0.04,
         },
