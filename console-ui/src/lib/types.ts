@@ -19,6 +19,9 @@ export interface GraphNode {
   importance: number;
   /** Provenance score 0..1 (claims only). */
   provenance?: number;
+  /** Claims only: index claim_id for portal links — the node `id` carries
+   * the ledger claim_key, which can differ. */
+  claim_id?: string;
 }
 
 export interface GraphEdge {

@@ -267,7 +267,10 @@ export default function KnowledgeGraph({
           const sha = nodeId.slice('source:'.length);
           if (knownShas.has(sha)) navigate(`/library/${sha}`);
         } else if (nodeId.startsWith('claim:')) {
-          navigate(`/knowledge#${nodeId.slice('claim:'.length)}`);
+          // Node ids carry the ledger claim_key; portal anchors resolve the
+          // index claim_id — use the payload field, not the id suffix.
+          const claimId = nodeById.get(nodeId)?.claim_id ?? nodeId.slice('claim:'.length);
+          navigate(`/knowledge#${claimId}`);
         }
       });
 
