@@ -92,6 +92,16 @@ export default function Shell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        // Never steal ⌘K from an active editing context (inputs, textareas,
+        // selects, contenteditable) — the browser/user owns it there.
+        const el = e.target as HTMLElement | null;
+        if (
+          el &&
+          (el.isContentEditable ||
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+        ) {
+          return;
+        }
         e.preventDefault();
         setSearchOpen(true);
       }
