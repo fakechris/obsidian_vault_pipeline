@@ -7,6 +7,11 @@ Product-state layout: [`product-state-layout.md`](./product-state-layout.md).
 
 ## 0. One-time setup
 
+Prebuilt binaries (curl installer or `brew install fakechris/ovp2/ovp2`, see
+[`install.md`](./install.md)) ship with all live features compiled in — if
+you installed one, skip the builds below and use `ovp2` directly. From a dev
+checkout:
+
 ```bash
 cd ~/Documents/obsidian-vault-pipeline
 cargo build --release -p ovp-cli            # offline build (replay-only)
@@ -273,5 +278,8 @@ deleting them only costs re-recording.
 - No arXiv-specific enrichment; papers flow as ordinary articles (GitHub
   links get README enrichment behind `github-live`).
 - No daemon — run `daily` from cron/launchd if you want scheduling.
-- No embeddings/SQLite/graph; `find` is substring search over the read model.
-- Legacy `knowledge.db`, `/ops` UI, `ovp-ask`/digest remain Python-only.
+- No embeddings/SQLite; `find` is substring search over the read model
+  (semantic themes via embeddings are in flight).
+- Legacy Python surfaces (`knowledge.db`, the 8787 `ovp-ui`) are retired, not
+  ported — see `docs/ovp-to-ovp2.md` for the mapping (`ovp-ask` → `ovp2 ask`,
+  `/digest` → `ovp2 digest`, `/ops` → the portal System page).

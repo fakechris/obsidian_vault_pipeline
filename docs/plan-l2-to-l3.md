@@ -88,7 +88,7 @@ graph TD
 
 ## Phase 0: Dogfood 稳定化 = 硬 go/no-go gate（1-2 周）
 
-**目标**：真实 vault 连续跑 `ovp-next daily --client live`，验证 M31 闭环。
+**目标**：真实 vault 连续跑 `ovp2 daily --client live`，验证 M31 闭环。
 **当前唯一真实证据只是一次 29 条 clippings 的 dry-run（什么都没写）——本 phase 才是 Level-2 结论本身。未过不进 Phase 1+。**
 
 **产品化验收（不只是「无 panic」）**：
@@ -147,7 +147,7 @@ graph TD
 - **⚠️ 修正（数据模型）**：旧版的 `strength >= 8 / 6-7 / < 4` 是错的——`StrengthClass`(`crystal.rs:294-305`) 是 4 值枚举（Supported/Overreach/OverSynthesized/OpinionAsFact），**没有 0-10 分**（唯一数字是 `provenance_score` 0..1）。
 - **⚠️ 修正（逻辑已存在）**：`final_routing(provenance, strength) -> FinalClass{Durable|Caveated|Reject}`(`crystal.rs:384-399`) **已实现** AUTO/ESCALATE/REJECT 三分。本 phase 真正新增的只有：(1) 把 `FinalClass` 持久化成可查询的 projection lane；(2) 给 Caveated 加**人工 review 队列**。
 - **lane 映射**：`Durable` = 自动投影（AUTO）；`Caveated` = 待人工裁决（ESCALATE），**初版不自动投影**；`Reject` = 不投影。
-- **CLI**：`ovp-next project --vault-root ... [--lane durable|review]`（命名用 project，不用 promote）。
+- **CLI**：`ovp2 project --vault-root ... [--lane durable|review]`（命名用 project，不用 promote）。
 
 ### 2b. Crystal → Vault Projection（derived view only）
 
@@ -158,7 +158,7 @@ graph TD
 - **⚠️ 修正（投影范围）**：初版**只投 `FinalClass::Durable`**。Caveated/escalate 暂不投影——M31 已标欠债：`review.json` 是 latest-state render，不是 append-only(`stage-m31:91-93`)。投影 escalate 前先还「caveated 折进 crystal ledger 成 event」这笔债。
 - **防护**：vault note 带 `<!-- crystal-managed -->` 标记 + frontmatter `crystal_key`；未标记的同名文件**绝不覆盖**。
 - **⚠️ 机器所有权边界（执行前要求）**：初版**不更新任何人类手写 section**——只生成**全机器管理的文件**，或只更新**明确 fenced 的 managed block**（`<!-- crystal-managed:start -->`…`<!-- :end -->`）。任何人类编辑的内容**不参与自动 splice**。明确禁止「智能合并 Markdown」——未来 agent 也不得把 projection 当成可以 merge 人类正文的许可。
-- **重投影**：`ovp-next project --rebuild`（从 ledger 全量重建 derived notes）。
+- **重投影**：`ovp2 project --rebuild`（从 ledger 全量重建 derived notes）。
 
 ---
 
@@ -172,7 +172,7 @@ graph TD
 
 - `ovp-index` 的 `run_query`(`query.rs:40-120`) 已能对 claims/packs/cards/sources 做大小写不敏感子串检索——`search`/`digest` 的语料已就绪。
 - **⚠️ 定位边界（执行前要求）**：**digest / working-memory 是 ephemeral reuse surface**——是 product output，**不进入 Crystal ledger，不作为 durable truth，不反向驱动 projection**。它们读 product state 生成临时视图，绝不能变成新的 hidden memory store / 第二个知识沉淀层。durable 真相只有一条路：reader → crystal gate → ledger。
-- **digest**：`daily` 末尾或独立 `ovp-next digest` → `.ovp/digests/<YYYY-MM-DD>.md`（今日新 packs + crystal 变动 + attention + projection events），LLM synthesis 受 token budget 约束（默认 8k），`--no-digest` 跳过。**遵守 OVP_RULES「不在循环里无限调付费 LLM」**——和 `--max-sources` 同源的速率纪律。
+- **digest**：`daily` 末尾或独立 `ovp2 digest` → `.ovp/digests/<YYYY-MM-DD>.md`（今日新 packs + crystal 变动 + attention + projection events），LLM synthesis 受 token budget 约束（默认 8k），`--no-digest` 跳过。**遵守 OVP_RULES「不在循环里无限调付费 LLM」**——和 `--max-sources` 同源的速率纪律。
 
 ### 3b. Tantivy（**仅在 Phase 0/早期使用证明痛点后启动**）
 
@@ -182,7 +182,7 @@ graph TD
 
 ### 3c. ask / working-memory（**痛点驱动，先建在 JSON index 上**）
 
-- **ovp-ask**：retrieval（先 JSON index 子串，痛点后换 Tantivy）→ context 组装（reader cards + crystal claims）→ LLM → 带 citation 回答。`ovp-next ask "..."`，可选存 `.ovp/chats/`。
+- **ovp-ask**：retrieval（先 JSON index 子串，痛点后换 Tantivy）→ context 组装（reader cards + crystal claims）→ LLM → 带 citation 回答。`ovp2 ask "..."`，可选存 `.ovp/chats/`。
 - **working-memory**：预算化上下文包 `.ovp/working-memory.md`（当日 digest + 近 3 天 packs 摘要 + active crystal + user focus），默认 4000 tokens，每次 daily 重建。**同 3a 边界：ephemeral，不进 ledger、不是 durable truth、不反向驱动 projection。**
 - **crate 边界**：`ovp-memory` 只读 product state（index + crystal），**只放 retrieval/ask/digest/working-memory**，不接管 projection、不读 demoted canonical。
 
@@ -195,7 +195,7 @@ graph TD
 ### 4a. ovp-doctor
 
 - 检查项（pass/warn/fail）：ledger↔fs 一致性（processed 记录但文件不在 `03-Processed/`）；orphan packs；stale index（`index.json` 早于最新 ledger entry）；broken internal links；crystal ledger 完整性；per-dir disk usage。
-- `ovp-next doctor`，有 fail → exit 1（CI 可用）；`--fix` 只做安全修复（重建 index、orphan 移到 quarantine——**不删除**，遵守 OVP_RULES）。
+- `ovp2 doctor`，有 fail → exit 1（CI 可用）；`--fix` 只做安全修复（重建 index、orphan 移到 quarantine——**不删除**，遵守 OVP_RULES）。
 
 ### 4b. ops_state Projection
 
@@ -213,7 +213,7 @@ graph TD
 
 ### 5a. Web UI Server（新 crate `ovp-server`，**主线**）
 
-- **功能**：托管 `ovp-console` 输出 + API endpoints（`/api/find`, `/api/search`, `/api/ask`, `/api/doctor`）+ 静态资源内联（无 npm 构建）；仅 localhost bind（默认），`--host` 可选。`ovp-next serve --port 3141`。
+- **功能**：托管 `ovp-console` 输出 + API endpoints（`/api/find`, `/api/search`, `/api/ask`, `/api/doctor`）+ 静态资源内联（无 npm 构建）；仅 localhost bind（默认），`--host` 可选。`ovp2 serve --port 3141`。
 - **✅ 决策已定：A（同步 server）**。
 - **gate 事实（精确表述）**：当前 `check_architecture.sh` 只 grep 两处 async runtime——`crates/ovp-core/Cargo.toml`（行 65-66）和 **workspace 根 `Cargo.toml`**（行 72-74）。所以 tokio 若**只写在 `crates/ovp-server/Cargo.toml`**，现有 gate **未必会抓到**。因此问题不是「现有 gate 必然变红」，而是：**项目原则上仍是同步 Rust trunk**；一旦引入 axum/tokio，要么**修改并强化 gate**（把检查扩到 server crate / 显式记录例外），要么**明确允许 server crate 成为唯一 async 边界**——两者都得是有记录的决策，不能让依赖偷偷带进来。
 - **选 A 的实现**：`tiny_http` / 裸 `std::net::TcpListener`——保住 invariant #6 的同步简洁性，匹配现有 `reqwest::blocking` 先例；live-reload 用 SSE/轮询而非 websocket。等 console/API 真出现并发压力，再单独讨论 async 边界（即 B：axum + tokio + 强化 gate）。

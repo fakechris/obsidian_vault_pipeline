@@ -1,149 +1,192 @@
-# OVP Next
+# Obsidian Vault Pipeline (OVP2)
 
-This repository is the **Rust OVP Next trunk**. The Rust workspace now lives at the repository root (`Cargo.toml`, `crates/`, `fixtures/`, `manifests/`, `scripts/`, `docs/`) and is no longer nested under `rust/ovp2/`.
+A local-first knowledge runtime for Obsidian vaults. OVP2 turns the articles,
+clippings, and bookmarks you capture into a grounded, auditable knowledge base
+— and every statement it keeps can be traced back to verbatim source lines.
 
-Clean-core Rust rewrite of the Obsidian Vault Pipeline — the **current trunk and future mainline**.
+[简体中文](README.zh-CN.md)
 
-**Status (accurate framing):** the validated **reader / truth-layer loop** (`Source → Grounded Units → Critic Repair → Reader Cards → Reader Pack`, M14a–M20) is now wrapped in a **complete daily operator workflow on the real vault** (M30/M31): capture (clippings + pinboard) → normalize/dedup/lifecycle → grounded reader packs → durable ledgers/reports → a queryable read model → a bilingual product console. One command (`ovp2 daily --vault-root <vault> --client live`) runs the whole cycle — see `docs/operator-runbook.md`. This is **NOT yet a full-functionality equivalent of the legacy Python OVP.** The earlier L0–L6 canonical / MOC / concept-promotion layers (M7–M13, described below) exist in-tree and still build + test, but the M14–M17 line found that **eager concept/canonical extraction was the wrong root** (0/3 on real models across ~8 milestones) and **demoted it** — the grounded truth-layer + reader view is the trunk going forward. See `docs/stage-m15-results.md` → `docs/stage-m17-grounded-reader-trunk.md`.
+## What this is
 
-This repo intentionally has zero dependency on the legacy Python `ovp_pipeline` package: no import, no subprocess, no embedded runtime. The legacy Python implementation has been removed from this branch's working tree **to keep architecture judgments clean — the Rust crates are the single source of truth — NOT because the Rust trunk is yet feature-equivalent to legacy Python.** Historical fixtures and docs may describe legacy behavior as a frozen contract, but current development happens in the Rust crates. Any `scripts/*.py` here are offline eval/diagnostic helpers, not a runtime architecture source.
+OVP2 organizes a vault into three layers:
 
-## Install & Quick Start (prebuilt — no Rust toolchain needed)
+| Layer | 中文 | Contents |
+|---|---|---|
+| Source | 原文 | The captured material itself: web clippings, Pinboard bookmarks, manual drops. Never rewritten. |
+| Memory | 记忆 | Per-source grounded **Units** (verbatim quotes with line numbers) and readable **Cards** built only from those Units. |
+| Knowledge | 结晶 | Cross-source **Claims**, each classified **durable** or **caveated**, each citation resolving to a Unit, a quote, and a source line. |
 
-> **Note.** The curl installer and Homebrew download from GitHub Releases of
-> the public repo `fakechris/obsidian_vault_pipeline`. They work anonymously
-> once the first `vX.Y.Z` release exists (see `docs/install.md`); the Homebrew
-> path additionally needs the public tap repo `fakechris/homebrew-ovp2`.
+The truth layer is the product. A claim that cannot cite verbatim evidence
+does not persist: mechanical gates check every citation against the accepted
+Units before anything is written, and all durable state lives in append-only
+ledgers inside the vault (`.ovp/`). Everything else — the search index, the
+web portal, the theme views — is a projection that can be deleted and rebuilt
+from those ledgers at any time.
 
-1. **Install** (macOS arm64/x64, Linux x64):
+## From OVP to OVP2
 
-   ```sh
-   curl --proto '=https' --tlsv1.2 -LsSf \
-     https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
-   ```
+OVP2 is a ground-up Rust rewrite of the Python OVP (six-stage pipeline,
+`knowledge.db`, Evergreen/MOC notes, `ovp`/`ovp-autopilot`/`ovp-ui`). The
+rewrite changed the direction, not just the language: eager concept-map and
+canonical-ontology extraction failed validation on real data, and the system
+was rebuilt around a grounded reader trunk and a gated crystal truth layer.
+The full decision story, a command mapping, and migration notes for existing
+vaults are in [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md).
 
-   or, once the tap is published: `brew install fakechris/ovp2/ovp2`
+## Install
 
-2. **Check it runs**: `ovp2 --version`
+Prebuilt binaries for macOS (arm64/x64) and Linux (x64); no Rust toolchain
+required. Current release: **v0.23.0**. Both channels are verified end-to-end.
 
-3. **Configure the LLM** for live runs — put these in your shell profile or a
-   private `.env` you `source` (NEVER in the repo or the vault); conventions in
-   `docs/operator-runbook.md` §0:
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+```
+
+or via Homebrew:
+
+```sh
+brew install fakechris/ovp2/ovp2
+```
+
+Check the install with `ovp2 --version`. Details, the release process, and a
+proxy note for `brew` are in [`docs/install.md`](docs/install.md).
+
+## Quick start
+
+1. **Configure the LLM** for live runs — in your shell profile or a private
+   `.env` you `source` (never in the repo or the vault):
 
    ```sh
    export ANTHROPIC_API_KEY=sk-ant-...
-   export OVP_LLM_TIMEOUT_SECS=480   # required for live runs; default 180s mis-kills slow responses
+   export OVP_LLM_TIMEOUT_SECS=480   # required for live runs; the 180s default mis-kills slow responses
    # optional: ANTHROPIC_BASE_URL, OVP_LLM_MODEL, OVP_LLM_MAX_TOKENS, OVP_LLM_NO_PROXY=1
    ```
 
-4. **First daily run** against your vault (use `--dry-run` first to see the
-   plan without writing anything):
+2. **Run the daily loop** against your vault (`--dry-run` first shows the plan
+   without writing anything):
 
    ```sh
-   ovp2 daily --vault-root ~/Documents/ovp-vault --client live
+   ovp2 daily --vault-root ~/Documents/my-vault --client live
    ```
 
-5. **Open the console**:
+   One run sweeps captures into a normalized queue (URL + content dedup),
+   reads each new source through the grounded reader trunk, writes reader
+   packs into the vault, records every attempt in append-only ledgers, and
+   rebuilds the read model.
+
+3. **Open the portal**:
 
    ```sh
-   ovp2 serve --vault-root ~/Documents/ovp-vault
+   ovp2 serve --vault-root ~/Documents/my-vault
    ```
 
-   then open <http://127.0.0.1:3141> in your browser.
+   then open the printed URL (default `http://127.0.0.1:3141`).
 
-Prebuilt binaries ship with the live capabilities (`anthropic`,
-`pinboard-live`, `web-fetch-live`, `github-live`) compiled in; runtime behavior
-stays opt-in via flags/env. Releases are cut by pushing a `vX.Y.Z` tag —
-`.github/workflows/release.yml` (cargo-dist) builds and uploads the artifacts.
-Building from source (`cargo build --release -p ovp-cli --features anthropic`)
-remains a dev-only path.
+4. **Optional — Pinboard capture**:
 
-## What works today
+   ```sh
+   ovp2 pinboard-sync --vault-root ~/Documents/my-vault --live --max 200
+   ```
 
-21 crates; **626 tests pass (1 ignored)** + a binary-level end-to-end dogfood. The blessed product path (M30/M31):
+   Needs `PINBOARD_TOKEN` (`username:TOKEN`; never stored, never logged). The
+   Pinboard API returns your entire bookmark history, so a first sync is
+   guarded: without `--since`/`--max`, a run that would create more than 500
+   new notes aborts before writing anything. `--max 200` takes the newest 200
+   and lets older bookmarks drain on later runs.
 
-```
-ovp2 daily --vault-root ~/Documents/ovp-vault --client live   # the whole daily cycle
-ovp2 intake | pinboard-sync | index | find | console          # the pieces, separately
-ovp2 serve --vault-root ~/Documents/ovp-vault                 # web console + API (localhost:3141)
-ovp2 mcp --vault-root ~/Documents/ovp-vault                   # MCP stdio server for editors
-```
+## The portal
 
-Capture dirs (`Clippings/`, `50-Inbox/00-Capture`, `50-Inbox/02-Pinboard`) are swept into a normalized raw queue with URL/content dedup; new sources run through the grounded reader trunk into vault-local packs (`40-Resources/Reader/`); succeeded sources move to `03-Processed/`; every attempt lands in append-only ledgers with an OVP_RULES write log; a JSON read model and a bilingual console are rebuilt from product state. Failures retry; 3 failures block a source pending review. Every CLI verb is labeled PRODUCT / DIAGNOSTIC / DEMOTED in `--help`. (The validated current path is the grounded **reader trunk** — M14a–M17, `read-source` command + the `ovp-domain::reader` module; the canonical / MOC / concept-promotion machinery described in the rest of this section is the earlier M7–M13 substrate — still built and tested, but demoted off the main path per the status note above.) Three acceptance fixtures (`article_clean`, `article_mixed_lang`, `paper_arxiv`) run through the pipeline offline against committed cassettes; the resulting `WritePlan` is applied to a tempdir vault and the round-trip fields match. Pipelines are **assembled** from a declarative manifest (node id + kind + config + edges) plus app `AppWiring` — the CLI and tests no longer hand-wire `register_*`. A single **`run-cycle`** command drives the whole thing — inbox file → vault note + evergreen + canonical + MOC + knowledge index — with a run report and idempotent re-runs. Read-only **`query`** and **`lint`** commands read the result back (list / get / search / backlinks / stats) and health-check it (missing notes, stale index/MOC, broken wikilinks, orphan concepts). A read-only **`rag`** command retrieves over that read model — deterministic, explainable lexical scoring → ranking → a bounded context — and an **`auto-run`** sweep discovers an inbox, runs the `run-cycle` per file, then lints the result, all offline. A unified pipeline routes a mixed inbox (articles + papers) to the right interpreter by source kind. Concept promotion is driven by a loadable `ConceptRegistry`, not hardcoded constants. New evergreen concepts mint through a single hardened `CanonicalSlug` rule, land in a canonical store, and rebuild derived MOC + knowledge-index artifacts. The live Anthropic client + cassette capture exist behind the `anthropic` feature (`docs/live-capture.md`); the default build and CI are offline and need no API key.
+`ovp2 serve` hosts a single-page portal over the vault's read model, with six
+destinations:
 
-```
-ovp2 interpret-article \
-  --input fixtures/article_clean/input.md \
-  --out .run/article \
-  --cache-dir crates/ovp-domain/tests/cassettes
-
-ovp2 apply-plan \
-  --plan .run/article/plans/demo-article.json \
-  --vault-root .run/vault
-```
-
-→ `.run/vault/20-Areas/AI-Research/Topics/<YYYY-MM>/<YYYY-MM-DD>_<title>_深度解读.md` lands on disk.
-
-## Crates
-
-| Crate | Role |
+| Page | Answers |
 |---|---|
-| `ovp-core` | Sync kernel: `Record<B>`, `Filter` traits, `GraphRunner`, `WritePlan`, `Event`, `PlanApplier` trait. Knows nothing about Obsidian / LLM / HTTP. |
-| `ovp-domain` | Domain types + transforms: `DomainBody` (`Source`/`Prompt`/`Model`/`Interpreted`/`InterpretedPaper`), `SourceDoc` (typed `SourceKind`), `PaperDoc`, `VaultLayout`, `ConceptRegistry`, `RouteBySourceKind`, article + paper builders/parsers/sinks, `MarkdownInboxSource` / `InboxScanSource`. |
-| `ovp-llm` | `ModelClient` trait + Fixture / Cached / NeverCalls impls (per-request cassette namespacing). `AnthropicBlockingClient` behind `--features anthropic`. |
-| `ovp-stores` | `PlanApplier` impls: `VaultFsPlanApplier` (vault files), `CanonicalFsStoreApplier` (canonical records), `CompositePlanApplier` (routes ops by kind, halts on first failure); `walk_markdown` for backlink scans. |
-| `ovp-app` | Assembly layer (L2): `GraphAssembler` builds a `GraphRunner` from a `DomainPipelineSpec` (node id + kind + config + edges) + `AppWiring`, via a compiled-in `NodeRegistry`. DirectShow-like, not a plugin system. |
-| `ovp-run` | Operational workflow layer (L4): `RunCycle` drives one full cycle — assemble → run → apply → rebuild MOC + knowledge index → report — idempotent on re-run. |
-| `ovp-query` | Read layer (L5): a read-only `KnowledgeView` over the canonical store (authority) + knowledge index (backlinks) — list / get / search / backlinks / stats. No mutation. |
-| `ovp-lint` | Health layer (L5): read-only WIGS-style checks over canonical + vault + index (missing notes, stale index/MOC, broken wikilinks, orphan canonical). Reports findings with a severity gate; never fixes. |
-| `ovp-rag` | RAG read path (L6): read-only `RagCorpus` → `Retriever` (deterministic, explainable scoring) → `Ranker` → `ContextBuilder` (bounded context) + offline `Eval`, all over `ovp-query::KnowledgeView`. Never mutates. |
-| `ovp-auto` | Automation (L6): `AutoRun::sweep` — discover an inbox, *call* `ovp-run::RunCycle` per input, then `ovp-lint::Lint`, and report. Duplicates no workflow logic; the caller supplies the per-input wiring. |
-| `ovp-intake` | **(M31)** Capture boundary: clippings/pinboard sweep → normalized `01-Raw`, URL+sha256 dedup, non-destructive lifecycle moves, append-only intake/pinboard ledgers, `RunLock`, OVP_RULES write-log primitives. Pinboard live HTTP behind `pinboard-live` feature. |
-| `ovp-daily` | **(M30/M31)** The daily loop: plan (hash dedup + 3-failure retry cap) → reader trunk per source → packs → lifecycle move (after the success record is durable) → per-run report. |
-| `ovp-index` | **(M31)** Read model: deterministic JSON projection over ledgers + packs + crystal store + reports (`.ovp/index/index.json`); full rebuild = migration story; queried by `find`. No SQLite/embeddings by decision. |
-| `ovp-console` | **(M31)** Product console: deterministic bilingual (EN+中文) HTML over the read model (`.ovp/console/index.html`) — attention feed, runs, sources, packs, crystal claims, provenance links. Includes ops/audit/candidates dashboards. |
-| `ovp-enrich` | **(L3)** Enrichment crate: web-fetch, GitHub metadata, image download — all behind optional feature gates (`web-fetch-live`, `github-live`, `image-download-live`). |
-| `ovp-memory` | **(L3)** Ephemeral reuse surfaces: `digest`, `ask`, `working-memory`. Not durable truth; budget-constrained LLM calls over the read model. |
-| `ovp-server` | **(L3)** Synchronous HTTP server (`tiny_http`): hosts `.ovp/console/` + JSON API (`/api/find`, `/api/search`, `/api/model`, `/api/refresh`). Localhost-only by default. |
-| `ovp-mcp` | **(L3+)** MCP stdio server: synchronous JSON-RPC over stdin/stdout, exposing OVP tools (find/search/status/doctor) and resources (ovp://index, ovp://working-memory) to MCP-compatible editors. |
-| `ovp-eval` | External E2E comparator (M8): `CompareRun::execute` runs one input through BOTH the ovp2 pipeline (reusing the M7 review harness) and an **external** Nowledge Mem HTTP service (`NowledgeClient` adapter, `reqwest::blocking`), normalizes both into a shared `NormalizedSubject`, and writes a deterministic comparison pack across five explicitly-lexical dimensions (concept overlap, claim diff, grounding, structure, retrieval). Evaluation/orchestration layer only — Nowledge Mem is a comparator, NOT legacy OVP and NOT a trunk dependency (gate-enforced); the adapter fails loud and the pack is partial when a side fails. Real-LLM + the network call are explicit, manual operations (offline tests use a fake client + replay cassettes; the live test is `#[ignore]`d). |
-| `ovp-review` | E2E review harness (M7): `ReviewRun::execute` *calls* the L4 cycle on one input, reads it back via L5 (`ovp-query` / `ovp-lint`) + L6 (`ovp-rag`), and writes a deterministic, human-inspectable **review pack** (processor chain, run report, apply summary, files written, canonical summary, lint, query stats, RAG preview, and an `--expected-dir` comparison that defers to `ovp-domain`'s contract engine). It is a quality *gate*, not just an observability dump: the **review** verdict (and the CLI exit code) is `cycle_succeeded() && contract MUST-clean`, so a clean run whose output violates its frozen contract still fails. Read / orchestrate only — the only vault/canonical content writes go through `RunCycle`; the harness writes just the pack (and the empty store-root dirs). Reimplements no pipeline logic. |
-| `ovp-cli` | Thin arg-parsing layer: builds `ModelClient` + `ConceptRegistry` + `AppWiring`, delegates assembly to `ovp-app`, the cycle to `ovp-run`, reads to `ovp-query` / `ovp-lint` / `ovp-rag`, the sweep to `ovp-auto`, the review pack to `ovp-review`. PRODUCT subcommands: `daily`, `intake`, `pinboard-sync`, `index`, `find`, `console`, `read-source`, `crystal-lint`/`crystal-write`/`crystal-review`; demoted/diagnostic: `run-cycle`, `query`, `lint`, `rag`, `auto-run`, `review-run`, `compare-run`, `interpret-article`, `apply-plan`, `graph`, `extract-units`, `extract-referents`, `copy-probe`. |
+| Today | What came in, what was read, what crystallized, what needs attention |
+| Library | Every captured source by collection, month, and status, with a three-layer source detail view (memory / original / claims) |
+| Search | One box over sources, cards, units, claims, and themes (`⌘K` anywhere) |
+| Knowledge | Themes and Claims, durable/caveated status, evidence drill-down, scoped graph views |
+| Ask | Cited Q&A over the vault's evidence; citations are verified against the index |
+| System | Runs, blocked sources, `doctor` results, settings, concept reference |
 
-## Docs
+Two equal-weight themes — light "Atelier" (warm parchment + terracotta) and
+dark "Vault" (near-black + deep blue + cyan) — and an EN-default interface
+with a full 简体中文 translation, both switchable in the UI.
 
-- `docs/plan-l2-to-l3.md` — **Level 2→Level 3 migration plan (v2.1, approved execution baseline)** — the 6-phase plan replacing the Python pipeline.
-- `docs/architecture.md` — current authoritative architecture + system primitives + crate responsibilities + deprecated vocabulary.
-- `docs/operator-runbook.md` — **how to run the Rust daily workflow on the real vault** (M31).
-- `docs/product-state-layout.md` — where product state lives, what is authoritative vs derived (M31).
-- `docs/stage-m31-mainline-capability-closure.md` — the M31 epic: capture → daily workflow → index → console.
-- `docs/mainline-return-matrix.md` — legacy-vs-Rust capability matrix (M29, updated M31: P0 set closed).
-- `docs/legacy-alignment.md` — living gap matrix between this rewrite and the legacy Python OVP. Read before scoping any new stage.
-- `docs/live-capture.md` — how to make live Anthropic calls + capture cassettes (`--features anthropic`, `--client live`).
-- `docs/invariants.md` — the 12 invariants; CI-gated where possible.
-- `docs/stage-graph-assembly.md` — the Graph Assembly Layer (`ovp-app`): manifest shape, primitives, validation, acceptance.
-- `docs/stage-operational-workflow.md` — the L4 `run-cycle` (`ovp-run`): flow, idempotence, fail-closed semantics, dry-run.
-- `docs/stage-read-health.md` — the L5 read/health layer (`ovp-query` + `ovp-lint`): `KnowledgeView`, queries, planned lint checks.
-- `docs/stage-rag-automation.md` — the L6 RAG read path (`ovp-rag`) + automation sweep (`ovp-auto`): crate boundaries, public nouns, data flow, acceptance tests, non-goals.
-- `docs/stage-m13.2-v2-concept-map.md` — M13.2: the additive v2 concept-map path (synthetic-green; foundation for real-model work).
-- `docs/stage-m13.3-v2-live-loop.md` — M13.3: real `MiniMax-M2.7-highspeed` run executed; **0/3 bench on real data, all 3 cases complete end-to-end**. Three framework fixes (reqwest timeout, `OVP_LLM_TIMEOUT_SECS`, parser null-tolerance) landed; the remaining gap is prompt-quality, scoped to M13.4.
-- `docs/stage-m13.4-prompt-iteration.md` — M13.4: the prompt-first iteration plan (slug drift, umbrella over-mint, abstract definitions); no production code change expected.
-- `docs/stage-c.md`, `docs/stage-d-plan-applier.md` — historical stage docs.
-- `docs/calibration-r1.md`, `docs/calibration-r2.md` — historical calibration verdicts.
-- `fixtures/` — frozen contracts captured from the legacy system.
+## Core commands
 
-## Landed
+Every CLI verb is labeled PRODUCT / DIAGNOSTIC / DEMOTED in `--help`. The
+product surface:
 
-The earlier L0–L6 rewrite is in-tree and built/tested (it is NOT a full-functionality equivalent of legacy Python — see the status note at the top): C9/C10 (live Anthropic + capture), L0/L1 (intake + `VaultLayout`), v1.2 (paper routing), L3 (`ConceptRegistry`), EvergreenConceptWriter (mints new evergreens + `CanonicalUpsert`), the canonical store (`CanonicalFsStoreApplier` + typed `CanonicalConcept`), the derived rebuilds (`MocBuilder` + `KnowledgeIndexBuilder`), the **Graph Assembly Layer** (L2, `ovp-app`), the **Operational Workflow Layer** (L4, `ovp-run` + `run-cycle`), the **Read / Health Layer** (L5, `ovp-query` + `ovp-lint`), and the **RAG / Automation Layer** (L6, `ovp-rag` + `ovp-auto`). `TxnFsApplier` was assessed and deferred — every op is idempotent, so multi-file atomicity isn't required.
+| Command | Does |
+|---|---|
+| `ovp2 daily` | The blessed daily loop: capture sweep → grounded reader trunk per new source → lifecycle → ledgers + report → read model + console refresh |
+| `ovp2 serve` | Start the localhost portal server: `.ovp/console/` pages + JSON API (`/api/find`, `/api/search`, `/api/ask`, …) |
+| `ovp2 ask` | Retrieval-augmented Q&A over product state; prints a cited answer with deterministic citation verification |
+| `ovp2 pinboard-sync` | Materialize Pinboard bookmarks as inbox notes, URL-deduped, with the first-sync flood guard |
+| `ovp2 crystal-synth` | Turnkey Crystal synthesis: reader packs → cross-source claims → grounded filter → strength gate → durable write |
+| `ovp2 crystal-review-session` | Prepare a bounded human review session over caveated claims (sheet + decisions template) |
+| `ovp2 index` | Rebuild the read model (`.ovp/index/index.json`); always a full deterministic rebuild |
+| `ovp2 find` | Query the read model: sources, packs, claims, runs, cards, units — by term, kind, status, date |
+| `ovp2 doctor` | Health checks over vault state; `--fix` applies safe repairs, never deletes |
+| `ovp2 digest` | Daily digest (`.ovp/digests/<date>.md`); ephemeral reuse surface, never enters a ledger |
+| `ovp2 project` | Projection Lanes: view claims by lane, or write durable claims as vault notes (`--write` / `--rebuild`) |
+| `ovp2 mcp` | MCP stdio server exposing find/search/status/doctor tools to MCP-compatible editors |
 
-**M14–M17 pivot (current direction).** The L0–L6 work above centred on *eager* concept/canonical extraction; the M14–M17 line found that root was wrong (0/3 real-green across ~8 milestones), and pivoted to the **grounded reader trunk**: `Source → Grounded Units (M14a) → Critic Repair (M14a.8) → Reader Cards (card_synth/v3, M16.1) → Reader Pack (M17, the `read-source` command)`. The grounded units are the *truth layer* (verbatim-quote-anchored, `accepted_without_quote = 0`); reader cards are the *view layer* (collapsible HTML/MD with provenance intact). The Referent / Resolver / canonical-concept ontology is **demoted** — only a narrow, entity-density-gated object-index helper is contemplated, not a main-path stage. Validated against KnowledgeMEM on held-out articles (M15/M16.1/M17): the truth layer wins faithfulness + coverage + provenance; the reader pack is human-usable with collapsed-but-intact evidence. See `docs/stage-m15-results.md`, `docs/stage-m16.1-card-view-v3.md`, `docs/stage-m17-grounded-reader-trunk.md`.
+## Privacy & trust
 
-## Next
+OVP2 is local-first. Everything it knows lives as plain files inside your
+vault (`.ovp/` ledgers and projections plus the notes themselves); there is no
+cloud component, no account, and **no telemetry**. The only things that ever
+leave your machine, each under your explicit configuration:
 
-Work is placed against the target layers (`docs/architecture.md` "Target architecture layers"). L0–L6 are landed. Genuine future work (explicit non-goals of the L6 v1):
+- **LLM calls** — during `daily`, `ask`, and `crystal-synth` (and the portal's
+  Ask page), article/bookmark text is sent to the LLM provider **you**
+  configure via environment keys (`ANTHROPIC_API_KEY`, optional
+  `ANTHROPIC_BASE_URL`). No key, no calls: the default run is offline/replay.
+- **Pinboard sync** — `pinboard-sync --live` talks to pinboard.in with your
+  `PINBOARD_TOKEN` (never stored, never logged).
+- **Web/GitHub enrichment** — enrichment fetches the URLs you bookmarked
+  (plus GitHub API metadata for repo links) to capture their content.
+- **`compare-run` (diagnostic, manual)** — the external comparator sends the
+  source path/URL and queries to the Nowledge Mem HTTP service you point it
+  at. It never runs as part of `daily`; skip the command and nothing is sent.
 
-1. **Embedding / semantic ranker** for `ovp-rag` — a future `RetrievalWeights`-shaped extension; v1 is deterministic lexical scoring (no model, no network).
-2. **A `--watch` polling daemon** wrapping `AutoRun::sweep` — v1 automation is one-shot and sync (no async runtime).
-3. **Frontmatter-stripped RAG snippets** — v1 snippets are the first chars of the raw note body.
+Nothing else is transmitted.
 
-See `docs/stage-rag-automation.md` (L6 non-goals), `docs/architecture.md` "What comes next", and `docs/legacy-alignment.md` for rationale.
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md) | The OVP → OVP2 story: what changed, why, and how to migrate ([中文](docs/ovp-to-ovp2.zh-CN.md)) |
+| [`docs/install.md`](docs/install.md) | Install channels and the maintainer release process |
+| [`docs/operator-runbook.md`](docs/operator-runbook.md) | Day-to-day operation on a real vault: daily loop, failures, review sessions, recovery |
+| [`docs/architecture.md`](docs/architecture.md) | Crate map, dataflow, invariants, portal and evolution kernel |
+| [`docs/product-state-layout.md`](docs/product-state-layout.md) | Where product state lives; authoritative vs derived |
+| [`docs/invariants.md`](docs/invariants.md) | The architecture invariants, CI-gated where possible |
+
+## Status
+
+The workspace is 22 Rust crates; 780 tests pass (1 ignored) plus binary-level
+end-to-end coverage. The daily loop, portal, Crystal synthesis, and review
+flow run on a real vault today. Release v0.23.0 continues the repository's
+release lineage (v0.22.0 was the last Python-era release); v2.0.0 is reserved
+for the merge-to-main / Python-retirement milestone. In flight: real-vault
+dogfooding and semantic theme projection. Historical stage records live in
+`docs/stage-*.md`; release history is in [`CHANGELOG.md`](CHANGELOG.md).
+
+## License
+
+Dual-licensed under either of
+
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in this work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional
+terms or conditions.
+
+Exception: the vendored IBM Plex web fonts
+(`console-ui/src/design/fonts/`) remain under the SIL Open Font License 1.1 —
+see [`console-ui/src/design/fonts/LICENSE.txt`](console-ui/src/design/fonts/LICENSE.txt).

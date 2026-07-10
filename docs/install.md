@@ -1,27 +1,99 @@
-# Install & Release — the prebuilt `ovp2` story (M32 Stage P.1)
+# Install & Release — the prebuilt `ovp2` story
 
 End users have **no Rust toolchain**; `cargo install` from source is rejected
 as an install story. Distribution is prebuilt binaries via
 [cargo-dist](https://axodotdev.github.io/cargo-dist) (`dist`, pinned to
-**0.32.0** in `dist-workspace.toml` and in the generated workflow), with two
-channels:
+**0.32.0** in `dist-workspace.toml` and in the generated workflow).
 
-1. **curl-shell installer** — `ovp-cli-installer.sh`, attached to each GitHub
-   Release; installs the `ovp2` binary into `$CARGO_HOME/bin` (falls back to
-   `~/.cargo/bin`), no toolchain required.
-2. **Homebrew** — a generated formula `ovp2.rb` for the tap
-   `fakechris/homebrew-ovp2` (`brew install fakechris/ovp2/ovp2`). Formula
-   **generation** is automatic; **publishing to the tap is a manual operator
-   step** (below) — there is deliberately no `publish-jobs = ["homebrew"]`.
+Current release: **v0.23.0** (continuing the repo's release lineage — v0.22.0
+was the last Python-era release; v2.0.0 is reserved for the merge-to-main /
+Python-retirement milestone). Both channels are published and verified
+end-to-end.
 
-An npm wrapper (`npx ovp2` style, binary-download shim) is a possible future
-third channel; skipped for now.
+## Channels
+
+1. **curl-shell installer** — installs the `ovp2` binary into
+   `$CARGO_HOME/bin` (falls back to `~/.cargo/bin`), no toolchain required:
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -LsSf \
+     https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+   ```
+
+2. **Homebrew** — the public tap `fakechris/homebrew-ovp2` exists and carries
+   the generated formula:
+
+   ```sh
+   brew install fakechris/ovp2/ovp2
+   ```
+
+   **Proxy note:** `brew tap` clones the tap repo with git; behind an HTTP(S)
+   proxy that git cannot use, the clone can fail. Clear the proxy for the
+   install (`env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY brew install
+   fakechris/ovp2/ovp2`) or configure git's proxy explicitly.
+
+Verify either channel with `ovp2 --version` (→ `ovp2 0.23.0`).
+
+Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`x86_64-unknown-linux-gnu`. An npm wrapper (`npx ovp2` style, binary-download
+shim) is a possible future third channel; skipped for now.
+
+Prebuilt binaries are built with `features = ["anthropic", "pinboard-live",
+"web-fetch-live", "github-live"]`, so `--client live`, `--pinboard-live`, and
+live enrichment work out of the box. Runtime behavior stays opt-in (flags +
+env); a plain run is still offline/replay.
+
+## Installing an older version (downgrade / rollback)
+
+This is the rollback story for major cutovers — e.g. if v2.0.0 (the
+Python-retirement release) misbehaves on your vault, you can pin back to the
+last release that worked and file a bug. Vault state is safe either way:
+ledgers are append-only and projections rebuild, so downgrading the binary
+does not corrupt anything.
+
+1. **curl installer, versioned URL (recommended).** Every release keeps its
+   installer attached; swap `latest/download` for a version tag:
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -LsSf \
+     https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v0.23.0/ovp-cli-installer.sh | sh
+   ```
+
+   The versioned installer installs exactly that release (it overwrites
+   whatever `ovp2` is in `$CARGO_HOME/bin`). Verify with `ovp2 --version`.
+
+2. **Homebrew — pinning realities.** The tap formula
+   (`fakechris/ovp2/ovp2`) always tracks the **latest** release; there are no
+   versioned formulae (`ovp2@0.23`), so `brew install` cannot directly ask
+   for an old version. What works:
+
+   - `brew pin ovp2` — *before* the bad release lands, this stops `brew
+     upgrade` from moving you. It does not install anything older.
+   - **Install from a tap commit** — the tap's git history has every formula
+     version. Check the tap clone out at the commit you want and install from
+     the local formula file:
+
+     ```sh
+     cd "$(brew --repository fakechris/ovp2)"
+     git log --oneline Formula/ovp2.rb   # find the commit for the version you want
+     git checkout <commit> -- Formula/ovp2.rb
+     brew reinstall --formula Formula/ovp2.rb
+     git checkout HEAD -- Formula/ovp2.rb   # restore the tap afterwards
+     ```
+
+   - **Direct tarball fallback** — skip brew and grab the release artifact
+     (`ovp-cli-<target>.tar.xz`) from the versioned GitHub release page,
+     unpack, and put `ovp2` on your `PATH`. Equivalent to what the installer
+     does, minus the receipt.
+
+   If that dance is more than you need, just use the versioned curl installer
+   (option 1) — it wins on simplicity and is the supported rollback path.
 
 ## What is configured where
 
 | File | Role |
 |---|---|
-| `dist-workspace.toml` | dist config: targets (`aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`), installers (`shell`, `homebrew`), `formula = "ovp2"`, tap, `pr-run-mode = "skip"`, live features compiled into release binaries |
+| `dist-workspace.toml` | dist config: targets, installers (`shell`, `homebrew`), `formula = "ovp2"`, tap, `pr-run-mode = "skip"`, live features compiled into release binaries |
 | `.github/workflows/release.yml` | **generated by `dist generate` — do not hand-edit**; tag-triggered only (no PR/push CI, per repo policy) |
 | `Cargo.toml` (workspace) | `[profile.dist]` + `repository`/`homepage` under `[workspace.package]` (dist needs the repo URL) |
 | `crates/ovp-cli/Cargo.toml` | inherits `repository`/`homepage`; owns the `ovp2` `[[bin]]` |
@@ -31,59 +103,35 @@ Artifacts are named after the cargo package (`ovp-cli-<target>.tar.xz`,
 `ovp2`. Renaming the package was rejected: `ovp-cli` is referenced by
 `scripts/check_architecture.sh` and other crates.
 
-Prebuilt binaries are built with `features = ["anthropic", "pinboard-live",
-"web-fetch-live", "github-live"]` so `--client live`, `--pinboard-live` and
-live enrich work out of the box. Runtime behavior stays opt-in (flags + env);
-a plain run is still offline/replay.
-
-## Operator release process
+## Operator release process (maintainers)
 
 1. Bump `version` under `[workspace.package]` in `Cargo.toml` (all crates
    version in lockstep); commit via the normal feature-branch → PR flow.
 2. Tag the release commit on `codex/rust-migration` (or `main` post-M32):
-   `git tag v0.2.0 && git push origin v0.2.0`.
+   `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. GitHub Actions (`release.yml`) builds all three targets, the shell
    installer, the `ovp2.rb` formula and checksums, then creates the GitHub
    Release with everything attached. The workflow only triggers on version
    tags — normal pushes and PRs are untouched.
-4. **Manual: publish the Homebrew formula.** Download `ovp2.rb` from the
-   release and push it to `github.com/fakechris/homebrew-ovp2` as
-   `Formula/ovp2.rb`. (Create that repo once; it must be **public** for
-   `brew tap`/`brew install` to work.)
-5. Smoke-test on a machine without Rust: run the curl installer line from the
-   README, then `ovp2 --version`.
+4. **Manual: update the Homebrew tap.** Download `ovp2.rb` from the release
+   and push it to `github.com/fakechris/homebrew-ovp2` as `Formula/ovp2.rb`.
+   (The tap is public; formula generation is automatic, publishing is a
+   deliberate manual step — there is no `publish-jobs = ["homebrew"]`.)
+5. Smoke-test on a machine without Rust: run the curl installer line above,
+   then `ovp2 --version`.
 
-## Release-channel prerequisites
-
-`fakechris/obsidian_vault_pipeline` is **public**, so both channels work
-anonymously once artifacts exist:
-
-- The README's `curl ... | sh` line hits
-  `releases/latest/download/ovp-cli-installer.sh` — this 404s only until the
-  first `vX.Y.Z` tag is pushed and the release workflow has published
-  artifacts. The installer also honors `OVP_CLI_DOWNLOAD_URL` /
-  `OVP_CLI_INSTALLER_GITHUB_BASE_URL` overrides for testing.
-- `brew install fakechris/ovp2/ovp2` additionally requires the tap repo
-  `github.com/fakechris/homebrew-ovp2` to exist and be public, with the
-  generated `ovp2.rb` pushed to it (manual step, see release process above).
-- Do not commit binaries to the repo or re-host artifacts ad hoc.
-
-## Local verification (what was actually run)
-
-Verified 2026-07-09 on macOS aarch64 with dist 0.32.0 (evidence in
-`.run/m32-p1/`, gitignored):
+The installer honors `OVP_CLI_DOWNLOAD_URL` /
+`OVP_CLI_INSTALLER_GITHUB_BASE_URL` overrides for local testing:
 
 ```sh
 dist build          # current platform; builds target/distrib/* incl. installer + ovp2.rb
 OVP_CLI_DOWNLOAD_URL="file://$PWD/target/distrib" \
-CARGO_DIST_FORCE_INSTALL_DIR="$PWD/.run/m32-p1/prefix" \
+CARGO_DIST_FORCE_INSTALL_DIR="$PWD/.run/dist-test/prefix" \
   sh target/distrib/ovp-cli-installer.sh
-.run/m32-p1/prefix/bin/ovp2 --version   # → ovp2 0.1.0
+.run/dist-test/prefix/bin/ovp2 --version
 ```
 
-The installed binary was probed with `--client live` and no key: it fails with
-`ANTHROPIC_API_KEY is not set` (not "rebuild with `--features anthropic`"),
-proving the live transport is compiled into the prebuilt artifact.
+Do not commit binaries to the repo or re-host artifacts ad hoc.
 
 Maintainers: `dist` itself installs via
 `curl -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh`
