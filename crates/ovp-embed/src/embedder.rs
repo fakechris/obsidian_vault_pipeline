@@ -20,10 +20,10 @@ use crate::{EMBED_DIM, EMBED_MAX_TOKENS, EMBED_MODEL_ID, EMBED_TEXT_PREFIX};
 /// Where model files live. `$FASTEMBED_CACHE_DIR` wins; otherwise
 /// `~/.cache/ovp/models`; otherwise (no HOME) a local `.fastembed_cache`.
 pub fn model_cache_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FASTEMBED_CACHE_DIR") {
-        if !dir.trim().is_empty() {
-            return PathBuf::from(dir);
-        }
+    if let Ok(dir) = std::env::var("FASTEMBED_CACHE_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir);
     }
     match std::env::var("HOME") {
         Ok(home) if !home.trim().is_empty() => {

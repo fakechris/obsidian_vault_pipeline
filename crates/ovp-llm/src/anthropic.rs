@@ -82,11 +82,10 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
         .ok_or_else(|| CallError::Decode { detail: "missing `content` array".into() })?;
     let mut text = String::new();
     for block in content {
-        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+        if block.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(t) = block.get("text").and_then(|t| t.as_str()) {
                 text.push_str(t);
             }
-        }
     }
     if text.is_empty() {
         // Diagnose the common reasoning-model case: the provider returned only

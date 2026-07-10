@@ -117,11 +117,10 @@ pub fn validate_cards(raw: &[RawCard], accepted_units: &[Unit]) -> (Vec<Card>, C
     for rc in raw {
         let mut cites: Vec<String> = Vec::new();
         for cid in &rc.cited_unit_ids {
-            if let Some(u) = resolve_unit(accepted_units, cid) {
-                if !cites.contains(&u.id) {
+            if let Some(u) = resolve_unit(accepted_units, cid)
+                && !cites.contains(&u.id) {
                     cites.push(u.id.clone());
                 }
-            }
         }
         if cites.is_empty() || rc.content.trim().is_empty() {
             dropped += 1;

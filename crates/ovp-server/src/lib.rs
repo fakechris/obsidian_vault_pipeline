@@ -951,11 +951,10 @@ fn handle_ask(
     if !is_json {
         return json_response(415, r#"{"error":"content-type must be application/json"}"#);
     }
-    if let Some(origin) = headers.origin.as_deref() {
-        if !is_loopback_origin(origin) {
+    if let Some(origin) = headers.origin.as_deref()
+        && !is_loopback_origin(origin) {
             return json_response(403, r#"{"error":"cross-origin ask rejected"}"#);
         }
-    }
     if body.len() > MAX_POST_BODY_BYTES {
         return json_response(400, r#"{"error":"request body too large"}"#);
     }
@@ -1316,14 +1315,13 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
         };
     }
 
-    if is_client_route(relative) {
-        if let Some(body) = read_app_file(state, "index.html") {
+    if is_client_route(relative)
+        && let Some(body) = read_app_file(state, "index.html") {
             return Resolved::File {
                 body,
                 content_type: "text/html; charset=utf-8",
             };
         }
-    }
 
     Resolved::NotFound
 }

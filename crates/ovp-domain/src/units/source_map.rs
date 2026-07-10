@@ -201,11 +201,10 @@ fn strip_leading_marker(s: &str) -> &str {
     }
     // ordered list "12. "
     let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if !digits.is_empty() {
-        if let Some(r) = t[digits.len()..].strip_prefix(". ") {
+    if !digits.is_empty()
+        && let Some(r) = t[digits.len()..].strip_prefix(". ") {
             return r.trim_start();
         }
-    }
     t
 }
 
@@ -222,12 +221,12 @@ pub(crate) fn strip_markdown_links(s: &str) -> String {
             i += 1;
             continue;
         }
-        if bytes[i] == b'[' {
-            if let Some(close) = s[i + 1..].find(']') {
+        if bytes[i] == b'['
+            && let Some(close) = s[i + 1..].find(']') {
                 let text_end = i + 1 + close;
                 let after = text_end + 1;
-                if bytes.get(after) == Some(&b'(') {
-                    if let Some(paren) = s[after..].find(')') {
+                if bytes.get(after) == Some(&b'(')
+                    && let Some(paren) = s[after..].find(')') {
                         let anchor = &s[i + 1..text_end];
                         let url = &s[after + 1..after + paren];
                         if !is_citation_link(anchor, url) {
@@ -236,9 +235,7 @@ pub(crate) fn strip_markdown_links(s: &str) -> String {
                         i = after + paren + 1;
                         continue;
                     }
-                }
             }
-        }
         let ch = s[i..].chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();

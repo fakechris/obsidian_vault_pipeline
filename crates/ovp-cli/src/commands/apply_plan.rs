@@ -34,13 +34,12 @@ pub fn run(args: ApplyPlanArgs) -> Result<(), CliError> {
     if let Some(path) = &args.report_path {
         let json = serde_json::to_string_pretty(&report)
             .map_err(|e| CliError::Io(format!("serializing report: {e}")))?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     CliError::Io(format!("creating {}: {e}", parent.display()))
                 })?;
             }
-        }
         std::fs::write(path, json)
             .map_err(|e| CliError::Io(format!("writing report {}: {e}", path.display())))?;
         println!();

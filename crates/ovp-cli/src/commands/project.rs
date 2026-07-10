@@ -317,13 +317,12 @@ fn remove_managed_files(dir: &std::path::Path) -> Result<(), CliError> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if content.contains(MANAGED_MARKER) {
+        if let Ok(content) = std::fs::read_to_string(&path)
+            && content.contains(MANAGED_MARKER) {
                 std::fs::remove_file(&path).map_err(|e| {
                     CliError::Io(format!("removing managed file {}: {e}", path.display()))
                 })?;
             }
-        }
     }
     Ok(())
 }

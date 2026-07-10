@@ -188,11 +188,10 @@ pub fn parse_reply_value(text: &str) -> Result<(serde_json::Value, Option<JsonDe
         Err(first_err) => {
             // One safe local fix: re-escape stray backslashes, then retry.
             let repaired = escape_stray_backslashes(candidate);
-            if repaired != candidate {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&repaired) {
+            if repaired != candidate
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(&repaired) {
                     return Ok((v, Some(JsonDefect::RepairedUnescapedBackslash)));
                 }
-            }
             // Classify the unrecoverable case for a precise fail-loud message.
             let has_envelope =
                 locate_envelope(stripped).is_some() || stripped.trim_start().starts_with(['{', '[']);

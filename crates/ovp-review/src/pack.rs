@@ -74,11 +74,10 @@ pub fn write(
     // generated/ — copy the produced artifacts when they exist on disk.
     let generated = out.join("generated");
     ensure_dir(&generated)?;
-    if let Some(rel) = &report.primary_note {
-        if let Ok(c) = std::fs::read_to_string(config.vault_root.join(rel)) {
+    if let Some(rel) = &report.primary_note
+        && let Ok(c) = std::fs::read_to_string(config.vault_root.join(rel)) {
             write_file(&generated.join("primary-note.md"), &c)?;
         }
-    }
     let moc_rel = MocBuilder::new().moc_path().as_str().to_string();
     if let Ok(c) = std::fs::read_to_string(config.vault_root.join(&moc_rel)) {
         write_file(&generated.join("moc.md"), &c)?;

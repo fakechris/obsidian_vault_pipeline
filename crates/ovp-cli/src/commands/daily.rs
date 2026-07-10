@@ -161,11 +161,10 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
                 needs_content_items.len(), enriched, failed,
             );
             for r in &results {
-                if !r.updated {
-                    if let Some(err) = &r.fetch.error {
+                if !r.updated
+                    && let Some(err) = &r.fetch.error {
                         println!("    skip {}: {err}", r.url);
                     }
-                }
             }
         }
     }
@@ -195,11 +194,10 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
                 github_items.len(), written, failed,
             );
             for r in &results {
-                if !r.written {
-                    if let Some(err) = &r.fetch.error {
+                if !r.written
+                    && let Some(err) = &r.fetch.error {
                         println!("    skip {}/{}: {err}", r.owner, r.repo);
                     }
-                }
             }
         }
     }
@@ -275,8 +273,8 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     }
 
     // Phase 4.5 — image download for succeeded packs (optional).
-    if !args.no_images && !args.dry_run {
-        if let Some(mut downloader) = build_image_downloader(&args)? {
+    if !args.no_images && !args.dry_run
+        && let Some(mut downloader) = build_image_downloader(&args)? {
             let succeeded_packs: Vec<PathBuf> = daily
                 .processed
                 .iter()
@@ -314,7 +312,6 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
                 }
             }
         }
-    }
 
     // Phase 5 — durable run report FIRST (so the rebuilt index includes this
     // run), then read model + console refresh. The report does NOT claim the
@@ -365,13 +362,12 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     // Semantic-theme staleness HINT (never an action): daily must not
     // auto-run crystal-themes — a cold model cache means a surprise ~450MB
     // download — but the operator should know when new packs are unthemed.
-    if let Some(n) = stale_theme_packs(&args.vault_root, &model) {
-        if n > 0 {
+    if let Some(n) = stale_theme_packs(&args.vault_root, &model)
+        && n > 0 {
             println!(
                 "  themes: {n} pack(s) not in .ovp/crystal/themes.json — run `ovp2 crystal-themes` to re-theme"
             );
         }
-    }
 
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now

@@ -150,20 +150,16 @@ fn first_heading(reader_md: &str) -> Option<String> {
 /// `source`, else the directory name. Best-effort — never fails the run.
 /// Public so `crystal-themes` titles packs identically to the synth catalog.
 pub fn resolve_title(case_dir: &Path, case_id: &str) -> String {
-    if let Ok(md) = std::fs::read_to_string(case_dir.join("reader.md")) {
-        if let Some(h) = first_heading(&md) {
+    if let Ok(md) = std::fs::read_to_string(case_dir.join("reader.md"))
+        && let Some(h) = first_heading(&md) {
             return h;
         }
-    }
-    if let Ok(rs) = std::fs::read_to_string(case_dir.join("run-status.json")) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&rs) {
-            if let Some(s) = v.get("source").and_then(|s| s.as_str()) {
-                if !s.trim().is_empty() {
+    if let Ok(rs) = std::fs::read_to_string(case_dir.join("run-status.json"))
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&rs)
+            && let Some(s) = v.get("source").and_then(|s| s.as_str())
+                && !s.trim().is_empty() {
                     return s.trim().to_string();
                 }
-            }
-        }
-    }
     case_id.to_string()
 }
 

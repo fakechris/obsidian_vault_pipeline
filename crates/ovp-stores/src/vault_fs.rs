@@ -105,13 +105,12 @@ impl VaultFsPlanApplier {
             return outcome(OpResult::Skipped { reason: "dry-run".into() });
         }
 
-        if let Some(parent) = abs.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
+        if let Some(parent) = abs.parent()
+            && let Err(e) = fs::create_dir_all(parent) {
                 return outcome(OpResult::Failed {
                     reason: format!("create_dir_all({}): {e}", parent.display()),
                 });
             }
-        }
         if let Err(e) = fs::write(&abs, op.body.as_bytes()) {
             return outcome(OpResult::Failed {
                 reason: format!("write({}): {e}", abs.display()),

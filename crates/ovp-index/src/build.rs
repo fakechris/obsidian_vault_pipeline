@@ -463,11 +463,10 @@ fn build_packs(
 fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
     let by_pack: HashMap<&str, &PackRow> = packs.iter().map(|p| (p.pack_dir.as_str(), p)).collect();
     for s in sources.iter_mut() {
-        if s.title.is_none() {
-            if let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
+        if s.title.is_none()
+            && let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
                 s.title = Some(p.title.clone());
             }
-        }
     }
 }
 
@@ -651,11 +650,9 @@ fn insert_prefix_hit(
             if let PrefixHit::Unique {
                 sha256: existing, ..
             } = o.get()
-            {
-                if existing != &sha256 {
+                && existing != &sha256 {
                     o.insert(PrefixHit::Ambiguous);
                 }
-            }
         }
     }
 }
@@ -907,7 +904,7 @@ fn from_days(total: u32) -> String {
 }
 
 fn is_leap(y: u32) -> bool {
-    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+    y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400))
 }
 
 #[cfg(test)]

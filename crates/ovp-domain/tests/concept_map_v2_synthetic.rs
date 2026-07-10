@@ -339,11 +339,10 @@ fn claims_of(md: &str) -> Vec<String> {
             in_sec = h.trim() == "Source-backed claims";
             continue;
         }
-        if in_sec {
-            if let Some(item) = line.strip_prefix("- ") {
+        if in_sec
+            && let Some(item) = line.strip_prefix("- ") {
                 out.push(item.trim().to_string());
             }
-        }
     }
     out
 }

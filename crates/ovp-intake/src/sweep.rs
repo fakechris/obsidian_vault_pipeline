@@ -130,8 +130,8 @@ pub fn sweep_intake(
             };
 
             let url = (!source.source_url.is_empty()).then(|| source.source_url.clone());
-            if let Some(u) = &url {
-                if urls.contains(u) {
+            if let Some(u) = &url
+                && urls.contains(u) {
                     let rec = dispose_duplicate(
                         cfg, &layout, &path, &from, &sha256,
                         format!("url:{u}"),
@@ -140,7 +140,6 @@ pub fn sweep_intake(
                     outcome.duplicates.push(rec);
                     continue;
                 }
-            }
 
             let body_chars = source.body_markdown.trim().chars().count();
             if body_chars < cfg.min_reader_body_chars {
