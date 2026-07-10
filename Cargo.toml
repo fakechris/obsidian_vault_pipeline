@@ -23,12 +23,17 @@ members = [
     "crates/ovp-server",
     "crates/ovp-mcp",
     "crates/ovp-evolve",
+    "crates/ovp-embed",
 ]
 
 [workspace.package]
 version = "0.23.0"
 edition = "2024"
-rust-version = "1.85"
+# 1.88 = the floor of the `embed` dep tree (ort 2.0.0-rc.12 / time 0.3.53),
+# which release builds enable (dist-workspace.toml `features`). Nothing pins an
+# older toolchain (no rust-toolchain.toml; release CI installs current stable),
+# so raising the declared MSRV beats pinning the embed deps back.
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 authors = ["OVP Next"]
 # Required by dist for GitHub release hosting. NOTE: this repo is currently

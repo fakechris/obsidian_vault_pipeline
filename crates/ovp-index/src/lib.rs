@@ -23,7 +23,7 @@ pub mod model;
 pub mod query;
 pub mod score;
 
-pub use build::{build_index, read_index, write_index};
+pub use build::{build_index, failed_reader_attempt, read_index, write_index};
 pub use evidence::{EvidenceModel, build_evidence, read_evidence, write_evidence};
 pub use model::{
     BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, RunRow,

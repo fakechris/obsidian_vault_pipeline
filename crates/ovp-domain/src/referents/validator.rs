@@ -129,11 +129,10 @@ fn classify_one(
     // by unique prefix (the index is unique, so this never weakens grounding).
     let mut support: Vec<&Unit> = Vec::new();
     for uid in &r.support_unit_ids {
-        if let Some(u) = resolve_support(by_id, uid) {
-            if !support.iter().any(|s| s.id == u.id) {
+        if let Some(u) = resolve_support(by_id, uid)
+            && !support.iter().any(|s| s.id == u.id) {
                 support.push(u);
             }
-        }
     }
     if support.is_empty() {
         return Err(reject("no_support", &r.surface_names));

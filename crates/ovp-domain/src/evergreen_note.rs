@@ -121,11 +121,10 @@ impl EvergreenNote {
                 continue;
             }
             if sec == Sec::None {
-                if let Some(d) = line.strip_prefix("> ") {
-                    if definition.is_empty() {
+                if let Some(d) = line.strip_prefix("> ")
+                    && definition.is_empty() {
                         definition = d.trim().to_string();
                     }
-                }
                 continue;
             }
             if let Some(item) = line.strip_prefix("- ") {

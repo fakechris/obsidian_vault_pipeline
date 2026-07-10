@@ -196,17 +196,13 @@ pub fn normalize_nowledge(
 /// A Nowledge source carries no explicit title; derive one from its first
 /// section, else the original filename.
 fn source_title(detail: &SourceDetail) -> String {
-    if let Some(tree) = &detail.source.section_tree {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(tree) {
-            if let Some(first) = v.as_array().and_then(|a| a.first()) {
-                if let Some(t) = first.get("title").and_then(|t| t.as_str()) {
-                    if !t.trim().is_empty() {
+    if let Some(tree) = &detail.source.section_tree
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(tree)
+            && let Some(first) = v.as_array().and_then(|a| a.first())
+                && let Some(t) = first.get("title").and_then(|t| t.as_str())
+                    && !t.trim().is_empty() {
                         return t.to_string();
                     }
-                }
-            }
-        }
-    }
     if !detail.source.original_name.trim().is_empty() {
         return detail.source.original_name.clone();
     }

@@ -454,11 +454,10 @@ fn update_source_body(
         }
         new_content.push_str("---\n\n");
     }
-    if let Some(t) = title {
-        if !content.starts_with('#') {
+    if let Some(t) = title
+        && !content.starts_with('#') {
             new_content.push_str(&format!("# {t}\n\n"));
         }
-    }
     new_content.push_str(content);
     if !new_content.ends_with('\n') {
         new_content.push('\n');

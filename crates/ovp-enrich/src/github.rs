@@ -436,11 +436,10 @@ fn update_frontmatter_github(fm: &str, fetched_at: &str, meta: &RepoMetadata) ->
     if !lines.iter().any(|l| l.starts_with("github_stars:")) {
         lines.push(format!("github_stars: {}", meta.stars));
     }
-    if !lines.iter().any(|l| l.starts_with("github_language:")) {
-        if let Some(lang) = &meta.language {
+    if !lines.iter().any(|l| l.starts_with("github_language:"))
+        && let Some(lang) = &meta.language {
             lines.push(format!("github_language: {lang}"));
         }
-    }
     lines.join("\n")
 }
 

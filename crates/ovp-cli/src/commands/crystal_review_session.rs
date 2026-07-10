@@ -1,9 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use ovp_domain::crystal::synth::{
-    bucket_for, collect_catalog, parse_strength_verdicts, strength_request,
-};
+use ovp_domain::crystal::synth::{collect_catalog, parse_strength_verdicts, strength_request};
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID};
 use ovp_domain::crystal::{
     apply_decisions, defer_fired, strength_coverage, triviality_containment,
     ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader, DeferState,
@@ -31,22 +30,66 @@ pub struct CrystalReviewSessionPrepareArgs {
     pub suggest: bool,
 }
 
-/// Does a pack title fall in the claim's theme? Claim themes carry EITHER the
-/// bucket key ("memory" — `parse_synth_claims`' fallback) or the bucket
-/// description ("Memory & context" — what models echo from the synth prompt),
-/// so both must match (gemini PR review).
-fn theme_matches(title: &str, theme: &str) -> bool {
-    let (key, description) = bucket_for(title);
-    key == theme || description == theme
+/// The reader-pack case id is its dir basename (== themes.json packs key).
+fn pack_case_id(pack_dir: &str) -> &str {
+    pack_dir.rsplit('/').next().unwrap_or(pack_dir)
+}
+
+/// Community id of a pack in the projection. Packs ABSENT from `packs` are
+/// new-since-generation (the themes.json contract: "a pack missing from this
+/// map is by definition NEW") and count toward the unclassified pool — new
+/// packs land there until the next `crystal-themes` run.
+fn community_of(themes: &ThemesFile, case_id: &str) -> i64 {
+    themes.packs.get(case_id).copied().unwrap_or(UNCLASSIFIED_ID)
+}
+
+/// How many read-model packs are "in the entry's theme" — the count
+/// `new_sources_in_theme` defers are measured against. Membership derives
+/// from STABLE identity, never display-label text: labels change under
+/// `--client live` relabels and clustering refreshes (which would orphan a
+/// label-keyed defer silently), and fallback themes like "Unthemed batch N"
+/// or "Unclassified" match no community label at all (count stuck at 0 → the
+/// trigger could never fire, violating the M36 closed-vocabulary contract).
+///
+///   - themes.json + a cited entry: the union of the communities the entry's
+///     cited packs belong to (community id via `packs`, unclassified pool
+///     included) — the defer fires as packs join those communities.
+///   - otherwise (no themes.json, or a pre-M35 entry without citations):
+///     the entry's own cited-pack set plus the legacy case-insensitive
+///     title⊇theme containment, so keyword-era queues keep firing.
+fn theme_pack_count(model: &IndexModel, themes: Option<&ThemesFile>, entry: &ReviewEntry) -> usize {
+    let cited: BTreeSet<&str> = entry.citations.iter().map(|c| c.case_id.as_str()).collect();
+    if let Some(t) = themes
+        && !cited.is_empty()
+    {
+        let communities: BTreeSet<i64> =
+            cited.iter().map(|case_id| community_of(t, case_id)).collect();
+        return model
+            .packs
+            .iter()
+            .filter(|p| communities.contains(&community_of(t, pack_case_id(&p.pack_dir))))
+            .count();
+    }
+    let theme = entry.theme.to_lowercase();
+    model
+        .packs
+        .iter()
+        .filter(|p| {
+            cited.contains(pack_case_id(&p.pack_dir)) || p.title.to_lowercase().contains(&theme)
+        })
+        .count()
 }
 
 /// The count a defer trigger is measured against, from the read model.
-fn trigger_count(model: &IndexModel, trigger: DeferTrigger, theme: &str) -> usize {
+fn trigger_count(
+    model: &IndexModel,
+    themes: Option<&ThemesFile>,
+    trigger: DeferTrigger,
+    entry: &ReviewEntry,
+) -> usize {
     match trigger {
         DeferTrigger::CorpusGrowsBy => model.packs.len(),
-        DeferTrigger::NewSourcesInTheme => {
-            model.packs.iter().filter(|p| theme_matches(&p.title, theme)).count()
-        }
+        DeferTrigger::NewSourcesInTheme => theme_pack_count(model, themes, entry),
     }
 }
 
@@ -68,11 +111,20 @@ pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError
     // items just because the index was not built.
     let has_defers = review.iter().any(|e| e.defer.is_some());
     if has_defers {
+        let themes = match ThemesFile::load(&args.vault_root.join(".ovp/crystal/themes.json")) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("  warning: ignoring themes.json for defer triggers ({e})");
+                None
+            }
+        };
         match ovp_index::read_index(&args.vault_root) {
             Ok(model) => {
                 let before = review.len();
                 review.retain(|e| match &e.defer {
-                    Some(d) => defer_fired(d, trigger_count(&model, d.trigger, &e.theme)),
+                    Some(d) => {
+                        defer_fired(d, trigger_count(&model, themes.as_ref(), d.trigger, e))
+                    }
                     None => true,
                 });
                 let skipped = before - review.len();
@@ -393,6 +445,13 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
     let mut entries = entries;
     let mut n_queue_ops = 0usize;
     let mut index_model: Option<IndexModel> = None;
+    let themes = match ThemesFile::load(&args.vault_root.join(".ovp/crystal/themes.json")) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("  warning: ignoring themes.json for defer baselines ({e})");
+            None
+        }
+    };
     for d in &decisions {
         match d.action {
             ReviewAction::DemoteToSourceInsight => {
@@ -412,7 +471,7 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
                 }
                 let model = index_model.as_ref().expect("just loaded");
                 if let Some(e) = entries.iter_mut().find(|e| e.claim_id == d.claim_id) {
-                    let baseline = trigger_count(model, spec.trigger, &e.theme);
+                    let baseline = trigger_count(model, themes.as_ref(), spec.trigger, e);
                     e.defer = Some(DeferState { trigger: spec.trigger, n: spec.n, baseline });
                     n_queue_ops += 1;
                 }
@@ -914,14 +973,146 @@ mod tests {
         assert!(ids.trim().is_empty(), "nothing left for the human queue: {ids}");
     }
 
+    /// Read-model fixture: packs by `(pack_dir, title)`, everything else empty.
+    fn model_with_packs(packs: &[(&str, &str)]) -> ovp_index::model::IndexModel {
+        ovp_index::model::IndexModel {
+            schema: "test".into(),
+            date: "2026-07-07".into(),
+            run_id: None,
+            totals: Default::default(),
+            sources: vec![],
+            packs: packs
+                .iter()
+                .map(|(dir, title)| ovp_index::model::PackRow {
+                    pack_dir: (*dir).into(),
+                    title: (*title).into(),
+                    date: None,
+                    units: 0,
+                    cards: 0,
+                    json_repaired: false,
+                    card_titles: vec![],
+                    source_sha256: None,
+                })
+                .collect(),
+            claims: vec![],
+            runs: vec![],
+            ops: Default::default(),
+        }
+    }
+
+    fn entry_citing(theme: &str, cited: &[&str]) -> ovp_domain::crystal::ReviewEntry {
+        let citations: Vec<_> = cited
+            .iter()
+            .map(|c| json!({"case_id": c, "unit_id": "u-0", "quote": "q"}))
+            .collect();
+        serde_json::from_value(json!({
+            "claim_id": "c1", "claim": "x", "theme": theme,
+            "final_class": "caveated", "strength": "supported",
+            "evidence_sufficient": true, "rationale": "r",
+            "citations": citations
+        }))
+        .unwrap()
+    }
+
+    fn themes_with(
+        packs: &[(&str, i64)],
+        label: &str,
+    ) -> ovp_domain::crystal::themes::ThemesFile {
+        use ovp_domain::crystal::themes::{
+            LabelsProvenance, ThemeCommunity, ThemeParams, ThemesFile,
+        };
+        ThemesFile {
+            schema: "ovp.themes/v1".into(),
+            model: "test".into(),
+            params: ThemeParams {
+                k: 10,
+                cosine_threshold: 0.5,
+                resolution: 1.5,
+                seed: 42,
+                text_prefix: String::new(),
+                head_chars: 1500,
+            },
+            generated_from: "x".into(),
+            packs: packs.iter().map(|(id, c)| ((*id).to_string(), *c)).collect(),
+            communities: vec![ThemeCommunity {
+                id: 0,
+                label: label.into(),
+                label_zh: label.into(),
+                keywords: vec![],
+                size: packs.iter().filter(|(_, c)| *c == 0).count(),
+            }],
+            labels_provenance: LabelsProvenance::Keyword,
+        }
+    }
+
     #[test]
-    fn theme_matches_accepts_bucket_key_and_description() {
-        // "Agent memory design" buckets to agents (first-match-wins).
-        assert!(super::theme_matches("Agent memory design", "agents"));
-        assert!(super::theme_matches("Agent memory design", "Agents & agentic systems"));
-        assert!(!super::theme_matches("Agent memory design", "memory"));
-        assert!(super::theme_matches("Context windows and memory", "Memory & context"));
-        assert!(super::theme_matches("Something entirely unrelated", "Miscellaneous"));
+    fn unclassified_defer_fires_when_new_packs_join_the_pool() {
+        use ovp_domain::crystal::{defer_fired, DeferState, DeferTrigger};
+        // The entry's cited pack is noise (community -1); its display theme is
+        // the label-less "Unclassified" — which matches NO community label,
+        // the exact stuck-at-0 failure of label-keyed membership.
+        let themes = themes_with(&[("m18-01", -1), ("m18-02", 0)], "Agent memory");
+        let e = entry_citing("Unclassified", &["m18-01"]);
+        let before = super::theme_pack_count(
+            &model_with_packs(&[("R/m18-01", "A"), ("R/m18-02", "B")]),
+            Some(&themes),
+            &e,
+        );
+        assert_eq!(before, 1, "only the noise pack is in the entry's pool");
+        // A NEW pack (absent from themes.packs) lands in the unclassified pool.
+        let after = super::theme_pack_count(
+            &model_with_packs(&[("R/m18-01", "A"), ("R/m18-02", "B"), ("R/m18-09", "New")]),
+            Some(&themes),
+            &e,
+        );
+        assert_eq!(after, 2);
+        let d = DeferState { trigger: DeferTrigger::NewSourcesInTheme, n: 1, baseline: before };
+        assert!(defer_fired(&d, after), "unclassified-pool growth must fire the defer");
+    }
+
+    #[test]
+    fn relabeling_or_refresh_does_not_orphan_a_defer() {
+        // Membership is keyed by community id via the cited packs, so neither
+        // the entry's stored theme text nor the community's display label
+        // participates — an LLM relabel cannot orphan the defer.
+        let themes = themes_with(&[("m18-01", 0), ("m18-02", 0)], "Agent memory systems");
+        let model = model_with_packs(&[("R/m18-01", "A"), ("R/m18-02", "B")]);
+        // Stored theme text is the OLD label; entry cites a community-0 pack.
+        let e = entry_citing("Agent memory systems", &["m18-01"]);
+        assert_eq!(super::theme_pack_count(&model, Some(&themes), &e), 2);
+        // `--client live` renames the community: count unchanged.
+        let mut relabeled = themes.clone();
+        relabeled.communities[0].label = "记忆与上下文".into();
+        relabeled.communities[0].label_zh = "记忆与上下文".into();
+        assert_eq!(super::theme_pack_count(&model, Some(&relabeled), &e), 2);
+        // A themes refresh adds a pack to the same community: count grows —
+        // the defer can fire even though every label changed.
+        relabeled.packs.insert("m18-03".into(), 0);
+        let grown = model_with_packs(&[("R/m18-01", "A"), ("R/m18-02", "B"), ("R/m18-03", "C")]);
+        assert_eq!(super::theme_pack_count(&grown, Some(&relabeled), &e), 3);
+        // Same for a fallback-labeled batch theme ("Unthemed batch 1"):
+        // membership still resolves via the cited pack's community.
+        let batch_entry = entry_citing("Unthemed batch 1", &["m18-01"]);
+        assert_eq!(super::theme_pack_count(&grown, Some(&relabeled), &batch_entry), 3);
+    }
+
+    #[test]
+    fn no_themes_fallback_counts_cited_packs_and_title_matches() {
+        let model = model_with_packs(&[
+            ("R/m18-01", "Unrelated title"),
+            ("R/m18-02", "Agent MEMORY design"),
+            ("R/m18-03", "Something else"),
+        ]);
+        // Cited pack + case-insensitive title⊇theme containment (legacy).
+        let e = entry_citing("memory", &["m18-01"]);
+        assert_eq!(super::theme_pack_count(&model, None, &e), 2);
+        // Pre-M35 entry without citations: pure legacy title containment.
+        let legacy = entry_citing("memory", &[]);
+        assert_eq!(super::theme_pack_count(&model, None, &legacy), 1);
+        // A cited entry with NO themes.json never gets stuck below its own
+        // citation count, even for fallback batch labels.
+        let batch = entry_citing("Unthemed batch 1", &["m18-01", "m18-02"]);
+        assert_eq!(super::theme_pack_count(&model, None, &batch), 2);
     }
 
     #[test]

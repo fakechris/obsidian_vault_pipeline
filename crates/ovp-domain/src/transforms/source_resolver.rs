@@ -115,8 +115,8 @@ fn find_first_external_link(body: &str) -> Option<String> {
             // Find matching `]`
             if let Some(close_text) = find_unescaped(bytes, i + 1, b']') {
                 // Need `(` immediately after `]`
-                if close_text + 1 < bytes.len() && bytes[close_text + 1] == b'(' {
-                    if let Some(close_url) = find_unescaped(bytes, close_text + 2, b')') {
+                if close_text + 1 < bytes.len() && bytes[close_text + 1] == b'('
+                    && let Some(close_url) = find_unescaped(bytes, close_text + 2, b')') {
                         let url = &body[close_text + 2..close_url];
                         // Trim and validate.
                         let url = url.trim();
@@ -128,7 +128,6 @@ fn find_first_external_link(body: &str) -> Option<String> {
                         i = close_url + 1;
                         continue;
                     }
-                }
             }
         }
         i += 1;

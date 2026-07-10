@@ -59,11 +59,10 @@ impl ConceptRegistry {
         if let Some(c) = self.canonical.get(slug) {
             return Some(c.as_str());
         }
-        if let Some(canon) = self.aliases.get(slug) {
-            if let Some(c) = self.canonical.get(canon) {
+        if let Some(canon) = self.aliases.get(slug)
+            && let Some(c) = self.canonical.get(canon) {
                 return Some(c.as_str());
             }
-        }
         None
     }
 
@@ -94,11 +93,10 @@ impl ConceptRegistry {
         for entry in entries {
             let entry = entry.map_err(|e| RegistryError(format!("dir entry: {e}")))?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if path.extension().and_then(|e| e.to_str()) == Some("md")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     reg.insert_canonical(stem.to_string());
                 }
-            }
         }
         Ok(reg)
     }

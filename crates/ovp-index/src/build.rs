@@ -15,6 +15,7 @@ use std::path::Path;
 
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
@@ -381,6 +382,37 @@ struct RunStatusFile {
     parse_error: Option<String>,
 }
 
+impl RunStatusFile {
+    /// The PRODUCT eligibility rule: a failed attempt also leaves a pack dir
+    /// (audit artifacts + the fail-loud "pack written" semantics), marked by
+    /// a `parse_error` or zero cards in run-status.json. Only card-bearing
+    /// packs are product; the failure itself lives on the source row.
+    fn is_product(&self) -> bool {
+        self.parse_error.is_none() && self.cards > 0
+    }
+}
+
+/// Does this reader dir hold a FAILED reader attempt — a run-status.json that
+/// fails the index's product-pack rule ([`RunStatusFile::is_product`], the
+/// predicate `build_packs` applies)? Dirs WITHOUT run-status.json are not
+/// judged here (legacy corpus packs predate the file). An unreadable or
+/// unparseable run-status.json counts as failed: non-index consumers of the
+/// reader tree (e.g. `crystal-themes` input collection) must SKIP such dirs,
+/// unlike the index build itself, which fails loud on them.
+pub fn failed_reader_attempt(dir: &Path) -> bool {
+    let status_path = dir.join("run-status.json");
+    if !status_path.exists() {
+        return false;
+    }
+    match std::fs::read_to_string(&status_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<RunStatusFile>(&raw).ok())
+    {
+        Some(status) => !status.is_product(),
+        None => true,
+    }
+}
+
 #[derive(Deserialize)]
 struct CardFile {
     #[serde(default)]
@@ -420,10 +452,10 @@ fn build_packs(
                 .map_err(|e| format!("reading {}: {e}", status_path.display()))?,
         )
         .map_err(|e| format!("parsing {}: {e}", status_path.display()))?;
-        // A failed attempt also leaves a pack dir (audit artifacts + the
-        // fail-loud "pack written" semantics). Only card-bearing packs are
-        // PRODUCT; the failure itself is on the source row, not here.
-        if status.parse_error.is_some() || status.cards == 0 {
+        // Product eligibility — see `RunStatusFile::is_product` (shared with
+        // `failed_reader_attempt` so other reader-tree consumers apply the
+        // same rule).
+        if !status.is_product() {
             continue;
         }
         let cards: Vec<CardFile> = std::fs::read_to_string(dir.join("cards.json"))
@@ -462,11 +494,10 @@ fn build_packs(
 fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
     let by_pack: HashMap<&str, &PackRow> = packs.iter().map(|p| (p.pack_dir.as_str(), p)).collect();
     for s in sources.iter_mut() {
-        if s.title.is_none() {
-            if let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
+        if s.title.is_none()
+            && let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
                 s.title = Some(p.title.clone());
             }
-        }
     }
 }
 
@@ -650,11 +681,9 @@ fn insert_prefix_hit(
             if let PrefixHit::Unique {
                 sha256: existing, ..
             } = o.get()
-            {
-                if existing != &sha256 {
+                && existing != &sha256 {
                     o.insert(PrefixHit::Ambiguous);
                 }
-            }
         }
     }
 }
@@ -709,6 +738,22 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 run_id: None,
                 lane: enum_str(&entry.lane),
             });
+        }
+    }
+
+    // Semantic theme PROJECTION (M-semantic-themes): when `themes.json`
+    // exists, a claim's display theme is the majority community label among
+    // its cited packs (ties → lexicographically first; nothing mapped →
+    // "Unclassified"). The ledger keeps whatever theme synthesis stamped —
+    // claims are never re-synthesized to re-theme; this overlay is rebuilt on
+    // every index build. Without themes.json the ledger theme passes through.
+    if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
+        for row in claims.iter_mut() {
+            row.theme = Some(
+                themes
+                    .majority_label(&row.sources)
+                    .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string()),
+            );
         }
     }
 
@@ -890,7 +935,7 @@ fn from_days(total: u32) -> String {
 }
 
 fn is_leap(y: u32) -> bool {
-    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+    y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400))
 }
 
 #[cfg(test)]
@@ -933,6 +978,30 @@ mod tests {
             None
         );
         assert_eq!(corpus_date("40-Resources/Reader/00044cfd-"), None);
+    }
+
+    #[test]
+    fn failed_reader_attempt_mirrors_the_product_pack_rule() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // No run-status.json → not judged (legacy pack).
+        assert!(!failed_reader_attempt(dir));
+        // Card-bearing, no parse error → product.
+        std::fs::write(dir.join("run-status.json"), r#"{"cards": 3}"#).unwrap();
+        assert!(!failed_reader_attempt(dir));
+        // Zero cards → failed attempt.
+        std::fs::write(dir.join("run-status.json"), r#"{"cards": 0}"#).unwrap();
+        assert!(failed_reader_attempt(dir));
+        // parse_error set → failed attempt even with cards.
+        std::fs::write(
+            dir.join("run-status.json"),
+            r#"{"cards": 3, "parse_error": "bad reply"}"#,
+        )
+        .unwrap();
+        assert!(failed_reader_attempt(dir));
+        // Unparseable status → failed (non-index consumers skip, not crash).
+        std::fs::write(dir.join("run-status.json"), "not json").unwrap();
+        assert!(failed_reader_attempt(dir));
     }
 
     #[test]

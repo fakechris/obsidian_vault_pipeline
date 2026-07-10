@@ -8,6 +8,7 @@ pub mod crystal_lint;
 pub mod crystal_review;
 pub mod crystal_review_session;
 pub mod crystal_synth;
+pub mod crystal_themes;
 pub mod crystal_write;
 pub mod console_cmd;
 pub mod daily;

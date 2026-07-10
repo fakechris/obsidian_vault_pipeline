@@ -232,6 +232,36 @@ Stage 3a 与此正交、先行——它是任何分组机制下的执行层。
 真实 vault crystal store 有 173 条 ledger、console 显示 283 claims，但"修复后全量 crystallize +
 replay 幂等验证"未记录在案。剩余 ~1-2 天。Phase 2 = M34 轨道，**已冻结至 merge 后**。
 
+## Stage 3b: 语义主题系统 L1+L2（operator 指令，merge-blocking；分支 feat/semantic-themes-l1-l2）
+
+**Goal**: 删除硬编码 8 桶英文关键词分类，替换为 spike 验证过的语义主题
+（多语 embeddings + Louvain 社区 + c-TF-IDF 关键词 + 双语标签投影）。
+**Recipe（.run/theme-spike-20260709/REPORT.md，994 真实 corpus 验证）**：
+title+1500 字符 → 多语 sentence embedding（128 token 截断）→ 非互斥 kNN（k=10, cos≥0.5）→
+Louvain（resolution 1.5, seed 42）→ 17 簇 / 96.6% 覆盖 / 3.2% 噪声 / 全簇双语。
+**关键验证结论（2026-07-10，生产 ONNX 工件重跑 spike 门）**：
+- 指定首选 multilingual-e5-small **FAIL**（93–100% 中文文档聚进一个纯中文簇，0–1/4 双语样例对）；
+  mpnet / bge-m3 结构过但双语样例对 3/4；
+- fastembed **确实**发行 spike 原胜者 `Xenova/paraphrase-multilingual-MiniLM-L12-v2`
+  （REPORT "not shipped" 注记过时）——@128 tokens 与 sentence-transformers 逐文档 cosine
+  parity = 1.0000，胜者行逐字节复现（17 簇/17/17 双语/4/4 样例对）→ **钉为生产模型**
+  （对指令回退顺序的偏离，已在 commit + docs 记录）；
+- 根因教训：fastembed 默认 512 token 截断 ≠ ST 的 128 —— token 上限现在是配方常量。
+**落地面**：
+- [x] `ovp-embed` crate：纯 Rust Louvain/kNN/c-TF-IDF + content-sha 嵌入缓存 + feature-gated
+      fastembed embedder（`embed` feature，rustls-only）。
+- [x] `ovp2 crystal-themes`：packs → 缓存嵌入 → 社区 → 关键词 → `.ovp/crystal/themes.json`
+      （可重建投影，绝不进 ledger）；`--client live` = 每社区一次缓存 `theme_label/v1` 双语命名
+      （evolution 候选已注册）；离线=关键词标签；无模型/无 feature = 优雅跳过。
+- [x] index/server 投影：ClaimRow.theme = 被引 packs 多数社区标签（平局取字典序，无映射 =
+      Unclassified）；无 themes.json = ledger 透传。/api/themes、graph、claim 页零前端改动生效；
+      顺带修掉 url_decode 的多字节 UTF-8 mojibake。
+- [x] crystal-synth 批次分组去硬编码：themes.json 社区分组，else 日期序确定性分批 + stderr 提示；
+      M32 live-repro fixture 已忠实迁移（synth cassettes 字节不变）。
+- [x] daily 提示（不自动跑，避免首跑模型下载惊吓）；dist features 加 `embed`。
+- [x] 文档 `docs/stage-semantic-themes.md`（验证表 + 配方 + L3 后续）。
+**Status**: **Complete**（分支内，待 PR/review）。L3 后续（KMEM 式 LLM-shaped 合成簇）超出本 Stage。
+
 ## Stage 4: KMEM AB on random real sample（P0 #4，依赖 Stage 2/3，2-3 天）
 
 **Goal**: "87% vs 58%" 在**我们自己的真实随机样本**上重测，两层都有 recorded verdict——无论结果好坏都记录。

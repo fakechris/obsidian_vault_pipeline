@@ -46,12 +46,11 @@ impl CanonicalFsStoreApplier {
         let mut out: Vec<(String, String)> = Vec::new();
         for entry in fs::read_dir(&self.store_root)? {
             let path = entry?.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if path.extension().and_then(|e| e.to_str()) == Some("json")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     let payload = fs::read_to_string(&path)?;
                     out.push((stem.to_string(), payload));
                 }
-            }
         }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(out)
@@ -149,25 +148,23 @@ impl CanonicalFsStoreApplier {
         }
 
         // Idempotent: existing content already equals the desired payload.
-        if let Some(bytes) = &existing {
-            if sha256_hex(bytes) == op.after_hash.as_str() {
+        if let Some(bytes) = &existing
+            && sha256_hex(bytes) == op.after_hash.as_str() {
                 return outcome(OpResult::Skipped {
                     reason: "idempotent: canonical record already matches after_hash".into(),
                 });
             }
-        }
 
         if matches!(mode, ApplyMode::DryRun) {
             return outcome(OpResult::Skipped { reason: "dry-run".into() });
         }
 
-        if let Some(parent) = abs.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
+        if let Some(parent) = abs.parent()
+            && let Err(e) = fs::create_dir_all(parent) {
                 return outcome(OpResult::Failed {
                     reason: format!("create_dir_all({}): {e}", parent.display()),
                 });
             }
-        }
         if let Err(e) = fs::write(&abs, op.payload.as_bytes()) {
             return outcome(OpResult::Failed {
                 reason: format!("write({}): {e}", abs.display()),

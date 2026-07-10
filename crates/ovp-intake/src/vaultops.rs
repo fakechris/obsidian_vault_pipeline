@@ -170,11 +170,10 @@ impl RunLock {
                 // staleness, so a racer that already re-created a fresh lock
                 // can never have it deleted out from under it (the other
                 // racer loses the guard and takes the in-progress error).
-                if Self::owner_is_dead(&path) {
-                    if let Some(lock) = Self::reclaim_under_guard(&path) {
+                if Self::owner_is_dead(&path)
+                    && let Some(lock) = Self::reclaim_under_guard(&path) {
                         return Ok(lock);
                     }
-                }
                 Err(format!(
                     "another OVP run appears to be in progress (lock file {}); \
                      if no run is active, delete the lock file and retry",

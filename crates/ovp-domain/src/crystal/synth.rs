@@ -148,21 +148,18 @@ fn first_heading(reader_md: &str) -> Option<String> {
 
 /// Resolve a case title: `reader.md`'s first heading, else `run-status.json`'s
 /// `source`, else the directory name. Best-effort — never fails the run.
-fn resolve_title(case_dir: &Path, case_id: &str) -> String {
-    if let Ok(md) = std::fs::read_to_string(case_dir.join("reader.md")) {
-        if let Some(h) = first_heading(&md) {
+/// Public so `crystal-themes` titles packs identically to the synth catalog.
+pub fn resolve_title(case_dir: &Path, case_id: &str) -> String {
+    if let Ok(md) = std::fs::read_to_string(case_dir.join("reader.md"))
+        && let Some(h) = first_heading(&md) {
             return h;
         }
-    }
-    if let Ok(rs) = std::fs::read_to_string(case_dir.join("run-status.json")) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&rs) {
-            if let Some(s) = v.get("source").and_then(|s| s.as_str()) {
-                if !s.trim().is_empty() {
+    if let Ok(rs) = std::fs::read_to_string(case_dir.join("run-status.json"))
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&rs)
+            && let Some(s) = v.get("source").and_then(|s| s.as_str())
+                && !s.trim().is_empty() {
                     return s.trim().to_string();
                 }
-            }
-        }
-    }
     case_id.to_string()
 }
 
@@ -287,122 +284,12 @@ pub fn build_grounding_index(packs_dir: &Path) -> Result<GroundingIndex, SynthEr
     Ok(index)
 }
 
-/// First-match-wins keyword bucket for a case title (the pilot's `bucket_for`).
-/// Lower-cased substring match, order matters. Returns `(key, theme)`.
-pub fn bucket_for(title: &str) -> (&'static str, &'static str) {
-    let t = title.to_lowercase();
-    const BUCKETS: &[(&str, &str, &[&str])] = &[
-        (
-            "agents",
-            "Agents & agentic systems",
-            &["agent", "agentic", "autonomy", "tool use", "tool-use"],
-        ),
-        (
-            "memory",
-            "Memory & context",
-            &[
-                "memory",
-                "context",
-                "retrieval",
-                "rag",
-                "recall",
-                "embedding",
-            ],
-        ),
-        (
-            "coding",
-            "Coding & software",
-            &[
-                "code",
-                "coding",
-                "software",
-                "programming",
-                "compiler",
-                "refactor",
-            ],
-        ),
-        (
-            "models",
-            "Models & training",
-            &[
-                "model",
-                "llm",
-                "training",
-                "fine-tune",
-                "fine tuning",
-                "transformer",
-                "weights",
-            ],
-        ),
-        (
-            "prompting",
-            "Prompting & evaluation",
-            &["prompt", "prompting", "eval", "benchmark", "evaluation"],
-        ),
-        (
-            "product",
-            "Product & design",
-            &["product", "design", "ux", "user", "workflow", "interface"],
-        ),
-        (
-            "infra",
-            "Infrastructure & systems",
-            &[
-                "infra",
-                "infrastructure",
-                "system",
-                "database",
-                "server",
-                "distributed",
-                "cache",
-            ],
-        ),
-    ];
-    for (key, theme, needles) in BUCKETS {
-        if needles.iter().any(|n| t.contains(n)) {
-            return (key, theme);
-        }
-    }
-    ("misc", "Miscellaneous")
-}
-
-/// Cluster cases into keyword theme buckets (deterministic, order-stable). Cases
-/// within a cluster are sorted; empty buckets are dropped; clusters are emitted
-/// in the fixed bucket order above then `misc`.
-pub fn cluster_by_keyword(catalog: &UnitsCatalog) -> Vec<Cluster> {
-    // Preserve bucket declaration order via an index map keyed on bucket key.
-    let order = [
-        "agents",
-        "memory",
-        "coding",
-        "models",
-        "prompting",
-        "product",
-        "infra",
-        "misc",
-    ];
-    let mut by_key: BTreeMap<&str, (&str, Vec<String>)> = BTreeMap::new();
-    for (case_id, case) in &catalog.cases {
-        let (key, theme) = bucket_for(&case.title);
-        by_key
-            .entry(key)
-            .or_insert_with(|| (theme, Vec::new()))
-            .1
-            .push(case_id.clone());
-    }
-    let mut clusters = Vec::new();
-    for key in order {
-        if let Some((theme, mut cases)) = by_key.remove(key) {
-            cases.sort();
-            clusters.push(Cluster {
-                key: key.to_string(),
-                theme: theme.to_string(),
-                cases,
-            });
-        }
-    }
-    clusters
-}
+// NOTE (M-semantic-themes): the pilot's hardcoded 8-bucket English keyword
+// taxonomy (`bucket_for` / `cluster_by_keyword`) is RETIRED. Synthesis
+// grouping now comes from the semantic themes projection
+// (`crate::crystal::themes::clusters_from_themes`) when `themes.json` exists,
+// else deterministic date-ordered batches
+// (`crate::crystal::themes::clusters_date_ordered`).
 
 /// Split clusters into deterministic bounded batches. Returns an empty vec only
 /// when `clusters` is empty; callers must reject `max_cases_per_batch == 0`.
@@ -847,49 +734,6 @@ mod tests {
     }
 
     #[test]
-    fn bucket_for_first_match_wins() {
-        assert_eq!(bucket_for("Building autonomous AI agents").0, "agents");
-        assert_eq!(bucket_for("Context windows and memory").0, "memory");
-        assert_eq!(bucket_for("A new compiler for Rust").0, "coding");
-        assert_eq!(bucket_for("Something entirely unrelated").0, "misc");
-        // "agent memory" — agents comes first in declaration order → agents.
-        assert_eq!(bucket_for("Agent memory design").0, "agents");
-    }
-
-    #[test]
-    fn cluster_is_deterministic_and_drops_empty() {
-        let mut cat = UnitsCatalog::default();
-        cat.cases.insert(
-            "c-b".into(),
-            CatalogCase {
-                title: "Memory and retrieval".into(),
-                units: vec![],
-            },
-        );
-        cat.cases.insert(
-            "c-a".into(),
-            CatalogCase {
-                title: "Agentic systems".into(),
-                units: vec![],
-            },
-        );
-        cat.cases.insert(
-            "c-c".into(),
-            CatalogCase {
-                title: "Another memory piece".into(),
-                units: vec![],
-            },
-        );
-        let clusters = cluster_by_keyword(&cat);
-        // agents bucket emitted before memory (declaration order).
-        assert_eq!(clusters[0].key, "agents");
-        assert_eq!(clusters[0].cases, vec!["c-a"]);
-        assert_eq!(clusters[1].key, "memory");
-        assert_eq!(clusters[1].cases, vec!["c-b", "c-c"], "cases sorted");
-        assert_eq!(clusters.len(), 2, "no empty buckets");
-    }
-
-    #[test]
     fn cluster_batches_cover_every_case_without_truncation() {
         let cluster = Cluster {
             key: "memory".into(),
@@ -1058,7 +902,7 @@ mod tests {
                 }],
             },
         );
-        let clusters = cluster_by_keyword(&cat);
+        let clusters = crate::crystal::themes::clusters_date_ordered(&cat, 16);
         let req = crystal_synth_request(&cat, &clusters[0], 16, 22);
         assert_eq!(req.cache_namespace.as_deref(), Some("crystal_synth/v1"));
         let ModelMessage::User { content } = &req.messages[0] else {

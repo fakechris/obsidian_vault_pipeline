@@ -144,11 +144,10 @@ pub fn critic_model_request(source: &SourceDoc, base_units: &[Unit]) -> ModelReq
 /// balanced `{...}` object. A reply we cannot parse yields an empty `CriticReply`
 /// (⇒ no repairs ⇒ frozen-v5 floor), never an error.
 pub fn parse_critic_reply(reply_text: &str) -> CriticReply {
-    if let Some(obj) = extract_json_object(reply_text) {
-        if let Ok(r) = serde_json::from_str::<CriticReply>(&obj) {
+    if let Some(obj) = extract_json_object(reply_text)
+        && let Ok(r) = serde_json::from_str::<CriticReply>(&obj) {
             return r;
         }
-    }
     CriticReply::default()
 }
 

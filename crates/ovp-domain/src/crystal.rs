@@ -33,6 +33,11 @@ use sha2::{Digest, Sha256};
 /// substrate.
 pub mod synth;
 
+/// Semantic display themes: the `themes.json` projection schema + helpers
+/// (majority-label lookup, synthesis grouping, bilingual `theme_label/v1`
+/// model stage). Rebuildable projection; never baked into the ledger.
+pub mod themes;
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 
@@ -591,13 +596,11 @@ pub fn fold_ledger(events: &[StoreEvent]) -> Vec<DurableRecord> {
         rec.status = status;
         state.insert(key, rec);
         // A supersede also flips the superseded predecessor, if present.
-        if ev.op == StoreOp::Supersede {
-            if let Some(prev) = &ev.supersedes {
-                if let Some(r) = state.get_mut(prev) {
+        if ev.op == StoreOp::Supersede
+            && let Some(prev) = &ev.supersedes
+                && let Some(r) = state.get_mut(prev) {
                     r.status = CrystalStatus::Superseded;
                 }
-            }
-        }
     }
     let mut out: Vec<DurableRecord> = state.into_values().collect();
     out.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));

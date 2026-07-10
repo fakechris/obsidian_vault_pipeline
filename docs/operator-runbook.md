@@ -186,6 +186,24 @@ ovp2 console --vault-root "$VAULT"     # claims appear under Crystal · 结晶�
 `40-Resources/Reader/`. Daily packs already write `units.accepted.json` in
 exactly the layout the gates expect.
 
+### Semantic themes (display projection)
+
+```bash
+ovp2 crystal-themes --vault-root "$VAULT"                 # keyword labels, offline
+ovp2 crystal-themes --vault-root "$VAULT" --client live   # + bilingual LLM names (cached)
+ovp2 index --vault-root "$VAULT" --date $(date +%F)       # re-project claim themes
+```
+
+Builds `.ovp/crystal/themes.json` — a rebuildable projection (embeddings +
+Louvain communities + c-TF-IDF keywords) that the index, portal and
+crystal-synth batching all read. First run downloads the embedding model
+(~460MB, one-time, `~/.cache/ovp/models`); offline or model-less runs skip
+gracefully and everything shows `Unclassified`. `daily` prints a hint when
+new packs are missing from the projection — it never auto-runs this (the
+model download should be a deliberate step). Embeddings cache under
+`.ovp/cache/embeddings/` (content-addressed; safe to delete). See
+`docs/stage-semantic-themes.md` for the recipe and validation.
+
 Prepare a bounded review session for caveated claims:
 
 ```bash

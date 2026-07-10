@@ -277,12 +277,11 @@ pub fn sync_pinboard(
     // `max`: keep only the N newest new bookmarks. Candidates are sorted
     // oldest-first, so the newest sit at the tail; processing order (and thus
     // filenames/ledger) stays oldest-first.
-    if let Some(max) = opts.max {
-        if candidates.len() > max {
+    if let Some(max) = opts.max
+        && candidates.len() > max {
             outcome.skipped_over_max = candidates.len() - max;
             candidates.drain(..candidates.len() - max);
         }
-    }
 
     // First-sync flood guard: no narrowing flags + a huge NEW set means this
     // is almost certainly `posts/all` history, not a daily delta. Abort

@@ -528,11 +528,10 @@ fn assign_clusters(base: &mut BaseGraph) {
     // Propagate claim → unit (cites), then unit → source (extracted_from).
     let mut unit_cluster: HashMap<String, usize> = HashMap::new();
     for e in &base.edges {
-        if e.edge_type == "cites" {
-            if let Some(c) = claim_cluster.get(&e.source) {
+        if e.edge_type == "cites"
+            && let Some(c) = claim_cluster.get(&e.source) {
                 unit_cluster.insert(e.target.clone(), *c);
             }
-        }
     }
     for (id, c) in &unit_cluster {
         if let Some(n) = base.nodes.get_mut(id) {

@@ -183,8 +183,8 @@ impl GraphAssembler {
 
             // Client binding existence + move-only uniqueness. (`validate_config`
             // already guarantees the field is present when required.)
-            if entry.config.required.contains(&ConfigField::Client) {
-                if let Some(client) = na.config.client.as_deref() {
+            if entry.config.required.contains(&ConfigField::Client)
+                && let Some(client) = na.config.client.as_deref() {
                     if !wiring.has_client(client) {
                         return Err(AssemblyError::MissingWiring {
                             node_id: node_id.clone(),
@@ -199,19 +199,16 @@ impl GraphAssembler {
                         });
                     }
                 }
-            }
 
             // Registry binding existence (registries are clonable → shareable).
-            if entry.config.required.contains(&ConfigField::Registry) {
-                if let Some(registry) = na.config.registry.as_deref() {
-                    if !wiring.has_registry(registry) {
+            if entry.config.required.contains(&ConfigField::Registry)
+                && let Some(registry) = na.config.registry.as_deref()
+                    && !wiring.has_registry(registry) {
                         return Err(AssemblyError::MissingWiring {
                             node_id: node_id.clone(),
                             name: registry.to_string(),
                         });
                     }
-                }
-            }
         }
         Ok(())
     }
@@ -310,11 +307,10 @@ fn reachable<'a>(adj: &HashMap<&'a str, Vec<&'a str>>, seeds: &[&'a str]) -> Has
     let mut seen: HashSet<&str> = HashSet::new();
     let mut stack: Vec<&str> = seeds.to_vec();
     while let Some(n) = stack.pop() {
-        if seen.insert(n) {
-            if let Some(next) = adj.get(n) {
+        if seen.insert(n)
+            && let Some(next) = adj.get(n) {
                 stack.extend(next.iter().copied());
             }
-        }
     }
     seen
 }

@@ -20,11 +20,11 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::synth::{
-    SynthError, build_grounding_index as synth_build_index, cluster_batches, cluster_by_keyword,
-    collect_catalog, count_durable_provenance, crystal_synth_batch_request,
-    dedup_exact_citation_sets, filter_grounded, parse_strength_verdicts, parse_synth_claims,
-    strength_request, write_packs,
+    SynthError, build_grounding_index as synth_build_index, cluster_batches, collect_catalog,
+    count_durable_provenance, crystal_synth_batch_request, dedup_exact_citation_sets,
+    filter_grounded, parse_strength_verdicts, parse_synth_claims, strength_request, write_packs,
 };
+use ovp_domain::crystal::themes::{ThemesFile, clusters_date_ordered, clusters_from_themes};
 use ovp_domain::crystal::{
     ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader, strength_coverage,
 };
@@ -44,6 +44,10 @@ pub struct CrystalSynthArgs {
     pub vault_root: Option<PathBuf>,
     pub work_dir: PathBuf,
     pub store: Option<PathBuf>,
+    /// Semantic themes projection for batch grouping. Default:
+    /// `<vault-root>/.ovp/crystal/themes.json` when `--vault-root` is set.
+    /// Missing file → deterministic date-ordered fallback batches.
+    pub themes_file: Option<PathBuf>,
     pub client_kind: ClientKind,
     pub cache_dir: Option<PathBuf>,
     pub max_cases_per_cluster: usize,
@@ -208,12 +212,34 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     write_packs(&packs_dir, &paths.reader_dir, &catalog).map_err(synth_err)?;
     write_json(&args.work_dir.join("units-catalog.json"), &catalog)?;
 
-    // (b) Deterministic keyword theme clusters. -----------------------------
-    let clusters = cluster_by_keyword(&catalog);
+    // (b) Deterministic synthesis clusters: semantic communities from the
+    // themes.json projection when available, else date-ordered cap-size
+    // batches (fresh vault / embed feature off / no model). The hardcoded
+    // keyword taxonomy is retired. A corrupt themes.json fails loud — synth
+    // feeds the durable ledger and must not proceed on a broken projection.
+    let themes_path = args.themes_file.clone().or_else(|| {
+        args.vault_root
+            .as_ref()
+            .map(|v| v.join(".ovp/crystal/themes.json"))
+    });
+    let themes = match &themes_path {
+        Some(p) => ThemesFile::load(p).map_err(|e| CliError::Io(format!("crystal-synth: {e}")))?,
+        None => None,
+    };
+    let clusters = match &themes {
+        Some(t) => clusters_from_themes(&catalog, t),
+        None => {
+            eprintln!(
+                "crystal-synth: no semantic themes available — run `ovp2 crystal-themes` \
+                 (falling back to deterministic date-ordered batches)"
+            );
+            clusters_date_ordered(&catalog, args.max_cases_per_cluster)
+        }
+    };
 
     // Surface degraded inputs BEFORE any model call: (1) cases whose title fell
     // back to the directory name (no reader.md heading / run-status source) —
-    // keyword clustering degrades to `misc`; (2) clusters larger than the cap.
+    // embedding text + theme labels degrade; (2) clusters larger than the cap.
     // Stage 3a no longer excludes the overflow; it records deterministic
     // sub-batches so full coverage is auditably preserved.
     let fallback_title_cases: Vec<String> = catalog
@@ -225,7 +251,7 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     if !fallback_title_cases.is_empty() {
         eprintln!(
             "crystal-synth: WARNING: {} case(s) have no readable title (fell back to the \
-             directory name; keyword clustering degrades): {}",
+             directory name; theming degrades): {}",
             fallback_title_cases.len(),
             fallback_title_cases.join(", ")
         );
@@ -520,11 +546,12 @@ mod tests {
         let cache = work.join("cassettes");
         std::fs::create_dir_all(&cache).unwrap();
 
-        // Rebuild the catalog + clusters exactly as run() will, to key cassettes.
+        // Rebuild the catalog + clusters exactly as run() will, to key
+        // cassettes. No themes.json here → date-ordered fallback batches.
         let catalog = collect_catalog(&reader).unwrap();
-        let clusters = cluster_by_keyword(&catalog);
+        let clusters = clusters_date_ordered(&catalog, 16);
         assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0].key, "memory");
+        assert_eq!(clusters[0].key, "batch-001");
         let u01 = catalog.cases["m18-01"].units[0].unit_id.clone();
         let u02 = catalog.cases["m18-02"].units[0].unit_id.clone();
 
@@ -540,7 +567,7 @@ mod tests {
 
         // The grounded candidate is deterministic → build the strength request.
         let candidate = CrystalCandidate {
-            items: parse_synth_claims(&synth_reply, "memory").unwrap(),
+            items: parse_synth_claims(&synth_reply, "batch-001").unwrap(),
         };
         let idx = synth_build_index(&{
             let p = work.join("packs");
@@ -563,6 +590,7 @@ mod tests {
             vault_root: None,
             work_dir: work.clone(),
             store: Some(store.clone()),
+            themes_file: None,
             client_kind: ClientKind::Replay,
             cache_dir: Some(cache.clone()),
             max_cases_per_cluster: 16,
@@ -633,8 +661,10 @@ mod tests {
         let cache = work.join("cassettes");
         std::fs::create_dir_all(&cache).unwrap();
         let catalog = collect_catalog(&reader).unwrap();
-        let clusters = cluster_by_keyword(&catalog);
-        assert_eq!(clusters.len(), 1);
+        // Date-ordered fallback pre-chunks at the cap, so each cluster is one
+        // batch — four cases at cap=2 still means two synth calls.
+        let clusters = clusters_date_ordered(&catalog, 2);
+        assert_eq!(clusters.len(), 2);
         let batches = cluster_batches(&clusters, 2);
         assert_eq!(
             batches.len(),
@@ -691,6 +721,7 @@ mod tests {
             vault_root: None,
             work_dir: work.clone(),
             store: Some(store.clone()),
+            themes_file: None,
             client_kind: ClientKind::Replay,
             cache_dir: Some(cache.clone()),
             max_cases_per_cluster: 2,
@@ -736,8 +767,8 @@ mod tests {
         let cache = work.join("cassettes");
         std::fs::create_dir_all(&cache).unwrap();
         let catalog = collect_catalog(&reader).unwrap();
-        let clusters = cluster_by_keyword(&catalog);
-        assert_eq!(clusters.len(), 1, "both titles bucket to memory");
+        let clusters = clusters_date_ordered(&catalog, 16);
+        assert_eq!(clusters.len(), 1, "both cases in one fallback batch");
         let u01 = catalog.cases["m18-01"].units[0].unit_id.clone();
         let u02 = catalog.cases["m18-02"].units[0].unit_id.clone();
         let synth_req = crystal_synth_request(&catalog, &clusters[0], 16, 22);
@@ -750,7 +781,7 @@ mod tests {
         write_cassette(&cache, &synth_req, &synth_reply);
         // Grounded candidate → strength request, but return an EMPTY verdict set.
         let candidate = CrystalCandidate {
-            items: parse_synth_claims(&synth_reply, "memory").unwrap(),
+            items: parse_synth_claims(&synth_reply, "batch-001").unwrap(),
         };
         let p = work.join("packs");
         write_packs(&p, &reader, &catalog).unwrap();
@@ -763,6 +794,7 @@ mod tests {
             vault_root: None,
             work_dir: work.clone(),
             store: Some(work.join("store")),
+            themes_file: None,
             client_kind: ClientKind::Replay,
             cache_dir: Some(cache.clone()),
             max_cases_per_cluster: 16,
@@ -790,6 +822,7 @@ mod tests {
             vault_root: None,
             work_dir: work.to_path_buf(),
             store: Some(work.join("store")),
+            themes_file: None,
             client_kind: ClientKind::Replay,
             cache_dir: Some(work.join("cassettes")),
             max_cases_per_cluster: 16,
@@ -806,11 +839,85 @@ mod tests {
     }
 
     #[test]
-    fn cluster_cap_overflow_records_batches_before_model_calls() {
+    fn themes_json_groups_batches_and_overflow_is_recorded() {
         let tmp = tempfile::tempdir().unwrap();
         let reader = tmp.path().join("reader");
-        // Two cases in the same (memory) bucket with cap=1 → two full-coverage
-        // batches, not one synthesized case plus one exclusion.
+        // Two cases in the SAME semantic community with cap=1 → two
+        // full-coverage batches, not one synthesized case plus one exclusion.
+        write_pack(
+            &reader,
+            "m18-01",
+            "Working memory systems",
+            "Memory is scarce working memory in systems.",
+            &["Memory is scarce working memory in systems."],
+        );
+        write_pack(
+            &reader,
+            "m18-02",
+            "Context and retrieval",
+            "Context windows are a scarce budget for retrieval.",
+            &["Context windows are a scarce budget for retrieval."],
+        );
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let themes_path = work.join("themes.json");
+        std::fs::write(
+            &themes_path,
+            serde_json::json!({
+                "schema": "ovp.themes/v1",
+                "model": "test-model",
+                "params": {"k": 10, "cosine_threshold": 0.5, "resolution": 1.5,
+                            "seed": 42, "text_prefix": "", "head_chars": 1500},
+                "generated_from": "deadbeef",
+                "packs": {"m18-01": 0, "m18-02": 0},
+                "communities": [{"id": 0, "label": "Memory & context budgets",
+                                  "label_zh": "记忆与上下文预算",
+                                  "keywords": ["memory"], "size": 2}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut args = bare_args(&reader, &work);
+        args.themes_file = Some(themes_path);
+        args.max_cases_per_cluster = 1;
+        args.strict_cluster_cap = true;
+        // No cassettes exist, so the run errors at the first synth call. The
+        // point is that Stage 3a no longer gates merely because the community
+        // exceeds the per-request cap; it records deterministic batches first.
+        let err = run(args).unwrap_err();
+        assert!(
+            matches!(err, CliError::Io(_)),
+            "expected replay miss, got {err:?}"
+        );
+        // The split is recorded for auditability before the model call.
+        let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
+        assert_eq!(v["cluster_cap_overflow"].as_array().unwrap().len(), 0);
+        let batching = v["cluster_batching"].as_array().unwrap();
+        assert_eq!(batching.len(), 1);
+        assert_eq!(batching[0]["cluster"], "t000", "semantic community key");
+        assert_eq!(batching[0]["batches"], serde_json::json!(2));
+        let b = std::fs::read_to_string(work.join("synth-batches.json")).unwrap();
+        let batches: serde_json::Value = serde_json::from_str(&b).unwrap();
+        assert_eq!(batches.as_array().unwrap().len(), 2);
+        assert_eq!(
+            batches[0]["theme"], "memory",
+            "synthesis theme = deterministic keywords, never the display label"
+        );
+
+        // A corrupt themes.json fails loud BEFORE any model call.
+        let mut args = bare_args(&reader, &work);
+        let corrupt = work.join("themes-corrupt.json");
+        std::fs::write(&corrupt, "not json").unwrap();
+        args.themes_file = Some(corrupt);
+        let err = run(args).unwrap_err();
+        assert!(matches!(err, CliError::Io(_)), "corrupt projection: {err:?}");
+    }
+
+    #[test]
+    fn no_themes_falls_back_to_date_ordered_batches_with_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
         write_pack(
             &reader,
             "m18-01",
@@ -828,26 +935,18 @@ mod tests {
         let work = tmp.path().join("work");
         let mut args = bare_args(&reader, &work);
         args.max_cases_per_cluster = 1;
-        args.strict_cluster_cap = true;
-        // No cassettes exist, so the run errors at the first synth call. The
-        // point is that Stage 3a no longer gates merely because the cluster
-        // exceeds the per-request cap; it records deterministic batches first.
+        // Fallback pre-chunks at the cap: two date-ordered single-case
+        // clusters, no overflow batching, everything still covered.
         let err = run(args).unwrap_err();
-        assert!(
-            matches!(err, CliError::Io(_)),
-            "expected replay miss, got {err:?}"
-        );
-        // The split is recorded for auditability before the model call.
-        let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
-        assert_eq!(v["cluster_cap_overflow"].as_array().unwrap().len(), 0);
-        let batching = v["cluster_batching"].as_array().unwrap();
-        assert_eq!(batching.len(), 1);
-        assert_eq!(batching[0]["cluster"], "memory");
-        assert_eq!(batching[0]["batches"], serde_json::json!(2));
+        assert!(matches!(err, CliError::Io(_)), "replay miss: {err:?}");
         let b = std::fs::read_to_string(work.join("synth-batches.json")).unwrap();
         let batches: serde_json::Value = serde_json::from_str(&b).unwrap();
         assert_eq!(batches.as_array().unwrap().len(), 2);
+        assert_eq!(batches[0]["key"], "batch-001");
+        assert_eq!(batches[1]["key"], "batch-002");
+        let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
+        assert_eq!(v["cluster_batching"].as_array().unwrap().len(), 0);
     }
 
     #[test]

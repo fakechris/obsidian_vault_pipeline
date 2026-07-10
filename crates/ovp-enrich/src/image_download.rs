@@ -284,8 +284,8 @@ pub fn find_image_refs(content: &str) -> Vec<ImageRef> {
                     let alt_end = after_bang + close_bracket;
                     let alt = &line[after_bang..alt_end];
                     let paren_start = alt_end + 1;
-                    if paren_start < line.len() && line.as_bytes()[paren_start] == b'(' {
-                        if let Some(close_paren) = line[paren_start..].find(')') {
+                    if paren_start < line.len() && line.as_bytes()[paren_start] == b'('
+                        && let Some(close_paren) = line[paren_start..].find(')') {
                             let url = &line[paren_start + 1..paren_start + close_paren];
                             if url.starts_with("http://") || url.starts_with("https://") {
                                 refs.push(ImageRef {
@@ -297,7 +297,6 @@ pub fn find_image_refs(content: &str) -> Vec<ImageRef> {
                             pos = paren_start + close_paren + 1;
                             continue;
                         }
-                    }
                 }
                 pos = abs_start + 2;
             } else {
