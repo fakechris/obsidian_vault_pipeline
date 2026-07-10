@@ -67,8 +67,8 @@ registry on load and rejects unknown component references in candidates.
 
 ```text
 1. Write candidate spec       →  evolution/candidates/<id>.json
-2. Validate spec              →  ovp-next evolve validate <spec>
-3. Run paired A/B             →  ovp-next evolve ab --candidate <spec>
+2. Validate spec              →  ovp2 evolve validate <spec>
+3. Run paired A/B             →  ovp2 evolve ab --candidate <spec>
 4. Review scorecard           →  hard gates + guardrails + primary metrics
 5. Accept / Reject            →  human decision
 6. Record in ledger           →  .ovp/evolution-ledger.jsonl

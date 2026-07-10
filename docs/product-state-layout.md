@@ -24,8 +24,8 @@ derived. Everything lives **in the vault** (never in the repo, never `.run/`).
     ├── reports/<run_id>.json       per-run report (append-only, collision-suffixed)
     ├── crystal/                    durable Crystal store (ledger.jsonl + crystal.md + review.json)
     ├── cassettes/daily/            recorded model replies (replayable; deletable at re-record cost)
-    ├── index/index.json            DERIVED read model (rebuild: `ovp-next index`)
-    └── console/index.html          DERIVED console     (rebuild: `ovp-next console`)
+    ├── index/index.json            DERIVED read model (rebuild: `ovp2 index`)
+    └── console/index.html          DERIVED console     (rebuild: `ovp2 console`)
 ```
 
 ## Rules
