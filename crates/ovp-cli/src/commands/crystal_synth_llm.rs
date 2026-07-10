@@ -370,8 +370,29 @@ pub(crate) fn run_sweep(
             cfg.max_cases_per_cluster,
         );
         stats.select_calls += 1;
+        // Parse-level failures (no JSON envelope, unrecoverable reply) are a
+        // property of ONE model exchange, not the sweep: fail this seed,
+        // forget the bad cassette so a rerun re-asks, keep sweeping — the
+        // same contract as mechanical validation below. (A live A/B run was
+        // aborted whole-arm by a single envelope-less reply; never again.)
+        // EXCEPTION: a replay cache MISS means the recording itself is
+        // incomplete — swallowing it per-seed would let a replay produce
+        // different metrics than the live run, so that one stays fatal.
+        // (String match: ModelClient errors are unstructured today.)
         let (selection, log) =
-            call_and_parse(client, &req, "cluster-select", parse_cluster_selection)?;
+            match call_and_parse(client, &req, "cluster-select", parse_cluster_selection) {
+                Ok(v) => v,
+                Err(e) if e.to_string().contains("cache miss") => return Err(e),
+                Err(e) => {
+                    stats.failed += 1;
+                    client.invalidate(&req);
+                    let msg = e.to_string();
+                    let mut line = SeedReport::new(seed, "failed");
+                    line.error = Some(&msg);
+                    write_line(&line)?;
+                    continue;
+                }
+            };
         if let Some(l) = log {
             repairs.push(l);
         }
@@ -773,6 +794,38 @@ mod tests {
         let neighbor_digests: Vec<CaseDigest> =
             neighbor_ids.iter().map(|id| digests[id].clone()).collect();
         cluster_select_request(&digests[seed], &neighbor_digests, 16)
+    }
+
+    #[test]
+    fn garbage_select_reply_fails_only_that_seed() {
+        // Regression: the first live A/B run was aborted whole-arm by one
+        // envelope-less (prose) reply. Parse garbage must fail ONE seed and
+        // keep sweeping; only replay cache MISSES stay fatal.
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(&cache, &sel_a, "I could not find a coherent cluster, sorry!");
+        for c in ["2026-06-02_b", "2026-06-03_c", "2026-06-04_d"] {
+            let r = select_request_for(&reader, &embed, &catalog, c);
+            write_cassette(&cache, &r, r#"{"refuse":true,"reason":"scattered"}"#);
+        }
+
+        let stats = run_stats(llm_args(&reader, &work, &embed)).expect("sweep must survive");
+        assert_eq!(stats.failed_seeds, 1, "only seed a fails");
+        assert_eq!(stats.refused, 3, "b, c, d all reach the model and refuse");
+        assert_eq!(stats.select_calls, 4);
+        assert_eq!(stats.durable_appended, 0);
+
+        let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        assert_eq!(first["outcome"], "failed");
+        assert!(first["error"].as_str().unwrap().contains("JSON"));
     }
 
     #[test]
