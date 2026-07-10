@@ -139,15 +139,21 @@ fn strip_trailing_em_tag(s: &str) -> &str {
     trimmed
 }
 
-/// Collect every reader-pack dir (any dir carrying reader.md /
-/// run-status.json / units.accepted.json), sorted by case_id.
+/// Collect every PRODUCT reader-pack dir (any dir carrying reader.md /
+/// run-status.json / units.accepted.json, minus failed attempts), sorted by
+/// case_id. A missing reader root is an empty corpus (fresh vault), not an
+/// error — the degradation contract says never block.
 fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
-    let entries = std::fs::read_dir(reader_root).map_err(|e| {
-        CliError::Io(format!(
-            "crystal-themes: reading reader root {}: {e}",
-            reader_root.display()
-        ))
-    })?;
+    let entries = match std::fs::read_dir(reader_root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(CliError::Io(format!(
+                "crystal-themes: reading reader root {}: {e}",
+                reader_root.display()
+            )));
+        }
+    };
     let mut docs = Vec::new();
     for entry in entries.flatten() {
         let dir = entry.path();
@@ -158,6 +164,14 @@ fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
             || dir.join("run-status.json").exists()
             || dir.join("units.accepted.json").exists();
         if !is_pack {
+            continue;
+        }
+        // The index's product-pack eligibility rule (shared predicate; see
+        // `ovp_index::failed_reader_attempt` / `build_packs`): failed reader
+        // attempts leave dirs with run-status.json carrying a parse_error or
+        // zero cards — audit artifacts, not product. They must not shape
+        // embeddings/kNN/communities either.
+        if ovp_index::failed_reader_attempt(&dir) {
             continue;
         }
         let case_id = entry.file_name().to_string_lossy().into_owned();
@@ -767,5 +781,45 @@ mod tests {
         std::fs::create_dir_all(vault.join(VaultLayout::new().reader_root())).unwrap();
         run(args(vault)).expect("noop");
         assert!(!vault.join(".ovp/crystal/themes.json").exists());
+    }
+
+    #[test]
+    fn missing_reader_root_is_a_graceful_noop() {
+        // Fresh vault: 40-Resources/Reader does not exist yet. The documented
+        // degradation contract is "print why and exit 0", not an IO error.
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        run(args(vault)).expect("missing reader root must be a no-op, not an error");
+        assert!(!vault.join(".ovp/crystal/themes.json").exists());
+    }
+
+    #[test]
+    fn failed_reader_attempts_are_excluded_from_theme_inputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        seed_two_pack_vault(vault);
+        let reader = vault.join(VaultLayout::new().reader_root());
+        // A failed attempt dir: run-status.json with zero cards (the index's
+        // exclusion rule). No cached vector is seeded for it — if it leaked
+        // into the inputs, this run could not resolve vectors at all.
+        let failed = reader.join("2026-06-03_failed");
+        std::fs::create_dir_all(&failed).unwrap();
+        std::fs::write(
+            failed.join("run-status.json"),
+            r#"{"source": "Broken source", "cards": 0, "parse_error": "model reply unusable"}"#,
+        )
+        .unwrap();
+        std::fs::write(failed.join("reader.md"), "# Broken source\n\nstub\n").unwrap();
+
+        run(args(vault)).expect("themes run");
+        let file = ThemesFile::load(&vault.join(".ovp/crystal/themes.json"))
+            .unwrap()
+            .expect("themes written from the two product packs");
+        assert_eq!(file.packs.len(), 2, "{:?}", file.packs);
+        assert!(
+            !file.packs.contains_key("2026-06-03_failed"),
+            "failed attempt must not shape communities: {:?}",
+            file.packs
+        );
     }
 }

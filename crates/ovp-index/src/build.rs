@@ -382,6 +382,37 @@ struct RunStatusFile {
     parse_error: Option<String>,
 }
 
+impl RunStatusFile {
+    /// The PRODUCT eligibility rule: a failed attempt also leaves a pack dir
+    /// (audit artifacts + the fail-loud "pack written" semantics), marked by
+    /// a `parse_error` or zero cards in run-status.json. Only card-bearing
+    /// packs are product; the failure itself lives on the source row.
+    fn is_product(&self) -> bool {
+        self.parse_error.is_none() && self.cards > 0
+    }
+}
+
+/// Does this reader dir hold a FAILED reader attempt — a run-status.json that
+/// fails the index's product-pack rule ([`RunStatusFile::is_product`], the
+/// predicate `build_packs` applies)? Dirs WITHOUT run-status.json are not
+/// judged here (legacy corpus packs predate the file). An unreadable or
+/// unparseable run-status.json counts as failed: non-index consumers of the
+/// reader tree (e.g. `crystal-themes` input collection) must SKIP such dirs,
+/// unlike the index build itself, which fails loud on them.
+pub fn failed_reader_attempt(dir: &Path) -> bool {
+    let status_path = dir.join("run-status.json");
+    if !status_path.exists() {
+        return false;
+    }
+    match std::fs::read_to_string(&status_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<RunStatusFile>(&raw).ok())
+    {
+        Some(status) => !status.is_product(),
+        None => true,
+    }
+}
+
 #[derive(Deserialize)]
 struct CardFile {
     #[serde(default)]
@@ -421,10 +452,10 @@ fn build_packs(
                 .map_err(|e| format!("reading {}: {e}", status_path.display()))?,
         )
         .map_err(|e| format!("parsing {}: {e}", status_path.display()))?;
-        // A failed attempt also leaves a pack dir (audit artifacts + the
-        // fail-loud "pack written" semantics). Only card-bearing packs are
-        // PRODUCT; the failure itself is on the source row, not here.
-        if status.parse_error.is_some() || status.cards == 0 {
+        // Product eligibility — see `RunStatusFile::is_product` (shared with
+        // `failed_reader_attempt` so other reader-tree consumers apply the
+        // same rule).
+        if !status.is_product() {
             continue;
         }
         let cards: Vec<CardFile> = std::fs::read_to_string(dir.join("cards.json"))
@@ -947,6 +978,30 @@ mod tests {
             None
         );
         assert_eq!(corpus_date("40-Resources/Reader/00044cfd-"), None);
+    }
+
+    #[test]
+    fn failed_reader_attempt_mirrors_the_product_pack_rule() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // No run-status.json → not judged (legacy pack).
+        assert!(!failed_reader_attempt(dir));
+        // Card-bearing, no parse error → product.
+        std::fs::write(dir.join("run-status.json"), r#"{"cards": 3}"#).unwrap();
+        assert!(!failed_reader_attempt(dir));
+        // Zero cards → failed attempt.
+        std::fs::write(dir.join("run-status.json"), r#"{"cards": 0}"#).unwrap();
+        assert!(failed_reader_attempt(dir));
+        // parse_error set → failed attempt even with cards.
+        std::fs::write(
+            dir.join("run-status.json"),
+            r#"{"cards": 3, "parse_error": "bad reply"}"#,
+        )
+        .unwrap();
+        assert!(failed_reader_attempt(dir));
+        // Unparseable status → failed (non-index consumers skip, not crash).
+        std::fs::write(dir.join("run-status.json"), "not json").unwrap();
+        assert!(failed_reader_attempt(dir));
     }
 
     #[test]
