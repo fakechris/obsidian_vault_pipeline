@@ -33,6 +33,12 @@ use sha2::{Digest, Sha256};
 /// substrate.
 pub mod synth;
 
+/// L3 — `cluster_select/v1`: LLM-shaped synthesis clusters for
+/// `crystal-synth --cluster-mode llm`. Prompt builder + reply parsing +
+/// MECHANICAL selection validation; refusal is a first-class outcome.
+/// Never touches grounding, gates, or the ledger.
+pub mod select;
+
 /// Semantic display themes: the `themes.json` projection schema + helpers
 /// (majority-label lookup, synthesis grouping, bilingual `theme_label/v1`
 /// model stage). Rebuildable projection; never baked into the ledger.
