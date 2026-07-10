@@ -133,6 +133,24 @@ product surface:
 | `ovp2 project` | Projection Lanes: view claims by lane, or write durable claims as vault notes (`--write` / `--rebuild`) |
 | `ovp2 mcp` | MCP stdio server exposing find/search/status/doctor tools to MCP-compatible editors |
 
+## Privacy & trust
+
+OVP2 is local-first. Everything it knows lives as plain files inside your
+vault (`.ovp/` ledgers and projections plus the notes themselves); there is no
+cloud component, no account, and **no telemetry**. The only things that ever
+leave your machine, each under your explicit configuration:
+
+- **LLM calls** — during `daily`, `ask`, and `crystal-synth` (and the portal's
+  Ask page), article/bookmark text is sent to the LLM provider **you**
+  configure via environment keys (`ANTHROPIC_API_KEY`, optional
+  `ANTHROPIC_BASE_URL`). No key, no calls: the default run is offline/replay.
+- **Pinboard sync** — `pinboard-sync --live` talks to pinboard.in with your
+  `PINBOARD_TOKEN` (never stored, never logged).
+- **Web/GitHub enrichment** — enrichment fetches the URLs you bookmarked
+  (plus GitHub API metadata for repo links) to capture their content.
+
+Nothing else is transmitted, ever.
+
 ## Documentation
 
 | Doc | Contents |
@@ -152,4 +170,20 @@ flow run on a real vault today. Release v0.23.0 continues the repository's
 release lineage (v0.22.0 was the last Python-era release); v2.0.0 is reserved
 for the merge-to-main / Python-retirement milestone. In flight: real-vault
 dogfooding and semantic theme projection. Historical stage records live in
-`docs/stage-*.md`.
+`docs/stage-*.md`; release history is in [`CHANGELOG.md`](CHANGELOG.md).
+
+## License
+
+Dual-licensed under either of
+
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in this work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional
+terms or conditions.
+
+Exception: the vendored IBM Plex web fonts
+(`console-ui/src/design/fonts/`) remain under the SIL Open Font License 1.1 —
+see [`console-ui/src/design/fonts/LICENSE.txt`](console-ui/src/design/fonts/LICENSE.txt).

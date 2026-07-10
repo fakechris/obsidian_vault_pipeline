@@ -43,6 +43,52 @@ Prebuilt binaries are built with `features = ["anthropic", "pinboard-live",
 live enrichment work out of the box. Runtime behavior stays opt-in (flags +
 env); a plain run is still offline/replay.
 
+## Installing an older version (downgrade / rollback)
+
+This is the rollback story for major cutovers — e.g. if v2.0.0 (the
+Python-retirement release) misbehaves on your vault, you can pin back to the
+last release that worked and file a bug. Vault state is safe either way:
+ledgers are append-only and projections rebuild, so downgrading the binary
+does not corrupt anything.
+
+1. **curl installer, versioned URL (recommended).** Every release keeps its
+   installer attached; swap `latest/download` for a version tag:
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -LsSf \
+     https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v0.23.0/ovp-cli-installer.sh | sh
+   ```
+
+   The versioned installer installs exactly that release (it overwrites
+   whatever `ovp2` is in `$CARGO_HOME/bin`). Verify with `ovp2 --version`.
+
+2. **Homebrew — pinning realities.** The tap formula
+   (`fakechris/ovp2/ovp2`) always tracks the **latest** release; there are no
+   versioned formulae (`ovp2@0.23`), so `brew install` cannot directly ask
+   for an old version. What works:
+
+   - `brew pin ovp2` — *before* the bad release lands, this stops `brew
+     upgrade` from moving you. It does not install anything older.
+   - **Install from a tap commit** — the tap's git history has every formula
+     version. Check the tap clone out at the commit you want and install from
+     the local formula file:
+
+     ```sh
+     cd "$(brew --repository fakechris/ovp2)"
+     git log --oneline Formula/ovp2.rb   # find the commit for the version you want
+     git checkout <commit> -- Formula/ovp2.rb
+     brew reinstall --formula Formula/ovp2.rb
+     git checkout HEAD -- Formula/ovp2.rb   # restore the tap afterwards
+     ```
+
+   - **Direct tarball fallback** — skip brew and grab the release artifact
+     (`ovp-cli-<target>.tar.xz`) from the versioned GitHub release page,
+     unpack, and put `ovp2` on your `PATH`. Equivalent to what the installer
+     does, minus the receipt.
+
+   If that dance is more than you need, just use the versioned curl installer
+   (option 1) — it wins on simplicity and is the supported rollback path.
+
 ## What is configured where
 
 | File | Role |
