@@ -523,6 +523,37 @@ enum Cmd {
         /// if an internal batching bug would send an oversized request.
         #[arg(long)]
         strict_cluster_cap: bool,
+        /// L3: how synthesis inputs are grouped. `batch` (default) keeps the
+        /// deterministic themes/date batching; `llm` runs the coverage-first
+        /// sweep — one cluster_select/v1 call per uncovered pack picks 3..cap
+        /// case ids (or refuses), the superset guard skips clusters an active
+        /// claim already covers, then the UNCHANGED crystal_synth/v1 + gates +
+        /// idempotent write run per cluster. Needs cached embeddings
+        /// (`ovp2 crystal-themes` warms them).
+        #[arg(long, value_enum, default_value_t = ClusterModeArg::Batch)]
+        cluster_mode: ClusterModeArg,
+        /// llm mode: per-run budget cap on cluster_select/v1 calls.
+        #[arg(long, default_value_t = 25)]
+        max_seeds: usize,
+        /// llm mode: kNN neighborhood size offered alongside each seed.
+        #[arg(long, default_value_t = 12)]
+        neighborhood: usize,
+        /// llm mode: embedding cache root. Default:
+        /// `<vault-root>/.ovp/cache/embeddings`.
+        #[arg(long)]
+        embed_cache_dir: Option<PathBuf>,
+        /// L3 A/B harness: sample a deterministic seeded slice of UNCOVERED
+        /// packs and run arm A (batch) vs arm B (llm) against the SAME packs
+        /// with fresh stores + separate cassette dirs; prints a comparison
+        /// table and writes comparison.json. The real store is only read.
+        #[arg(long)]
+        experiment: bool,
+        /// Experiment slice size (uncovered packs sampled).
+        #[arg(long, default_value_t = 30)]
+        experiment_slice: usize,
+        /// Experiment sampling seed.
+        #[arg(long, default_value_t = 42)]
+        experiment_seed: u64,
     },
     /// Build the semantic display-theme projection (.ovp/crystal/themes.json)
     /// over all reader packs: multilingual embeddings (cached) → Louvain
@@ -943,6 +974,14 @@ enum ClientKindArg {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ClusterModeArg {
+    /// Deterministic ≤cap batches (themes.json communities / date order).
+    Batch,
+    /// L3 coverage-first LLM cluster selection (cluster_select/v1).
+    Llm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum EvolveAction {
     Registry,
     Validate,
@@ -1302,32 +1341,67 @@ fn main() -> ExitCode {
             date,
             strict,
             strict_cluster_cap,
+            cluster_mode,
+            max_seeds,
+            neighborhood,
+            embed_cache_dir,
+            experiment,
+            experiment_slice,
+            experiment_seed,
         } => {
             use commands::client::ClientKind;
-            use commands::crystal_synth::CrystalSynthArgs;
+            use commands::crystal_synth::{ClusterMode, CrystalSynthArgs};
             let client_kind = match client {
                 ClientKindArg::Replay => ClientKind::Replay,
                 ClientKindArg::Live => ClientKind::Live,
             };
-            commands::crystal_synth::run(CrystalSynthArgs {
-                reader_dir,
-                vault_root,
-                work_dir,
-                store,
-                themes_file,
-                client_kind,
-                cache_dir,
-                max_cases_per_cluster,
-                max_units_per_case,
-                run_id,
-                title,
-                scope,
-                not_claiming,
-                refresh,
-                date,
-                strict,
-                strict_cluster_cap,
-            })
+            let cluster_mode = match cluster_mode {
+                ClusterModeArg::Batch => ClusterMode::Batch,
+                ClusterModeArg::Llm => ClusterMode::Llm,
+            };
+            if experiment {
+                commands::crystal_synth_ab::run_experiment(
+                    commands::crystal_synth_ab::ExperimentArgs {
+                        reader_dir,
+                        vault_root,
+                        store,
+                        themes_file,
+                        embed_cache_dir,
+                        work_dir,
+                        client_kind,
+                        slice: experiment_slice,
+                        seed: experiment_seed,
+                        max_seeds: 0, // per-arm default: the slice size
+                        neighborhood,
+                        max_cases_per_cluster,
+                        max_units_per_case,
+                    },
+                )
+            } else {
+                commands::crystal_synth::run(CrystalSynthArgs {
+                    reader_dir,
+                    vault_root,
+                    work_dir,
+                    store,
+                    themes_file,
+                    client_kind,
+                    cache_dir,
+                    max_cases_per_cluster,
+                    max_units_per_case,
+                    run_id,
+                    title,
+                    scope,
+                    not_claiming,
+                    refresh,
+                    date,
+                    strict,
+                    strict_cluster_cap,
+                    cluster_mode,
+                    max_seeds,
+                    neighborhood,
+                    embed_cache_dir,
+                })
+            }
         }
         Cmd::CrystalThemes {
             vault_root,

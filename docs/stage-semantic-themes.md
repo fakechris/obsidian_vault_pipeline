@@ -140,8 +140,10 @@ config — expect to raise k/resolution around the next corpus doubling
   (`evolution/candidates/theme_label-v1.json`) and validated via
   `ovp2 evolve validate`; the deterministic keyword layer is the auditable
   fallback under every label.
-- **L3 follow-up (out of scope here)**: KMEM-style LLM-shaped synthesis
-  clusters — using claim lineage / relations rather than doc embeddings to
-  group synthesis inputs. The L2 projection deliberately keeps display
-  themes decoupled so L3 can replace the grouping without touching the
-  ledger or the portal.
+- **L3 follow-up — SHIPPED**: KMEM-hybrid LLM-shaped synthesis clusters
+  landed as `crystal-synth --cluster-mode llm` (`cluster_select/v1`,
+  coverage-first sweep over the L1 embedding cache, superset guard, refusal
+  as a first-class answer; batch default unchanged pending the A/B). See
+  `docs/stage-l3-cluster-synthesis.md`. The L2 projection stayed decoupled
+  exactly as planned: L3 replaced the grouping without touching the ledger
+  or the portal.

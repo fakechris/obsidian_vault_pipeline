@@ -1,0 +1,23 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "cluster_select-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.cluster_select",
+  "hypothesis": "Replacing deterministic <=cap batch-shaping with one small LLM call per uncovered seed (seed+kNN-neighbor digests -> pick 3..cap diverse case ids for ONE claim-worthy cross-source cluster, or refuse) raises durable yield per crystal_synth call and mean distinct sources per durable claim on the ~55%-uncovered real-vault backlog, WITHOUT touching the citation/provenance/strength gates (grouping-only change; the superset guard prevents re-deriving subsets of active claims). Refusal is a first-class output, so wasted synth calls on topically scattered neighborhoods drop instead of producing gate-rejected grab-bag claims.",
+  "predicted_delta": {
+    "durable_yield_per_synth_call": "arm B (llm) >= 1.3x arm A (batch) on the seeded uncovered slice",
+    "mean_distinct_sources_per_durable_claim": "arm B >= arm A",
+    "gate_pass_rate": "arm B >= arm A (selection quality shows up as fewer gate rejections, never as a loosened gate)",
+    "cost": "arm B total LLM calls <= 3x arm A on the same slice (select adds ~1 small call per seed; refusals save the synth+strength spend)"
+  },
+  "guardrails": {},
+  "eval_plan": {
+    "replay_set": "ovp2 crystal-synth --experiment: deterministic seeded slice of uncovered real-vault packs, arm A (batch) vs arm B (llm) on the SAME packs, cassettes recorded once under separate cache dirs (cassettes-arm-a / cassettes-arm-b), replayable offline; comparison.json carries the paired metrics",
+    "paired_sources": 30,
+    "soak": false
+  },
+  "rollback": "Default stays --cluster-mode batch (byte-for-byte unchanged); drop the llm flag from operator runbooks and remove prompt.cluster_select from evolution/components.json. The sweep writes only through the unchanged idempotent crystal-write core, so no ledger surgery is ever needed; l3-sweep.jsonl and the arm stores under the experiment work dir are disposable artifacts.",
+  "ablation_required": false
+}

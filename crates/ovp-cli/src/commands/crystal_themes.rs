@@ -97,7 +97,7 @@ struct ThemeDoc {
 /// evidence scaffolding, trailing `` `[u-… · line N]` `` unit refs, heading
 /// markers, and trailing `_definition_`-style card-kind tags. Deterministic,
 /// line-based, no regex.
-fn clean_reader_body(md: &str) -> String {
+pub(crate) fn clean_reader_body(md: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     for line in md.lines() {
         let s = line.trim();

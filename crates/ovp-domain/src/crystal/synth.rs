@@ -528,7 +528,10 @@ pub struct DedupedClaim {
     pub reason: String,
 }
 
-fn citation_signature(citations: &[Citation]) -> String {
+/// Deterministic signature of a citation set (sorted, deduped). Public so the
+/// L3 sweep can dedup incrementally across clusters with the SAME identity the
+/// batch-mode `dedup_exact_citation_sets` uses.
+pub fn citation_signature(citations: &[Citation]) -> String {
     let mut parts: Vec<String> = citations
         .iter()
         .map(|c| {
