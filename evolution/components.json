@@ -1,0 +1,65 @@
+{
+  "components": [
+    {
+      "id": "prompt.unit_extract",
+      "surface": "prompt",
+      "current_version": "v5",
+      "file": "crates/ovp-domain/prompts/unit_extraction.md",
+      "quality_buckets": ["extraction_fidelity", "coverage"],
+      "regression_fixtures": ["fixtures/reader/m14a-coverage-set/"]
+    },
+    {
+      "id": "prompt.unit_critic",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/unit_critic.md",
+      "quality_buckets": ["extraction_fidelity"]
+    },
+    {
+      "id": "prompt.card_synth",
+      "surface": "prompt",
+      "current_version": "v3",
+      "file": "crates/ovp-domain/prompts/card_synthesis.md",
+      "quality_buckets": ["card_quality", "coverage"]
+    },
+    {
+      "id": "runtime.web_fetch",
+      "surface": "runtime",
+      "file": "crates/ovp-enrich/src/web_fetch.rs",
+      "quality_buckets": ["operational_reliability"]
+    },
+    {
+      "id": "gate.crystal_lint",
+      "surface": "gate",
+      "file": "crates/ovp-cli/src/commands/crystal_lint.rs",
+      "quality_buckets": ["crystal_provenance"]
+    },
+    {
+      "id": "prompt.crystal_synth",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/crystal_synth.md",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
+      "id": "prompt.crystal_strength",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/crystal_strength.md",
+      "quality_buckets": ["crystal_provenance"]
+    },
+    {
+      "id": "prompt.theme_label",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/theme_label.md",
+      "quality_buckets": ["card_quality"]
+    },
+    {
+      "id": "parser.json_repair",
+      "surface": "parser",
+      "file": "crates/ovp-domain/src/units/parser.rs",
+      "quality_buckets": ["operational_reliability", "extraction_fidelity"]
+    }
+  ]
+}

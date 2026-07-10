@@ -1,0 +1,1032 @@
+[
+  {
+    "id": "u-000-544615ad",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The company is AI-native when its operating model changes: fewer people coordinate less, agents execute more of the repeat work, and humans focus on direction, taste, relationships, validation, and accountability.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "The company is AI-native when its operating model changes: fewer people coordinate less, agents execute more of the repeat work, and humans focus on direction, taste, relationships, validation, and accountability.",
+      "location": {
+        "byte_start": 1368,
+        "byte_end": 1585,
+        "line": 45,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI-native",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "operating model",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-e24a3103",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The fundamental change is how fast the company can learn, iterate, and evolve, and the second company will outlearn the first every single day.",
+    "evidence": {
+      "ref_id": "p007.s002",
+      "quote": "The fundamental change is how fast the company can learn, iterate, and evolve.",
+      "location": {
+        "byte_start": 1075,
+        "byte_end": 1154,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI-native startup",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-6928bcee",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Map the work is the first step: listing the recurring work the startup ran in the last two weeks; if the work repeats, it is a candidate for encoding.",
+    "evidence": {
+      "ref_id": "p015.s002",
+      "quote": "If the work repeats, it is a candidate for encoding.",
+      "location": {
+        "byte_start": 2499,
+        "byte_end": 2552,
+        "line": 62,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Map the work",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "encoding",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-cc8f5b60",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "L1 is human only: a strategic call, a final hire, a major refund, a legal signature, a board communication.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "L1 is human only: a strategic call, a final hire, a major refund, a legal signature, a board communication.",
+      "location": {
+        "byte_start": 2832,
+        "byte_end": 2943,
+        "line": 68,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "L1 autonomy level",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-c6c10b55",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "L2 is AI prepared, human approved: an investor update draft, a contract redline, a pricing-page rewrite, a support macro.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "L2 is AI prepared, human approved: an investor update draft, a contract redline, a pricing-page rewrite, a support macro.",
+      "location": {
+        "byte_start": 2945,
+        "byte_end": 3070,
+        "line": 70,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "L2 autonomy level",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-fab38159",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "L3 is AI executes, human supervises: inbound triage, meeting-note routing, lead enrichment, test generation.",
+    "evidence": {
+      "ref_id": "p020.s001",
+      "quote": "L3 is AI executes, human supervises: inbound triage, meeting-note routing, lead enrichment, test generation.",
+      "location": {
+        "byte_start": 3072,
+        "byte_end": 3184,
+        "line": 72,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "L3 autonomy level",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-654c9520",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "L4 is autonomous inside clear limits: competitor monitoring, nightly report generation, invoice extraction from known vendors, simple anomaly detection.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "L4 is autonomous inside clear limits: competitor monitoring, nightly report generation, invoice extraction from known vendors, simple anomaly detection.",
+      "location": {
+        "byte_start": 3186,
+        "byte_end": 3342,
+        "line": 74,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "L4 autonomy level",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-fb820147",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The boring workflow usually wins; frequency beats prestige, and the first workflow to attack is frequent, measurable, reversible, and tied to a real bottleneck.",
+    "evidence": {
+      "ref_id": "p022.s001",
+      "quote": "The boring workflow usually wins.",
+      "location": {
+        "byte_start": 3344,
+        "byte_end": 3377,
+        "line": 76,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "workflow automation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-68dcc779",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Do not automate work that is rare, unclear, high-trust, or unstable; if the team cannot explain what good output looks like, the workflow is not ready for encoding.",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "Do not automate work that is rare, unclear, high-trust, or unstable.",
+      "location": {
+        "byte_start": 3729,
+        "byte_end": 3797,
+        "line": 78,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "automation",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-72461ff1",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Context is the AI native startup's operating memory, everything the company knows about itself, held where agents can read it; it separates an agent that works like a cofounder from one that works like a confused temp.",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "Context is the AI native startup's operating memory.",
+      "location": {
+        "byte_start": 4742,
+        "byte_end": 4794,
+        "line": 84,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context system",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-cda52cae",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A diagnostic to ascertain the state of the context layer: pick one representative task, hand it to a fresh agent with only the workspace context, and ask for three next actions; two or more strong suggestions means the context layer is carrying weight; three generic answers means the context is thin.",
+    "evidence": {
+      "ref_id": "p028.s001",
+      "quote": "pick one representative task, hand it to a fresh agent with only the workspace context, and ask for three next actions.",
+      "location": {
+        "byte_start": 5344,
+        "byte_end": 5543,
+        "line": 88,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context layer",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-9c6dcbfb",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Keep context to 40–60 hand-written lines; a tight list of what to avoid beats 400 generated lines of slop.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "a tight list of what to avoid beats 400 generated lines of slop.",
+      "location": {
+        "byte_start": 6202,
+        "byte_end": 6335,
+        "line": 94,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "context files",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-cdd57802",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Keep raw data separate from distilled data; a call transcript is raw, but the decision made on that call, the objection the customer raised, the follow-up owner, the renewal risk—that's distilled, and that's what agents actually query.",
+    "evidence": {
+      "ref_id": "p036.s003",
+      "quote": "A call transcript is raw.",
+      "location": {
+        "byte_start": 8158,
+        "byte_end": 8184,
+        "line": 104,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "raw vs distilled data",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-6896203a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The Replit incident from mid-2025—a coding agent wiped a production database mid-session—demonstrates that a prompt instruction is not a security boundary.",
+    "evidence": {
+      "ref_id": "p037.s005",
+      "quote": "a prompt instruction is not a security boundary.",
+      "location": {
+        "byte_start": 9020,
+        "byte_end": 9196,
+        "line": 106,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agent security",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-6210f0ff",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "The best AI-native systems are a blend of scripts, AI-assisted humans, deterministic workflows, and agents, each doing the work it's actually suited for; the job as a founder is to reach for the lightest tool that can run the work safely.",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "The best AI-native systems are a blend of scripts, AI-assisted humans, deterministic workflows, and agents, each doing the work it's actually suited for.",
+      "location": {
+        "byte_start": 10416,
+        "byte_end": 10569,
+        "line": 116,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "automation tool selection",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-b774c3b1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use a script when the step is deterministic—exporting a report, transforming a CSV, running tests, checking links, validating JSON, formatting the weekly metric pack.",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "Use a script when the step is deterministic",
+      "location": {
+        "byte_start": 10715,
+        "byte_end": 10885,
+        "line": 118,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "scripts",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-2de250d6",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use an agent when the path can't be pre-specified—investigate a production bug, research a market, work an unusual support case, untangle a messy customer account.",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "Use an agent when the path can't be pre-specified",
+      "location": {
+        "byte_start": 11295,
+        "byte_end": 11462,
+        "line": 124,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agents",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-02ad882e",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "A workable first harness version has six stages: Preflight, Plan, Approve, Execute, Verify, and Log.",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "A workable first version is six stages:",
+      "location": {
+        "byte_start": 11770,
+        "byte_end": 11894,
+        "line": 126,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p047.s002`..`p048.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-77fc7ec2",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Guardrails belong in code and config, not in prompts; the non-negotiables are explicit: cost caps per run and per day, retry caps, a maximum tool-call depth, scoped credentials per agent identity, no production writes without an approval step, no auto-merge on code, and a fleet-wide kill switch.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "Guardrails belong in code and config, not in prompts.",
+      "location": {
+        "byte_start": 12252,
+        "byte_end": 12305,
+        "line": 135,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "guardrails",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-6ddced0f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A skill is reusable instructions plus examples for a recurring task; run it by hand twice, then encode the parts that repeat.",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "A skill is reusable instructions plus examples for a recurring task.",
+      "location": {
+        "byte_start": 13192,
+        "byte_end": 13260,
+        "line": 143,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "skill",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-1864a830",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "An eval has three layers: hand-labeled ground truth, deterministic checks, and an LLM judge for what the deterministic checks can't reach.",
+    "evidence": {
+      "ref_id": "p061.s001",
+      "quote": "An eval has three layers, and they stack in order.",
+      "location": {
+        "byte_start": 15177,
+        "byte_end": 15508,
+        "line": 162,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "eval layers",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p060.s001`..`p062.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-32a29834",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Below roughly 70% acceptance rate—minor edits still count as accepted—the skill isn't ready to move up an autonomy level; when acceptance is low, rewriting the prompt is almost never the fix; it's usually loading more context at runtime, tightening the skill's scope, adding more worked examples, or writing a clearer escalation rule.",
+    "evidence": {
+      "ref_id": "p071.s001",
+      "quote": "Below roughly 70% — minor edits still count as accepted — the skill isn't ready to move up an autonomy level to run with less oversight than it has now.",
+      "location": {
+        "byte_start": 17737,
+        "byte_end": 18116,
+        "line": 186,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "acceptance rate",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p070.s002`..`p071.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-023-c1a81c7c",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "The fastest way to move a team onto a new way of operating is to show them live, within the context of your company.",
+    "evidence": {
+      "ref_id": "p074.s001",
+      "quote": "The fastest way to move a team onto a new way of operating is to show them live, within the context of your company.",
+      "location": {
+        "byte_start": 18474,
+        "byte_end": 18590,
+        "line": 194,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI-native team adoption",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-024-54adf704",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The human role gets bigger, not smaller: people design the system, own the relationships, judge the output, and carry the accountability while agents handle execution.",
+    "evidence": {
+      "ref_id": "p077.s001",
+      "quote": "the human role gets bigger, not smaller.",
+      "location": {
+        "byte_start": 19688,
+        "byte_end": 19739,
+        "line": 200,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "human role",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-87cdbd5b",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "When hiring, test for the new shape of the job: skip the trivia, hand candidates a project too big to finish by hand in the time given, and watch how they direct agents through it; you're hiring for judgment, taste, and the ability to recover when an agent goes sideways.",
+    "evidence": {
+      "ref_id": "p078.s004",
+      "quote": "test for the new shape of the job: skip the trivia, hand candidates a project too big to finish by hand in the time given, and watch how they direct agents through it.",
+      "location": {
+        "byte_start": 20214,
+        "byte_end": 20400,
+        "line": 202,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "hiring criteria",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-026-a4b955c4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The inner loop makes existing work better—lower cost per run, shorter cycle time, fewer incidents, less review time per artifact—while the outer loop hunts for what's next: new customer segments, product ideas, pricing changes, partnerships, competitor moves, regulatory shifts, churn risk.",
+    "evidence": {
+      "ref_id": "p084.s002",
+      "quote": "The inner loop makes existing work better",
+      "location": {
+        "byte_start": 21546,
+        "byte_end": 21680,
+        "line": 220,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "inner loop",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "outer loop",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-f0408217",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Two hard rules: nothing auto-merges, and no agent writes to production; the gate is what let them scale the rest safely.",
+    "evidence": {
+      "ref_id": "p087.s001",
+      "quote": "two hard rules: nothing auto-merges, and no agent writes to production.",
+      "location": {
+        "byte_start": 22411,
+        "byte_end": 22492,
+        "line": 226,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "code deployment safety",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-028-d7d0c358",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Company-level self-improvement comes down to one skill: whether the team can write evals; the founder writes the eval and reads the failure clusters but never writes or reads the evolved prompt.",
+    "evidence": {
+      "ref_id": "p089.s001",
+      "quote": "Company-level self-improvement comes down to one skill: whether the team can write evals.",
+      "location": {
+        "byte_start": 23209,
+        "byte_end": 23298,
+        "line": 230,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "company self-improvement",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-029-e59ff187",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agent capability is rarely the thing holding you back; if you can encode what good looks like—binary labels, a scoring rubric, a few business metrics—the loop runs at the scale of the whole company; if you can't, no amount of model capability closes the gap.",
+    "evidence": {
+      "ref_id": "p090.s001",
+      "quote": "Agent capability is rarely the thing holding you back.",
+      "location": {
+        "byte_start": 23697,
+        "byte_end": 23751,
+        "line": 232,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agent capability",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-030-e264cf14",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Coding helps, but it isn't the bottleneck; a subject-matter expert who can reliably mark output good or bad can run the entire loop; the eval is the load-bearing artifact.",
+    "evidence": {
+      "ref_id": "p090.s004",
+      "quote": "the eval is the load-bearing artifact.",
+      "location": {
+        "byte_start": 23903,
+        "byte_end": 24135,
+        "line": 232,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "eval",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p090.s003`..`p090.s005` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-031-a2b361a5",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Discipline is the moat now; everyone has the same models; the operating system is the secret sauce.",
+    "evidence": {
+      "ref_id": "p091.s003",
+      "quote": "Discipline is the moat now.",
+      "location": {
+        "byte_start": 24356,
+        "byte_end": 24384,
+        "line": 234,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI-native company differentiation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-032-f8501da6",
+    "kind": "assertion",
+    "text": "Every agent summary has to trace back to its source — the transcript, the ticket, the commit, the invoice, the database row.",
+    "evidence": {
+      "ref_id": "p039.s002",
+      "quote": "Every agent summary has to trace back to its source — the transcript, the ticket, the commit, the invoice, the database row.",
+      "location": {
+        "byte_start": 9760,
+        "byte_end": 9887,
+        "line": 110,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-033-b7f188e5",
+    "kind": "assertion",
+    "text": "The advanced version is a structured context graph.",
+    "evidence": {
+      "ref_id": "p038.s001",
+      "quote": "The advanced version is a structured context graph.",
+      "location": {
+        "byte_start": 9198,
+        "byte_end": 9253,
+        "line": 108,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

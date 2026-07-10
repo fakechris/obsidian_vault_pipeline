@@ -1,0 +1,21 @@
+[package]
+name = "ovp-rag"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next L6 RAG read path: a read-only retriever + ranker + context builder + offline eval over ovp-query::KnowledgeView"
+
+[dependencies]
+ovp-query = { path = "../ovp-query" }
+serde = { workspace = true }
+
+[dev-dependencies]
+# The e2e seeds a real canonical store + vault, loads a KnowledgeView, and
+# builds the corpus from it — all offline (tempdirs only).
+ovp-core = { path = "../ovp-core" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-stores = { path = "../ovp-stores" }
+sha2 = { workspace = true }
+tempfile = { workspace = true }

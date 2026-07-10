@@ -1,0 +1,279 @@
+{
+  "durable": [
+    {
+      "claim_id": "c01",
+      "title_en": "Filesystem Stack Matches Bespoke Memory Infra",
+      "title_zh": "文件系统栈可媲美专用记忆基础设施",
+      "summary_zh": "多源证据表明，以文件系统 + Markdown + Bash 构成的极简栈，在记忆存储与检索上可匹配乃至超越定制化记忆基础设施，无需引入额外依赖。",
+      "why_en": "Grounding OVP's memory layer in plain files rather than bespoke infra keeps the system auditable, portable, and cheaper to operate without sacrificing retrieval quality.",
+      "why_zh": "将 OVP 记忆层建在普通文件之上，而非专用基础设施，可在不损失检索质量的前提下保持可审计、可迁移，并降低运维成本。"
+    },
+    {
+      "claim_id": "c03",
+      "title_en": "Pure Semantic Retrieval Fails at Scale",
+      "title_zh": "纯语义检索在规模化场景下不可靠",
+      "summary_zh": "基准调研与形式理论两类文献一致表明：纯向量/语义检索随规模扩大而性能下降，必须引入混合存储加以补充；顶级系统无一例外采用混合存储，\"无逃逸定理\"进一步要求系统保留精确的情节记录。",
+      "why_en": "OVP's hybrid index (vector + exact episodic store) is architecturally validated by both empirical benchmarks and formal theory, justifying the design cost over pure-vector shortcuts.",
+      "why_zh": "OVP 的混合索引（向量 + 精确情节存储）同时得到实证基准与形式理论的支撑，证明该架构代价优于纯向量方案，为设计决策提供依据。"
+    },
+    {
+      "claim_id": "c05",
+      "title_en": "Freeze Memory Snapshot at Session Start",
+      "title_zh": "会话开始时冻结记忆快照",
+      "summary_zh": "设计准则：会话开始时将动态记忆固定为快照，整个会话期间不再向系统提示注入任何变更，以保持提示缓存稳定。",
+      "why_en": "Mutating the system prompt mid-session busts the prompt cache on every turn; freezing a snapshot at session start is the structural prerequisite for cost-effective, cache-stable OVP delivery.",
+      "why_zh": "会话中途修改系统提示会使每轮缓存失效；在会话开始时冻结快照，是 OVP 实现低成本、缓存稳定交付的结构性前提。"
+    },
+    {
+      "claim_id": "c06",
+      "title_en": "Offline Dreaming Backs Online Memory Layers",
+      "title_zh": "离线\"梦境\"巩固在线记忆层",
+      "summary_zh": "一种反复出现的架构模式：廉价的在线层由离线后台进程支撑，该进程（如 Anthropic 的\"dreaming\"、Letta 的睡眠时代理）回顾历史会话记录，并对持久记忆进行精炼与巩固。",
+      "why_en": "OVP's consolidation pipeline design must account for this two-tier pattern — a lightweight online writer plus a scheduled offline reviewer — to keep durable memory accurate without blocking live sessions.",
+      "why_zh": "OVP 的记忆巩固管道必须采用\"轻量在线写入 + 定时离线审查\"的两层架构，才能在不阻塞实时会话的前提下保持持久记忆的准确性。"
+    },
+    {
+      "claim_id": "c09",
+      "title_en": "Context Rot Demands Compression, Not Bigger Windows",
+      "title_zh": "上下文腐化：压缩优先，扩窗无效",
+      "summary_zh": "跨模型实验表明，性能随输入长度下降，且发生在上下文窗口填满之前——这一\"上下文腐化\"现象说明主动压缩比单纯扩大窗口更关键。",
+      "why_en": "OVP must actively compress context rather than rely on window size, since rot sets in before limits are reached.",
+      "why_zh": "OVP 的设计重点应是主动压缩，而非依赖更大的上下文窗口——腐化在窗口耗尽前已发生。"
+    },
+    {
+      "claim_id": "c11",
+      "title_en": "Load Skills On Demand, Not Up Front",
+      "title_zh": "按需加载技能，避免上下文膨胀",
+      "summary_zh": "按需注入领域工作流、Schema 与决策树是保持 Agent 上下文精简的首选机制；过宽的技能包会造成上下文膨胀，应明确警告避免。",
+      "why_en": "OVP's skill-loading architecture must enforce progressive disclosure at the loader level to prevent context bloat from accumulating across multi-step agent runs.",
+      "why_zh": "OVP 的技能加载器必须在架构层面强制执行渐进披露，防止多步 Agent 运行中上下文持续累积膨胀。"
+    },
+    {
+      "claim_id": "c13",
+      "title_en": "Bi-temporal Modeling Handles Knowledge Staleness",
+      "title_zh": "双时态建模处理知识过期",
+      "summary_zh": "将事实在世界中的有效时间与系统习得该事实的时间分开记录，是应对记忆与知识库系统中更新和过期问题的核心反复出现的技术手段。",
+      "why_en": "OVP must distinguish when a fact was true from when it was ingested to correctly surface stale claims and apply targeted updates without corrupting historical provenance.",
+      "why_zh": "OVP 需区分事实的有效时间与入库时间，才能准确识别过期声明并精准更新，同时不破坏历史溯源链。"
+    },
+    {
+      "claim_id": "c14",
+      "title_en": "Humans Own Memory Approval and Deployment",
+      "title_zh": "持久记忆须经人工审批与部署",
+      "summary_zh": "三份来源均强调：持久知识必须可见、经所有者审批并经过核实，而非由系统隐式归纳——因为记忆写入本身附带真实的隐私与判断代价，自主记忆不可绕过人工治理关卡。",
+      "why_en": "OVP's append-only crystal store is only trustworthy if the human governance gate is non-bypassable; this claim is the principled justification for requiring explicit owner approval before any claim becomes durable.",
+      "why_zh": "OVP 的追加式 crystal 存储之所以可信，前提是人工治理关卡不可绕过；本条主张为\"持久化前必须经所有者显式批准\"提供了原则性依据。"
+    },
+    {
+      "claim_id": "engrt-2",
+      "title_en": "Author Once, Deploy as Plugin or Headless Agent",
+      "title_zh": "一次编写，双模部署（插件 / 无头代理）",
+      "summary_zh": "按照\"一份源码、两个封装\"原则，同一套智能体工作流可一次编写，既能作为交互式 Claude Cowork 插件部署，也能作为通过 API 调度的无头 Claude Managed Agent 部署。",
+      "why_en": "A 'one source, two wrappers' authoring model lets OVP ship the same agentic workflow to interactive and headless surfaces without forking logic, cutting maintenance and drift across deployment modes.",
+      "why_zh": "\"一份源码、两个封装\"的编写模型让 OVP 把同一套智能体工作流同时交付到交互式与无头两种界面，无需分叉逻辑，从而降低维护成本与多部署模式间的漂移。"
+    },
+    {
+      "claim_id": "engrt-4",
+      "title_en": "Supervisor Restarts Isolate Pipeline Crashes",
+      "title_zh": "监督者重启隔离管道崩溃",
+      "summary_zh": "Claude Code 通过监督者自动重启崩溃的媒体管道，将故障影响限制在单一组件内，沙箱崩溃不会导致对话内容丢失。",
+      "why_en": "Fault containment via supervisor restarts is a prerequisite for OVP multi-tenant reliability: knowing crashes stay scoped lets the system serve concurrent users without defensive conversation checkpointing overhead.",
+      "why_zh": "监督者级别的故障隔离是 OVP 多租户可靠性的前提——崩溃范围可控，系统才能在不增加防御性对话检查点开销的前提下并发服务多个用户。"
+    },
+    {
+      "claim_id": "engrt-5",
+      "title_en": "Replay Debugs Long Agent Runs Without Re-execution",
+      "title_zh": "回放调试长时智能体轨迹，无需重跑",
+      "summary_zh": "回放机制允许开发者在不重新执行的情况下审查数小时的智能体运行轨迹；配合远程 REPL 等运行时可观测手段，可直接检视进程状态与行为。",
+      "why_en": "OVP agents will run long, expensive trajectories; without replay and runtime inspection, debugging failures costs as much as the original run, making observability a hard prerequisite for any production agent loop.",
+      "why_zh": "OVP 智能体轨迹耗时长、成本高，若缺乏回放与运行时检视能力，调试失败的代价与重跑等同，因此可观测性是生产级智能体循环的硬性前提。"
+    },
+    {
+      "claim_id": "agdes-5",
+      "title_en": "Enterprise Context Layer as AI Infrastructure",
+      "title_zh": "企业上下文层：AI 基础设施",
+      "summary_zh": "企业上下文层将知识、专业经验与规范转化为机器可用的上下文，使 AI 智能体能以合适格式获取正确信息与工具，从而完成任务。",
+      "why_en": "Framing the context layer as infrastructure—not a feature—defines the architectural commitment OVP must make to reliably serve AI agents at enterprise scale.",
+      "why_zh": "将上下文层定位为基础设施而非功能特性，明确了 OVP 在企业级规模下可靠服务 AI 智能体所需的架构承诺。"
+    }
+  ],
+  "caveated": [
+    {
+      "claim_id": "evrel-1",
+      "summary_zh": "静默质量回退难以被发现，因为评估基础设施运行在训练时运行时中，而非生产运行时中。",
+      "why_caveated_en": "The claim is supported by a single source only; no corroborating evidence from a second independent source has been cited to confirm that this failure mode is general rather than anecdotal.",
+      "why_caveated_zh": "该论断仅有单一来源支撑，缺乏第二个独立来源的佐证，无法确认这一失效模式具有普遍性而非个案性。",
+      "action_en": "Locate a second independent source (e.g., a production ML system post-mortem or evaluation-infrastructure paper) that corroborates the training-runtime vs. production-runtime eval gap before promoting this claim to durable.",
+      "action_zh": "在将此论断升级为 durable 之前，需找到第二个独立来源（如生产 ML 系统事后分析或评估基础设施论文），以佐证训练时运行时与生产运行时之间的评估差距。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "evrel-2",
+      "summary_zh": "人工分析模型输出在诊断评估失败原因、获取针对性改进洞见方面，可能比单纯依赖自动化指标更有效。",
+      "why_caveated_en": "Supported by a single source whose quote asserts manual analysis as the most effective diagnostic method; the claim softens this to a hedge (\"may be more effective\"), but the underlying evidence base remains thin — no corroborating source validates the comparative claim across contexts.",
+      "why_caveated_zh": "仅有单一来源支撑，且原文措辞为肯定断言，主张经过弱化改写后仍属孤证；跨场景的比较性结论尚无第二来源印证。",
+      "action_en": "Locate a second independent source — preferably an empirical study or practitioner post-mortem — that documents a concrete case where manual output inspection surfaced failure modes that automated metrics missed; pair it with the existing quote before considering promotion.",
+      "action_zh": "寻找第二个独立来源（优先选用实证研究或从业者事后复盘报告），要求该来源具体记录人工检查发现了自动化指标所遗漏的失败模式；与现有引文配对后方可考虑晋升为 durable。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "evrel-3",
+      "summary_zh": "作者观察认为，大多数\"氛围编程\"的成功案例，要么出自有经验的开发者之手，要么发生在低风险场景中。",
+      "why_caveated_en": "This is a single-source, first-person author observation with no corroborating external data; the \"supported\" label reflects faithful scope (\"most\"), but the evidence base is too thin to stand alone.",
+      "why_caveated_zh": "仅有作者一手观察，无第二来源佐证；\"supported\"标签仅表明措辞（\"大多数\"）尚属克制，但单源观察不足以独立支撑该论断。",
+      "action_en": "Pair with a published study or practitioner survey that documents vibe-coding outcomes by developer experience level before considering promotion to durable.",
+      "action_zh": "补充一份按开发者经验层级记录氛围编程结果的已发表研究或从业者调查，再评估是否可晋升为 durable。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "evrel-4",
+      "summary_zh": "智能体RL中的奖励博弈发生在优化指标与任务质量脱节时——模型可能学会输出无意义的平凡解，以迎合过度看重特定指标、忽视任务满足度的奖励信号。",
+      "why_caveated_en": "The claim is supported but rests on a single source; the trivial-solution instance is the author's own illustrative definition rather than independently verified evidence, so it needs a corroborating partner source before it can be treated as durable.",
+      "why_caveated_zh": "该主张有支撑，但仅依赖单一来源；\"平凡解\"示例本质上是作者的说明性定义，并非经过独立验证的证据，需要引入佐证来源方可视为可靠结论。",
+      "action_en": "Locate a second independent source (e.g., a published RL alignment paper or empirical study) that documents reward hacking or metric-task divergence in agent training, then cross-cite it alongside the original claim before reconsidering durable promotion.",
+      "action_zh": "查找第二个独立来源（如已发表的RL对齐论文或实证研究），记录智能体训练中奖励劫持或指标-任务偏离的案例，与原始主张交叉引用后，再重新评估是否晋升为可靠结论。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "secgov-2",
+      "summary_zh": "缺乏可见且可直接编辑存储状态的长期记忆系统，可能促成隐性画像而非真正的记忆；验证门控可让用户控制哪些AI生成内容被标记为已审阅。",
+      "why_caveated_en": "Labeled opinion_as_fact: the claim that opaque memory systems \"facilitate implicit profiling\" is the author's own rhetorical design stance, generalized as a universal system property without cited evidence or corroborating sources.",
+      "why_caveated_zh": "强度标签为 opinion_as_fact：原文是作者对系统设计的主观立场，以修辞性问句提出，却被还原为普遍性系统事实；既无引用支撑，也无独立来源印证。",
+      "action_en": "Rewrite by separating the design opinion (\"opaque state may enable profiling\") from any factual claim, or split into two entries: one scoped to the author's design rationale and one to the validation-gate mechanism if independently sourced.",
+      "action_zh": "将设计立场（\"不透明状态可能促成画像\"）与事实性断言拆分改写，或拆为两条：一条限定为作者设计理由，另一条仅在有独立来源时保留验证门控机制的陈述。",
+      "action_type": "needs_rewrite_or_split"
+    },
+    {
+      "claim_id": "engrt-3",
+      "summary_zh": "训练与生产运行时的分歧会导致智能体系统出现无声的质量退化，而定义并强制执行显式运行时契约被认为是应对这一漂移的潜在方法。",
+      "why_caveated_en": "The claim is strength-labeled \"supported\" but rests on a single conceptual thread — the runtime-divergence mechanism and its suggested contract remedy both originate from the same line of reasoning; no independent corroborating source is cited to validate that runtime contracts actually reduce silent regressions in practice.",
+      "why_caveated_zh": "该主张标记为\"supported\"，但机制描述与解决方案建议（运行时契约）均源自同一论证脉络，缺乏独立来源交叉验证运行时契约在实践中确实能减少无声退化。",
+      "action_en": "Find a second source — an independent empirical study or production postmortem — that demonstrates runtime contract enforcement measurably reducing silent quality regressions in a deployed agent system; if none can be found, downgrade the remedy half of the claim to speculative.",
+      "action_zh": "寻找第二个独立来源（实证研究或生产事故复盘），证明运行时契约执行在已部署的智能体系统中确实可测量地减少了无声质量退化；若无法找到，将\"契约remedy\"部分的表述降级为推测性。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "agdes-1",
+      "summary_zh": "一种做法是用单一智能体循环按需懒加载技能，而非为每项任务构建独立机器人，该设计可能比窄功能机器人集群更具优势。",
+      "why_caveated_en": "Labeled \"supported\" but rests on a single author's comparative assertion hedged with \"may offer advantages\" — no corroborating source validates the claimed superiority over fleet architectures.",
+      "why_caveated_zh": "虽标记为\"supported\"，但比较性断言来自单一作者且用\"may\"对冲，无第二来源印证单体循环相对于机器人集群的优势。",
+      "action_en": "Locate a second independent source (e.g., a paper or engineering post-mortem) that evaluates single-agent lazy-loading versus multi-bot fleet design; if none is found, rewrite the claim as an explicit design opinion attributed to its source rather than a comparative finding.",
+      "action_zh": "寻找第二个独立来源（如论文或工程复盘）评估单体懒加载与多机器人集群的对比；若无，则将该声明改写为明确归因于原作者的设计观点，而非比较性结论。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "agdes-2",
+      "summary_zh": "将\"技能\"视同软件时代的\"代码\"，作为程序性知识的基本单元统一管理，或可产生类似软件领域的组织效益。",
+      "why_caveated_en": "The claim is supported but rests on a single source; the analogy between skills-as-primitive and code-as-primitive, and especially the organizational-effects projection, lack a corroborating independent source to elevate it beyond a well-framed hypothesis.",
+      "why_caveated_zh": "该论断虽有支撑，但仅来自单一来源；\"技能即原语\"与\"代码即原语\"的类比，以及由此推导的组织效益，缺乏独立的佐证来源，目前只能视为有据可查的假设，而非确立结论。",
+      "action_en": "Locate a second independent source (e.g., organizational-learning, knowledge-management, or software-engineering literature) that independently observes skills or procedural knowledge being treated as reusable assets with measurable organizational impact, then pair it with the existing source before reconsidering for durable status.",
+      "action_zh": "寻找第二个独立来源（如组织学习、知识管理或软件工程文献），其需独立观察到将技能或程序性知识作为可复用资产并产生可量化组织效益的案例，与现有来源配对后再评估是否升格为 durable。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "agdes-3",
+      "summary_zh": "以决策为中心的架构（同时捕获逻辑、动作原语与数据）比纯数据检索架构更适合 Agent 决策。",
+      "why_caveated_en": "The claim is supported by a single source with vendor framing; no independent corroborating source has confirmed that decision-centric architecture outperforms data-centric retrieval in agent contexts.",
+      "why_caveated_zh": "仅有单一来源支持，且该来源存在供应商立场；尚无独立资料印证\"决策中心架构优于数据中心检索\"这一结论。",
+      "action_en": "Locate a second independent source (academic paper, open-source project, or neutral evaluation) that corroborates the architectural advantage of decision-centric over data-centric retrieval for agents before considering promotion to durable.",
+      "action_zh": "在考虑升级为 durable 之前，需找到第二个独立来源（学术论文、开源项目或中立评测），印证\"决策中心架构在 Agent 场景下优于数据中心检索\"这一论点。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "agdes-4",
+      "summary_zh": "智能体训练遵循\"状态→动作→验证→奖励→学习\"五阶段通用循环，复杂度主要来自该循环之外的基础设施，而非循环本身。",
+      "why_caveated_en": "Labeled \"supported\" but rests on a single source; the five-domain universality claim is a broad generalization that requires at least one independent corroborating source before it can be treated as durable.",
+      "why_caveated_zh": "强度标签为\"supported\"，但仅来自单一来源；跨五个领域的普适性断言属于广泛概括，须有至少一个独立佐证来源方可升格为 durable。",
+      "action_en": "Locate a second independent source (e.g., a survey paper or textbook on RL or agent system design) that explicitly describes the same five-stage loop across multiple domains; if found, pair it with the existing source and re-gate.",
+      "action_zh": "查找第二个独立来源（如强化学习综述或智能体系统设计教材），明确描述相同的五阶段循环在多个领域的适用性；若找到，与现有来源配对后重新过门。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "densetech-1",
+      "summary_zh": "该论断将 NVIDIA 分层抽象吸收硬件复杂度与 Erlang/OTP 分布式协调抽象两种现象融合为一条普遍原则。",
+      "why_caveated_en": "Labeled over_synthesized: the claim welds two independent case studies (NVIDIA hardware abstraction layers; Erlang/OTP coordination primitives) into a single general principle that neither source jointly establishes — the fusion is the reviewer's inference, not a finding present in either evidence strand.",
+      "why_caveated_zh": "标注为 over_synthesized：两个独立案例（NVIDIA 硬件分层 vs. Erlang/OTP 协调原语）被合并为同一普遍原则，但没有任何一处原始引证同时支持两者，该概括是审阅者的推断，而非证据本身的结论。",
+      "action_en": "Split into two separate, narrowly scoped claims — one for NVIDIA's layered hardware abstraction and one for Erlang/OTP's distributed coordination abstractions — then gate each independently against its own source quotes before considering durable promotion.",
+      "action_zh": "将其拆分为两条独立的、范围收窄的论断——一条专述 NVIDIA 硬件分层抽象，一条专述 Erlang/OTP 分布式协调原语——再分别对照各自的原始引证独立过门控，方可考虑升级为 durable。",
+      "action_type": "needs_rewrite_or_split"
+    },
+    {
+      "claim_id": "densetech-3",
+      "summary_zh": "GPU执行层级在Tensor Core专业化时代新增了Warp与Cluster两层，使总层数达到五层。",
+      "why_caveated_en": "The claim is labeled \"supported\" but rests on a single source; without a corroborating reference confirming the five-layer hierarchy and the specific era attribution, it cannot be treated as durable.",
+      "why_caveated_zh": "该说法标记为\"有据可查\"，但仅来源于单一文献；在缺乏第二个信源独立印证五层结构及所属时代的情况下，不具备转化为持久性结论的条件。",
+      "action_en": "Locate a second primary source (e.g., NVIDIA architecture whitepaper or peer-reviewed GPU survey) that independently confirms the Warp and Cluster layer insertions and the five-layer total during the Tensor Core era, then re-gate.",
+      "action_zh": "查找第二个一手信源（如NVIDIA架构白皮书或同行评审的GPU综述），独立印证Tensor Core时代插入Warp与Cluster层、总计五层这一表述，确认后重新过闸评审。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "densetech-4",
+      "summary_zh": "NVIDIA 的竞争护城河源于十余年间积累的数十个生态库，而非任何单一库。",
+      "why_caveated_en": "The claim is supported but rests on a single source; no corroborating evidence from independent analyses or third-party audits of NVIDIA's ecosystem depth has been cited to substantiate the \"decade-plus / dozens of libraries\" framing.",
+      "why_caveated_zh": "该断言有来源支撑，但仅来自单一文献，缺乏独立第三方对 NVIDIA 生态广度与积累年限的佐证，尚不足以确立为持久结论。",
+      "action_en": "Locate a second independent source (e.g., an industry analyst report or academic survey of GPU software ecosystems) that corroborates the multi-library, multi-year accumulation claim before promoting to durable.",
+      "action_zh": "补充一份独立的第二来源（如行业分析报告或 GPU 软件生态学术综述），以佐证\"数十个库、历经十余年积累\"这一核心断言，方可提升为持久状态。",
+      "action_type": "needs_cross_source_partner"
+    },
+    {
+      "claim_id": "densetech-5",
+      "summary_zh": "低精度格式在每一代GPU上将同等硅片的有效容量翻倍，相当于把同一块芯片当作多块芯片使用。",
+      "why_caveated_en": "The mechanism is presented as an established system fact, but it originates from a single author's interpretive framing with no supporting citation or corroborating source recorded — a textbook opinion_as_fact pattern.",
+      "why_caveated_zh": "该说法将单一作者的诠释性论断（低精度格式\"等同于多芯片\"）直接表述为已确立的系统机制，无任何引用或佐证来源，属于典型的\"以观点充事实\"。",
+      "action_en": "Rewrite the claim to attribute the interpretation explicitly to its source, then locate at least one independent technical reference (e.g., NVIDIA architecture whitepaper or peer-reviewed benchmarks) that corroborates the capacity-multiplication framing before reconsidering for durable status.",
+      "action_zh": "将该断言改写为归因句式（\"据X认为……\"），并找到至少一份独立技术来源（如NVIDIA架构白皮书或同行评审的基准测试）来佐证\"容量倍增\"这一说法，再重新评估是否可升为持久结论。",
+      "action_type": "needs_rewrite_or_split"
+    }
+  ],
+  "reader_only": [
+    {
+      "case_id": "m18-03",
+      "why_high_value_en": "With 21 reader cards covering all 10 article core points and zero factual issues, this official OpenAI eval-practices doc is the corpus's most complete single-source treatment of LLM evaluation methodology — yet it contributes nothing to Crystal, while the \"evaluation discipline & methodology\" theme (evrel-2) already exists and is currently held up by a single citation from m18-12.",
+      "why_high_value_zh": "21 张读者卡片覆盖全部 10 个文章核心观点，且无事实问题——这是语料库中对 LLM 评估方法论覆盖最完整的单一来源；然而它对 Crystal 的贡献为零，而\"评估纪律与方法论\"主题（evrel-2）目前仅依赖 m18-12 的单条引用支撑。",
+      "partner_action_en": "Pair with m18-12 (evrel-2, \"evaluation discipline & methodology\") and add m18-03 as a second citation to strengthen that existing candidate; then extract a new claim from the OVP cards on LLM-as-judge bias mitigation — specifically that pairwise comparison plus chain-of-thought reasoning plus length control are the three recommended mitigations for position bias and verbosity bias — which has no current Crystal representation and is a concrete, testable practice grounded in the source.",
+      "partner_action_zh": "将 m18-03 作为第二引用补入 m18-12 已有的 evrel-2 候选（\"评估纪律与方法论\"），以双来源加固该条目；同时从 OVP 卡片中提取一条新 Crystal 声明：对比评分 + 思维链推理 + 长度控制，是缓解 LLM 评判器位置偏差和冗长偏差的三项具体实践——该观点目前在 Crystal 中完全空白，且可直接从源文本引用核实。"
+    },
+    {
+      "case_id": "m18-09",
+      "why_high_value_en": "With 27 accepted units across decision ontology, decision lineage, and agent-action governance, m18-09 is the corpus's dedicated source on decision-centric architecture — a distinct angle (data + logic + action + security as a unified substrate) not yet represented by any durable claim, making it a focused extraction target rather than a marginal add-on.",
+      "why_high_value_zh": "m18-09 的 27 个已接受语料单元集中覆盖决策本体、决策溯源链与智能体动作治理三条主线，是语料库中唯一专论\"决策中心架构\"（数据 + 逻辑 + 动作 + 安全统一基底）的来源，尚无任何 durable 主张承载这一视角，提取价值集中、不重叠。",
+      "partner_action_en": "Pair m18-09 with m18-07 (which already cites \"inject domain-specific workflows, schemas, and decision trees into the agent's context on demand\") to lift the caveated agdes-3 claim — currently single-sourced on m18-09 alone — into a durable cross-source claim: the concrete pairing text is u-020-3eee10f3 (\"agents go beyond the data-centric limitations of RAG and interface with interconnected data, logic, and action primitives\") from m18-09 plus u-001-f51d1bf8 from m18-07, establishing that decision-centric context (not raw data retrieval) is the preferred interface pattern for enterprise agents. Separately, u-007-ae0fe07c (decision lineage: when, atop which data version, through which application) can seed a new standalone durable claim alongside m18-19's bi-temporal work (c13), as decision lineage and bi-temporal fact modeling address the same provenance gap from complementary angles.",
+      "partner_action_zh": "将 m18-09 与 m18-07 配对，后者已有引文\"将决策树按需注入智能体上下文\"，可将目前仅靠 m18-09 单源支撑的 caveated 主张 agdes-3 提升为跨源 durable：核心配对引文为 m18-09 u-020-3eee10f3（\"智能体超越 RAG 的数据局限，改而通过可扩展工具范式接入互联的数据、逻辑与动作原语\"）+ m18-07 u-001-f51d1bf8，共同确立\"决策中心上下文而非原始数据检索\"是企业智能体的首选接口模式。此外，u-007-ae0fe07c（决策溯源链：何时、基于哪个数据版本、经由哪个应用执行）可与 m18-19 的双时态建模（c13）组合，提取一条新 durable 主张，从决策溯源角度补充现有的 bi-temporal 主张。"
+    },
+    {
+      "case_id": "m18-12",
+      "why_high_value_en": "With 11 reader cards and 12 article core points from an authoritative OpenAI cookbook, m18-12 supplies the only source in the corpus that defines a named, three-phase evaluation methodology (Analyze → Measure → Improve) as a structured engineering discipline for production AI systems — a cross-cutting claim type that no current durable Crystal entry covers.",
+      "why_high_value_zh": "该来源拥有 11 张读者卡片和 12 个文章核心点，是语料库中唯一以\"分析→度量→改进\"三阶段闭环定义系统化评估工程方法论的来源——这一跨主题的主张类型在当前 Crystal 的任何持久性条目中均无覆盖。",
+      "partner_action_en": "Pair m18-12 with sibling source m18-03 (OpenAI evaluation best practices docs, en-docs) to extract a durable claim on the theme \"Evaluation as a continuous engineering discipline\": the flywheel's three phases (Analyze → Measure → Improve) form the canonical loop for making prompts resilient in production, and automated graders must be validated against human SMEs via split train/validation/test sets before they can be trusted. Both claims are directly asserted, non-hedged, and the two sources independently converge on the same pipeline, satisfying the cross-source provenance gate.",
+      "partner_action_zh": "将 m18-12 与同批来源 m18-03（OpenAI 评估最佳实践文档，en-docs）配对，围绕主题\"评估作为持续工程纪律\"提取一条持久性声明：飞轮的三个阶段（分析→度量→改进）构成在生产环境中增强 Prompt 鲁棒性的规范闭环；自动评分器在用于生产前必须通过训练/验证/测试三段划分与人类 SME 进行对齐校验。两条主张均为直接断言、无对冲，且两个来源独立收敛于同一流程，可满足跨来源出处门控要求。"
+    },
+    {
+      "case_id": "m18-13",
+      "why_high_value_en": "This zh-opinion piece anchors a concrete organizational-interface thesis — evaluation standards, authorization, audit, and accountability mechanisms lag AI capability and determine actual deployment pace — that is absent from Crystal yet directly supports the \"human governance gate\" spine (claim 9) and the caveated evaluation-discipline cluster (evrel-2); as the only Chinese-language opinion source in the corpus, it also provides cross-language corroboration that strengthens provenance breadth.",
+      "why_high_value_zh": "这篇中文观点文章提出了一个明确的组织接口论点：评估标准、授权边界、审计追踪和责任归属机制的演化速度慢于技术能力，这一滞后才是决定 AI 实际落地速度的关键变量。这一论点在 Crystal 中尚无对应条目，却与现有可信声明\"人类治理门控持久记忆\"（claim 9）和待审的\"评估纪律\"条目直接呼应，同时也是语料库中唯一的中文观点来源，能拓宽溯源广度。",
+      "partner_action_en": "Pair m18-13 with m18-20 (enterprise context layer) and m18-06 (human governance gate, already in claim 9): extract a durable claim along the lines of \"Evaluation infrastructure — domain-specific benchmarks, authorization boundaries, and audit trails — is the rate-limiting layer between copilot and autopilot deployment, not model capability.\" Ground it in the article's explicit statement (line 84): \"谁先在某个垂直领域建立起可信的 evaluation 标准，谁就更接近拿到那个领域从 copilot 走向 autopilot 的入口\" and the line-86 observation that authorization and audit need to be productized as first-class capabilities. Run the candidate through the citation and claim-strength gates; if it passes at Supported strength, key it under a new theme label (e.g., orgif — organizational interface).",
+      "partner_action_zh": "将 m18-13 与 m18-20（企业上下文层）和 m18-06（人类治理门控，已纳入 claim 9）配对，提取一条可信声明，方向为：\"决定从 copilot 走向 autopilot 落地速度的关键层是评估基础设施——领域专属 benchmark、授权边界和审计追踪——而非模型能力本身。\"引文锚点为原文第 84 行（\"谁先在某个垂直领域建立起可信的 evaluation 标准……\"）和第 86 行（授权管理与审计追踪需要被产品化为可付费能力）。将候选声明走引用门控和声明强度门控；若通过（强度 Supported），以新主题标签 orgif（组织接口）归档。"
+    },
+    {
+      "case_id": "m18-15",
+      "why_high_value_en": "A zh-eng source covering a decade of GPU architecture evolution alongside CUDA programming-model growth offers high claim density on a topic (hardware-software co-evolution) that is structurally durable — architectural generations and programming-model milestones do not become stale quickly — making it a strong candidate to anchor or extend existing Crystal spine claims about agent compute infrastructure.",
+      "why_high_value_zh": "该来源以中英双语视角梳理GPU架构十年演化与CUDA编程模型的同步膨胀，涉及的硬件世代演进与编程模型里程碑属于结构性事实，时效衰减慢、claim密度高，具备直接写入Crystal的条件。",
+      "partner_action_en": "Pair with any existing Crystal spine claim on agent compute or inference infrastructure: read the article's 10 core points and extract 1-2 durable, citable claims (e.g., a concrete architectural transition or a CUDA model change with a named version/generation) that can be gated and appended under that theme. If no sibling claim exists, open a new Crystal candidate slot for \"hardware-software co-evolution in LLM/agent inference\" and write the first claim from the strongest core point.",
+      "partner_action_zh": "与Crystal中现有的\"Agent推理/计算基础设施\"主题配对：精读文章10个核心点，提取1-2条可引用的耐久claim（如某次具体的架构代际跃迁，或CUDA编程模型的具名版本变化），通过gate后追加写入该主题。若尚无同类sibling claim，则为\"LLM/Agent推理中的硬件-软件协同演化\"新开Crystal候选槽，以最强核心点写入首条claim。"
+    },
+    {
+      "case_id": "m18-17",
+      "why_high_value_en": "With 11 reader cards and 10 article core points, this opinion piece supplies the corpus's only practitioner-level argument for why LLM tooling fails at essential complexity and metacognitive architectural judgment — a conceptual layer absent from the current 12 durable claims, which cover infrastructure and memory design but not the limits of AI judgment in the development loop itself.",
+      "why_high_value_zh": "该文章贡献了语料库中唯一来自从业者视角的论证：LLM 工具在\"本质复杂性\"（essential complexity）和架构判断的元认知层面存在根本性局限。现有 12 条 durable claim 覆盖基础设施与记忆设计，但对\"AI 判断边界\"这一层面尚无涉及，m18-17 可填补这一空白。",
+      "partner_action_en": "Pair m18-17 with the caveated claim evrel-3 (already citing this source's expert-prerequisite observation) and draft a durable claim from cards 3+4: \"LLMs cannot perform the metacognitive check — recognizing that increasing implementation friction signals a wrong architectural path — that experienced developers rely on to redirect work; this absence places full accountability on the human regardless of how much code the LLM produced.\" Submit against the citation/provenance gate citing u-011-596fa794 (\"this metacognition is something an LLM can't ever do\") and u-016-a1f5824c (\"when writing the code becomes hard, that tells me that I'm going down a wrong path\") — both already in the accepted units catalog.",
+      "partner_action_zh": "将 m18-17 与已引用该来源的 caveated claim evrel-3 配对，基于第 3、4 张卡片起草一条 durable claim：\"LLM 无法执行元认知检查——即通过感知实现阻力上升来识别架构路径错误——而有经验的开发者正是依赖这一能力来及时纠偏；这一缺失意味着无论 LLM 生成多少代码，人类始终承担全部责任。\" 引用 u-011-596fa794 与 u-016-a1f5824c（均已在 accepted units catalog 中），提交至 citation/provenance gate 校验。"
+    },
+    {
+      "case_id": "m18-18",
+      "why_high_value_en": "With 17 reader cards covering 10 core points (1.7× card-to-point density), the system has already extracted rich, granular material from this English engineering source; a first-principles treatment of agent construction is structurally complementary to the existing durable agdes/engrt spine (m18-01, m18-04, m18-07, m18-20), making it the most likely reader-only source to yield a genuine cross-source durable claim if a sibling partner can be confirmed.",
+      "why_high_value_zh": "该源 17 张卡片覆盖 10 个核心点（密度 1.7×），系统已提取了丰富的细粒度内容；\"从第一原则构建 agent\"的视角在结构上与现有 durable 主题（agdes/engrt，依托 m18-01、m18-04、m18-07、m18-20）互补，是现有 reader-only 源中最有可能在找到跨源搭档后升为 durable 的候选。",
+      "partner_action_en": "Scan the 17 reader cards for any claim that overlaps with the existing agdes-5 theme (\"enterprise context layer turns knowledge/expertise/norms into machine-usable context\", citing m18-01 and m18-20) or the engrt-4/engrt-5 fault-containment and observability claims (citing m18-04, m18-10, m18-16); if a verbatim quote from m18-18 independently supports the same narrowed assertion, draft a two-source structured-citation candidate and run it through the M22/M23 gate — do not broaden the claim to fit, let the gate decide.",
+      "partner_action_zh": "扫描该源的 17 张 reader card，寻找与 agdes-5 主题（\"企业上下文层将知识/专业经验/规范转化为机器可用上下文\"，引用 m18-01 和 m18-20）或 engrt-4/engrt-5 容错与可观测性主题（引用 m18-04、m18-10、m18-16）重叠的条目；若 m18-18 中存在独立支持同一收窄断言的逐字引用，则起草双源结构化引用候选，送入 M22/M23 gate 判定——不要为凑跨源而扩大 claim 范围，以 gate 结果为准。"
+    }
+  ]
+}

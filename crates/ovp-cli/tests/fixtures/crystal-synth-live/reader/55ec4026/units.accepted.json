@@ -1,0 +1,798 @@
+[
+  {
+    "id": "u-000-c25ce620",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When an AI agent fails in production, observability tools show exactly what it did and almost nothing about how to fix it.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "When an AI agent fails in production, your observability tool shows you exactly what it did and almost nothing about how to fix it.",
+      "location": {
+        "byte_start": 77,
+        "byte_end": 208,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI agent failures in production",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "observability tool",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-41eb6efe",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The real bottleneck isn't your observability.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "The real bottleneck isn't your observability.",
+      "location": {
+        "byte_start": 741,
+        "byte_end": 786,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "observability",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "after the trace lands",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-38f4ac2f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Everything to the left of the dotted line runs automatically while everything to the right runs on your time, which is where production debugging actually lives.",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "Everything to the left of the dotted line runs automatically. Everything to the right runs on your time, which is where production debugging actually lives.",
+      "location": {
+        "byte_start": 861,
+        "byte_end": 1094,
+        "line": 43,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "automated steps",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "manual steps",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p008.s001`..`p009.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-8683dd2c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Opik is an open-source logging, debugging, and optimization platform for AI agents and LLM applications.",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "Opik is an open-source logging, debugging, and optimization platform for AI agents and LLM applications.",
+      "location": {
+        "byte_start": 2639,
+        "byte_end": 2779,
+        "line": 76,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opik",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-4ac0d684",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Opik is built around the premise that the debugging loop should be automated, not staffed.",
+    "evidence": {
+      "ref_id": "p023.s002",
+      "quote": "Opik is built around the premise that this loop should be automated, not staffed.",
+      "location": {
+        "byte_start": 2779,
+        "byte_end": 2861,
+        "line": 76,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opik",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "debugging loop",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-de710519",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Most agent observability platforms deliver a trace and stop.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "Most agent observability platforms deliver a trace and stop.",
+      "location": {
+        "byte_start": 1686,
+        "byte_end": 1746,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Most agent observability platforms",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-ca61cb36",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The problem compounds itself. Every model upgrade introduces new failure modes. Every new tool adds new edge cases. The harness gets more complex faster than any team can manually track and repair.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "The problem compounds itself. Every model upgrade introduces new failure modes. Every new tool adds new edge cases. The harness gets more complex faster than any team can manually track and repair.",
+      "location": {
+        "byte_start": 2013,
+        "byte_end": 2362,
+        "line": 62,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model upgrades",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "new tools",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "harness complexity",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p016.s004`..`p018.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "3 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-c345b970",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Trace → Ollie diagnoses → Ollie proposes a fix → fix is applied and verified → Test Suite locks the failure as a regression test → back to Trace",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Trace → Ollie diagnoses → Ollie proposes a fix → fix is applied and verified → Test Suite locks the failure as a regression test → back to Trace",
+      "location": {
+        "byte_start": 3012,
+        "byte_end": 3166,
+        "line": 84,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opik's architecture",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-539e7ae7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The four layers are not separate features. They feed each other in a single loop that closes on its own.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "The four layers are not separate features. They feed each other in a single loop that closes on its own.",
+      "location": {
+        "byte_start": 3168,
+        "byte_end": 3349,
+        "line": 86,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "four layers of Opik",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "single loop",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p028.s001`..`p029.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-ca944b72",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Every LLM call, tool invocation, and retrieval step is instrumented automatically with a single decorator.",
+    "evidence": {
+      "ref_id": "p032.s001",
+      "quote": "Every LLM call, tool invocation, and retrieval step is instrumented automatically with a single decorator.",
+      "location": {
+        "byte_start": 3392,
+        "byte_end": 3498,
+        "line": 94,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Layer 1 Tracing",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "LLM calls, tool invocations, retrieval steps",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-9e9440df",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Every other observability platform stops at \"here's your trace.\" Opik goes from trace to fixed code, powered by Ollie.",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "Every other observability platform stops at \"here's your trace.\" Opik goes from trace to fixed code, powered by Ollie.",
+      "location": {
+        "byte_start": 3998,
+        "byte_end": 4116,
+        "line": 113,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Ollie",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-ae04294f",
+    "kind": "assertion",
+    "subtype": "procedure_step",
+    "text": "Reads your source files Identifies the exact lines responsible Proposes a diff; nothing changes without your explicit approval",
+    "evidence": {
+      "ref_id": "p045.s001",
+      "quote": "Reads your source files Identifies the exact lines responsible Proposes a diff; nothing changes without your explicit approval",
+      "location": {
+        "byte_start": 4497,
+        "byte_end": 4837,
+        "line": 121,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Ollie",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "fix workflow",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p043.s002`..`p045.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-e2cf3608",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Opik replaces it with plain-English assertions.",
+    "evidence": {
+      "ref_id": "p052.s001",
+      "quote": "Opik replaces it with plain-English assertions.",
+      "location": {
+        "byte_start": 5524,
+        "byte_end": 5571,
+        "line": 141,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opik",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "plain-English assertions",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-a0cc6ec6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Every failing trace you debug automatically becomes a new test case, so the suite grows from real production failures rather than synthetic scenarios.",
+    "evidence": {
+      "ref_id": "p057.s001",
+      "quote": "every failing trace you debug automatically becomes a new test case. The suite grows from real production failures, not synthetic scenarios someone wrote in advance.",
+      "location": {
+        "byte_start": 5985,
+        "byte_end": 6286,
+        "line": 154,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "failing traces",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "test cases",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p056.s001`..`p057.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-e443adf1",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Opik's Agent Sandbox runs the fully instrumented agent end-to-end inside the UI.",
+    "evidence": {
+      "ref_id": "p063.s001",
+      "quote": "Opik's Agent Sandbox runs the fully instrumented agent end-to-end inside the UI.",
+      "location": {
+        "byte_start": 6704,
+        "byte_end": 6784,
+        "line": 168,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Agent Sandbox",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-7ba95b40",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The Agent Sandbox allows non-developer stakeholders like PMs, domain experts, and QA to safely test configurations without touching git.",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "Non-developer stakeholders, PMs, domain experts, and QA can safely test configurations without touching git.",
+      "location": {
+        "byte_start": 6950,
+        "byte_end": 7058,
+        "line": 170,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Agent Sandbox",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "non-developer stakeholders",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-2124294d",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Every cycle of the Opik loop, the harness gets harder to break.",
+    "evidence": {
+      "ref_id": "p071.s001",
+      "quote": "Every cycle, the harness gets harder to break.",
+      "location": {
+        "byte_start": 7758,
+        "byte_end": 7804,
+        "line": 184,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Opik loop cycles",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "harness robustness",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-2ec334f0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Observability that ends at the trace made sense when agents were simple.",
+    "evidence": {
+      "ref_id": "p073.s001",
+      "quote": "Observability that ends at the trace made sense when agents were simple.",
+      "location": {
+        "byte_start": 7829,
+        "byte_end": 7901,
+        "line": 188,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "observability ending at trace",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "agent production",
+        "role": "context",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-533d7885",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The manual loop Cursor describes is the one Opik closes on its own, from a bad trace all the way to a locked regression test.",
+    "evidence": {
+      "ref_id": "p077.s001",
+      "quote": "The manual loop Cursor describes is the one Opik closes on its own, from a bad trace all the way to a locked regression test.",
+      "location": {
+        "byte_start": 8350,
+        "byte_end": 8475,
+        "line": 200,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "manual debugging loop",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Opik",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-4679ef4e",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Opik is worth a look if you are running agents in production.",
+    "evidence": {
+      "ref_id": "p078.s001",
+      "quote": "It is worth a look if you are running agents in production.",
+      "location": {
+        "byte_start": 8477,
+        "byte_end": 8536,
+        "line": 202,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Opik",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "agents in production",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-cae43a2f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "the layer of prompts, tools, and checks wrapped around the raw model",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "the layer of prompts, tools, and checks wrapped around the raw model",
+      "location": {
+        "byte_start": 1096,
+        "byte_end": 1251,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-a003b09e",
+    "kind": "assertion",
+    "text": "A better harness on the same model gives far better results, and that work never really ends.",
+    "evidence": {
+      "ref_id": "p010.s002",
+      "quote": "A better harness on the same model gives far better results, and that work never really ends.",
+      "location": {
+        "byte_start": 1251,
+        "byte_end": 1345,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-4321e345",
+    "kind": "assertion",
+    "text": "It answers what happened, then hands back why it happened, what to change, and how to keep it from breaking again.",
+    "evidence": {
+      "ref_id": "p011.s002",
+      "quote": "It answers what happened, then hands back why it happened, what to change, and how to keep it from breaking again.",
+      "location": {
+        "byte_start": 1401,
+        "byte_end": 1516,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-e8d5b248",
+    "kind": "assertion",
+    "text": "It's the wrong abstraction for teams running agents in production today.",
+    "evidence": {
+      "ref_id": "p017.s002",
+      "quote": "It's the wrong abstraction for teams running agents in production today.",
+      "location": {
+        "byte_start": 2090,
+        "byte_end": 2163,
+        "line": 64,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

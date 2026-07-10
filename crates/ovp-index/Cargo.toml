@@ -1,0 +1,18 @@
+[package]
+name = "ovp-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next M31 read model: a deterministic JSON projection over the product ledgers, reader packs, and the Crystal store — rebuildable, queryable, never authoritative"
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-daily = { path = "../ovp-daily" }
+ovp-intake = { path = "../ovp-intake" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

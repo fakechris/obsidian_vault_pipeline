@@ -1,0 +1,760 @@
+[
+  {
+    "id": "u-000-d79cb088",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Autobrowse is a workflow that uses AI to improve AI, where an agent runs a real task end to end, studies its trace, iterates on strategy, and graduates the winning approach into a reusable skill.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Autobrowse is a workflow that uses AI to improve AI.",
+      "location": {
+        "byte_start": 1839,
+        "byte_end": 1891,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Autobrowse",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-ca465dd6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Browser agents have an amnesia problem: they re-discover every site from scratch on every run, paying the full discovery tax forever.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "Browser agents have an amnesia problem.",
+      "location": {
+        "byte_start": 77,
+        "byte_end": 126,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "browser agents",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-9e4ea3fe",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The real bottleneck for browser agents in production is memory, in a form humans and agents can both read and trust; reasoning has stopped being the constraint.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "The real bottleneck for browser agents in production is memory, in a form humans and agents can both read and trust.",
+      "location": {
+        "byte_start": 1649,
+        "byte_end": 1767,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memory",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "browser agents",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-8ec6b983",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The first run is expensive on purpose, as it pays for everything that comes after.",
+    "evidence": {
+      "ref_id": "p012.s002",
+      "quote": "The first run is expensive on purpose, it's the run that pays for everything that comes after.",
+      "location": {
+        "byte_start": 2690,
+        "byte_end": 2785,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "first run",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-c350b916",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The core loop maintains a strategy.md file as a scratchpad where the agent dumps observations after each iteration; on the next iteration, the agent reads strategy.md first so improvements compound instead of resetting every run.",
+    "evidence": {
+      "ref_id": "p018.s011",
+      "quote": "On the next iteration, the agent reads strategy.md first and uses it as context, so improvements compound instead of resetting every run.",
+      "location": {
+        "byte_start": 3442,
+        "byte_end": 3799,
+        "line": 68,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "strategy.md",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p018.s010`..`p018.s012` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-006-b3c59897",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Autobrowse iteration is capped low (3 to 5) and short-circuits aggressively, aiming for a reliable, cheap path good enough to be reused but technically short of any theoretical global optimum.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "In practice, we cap iterations low ( 3 to 5) and short-circuit aggressively.",
+      "location": {
+        "byte_start": 4199,
+        "byte_end": 4276,
+        "line": 73,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "iterations",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-67737679",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The shape of Autobrowse cost savings matters more than absolute numbers: the end skill changes unit economics of every subsequent run by an order of magnitude or more because it encodes the shortest reliable path found and reuses it instead of re-deriving it.",
+    "evidence": {
+      "ref_id": "p065.s003",
+      "quote": "The end skill changes the unit economics of every subsequent run by an order of magnitude or more, because it encodes the shortest reliable path the agent could find and reuses it instead of re-deriving it.",
+      "location": {
+        "byte_start": 18070,
+        "byte_end": 18277,
+        "line": 204,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "end skill",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "unit economics",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-44d5382c",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "On Craigslist, the traditional Claude Code loop costs $0.22 and 71 seconds, while the graduated Autobrowse skill costs $0.12 and 27 seconds.",
+    "evidence": {
+      "ref_id": "p063.s001",
+      "quote": "Traditional Claude Code loop: $0.22, 71s Graduated Autobrowse skill: $0.12, 27s",
+      "location": {
+        "byte_start": 17777,
+        "byte_end": 17859,
+        "line": 200,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Autobrowse skill",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Craigslist",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-f37f411e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Autobrowse shines on sites requiring exploration: hidden undocumented APIs, heavy client-side rendering, multi-step login flows, and any UI where the shortest reliable path is non-trivial enough that a human reverse-engineering it would take hours.",
+    "evidence": {
+      "ref_id": "p057.s001",
+      "quote": "Autobrowse shines on sites that genuinely require exploration.",
+      "location": {
+        "byte_start": 16121,
+        "byte_end": 16183,
+        "line": 188,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Autobrowse",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-682803bc",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The recurring pattern that makes Autobrowse worth investing in is that an agent tries something a person never would and finds something a person would never see.",
+    "evidence": {
+      "ref_id": "p060.s001",
+      "quote": "This is the recurring pattern that makes the whole approach worth investing in: an agent tries something a person never would, and finds something a person would never see.",
+      "location": {
+        "byte_start": 17499,
+        "byte_end": 17675,
+        "line": 194,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agent",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-06518519",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Autobrowse is not the right tool when the task is deterministic parsing; on a 167-row static HTML state catalog, four iterations and $24 later the loop still had not returned all 167 rows, but 200 lines of deterministic Python with browse fetch and BeautifulSoup delivered sub-second runtime and zero inference cost.",
+    "evidence": {
+      "ref_id": "p068.s002",
+      "quote": "We learned this the hard way against a 167-row static HTML state catalog.",
+      "location": {
+        "byte_start": 18829,
+        "byte_end": 18903,
+        "line": 210,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Autobrowse",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-1f709b27",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Probe with fetch first before escalating to Autobrowse: if the data comes back cleanly in the response, write the parser; if the response is empty, dynamic, or gated, escalate to Autobrowse.",
+    "evidence": {
+      "ref_id": "p069.s002",
+      "quote": "Step 1: probe with fetch first.",
+      "location": {
+        "byte_start": 19603,
+        "byte_end": 19636,
+        "line": 213,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "fetch",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-adbf7c57",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Choose the right agency level for the task; Autobrowse sits at the high-agency end and should be reached for once the cheaper, more deterministic options have given up.",
+    "evidence": {
+      "ref_id": "p070.s003",
+      "quote": "Autobrowse sits at the high-agency end of that spectrum, and like any high-agency tool, you reach for it once the cheaper, more deterministic options have given up.",
+      "location": {
+        "byte_start": 20117,
+        "byte_end": 20286,
+        "line": 219,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Autobrowse",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-6210eb6f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A skill is legible, durable, debuggable, human-auditable, and ownable — an engineer can read, edit, and commit it, and a non-engineer can also roughly understand what the agent is doing without touching code.",
+    "evidence": {
+      "ref_id": "p072.s004",
+      "quote": "A skill is legible.",
+      "location": {
+        "byte_start": 20622,
+        "byte_end": 20642,
+        "line": 223,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "skill",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-26d9d829",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "A growing public directory of Autobrowse skills, accessible to anyone running a browser agent, is the actual prize — not just a single skill.",
+    "evidence": {
+      "ref_id": "p073.s003",
+      "quote": "A growing public directory of them, accessible to anyone running a browser agent, is the actual prize.",
+      "location": {
+        "byte_start": 21576,
+        "byte_end": 21679,
+        "line": 225,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "public directory",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-545abda3",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Even a perfect model still has to discover on every new site what a perfect model would already know if it had been there before; without a place to put what the agent learns, every run is a fresh start.",
+    "evidence": {
+      "ref_id": "p079.s004",
+      "quote": "Even a perfect model still has to discover (on every new site) what a perfect model would already know if it had been there before.",
+      "location": {
+        "byte_start": 23501,
+        "byte_end": 23633,
+        "line": 237,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "perfect model",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "every new site",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-a7128192",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The fundamental bottleneck for browser agents is not model quality but memory, in a form humans and agents can both understand and trust.",
+    "evidence": {
+      "ref_id": "p079.s006",
+      "quote": "The real bottleneck is memory, in a form humans and agents can both understand and trust.",
+      "location": {
+        "byte_start": 23707,
+        "byte_end": 23797,
+        "line": 237,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memory",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "browser agents",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-b7d15b85",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "The seven-step Autobrowse loop is: Objective (hand the agent a real task), Run (agent attempts it end to end against a live browser), Study (agent reads its own trace), Strategy (outer loop maintains strategy.md), Iterate (refine and drop ineffective steps), Converge (short-circuit when consecutive iterations stop improving), and Graduate (write SKILL.md plus helpers).",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "The core loop is simple:",
+      "location": {
+        "byte_start": 3081,
+        "byte_end": 3233,
+        "line": 63,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "core loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p017.s001`..`p018.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-019-d81dcc05",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Real sites are messy: they render differently for different user agents, gate content behind JavaScript, hide wanted data behind undocumented JSON endpoints, throw captchas on unrecognized sessions, and sometimes redesign their flow on a Tuesday.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "Real sites are messy.",
+      "location": {
+        "byte_start": 1176,
+        "byte_end": 1197,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "real sites",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-cc6e100c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The artifact is the point: every Autobrowse run produces a durable markdown file any future agent can load and execute, on top of whatever value was got from the run itself.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "The artifact is the point.",
+      "location": {
+        "byte_start": 2787,
+        "byte_end": 2813,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "artifact",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-02a59285",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The most exciting direction is recursive Autobrowse: using Autobrowse to graduate improvements to its own harness, including better prompts for the iteration step, better priors for which primitives to reach for first, and better templates for what the final skill should look like for a given class of task.",
+    "evidence": {
+      "ref_id": "p078.s001",
+      "quote": "The most exciting direction is recursive: Autobrowse improving Autobrowse.",
+      "location": {
+        "byte_start": 22742,
+        "byte_end": 22841,
+        "line": 235,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "recursive Autobrowse",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-e0662469",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A Craigslist search using the undocumented JSON API at sapi.craigslist.org is faster, cheaper, and structurally more reliable than scraping HTML.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "The Craigslist web UI is a thin client over a public JSON API at \\https://sapi.craigslist.org\\ — no auth, cookies, session state, or anti-bot stealth.",
+      "location": {
+        "byte_start": 6044,
+        "byte_end": 6198,
+        "line": 110,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "JSON API",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Craigslist web UI",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-4d25b6b8",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "In the Craigslist API response, item[0] is NOT the postingId — it is an offset from data.decode.minPostingId, so naïvely treating item[0] as the postingId produces 404s.",
+    "evidence": {
+      "ref_id": "p053.s016",
+      "quote": "\\item[0]\\ is NOT the postingId — it's an offset from \\data.decode.minPostingId\\.",
+      "location": {
+        "byte_start": 13261,
+        "byte_end": 13353,
+        "line": 175,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "item[0]",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Craigslist API",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-025-89091b48",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "For neighborhood-scoped searches on Craigslist, use lat/lon bounding-box matching on the coordinates field as a fallback or supplement to label-string matching, because neighborhood labels in location decode tables are unreliable.",
+    "evidence": {
+      "ref_id": "p053.s023",
+      "quote": "For neighborhood-scoped searches, use lat/lon bounding-box matching on \\item[4]\\'s coordinates as a fallback or supplement to label-string matching.",
+      "location": {
+        "byte_start": 14149,
+        "byte_end": 14304,
+        "line": 177,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "neighborhood-scoped searches",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-026-dc4307aa",
+    "kind": "assertion",
+    "text": "Today, when an agent succeeds at a job, the customer's engineering team gets a trace, maybe a session replay, maybe a paragraph of natural-language reasoning.",
+    "evidence": {
+      "ref_id": "p072.s002",
+      "quote": "Today, when an agent succeeds at a job, the customer's engineering team gets a trace, maybe a session replay, maybe a paragraph of natural-language reasoning.",
+      "location": {
+        "byte_start": 20392,
+        "byte_end": 20551,
+        "line": 223,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-027-b51e1de0",
+    "kind": "assertion",
+    "text": "Autobrowse already functions as a factory for browser-agent capabilities, well beyond what any single agent could ship on its own.",
+    "evidence": {
+      "ref_id": "p073.s001",
+      "quote": "Autobrowse already functions as a factory for browser-agent capabilities, well beyond what any single agent could ship on its own.",
+      "location": {
+        "byte_start": 21409,
+        "byte_end": 21539,
+        "line": 225,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

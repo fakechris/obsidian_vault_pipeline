@@ -1,0 +1,28 @@
+[package]
+name = "ovp-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next M8: external E2E comparator. Runs one input through the ovp2 pipeline (via the M7 review harness) and an external Nowledge Mem HTTP service, normalizes both, and emits a deterministic comparison pack. Evaluation/orchestration layer only — never a dependency of the trunk."
+
+[dependencies]
+ovp-core = { path = "../ovp-core" }
+ovp-domain = { path = "../ovp-domain" }
+ovp-app = { path = "../ovp-app" }
+ovp-rag = { path = "../ovp-rag" }
+ovp-review = { path = "../ovp-review" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# External-comparator HTTP transport. Blocking + rustls (the workspace
+# transport): no async runtime, no system OpenSSL. The Nowledge Mem service is
+# the whole point of this crate, so reqwest is a direct (non-optional) dep —
+# but the *build* needs no network; only live runs/tests hit the service.
+reqwest = { workspace = true }
+
+[dev-dependencies]
+# Tests build a replay-only cassette client to drive the ovp side offline, and
+# inject a fake NowledgeClient — no network, no API key.
+ovp-llm = { path = "../ovp-llm" }
+tempfile = { workspace = true }

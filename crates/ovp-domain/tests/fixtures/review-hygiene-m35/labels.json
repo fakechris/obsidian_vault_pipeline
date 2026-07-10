@@ -1,0 +1,172 @@
+{
+  "labels": [
+    {
+      "id": "agents-b002-3",
+      "audit_action": "rewrite",
+      "tags": [
+        "single_source",
+        "overgeneralized_caught_by_judge"
+      ],
+      "expected_lane": "review"
+    },
+    {
+      "id": "agents-b002-5",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b002-6",
+      "audit_action": "reject",
+      "tags": [
+        "single_source",
+        "overgeneralized_caught_by_judge",
+        "implementation_detail"
+      ],
+      "expected_lane": "review"
+    },
+    {
+      "id": "agents-b002-8",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b003-2",
+      "audit_action": "rewrite",
+      "tags": [
+        "overgeneralized_caught_by_judge"
+      ],
+      "expected_lane": "review"
+    },
+    {
+      "id": "agents-b003-7",
+      "audit_action": "rewrite",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b003-8",
+      "audit_action": "reject",
+      "tags": [
+        "single_source",
+        "semantic_duplicate_pair"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b004-2",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b004-4",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b004-5",
+      "audit_action": "rewrite",
+      "tags": [
+        "single_source",
+        "overgeneralized_caught_by_judge"
+      ],
+      "expected_lane": "review"
+    },
+    {
+      "id": "agents-b004-6",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b004-7",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b005-2",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b005-4",
+      "audit_action": "rewrite",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b005-5",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b008-3",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "agents-b010-7",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source",
+        "semantic_duplicate_pair"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "coding-b001-3",
+      "audit_action": "keep_caveated",
+      "tags": [
+        "single_source"
+      ],
+      "expected_lane": "source_insight"
+    },
+    {
+      "id": "coding-b001-4",
+      "audit_action": "rewrite",
+      "tags": [
+        "overgeneralized_caught_by_judge"
+      ],
+      "expected_lane": "review"
+    },
+    {
+      "id": "coding-b001-5",
+      "audit_action": "rewrite",
+      "tags": [
+        "single_source",
+        "overgeneralized_caught_by_judge"
+      ],
+      "expected_lane": "review"
+    }
+  ],
+  "note": "audit = 2026-07-06 AI suggestions (human-reviewed); expected_lane = decidable rule over real (distinct_sources, strength); semantic_duplicate_pair is EXPECTED NOT to collapse deterministically (0 shared units, jaccard 0.27) - it is lineage/judge territory"
+}

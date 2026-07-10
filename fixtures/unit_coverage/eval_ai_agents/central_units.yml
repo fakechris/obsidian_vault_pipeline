@@ -1,0 +1,117 @@
+case: eval_ai_agents
+note: Span-anchored central-unit gold (M14a.5). Scored by SOURCE-SPAN OVERLAP / quote containment, NOT by label. Drafted by independent source reading; anchors verified to occur verbatim in the source.
+central_units:
+- label: eval_methods_unchanged
+  kind: observation
+  required: true
+  expected_point: Despite agents proliferating everywhere, the method for evaluating their reliability and performance has mostly not changed since the chatbot/RAG era, and eval vendors push overly complicated strategies divergent from what actually works.
+  quote_must_include: the method for evaluating reliability and performance of agents mostly hasn't changed
+  section_hint: Foreword
+- label: scope_agents_only
+  kind: limitation
+  required: false
+  expected_point: The guide is scoped specifically to agents; classifiers, RAG pipelines, and other AI systems are evaluated differently and are out of scope.
+  quote_must_include: The way you evaluate classifiers, RAG pipelines, and many other AI systems is different
+  section_hint: Foreword
+- label: benchmark_vs_floor
+  kind: claim
+  required: true
+  expected_point: Before doing evals, teams must explicitly choose between benchmark-maxxing or floor-raising, a choice most teams never make explicitly.
+  quote_must_include: you can **benchmark maxx**, or you can **raise the floor**
+  section_hint: Benchmark-maxxer or floor-raiser?
+- label: floor_raising_recommended
+  kind: recommendation
+  required: true
+  expected_point: 'Most product teams should think in terms of floor raising: making the agent reliable where reliability matters, in the workflows users actually run and where mistakes are expensive.'
+  quote_must_include: most product teams should think in terms of **floor raising**
+  section_hint: Benchmark-maxxer or floor-raiser?
+- label: floor_raising_is_error_analysis
+  kind: method
+  required: true
+  expected_point: 'Floor raising looks less like benchmark design and more like error analysis: detective work finding where the system bends, classifying failures, and deciding which deserve engineering effort.'
+  quote_must_include: floor raising looks less like benchmark design and more like error analysis
+  section_hint: Floor raising is error analysis
+- label: evals_lock_in_lessons
+  kind: method
+  required: true
+  expected_point: Evals should be added only after error analysis, and are targeted to lock in lessons from real failures; a floor-raising eval suite is a memory of bugs you refuse to reintroduce.
+  quote_must_include: A floor-raising eval suite is a memory of bugs you refuse to reintroduce
+  section_hint: Floor raising is error analysis
+- label: teach_agent_to_refuse
+  kind: recommendation
+  required: true
+  expected_point: A key floor-raising technique is teaching the agent to refuse and say 'I don't know' when confidence is low, query is out of domain, or context is insufficient, because a confident wrong answer is worse than an honest 'I don't know.'
+  quote_must_include: a confident wrong answer is worse than an honest "I don't know."
+  section_hint: Benchmark-maxxer or floor-raiser?
+- label: golden_cases
+  kind: method
+  required: true
+  expected_point: Before shipping, pick 5 to 10 golden cases representing your critical paths, write them down without needing a file format or harness, and do not ship if the agent starts failing them.
+  quote_must_include: Pick 5 to 10 cases that represent your critical paths
+  section_hint: Golden cases
+- label: inspect_full_trajectory
+  kind: method
+  required: true
+  expected_point: Don't just check final output; inspect the full trajectory — user message, tool calls, retrieved context, reasoning chain — because the path matters as much as the answer.
+  quote_must_include: The path matters as much as the answer
+  section_hint: Understand your agent locally
+- label: ask_your_agent
+  kind: method
+  required: false
+  expected_point: A useful inspection technique is reconstructing the run and asking your own agent directly what happened, since reasoning traces are often encrypted and passing the trace back to the same model is the closest you can get to asking the agent.
+  quote_must_include: Passing the trace back to the same model is the closest you can get to asking the agent
+  section_hint: 'Pro tip: asking your agent'
+- label: code_aware_offline_evals
+  kind: method
+  required: true
+  expected_point: 'Offline evals must be code-aware and look like ordinary software testing (Vitest/pytest/jest): take an input, run the real agent path, and assert on output, tool calls, files changed, structured data, or final state — evaluating the agent, not an LLM call.'
+  quote_must_include: runs the real agent path, and asserts on the result
+  section_hint: Offline evals
+- label: avoid_hosted_dashboards
+  kind: recommendation
+  required: false
+  expected_point: The author strongly recommends against using a hosted eval dashboard to run agent evals, suggesting instead storing evals in a markdown file run by Codex or spinning up a quick local HTML viewer.
+  quote_must_include: I *really don't recommend* trying to use a hosted eval dashboard to run agent evals
+  section_hint: Offline evals
+- label: learn_from_production
+  kind: method
+  required: true
+  expected_point: After shipping, start by reading raw interaction logs until you hit saturation, since error analysis is the single most valuable, highest-ROI activity and the only way to build a real mental model.
+  quote_must_include: Do this until you hit saturation
+  section_hint: Learning from production / Start with raw logs
+- label: scale_review_with_volume
+  kind: method
+  required: true
+  expected_point: Production review should scale with traffic, progressing from Stumbles (raw logs) to Issues to long-horizon Signals to Experiments (feature-flagged fixes compared in production), and you shouldn't reach for high-volume machinery too early.
+  quote_must_include: The workflow should scale with your traffic
+  section_hint: What you need depends on volume
+- label: prune_eval_suite
+  kind: limitation
+  required: true
+  expected_point: Adding every bug as an eval case has diminishing returns; not every bug deserves a case, and you should be ruthless about pruning because 20 high-signal cases beats 200 low-signal ones.
+  quote_must_include: 20 high-signal cases beats 200 low-signal ones
+  section_hint: Adding as an eval case often has diminishing returns
+- label: experiment_in_production
+  kind: method
+  required: false
+  expected_point: For many changes the only way to know if they work is testing with real users via A/B tests on real traffic; offline evals tell you golden cases didn't break, but production tells you if the change actually helped.
+  quote_must_include: Production tells you if it actually helped
+  section_hint: 'Often: experiment in production'
+- label: ongoing_loop_time_budget
+  kind: recommendation
+  required: true
+  expected_point: Evaluation is an ongoing loop, not a one-time setup; plan to spend 10 to 20% of agent development time on evaluation and monitoring, and teams that skip it pay the price in production incidents.
+  quote_must_include: Plan to spend 10 to 20% of your agent development time on evaluation and monitoring
+  section_hint: Rinse, wash, repeat
+- label: collapse_of_harnesses
+  kind: claim
+  required: false
+  expected_point: As models become more capable and agentic, the distinction between model and agent blurs and the harness collapses into the model, making intermediate steps opaque and end-to-end evaluation (golden cases + production monitoring) even more important.
+  quote_must_include: The harness, the scaffolding around the agent, collapses into the model itself
+  section_hint: Looking forward / The collapse of harnesses
+- label: what_stays_constant
+  kind: claim
+  required: true
+  expected_point: Tools, frameworks, and models will change, but the fundamental challenge of verifying that an autonomous system does what you want stays the same, requiring contact with real user behavior, trajectory awareness, golden cases, and ongoing production monitoring.
+  quote_must_include: verifying that an autonomous system does what you want, stays the same
+  section_hint: What stays constant

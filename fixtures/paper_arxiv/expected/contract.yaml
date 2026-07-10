@@ -1,0 +1,58 @@
+version: 1
+
+terminal_state: interpretation_produced
+expected_artifacts:
+  - kind: interpretation
+    path_pattern: "20-Areas/AI-Research/Papers/<YYYY-MM-DD>_<arxiv-id>_<title>_深度解读.md"
+
+must:
+  - field: title
+    op: contains
+    value: "Deep GraphRAG"
+  - field: arxiv_id
+    op: equals
+    value: "2601.11144"
+    notes: "exposed at the interp level via either arxiv_id or arXiv field"
+  - source_kind: paper
+  - field: authors
+    op: type
+    value: list_of_strings
+    notes: "even if rendered as comma-joined string in the body, the data model must be a list"
+  - field: authors
+    op: length_gte
+    value: 1
+  - body_sections_present:
+      op: at_least
+      sections:
+        - "元信息"
+        - "一句话核心贡献"
+        - "研究背景与动机"
+        - "方法详解"
+        - "实验设计"
+        - "核心洞察"
+        - "方法复现指南"
+        - "局限性与未来工作"
+        - "关联研究"
+        - "个人思考"
+      notes: "10 numbered sections; English equivalents accepted"
+
+should:
+  - field: tags
+    op: non_empty
+  - field: tags
+    op: length_in_range
+    value: [3, 8]
+    notes: "substantive concept tags, not clippings/twitter noise"
+
+may_break:
+  - field: frontmatter_wrapping
+    notes: "legacy wraps paper frontmatter in a code fence; new system should emit plain YAML"
+  - field: date
+    notes: "legacy uses paper publication date; new system splits into source_date + interpreted_at"
+  - field: arXiv_field_name
+    notes: "legacy uses `arXiv:` (mixed case); new system normalizes to `arxiv_id`"
+  - absorb_skipped: true
+    notes: "legacy papers skip canonical_concepts/concept_candidates; new system MAY add them — improvement, not regression"
+
+known_anomalies:
+  - "Live `20-Areas/AI-Research/Papers/` may not contain this interp — it was archived. Archived-vs-live placement is not a contract dimension."

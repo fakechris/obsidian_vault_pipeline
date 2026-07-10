@@ -1,0 +1,491 @@
+[
+  {
+    "id": "u-000-bb2ddf6d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A lot of people seem convinced that the point of AI coding is to write low-quality code as fast as possible.",
+    "evidence": {
+      "ref_id": "p001.s001",
+      "quote": "A lot of people seem convinced that the point of AI coding is to write low-quality code as fast as possible.",
+      "location": {
+        "byte_start": 0,
+        "byte_end": 108,
+        "line": 11,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI coding",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "low-quality code",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-51aca103",
+    "kind": "assertion",
+    "subtype": "thesis",
+    "text": "LLMs are flexible enough to be used to write high-quality code more slowly, not just to generate slop quickly.",
+    "evidence": {
+      "ref_id": "p002.s002",
+      "quote": "And you can use them just as effectively to write high-quality code more slowly.",
+      "location": {
+        "byte_start": 234,
+        "byte_end": 319,
+        "line": 13,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LLMs",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "high-quality code",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-9daf9332",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "LLM agents are really good at finding bugs.",
+    "evidence": {
+      "ref_id": "p004.s001",
+      "quote": "LLM agents are really good at finding bugs.",
+      "location": {
+        "byte_start": 621,
+        "byte_end": 771,
+        "line": 17,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LLM agents",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "bugs",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-71408e0b",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The latest public models from Anthropic and OpenAI are good enough to find plenty of bugs in an unscrutinized codebase.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "the latest public models from Anthropic and OpenAI are good enough to find plenty of bugs in an unscrutinized codebase.",
+      "location": {
+        "byte_start": 892,
+        "byte_end": 1246,
+        "line": 19,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "latest public models from Anthropic and OpenAI",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-71b1ad87",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The challenge with AI bug-finding is prioritizing and validating the findings, not just locating the bugs.",
+    "evidence": {
+      "ref_id": "p006.s001",
+      "quote": "The problem is not so much finding the bugs, but instead prioritizing and validating them.",
+      "location": {
+        "byte_start": 1248,
+        "byte_end": 1340,
+        "line": 21,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "prioritizing and validating bugs",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-6f590c1c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Using multiple different models for PR review reduces the likelihood of hallucinations or bogus bugs.",
+    "evidence": {
+      "ref_id": "p006.s002",
+      "quote": "the more, different models you throw at a PR review, the less likely you are to get hallucinations or bogus bugs.",
+      "location": {
+        "byte_start": 1340,
+        "byte_end": 1673,
+        "line": 21,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "multiple different models",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "hallucinations or bogus bugs",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-38e563d7",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Run multiple AI agents (Claude sub-agent, Codex, and Cursor Bugbot) to find bugs ranked by critical/high/medium/low, then review findings, rule out false positives, and write a final report.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "Run a Claude sub-agent, Codex, and Cursor Bugbot to find bugs in this PR ranked by critical/high/medium/low. Once they're all done, review their findings, do your own research to rule out false positives, and write a final report.",
+      "location": {
+        "byte_start": 1675,
+        "byte_end": 1941,
+        "line": 23,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Claude sub-agent, Codex, and Cursor Bugbot",
+        "role": "instrument",
+        "locatable": true
+      },
+      {
+        "surface": "bugs in PR",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p007.s001`..`p008.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-6e8d9f3a",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The multi-model bug-finding approach consistently finds many bugs with a near-zero false positive rate.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "this skill always finds tons of bugs in a PR, and the false positive rate is near zero.",
+      "location": {
+        "byte_start": 2262,
+        "byte_end": 2367,
+        "line": 29,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "multi-model bug-finding skill",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-40ab7d34",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Using the multi-model review technique doesn't necessarily increase velocity; it often reveals pre-existing bugs, leading to tangential fixes.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "When I use this technique, I haven't necessarily seen my velocity go up. If anything, the review process often finds pre-existing bugs, so I end up on a tangential side-quest where I'm writing unit tests and fixing subtle flaws that pre-date the PR.",
+      "location": {
+        "byte_start": 2881,
+        "byte_end": 3229,
+        "line": 35,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "multi-model review technique",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "velocity",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p012.s004`..`p013.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-2f6b9501",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Have an agent fix all the criticals and highs (with my guidance on the proper solution), then repeat until no criticals/highs",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "Have an agent fix all the criticals and highs (with my guidance on the proper solution), then repeat until no criticals/highs",
+      "location": {
+        "byte_start": 2639,
+        "byte_end": 2767,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "critical and high priority bugs",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-d397976b",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The failure modes of a codebase are more informative to explore than its happy-path architecture.",
+    "evidence": {
+      "ref_id": "p014.s002",
+      "quote": "the happy-path of a complex architecture is less interesting than its failure modes.",
+      "location": {
+        "byte_start": 3520,
+        "byte_end": 3623,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "failure modes",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "happy-path of a complex architecture",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-b150b7a6",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use a slower style of vibe coding by asking an agent how a PR works and how it might fail, using documentation with Mermaid charts and Matt Pocock's /grill-me skill to understand the PR fully.",
+    "evidence": {
+      "ref_id": "p015.s002",
+      "quote": "ask an agent how your PR works and how it might fail. Have it write Markdown docs with Mermaid charts if necessary. Use Matt Pocock's /grill-me skill until you understand the entire PR front-to-back.",
+      "location": {
+        "byte_start": 3623,
+        "byte_end": 4428,
+        "line": 39,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "slower style of vibe coding",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p014.s003`..`p015.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-d7a3e74a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "I find this style of coding to be a more super-powered version of the kind of programming I was already trying to do before LLMs: careful, methodical, quality-obsessed, focused on making things better for the next coder.",
+    "evidence": {
+      "ref_id": "p016.s003",
+      "quote": "I find this style of coding to be a more super-powered version of the kind of programming I was already trying to do before LLMs: careful, methodical, quality-obsessed, focused on making things better for the next coder.",
+      "location": {
+        "byte_start": 4601,
+        "byte_end": 4826,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "slower AI-assisted coding",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "careful, methodical, quality-obsessed programming",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-12d7ba3c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "try this other, slower style of \"vibe coding.\"",
+    "evidence": {
+      "ref_id": "p015.s002",
+      "quote": "try this other, slower style of \"vibe coding.\"",
+      "location": {
+        "byte_start": 3917,
+        "byte_end": 4185,
+        "line": 41,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-5558fc16",
+    "kind": "assertion",
+    "text": "This is the opposite of the \"10x productivity\" slop-cannon style of development that most people imagine when they think of vibe coding",
+    "evidence": {
+      "ref_id": "p013.s003",
+      "quote": "This is the opposite of the \"10x productivity\" slop-cannon style of development that most people imagine when they think of vibe coding",
+      "location": {
+        "byte_start": 3229,
+        "byte_end": 3401,
+        "line": 37,
+        "match_kind": "rendered"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

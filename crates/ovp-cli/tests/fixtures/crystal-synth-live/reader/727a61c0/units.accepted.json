@@ -1,0 +1,676 @@
+[
+  {
+    "id": "u-000-b3108486",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "In modern coding agents, ordinary markdown files can change agent behavior.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "现代 coding agent 里，一个很有意思的现象是：普通 markdown 文件可以改变 agent behavior。",
+      "location": {
+        "byte_start": 328,
+        "byte_end": 439,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "markdown 文件",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent behavior",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-e6dd1854",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Markdown files are only the visible part; the interesting part is the Harness's design of this mechanism.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "Markdown file 只是可见部分。真正有趣的是 Harness 对这种机制的设计：",
+      "location": {
+        "byte_start": 506,
+        "byte_end": 662,
+        "line": 41,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Harness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p007.s001`..`p009.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-002-3e14d41a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "旧 notes 会和当前 instructions 竞争",
+    "evidence": {
+      "ref_id": "p016.s001",
+      "quote": "旧 notes 会和当前 instructions 竞争",
+      "location": {
+        "byte_start": 1048,
+        "byte_end": 1093,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "raw markdown dumping",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-b13a9aa6",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "The model gets more text but the task gets less useful instruction when markdown is raw dumped.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "Model 得到了更多 text，但 task 得到的有用的 instruction 更少。",
+      "location": {
+        "byte_start": 1232,
+        "byte_end": 1310,
+        "line": 64,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "raw markdown dumping",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-d1340048",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": ".md files should enter context through Harness routing, not be dumped directly into prompts.",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": ".md 应该通过 Harness route 进入 context，不能直接倒进 prompt。",
+      "location": {
+        "byte_start": 1323,
+        "byte_end": 1401,
+        "line": 68,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": ".md 文件",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-3110ab7c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "AGENTS.md means: In this workspace, behave like this; it is workspace instruction context.",
+    "evidence": {
+      "ref_id": "p024.s001",
+      "quote": "AGENTS.md ：In this workspace, behave like this.",
+      "location": {
+        "byte_start": 1655,
+        "byte_end": 1706,
+        "line": 78,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AGENTS.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-98b30c36",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "SKILL.md means: For this kind of task, use this procedure; it is task procedure context.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "SKILL.md ：For this kind of task, use this procedure.",
+      "location": {
+        "byte_start": 1708,
+        "byte_end": 1764,
+        "line": 80,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "SKILL.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-5eb64b4e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "AGENTS.md works because Harness treats it as workspace instruction context; it should be visible before the model starts operating on the repo.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "AGENTS.md 有效，是因为 Harness 把它当成 workspace instruction context。它是 project guidance，应该在 model 开始操作 repo 前可见。",
+      "location": {
+        "byte_start": 1766,
+        "byte_end": 1946,
+        "line": 82,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AGENTS.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p026.s001`..`p028.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-008-2ac120d7",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The model remains responsible for writing and reasoning, but the Harness inserts stable project rules before each turn starts.",
+    "evidence": {
+      "ref_id": "p033.s001",
+      "quote": "Model 仍然负责 writing 和 reasoning。但 Harness 在 turn 开始前插入了稳定的 project rule。",
+      "location": {
+        "byte_start": 2276,
+        "byte_end": 2462,
+        "line": 94,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "project rules",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p032.s001`..`p034.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-2220a2b4",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "它从 workspace 被发现",
+    "evidence": {
+      "ref_id": "p036.s001",
+      "quote": "它从 workspace 被发现",
+      "location": {
+        "byte_start": 2501,
+        "byte_end": 2530,
+        "line": 102,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AGENTS.md",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-05b07f36",
+    "kind": "assertion",
+    "subtype": "recommendation",
+    "text": "The content of AGENTS.md should not be blindly copied into every visible transcript message; it belongs in the stable context layer.",
+    "evidence": {
+      "ref_id": "p039.s004",
+      "quote": "文件内容不应该被盲目复制进每条 visible transcript message。它属于 stable context layer。",
+      "location": {
+        "byte_start": 2922,
+        "byte_end": 3138,
+        "line": 114,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AGENTS.md 内容",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p039.s003`..`p039.s005` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-4f4ddf0d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "AGENTS.md loads before model turn assembly, entering stable workspace instruction context alongside project rules and local operating constraints.",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "AGENTS.md 在 model turn 组装前加载。它进入 stable workspace instruction context，和 project rules、local operating constraints 放在一起。",
+      "location": {
+        "byte_start": 3274,
+        "byte_end": 3508,
+        "line": 122,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AGENTS.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p042.s001`..`p044.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-012-aac3dfa4",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "SKILL.md works differently: it boosts task performance by providing a focused procedure at the right moment.",
+    "evidence": {
+      "ref_id": "p047.s001",
+      "quote": "它能提升某类 task 的表现，是因为它在正确时机给 model 一个聚焦的 procedure。",
+      "location": {
+        "byte_start": 3643,
+        "byte_end": 3744,
+        "line": 132,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "SKILL.md",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-8ab99d6f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Without a skill, a model may understand general domain but miss local workflow.",
+    "evidence": {
+      "ref_id": "p048.s001",
+      "quote": "没有 skill 时，model 可能懂一般领域，但会漏掉 local workflow。",
+      "location": {
+        "byte_start": 3746,
+        "byte_end": 3825,
+        "line": 134,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model without skill",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-b819fa40",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "With a skill, Harness can provide: when to use the workflow, which files/artifacts matter, which tools are allowed, what steps to follow, what checks prove completion, and what output format users expect.",
+    "evidence": {
+      "ref_id": "p050.s001",
+      "quote": "什么时候使用这个 workflow",
+      "location": {
+        "byte_start": 3868,
+        "byte_end": 3904,
+        "line": 138,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Harness with skill",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-b0717eb1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "SKILL.md improves performance by converting fuzzy ability into repeatable procedure.",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "这个文件会提升 performance，因为它把 fuzzy ability 变成 repeatable procedure。",
+      "location": {
+        "byte_start": 4195,
+        "byte_end": 4288,
+        "line": 149,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "SKILL.md",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-7dda2cf7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A good Harness uses progressive disclosure: scanning skill folders at startup or capability refresh, making only capability metadata visible to the model initially, with the full body entering context only when needed.",
+    "evidence": {
+      "ref_id": "p056.s001",
+      "quote": "它使用 progressive disclosure。",
+      "location": {
+        "byte_start": 4380,
+        "byte_end": 4415,
+        "line": 155,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "progressive disclosure",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-83b07a9f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "SKILL.md first appears as capability metadata, loading the body only after task invoke; it enters task procedure context serving only the current workflow, not spreading into always-on workspace policy.",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "SKILL.md 先以 capability metadata 出现，task invoke 之后才加载 body。它进入 task procedure context：steps、tool expectations、checks、output shape。",
+      "location": {
+        "byte_start": 4772,
+        "byte_end": 5018,
+        "line": 169,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "SKILL.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p063.s001`..`p065.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-2e5feaa3",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Markdown does not change model weights but changes harness-managed context, tools, and workflow for that task.",
+    "evidence": {
+      "ref_id": "p066.s001",
+      "quote": "小小的 markdown，没有改变 model weights。却改变了该 task 里的 harness-managed context、tools 和 workflow。",
+      "location": {
+        "byte_start": 5018,
+        "byte_end": 5231,
+        "line": 173,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "markdown",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p065.s002`..`p067.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-019-32bc2b42",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "At the right moment, loading different markdown files into context is what the Harness should do.",
+    "evidence": {
+      "ref_id": "p070.s001",
+      "quote": "在恰当的时机，把不同的 markdown 文件加载进context，就是 harness 应该做的事情。",
+      "location": {
+        "byte_start": 5311,
+        "byte_end": 5417,
+        "line": 183,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Harness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-2357d073",
+    "kind": "assertion",
+    "text": "Harness 应该知道每条 rule 适用于哪个 directory。",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "Harness 应该知道每条 rule 适用于哪个 directory。",
+      "location": {
+        "byte_start": 2812,
+        "byte_end": 2874,
+        "line": 112,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-d1340048",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": ".md 应该通过 Harness route 进入 context，不能直接倒进 prompt。",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": ".md 应该通过 Harness route 进入 context，不能直接倒进 prompt。",
+      "location": {
+        "byte_start": 1323,
+        "byte_end": 1401,
+        "line": 68,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ovp2.</title>
+    <script>
+      /* Theme boot — runs before first paint to prevent a theme flash.
+         Precedence: ?theme= param (headless screenshots; NOT persisted)
+         > localStorage['ovp-theme'] > prefers-color-scheme > light. */
+      (function () {
+        var t = null;
+        try {
+          t = new URLSearchParams(location.search).get('theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = localStorage.getItem('ovp-theme');
+          }
+        } catch (e) {
+          /* storage disabled — fall through to media query */
+        }
+        if (t !== 'dark' && t !== 'light') {
+          t =
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

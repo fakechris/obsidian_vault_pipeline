@@ -1,0 +1,20 @@
+# Note: interp `source` differs from raw `source` — the legacy pipeline followed
+# the Twitter thread's referenced article and used THAT URL as canonical. See ../notes.md.
+title: "AI  Readiness Gap：组织清晰度决定 AI 应用成败"
+source: https://danielmiessler.com/blog/most-companies-arent-ready-for-ai
+author: Daniel Miessler
+date: 2026-05-05
+type: article
+tags: ["AI-Adoption", "Organizational-Clarity", "Strategy-Execution", "Business-Transformation"]
+status: completed
+area: ai
+canonical_concepts: [ai-agent, competitive-advantage]
+concept_candidates:
+  - business-process-management
+  - digital-transformation
+  - organizational-learning
+  - strategic-planning
+link_resolution_status: resolved
+link_resolution_version: v2
+pipeline_run_id: 20260505-075841-cfdf52c9
+original_note_type: analysis

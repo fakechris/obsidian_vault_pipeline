@@ -1,0 +1,33 @@
+[package]
+name = "ovp-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Semantic theme layer: document embeddings (feature-gated) + pure-Rust kNN/Louvain clustering + c-TF-IDF keywords"
+
+[features]
+default = []
+# Heavy ONNX inference stack (fastembed + ort). OFF by default — the pure
+# clustering/keyword layer and the embedding cache reader compile without it.
+embed = ["dep:fastembed"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# rustls everywhere (repo policy: no system OpenSSL), no image models.
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "hf-hub-rustls-tls",
+    "ort-download-binaries-rustls-tls",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[example]]
+name = "embed_dir"
+required-features = ["embed"]

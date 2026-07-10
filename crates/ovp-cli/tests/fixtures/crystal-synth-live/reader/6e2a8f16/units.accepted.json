@@ -1,0 +1,788 @@
+[
+  {
+    "id": "u-000-93856f66",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "长任务 Agent 系统需要三层控制：Context 管现场，Planning 管边界，Verification 管证据，任何一层松掉，另外两层都会被拖下水。",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "Context 管现场，Planning 管边界，Verification 管证据。任何一层松掉，另外两层都会被拖下水。",
+      "location": {
+        "byte_start": 1374,
+        "byte_end": 1537,
+        "line": 53,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Context",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "Planning",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "Verification",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p013.s001`..`p015.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-001-783f0706",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "状态丢失、规划失真、验证失灵会形成长任务 Agent 的失控链路：上下文越来越脏，计划越来越虚，验证越来越浅，最后 Agent 没有突然变笨，只是在一个缺少控制回路的系统里越跑越偏。",
+    "evidence": {
+      "ref_id": "p009.s001",
+      "quote": "这三个问题放在一起，就会形成长任务里最常见的失控链路：上下文越来越脏，计划越来越虚，验证越来越浅。",
+      "location": {
+        "byte_start": 875,
+        "byte_end": 1022,
+        "line": 45,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "状态丢失",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "规划失真",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "验证失灵",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "失控链路",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "3 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-4695a9e9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "curl-only verification 是指 Agent 只用 curl 检查接口返回 200 就声称功能可用，但没有真正点击页面、走用户路径、查浏览器控制台或确认数据是否写入。",
+    "evidence": {
+      "ref_id": "p088.s001",
+      "quote": "最常见的情况是 curl-only verification。接口能返回 200，Agent 就说功能可用。",
+      "location": {
+        "byte_start": 8712,
+        "byte_end": 8893,
+        "line": 210,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "curl-only verification",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p087.s001`..`p089.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-003-dc9568bd",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Stub 逃逸是指 Agent 用 mock、stub、placeholder 搭了流程后，忘了回来替换或把临时实现包装成阶段成果，如支付流程只打印日志、权限判断写了 TODO 但页面已放开入口。",
+    "evidence": {
+      "ref_id": "p093.s001",
+      "quote": "第二种情况是 stub 逃逸。Agent 做到复杂功能时，会先写一个简化版本。这个动作本身没问题。工程里经常先用 mock、stub、placeholder 搭流程。",
+      "location": {
+        "byte_start": 9159,
+        "byte_end": 9562,
+        "line": 220,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Stub 逃逸",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p092.s001`..`p095.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-004-d4e51736",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "另一类更隐蔽的失败来自任务尺寸感。",
+    "evidence": {
+      "ref_id": "p041.s001",
+      "quote": "另一类更隐蔽的失败来自任务尺寸感。",
+      "location": {
+        "byte_start": 4542,
+        "byte_end": 4593,
+        "line": 109,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "任务尺寸感",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-23e29441",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Progress ledger 是一种外部状态文件，每完成一个阶段后记录 Current Goal、Completed、Changed Files、Decisions、Verification、Open Risks、Next Step，用于跨 session 续跑和人工快速定位进度。",
+    "evidence": {
+      "ref_id": "p222.s001",
+      "quote": "长任务不要只靠对话续命。每完成一个阶段，Agent 要写一份 progress ledger。",
+      "location": {
+        "byte_start": 22678,
+        "byte_end": 22841,
+        "line": 501,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Progress ledger",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p221.s001`..`p223.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-009-1f50e523",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "生产级 Agent 的五层架构包括：状态层（保存任务目标和进度）、规划层（拆阶段和设预算）、执行层（工具调用和状态同步）、验证层（外部证据和独立评价）、监督层（权限控制和硬停止条件）。",
+    "evidence": {
+      "ref_id": "p130.s001",
+      "quote": "一个更稳的结构，至少要有五层。",
+      "location": {
+        "byte_start": 13427,
+        "byte_end": 13472,
+        "line": 305,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "状态层",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "规划层",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "执行层",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "验证层",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "监督层",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "5 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-d0f30d06",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "监督层负责在关键节点介入：在任务范围扩大、预算接近上限、验证连续失败、操作涉及危险动作或 Agent 无法判断时，强制停止或升级给人工。",
+    "evidence": {
+      "ref_id": "p156.s001",
+      "quote": "它只在几个关键点介入：任务范围扩大。预算接近上限。验证连续失败。操作涉及删除、发布、权限、付费、生产数据。Agent 发现自己无法判断。",
+      "location": {
+        "byte_start": 16052,
+        "byte_end": 16880,
+        "line": 347,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "监督层",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p151.s003`..`p157.s005` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-011-4d52decf",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Browser-level verification 是指 Web 产品的验证必须用浏览器走一遍关键路径，包括页面打开、控件点击、表单提交、数据展示、错误状态、控制台报错和移动端布局，不能只用 curl 和单元测试。",
+    "evidence": {
+      "ref_id": "p248.s001",
+      "quote": "Web 任务里，curl 和单元测试都不够。至少要让 Agent 用浏览器走一遍关键路径：",
+      "location": {
+        "byte_start": 23819,
+        "byte_end": 24092,
+        "line": 566,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Browser-level verification",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p246.s001`..`p250.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-012-3f1292e0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "验证失灵是 Agent 最危险的能力：它擅长用体面的语言给自己的浅验证包装结论，把不确定问题解释成可接受风险，把未完成部分解释成后续优化，把 stub 包装成交付——而写代码的 Agent 天然希望任务收敛，会不断把问题降级。",
+    "evidence": {
+      "ref_id": "p102.s001",
+      "quote": "到了后半程，它会倾向于把不确定问题解释成可接受风险，把未完成部分解释成后续优化，把浅验证解释成基本通过。",
+      "location": {
+        "byte_start": 10469,
+        "byte_end": 10625,
+        "line": 244,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "验证失灵",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-47c43ca6",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "真正贵的是：Agent 失败了，系统却以为它成功了。失败可以重试，可以回滚，可以升级给人；但系统误判成功会导致问题一路流到最后，由用户自己兜底。",
+    "evidence": {
+      "ref_id": "p123.s001",
+      "quote": "生产级 Agent 最该警惕的，是系统误判成功。失败可以重试，可以回滚，可以升级给人。真正贵的是：它失败了，系统却以为它成功了。",
+      "location": {
+        "byte_start": 12592,
+        "byte_end": 12946,
+        "line": 287,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "系统误判成功",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p121.s001`..`p125.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-014-ef7b6226",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "更强模型会改变 harness 的设计，但不会取消 harness：每一个 harness 组件背后都藏着对当前模型能力边界的假设，模型能力提高后这些假设需要重新测试，保留过时的 harness 会让系统变慢变重。",
+    "evidence": {
+      "ref_id": "p169.s001",
+      "quote": "每一个 harness 组件背后，都藏着一个判断：当前模型在这件事上还不够稳定，所以系统要补一层。模型能力提高，这个判断就应该被重新测试。",
+      "location": {
+        "byte_start": 17782,
+        "byte_end": 18097,
+        "line": 384,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p167.s002`..`p170.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-d67d7d49",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "即使模型更强，也有四类东西很难被模型能力完全吃掉：外部状态（文件系统、数据库、API 状态在变化）、外部验证（需要环境反馈而非模型想一遍）、权限和责任（删除、发布、付费需规则和审计）、成本（token 和工具调用是隐性成本需 budget routing）。",
+    "evidence": {
+      "ref_id": "p176.s001",
+      "quote": "但有几类东西很难被模型能力完全吃掉。第一类是外部状态。模型可以读更长的上下文，但真实任务里的状态不只存在于上下文里。",
+      "location": {
+        "byte_start": 18437,
+        "byte_end": 18823,
+        "line": 398,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "外部状态",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "外部验证",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "权限和责任",
+        "role": "topic",
+        "locatable": false
+      },
+      {
+        "surface": "成本",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p174.s001`..`p178.s001` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "3 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-7547d789",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "应该避免的两种极端是：迷信模型（模型一升级就把状态、验证、权限、预算都交给它临场判断，短 demo 漂亮但长任务容易埋雷）和迷信 harness（模型已能稳定做的事还强行拆成复杂流程，最后系统慢、贵、难维护）。",
+    "evidence": {
+      "ref_id": "p187.s001",
+      "quote": "真正该避免的是两种极端。一种是迷信模型。模型一升级，就把状态、验证、权限、预算都交给它临场判断。短 demo 很漂亮，长任务容易埋雷。",
+      "location": {
+        "byte_start": 20017,
+        "byte_end": 20427,
+        "line": 420,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "迷信模型",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "迷信 harness",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p185.s002`..`p189.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-a4694101",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "应该定期问：这层 harness 现在还在解决真实问题吗？如果是，就保留并把它做得更可观测；如果否，就删掉让模型直接做。Agent 架构师的工作是持续识别模型当前的能力边界，然后只在边界外补必要的工程控制。",
+    "evidence": {
+      "ref_id": "p192.s001",
+      "quote": "更好的做法是定期问一个问题：这层 harness 现在还在解决真实问题吗？如果答案是肯定的，就保留，并把它做得更可观测。如果答案是否定的，就删掉，让模型直接做。",
+      "location": {
+        "byte_start": 20382,
+        "byte_end": 20822,
+        "line": 428,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p189.s002`..`p195.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-941c1fd5",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "判断一个 Agent 工作流是否进入工程化，应先问五个问题：状态在哪里？计划怎么拆？执行怎么记录？结果怎么验证？什么时候必须停？这五个问题回答不清，模型越强跑偏时造成的动静越大。",
+    "evidence": {
+      "ref_id": "p292.s001",
+      "quote": "我现在判断一个 Agent 工作流，会先跳过模型名。我会先问这五个问题：状态在哪里？计划怎么拆？执行怎么记录？结果怎么验证？什么时候必须停？",
+      "location": {
+        "byte_start": 27253,
+        "byte_end": 27838,
+        "line": 667,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "五个问题",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p287.s001`..`p293.s005` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-020-1eb7db9d",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Agent 需要明确的停止条件，常见停止点包括：连续两次验证失败、任务范围明显扩大、需删除/发布/改权限/花钱/触碰生产数据、当前阶段超过预算、遇到多个可行方案但无法判断取舍、关键依赖不可用、用户目标互相冲突。停下来很正常，失去边界继续跑风险更大。",
+    "evidence": {
+      "ref_id": "p255.s001",
+      "quote": "Agent 需要明确的停止条件。常见停止点包括：连续两次验证失败。任务范围明显扩大。需要删除、发布、改权限、花钱、触碰生产数据。当前阶段超过预算。",
+      "location": {
+        "byte_start": 24305,
+        "byte_end": 24785,
+        "line": 584,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "停止条件",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p252.s001`..`p257.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-021-6d386382",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Agent 自动化越强，越需要回滚路径：代码任务至少要有 git diff、数据任务要有 dry-run/备份/row count、发布任务要有草稿/预览/读回验证、配置任务要记录旧值；没有回滚路径就不应让 Agent 自动执行高影响操作。",
+    "evidence": {
+      "ref_id": "p260.s001",
+      "quote": "Agent 自动化越强，越需要回滚路径。代码任务至少要有 git diff。数据任务要有 dry-run、备份、row count。发布任务要有草稿、预览、读回验证。配置任务要记录旧值。",
+      "location": {
+        "byte_start": 24864,
+        "byte_end": 25312,
+        "line": 600,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "回滚路径",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p257.s007`..`p262.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-022-1699285d",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "这五层合起来，Agent 才从一个会调用工具的模型，变成一个可恢复、可验证、可停止的执行系统。",
+    "evidence": {
+      "ref_id": "p159.s001",
+      "quote": "这五层合起来，Agent 才从一个会调用工具的模型，变成一个可恢复、可验证、可停止的执行系统。",
+      "location": {
+        "byte_start": 17028,
+        "byte_end": 17157,
+        "line": 368,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "五层架构",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-7d75197c",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Anthropic 建议给 Claude 明确的验证方式（测试、截图、期望输出），因为这是提升结果质量的高杠杆动作；context window 会被快速填满、窗口越满模型越容易忘记早期指令或出错。",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "Anthropic 在 Claude Code 最佳实践里讲得很直接：context window 会很快被填满，窗口越满，模型越容易忘记早期指令或犯错。它还建议给 Claude 明确的验证方式，比如测试、截图和期望输出，因为这是提升结果质量的高杠杆动作。",
+      "location": {
+        "byte_start": 2247,
+        "byte_end": 2766,
+        "line": 73,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "quoted_person",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Anthropic",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "context window",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p023.s002`..`p026.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-024-6ab6b393",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "一张 Claude 工程师分享的图，把长任务 Agent 最常见的三个问题说得很准：带不住状态，估不准工作量，评不好自己的输出。",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "一张 Claude 工程师分享的图，把长任务 Agent 最常见的三个问题说得很准：带不住状态，估不准工作量，评不好自己的输出。",
+      "location": {
+        "byte_start": 64,
+        "byte_end": 228,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-a6201419",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Spec-first：先写施工单，再让 Agent 动手",
+    "evidence": {
+      "ref_id": "p205.s001",
+      "quote": "Spec-first：先写施工单，再让 Agent 动手",
+      "location": {
+        "byte_start": 21400,
+        "byte_end": 21569,
+        "line": 458,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p204.s001`..`p206.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-026-d4e51736",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "另一类更隐蔽的失败来自任务尺寸感。",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "另一类更隐蔽的失败来自任务尺寸感。",
+      "location": {
+        "byte_start": 4218,
+        "byte_end": 4593,
+        "line": 101,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p037.s002`..`p041.s001` around the ref"
+      }
+    ]
+  }
+]

@@ -1,0 +1,61 @@
+# Article concept-map pipeline (M13.3) — identical to article_evergreen.pipeline
+# except the prompt builder emits the v2 `article_concept_map/v2` prompt instead
+# of `article_interpret/v1`. The LLM returns per-concept `concepts[]`; the parser
+# marks the doc ConceptMapV2, the resolver gates the map, and the writer mints
+# one grounded evergreen per surviving concept (failing loud if the map gates to
+# empty — it never falls back to the v1 candidate path).
+#
+# Run live to record v2 cassettes / score against the concept-map benchmark; the
+# v1 article_evergreen.pipeline.toml is unchanged and stays the default.
+[pipeline]
+nodes = [
+  "markdown_inbox",
+  "source_resolver",
+  "prompt_builder",
+  "llm_invoker",
+  "article_parser",
+  "concept_resolver",
+  "evergreen_concept_writer",
+  "article_vault_plan",
+  "evergreen_sink",
+]
+edges = [
+  ["markdown_inbox", "source_resolver"],
+  ["source_resolver", "prompt_builder"],
+  ["prompt_builder", "llm_invoker"],
+  ["llm_invoker", "article_parser"],
+  ["article_parser", "concept_resolver"],
+  ["concept_resolver", "evergreen_concept_writer"],
+  ["evergreen_concept_writer", "article_vault_plan"],
+  ["evergreen_concept_writer", "evergreen_sink"],
+]
+
+[assembly.markdown_inbox]
+kind = "source.markdown_inbox"
+
+[assembly.source_resolver]
+kind = "transform.source_resolver"
+
+# The only difference from article_evergreen: the v2 concept-map prompt builder.
+[assembly.prompt_builder]
+kind = "transform.concept_map_prompt_builder"
+
+[assembly.llm_invoker]
+kind = "effect.llm_invoker"
+config = { client = "default_llm" }
+
+[assembly.article_parser]
+kind = "transform.article_parser"
+
+[assembly.concept_resolver]
+kind = "transform.concept_resolver"
+config = { registry = "default" }
+
+[assembly.evergreen_concept_writer]
+kind = "transform.evergreen_concept_writer"
+
+[assembly.article_vault_plan]
+kind = "sink.article_vault_plan"
+
+[assembly.evergreen_sink]
+kind = "sink.evergreen_sink"

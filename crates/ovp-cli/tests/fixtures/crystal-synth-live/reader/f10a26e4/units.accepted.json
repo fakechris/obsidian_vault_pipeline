@@ -1,0 +1,856 @@
+[
+  {
+    "id": "u-000-48d07a82",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Code review at Google is a process where someone other than the author examines a piece of code before it is integrated into the codebase.",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Code review at Google is a process where someone other than the author examines a piece of code before it is integrated into the codebase.",
+      "location": {
+        "byte_start": 746,
+        "byte_end": 885,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Code review at Google",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-8f8126e0",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "CL stands for 'changelist' - a self-contained change submitted to version control or undergoing code review.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "CL : Stands for \"changelist\" - a self-contained change submitted to version control or undergoing code review",
+      "location": {
+        "byte_start": 1167,
+        "byte_end": 1354,
+        "line": 46,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "CL",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-69b4582f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "LGTM means 'Looks Good To Me' - what a reviewer says when approving a CL.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "LGTM : \"Looks Good To Me\" - what a reviewer says when approving a CL",
+      "location": {
+        "byte_start": 1356,
+        "byte_end": 1426,
+        "line": 48,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LGTM",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-10445408",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Code review is a fundamental quality assurance mechanism that helps maintain high standards across the codebase.",
+    "evidence": {
+      "ref_id": "p054.s002",
+      "quote": "At Google, code review is a fundamental quality assurance mechanism that helps maintain high standards across the codebase.",
+      "location": {
+        "byte_start": 5067,
+        "byte_end": 5191,
+        "line": 153,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Code review",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-4db84665",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Ensure code quality : Verify that changes meet Google's engineering standards",
+    "evidence": {
+      "ref_id": "p060.s001",
+      "quote": "Ensure code quality : Verify that changes meet Google's engineering standards",
+      "location": {
+        "byte_start": 5315,
+        "byte_end": 5394,
+        "line": 165,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Code Review Goals",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-6dafeae2",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Reviewers should favor approving a CL once it is in a state where it definitely improves the overall code health of the system being worked on, even if the CL isn't perfect.",
+    "evidence": {
+      "ref_id": "p371.s001",
+      "quote": "Reviewers should favor approving a CL once it is in a state where it definitely improves the overall code health of the system being worked on, even if the CL isn't perfect.",
+      "location": {
+        "byte_start": 34813,
+        "byte_end": 34987,
+        "line": 977,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "The core standard for code review",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-81273b0d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The fundamental purpose of code review at Google is to ensure that the overall code health of the codebase improves over time.",
+    "evidence": {
+      "ref_id": "p365.s001",
+      "quote": "The fundamental purpose of code review at Google is to ensure that the overall code health of the codebase improves over time.",
+      "location": {
+        "byte_start": 34449,
+        "byte_end": 34576,
+        "line": 965,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Code review at Google",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-7ea446a4",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Google optimizes for the speed at which a team of developers can produce a product together, rather than individual developer productivity.",
+    "evidence": {
+      "ref_id": "p421.s001",
+      "quote": "At Google, we optimize for the speed at which a team of developers can produce a product together, rather than individual developer productivity.",
+      "location": {
+        "byte_start": 39357,
+        "byte_end": 39503,
+        "line": 1101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Team velocity",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-0b809121",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Respond within one business day maximum (ideally first thing the next morning).",
+    "evidence": {
+      "ref_id": "p432.s001",
+      "quote": "Respond within one business day maximum (ideally first thing the next morning)",
+      "location": {
+        "byte_start": 40274,
+        "byte_end": 40354,
+        "line": 1125,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Response time expectations",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-10c952b1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Do not interrupt your focused development work to perform a code review.",
+    "evidence": {
+      "ref_id": "p436.s002",
+      "quote": "Do not interrupt your focused development work to perform a code review.",
+      "location": {
+        "byte_start": 40814,
+        "byte_end": 40887,
+        "line": 1136,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Focused development work",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-8e8f7d93",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Reviewers should distinguish between required changes, suggested improvements (Nit:), and educational comments.",
+    "evidence": {
+      "ref_id": "p386.s001",
+      "quote": "Required Changes : Issues that must be fixed before approval",
+      "location": {
+        "byte_start": 36084,
+        "byte_end": 36146,
+        "line": 1009,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Different Types of Review Comments",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-011-7cf1eddc",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "An emergency requiring expedited code review is characterized by a small change that addresses critical situations such as allowing a major launch to continue, fixing a significant production bug, handling a pressing legal issue, or closing a major security hole.",
+    "evidence": {
+      "ref_id": "p693.s001",
+      "quote": "Allows a major launch to continue instead of rolling back",
+      "location": {
+        "byte_start": 64839,
+        "byte_end": 64898,
+        "line": 1782,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "An emergency requiring expedited code review",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-37889f72",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A hard deadline is one where something disastrous would happen if missed, while most deadlines are soft deadlines representing a desire rather than a critical necessity.",
+    "evidence": {
+      "ref_id": "p715.s001",
+      "quote": "A hard deadline is one where something disastrous would happen if missed:",
+      "location": {
+        "byte_start": 66671,
+        "byte_end": 66746,
+        "line": 1830,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Hard Deadlines",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Soft Deadlines",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-9480d20c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "When qualified developers pair-program code together, the code is considered to have been reviewed by the non-authoring pair member.",
+    "evidence": {
+      "ref_id": "p098.s001",
+      "quote": "When qualified developers pair-program code together, the code is considered to have been reviewed by the non-authoring pair member.",
+      "location": {
+        "byte_start": 8219,
+        "byte_end": 8352,
+        "line": 250,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Pair Programming",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-b27c2c29",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "CL descriptions serve as permanent records in the version control history and help current reviewers understand the purpose and context of changes, future developers locate relevant changes through search, and maintainers determine whether code can be safely modified.",
+    "evidence": {
+      "ref_id": "p159.s001",
+      "quote": "CL descriptions serve as permanent records in the version control history.",
+      "location": {
+        "byte_start": 15186,
+        "byte_end": 15261,
+        "line": 427,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "CL descriptions",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-cbcb33ae",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "The CL navigation process follows three steps: Initial Assessment to evaluate whether the change makes sense, Main Component Review to examine the most important parts first, and Systematic Review to process remaining files in a logical sequence.",
+    "evidence": {
+      "ref_id": "p571.s001",
+      "quote": "Initial Assessment : Evaluate whether the change makes sense and has a good description",
+      "location": {
+        "byte_start": 53325,
+        "byte_end": 53414,
+        "line": 1483,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "CL navigation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-4bffc090",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Effective code review comments follow four fundamental principles: be kind, explain reasoning, balance guidance, and encourage simplification.",
+    "evidence": {
+      "ref_id": "p510.s001",
+      "quote": "Be kind - Focus on the code, not the developer",
+      "location": {
+        "byte_start": 46978,
+        "byte_end": 47026,
+        "line": 1322,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Effective code review comments",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-017-4199733e",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "When handling disagreements, always start by trying to reach technical consensus through respectful discussion, then refer to Code Review Standards for guidance, consider bringing in additional reviewers, and understand when to defer or escalate.",
+    "evidence": {
+      "ref_id": "p307.s001",
+      "quote": "Always start by trying to reach technical consensus through respectful discussion",
+      "location": {
+        "byte_start": 26969,
+        "byte_end": 27052,
+        "line": 809,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Resolving conflicts",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-f296cd77",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Experience shows that unless cleanup happens immediately after the current change, it rarely occurs.",
+    "evidence": {
+      "ref_id": "p642.s001",
+      "quote": "Experience shows that unless cleanup happens immediately after the current change, it rarely occurs.",
+      "location": {
+        "byte_start": 60273,
+        "byte_end": 60374,
+        "line": 1657,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Cleanup",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-bd04ff84",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Google Engineering Practices repository is made available under the Creative Commons Attribution 3.0 Unported (CC BY 3.0) license.",
+    "evidence": {
+      "ref_id": "p761.s001",
+      "quote": "The Google Engineering Practices repository is made available under the Creative Commons Attribution 3.0 Unported (CC BY 3.0) license.",
+      "location": {
+        "byte_start": 69890,
+        "byte_end": 70025,
+        "line": 1945,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Google Engineering Practices repository",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-fcc7d27f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Code reviewers evaluate submissions across multiple dimensions: design, functionality, complexity, tests, naming, comments, style, and documentation.",
+    "evidence": {
+      "ref_id": "p027.s001",
+      "quote": "Design Is the code well-designed and appropriate for the system?",
+      "location": {
+        "byte_start": 2033,
+        "byte_end": 2117,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Code reviewers",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-021-12cfea08",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Smaller, focused changes are easier to review thoroughly and are more likely to be approved quickly; breaking down large changes into smaller, logical units improves the review experience for both authors and reviewers.",
+    "evidence": {
+      "ref_id": "p130.s001",
+      "quote": "Smaller, focused changes are easier to review thoroughly and are more likely to be approved quickly.",
+      "location": {
+        "byte_start": 11619,
+        "byte_end": 11720,
+        "line": 339,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Creating Small CLs",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-81e71b2d",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Request splitting the CL into smaller, incremental changes that build on each other",
+    "evidence": {
+      "ref_id": "p472.s001",
+      "quote": "Request splitting the CL into smaller, incremental changes that build on each other",
+      "location": {
+        "byte_start": 43125,
+        "byte_end": 43210,
+        "line": 1217,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Large CLs",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-e3908d43",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "To increase review efficiency, reviewers can give approval (LGTM) while still leaving unresolved comments when the reviewer is confident the developer will appropriately address all remaining comments or the comments don't need to be addressed.",
+    "evidence": {
+      "ref_id": "p457.s001",
+      "quote": "The reviewer is confident the developer will appropriately address all remaining comments",
+      "location": {
+        "byte_start": 42204,
+        "byte_end": 42295,
+        "line": 1185,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "LGTM With Comments",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-025-5a6981c9",
+    "kind": "assertion",
+    "text": "Don't require unnecessary polishing that delays progress",
+    "evidence": {
+      "ref_id": "p494.s002",
+      "quote": "Don't require unnecessary polishing that delays progress",
+      "location": {
+        "byte_start": 45161,
+        "byte_end": 45585,
+        "line": 1270,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p492.s002`..`p496.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-026-82fb248e",
+    "kind": "assertion",
+    "text": "Reviewers should favor approving a CL once it is in a state where it definitely improves the overall code health of the system being worked on, even if the CL isn't perfect. This principle acknowledges that perfect code doesn't exist—there is only better code.",
+    "evidence": {
+      "ref_id": "p372.s001",
+      "quote": "Reviewers should favor approving a CL once it is in a state where it definitely improves the overall code health of the system being worked on, even if the CL isn't perfect. This principle acknowledges that perfect code doesn't exist—there is only better code.",
+      "location": {
+        "byte_start": 34813,
+        "byte_end": 35174,
+        "line": 977,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p371.s001`..`p372.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-027-e57c8cef",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A situation qualifies as an emergency only when: It requires immediate action It affects a large number of users It has significant negative impact",
+    "evidence": {
+      "ref_id": "p488.s001",
+      "quote": "A situation qualifies as an emergency only when: It requires immediate action It affects a large number of users It has significant negative impact",
+      "location": {
+        "byte_start": 44521,
+        "byte_end": 45073,
+        "line": 1250,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p483.s001`..`p491.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-028-8445e86c",
+    "kind": "assertion",
+    "text": "When disagreements arise during code review, follow this escalation path: The key principle is to avoid letting CLs linger due to unresolved disagreements. The process provides clear paths to resolution.",
+    "evidence": {
+      "ref_id": "p391.s001",
+      "quote": "When disagreements arise during code review, follow this escalation path: The key principle is to avoid letting CLs linger due to unresolved disagreements. The process provides clear paths to resolution.",
+      "location": {
+        "byte_start": 36436,
+        "byte_end": 36759,
+        "line": 1017,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p389.s002`..`p394.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-029-f8fac473",
+    "kind": "assertion",
+    "text": "When qualified developers pair-program code together, the code is considered to have been reviewed by the non-authoring pair member. This approach combines development and review into a single process.",
+    "evidence": {
+      "ref_id": "p098.s001",
+      "quote": "When qualified developers pair-program code together, the code is considered to have been reviewed by the non-authoring pair member. This approach combines development and review into a single process.",
+      "location": {
+        "byte_start": 8196,
+        "byte_end": 8421,
+        "line": 248,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p097.s001`..`p098.s002` around the ref"
+      }
+    ]
+  }
+]

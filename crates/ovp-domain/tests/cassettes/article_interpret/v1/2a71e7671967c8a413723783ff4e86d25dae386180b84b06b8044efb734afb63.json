@@ -1,0 +1,9 @@
+{
+  "model": "claude-sonnet-4-6",
+  "text": "{\n  \"title\": \"AI Readiness Gap：组织清晰度决定 AI 应用成败\",\n  \"tags\": [\"AI-Adoption\", \"Organizational-Clarity\", \"Strategy-Execution\", \"Business-Transformation\"],\n  \"linked_concepts\": [\n    \"ai-agent\",\n    \"competitive-advantage\",\n    \"business-process-management\",\n    \"digital-transformation\",\n    \"organizational-learning\",\n    \"strategic-planning\"\n  ],\n  \"dimensions\": {\n    \"one_liner\": \"大多数公司之所以无法用好 AI，不是因为模型不够强，而是因为缺乏对自身业务的足够清晰度，导致 AI 没有可对齐的目标。\",\n    \"explanation\": {\n      \"what\": \"作者 Daniel Miessler 指出：当前阶段 AI 已经足够强大，瓶颈反而在企业内部——大多数组织对自己业务流程、客户画像、产品目标缺乏足够清晰的描述，AI 因此无法接入有意义的上下文。\",\n      \"why\": \"AI 的能力杠杆需要明确的应用场景；当组织自己都说不清楚要解决什么问题，AI 只能产出泛泛的输出。所谓 AI Readiness Gap，就是组织表达清晰度与 AI 能力之间的落差。\",\n      \"how\": \"补齐方式不是更聪明的模型，而是把组织清晰度补上：写清楚战略、流程、目标和客户问题，把这些结构化成 AI 可消费的上下文，AI 才能产生差异化的复利效应。\"\n    },\n    \"details\": [\n      \"作者强调瓶颈不在算力或模型，而在企业自身的结构化能力。\",\n      \"组织清晰度 = strategy + processes + customer understanding + product objectives 的明确程度。\",\n      \"清晰度差的公司即使用上同等的 AI，也只能复制平均水平，没法形成差异化优势。\"\n    ],\n    \"structure\": null,\n    \"actions\": [\n      \"短期：用一页纸写清楚公司的业务目标、客户画像、关键流程。\",\n      \"中期：把这些素材结构化为 AI 可消费的上下文（doc、playbook、SOP），形成可复用的提示词资产。\",\n      \"长期：将组织清晰度作为持续投入项，把它当成 AI 时代的核心竞争力来管理。\"\n    ],\n    \"linked_concepts\": [\n      \"ai-agent\",\n      \"competitive-advantage\",\n      \"business-process-management\",\n      \"digital-transformation\",\n      \"organizational-learning\",\n      \"strategic-planning\"\n    ]\n  }\n}",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 3800,
+    "output_tokens": 950
+  }
+}

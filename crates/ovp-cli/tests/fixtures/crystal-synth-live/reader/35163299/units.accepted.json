@@ -1,0 +1,869 @@
+[
+  {
+    "id": "u-000-4e72f519",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The problem is not that information does not exist; it exists in project notes, client files, daily notes, task lists, and calendars.",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "The problem is not that the information does not exist.",
+      "location": {
+        "byte_start": 446,
+        "byte_end": 501,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "information",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-218075a1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The problem is that accessing information requires you to be the integration layer between all of it.",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "The problem is that accessing it requires you to be the integration layer between all of it.",
+      "location": {
+        "byte_start": 605,
+        "byte_end": 697,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "you",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "the integration layer",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-1b81f4ef",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A dashboard is a single note that reads information from everywhere else in your vault and displays what is relevant right now.",
+    "evidence": {
+      "ref_id": "p016.s001",
+      "quote": "It is a single note that reads information from everywhere else in your vault and displays what is relevant right now.",
+      "location": {
+        "byte_start": 1370,
+        "byte_end": 1488,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "A dashboard",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-003-732832ad",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The dashboard reads from other notes rather than storing its own information, so you never have to maintain it manually.",
+    "evidence": {
+      "ref_id": "p018.s001",
+      "quote": "Because the dashboard reads from your other notes rather than storing its own information, you never have to maintain it manually.",
+      "location": {
+        "byte_start": 1546,
+        "byte_end": 1676,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "The dashboard",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-eb155352",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Dataview is a community plugin that functions as a query engine for your vault, letting you write queries inside any note that pull information from other notes based on their properties, tags, or content.",
+    "evidence": {
+      "ref_id": "p035.s001",
+      "quote": "Dataview is a community plugin that functions as a query engine for your vault. It lets you write queries inside any note that pull information from other notes based on their properties, tags, or content.",
+      "location": {
+        "byte_start": 3220,
+        "byte_end": 3484,
+        "line": 95,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dataview",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p034.s001`..`p035.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-005-7c1a24c9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Properties are structured metadata fields at the top of every note written in YAML format.",
+    "evidence": {
+      "ref_id": "p036.s001",
+      "quote": "Properties are structured metadata fields at the top of every note written in YAML format.",
+      "location": {
+        "byte_start": 3537,
+        "byte_end": 3631,
+        "line": 99,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Properties",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-1540f0dc",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The OPEN: convention prefixes any item you want to surface on the following day's dashboard when writing it in your daily note.",
+    "evidence": {
+      "ref_id": "p071.s001",
+      "quote": "Any item you want to surface on the following day's dashboard gets prefixed with OPEN: when you write it in your daily note.",
+      "location": {
+        "byte_start": 8983,
+        "byte_end": 9107,
+        "line": 205,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "OPEN:",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "item",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-f6d5e8eb",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The property names must match exactly between your notes and your queries; one typo in a property name means that note becomes invisible to the query.",
+    "evidence": {
+      "ref_id": "p044.s001",
+      "quote": "The property names must match exactly between your notes and your queries. Type, status, priority, due, deadline — these exact strings appear in both places. One typo in a property name means that note becomes invisible to the query.",
+      "location": {
+        "byte_start": 4963,
+        "byte_end": 5237,
+        "line": 147,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "property names",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p043.s035`..`p044.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-008-2fc5962b",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Limiting the priorities query to 10 items forces prioritization at the properties level, making the dashboard a forcing function for honest prioritization.",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "Limiting to ten forces prioritization at the properties level. If more than ten tasks are due today the ones that do not make the dashboard need their due dates adjusted or their priority re-evaluated. The dashboard becomes a forcing function for honest prioritization.",
+      "location": {
+        "byte_start": 6104,
+        "byte_end": 6479,
+        "line": 165,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "LIMIT 10",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "prioritization",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p051.s003`..`p053.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-c028f401",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Sorting client health ascending means at-risk clients appear at the top, and sorting last contact ascending within each health tier means clients you have not spoken to most recently appear first.",
+    "evidence": {
+      "ref_id": "p066.s001",
+      "quote": "Sorting last\\contact ascending within each health tier means the clients you have not spoken to most recently appear first within their group.",
+      "location": {
+        "byte_start": 8341,
+        "byte_end": 8484,
+        "line": 195,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "health ascending",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "at-risk clients",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-0b6bb6a1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The health property uses three values: healthy, attention, and atrisk.",
+    "evidence": {
+      "ref_id": "p068.s001",
+      "quote": "The health property uses three values: healthy, attention, and atrisk.",
+      "location": {
+        "byte_start": 8691,
+        "byte_end": 8761,
+        "line": 199,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "health property",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-4255aa4e",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start with the minimum viable properties and add more as you identify what information you want the dashboard to surface.",
+    "evidence": {
+      "ref_id": "p045.s001",
+      "quote": "Start with the minimum viable properties. Add more as you identify what information you want the dashboard to surface.",
+      "location": {
+        "byte_start": 5161,
+        "byte_end": 5357,
+        "line": 151,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "minimum viable properties",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p044.s003`..`p045.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-012-68b3d2db",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Update properties the moment something changes; stale properties produce stale dashboard data.",
+    "evidence": {
+      "ref_id": "p110.s001",
+      "quote": "Update properties the moment something changes. When a project moves from active to complete update the status property immediately. When a client's health changes update the health property that day. Stale properties produce stale dashboard data.",
+      "location": {
+        "byte_start": 13762,
+        "byte_end": 14109,
+        "line": 279,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "properties",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p108.s001`..`p110.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-9110f354",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Review the dashboard at day end as well as day start; five property updates at 5PM produce a more accurate briefing at 6AM than five updates made while already reading the briefing.",
+    "evidence": {
+      "ref_id": "p112.s001",
+      "quote": "Review the dashboard at day end as well as day start. A 3-minute end-of-day dashboard review identifies what to update before tomorrow's morning briefing runs. Five property updates at 5PM produce a more accurate briefing at 6AM than five updates made while already reading the briefing.",
+      "location": {
+        "byte_start": 14260,
+        "byte_end": 14605,
+        "line": 285,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "dashboard review",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p111.s002`..`p112.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-014-186c92a9",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use the OPEN: convention consistently; every time something needs to carry forward to tomorrow write it in your daily note with the OPEN: prefix.",
+    "evidence": {
+      "ref_id": "p111.s001",
+      "quote": "Use the OPEN: convention consistently. Every time something needs to carry forward to tomorrow write it in your daily note with the OPEN: prefix. Do not rely on memory to carry it forward manually.",
+      "location": {
+        "byte_start": 14062,
+        "byte_end": 14312,
+        "line": 283,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "OPEN:",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p110.s003`..`p111.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-16f04544",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The dashboard is only as good as the data underneath it; three habits make the data reliable: updating properties immediately, using the OPEN: convention consistently, and reviewing the dashboard at day end.",
+    "evidence": {
+      "ref_id": "p109.s001",
+      "quote": "The dashboard is only as good as the data underneath it. Three habits make the data reliable.",
+      "location": {
+        "byte_start": 13762,
+        "byte_end": 13994,
+        "line": 279,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "The dashboard",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "data",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p108.s001`..`p110.s001` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-6787e01c",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "If queries are returning empty results, the property names in your notes do not exactly match the property names in the query; check for typos, capitalization differences, and missing quotes.",
+    "evidence": {
+      "ref_id": "p114.s001",
+      "quote": "Queries returning empty results: The property names in your notes do not exactly match the property names in the query. Check for typos, capitalization differences, and missing quotes.",
+      "location": {
+        "byte_start": 14607,
+        "byte_end": 14815,
+        "line": 289,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "empty results",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "property names",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p113.s001`..`p114.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-017-c3d6b516",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "If properties are not displaying, the YAML frontmatter block must appear at the very top of the note before any other content; a single character before the opening breaks the entire properties block.",
+    "evidence": {
+      "ref_id": "p115.s001",
+      "quote": "Properties not displaying: The YAML frontmatter block must appear at the very top of the note before any other content. A single character before the opening --- breaks the entire properties block.",
+      "location": {
+        "byte_start": 14750,
+        "byte_end": 15018,
+        "line": 291,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "YAML frontmatter",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p114.s002`..`p115.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-4544b195",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Dates in properties must follow YYYY-MM-DD format exactly; 2026-5-18 breaks the query but 2026-05-18 works.",
+    "evidence": {
+      "ref_id": "p116.s001",
+      "quote": "Date queries not working: Dates in properties must follow YYYY-MM-DD format exactly. 2026-5-18 breaks the query. 2026-05-18 works.",
+      "location": {
+        "byte_start": 14817,
+        "byte_end": 15154,
+        "line": 293,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Dates",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p115.s001`..`p116.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-019-948839dd",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "The MRR property must contain a number not a string; mrr: 3000 works but mrr: \"$3,000\" does not.",
+    "evidence": {
+      "ref_id": "p118.s001",
+      "quote": "Inline calculations showing errors: The MRR property must contain a number not a string. mrr: 3000 works. mrr: \"$3,000\" does not.",
+      "location": {
+        "byte_start": 15226,
+        "byte_end": 15488,
+        "line": 297,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "MRR property",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p117.s002`..`p118.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-020-f8d1cb6a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The discipline of maintaining consistent structure across every note of a given type is what makes the dashboard reliable.",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "The discipline of maintaining consistent structure across every note of a given type is what makes the dashboard reliable.",
+      "location": {
+        "byte_start": 4105,
+        "byte_end": 4384,
+        "line": 109,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "consistent structure",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "the dashboard",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p041.s001`..`p042.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-021-05a6ebf5",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Connected to Claude Code via the Filesystem MCP, the dashboard gains an intelligent morning briefing that synthesizes information across all six sections and tells you what the data means for today.",
+    "evidence": {
+      "ref_id": "p090.s001",
+      "quote": "Connected to Claude Code via the Filesystem MCP it gains two capabilities that change the morning experience completely. Intelligent morning briefing. Instead of reading six tables of raw data Claude reads the dashboard, synthesizes the information across all six sections, and produces a natural language briefing. Not what the data shows. What the data means for today.",
+      "location": {
+        "byte_start": 11281,
+        "byte_end": 11745,
+        "line": 239,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Claude Code",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "dashboard",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p088.s001`..`p090.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-022-4cdffddb",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A complete business dashboard surfaces six categories of information: Today's priorities, Active project status, Upcoming deadlines, Client health, Open loops, and Revenue pulse.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "A complete business dashboard surfaces six categories of information.",
+      "location": {
+        "byte_start": 2198,
+        "byte_end": 2267,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "six categories",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "business dashboard",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-41a1c56d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The setup requires one plugin and a consistent approach to how every note in your vault is structured.",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "The setup requires one plugin and a consistent approach to how every note in your vault is structured.",
+      "location": {
+        "byte_start": 3779,
+        "byte_end": 3881,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "setup",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-a25dcfbd",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "You open one note, see everything that matters today, and start working without 45 minutes of orientation across five tools.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "You open one note. You see everything that matters today. You start working.",
+      "location": {
+        "byte_start": 750,
+        "byte_end": 1015,
+        "line": 45,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "one note",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "everything that matters today",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p009.s001`..`p011.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-025-0da60017",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The open loops section captures items that are important enough to note but not formal enough to be a task; these are the things that fall through the cracks in systems that only track formal tasks.",
+    "evidence": {
+      "ref_id": "p076.s001",
+      "quote": "The open loops section captures the items that are important enough to note but not formal enough to be a task. These are the things that fall through the cracks in systems that only track formal tasks.",
+      "location": {
+        "byte_start": 9402,
+        "byte_end": 9706,
+        "line": 213,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Open loops",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p075.s001`..`p076.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-027-e1aa6655",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Core Principle: Read Not Store",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "The Core Principle: Read Not Store",
+      "location": {
+        "byte_start": 1191,
+        "byte_end": 1228,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

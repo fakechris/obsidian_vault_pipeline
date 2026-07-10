@@ -1,0 +1,398 @@
+//! End-to-end tests for the L4 operational `run-cycle`: a full inbox-file →
+//! vault note + evergreen + canonical + MOC + knowledge index cycle, its
+//! idempotence, and its fail-closed behavior. Offline (replay-only cassette
+//! client); tempdirs only — no real vault, no network.
+
+use std::path::{Path, PathBuf};
+
+use ovp_app::{AppWiring, DomainPipelineSpec};
+use ovp_core::{ApplyMode, RunId};
+use ovp_domain::{
+    CanonicalConcept, ConceptRegistry, EvergreenConcept, EvergreenNote, ARTICLE_PROMPT_ID,
+};
+use ovp_llm::{CacheMode, CachedModelClient, ModelClient, NeverCallsClient};
+use ovp_run::{RunCycle, RunCycleError, RunCycleInputs, RunCycleReport};
+use ovp_stores::CanonicalFsStoreApplier;
+
+fn repo_root() -> PathBuf {
+    let md = std::env::var("CARGO_MANIFEST_DIR").unwrap(); // <root>/crates/ovp-run
+    Path::new(&md).ancestors().nth(2).unwrap().to_path_buf()
+}
+
+fn cassette_client(root: &Path) -> Box<dyn ModelClient> {
+    Box::new(
+        CachedModelClient::new(
+            NeverCallsClient,
+            root.join("crates/ovp-domain/tests/cassettes"),
+            ARTICLE_PROMPT_ID,
+            CacheMode::ReplayOnly,
+        )
+        .unwrap(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    root: &Path,
+    vault: &Path,
+    canon: &Path,
+    manifest_rel: &str,
+    input_rel: &str,
+    date: &str,
+    slugs: &[&str],
+) -> RunCycleReport {
+    let toml = std::fs::read_to_string(root.join(manifest_rel)).unwrap();
+    let spec = DomainPipelineSpec::parse(&toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp(date)
+        .with_area("ai")
+        .with_input_path(root.join(input_rel))
+        .with_client("default_llm", cassette_client(root))
+        .with_registry("default", ConceptRegistry::from_slugs(slugs));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.to_path_buf(),
+        canonical_root: canon.to_path_buf(),
+        mode: ApplyMode::Apply,
+    };
+    RunCycle::new().execute(inputs).unwrap()
+}
+
+/// A replay-only client over an EMPTY cache dir: every LLM call is a miss → the
+/// inner `NeverCallsClient` is reached and errors. Models a live LLM failure
+/// (transport/decode/etc.) with no network.
+fn failing_client(empty_cache: &Path) -> Box<dyn ModelClient> {
+    Box::new(
+        CachedModelClient::new(NeverCallsClient, empty_cache, ARTICLE_PROMPT_ID, CacheMode::ReplayOnly)
+            .unwrap(),
+    )
+}
+
+/// P0 regression: a failed LLM call must fail the cycle, not produce a silent
+/// empty success. The M9 live run exposed exactly this — a transient LLM error
+/// became a 0-concept/0-claim note while the cycle reported "succeeded".
+#[test]
+fn run_cycle_llm_failure_is_not_empty_success() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+    let empty_cache = tempfile::tempdir().unwrap();
+
+    let toml =
+        std::fs::read_to_string(root.join("manifests/article_evergreen.pipeline.toml")).unwrap();
+    let spec = DomainPipelineSpec::parse(&toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp("2026-05-04")
+        .with_area("ai")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", failing_client(empty_cache.path()))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.path().to_path_buf(),
+        canonical_root: canon.path().to_path_buf(),
+        mode: ApplyMode::Apply,
+    };
+    let report = RunCycle::new().execute(inputs).unwrap();
+
+    // The LLM call failed → the record errored → the cycle is NOT a success.
+    assert!(report.records_errored > 0, "the failed LLM call must be counted as an errored record");
+    assert!(!report.succeeded(), "an LLM failure must not be reported as an empty success");
+    assert_eq!(report.ops_emitted, 0, "no note should have been produced");
+    assert!(report.moc.is_none() && report.knowledge_index.is_none(), "derived rebuild must be skipped");
+    assert!(
+        report.derived_skipped_reason.as_deref().unwrap_or("").contains("errored"),
+        "the failure reason should name the error: {:?}",
+        report.derived_skipped_reason
+    );
+    // Nothing was written to the vault (no empty note, no MOC, no index).
+    assert!(
+        std::fs::read_dir(vault.path()).unwrap().next().is_none(),
+        "vault must be empty on a failed extraction"
+    );
+}
+
+#[test]
+fn run_cycle_article_is_idempotent() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    // First run writes the full cycle.
+    let r1 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r1.succeeded(), "run1 should succeed: {:?}", r1.derived_skipped_reason);
+    assert_eq!(r1.apply.counts().failed, 0);
+    assert!(r1.apply.counts().applied > 0, "main apply wrote nothing");
+    assert_eq!(r1.moc.as_ref().unwrap().applied, 1, "MOC created");
+    assert_eq!(r1.knowledge_index.as_ref().unwrap().applied, 1, "index created");
+    assert!(vault.path().join("10-Knowledge/Atlas/MOC-Index.md").exists());
+    assert!(vault.path().join("60-Logs/knowledge-index.json").exists());
+
+    // Canonical store parses strictly and has concepts.
+    let store = CanonicalFsStoreApplier::new(canon.path());
+    let concepts = CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).unwrap();
+    assert!(!concepts.is_empty(), "canonical store should hold minted concepts");
+
+    // Second run against the same roots is idempotent: nothing applied anywhere.
+    let r2 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r2.succeeded());
+    assert_eq!(r2.apply.counts().applied, 0, "second main apply must apply nothing");
+    assert_eq!(r2.apply.counts().failed, 0);
+    assert_eq!(r2.moc.as_ref().unwrap().applied, 0, "MOC unchanged on re-run");
+    assert_eq!(r2.knowledge_index.as_ref().unwrap().applied, 0, "index unchanged on re-run");
+}
+
+#[test]
+fn run_cycle_enriches_a_preexisting_same_slug_note() {
+    // M12b: a concept slug whose evergreen note already exists on disk with
+    // DIFFERENT grounding (as if a prior article minted it) must ENRICH — not
+    // fail the apply. Pre-M12b the re-minted VaultCreate would collide
+    // (different hash, same path) → Failed → halt → !succeeded().
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    // Run 1: mint article_clean's evergreen notes.
+    let r1 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r1.succeeded(), "run1 should succeed: {:?}", r1.derived_skipped_reason);
+
+    // Pick one minted note and capture one of its source-backed claims.
+    let evergreen_dir = vault.path().join("10-Knowledge/Evergreen");
+    let note_path = std::fs::read_dir(&evergreen_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "md"))
+        .expect("article_clean mints at least one evergreen note");
+    let slug = note_path.file_stem().unwrap().to_string_lossy().to_string();
+    let clean_body = std::fs::read_to_string(&note_path).unwrap();
+    let this_articles_claim = clean_body
+        .lines()
+        .find(|l| l.starts_with("- ") && !l.starts_with("- ["))
+        .map(|l| l.trim_start_matches("- ").to_string())
+        .expect("the minted note carries a source-backed claim");
+
+    // Simulate a DIFFERENT prior document having minted the same slug: overwrite
+    // the note with a distinct grounded body (valid evergreen format).
+    let mut prior = EvergreenConcept::from_candidate(&slug, "https://prior-doc.example/x");
+    prior.definition = "Definition from a prior document.".into();
+    prior.source_claims = vec!["PRIOR-DOC unique claim.".into()];
+    prior.source_title = "Prior Doc".into();
+    std::fs::write(&note_path, EvergreenNote::from_concept(&prior).render()).unwrap();
+
+    // Run 2: same article again. The clashing slug must enrich, not fail.
+    let r2 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(
+        r2.succeeded(),
+        "a pre-existing different-grounding note for the same slug must enrich, not fail: {:?}",
+        r2.derived_skipped_reason
+    );
+    assert_eq!(r2.apply.counts().failed, 0, "no op may fail");
+
+    // The note now carries BOTH groundings (union; first definition kept).
+    let merged = std::fs::read_to_string(&note_path).unwrap();
+    assert!(merged.contains("PRIOR-DOC unique claim."), "prior document's claim preserved");
+    assert!(merged.contains(&this_articles_claim), "this article's claim merged in:\n{merged}");
+    assert!(merged.contains("https://prior-doc.example/x"), "prior source link preserved");
+
+    // Run 3: idempotent — nothing new to merge, the note is unchanged.
+    let before3 = std::fs::read_to_string(&note_path).unwrap();
+    let r3 = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(r3.succeeded());
+    assert_eq!(std::fs::read_to_string(&note_path).unwrap(), before3, "third run is idempotent");
+}
+
+#[test]
+fn run_cycle_paper_smoke() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    let r = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/unified.pipeline.toml",
+        "fixtures/paper_arxiv/input.md",
+        "2026-05-29",
+        &[],
+    );
+    assert!(r.succeeded(), "paper run-cycle should succeed: {:?}", r.derived_skipped_reason);
+    assert!(
+        vault.path().join("20-Areas/AI-Research/Papers").exists(),
+        "paper note directory should exist"
+    );
+    // Derived artifacts were rebuilt (the unified path mints no evergreens, so
+    // the canonical store is empty and these are the empty-state artifacts).
+    assert!(r.moc.is_some());
+    assert!(r.knowledge_index.is_some());
+    let store = CanonicalFsStoreApplier::new(canon.path());
+    assert!(CanonicalConcept::try_parse_pairs(store.read_all().unwrap()).is_ok());
+}
+
+#[test]
+fn run_cycle_dry_run_writes_nothing() {
+    // --dry-run is a PREVIEW: ApplyMode::DryRun for every apply, so nothing is
+    // written to either root. The report records dry_run = true.
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    let toml =
+        std::fs::read_to_string(root.join("manifests/article_evergreen.pipeline.toml")).unwrap();
+    let spec = DomainPipelineSpec::parse(&toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp("2026-05-04")
+        .with_area("ai")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.path().to_path_buf(),
+        canonical_root: canon.path().to_path_buf(),
+        mode: ApplyMode::DryRun,
+    };
+    let report = RunCycle::new().execute(inputs).unwrap();
+
+    assert!(report.dry_run, "report must record dry-run mode");
+    assert!(report.succeeded(), "a clean dry-run reports success");
+    // Nothing written to either root.
+    assert!(std::fs::read_dir(vault.path()).unwrap().next().is_none(), "vault must be empty");
+    assert!(std::fs::read_dir(canon.path()).unwrap().next().is_none(), "canonical must be empty");
+    // Every main op was skipped (dry-run), none failed or left unsupported.
+    assert_eq!(report.apply.counts().applied, 0);
+    assert_eq!(report.apply.counts().failed, 0);
+    assert_eq!(report.apply.counts().unsupported, 0);
+}
+
+#[test]
+fn run_cycle_bad_manifest_writes_nothing() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    let toml = r#"
+        [pipeline]
+        nodes = ["src", "snk"]
+        edges = [["src", "snk"]]
+        [assembly.src]
+        kind = "source.markdown_inbox"
+        [assembly.snk]
+        kind = "sink.nonexistent"
+    "#;
+    let spec = DomainPipelineSpec::parse(toml).unwrap();
+    let wiring = AppWiring::new(RunId::new("rc"))
+        .with_date_stamp("2026-05-04")
+        .with_input_path(root.join("fixtures/article_clean/input.md"))
+        .with_client("default_llm", cassette_client(&root))
+        .with_registry("default", ConceptRegistry::from_slugs(&[]));
+    let inputs = RunCycleInputs {
+        spec,
+        wiring,
+        vault_root: vault.path().to_path_buf(),
+        canonical_root: canon.path().to_path_buf(),
+        mode: ApplyMode::Apply,
+    };
+    let err = RunCycle::new().execute(inputs).expect_err("expected run-cycle to fail");
+    assert!(matches!(err, RunCycleError::Assemble(_)), "got {err:?}");
+
+    // Assembly failed before any apply → both roots are untouched.
+    assert!(std::fs::read_dir(vault.path()).unwrap().next().is_none(), "vault must be empty");
+    assert!(std::fs::read_dir(canon.path()).unwrap().next().is_none(), "canonical must be empty");
+}
+
+#[test]
+fn run_cycle_corrupt_canonical_skips_derived_loudly() {
+    let root = repo_root();
+    let vault = tempfile::tempdir().unwrap();
+    let canon = tempfile::tempdir().unwrap();
+
+    // A clean run first: MOC + index + canonical records exist.
+    let first = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(first.succeeded());
+    let moc_path = vault.path().join("10-Knowledge/Atlas/MOC-Index.md");
+    let index_path = vault.path().join("60-Logs/knowledge-index.json");
+    let moc_before = std::fs::read_to_string(&moc_path).unwrap();
+    let index_before = std::fs::read_to_string(&index_path).unwrap();
+
+    // Corrupt the canonical store out-of-band.
+    std::fs::write(canon.path().join("broken.json"), "not valid json").unwrap();
+
+    // Re-run: the main apply is idempotent (no failures), but the strict
+    // canonical parse fails → derived rebuild is skipped loudly and the existing
+    // MOC/index are NOT overwritten.
+    let second = run(
+        &root,
+        vault.path(),
+        canon.path(),
+        "manifests/article_evergreen.pipeline.toml",
+        "fixtures/article_clean/input.md",
+        "2026-05-04",
+        &[],
+    );
+    assert!(!second.succeeded());
+    assert_eq!(second.apply.counts().failed, 0, "the main apply itself did not fail");
+    let reason = second.derived_skipped_reason.as_deref().unwrap_or("");
+    assert!(reason.contains("canonical store unparseable"), "got reason: {reason}");
+    assert!(second.moc.is_none(), "MOC rebuild must be skipped");
+    assert!(second.knowledge_index.is_none(), "index rebuild must be skipped");
+
+    // The derived artifacts are untouched.
+    assert_eq!(std::fs::read_to_string(&moc_path).unwrap(), moc_before, "MOC must not be overwritten");
+    assert_eq!(
+        std::fs::read_to_string(&index_path).unwrap(),
+        index_before,
+        "index must not be overwritten"
+    );
+}

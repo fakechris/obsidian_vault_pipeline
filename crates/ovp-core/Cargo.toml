@@ -1,0 +1,22 @@
+[package]
+name = "ovp-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next clean core: Record, Filter, GraphRunner, WritePlan, EventLog"
+
+[features]
+default = []
+# Enables the in-tree fake Source/Transform/Sink trio for tests and the
+# `ovp2 run --fake` demo command. Not for production builds.
+fakes = []
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+ovp-core = { path = ".", features = ["fakes"] }

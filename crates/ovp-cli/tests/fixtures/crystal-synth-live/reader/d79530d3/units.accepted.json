@@ -1,0 +1,699 @@
+[
+  {
+    "id": "u-000-5edcc315",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Loop engineering is replacing yourself as the person who prompts the agent by designing the system that does it instead.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "Loop engineering is replacing yourself as the person who prompts the agent.",
+      "location": {
+        "byte_start": 77,
+        "byte_end": 154,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Loop engineering",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-449ff196",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A loop is a recursive goal where you define a purpose and the AI iterates until complete.",
+    "evidence": {
+      "ref_id": "p002.s002",
+      "quote": "A loop here can be thought of a recursive goal where you define a purpose and the AI iterates until complete.",
+      "location": {
+        "byte_start": 154,
+        "byte_end": 398,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-df191d1e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A loop needs five things (automations, worktrees, skills, plugins/connectors, sub-agents) and one place to remember stuff (memory).",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "A loop needs five things and then one place to remember stuff.",
+      "location": {
+        "byte_start": 2818,
+        "byte_end": 2933,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-c92b88a7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The memory is the sixth thing a loop needs, a persistent store outside the single conversation that holds what's done and what is next.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "Then the sixth thing, the memory.",
+      "location": {
+        "byte_start": 3383,
+        "byte_end": 3416,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memory",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-1f14e7c1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The model forgets everything between runs so the memory has to be on disk and not in the context; the agent forgets, the repo doesn't.",
+    "evidence": {
+      "ref_id": "p012.s004",
+      "quote": "the model forgets everything between runs so the memory has to be on disk and not in the context.",
+      "location": {
+        "byte_start": 3571,
+        "byte_end": 3824,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model forgets everything between runs",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-61983c9d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Automations are what make a loop an actual loop and not just one run you did once; they fire on a schedule and do discovery and triage by themselves.",
+    "evidence": {
+      "ref_id": "p017.s001",
+      "quote": "Automations are what make a loop an actual loop and not just one run you did once.",
+      "location": {
+        "byte_start": 4214,
+        "byte_end": 4296,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Automations",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-5d6ccdf9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The /goal primitive keeps working until a verifiable stopping condition holds, with a separate small model checking whether you are done so the agent that wrote the code isn't the one grading it.",
+    "evidence": {
+      "ref_id": "p019.s003",
+      "quote": "/goal keeps going until a condition you wrote is actually true, and after every turn a separate small model checks whether you are done, so the agent that wrote the code isnt the one grading it.",
+      "location": {
+        "byte_start": 5648,
+        "byte_end": 5843,
+        "line": 69,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "/goal",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-0f487875",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Worktrees prevent parallel agents from colliding by giving each agent a separate working directory on its own branch sharing the same repo history, so one agent's edits literally cannot touch the other one's checkout.",
+    "evidence": {
+      "ref_id": "p022.s002",
+      "quote": "Two agents writing the same file is the exact same headache as two engineers committing to the same lines and nobody talked to each other first.",
+      "location": {
+        "byte_start": 6395,
+        "byte_end": 6540,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "git worktree fixes it",
+        "role": "predicate",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-f6d4bd02",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Skills are how you stop re-explaining the same project context every session, written one time where the agent reads it every run; a skill is that intent written down on the outside.",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "A skill is how you stop re-explaining the same project context every session like a goldfish.",
+      "location": {
+        "byte_start": 7418,
+        "byte_end": 7511,
+        "line": 81,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "skill",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-d8ac187f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Plugins bundle connectors and skills together so your teammate installs your setup in one go instead of rebuilding the whole thing from memory.",
+    "evidence": {
+      "ref_id": "p029.s004",
+      "quote": "plugins bundle connectors and skills together so your teammate installs your setup in one go instead of rebuilding the whole thing from memory.",
+      "location": {
+        "byte_start": 9105,
+        "byte_end": 9253,
+        "line": 89,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "plugins",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-0278c402",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Connectors, built on MCP, let the agent read your issue tracker, query a database, hit a staging API, drop a message in Slack.",
+    "evidence": {
+      "ref_id": "p029.s002",
+      "quote": "Connectors, which are built on MCP, let the agent read your issue tracker, query a database, hit a staging api, drop a message in Slack.",
+      "location": {
+        "byte_start": 8863,
+        "byte_end": 9000,
+        "line": 89,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Connectors",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-d6f3f668",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The most useful structural thing in a loop is splitting the one who writes from the one who checks, because the model that wrote the code is way too nice grading its own homework.",
+    "evidence": {
+      "ref_id": "p032.s001",
+      "quote": "The most useful structural thing in a loop, by far, is splitting the one who writes from the one who checks.",
+      "location": {
+        "byte_start": 9621,
+        "byte_end": 9729,
+        "line": 95,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Sub-agents",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-714d16b9",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The loop changes the work but does not delete you from it, and three problems actually get sharper as the loop gets better: verification is still on you, your understanding still rots if you allow it, and the comfortable posture is probably the risky one.",
+    "evidence": {
+      "ref_id": "p041.s001",
+      "quote": "The loop changes the work, it does not delete you from it.",
+      "location": {
+        "byte_start": 12373,
+        "byte_end": 12512,
+        "line": 113,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-11033e14",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Verification is still on you; a loop running unattended is also a loop making mistakes unattended, and even then 'done' is a claim and not a proof.",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "Verification is still on you.",
+      "location": {
+        "byte_start": 12514,
+        "byte_end": 12616,
+        "line": 115,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Verification",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-3171149b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Comprehension debt is the growing gap between what exists and what you actually understand, which a smooth loop just makes grow faster unless you read what the loop made.",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "Your understanding still rots if you allow it.",
+      "location": {
+        "byte_start": 12945,
+        "byte_end": 13111,
+        "line": 117,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "comprehension debt",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-b4ea6efb",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Cognitive surrender is when the loop runs itself and you stop having an opinion and just take whatever it gives back; designing the loop is the cure when you do it with judgment and the accelerant when you do it to avoid thinking.",
+    "evidence": {
+      "ref_id": "p044.s003",
+      "quote": "I called that cognitive surrender.",
+      "location": {
+        "byte_start": 13437,
+        "byte_end": 13524,
+        "line": 119,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "cognitive surrender",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-4748cd8e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Two people can build the exact same loop and get completely opposite results: one uses it to move faster on work they understand deeply, the other uses it to avoid understanding the work at all, and the loop doesn't know the difference.",
+    "evidence": {
+      "ref_id": "p048.s002",
+      "quote": "Two people can build the exact same loop and get completely opposite results.",
+      "location": {
+        "byte_start": 14226,
+        "byte_end": 14304,
+        "line": 127,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-e7e112ed",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Loop design is harder than prompt engineering because the leverage point moved, not because the work got easier.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "That's what makes loop design harder than prompt engineering, not easier.",
+      "location": {
+        "byte_start": 14469,
+        "byte_end": 14542,
+        "line": 129,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop design",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-79cc7b4d",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Build the loop, but build it like someone who intends to stay the engineer, not just the person who presses go.",
+    "evidence": {
+      "ref_id": "p050.s002",
+      "quote": "Build the loop.\nBut build it like someone who intends to stay the engineer, not just the person who presses go.",
+      "location": {
+        "byte_start": 14629,
+        "byte_end": 14744,
+        "line": 131,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p050.s001`..`p050.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-020-083097f1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Set up your loops, but don't forget that prompting your agents directly is still effective; it's all about finding the right balance.",
+    "evidence": {
+      "ref_id": "p047.s001",
+      "quote": "go ahead and set up your loops, but don't forget that prompting your agents directly is still effective.",
+      "location": {
+        "byte_start": 14006,
+        "byte_end": 14121,
+        "line": 125,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "loops",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-9ac38621",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "You absolutely have to be careful about token costs because usage patterns can vary wildly if you are token rich or poor.",
+    "evidence": {
+      "ref_id": "p003.s002",
+      "quote": "you absolutely have to be careful about token costs (usage patterns can vary wildly if you are token rich or poor).",
+      "location": {
+        "byte_start": 467,
+        "byte_end": 631,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "token costs",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-03f3ea0f",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Skills let intent stop costing you over and over; without skills the loop re-derives your whole project from zero every cycle, with skills it kind of compounds.",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "Skills are also where intent stops costing you over and over.",
+      "location": {
+        "byte_start": 7962,
+        "byte_end": 8023,
+        "line": 83,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Skills",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-56d9860a",
+    "kind": "relation",
+    "subtype": "null",
+    "text": "The five building blocks of a loop (automations, worktrees, skills, plugins/connectors, sub-agents) and the memory exist in both Claude Code and Codex, with the same capabilities under different names.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "Both products have all five now.",
+      "location": {
+        "byte_start": 3862,
+        "byte_end": 3894,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Claude Code",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "Codex",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-024-c00a9456",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Thats comprehension debt",
+    "evidence": {
+      "ref_id": "p043.s001",
+      "quote": "Thats comprehension debt",
+      "location": {
+        "byte_start": 12787,
+        "byte_end": 13267,
+        "line": 115,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p042.s003`..`p043.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-025-bcb4a77a",
+    "kind": "assertion",
+    "text": "The thing that surprised me is this is not really a tool thing anymore.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "The thing that surprised me is this is not really a tool thing anymore.",
+      "location": {
+        "byte_start": 2268,
+        "byte_end": 2339,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

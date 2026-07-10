@@ -1,0 +1,17 @@
+[package]
+name = "ovp-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-index = { path = "../ovp-index" }
+ovp-llm = { path = "../ovp-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []

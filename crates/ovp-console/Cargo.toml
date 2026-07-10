@@ -1,0 +1,15 @@
+[package]
+name = "ovp-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next M31 product console: deterministic bilingual static HTML over the read model (runs, sources, reader packs, crystal claims, attention/backlog)"
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-index = { path = "../ovp-index" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,1189 @@
+[
+  {
+    "id": "u-000-c5ef8d42",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "GEO（Generative Engine Optimization）中文全称生成式引擎优化，它关注的场景是当用户向AI提问时，AI能否在回答里准确提到你的品牌、产品、服务、案例和观点。",
+    "evidence": {
+      "ref_id": "p003.s001",
+      "quote": "先简单理解下GEO（Generative Engine Optimization），中文全称生成式引擎优化",
+      "location": {
+        "byte_start": 150,
+        "byte_end": 243,
+        "line": 16,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "生成式引擎优化",
+        "role": "definition",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-7b4848ee",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "白帽GEO的目标是把企业真实拥有的价值，用更清晰、更可信、更容易被检索的方式呈现出来，让AI在回答用户问题时有更好的信息来源。",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "白帽 GEO 的目标很清楚：把企业真实拥有的价值，用更清晰、更可信、更容易被检索的方式呈现出来，让 AI 在回答用户问题时有更好的信息来源",
+      "location": {
+        "byte_start": 2156,
+        "byte_end": 2345,
+        "line": 50,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "白帽GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "把企业真实拥有的价值呈现出来",
+        "role": "goal",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-2e21b794",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "GEOFlow是一套面向GEO的内容工程中台，它把原本分散在人工流程里的环节，整理成一个可以反复运行的系统。",
+    "evidence": {
+      "ref_id": "p044.s001",
+      "quote": "GEOFlow 可以理解为一套面向 GEO 的内容工程中台。它把原本分散在人工流程里的环节，整理成一个可以反复运行的系统",
+      "location": {
+        "byte_start": 4806,
+        "byte_end": 4990,
+        "line": 103,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEOFlow",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "内容工程中台",
+        "role": "definition",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p043.s001`..`p044.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-003-91d10015",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "向量化是把文本变成一组数字坐标，系统可以通过相似度计算，找到语义最接近的知识片段。",
+    "evidence": {
+      "ref_id": "p076.s001",
+      "quote": "向量化可以简单理解为，把文本变成一组数字坐标。系统可以通过相似度计算，找到语义最接近的知识片段",
+      "location": {
+        "byte_start": 8327,
+        "byte_end": 8518,
+        "line": 174,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "向量化",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "把文本变成数字坐标",
+        "role": "definition",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p075.s001`..`p076.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-41824e0e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "这个定义里有两个关键词",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "这个定义里有两个关键词",
+      "location": {
+        "byte_start": 960,
+        "byte_end": 993,
+        "line": 28,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "真实",
+        "role": "keyword",
+        "locatable": false
+      },
+      {
+        "surface": "可引用",
+        "role": "keyword",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-eb6cee48",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "AI更容易引用结构清晰、证据充分、表达完整的内容，内容写给人看，也要方便AI抽取其中的事实、结论和关系。",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "第二个关键词是“可引用”，AI 更容易引用结构清晰、证据充分、表达完整的内容。",
+      "location": {
+        "byte_start": 1175,
+        "byte_end": 1286,
+        "line": 32,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "可引用",
+        "role": "keyword",
+        "locatable": true
+      },
+      {
+        "surface": "AI",
+        "role": "actor",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-b7ff4149",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "白帽GEO的底线是：让正确的信息更容易被AI引用，避免让错误信息被系统化放大。",
+    "evidence": {
+      "ref_id": "p023.s001",
+      "quote": "白帽 GEO 的底线可以压缩成一句话：让正确的信息更容易被 AI 引用，避免让错误信息被系统化放大",
+      "location": {
+        "byte_start": 2835,
+        "byte_end": 2964,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "白帽GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "让正确信息被AI引用",
+        "role": "goal",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-4ec5a95b",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "虚构客户案例、服务能力、资质、奖项和价格",
+    "evidence": {
+      "ref_id": "p022.s001",
+      "quote": "虚构客户案例、服务能力、资质、奖项和价格",
+      "location": {
+        "byte_start": 2429,
+        "byte_end": 2492,
+        "line": 56,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "六类高风险动作",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-2eac33ca",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "GEO可以被拆成三个核心要素：数据、内容和投放，这个框架适合做项目管理，也适合用来判断一个团队的GEO能力是否完整。",
+    "evidence": {
+      "ref_id": "p025.s001",
+      "quote": "GEO可以被拆成三个核心要素：数据、内容和投放",
+      "location": {
+        "byte_start": 3029,
+        "byte_end": 3092,
+        "line": 67,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO三个核心要素",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "数据、内容、投放",
+        "role": "components",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-7f43316a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "数据解决的是两个问题",
+    "evidence": {
+      "ref_id": "p028.s001",
+      "quote": "数据解决的是两个问题",
+      "location": {
+        "byte_start": 3237,
+        "byte_end": 3267,
+        "line": 73,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "数据",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "现状和反馈",
+        "role": "two_problems",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-9af3d71e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "内容质量低，后续分发越强，风险越大；高质量GEO内容要满足事实要求和结构要求两类要求。",
+    "evidence": {
+      "ref_id": "p034.s001",
+      "quote": "内容质量低，后续分发越强，风险越大",
+      "location": {
+        "byte_start": 3632,
+        "byte_end": 3748,
+        "line": 83,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "内容质量",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "风险",
+        "role": "relationship",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p033.s002`..`p034.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-011-f034ffdb",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "真正有效的投放是根据AI的信源偏好做定向分发，而不是只看发布数量。",
+    "evidence": {
+      "ref_id": "p039.s001",
+      "quote": "真正有效的投放，是根据 AI 的信源偏好做定向分发",
+      "location": {
+        "byte_start": 4204,
+        "byte_end": 4377,
+        "line": 93,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "投放",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "AI的信源偏好",
+        "role": "basis",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p038.s002`..`p039.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-012-8a8efd00",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "GEOFlow最适合承担三项工作：知识库驱动的内容生成、自有站点内容发布、多站点或API分发。",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "现阶段，GEOFlow 最适合承担三项工作：知识库驱动的内容生成、自有站点内容发布、多站点或 API 分发",
+      "location": {
+        "byte_start": 5033,
+        "byte_end": 5166,
+        "line": 109,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEOFlow",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "知识库驱动的内容生成、自有站点内容发布、多站点或API分发",
+        "role": "three_tasks",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-3cde2281",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "GEO的第一步应该是诊断，先看AI当前怎么回答，再决定要生产什么内容、发布到哪里。",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "这个链路带来一个重要结论：GEO 的第一步应该是诊断，先看 AI 当前怎么回答，再决定要生产什么内容、发布到哪里",
+      "location": {
+        "byte_start": 1609,
+        "byte_end": 1761,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "诊断",
+        "role": "first_step",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-c6ac4835",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "诊断结束后，你会得到一张“信源偏好地图”：",
+    "evidence": {
+      "ref_id": "p060.s001",
+      "quote": "诊断结束后，你会得到一张“信源偏好地图”：",
+      "location": {
+        "byte_start": 6323,
+        "byte_end": 6386,
+        "line": 137,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "信源偏好地图",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "AI信任谁、缺什么、如何组织答案",
+        "role": "three_dimensions",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-ff0b5b04",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "知识库质量决定GEOFlow生成内容的上限，系统能放大内容能力，也会放大错误信息。",
+    "evidence": {
+      "ref_id": "p065.s001",
+      "quote": "知识库质量决定 GEOFlow 生成内容的上限。系统能放大内容能力，也会放大错误信息",
+      "location": {
+        "byte_start": 6830,
+        "byte_end": 6980,
+        "line": 145,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "知识库质量",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "GEOFlow生成内容质量",
+        "role": "determines",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p064.s001`..`p065.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-188d730d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "向量化为系统提供语义检索能力，但它不能替代知识库治理。",
+    "evidence": {
+      "ref_id": "p078.s001",
+      "quote": "向量化能提升召回效果，但它不能替代知识库治理。",
+      "location": {
+        "byte_start": 8741,
+        "byte_end": 8810,
+        "line": 180,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "向量化",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "知识库治理",
+        "role": "not_substitute_for",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-9be91822",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "要让知识库长期可靠，还要补充这些管理规则",
+    "evidence": {
+      "ref_id": "p078.s002",
+      "quote": "要让知识库长期可靠，还要补充这些管理规则",
+      "location": {
+        "byte_start": 8810,
+        "byte_end": 8870,
+        "line": 180,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "知识库管理规则",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-018-3559f1df",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "高质量GEO内容的共同点是：人能快速读懂，AI也能稳定抽取。",
+    "evidence": {
+      "ref_id": "p088.s001",
+      "quote": "高质量 GEO 内容有一个共同点：人能快速读懂，AI 也能稳定抽取",
+      "location": {
+        "byte_start": 10163,
+        "byte_end": 10246,
+        "line": 204,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "高质量GEO内容",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "人能读懂、AI能抽取",
+        "role": "common_feature",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-abae6fc0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "同一个事实可以在多个渠道复用，但文章角度和结构要有所区别：官网适合写完整教程，媒体适合写行业视角，问答平台适合回答具体问题，帮助中心适合维护标准答案。",
+    "evidence": {
+      "ref_id": "p106.s001",
+      "quote": "同一个事实可以在多个渠道复用，但文章角度和结构要有所区别。",
+      "location": {
+        "byte_start": 12251,
+        "byte_end": 12347,
+        "line": 245,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "同一事实多渠道复用",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "官网、媒体、问答平台、帮助中心",
+        "role": "channels",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-34fa603c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "GEO效果评估要分成三类指标：前端指标（AI答案有没有变化）、直接效果（用户是否进入业务链路）、间接效果（GEO对整体营销的协同提升）。",
+    "evidence": {
+      "ref_id": "p108.s001",
+      "quote": "GEO 的效果评估要分层。只看“有没有被提到”会低估项目价值；只看“有没有成交”又可能忽略品牌和信任的积累",
+      "location": {
+        "byte_start": 12347,
+        "byte_end": 12703,
+        "line": 245,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO效果评估",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "前端指标、直接效果、间接效果",
+        "role": "three_levels",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p106.s002`..`p108.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-d76bf6e4",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "评估时要避免过度归因，GEO往往和SEO、广告、社媒、销售动作共同产生影响，更可靠的方式是建立长期看板观察趋势和区间变化。",
+    "evidence": {
+      "ref_id": "p120.s001",
+      "quote": "评估时要避免过度归因。GEO 往往和 SEO、广告、社媒、销售动作共同产生影响。",
+      "location": {
+        "byte_start": 13771,
+        "byte_end": 13901,
+        "line": 273,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "过度归因",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "GEO效果评估",
+        "role": "context",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p119.s001`..`p120.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-2d08b583",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "误区1是只看文章数量，数量服务于覆盖面，质量决定可引用性，没有事实和信息增益的页面越多，越容易带来内容风险。",
+    "evidence": {
+      "ref_id": "p139.s001",
+      "quote": "数量服务于覆盖面，质量决定可引用性。",
+      "location": {
+        "byte_start": 15685,
+        "byte_end": 15739,
+        "line": 330,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "误区1：只看文章数量",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-024-e4bc3d25",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "误区2是知识库资料太少，资料少时模型更容易凭概率补全内容，进而产生幻觉。",
+    "evidence": {
+      "ref_id": "p142.s001",
+      "quote": "资料少时，模型更容易凭概率补全内容，进而产生幻觉",
+      "location": {
+        "byte_start": 15955,
+        "byte_end": 16027,
+        "line": 336,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "误区2：知识库资料太少",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "幻觉",
+        "role": "risk",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-025-c6a648cb",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "误区6是只看AI是否提到品牌，品牌被提到只是开始，更重要的是位置、语境、准确性、引用来源和用户下一步动作。",
+    "evidence": {
+      "ref_id": "p154.s001",
+      "quote": "品牌被提到只是开始。更重要的是位置、语境、准确性、引用来源和用户下一步动作",
+      "location": {
+        "byte_start": 16976,
+        "byte_end": 17132,
+        "line": 358,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "误区6：只看AI是否提到品牌",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p153.s001`..`p154.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-026-ede643a8",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "修正建议是同时跟踪提及率、Top 3率、引用率、答案准确率和转化归因。",
+    "evidence": {
+      "ref_id": "p155.s001",
+      "quote": "修正建议：同时跟踪提及率、Top 3 率、引用率、答案准确率和转化归因",
+      "location": {
+        "byte_start": 17134,
+        "byte_end": 17227,
+        "line": 362,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "提及率、Top 3率、引用率、答案准确率、转化归因",
+        "role": "metrics",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-86d34394",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "GEO是一套围绕AI搜索答案展开的内容、信源、知识库和数据工程，企业要先把事实整理清楚，再用GEOFlow放大内容生产和分发效率，最后通过数据持续观察AI答案和用户行为变化。",
+    "evidence": {
+      "ref_id": "p173.s001",
+      "quote": "GEO 是一套围绕 AI 搜索答案展开的内容、信源、知识库和数据工程",
+      "location": {
+        "byte_start": 18780,
+        "byte_end": 18866,
+        "line": 417,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "内容、信源、知识库和数据工程",
+        "role": "components",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-028-6943fde0",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "短期看GEO能提升品牌在AI答案中的可见度，长期看它会倒逼企业把产品信息、案例信息、官网内容、FAQ和销售话术统一起来。",
+    "evidence": {
+      "ref_id": "p175.s001",
+      "quote": "短期看，GEO 能提升品牌在 AI 答案中的可见度；长期看，它会倒逼企业把产品信息、案例信息、官网内容、FAQ 和销售话术统一起来",
+      "location": {
+        "byte_start": 18868,
+        "byte_end": 19189,
+        "line": 419,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "品牌可见度提升、企业信息统一",
+        "role": "effects",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p174.s001`..`p175.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-029-8a7f652c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "GEO的核心是让AI更容易找到、理解并引用你已经真实拥有的价值。",
+    "evidence": {
+      "ref_id": "p176.s001",
+      "quote": "GEO 的核心，是让 AI 更容易找到、理解并引用你已经真实拥有的价值",
+      "location": {
+        "byte_start": 19191,
+        "byte_end": 19280,
+        "line": 423,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "GEO",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "让AI找到、理解并引用真实价值",
+        "role": "core",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-030-f67e344d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "在传统搜索里用户输入关键词然后从搜索结果里点开网页，到了AI搜索里用户更常输入一个完整问题，AI会先理解问题，再检索信息、召回网页、交叉校验，最后生成一段答案。",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "AI 会先理解问题，再检索信息、召回网页、交叉校验，最后生成一段答案。",
+      "location": {
+        "byte_start": 737,
+        "byte_end": 836,
+        "line": 26,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI搜索",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "传统搜索",
+        "role": "comparison",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-031-c5ef8d42",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "先简单理解下GEO（Generative Engine Optimization），中文全称生成式引擎优化",
+    "evidence": {
+      "ref_id": "p003.s001",
+      "quote": "先简单理解下GEO（Generative Engine Optimization），中文全称生成式引擎优化",
+      "location": {
+        "byte_start": 150,
+        "byte_end": 243,
+        "line": 16,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-032-144f72f2",
+    "kind": "assertion",
+    "text": "在传统搜索里，用户输入关键词，然后从搜索结果里点开网页。",
+    "evidence": {
+      "ref_id": "p005.s001",
+      "quote": "在传统搜索里，用户输入关键词，然后从搜索结果里点开网页。",
+      "location": {
+        "byte_start": 380,
+        "byte_end": 464,
+        "line": 20,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-033-94ab0ee6",
+    "kind": "assertion",
+    "text": "一个用户问题从输入到形成答案，大致会经历七个环节：",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "一个用户问题从输入到形成答案，大致会经历七个环节：",
+      "location": {
+        "byte_start": 1367,
+        "byte_end": 1543,
+        "line": 34,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p011.s001`..`p012.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-034-1ee8c5e2",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "因此，上传知识库之前，先建立一份品牌事实母库",
+    "evidence": {
+      "ref_id": "p066.s001",
+      "quote": "因此，上传知识库之前，先建立一份品牌事实母库",
+      "location": {
+        "byte_start": 6982,
+        "byte_end": 7048,
+        "line": 149,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-035-06f663d9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "这里需要理解一个核心概念：向量化",
+    "evidence": {
+      "ref_id": "p075.s001",
+      "quote": "这里需要理解一个核心概念：向量化",
+      "location": {
+        "byte_start": 8327,
+        "byte_end": 8375,
+        "line": 174,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

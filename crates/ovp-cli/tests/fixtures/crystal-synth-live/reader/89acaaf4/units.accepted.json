@@ -1,0 +1,887 @@
+[
+  {
+    "id": "u-000-244d64af",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Obsidian is a local-first, offline-capable note-taking application that serves as a second brain on disk.",
+    "evidence": {
+      "ref_id": "p011.s001",
+      "quote": "Obsidian is your second brain on disk.",
+      "location": {
+        "byte_start": 1163,
+        "byte_end": 1241,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Obsidian",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-3940b6b5",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The AI acts as the librarian that reads, organizes, and queries the Obsidian vault for the user.",
+    "evidence": {
+      "ref_id": "p011.s002",
+      "quote": "AI is the librarian that reads, organizes, and queries it for you.",
+      "location": {
+        "byte_start": 1241,
+        "byte_end": 1308,
+        "line": 49,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-d5ef9b3a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Standard AI chats lose knowledge after the conversation ends, requiring users to re-explain context on every query.",
+    "evidence": {
+      "ref_id": "p012.s001",
+      "quote": "Most AI chats are like talking to someone with amnesia. You explain something, they answer, the conversation ends, the knowledge disappears.",
+      "location": {
+        "byte_start": 1241,
+        "byte_end": 1450,
+        "line": 49,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI chats",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p011.s002`..`p012.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-003-c7bd3b7c",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "In this setup, knowledge is compiled once and kept current rather than re-derived on every query.",
+    "evidence": {
+      "ref_id": "p013.s003",
+      "quote": "Knowledge gets compiled once and kept current.. not re-derived on every query.",
+      "location": {
+        "byte_start": 1476,
+        "byte_end": 1675,
+        "line": 53,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "knowledge compilation",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p013.s002`..`p013.s004` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-f218dfdb",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The vault is the structured wiki of markdown files that gets built from source materials.",
+    "evidence": {
+      "ref_id": "p016.s003",
+      "quote": "The wiki is what gets built.",
+      "location": {
+        "byte_start": 2040,
+        "byte_end": 2069,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "wiki",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-e0e4cdbe",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "That hot.md file in your vault root is a rolling 500-character cache of your most recent context.. the topic you're focused on, the last thing you ingested, the question you just asked.",
+    "evidence": {
+      "ref_id": "p061.s001",
+      "quote": "That hot.md file in your vault root is a rolling 500-character cache of your most recent context.. the topic you're focused on, the last thing you ingested, the question you just asked.",
+      "location": {
+        "byte_start": 7983,
+        "byte_end": 8216,
+        "line": 214,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "hot.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p060.s001`..`p061.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-007-b65c1504",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "index.md is the live catalog of all wiki pages in the vault.",
+    "evidence": {
+      "ref_id": "p026.s008",
+      "quote": "index.md — Live catalog of all wiki pages",
+      "location": {
+        "byte_start": 4069,
+        "byte_end": 4115,
+        "line": 103,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "index.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-0bcfb644",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "log.md is an append-only chronological action log of all vault operations.",
+    "evidence": {
+      "ref_id": "p026.s009",
+      "quote": "log.md — Append-only record of all actions",
+      "location": {
+        "byte_start": 4115,
+        "byte_end": 4161,
+        "line": 104,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "log.md",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-c369b370",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Use wiki-links (double brackets) for every cross-reference between pages.",
+    "evidence": {
+      "ref_id": "p029.s001",
+      "quote": "Use [[wiki-links]] for every cross-reference.",
+      "location": {
+        "byte_start": 4407,
+        "byte_end": 4454,
+        "line": 114,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "wiki-links",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-9a4d4e8f",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "Every wiki page must end with a ## Sources section linking back to raw/ files.",
+    "evidence": {
+      "ref_id": "p029.s003",
+      "quote": "Every page ends with a ## Sources section linking back to raw/",
+      "location": {
+        "byte_start": 4471,
+        "byte_end": 4535,
+        "line": 115,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "## Sources section",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-f63e8f73",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Never manually edit files inside wiki/ — drop new information into raw/ or update CLAUDE.md instead.",
+    "evidence": {
+      "ref_id": "p070.s001",
+      "quote": "Never manually edit files inside wiki/. That's the AI's layer.",
+      "location": {
+        "byte_start": 9223,
+        "byte_end": 9393,
+        "line": 232,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "wiki/ folder",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p069.s004`..`p070.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-f8a1acab",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Never delete files; use status: archived in frontmatter to mark outdated content.",
+    "evidence": {
+      "ref_id": "p035.s002",
+      "quote": "Never delete files. Use status: archived in frontmatter.",
+      "location": {
+        "byte_start": 5405,
+        "byte_end": 5521,
+        "line": 143,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "file deletion",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p035.s001`..`p035.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-b9dc9755",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Never edit raw/ files. They are sources of truth.",
+    "evidence": {
+      "ref_id": "p035.s004",
+      "quote": "Never edit raw/ files. They are sources of truth.",
+      "location": {
+        "byte_start": 5484,
+        "byte_end": 5573,
+        "line": 144,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "raw/ folder",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p035.s003`..`p035.s005` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-610ae60d",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "One page should contain one claim; atomic notes enable 2-3x better cross-referencing than essays.",
+    "evidence": {
+      "ref_id": "p067.s001",
+      "quote": "One page = one claim. Atomic notes beat essays. Cross-referencing works 2-3x better when each page is tightly focused.",
+      "location": {
+        "byte_start": 8612,
+        "byte_end": 8905,
+        "line": 224,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "atomic notes",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p065.s001`..`p067.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-015-831c89f1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Initialize git in the vault folder and commit daily for free version history and instant rollback.",
+    "evidence": {
+      "ref_id": "p069.s002",
+      "quote": "Run git init in the folder. Commit daily. Free version history and instant rollback when the AI does something weird.",
+      "location": {
+        "byte_start": 8998,
+        "byte_end": 9299,
+        "line": 230,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "git",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p068.s003`..`p069.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-017-80215629",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Set a weekly Sunday calendar reminder for the lint workflow to prevent wiki decay.",
+    "evidence": {
+      "ref_id": "p072.s002",
+      "quote": "Skipping the weekly lint. Without it, your wiki silently rots. Set a Sunday calendar reminder.",
+      "location": {
+        "byte_start": 9649,
+        "byte_end": 9773,
+        "line": 238,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "weekly lint",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p072.s001`..`p072.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-018-58d53fb7",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Ingest workflow processes a source file by extracting entities and concepts, creating or updating wiki pages, and logging the action.",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "The AI reads the source, extracts entities and concepts, creates new wiki pages, updates existing ones, and logs the action.",
+      "location": {
+        "byte_start": 6759,
+        "byte_end": 6883,
+        "line": 175,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Ingest workflow",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-019-f6baa826",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Query workflow checks hot.md and index.md, follows backlinks, and synthesizes answers with citations from relevant pages.",
+    "evidence": {
+      "ref_id": "p051.s001",
+      "quote": "The AI checks hot.md for recent context, reads index.md for relevant pages, follows backlinks, and synthesizes an answer with citations.",
+      "location": {
+        "byte_start": 7135,
+        "byte_end": 7271,
+        "line": 188,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Query workflow",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-020-44a97c69",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Lint workflow performs a weekly health check by scanning for contradictions, orphan pages, stale claims, and missing pages.",
+    "evidence": {
+      "ref_id": "p056.s001",
+      "quote": "The AI scans for contradictions between pages, orphan pages with no links, stale claims, and concepts mentioned in passing but lacking their own page.",
+      "location": {
+        "byte_start": 7583,
+        "byte_end": 7733,
+        "line": 202,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Lint workflow",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-021-4feb9fda",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Hot Cache workflow updates hot.md with recent context after every meaningful session, cutting token usage on day-to-day queries by 80-90%.",
+    "evidence": {
+      "ref_id": "p062.s001",
+      "quote": "For routine queries, the AI checks hot.md first instead of crawling the full wiki. Cuts token usage on day-to-day queries by 80-90%.",
+      "location": {
+        "byte_start": 8129,
+        "byte_end": 8350,
+        "line": 216,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Hot Cache workflow",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p061.s002`..`p062.s002` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-77cc34c2",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The five workflows stack so that Ingest feeds Query, Query feeds Lint, and Lint surfaces the next Ingest, creating a self-sharpening system.",
+    "evidence": {
+      "ref_id": "p064.s001",
+      "quote": "Stack the five. Ingest feeds Query. Query feeds Lint. Lint surfaces the next Ingest. Your vault sharpens itself.",
+      "location": {
+        "byte_start": 8218,
+        "byte_end": 8610,
+        "line": 218,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "workflow stacking",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p062.s001`..`p064.s005` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-023-537c4a32",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "A single ingest operation touches 10-15 wiki pages in one pass.",
+    "evidence": {
+      "ref_id": "p015.s002",
+      "quote": "A single ingest touches 10-15 pages in one pass.",
+      "location": {
+        "byte_start": 1918,
+        "byte_end": 1967,
+        "line": 57,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ingest",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-163e7ecc",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "Past 500K total tokens, plain markdown search starts hitting a wall on multi-hop questions.",
+    "evidence": {
+      "ref_id": "p073.s002",
+      "quote": "Past 500K total tokens, plain markdown search starts hitting a wall on multi-hop questions.",
+      "location": {
+        "byte_start": 9874,
+        "byte_end": 9966,
+        "line": 240,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "scaling",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-025-43695af1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The moat is not the markdown files themselves but the network of relationships between them that cannot be maintained manually.",
+    "evidence": {
+      "ref_id": "p080.s001",
+      "quote": "That's the moat. not the markdown files, the network of relationships between them that you couldn't possibly maintain manually.",
+      "location": {
+        "byte_start": 10950,
+        "byte_end": 11142,
+        "line": 252,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "network of relationships",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p079.s005`..`p080.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-026-51aad5ff",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Questions that used to take 30 minutes of scrolling take 30 seconds.",
+    "evidence": {
+      "ref_id": "p079.s003",
+      "quote": "Questions that used to take 30 minutes of scrolling take 30 seconds.",
+      "location": {
+        "byte_start": 10819,
+        "byte_end": 10888,
+        "line": 252,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "90-day results",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-c5cc77da",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Split memory files into one file per workflow (e.g., memory-trading.md, memory-content.md, memory-research.md) rather than one mega file.",
+    "evidence": {
+      "ref_id": "p071.s001",
+      "quote": "One mega memory file. Split into one file per workflow.. memory-trading.md, memory-content.md, memory-research.md.",
+      "location": {
+        "byte_start": 9370,
+        "byte_end": 9608,
+        "line": 234,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "memory files",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p070.s002`..`p071.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-028-4327d36b",
+    "kind": "assertion",
+    "text": "Download Obsidian (obsidian.md).",
+    "evidence": {
+      "ref_id": "p019.s001",
+      "quote": "Download Obsidian (obsidian.md).",
+      "location": {
+        "byte_start": 2277,
+        "byte_end": 2332,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-029-32effd05",
+    "kind": "assertion",
+    "text": "Install the Obsidian Web Clipper Chrome extension. Set the default folder to raw/. Now you can clip any web article into your vault with one click.",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "Install the Obsidian Web Clipper Chrome extension. Set the default folder to raw/. Now you can clip any web article into your vault with one click.",
+      "location": {
+        "byte_start": 5895,
+        "byte_end": 6090,
+        "line": 152,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p036.s007`..`p037.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-030-289621c2",
+    "kind": "assertion",
+    "text": "A single ingest touches 5-15 pages.",
+    "evidence": {
+      "ref_id": "p031.s013",
+      "quote": "A single ingest touches 5-15 pages.",
+      "location": {
+        "byte_start": 4843,
+        "byte_end": 4878,
+        "line": 126,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

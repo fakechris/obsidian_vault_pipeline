@@ -1,0 +1,7 @@
+# Paper interp frontmatter is much sparser than article interp.
+# Notably absent: canonical_concepts, concept_candidates, area, status,
+# link_resolution_*, pipeline_run_id, original_note_type. See ../notes.md.
+title: "Deep GraphRAG: A Balanced Approach to Hierarchical Retrieval and Adaptive Integration"
+date: 2026-01-29  # paper publication date, NOT interpretation date
+arXiv: 2601.11144
+tags: [GraphRAG, RAG, Knowledge Graph, Reinforcement Learning, LLM]

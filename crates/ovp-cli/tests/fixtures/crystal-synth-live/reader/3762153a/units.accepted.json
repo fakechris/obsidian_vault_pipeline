@@ -1,0 +1,584 @@
+[
+  {
+    "id": "u-000-d616460c",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Autonomous coding is shifting from better prompting to better control systems, where engineers wrap agents in goals, evaluators, loops, and artifacts that let them keep working after the human stops typing.",
+    "evidence": {
+      "ref_id": "p002",
+      "quote": "The important shift is that engineers are learning how to wrap agents in goals, evaluators, loops, and artifacts that let them keep working after the human stops typing.",
+      "location": {
+        "byte_start": 77,
+        "byte_end": 323,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "autonomous coding",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "goals, evaluators, loops, and artifacts",
+        "role": "tools",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-070761be",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A goal specifies the desired end state, evidence required to prove success, constraints that must not be violated, and where possible, the number of turns and budget — working as a contract rather than a longer prompt.",
+    "evidence": {
+      "ref_id": "p007",
+      "quote": "A coding agent remains the executor, but the human no longer interacts with it turn by turn. Instead, the human specifies the desired end state, the evidence required to prove success, the constraints that must not be violated, and, where possible, the number of turns and budget.",
+      "location": {
+        "byte_start": 1236,
+        "byte_end": 1582,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "goal",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-52bb6b45",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A weak goal gives the model room to stop early, take shortcuts, or redefine success in a way that looks plausible in the transcript but fails in the real system, while a strong goal gives the agent a target it can repeatedly measure itself against.",
+    "evidence": {
+      "ref_id": "p008",
+      "quote": "A weak goal gives the model room to stop early, take shortcuts, or redefine success in a way that looks plausible in the transcript but fails in the real system. A strong goal gives the agent a target it can repeatedly measure itself against.",
+      "location": {
+        "byte_start": 1584,
+        "byte_end": 1885,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "weak goal",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "strong goal",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-7f710f54",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "matching the evaluator to the task",
+    "evidence": {
+      "ref_id": "p012",
+      "quote": "That evaluator can be another coding agent, an LLM-as-judge, a script, a test suite, a benchmark harness, or a mix of all of them. The key design choice is matching the evaluator to the task.",
+      "location": {
+        "byte_start": 2500,
+        "byte_end": 2946,
+        "line": 51,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "evaluator",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-ddb1c9d6",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Deterministic checks are better when success is crisp, while agent evaluators become useful when success is fuzzy and requires language judgment or vision, such as evaluating research report coherence or UI design intent.",
+    "evidence": {
+      "ref_id": "p013",
+      "quote": "When success is fuzzy, an agent evaluator becomes useful. A script can tell you whether tests pass, but it cannot easily decide whether a generated research report is coherent, whether an implementation faithfully follows a paper, or whether a UI matches a design intent.",
+      "location": {
+        "byte_start": 2948,
+        "byte_end": 3303,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "deterministic checks",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "agent evaluators",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-005-fb7cd17e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Autonomy only works when the system has a reliable verifier — an external check that the agent cannot easily talk its way around, turning a confident text generator into a system that can be trusted with more time.",
+    "evidence": {
+      "ref_id": "p017",
+      "quote": "The deeper point is that autonomy only works when the system has a reliable verifier. A coding agent can generate a plan, implement a feature, and explain why it believes the work is complete, but that explanation should not be treated as evidence.",
+      "location": {
+        "byte_start": 3668,
+        "byte_end": 4004,
+        "line": 61,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "verifier",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-9168ff46",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "For code, the verifier might be a test suite, type checker, benchmark, browser run, screenshot comparison, or reproducible script; for research work, a held-out evaluation, reproduced table, loss curve, or benchmark score; for design work, a reference screenshot plus visual review.",
+    "evidence": {
+      "ref_id": "p018",
+      "quote": "For code, the verifier might be a test suite, type checker, benchmark, browser run, screenshot comparison, or reproducible script. For research work, it might be a held-out evaluation, a reproduced table, a loss curve, or a benchmark score that improves over the baseline. For design work, it might be a reference screenshot plus a visual review step.",
+      "location": {
+        "byte_start": 4006,
+        "byte_end": 4487,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "verifier",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-53b54bc1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Most shortcuts appear at the verifier boundary — if the verifier is vague, the model satisfies the easiest interpretation; if too narrow, the model overfits to it and misses the broader intent, requiring layered verification.",
+    "evidence": {
+      "ref_id": "p019",
+      "quote": "Most shortcuts appear at this boundary. If the verifier is vague, the model will often satisfy the easiest interpretation of the task. If the verifier is too narrow, the model may overfit to it and miss the broader intent.",
+      "location": {
+        "byte_start": 4489,
+        "byte_end": 5161,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "shortcuts",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "verifier boundary",
+        "role": "location",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-5f84095f",
+    "kind": "assertion",
+    "subtype": "limitation",
+    "text": "There is still an evident OOD (out-of-distribution) problem where if the verification task assigned to the agent falls outside the training distribution, models struggle significantly.",
+    "evidence": {
+      "ref_id": "p019",
+      "quote": "A few of the frontier models can already achieve some level of verification, but based on my research, there is still an evident OOD problem, where if the verification task you assign to the agent falls outside the training distribution, models struggle significantly.",
+      "location": {
+        "byte_start": 4489,
+        "byte_end": 5161,
+        "line": 65,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "OOD problem",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-aa99b022",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A loop is the outer control system that wakes up, inspects progress, runs checks, compares the result against the goal, and sends the agent back with the next instruction when the goal has not been met.",
+    "evidence": {
+      "ref_id": "p024",
+      "quote": "The loop is the outer control system. It wakes up, inspects progress, runs checks, compares the result against the goal, and sends the agent back in with the next instruction when the goal has not been met.",
+      "location": {
+        "byte_start": 5743,
+        "byte_end": 6182,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "loop",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-9c51257f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The Ralph loop pattern is the simplest form of loop, combining a coding agent with a deterministic condition, while a more flexible form includes an evaluator agent that can reason about progress and decide what should happen next.",
+    "evidence": {
+      "ref_id": "p024",
+      "quote": "In its simplest form, this is the Ralph loop pattern with a coding agent and a deterministic condition. In a more flexible form, the loop includes an evaluator agent that can reason about progress and decide what should happen next.",
+      "location": {
+        "byte_start": 5743,
+        "byte_end": 6182,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Ralph loop pattern",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-e43b8fda",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Long-running autonomy works as repeated effort under supervision from a control layer, not as one continuous act of intelligence, with the loop giving the system a way to notice failure and continue instead of silently declaring victory.",
+    "evidence": {
+      "ref_id": "p025",
+      "quote": "Long-running autonomy works as repeated effort under supervision from a control layer, not as one continuous act of intelligence. The agent can still fail, but the loop gives the system a way to notice the failure and continue instead of silently declaring victory.",
+      "location": {
+        "byte_start": 6184,
+        "byte_end": 6449,
+        "line": 77,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "long-running autonomy",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "control layer",
+        "role": "supervisor",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-2affa11d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Some models are better planners. Some are better executors. Some are cheaper evaluators. Some are better at vision-based review.",
+    "evidence": {
+      "ref_id": "p029",
+      "quote": "In practice, this means engineers should stop thinking of \"the model\" as a single choice. Model choice becomes an architecture decision. Some models are better planners. Some are better executors. Some are cheaper evaluators. Some are better at vision-based review.",
+      "location": {
+        "byte_start": 6451,
+        "byte_end": 7344,
+        "line": 79,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "model choice",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "architecture decision",
+        "role": "reclassification",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p026.s001`..`p030.s004` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-013-31c2e7a9",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Session mining turns past agent transcripts into operating rules by scanning work history to find recurring failure modes and proposing updates to project instructions, vault learnings, or agent rules.",
+    "evidence": {
+      "ref_id": "p040",
+      "quote": "Session mining turns those transcripts into operating rules. An agent can scan the last thirty days of work, find recurring failure modes, and propose updates to project instructions, vault learnings, or agent rules.",
+      "location": {
+        "byte_start": 9172,
+        "byte_end": 9485,
+        "line": 107,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "session mining",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-7923b8d0",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Start with a small, cheap subset before launching the full autonomous run; write a goal with measurable success criteria, explicit constraints, and a turn or time budget; separate the executor from the evaluator; define external verifiers before the long-running loop starts; use deterministic checks wherever possible, then add agent review for fuzzy criteria; require proof artifacts; and mine past sessions to promote repeated lessons into project instructions.",
+    "evidence": {
+      "ref_id": "p045",
+      "quote": "Start with a small, cheap subset before launching the full autonomous run. Write a goal with measurable success criteria, explicit constraints, and a turn or time budget (where possible). Separate the executor from the evaluator so implementation and judgment are not collapsed into one role. Define external verifiers before the long-running loop starts. Use deterministic checks wherever possible, then add agent review for fuzzy criteria. Require proof artifacts such as logs, screenshots, benchmark curves, or changed files. Mine past sessions and promote repeated lessons into project instructions.",
+      "location": {
+        "byte_start": 9893,
+        "byte_end": 10510,
+        "line": 117,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "emerging workflow for AI engineers",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-91401140",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Using a coding agent gives you a conversation, while engineering an autonomous coding system gives you a harness.",
+    "evidence": {
+      "ref_id": "p046",
+      "quote": "One gives you a conversation. The other gives you a harness.",
+      "location": {
+        "byte_start": 10512,
+        "byte_end": 10669,
+        "line": 125,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "coding agent",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "autonomous coding system",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-8570a1e1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Agents still take shortcuts, stop early, overestimate completion, and produce confident but weak plans, especially on recent papers, unfamiliar benchmarks, or systems outside their training distribution.",
+    "evidence": {
+      "ref_id": "p049",
+      "quote": "Agents still take shortcuts. They still stop early. They still overestimate completion. They still produce confident but weak plans, especially on recent papers, unfamiliar benchmarks, or systems outside their training distribution.",
+      "location": {
+        "byte_start": 10770,
+        "byte_end": 11042,
+        "line": 131,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agents",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-0f3d36f1",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Trusting coding agents more will not solve their limitations; better control systems will, through goals, loops, evaluators, deterministic checks, visual artifacts, and session memory that make autonomy observable and correctable.",
+    "evidence": {
+      "ref_id": "p050",
+      "quote": "Trusting them more will not solve this. Better control systems will. Goals, loops, evaluators, deterministic checks, visual artifacts, and session memory are all ways of making autonomy observable and correctable.",
+      "location": {
+        "byte_start": 11044,
+        "byte_end": 11257,
+        "line": 133,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "better control systems",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-91250e93",
+    "kind": "assertion",
+    "text": "The verifier is what turns a long-running agent from a confident text generator into a system that can be trusted with more time.",
+    "evidence": {
+      "ref_id": "p018.s004",
+      "quote": "The verifier is what turns a long-running agent from a confident text generator into a system that can be trusted with more time.",
+      "location": {
+        "byte_start": 4357,
+        "byte_end": 4487,
+        "line": 63,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-06aa2597",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "In its simplest form, this is the Ralph loop pattern with a coding agent and a deterministic condition.",
+    "evidence": {
+      "ref_id": "p024.s003",
+      "quote": "In its simplest form, this is the Ralph loop pattern with a coding agent and a deterministic condition.",
+      "location": {
+        "byte_start": 5949,
+        "byte_end": 6053,
+        "line": 75,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

@@ -1,0 +1,18 @@
+[package]
+name = "ovp-daily"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP Next daily loop (M30/M31): plan + reader-trunk run per new source with durable append-only ledger, retry cap, lifecycle move, and per-run report"
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-intake = { path = "../ovp-intake" }
+ovp-llm = { path = "../ovp-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

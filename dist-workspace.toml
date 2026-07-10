@@ -1,0 +1,37 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Where to host releases
+hosting = "github"
+# Whether to install an updater program
+install-updater = false
+# Keep the release workflow purely tag-triggered: repo policy is PR-only bot
+# CI, so we do not add a `dist plan` check to every pull request.
+pr-run-mode = "skip"
+# End users install prebuilt binaries precisely because they have no Rust
+# toolchain — so the live capabilities (`--client live`, `--pinboard-live`,
+# web/GitHub enrich) must be compiled in. Runtime behavior stays opt-in via
+# flags/env; the default run is still offline/replay. `embed` bundles the
+# ONNX embedder for `crystal-themes` (model files still download on first
+# use; offline stays a graceful skip).
+features = ["anthropic", "pinboard-live", "web-fetch-live", "github-live", "embed"]
+# Homebrew tap the generated formula targets. Formula GENERATION only: there is
+# intentionally no `publish-jobs = ["homebrew"]` — pushing the formula to the
+# tap is a manual operator step (see docs/install.md). The tap repo must exist
+# and be PUBLIC before `brew install` can work.
+tap = "fakechris/homebrew-ovp2"
+# Name the generated formula after the product binary (`brew install
+# fakechris/ovp2/ovp2`), not the cargo package name (ovp-cli).
+formula = "ovp2"

@@ -1,0 +1,99 @@
+case: rag_wrong
+note: Span-anchored central-unit gold (M14a.5). Scored by SOURCE-SPAN OVERLAP / quote containment, NOT by label. Drafted by independent source reading; anchors verified to occur verbatim in the source.
+central_units:
+- label: chunk_as_unit_is_the_bug
+  kind: claim
+  required: true
+  expected_point: The root cause of most RAG retrieval failures is the upstream assumption that a chunk of text is the right unit of knowledge to embed, something almost no one examines.
+  quote_must_include: a chunk of text is the right unit of knowledge to embed
+  section_hint: Intro / The Underlying Principle
+- label: headline_gains
+  kind: result
+  required: true
+  expected_point: The new approach cuts corpus size by 40x, reduces tokens per query by 3x, and improves vector search relevance by 2.3x without touching the retrieval algorithm, reranker, or embedding model.
+  quote_must_include: And it doesn't touch your retrieval algorithm, your reranker, or your embedding model
+  section_hint: Intro bullets
+- label: chunk_structurally_neutral
+  kind: observation
+  required: true
+  expected_point: A chunk is a structurally neutral container with no idea boundary, no version context, and no access state, so splitters cut wherever the token count runs out, producing incomplete or context-stripped retrievals.
+  quote_must_include: A chunk of text is a structurally neutral container
+  section_hint: Why the Chunk Is a Bad Unit
+- label: version_problem
+  kind: observation
+  required: true
+  expected_point: Because enterprise corpora hold many near-identical document versions, top-K retrieval returns mixed current and deprecated copies that the LLM blends into confidently wrong answers.
+  quote_must_include: The LLM blends them into an answer that’s confidently wrong
+  section_hint: Why the Chunk Is a Bad Unit (version problem)
+- label: no_metadata_governance_gap
+  kind: observation
+  required: false
+  expected_point: Because the chunk carries no metadata, access control (role, version state, clearance) gets bolted onto the orchestrator, disconnected from the content it governs.
+  quote_must_include: there’s nowhere to attach access control in the data itself
+  section_hint: Why the Chunk Is a Bad Unit (governance)
+- label: qa_packet_solution
+  kind: method
+  required: true
+  expected_point: 'The fix is to embed a structurally explicit unit: a claim consisting of one question, its validated answer, and governance fields as typed schema, one fact per unit.'
+  quote_must_include: 'you embed a claim: one question, its validated answer, and governance fields as typed schema'
+  section_hint: 'A Better Unit: The Question-Answer Packet'
+- label: structural_match
+  kind: claim
+  required: true
+  expected_point: Since user queries are already questions, storing answers to questions makes the match structural rather than just semantic, matching a question to its answer directly.
+  quote_must_include: the match becomes structural, not just semantic
+  section_hint: A Better Unit (structural match)
+- label: blockify_ideablock
+  kind: definition
+  required: true
+  expected_point: 'Blockify, a preprocessing layer from Iternal Technologies, implements this as an IdeaBlock: a question, its validated answer, and typed governance fields like clearance level, version state, and source on the same object.'
+  quote_must_include: implements this as a structure it calls an IdeaBlock
+  section_hint: A Better Unit (Blockify/IdeaBlock)
+- label: cosine_distance_benchmark
+  kind: result
+  required: true
+  expected_point: In a benchmark across 17 documents and 298 pages, average query-to-best-block cosine distance was 0.1585 for IdeaBlocks versus 0.3624 for naive chunks, a 2.29x reduction in retrieval distance.
+  quote_must_include: 0.1585 for IdeaBlocks versus 0.3624 for naive chunks
+  section_hint: A Better Unit (vector geometry benchmark)
+- label: less_data_more_accuracy
+  kind: result
+  required: true
+  expected_point: Counterintuitively, semantic distillation collapsed 2,042 raw IdeaBlocks to 1,200 canonical ones and word count from 88,877 to 44,537, yet the distilled dataset outperformed undistilled by 13.55% on vector accuracy.
+  quote_must_include: Distilled dataset outperformed undistilled by 13.55% on vector accuracy
+  section_hint: 'The counterintuitive finding: less data, more accuracy'
+- label: redundancy_degrades_retrieval
+  kind: claim
+  required: true
+  expected_point: Redundant near-duplicates create competing vectors that distribute probability mass and pull down the canonical match score; collapsing them into one canonical block sharpens the signal because the index is a retrieval surface, not a hard drive.
+  quote_must_include: It’s a retrieval surface, and redundancy degrades it
+  section_hint: The counterintuitive finding (why redundancy hurts)
+- label: seven_stage_pipeline
+  kind: method
+  required: true
+  expected_point: The fix is a seven-stage preprocessing pipeline (scoping, ingestion, chunking/extraction, semantic deduplication, auto-tagging, human validation, export) that runs before anything touches the vector store, with each stage having defined input/output.
+  quote_must_include: Blockify’s processing runs in seven stages
+  section_hint: 'The pipeline: Documents to IdeaBlocks'
+- label: dedup_threshold
+  kind: method
+  required: false
+  expected_point: Semantic deduplication clusters blocks by cosine similarity at an 80-85% threshold across three to five iterative rounds, merging near-duplicates into a single canonical block via a tuned LLM.
+  quote_must_include: clustered by cosine similarity at an 80-85% threshold across three to five iterative rounds
+  section_hint: 'Stage 4: Semantic deduplication'
+- label: governance_in_data_layer
+  kind: observation
+  required: false
+  expected_point: At the application layer, governance moves into the data layer as typed fields on each block, so different personas querying the same index get different datasets because the blocks themselves carry the access boundary.
+  quote_must_include: the blocks themselves carry the access boundary
+  section_hint: What Changes at the Application Layer
+- label: single_record_updates
+  kind: observation
+  required: false
+  expected_point: 'Updates propagate from a single record: changing one IdeaBlock corrects the answer everywhere, unlike naive chunking where the same fact lives in dozens of near-duplicates that are intractable to find at enterprise scale.'
+  quote_must_include: when a spec changes, you update one IdeaBlock
+  section_hint: What Changes at the Application Layer
+- label: fix_is_a_better_unit
+  kind: recommendation
+  required: true
+  expected_point: The fix is not a better retrieval algorithm but a better unit; RAG stacks are growing a distillation layer between parsing and vectorization, which you can build yourself or use Blockify for.
+  quote_must_include: The fix is not a better retrieval algorithm. It’s a better unit
+  section_hint: The Underlying Principle

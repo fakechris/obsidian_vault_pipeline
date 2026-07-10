@@ -1,0 +1,808 @@
+[
+  {
+    "id": "u-000-46ff127b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A 10X Engineer is one who becomes absolutely indispensable for the organisation.",
+    "evidence": {
+      "ref_id": "p002.s002",
+      "quote": "Here is my take on how some engineers become ABSOLUTELY INDISPENSABLE for the organisation.",
+      "location": {
+        "byte_start": 310,
+        "byte_end": 406,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "10X Engineer",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "absolutely indispensable",
+        "role": "description",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-001-84736504",
+    "kind": "assertion",
+    "subtype": "thesis",
+    "text": "It is not just about the OUTPUT\\- Yes, it is good to ship more code but it is an EXPECTATION not the DIFFERENTIATION.",
+    "evidence": {
+      "ref_id": "p004.s002",
+      "quote": "It is not just about the OUTPUT\\- Yes, it is good to ship more code but it is an EXPECTATION not the DIFFERENTIATION.",
+      "location": {
+        "byte_start": 439,
+        "byte_end": 561,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "OUTPUT",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "EXPECTATION not the DIFFERENTIATION",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-45365947",
+    "kind": "assertion",
+    "subtype": "thesis",
+    "text": "But it all fails to make a dent if it does not translate into business impact.",
+    "evidence": {
+      "ref_id": "p004.s005",
+      "quote": "But it all fails to make a dent if it does not translate into business impact.",
+      "location": {
+        "byte_start": 893,
+        "byte_end": 972,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "it",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "business impact",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-1b0ea99a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Completing all tickets in a sprint is the expectation and often goes unnoticed.",
+    "evidence": {
+      "ref_id": "p004.s008",
+      "quote": "But this often goes unnoticed because this the EXPECTATION.",
+      "location": {
+        "byte_start": 1075,
+        "byte_end": 1135,
+        "line": 36,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "completing all tickets in a sprint",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-004-00c282e2",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Good engineers pitch POCs not once a year before appraisals, but every month.",
+    "evidence": {
+      "ref_id": "p004.s010",
+      "quote": "Good engineers pitch POCs. Not once a year before appraisals, every month.",
+      "location": {
+        "byte_start": 1135,
+        "byte_end": 1313,
+        "line": 36,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "POCs",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "every month",
+        "role": "frequency",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p004.s009`..`p004.s011` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-005-b0ec70f5",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Good engineers should always have documentations ready and spend free time thinking about and charting out the next features/products.",
+    "evidence": {
+      "ref_id": "p004.s011",
+      "quote": "Have documentations ready, spend your free time thinking and charting out the next features/ products.",
+      "location": {
+        "byte_start": 1210,
+        "byte_end": 1313,
+        "line": 36,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "documentations",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "next features/products",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-18dae058",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Good engineers should not wait to be given tasks by the manager; they should pitch the feature they want to work on and ask if the manager wants to reprioritise.",
+    "evidence": {
+      "ref_id": "p004.s013",
+      "quote": "They do not wait to be given tasks by the manager (see it from the manager's POV, no one wants to MANAGE anyone), they PITCH the feature they want to work on and ask if the manager wants to reprioritise.",
+      "location": {
+        "byte_start": 1371,
+        "byte_end": 1575,
+        "line": 36,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "the feature they want to work on",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-82c15f48",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "KNOW THE ENTIRE PRODUCT LIFECYCLE.",
+    "evidence": {
+      "ref_id": "p004.s024",
+      "quote": "KNOW THE ENTIRE PRODUCT LIFECYCLE.",
+      "location": {
+        "byte_start": 1967,
+        "byte_end": 2002,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "the entire product lifecycle",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-f3402c2c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Differentiation comes when engineers contribute not just as per the JIRA ticket but anywhere and everywhere in the product lifecycle if the need arises.",
+    "evidence": {
+      "ref_id": "p004.s025",
+      "quote": "Differentiation comes when you contribute not just as per the JIRA ticket but anywhere and everywhere in the product lifecycle if the need arises.",
+      "location": {
+        "byte_start": 2002,
+        "byte_end": 2149,
+        "line": 37,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "contributing beyond JIRA tickets",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-62009d34",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Trust is the most important thing in any line of business, and it defines how much influence an engineer has over product decisions.",
+    "evidence": {
+      "ref_id": "p004.s030",
+      "quote": "TRUST \\- In any line of business, TRUST is the most important thing.",
+      "location": {
+        "byte_start": 2216,
+        "byte_end": 2289,
+        "line": 38,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "TRUST",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-010-f399b748",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Trust ensures that an engineer's involvement is not just limited to JIRA tickets but is fluid enough to have opinions on the product lifecycle.",
+    "evidence": {
+      "ref_id": "p004.s032",
+      "quote": "TRUST defines how much influence you have over the product decisions and TRUST is what ensures that the your involvement is not just limited to JIRA tickets but is fluid enough to have opinions on the product lifecycle.",
+      "location": {
+        "byte_start": 2376,
+        "byte_end": 2596,
+        "line": 38,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "TRUST",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "product decisions",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "JIRA tickets",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-a55dc8e5",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "To gain trust, do what you said — a commitment should not be violated at any point of time.",
+    "evidence": {
+      "ref_id": "p004.s035",
+      "quote": "A commitment should not be violated at any point of time.",
+      "location": {
+        "byte_start": 2633,
+        "byte_end": 2691,
+        "line": 38,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "A commitment",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-012-96521000",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Be the solution guy, not a problem statement lister.",
+    "evidence": {
+      "ref_id": "p004.s037",
+      "quote": "Be the SOLUTION GUY/GAL NOT A PROBLEM STATEMENT LISTER.",
+      "location": {
+        "byte_start": 2756,
+        "byte_end": 2812,
+        "line": 38,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "SOLUTION GUY/GAL",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "PROBLEM STATEMENT LISTER",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-013-dfe11981",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Perfection is the cutoff; anything below perfect is cheating.",
+    "evidence": {
+      "ref_id": "p004.s040",
+      "quote": "Anything below perfect is CHEATING.",
+      "location": {
+        "byte_start": 2873,
+        "byte_end": 2909,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Perfection",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "CHEATING",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-014-73cd5e5c",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Shipping quality code is what differentiates someone who can code from someone who can be trusted.",
+    "evidence": {
+      "ref_id": "p004.s047",
+      "quote": "Shipping quality code is what differentiates SOMEONE WHO CAN CODE from SOMEONE WHO CAN BE TRUSTED.",
+      "location": {
+        "byte_start": 3238,
+        "byte_end": 3337,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Shipping quality code",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "someone who can be trusted",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-b073dcd6",
+    "kind": "assertion",
+    "subtype": "result",
+    "text": "Being obsessed with perfection leads to being pulled into all important meetings and becoming the go-to person when things go wrong.",
+    "evidence": {
+      "ref_id": "p004.s048",
+      "quote": "Do this and see how you get pulled into all important meetings, all important discussions and be the go to guy when things go south.",
+      "location": {
+        "byte_start": 3337,
+        "byte_end": 3470,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "OBSESSION",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-016-b9c43831",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Obsession is the pathway to build trust.",
+    "evidence": {
+      "ref_id": "p004.s049",
+      "quote": "OBSESSION is the pathway to build TRUST.",
+      "location": {
+        "byte_start": 3470,
+        "byte_end": 3511,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "OBSESSION",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "TRUST",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-63e8fb28",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Know how your code influences the reputation of the team.",
+    "evidence": {
+      "ref_id": "p004.s054",
+      "quote": "Know how your code influences the reputation of the team.",
+      "location": {
+        "byte_start": 3617,
+        "byte_end": 3675,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "your code",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "reputation of the team",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-dea0d05a",
+    "kind": "assertion",
+    "subtype": "thesis",
+    "text": "Business impact is more important than the fanciest state-of-the-art tech stack.",
+    "evidence": {
+      "ref_id": "p004.s056",
+      "quote": "BUSINESS >>> FANCIEST STATE OF THE ART TECH STACK.",
+      "location": {
+        "byte_start": 3735,
+        "byte_end": 3786,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "BUSINESS",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "FANCIEST STATE OF THE ART TECH STACK",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-227273f1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Engineers should always know the biggest challenges the business and the team are facing, and try to design features or POCs that solve these painpoints.",
+    "evidence": {
+      "ref_id": "p004.s060",
+      "quote": "Try to design features/ POCs which solves this painpoint.",
+      "location": {
+        "byte_start": 4008,
+        "byte_end": 4066,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "features/ POCs",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "painpoint",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-06747eb8",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Link all work to the bigger picture and make that the elevator pitch for any discussion with leadership.",
+    "evidence": {
+      "ref_id": "p004.s062",
+      "quote": "Make that your elevator pitch for any discussion with the leadership.",
+      "location": {
+        "byte_start": 4110,
+        "byte_end": 4180,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "the bigger picture",
+        "role": "object",
+        "locatable": false
+      },
+      {
+        "surface": "the leadership",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-021-0c3ac3ea",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "These six traits are what make engineers become indispensable for organisations.",
+    "evidence": {
+      "ref_id": "p004.s063",
+      "quote": "these are the few traits of Engineers who end up becoming indispensable for an organisations.",
+      "location": {
+        "byte_start": 4180,
+        "byte_end": 4286,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "these traits",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "indispensable for an organisations",
+        "role": "predicate",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-022-2e7aa97c",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "The growth path is to EMULATE these traits and choose self-improvement.",
+    "evidence": {
+      "ref_id": "p004.s066",
+      "quote": "The growth path is to EMULATE these traits and choose self-improvement.",
+      "location": {
+        "byte_start": 4418,
+        "byte_end": 4490,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "EMULATE these traits",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "self-improvement",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-7dd00bb5",
+    "kind": "assertion",
+    "text": "With AI Agents getting better and the context window getting longer, it might be a possibility where given enough business context and recursive agentic loops, we are able to get a working solution for the task at hand.",
+    "evidence": {
+      "ref_id": "p004.s003",
+      "quote": "With AI Agents getting better and the context window getting longer, it might be a possibility where given enough business context and recursive agentic loops, we are able to get a working solution for the task at hand.",
+      "location": {
+        "byte_start": 561,
+        "byte_end": 785,
+        "line": 35,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-e4d8e364",
+    "kind": "assertion",
+    "text": "Practically, we all know that is impossible but this should not be normalised.",
+    "evidence": {
+      "ref_id": "p004.s046",
+      "quote": "Practically, we all know that is impossible but this should not be normalised.",
+      "location": {
+        "byte_start": 3159,
+        "byte_end": 3238,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-7e5d1ea0",
+    "kind": "assertion",
+    "text": "One way is to discard all these and say that the person is a bootlicker and is doing politics.",
+    "evidence": {
+      "ref_id": "p004.s065",
+      "quote": "One way is to discard all these and say that the person is a bootlicker and is doing politics.",
+      "location": {
+        "byte_start": 4323,
+        "byte_end": 4418,
+        "line": 40,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

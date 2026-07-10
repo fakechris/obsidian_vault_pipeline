@@ -1,0 +1,24 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "web_fetch_markdown_mime-v1",
+  "base_version": "v1",
+  "target_version": "v1.1",
+  "surface": "runtime",
+  "component": "runtime.web_fetch",
+  "hypothesis": "Accepting markdown MIME types (text/markdown, text/x-markdown, application/markdown) and passing text/* bodies through verbatim (no tag-stripping) lets enrichment recover sources that a real dogfood run rejected (vercel.com/design.md, 2026-07-09, 'non-text content-type: text/markdown'), without regressing HTML extraction. Predicted: previously-skipped markdown URLs enrich successfully; HTML fetch behavior unchanged.",
+  "predicted_delta": {
+    "enrich_skips_markdown_content_type": "0 (was >=1 per dogfood run touching .md URLs)",
+    "html_extraction": "unchanged"
+  },
+  "guardrails": {
+    "binary_content_types_still_rejected": true,
+    "html_path_untouched": true
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures in crates/ovp-enrich/src/web_fetch.rs (markdown + html + binary content types, both feature configs)",
+    "live_evidence": ".run/p2p3-daily-20260709.log (the rejected vercel.com/design.md skip that motivated this)",
+    "soak": false
+  },
+  "rollback": "Revert is_texty_content_type/readable_from_body to the strict text/html allowlist; enrichment is idempotent per source and needs-content flags are re-derivable, so no persisted state depends on the wider acceptance.",
+  "ablation_required": false
+}

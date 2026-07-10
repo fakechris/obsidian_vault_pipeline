@@ -1,0 +1,969 @@
+[
+  {
+    "id": "u-000-65ec024e",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "A harness is the durable layer around a model: instructions, tools, permissions, context, and verification.",
+    "evidence": {
+      "ref_id": "p006.s001",
+      "quote": "A harness is the durable layer around a model: instructions, tools, permissions, context, and verification.",
+      "location": {
+        "byte_start": 454,
+        "byte_end": 561,
+        "line": 39,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "model",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-a891cea4",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Context is everything specific to our project: code, specs, design docs, tracker items, data models, past decisions, conventions, examples, and recipes.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "Context is everything specific to our project: code, specs, design docs, tracker items, data models, past decisions, conventions, examples, and recipes.",
+      "location": {
+        "byte_start": 1974,
+        "byte_end": 2126,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Context",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-002-5167f5c3",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Provenance is how code changes stay linked to the intent that produced them.",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "Provenance is how code changes stay linked to the intent that produced them.",
+      "location": {
+        "byte_start": 3577,
+        "byte_end": 3653,
+        "line": 76,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Provenance",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-98b48af6",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Capability covers tools that let an agent act on live state and verify what it did: reading logs, querying a running database, driving the UI, taking screenshots, running tests, and looping until the result is correct.",
+    "evidence": {
+      "ref_id": "p028.s001",
+      "quote": "Capability covers tools that let an agent act on live state and verify what it did: reading logs, querying a running database, driving the UI, taking screenshots, running tests, and looping until the result is correct.",
+      "location": {
+        "byte_start": 5345,
+        "byte_end": 5563,
+        "line": 96,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Capability",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-0d7213da",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Workflow is the shape of a coding session: how it starts, how it plans, how it gets help, and how it parallelizes.",
+    "evidence": {
+      "ref_id": "p035.s001",
+      "quote": "Workflow is the shape of a coding session: how it starts, how it plans, how it gets help, and how it parallelizes.",
+      "location": {
+        "byte_start": 6975,
+        "byte_end": 7089,
+        "line": 117,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Workflow",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-f1a175a5",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Restraint is how we stop an agent from doing the wrong thing quickly.",
+    "evidence": {
+      "ref_id": "p042.s001",
+      "quote": "Restraint is how we stop an agent from doing the wrong thing quickly.",
+      "location": {
+        "byte_start": 8250,
+        "byte_end": 8319,
+        "line": 135,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Restraint",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-006-1eeef602",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Verification is how an agent proves a change works before handing it back.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "Verification is how an agent proves a change works before handing it back.",
+      "location": {
+        "byte_start": 9768,
+        "byte_end": 9842,
+        "line": 155,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Verification",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-007-d4c29f3f",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The visual interface is where the agent works and where we review what it did, in the same place.",
+    "evidence": {
+      "ref_id": "p058.s001",
+      "quote": "The visual interface is where the agent works and where we review what it did, in the same place.",
+      "location": {
+        "byte_start": 11361,
+        "byte_end": 11458,
+        "line": 177,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "visual interface",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-008-cf204a55",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Coordination is how the human running all of that keeps a single overview: who is doing what, where the hand-offs go, which sessions touched which files, and what’s still open.",
+    "evidence": {
+      "ref_id": "p065.s003",
+      "quote": "Coordination is how the human running all of that keeps a single overview: who is doing what, where the hand-offs go, which sessions touched which files, and what’s still open.",
+      "location": {
+        "byte_start": 13703,
+        "byte_end": 13882,
+        "line": 200,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Coordination",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-009-62182884",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Teams building with AI usually end up building two products: the thing they ship, and the system around their agents that makes them useful in building the thing they ship.",
+    "evidence": {
+      "ref_id": "p002.s001",
+      "quote": "Teams building with AI usually end up building two products: the thing they ship, and the system around their agents that makes them useful in building the thing they ship.",
+      "location": {
+        "byte_start": 64,
+        "byte_end": 236,
+        "line": 31,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "AI teams",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "two products",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-337e9134",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Almost nothing in a good harness is novel. It is mostly other people's parts assembled around your project",
+    "evidence": {
+      "ref_id": "p010.s001",
+      "quote": "Almost nothing in a good harness is novel. It is mostly other people’s parts assembled around your project",
+      "location": {
+        "byte_start": 1219,
+        "byte_end": 1622,
+        "line": 45,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "good harness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p009.s002`..`p010.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-011-22c8607a",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Restraint is the paired pillar to capability. Every new tool we give the agent needs a matched scope, or it becomes a liability the moment the agent reaches for it in the wrong context.",
+    "evidence": {
+      "ref_id": "p045.s002",
+      "quote": "Restraint is the paired pillar to capability. Every new tool we give the agent needs a matched scope, or it becomes a liability the moment the agent reaches for it in the wrong context.",
+      "location": {
+        "byte_start": 9135,
+        "byte_end": 9539,
+        "line": 147,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Restraint",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "Capability",
+        "role": "topic",
+        "locatable": true
+      },
+      {
+        "surface": "matched scope",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p045.s001`..`p045.s003` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-012-229f84f5",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "If the agent cannot show the change works end-to-end, it is not done.",
+    "evidence": {
+      "ref_id": "p053.s001",
+      "quote": "If the agent cannot show the change works end-to-end, it is not done.",
+      "location": {
+        "byte_start": 10800,
+        "byte_end": 10869,
+        "line": 167,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agent",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "end-to-end verification",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-6600ea6b",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Multi-agent coordination is a second-quarter problem, not a first-week one.",
+    "evidence": {
+      "ref_id": "p085.s001",
+      "quote": "Multi-agent coordination is a second-quarter problem, not a first-week one.",
+      "location": {
+        "byte_start": 20180,
+        "byte_end": 20255,
+        "line": 263,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "Multi-agent coordination",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "first-week",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-fdd248ae",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "A meaningful share of your AI effort should go into improving the system around the model, not just consuming completions from the model.",
+    "evidence": {
+      "ref_id": "p088.s001",
+      "quote": "A meaningful share of your AI effort should go into improving the system around the model, not just consuming completions from the model.",
+      "location": {
+        "byte_start": 20432,
+        "byte_end": 20569,
+        "line": 269,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "AI effort",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "system around the model",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-015-de43b820",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "As models converge, the advantage moves up a layer, into your accumulated workflow, your verification loops, your linked decisions, your team memory, and the way you organize a team of agents.",
+    "evidence": {
+      "ref_id": "p095.s001",
+      "quote": "As they converge, the advantage moves up a layer, into your accumulated workflow, your verification loops, your linked decisions, your team memory, and the way you organize a team of agents.",
+      "location": {
+        "byte_start": 21519,
+        "byte_end": 21889,
+        "line": 281,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "models",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "advantage",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p094.s001`..`p095.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-016-547293a4",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Do the boring parts first. They compound the fastest.",
+    "evidence": {
+      "ref_id": "p082.s001",
+      "quote": "Do the boring parts first. They compound the fastest.",
+      "location": {
+        "byte_start": 19481,
+        "byte_end": 19584,
+        "line": 251,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "boring parts",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p081.s001`..`p082.s002` around the ref"
+      }
+    ]
+  },
+  {
+    "id": "u-017-521a7311",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Put your specs, plans, diagrams, and checklists in files the agent can read directly.",
+    "evidence": {
+      "ref_id": "p083.s001",
+      "quote": "Put your specs, plans, diagrams, and checklists in files the agent can read directly.",
+      "location": {
+        "byte_start": 19586,
+        "byte_end": 19673,
+        "line": 255,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "specs, plans, diagrams, and checklists",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-c15f5103",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Add one root instruction file and a small number of path-scoped rules.",
+    "evidence": {
+      "ref_id": "p083.s002",
+      "quote": "Add one root instruction file and a small number of path-scoped rules.",
+      "location": {
+        "byte_start": 19674,
+        "byte_end": 19746,
+        "line": 256,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "root instruction file",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "path-scoped rules",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-019-88aee88c",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Give the agent at least three capability tools: logs, tests, and browser or screenshot access.",
+    "evidence": {
+      "ref_id": "p083.s003",
+      "quote": "Give the agent at least three capability tools: logs, tests, and browser or screenshot access.",
+      "location": {
+        "byte_start": 19747,
+        "byte_end": 19843,
+        "line": 257,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "capability tools",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-020-b867be42",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Add approval gates for destructive, expensive, or shared-state actions, so capability and restraint grow together.",
+    "evidence": {
+      "ref_id": "p083.s004",
+      "quote": "Add approval gates for destructive, expensive, or shared-state actions, so capability and restraint grow together.",
+      "location": {
+        "byte_start": 19844,
+        "byte_end": 19960,
+        "line": 258,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "approval gates",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-021-3bcbd1a8",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Link tickets, docs, files, sessions, and commits so future runs can traverse prior work.",
+    "evidence": {
+      "ref_id": "p083.s005",
+      "quote": "Link tickets, docs, files, sessions, and commits so future runs can traverse prior work.",
+      "location": {
+        "byte_start": 19961,
+        "byte_end": 20051,
+        "line": 259,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "tickets, docs, files, sessions, and commits",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-022-42c83840",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Treat the harness as a product your team ships to itself.",
+    "evidence": {
+      "ref_id": "p087.s001",
+      "quote": "Treat the harness as a product your team ships to itself.",
+      "location": {
+        "byte_start": 20373,
+        "byte_end": 20430,
+        "line": 267,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-023-ef91d7d7",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Pick one shape of multi-agent coordination, even a simple one",
+    "evidence": {
+      "ref_id": "p089.s001",
+      "quote": "Pick one shape of multi-agent coordination, even a simple one",
+      "location": {
+        "byte_start": 20797,
+        "byte_end": 20982,
+        "line": 271,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "multi-agent coordination",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-024-2894ad78",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Pick a percentage of your AI effort that goes to the harness instead of feature work, protect it, and make sure every release cycle includes at least one improvement to one of the eight pillars.",
+    "evidence": {
+      "ref_id": "p090.s001",
+      "quote": "Pick a percentage of your AI effort that goes to the harness instead of feature work, protect it, and make sure every release cycle includes at least one improvement to one of the eight pillars.",
+      "location": {
+        "byte_start": 21052,
+        "byte_end": 21246,
+        "line": 273,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "AI effort",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "harness",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-025-6f1a27e1",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "You should own your harness: instructions, rules, tool definitions, links between work items, audit logs, reusable skills, and the way your sessions hand off to each other.",
+    "evidence": {
+      "ref_id": "p093.s001",
+      "quote": "You should own your harness: instructions, rules, tool definitions, links between work items, audit logs, reusable skills, and the way your sessions hand off to each other.",
+      "location": {
+        "byte_start": 21345,
+        "byte_end": 21517,
+        "line": 279,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-026-3759aac5",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Keep your harness portable across coding agents so your team can point a session at a new agent without rebuilding the workflow above it.",
+    "evidence": {
+      "ref_id": "p097.s001",
+      "quote": "Model competition is healthy, and you only benefit from it if your harness is portable.",
+      "location": {
+        "byte_start": 21940,
+        "byte_end": 22027,
+        "line": 287,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "coding agents",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-027-94fb5672",
+    "kind": "directive",
+    "subtype": "procedure_step",
+    "text": "The test we use: can you name a recurring failure of your agent that does not map to a pillar?",
+    "evidence": {
+      "ref_id": "p101.s003",
+      "quote": "The test we use: can you name a recurring failure of your agent that does not map to a pillar?",
+      "location": {
+        "byte_start": 22645,
+        "byte_end": 22740,
+        "line": 295,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "eight-pillar framework",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "recurring failures",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-028-8426b026",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "Use your own incident log as the source of truth when building your harness framework.",
+    "evidence": {
+      "ref_id": "p101.s007",
+      "quote": "Use your own incident log as the source of truth.",
+      "location": {
+        "byte_start": 22882,
+        "byte_end": 22932,
+        "line": 295,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "incident log",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-029-2852bb0d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The eight-pillar framework was arrived at by collapsing every recurring failure mode into the smallest set of pillars that named each one exactly once.",
+    "evidence": {
+      "ref_id": "p101.s001",
+      "quote": "The eight-pillar framework is one we arrived at by collapsing every recurring failure mode we hit into the smallest set of pillars that named each one exactly once.",
+      "location": {
+        "byte_start": 22461,
+        "byte_end": 22625,
+        "line": 295,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "eight-pillar framework",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "recurring failure modes",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-031-f118cb32",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The harness gets better every week without anyone setting aside a “harness sprint.”",
+    "evidence": {
+      "ref_id": "p077.s004",
+      "quote": "The harness gets better every week without anyone setting aside a “harness sprint.”",
+      "location": {
+        "byte_start": 19192,
+        "byte_end": 19280,
+        "line": 243,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "harness",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-032-163349be",
+    "kind": "assertion",
+    "text": "Your team owns the next layer up: the workspace where agents do product work alongside you, with your files, tasks, diagrams, diffs, and decisions.",
+    "evidence": {
+      "ref_id": "p008.s001",
+      "quote": "Your team owns the next layer up: the workspace where agents do product work alongside you, with your files, tasks, diagrams, diffs, and decisions.",
+      "location": {
+        "byte_start": 822,
+        "byte_end": 969,
+        "line": 43,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]

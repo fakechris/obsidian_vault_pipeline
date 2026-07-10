@@ -1,0 +1,596 @@
+[
+  {
+    "id": "u-000-b35eb3f3",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The attention ceiling becomes felt firsthand when juggling agents across several repos at once.",
+    "evidence": {
+      "ref_id": "p003.s002",
+      "quote": "When you're juggling agents across several repos at once, you feel the attention ceiling firsthand.",
+      "location": {
+        "byte_start": 317,
+        "byte_end": 417,
+        "line": 33,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "attention ceiling",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agents",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-001-98ede664",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "I still think it falls apart in practice, because the hierarchy in the UI is lacking, so its actually hard to know where to focus",
+    "evidence": {
+      "ref_id": "p007.s001",
+      "quote": "I still think it falls apart in practice, because the hierarchy in the UI is lacking, so its actually hard to know where to focus",
+      "location": {
+        "byte_start": 636,
+        "byte_end": 766,
+        "line": 41,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "PostHog Code grid UI",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "focus",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-002-eae8860e",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Inboxes are better than nothing but they don't resolve by themselves and require a lot of work to get to inbox zero.",
+    "evidence": {
+      "ref_id": "p010.s002",
+      "quote": "Inboxes are better than nothing, but we all know they don't resolve by themselves and need a lot of work to get to inbox zero",
+      "location": {
+        "byte_start": 949,
+        "byte_end": 1076,
+        "line": 47,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "Inboxes",
+        "role": "subject",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-003-281b574d",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The bottleneck when running multiple agents is our own attention and sensory throughput, meaning we cannot cheat our biology.",
+    "evidence": {
+      "ref_id": "p013.s001",
+      "quote": "The main realisation I've had is that with running multiple agents is we cannot cheat our biology; the bottleneck is our own attention and sensory throughput.",
+      "location": {
+        "byte_start": 1161,
+        "byte_end": 1323,
+        "line": 53,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "attention",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "sensory throughput",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-004-f0d24d1b",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Ambient background automation is the only type of work that fits \"set and forget\" with agents, where people don't want to do the work and also don't care about having oversight over it.",
+    "evidence": {
+      "ref_id": "p014.s001",
+      "quote": "I argued a few weeks ago that only one type of work falls into the bucket of \"set and forget\" with agents - the ambient background automation - where people don't want to do the work, and also don't care about having oversight over it",
+      "location": {
+        "byte_start": 1325,
+        "byte_end": 1560,
+        "line": 55,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "ambient background automation",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "set and forget",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-005-8bd9d815",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Most of the current and future agent work lives in the quadrant of exceptions and approvals that require human attention.",
+    "evidence": {
+      "ref_id": "p016.s001",
+      "quote": "Most of the stuff we deal with today with agents lives and will probably continue to live in that top-right quadrant of exceptions and approvals.",
+      "location": {
+        "byte_start": 1639,
+        "byte_end": 1784,
+        "line": 59,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "exceptions and approvals",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent work",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-006-45761d01",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "For example, it matters how far each thing is from the arrival point, which is helpful in prioritising your attention (and prioritising attention is the name of the game).",
+    "evidence": {
+      "ref_id": "p021.s001",
+      "quote": "For example, it matters how far each thing is from the arrival point, which is helpful in prioritising your attention (and prioritising attention is the name of the game).",
+      "location": {
+        "byte_start": 2275,
+        "byte_end": 2446,
+        "line": 69,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "arrival point distance",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "attention prioritization",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-007-44700cb2",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "If an agent is just spinning up their plan but another agent is wrapping up, you can relax about the one that's planning and focus on the one that's finishing.",
+    "evidence": {
+      "ref_id": "p028.s002",
+      "quote": "If an agent's just spinning up their plan, but another agent is wrapping up, you can relax about the one that's planning and focus on the one that's finishing.",
+      "location": {
+        "byte_start": 2893,
+        "byte_end": 3053,
+        "line": 83,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "agent planning status",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "attention focus",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "2 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-008-95815c3a",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "The triage approach to queues works because there is less data to look at and eyes don't have to dart between options to decide how to think about that data.",
+    "evidence": {
+      "ref_id": "p031.s001",
+      "quote": "It's really all about attention, and in this case, there's just less \"data\" to look at, and your eyes are not having to dart between options to decide how to think about that data.",
+      "location": {
+        "byte_start": 3362,
+        "byte_end": 3542,
+        "line": 89,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "triage",
+        "role": "subject",
+        "locatable": false
+      },
+      {
+        "surface": "attention",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-009-c59e23bb",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "The UI should serve appropriately sized chunks of input based on whether you are in focus or have little capacity to give, such as not showing a 1000-line PR when the user is occupied.",
+    "evidence": {
+      "ref_id": "p033.s001",
+      "quote": "don't tell me about a 1000-line PR if I'm taking care of a baby, I'm not going to do a good job reviewing it",
+      "location": {
+        "byte_start": 3362,
+        "byte_end": 3956,
+        "line": 89,
+        "match_kind": "rendered_window"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "1000-line PR",
+        "role": "object",
+        "locatable": true
+      },
+      {
+        "surface": "busy user",
+        "role": "topic",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.spans_window",
+        "detail": "quote spans a window `p031.s001`..`p033.s003` around the ref"
+      },
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-010-26bf2845",
+    "kind": "assertion",
+    "subtype": "definition",
+    "text": "Lieutenants are agent orchestrators that look after several sessions and report the most important things, with the key insight being that orchestrators should own more than just a bunch of subagents.",
+    "evidence": {
+      "ref_id": "p040.s001",
+      "quote": "Or this idea of \"lieutenants\" (agent orchestrators) looking after several sessions and reporting the most important things (the UI is less interesting, it's the idea of orchestrators owning more than just a bunch of subagents)",
+      "location": {
+        "byte_start": 4617,
+        "byte_end": 4844,
+        "line": 107,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "lieutenants",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agent orchestrators",
+        "role": "topic",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-011-43016fc5",
+    "kind": "directive",
+    "subtype": "recommendation",
+    "text": "The goal in agent UI design is not to find \"the right UI\" but to find a provocation that triggers lateral ideas.",
+    "evidence": {
+      "ref_id": "p037.s001",
+      "quote": "but that's the whole point here is not to find \"the right UI\" - it's to find a provocation that triggers lateral ideas.",
+      "location": {
+        "byte_start": 4157,
+        "byte_end": 4394,
+        "line": 101,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "agent UI design",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-012-297dfe9d",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "The common \"sidebar with the main list view/one textbox for input\" pattern is waiting to be replaced by a better solution.",
+    "evidence": {
+      "ref_id": "p046.s002",
+      "quote": "The common \"sidebar with the main list view/one textbox for input\" is waiting to be replaced.",
+      "location": {
+        "byte_start": 5516,
+        "byte_end": 5610,
+        "line": 119,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [
+      {
+        "surface": "sidebar with main list view/one textbox for input",
+        "role": "subject",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-013-279a6747",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "It will only take one player to find which problem to solve for a new sticky pattern to emerge in agentic products.",
+    "evidence": {
+      "ref_id": "p046.s001",
+      "quote": "Going back to PostHog Code, and a whole bunch of other agentic products, it feels like it will only take one player to find which gordian knot to cut, for a new sticky pattern to emerge.",
+      "location": {
+        "byte_start": 5330,
+        "byte_end": 5516,
+        "line": 119,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "suggested",
+    "arguments": [
+      {
+        "surface": "new sticky pattern",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "agentic products",
+        "role": "object",
+        "locatable": true
+      }
+    ],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-014-5a43c0ca",
+    "kind": "assertion",
+    "subtype": "observation",
+    "text": "Ranking agents via silence as a proxy for which ones might be stuck is being explored, but the jury is still out on its effectiveness.",
+    "evidence": {
+      "ref_id": "p044.s001",
+      "quote": "I think I stopped at this final one, ranking agents via silence as a proxy for which ones might be stuck - because the jury is still out",
+      "location": {
+        "byte_start": 5114,
+        "byte_end": 5251,
+        "line": 115,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "uncertain",
+    "arguments": [
+      {
+        "surface": "ranking agents via silence",
+        "role": "subject",
+        "locatable": true
+      },
+      {
+        "surface": "stuck agents",
+        "role": "object",
+        "locatable": false
+      }
+    ],
+    "status": "accepted",
+    "issues": [
+      {
+        "code": "unit.argument_drift_advisory",
+        "detail": "1 argument(s) not found in the quote/span — advisory only"
+      }
+    ]
+  },
+  {
+    "id": "u-015-27845bf2",
+    "kind": "assertion",
+    "text": "I firmly believe that every article, every non-fiction book must now come with a prototype + skills for whatever it's trying to teach and communicate.",
+    "evidence": {
+      "ref_id": "p049.s001",
+      "quote": "I firmly believe that every article, every non-fiction book must now come with a prototype + skills for whatever it's trying to teach and communicate.",
+      "location": {
+        "byte_start": 5699,
+        "byte_end": 5851,
+        "line": 125,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-016-2340f2a0",
+    "kind": "assertion",
+    "text": "I can imagine this being a dynamic island that calls your attention when an agent needs input",
+    "evidence": {
+      "ref_id": "p038.s002",
+      "quote": "I can imagine this being a dynamic island that calls your attention when an agent needs input",
+      "location": {
+        "byte_start": 4443,
+        "byte_end": 4538,
+        "line": 103,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-017-5f940644",
+    "kind": "assertion",
+    "text": "The main downside is that it feels slow and if something needs more attention, then it's possible to go down the rabbit hole very easily even in this case.",
+    "evidence": {
+      "ref_id": "p032.s001",
+      "quote": "The main downside is that it feels slow and if something needs more attention, then it's possible to go down the rabbit hole very easily even in this case.",
+      "location": {
+        "byte_start": 3544,
+        "byte_end": 3699,
+        "line": 91,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  },
+  {
+    "id": "u-018-8331f90b",
+    "kind": "assertion",
+    "text": "Borrowing from Basecamp, even their Hill chart might get too noisy",
+    "evidence": {
+      "ref_id": "p026.s001",
+      "quote": "Borrowing from Basecamp, even their Hill chart might get too noisy",
+      "location": {
+        "byte_start": 2708,
+        "byte_end": 2775,
+        "line": 79,
+        "match_kind": "exact"
+      }
+    },
+    "attribution": "author",
+    "modality": "asserted",
+    "arguments": [],
+    "status": "accepted",
+    "issues": []
+  }
+]
