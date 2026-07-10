@@ -327,6 +327,16 @@ fn centroid_titles(docs: &[ThemeDoc], vectors: &[Vec<f32>], members: &[usize]) -
 }
 
 pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
+    // Non-finite params would cluster meaninglessly AND serialize to JSON
+    // null, making the written themes.json unloadable on the next index or
+    // synth run (codex review P2) — fail loud before touching anything.
+    if !args.cosine_threshold.is_finite() || !args.resolution.is_finite() {
+        return Err(CliError::Io(format!(
+            "crystal-themes: --cosine-threshold and --resolution must be finite numbers \
+             (got {} / {})",
+            args.cosine_threshold, args.resolution
+        )));
+    }
     let layout = VaultLayout::new();
     let reader_root = args.vault_root.join(layout.reader_root());
     let store = args.vault_root.join(layout.crystal_store_dir());
