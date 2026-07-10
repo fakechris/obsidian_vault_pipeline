@@ -285,6 +285,18 @@ M26 workbench 重判、双评审模型家族。
 
 ## Stage 5: Level-3 go/no-go + merge 回 main（全部依赖，~07-15 之后）
 
+> **GO — 2026-07-10（operator 决定，含两项书面豁免）**
+>
+> | # | Exit criterion | 状态 |
+> |---|---|---|
+> | 1 | 全量 corpus run 无 backlog | ✅ 1012 attempted / 994 ok；当前 211 queued 为 07-09 新入 pinboard 书签（滚动产品队列，非欠账） |
+> | 2 | 失败源全部分类/waive | ✅ docs/stage-m32-corpus-triage.md；operator 以 merge 决定签收其余 waiver |
+> | 3 | 全库 crystallize + 幂等 | ✅ 329 durable / replay 重跑 0 新增 |
+> | 4 | KMEM AB recorded verdict | ✅ docs/stage-m32-ab-real-sample.md；补跑项 operator 豁免 |
+> | 5 | ≥14 天 dogfood | ⚠ **WAIVED**（operator 2026-07-10）：5 天（07-06..07-10）全部成功、0 Python 回退，产品走查通过后 operator 决定不再等满 14 天 |
+> | 6 | 数据无丢失 | ✅ merge 不删除任何文件；vault md 原样；`60-Logs/knowledge.db` 实为 381MB（非计划假设的 0-byte）——按 Python 架构契约为可重建投影，原样留盘，doctor 标记为 legacy 产物待 operator 验证后自行处置 |
+> | #0 | 产品原型走查 | ✅ operator 2026-07-10 走查通过（"看起来可以，没有太大的问题"） |
+
 **Goal**: 按 M32 §3 六条 exit criteria 逐条验收，通过则执行 merge（= Python 正式退役）。
 **Go/no-go 清单**（六条全绿才 merge）:
 - [ ] 全量 corpus run 完成，无 backlog（Stage 2）

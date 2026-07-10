@@ -27,7 +27,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.23.0"
+version = "2.0.0"
 edition = "2024"
 # 1.88 = the floor of the `embed` dep tree (ort 2.0.0-rc.12 / time 0.3.53),
 # which release builds enable (dist-workspace.toml `features`). Nothing pins an

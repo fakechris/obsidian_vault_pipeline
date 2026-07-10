@@ -7,18 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+Nothing yet.
 
-- Semantic themes (LLM-grouped theme projection over Crystal claims) — in
-  progress.
-- `ovp2 doctor` now reports Python-era OVP artifacts left in a vault
-  (`60-Logs/knowledge.db`, legacy logs, old `.ovp/*.yaml` configs) as
-  informational findings with migration guidance.
+## [2.0.0] - 2026-07-10
+
+**OVP2 replaces OVP.** This release marks the merge of the Rust rewrite to
+`main` and the retirement of the Python pipeline. See
+[docs/ovp-to-ovp2.md](docs/ovp-to-ovp2.md) for the full story, key decisions,
+and migration guide. The final Python line is preserved frozen on the
+`legacy/python-main` branch (tag `legacy-python-final`).
+
+### Added
+- Semantic theme system: local multilingual embeddings (fastembed, pinned
+  paraphrase-multilingual-MiniLM) + deterministic Louvain communities +
+  c-TF-IDF keywords + optional LLM bilingual naming — replaces the hardcoded
+  keyword buckets; themes are a rebuildable projection (`.ovp/crystal/themes.json`).
+- `ovp2 crystal-themes` command; `embed` cargo feature (shipped in prebuilt
+  binaries); one-time model download with offline degradation to Unclassified.
+- `ovp2 doctor` legacy-artifact check (Python-era files reported as INFO with
+  migration guidance).
+- Dual license (MIT OR Apache-2.0), privacy & trust documentation, issue
+  templates, downgrade/rollback instructions.
 
 ### Changed
-
-- Relicensed from MIT to dual **MIT OR Apache-2.0** (`LICENSE-MIT`,
-  `LICENSE-APACHE`). Vendored IBM Plex fonts remain under the SIL OFL 1.1.
+- Crystal-synth batching groups by semantic community (date-ordered fallback);
+  the 8 hardcoded keyword buckets are deleted.
+- Review-session defer triggers key on stable community identity, never
+  display labels.
+- MSRV raised to 1.88 (embed dependency tree).
 
 ## [0.23.0] - 2026-07-10
 

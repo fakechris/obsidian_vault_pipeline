@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-app"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-auto"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-cli"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "clap",
  "ovp-app",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-console"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-core"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-core",
  "serde",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-daily"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "ovp-intake",
@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-domain"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-embed"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "fastembed",
  "serde",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-enrich"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "reqwest",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-eval"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-evolve"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1505,7 +1505,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-index"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-daily",
  "ovp-domain",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-intake"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "reqwest",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-lint"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-llm"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-mcp"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-memory"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-query"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-rag"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-review"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-run"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-server"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -1652,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-stores"
-version = "0.23.0"
+version = "2.0.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
