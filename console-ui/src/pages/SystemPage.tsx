@@ -98,7 +98,9 @@ function SurfacesSection() {
     let cancelled = false;
     Promise.all(
       ADMIN_PAGES.map((page) =>
-        fetch(`/${page}`, { method: 'HEAD' })
+        // GET, not HEAD: the server routes only GET to the static resolver
+        // (HEAD answers 405), and these pages are small.
+        fetch(`/${page}`, { method: 'GET', cache: 'no-store' })
           .then((r) => (r.ok ? page : null))
           .catch(() => null),
       ),
