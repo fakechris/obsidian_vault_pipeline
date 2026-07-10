@@ -7,6 +7,21 @@ date: 2026-04-07
 type: meta
 ---
 
+> ⚠️ **Frozen legacy line.** This branch preserves the final Python OVP
+> (v0.22.0 lineage, PyPI 0.21.0). It is **frozen — no further fixes or
+> releases**. Active development is the Rust **ovp2** on `main` (see
+> docs/ovp-to-ovp2.md there for what changed and how to migrate — your vault
+> markdown works with both). Stay on legacy:
+> `pip install obsidian-vault-pipeline==0.21.0` or use this branch; tag
+> `legacy-python-final` marks this exact state.
+>
+> ⚠️ **冻结的遗留版本线。** 本分支保存 Python 版 OVP 的最终状态（v0.22.0
+> 谱系，PyPI 0.21.0）。它已经**冻结——不再有任何修复或发布**。后续开发是
+> `main` 分支上的 Rust 版 **ovp2**（改了什么、如何迁移见该分支的
+> docs/ovp-to-ovp2.md——你的 vault markdown 两个版本都能用）。想留在
+> 遗留版：`pip install obsidian-vault-pipeline==0.21.0` 或直接使用本分支；
+> tag `legacy-python-final` 标记的就是当前这个状态。
+
 # Obsidian Vault Pipeline
 
 <div align="center">
