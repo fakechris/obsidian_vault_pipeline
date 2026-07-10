@@ -491,9 +491,11 @@ enum PrefixHit {
 /// source md now living under `50-Inbox/03-Processed/` (raw inbox as
 /// fallback). Hash the candidate files ONCE per build, join by prefix, and
 /// synthesize a Processed SourceRow when the ledgers know nothing about the
-/// hash. A synthesized row is recognizable by construction: `last_run_id`
-/// is None (every ledger-derived row has one) and `pack_dir` points at the
-/// corpus pack it was derived from.
+/// hash. When the raw-inbox SCAN already made a queued row for the same
+/// bytes (file still in 01-Raw, no ledger record), that row is promoted to
+/// processed instead of duplicated. Backfilled rows are recognizable by
+/// construction: `last_run_id` is None (every ledger-derived row has one)
+/// and `pack_dir` points at the corpus pack they were joined to.
 fn backfill_corpus_packs(
     vault_root: &Path,
     layout: &VaultLayout,
@@ -511,9 +513,12 @@ fn backfill_corpus_packs(
     }
 
     let by_prefix = hash_candidate_files(vault_root, layout)?;
-    let mut known: std::collections::HashSet<String> =
-        sources.iter().map(|s| s.sha256.clone()).collect();
-    let mut appended = false;
+    let mut by_sha: HashMap<String, usize> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.sha256.clone(), i))
+        .collect();
+    let mut changed = false;
     for i in unjoined {
         let Some(prefix) = corpus_hash8(&packs[i].pack_dir) else {
             continue;
@@ -522,25 +527,50 @@ fn backfill_corpus_packs(
             continue; // no candidate file, or an ambiguous prefix — never guess
         };
         packs[i].source_sha256 = Some(sha256.clone());
-        if known.insert(sha256.clone()) {
-            sources.push(SourceRow {
-                sha256: sha256.clone(),
-                status: SourceStatus::Processed,
-                title: Some(packs[i].title.clone()),
-                url: None,
-                rel_path: Some(rel_path.clone()),
-                date: corpus_date(&packs[i].pack_dir),
-                last_run_id: None, // no ledger record — the backfill provenance marker
-                pack_dir: Some(packs[i].pack_dir.clone()),
-                fail_count: 0,
-                last_reason: None,
-            });
-            appended = true;
+        match by_sha.get(sha256).copied() {
+            None => {
+                sources.push(SourceRow {
+                    sha256: sha256.clone(),
+                    status: SourceStatus::Processed,
+                    title: Some(packs[i].title.clone()),
+                    url: None,
+                    rel_path: Some(rel_path.clone()),
+                    date: corpus_date(&packs[i].pack_dir),
+                    last_run_id: None, // no ledger record — the backfill provenance marker
+                    pack_dir: Some(packs[i].pack_dir.clone()),
+                    fail_count: 0,
+                    last_reason: None,
+                });
+                by_sha.insert(sha256.clone(), sources.len() - 1);
+                changed = true;
+            }
+            Some(at) => {
+                // A raw-scan row (queued, no run id) is this same corpus file
+                // seen by the 01-Raw sweep — promote it to processed rather
+                // than leaving a pack-linked source stuck in the queue (its
+                // corpus case would otherwise be underivable). Ledger-derived
+                // rows (any last_run_id) stay untouched: the ledgers are the
+                // authority on lifecycle.
+                let row = &mut sources[at];
+                if row.last_run_id.is_none() && row.status == SourceStatus::Queued {
+                    row.status = SourceStatus::Processed;
+                    row.pack_dir = Some(packs[i].pack_dir.clone());
+                    // Preference rules: frontmatter title/url read by the raw
+                    // scan are richer than pack metadata — keep them and fill
+                    // only the gaps from the pack; rel_path stays (it points
+                    // at the bytes that were actually hashed).
+                    if row.title.is_none() {
+                        row.title = Some(packs[i].title.clone());
+                    }
+                    if row.date.is_none() {
+                        row.date = corpus_date(&packs[i].pack_dir);
+                    }
+                    changed = true;
+                }
+            }
         }
-        // Hash already known from a ledger: join the pack only, never touch
-        // the ledger-derived row.
     }
-    if appended {
+    if changed {
         sort_sources(sources);
     }
     Ok(())
