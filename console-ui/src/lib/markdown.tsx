@@ -182,18 +182,52 @@ export function safeLinkHref(url: string): string | null {
 const INLINE =
   /(!\[[^\]]*\]\([^)]*\))|(\[[^\]]+\]\([^)]*\))|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)/;
 
+/** Marker hook for the inline pass: plain-text runs are additionally split
+ * on `pattern` (which MUST carry the `g` flag) and each match is handed to
+ * `render`. Returning null leaves the token as plain text. The hook only
+ * ever produces React elements from the caller — matched source text still
+ * never becomes markup, so the XSS story is unchanged. Used by the Ask page
+ * to turn `[kind:id]` citations into live markers inside markdown. */
+export interface InlineMarker {
+  pattern: RegExp;
+  render: (match: RegExpMatchArray, key: string) => ReactNode | null;
+}
+
 /** Source text → React nodes. Text stays text nodes (React escapes it). */
-export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
+export function renderInline(
+  text: string,
+  keyPrefix = 'i',
+  marker?: InlineMarker,
+): ReactNode[] {
   const out: ReactNode[] = [];
   let rest = text;
   let k = 0;
+  const pushPlain = (chunk: string) => {
+    if (chunk === '') return;
+    if (!marker) {
+      out.push(chunk);
+      return;
+    }
+    let last = 0;
+    // matchAll clones the regex — the shared pattern's lastIndex is safe.
+    for (const m of chunk.matchAll(marker.pattern)) {
+      const at = m.index ?? 0;
+      const node = marker.render(m, `${keyPrefix}-mk${k}`);
+      if (node == null) continue;
+      if (at > last) out.push(chunk.slice(last, at));
+      out.push(node);
+      k += 1;
+      last = at + m[0].length;
+    }
+    if (last < chunk.length) out.push(chunk.slice(last));
+  };
   while (rest.length > 0) {
     const m = INLINE.exec(rest);
     if (!m || m.index === undefined) {
-      out.push(rest);
+      pushPlain(rest);
       break;
     }
-    if (m.index > 0) out.push(rest.slice(0, m.index));
+    if (m.index > 0) pushPlain(rest.slice(0, m.index));
     const token = m[0];
     const key = `${keyPrefix}-${k}`;
     k += 1;
@@ -213,7 +247,7 @@ export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
       if (href) {
         out.push(
           <a key={key} href={href} target="_blank" rel="noreferrer">
-            {renderInline(label, key)}
+            {renderInline(label, key, marker)}
           </a>,
         );
       } else {
@@ -223,10 +257,12 @@ export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
       out.push(<code key={key}>{token.slice(1, -1)}</code>);
     } else if (m[4]) {
       out.push(
-        <strong key={key}>{renderInline(token.slice(2, -2), key)}</strong>,
+        <strong key={key}>{renderInline(token.slice(2, -2), key, marker)}</strong>,
       );
     } else {
-      out.push(<em key={key}>{renderInline(token.slice(1, -1), key)}</em>);
+      out.push(
+        <em key={key}>{renderInline(token.slice(1, -1), key, marker)}</em>,
+      );
     }
     rest = rest.slice(m.index + token.length);
   }
@@ -235,10 +271,10 @@ export function renderInline(text: string, keyPrefix = 'i'): ReactNode[] {
 
 // ---------------------------------------------------------------- renderer
 
-function blockBody(block: MdBlock, key: string): ReactNode {
+function blockBody(block: MdBlock, key: string, marker?: InlineMarker): ReactNode {
   switch (block.kind) {
     case 'heading': {
-      const inner = renderInline(block.text, key);
+      const inner = renderInline(block.text, key, marker);
       // Page structure owns h1; source headings start at h2 (v1 parity).
       if (block.level === 1) return <h2>{inner}</h2>;
       if (block.level === 2) return <h3>{inner}</h3>;
@@ -250,7 +286,7 @@ function blockBody(block: MdBlock, key: string): ReactNode {
           {block.lines.map((l, n) => (
             <span key={`${key}-l${n}`}>
               {n > 0 && <br />}
-              {renderInline(l, `${key}-l${n}`)}
+              {renderInline(l, `${key}-l${n}`, marker)}
             </span>
           ))}
         </p>
@@ -267,14 +303,16 @@ function blockBody(block: MdBlock, key: string): ReactNode {
           {block.lines.map((l, n) => (
             <span key={`${key}-q${n}`}>
               {n > 0 && <br />}
-              {renderInline(l, `${key}-q${n}`)}
+              {renderInline(l, `${key}-q${n}`, marker)}
             </span>
           ))}
         </blockquote>
       );
     case 'list': {
       const items = block.items.map((it, n) => (
-        <li key={`${key}-it${n}`}>{renderInline(it.text, `${key}-it${n}`)}</li>
+        <li key={`${key}-it${n}`}>
+          {renderInline(it.text, `${key}-it${n}`, marker)}
+        </li>
       ));
       return block.ordered ? <ol>{items}</ol> : <ul>{items}</ul>;
     }
@@ -295,6 +333,11 @@ export interface MarkdownViewProps {
   anchoredLines?: ReadonlySet<number>;
   /** Line to scroll to and highlight (set when a unit anchor is clicked). */
   highlightLine?: number | null;
+  /** False hides the line-number gutter column (chat answers — no source
+   * lines to anchor to). Default true: the source reading view. */
+  gutter?: boolean;
+  /** Inline marker hook — see InlineMarker (Ask citation markers). */
+  marker?: InlineMarker;
 }
 
 /** The ~720px-measure reading view with a line-number gutter. Blocks whose
@@ -304,6 +347,8 @@ export function MarkdownView({
   markdown,
   anchoredLines,
   highlightLine,
+  gutter = true,
+  marker,
 }: MarkdownViewProps) {
   // Parsing walks the whole document — memoize per markdown string so
   // unrelated re-renders (highlight changes, anchor sets) don't re-parse.
@@ -325,7 +370,7 @@ export function MarkdownView({
   }, [highlightLine, markdown]);
 
   return (
-    <div className="md-preview">
+    <div className={`md-preview${gutter ? '' : ' no-gut'}`}>
       {blocks.map((b, idx) => {
         const anchor = anchoredLines
           ? [...anchoredLines].find((l) => b.line <= l && l <= b.end)
@@ -344,8 +389,10 @@ export function MarkdownView({
               else rowRefs.current.delete(idx);
             }}
           >
-            <span className="gut">{anchor != null ? `L${anchor}` : ''}</span>
-            <div className="md-block">{blockBody(b, `b${b.line}`)}</div>
+            {gutter && (
+              <span className="gut">{anchor != null ? `L${anchor}` : ''}</span>
+            )}
+            <div className="md-block">{blockBody(b, `b${b.line}`, marker)}</div>
           </div>
         );
       })}
