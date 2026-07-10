@@ -109,7 +109,7 @@ pub fn build_grounding_index(packs_dir: &std::path::Path) -> Result<GroundingInd
     Ok(index)
 }
 
-fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
+pub(crate) fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
     if !path.exists() {
         return Ok(Vec::new());
     }

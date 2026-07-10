@@ -39,6 +39,17 @@ use crate::commands::{console_cmd, index_cmd};
 
 pub(crate) const MAX_STRENGTH_CLAIMS_PER_CALL: usize = 20;
 
+/// How synthesis inputs are grouped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterMode {
+    /// Deterministic ≤cap batches over themes.json communities (or date
+    /// order). The default — current behavior, byte-for-byte unchanged.
+    Batch,
+    /// L3 coverage-first sweep: `cluster_select/v1` proposes one cross-source
+    /// cluster per uncovered seed (or refuses). Needs cached embeddings.
+    Llm,
+}
+
 pub struct CrystalSynthArgs {
     pub reader_dir: Option<PathBuf>,
     pub vault_root: Option<PathBuf>,
@@ -67,16 +78,25 @@ pub struct CrystalSynthArgs {
     /// from synthesis). Default false — overflow is warned + recorded in
     /// warnings.json and the run proceeds on the capped slice.
     pub strict_cluster_cap: bool,
+    /// Batch (default) or the L3 LLM cluster-selection sweep.
+    pub cluster_mode: ClusterMode,
+    /// llm mode: per-run budget cap on `cluster_select/v1` calls.
+    pub max_seeds: usize,
+    /// llm mode: kNN neighborhood size offered alongside each seed.
+    pub neighborhood: usize,
+    /// llm mode: embedding cache root. Default:
+    /// `<vault-root>/.ovp/cache/embeddings` — required (flag or vault root).
+    pub embed_cache_dir: Option<PathBuf>,
 }
 
 /// Resolved paths after applying `--vault-root` precedence.
-struct Resolved {
-    reader_dir: PathBuf,
-    store: PathBuf,
-    cache_dir: PathBuf,
+pub(crate) struct Resolved {
+    pub(crate) reader_dir: PathBuf,
+    pub(crate) store: PathBuf,
+    pub(crate) cache_dir: PathBuf,
 }
 
-fn resolve_paths(args: &CrystalSynthArgs) -> Resolved {
+pub(crate) fn resolve_paths(args: &CrystalSynthArgs) -> Resolved {
     let layout = VaultLayout::new();
     let reader_dir = args
         .reader_dir
@@ -180,7 +200,58 @@ pub(crate) fn call_and_parse<T>(
     }
 }
 
+/// Per-run counters. `run` discards them; the L3 A/B experiment harness
+/// consumes them to build its comparison table.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub(crate) struct RunStats {
+    pub mode: String,
+    pub synthesized: usize,
+    pub grounded: usize,
+    pub select_calls: usize,
+    pub synth_calls: usize,
+    pub strength_calls: usize,
+    pub refused: usize,
+    pub guarded: usize,
+    pub failed_seeds: usize,
+    pub durable_considered: usize,
+    pub durable_appended: usize,
+    pub review: usize,
+    /// Distinct-source count of each durable-routed claim (A/B metric).
+    pub durable_distinct_sources: Vec<usize>,
+    pub uncovered_before: Option<usize>,
+    pub uncovered_after: Option<usize>,
+}
+
+/// Distinct-source counts of the claims that route Durable (deterministic
+/// read-only preview over the SAME gate functions the write path uses).
+fn durable_source_counts(
+    grounded: &CrystalCandidate,
+    index: &ovp_domain::crystal::GroundingIndex,
+    verdicts: &[ClaimStrengthVerdict],
+) -> Vec<usize> {
+    use ovp_domain::crystal::{FinalClass, final_routing, lint_candidate, score_candidate};
+    let report = lint_candidate(grounded, index);
+    let scores = score_candidate(&report);
+    let mut out = Vec::new();
+    for item in &grounded.items {
+        let Some(score) = scores.iter().find(|s| s.claim_id == item.id) else {
+            continue;
+        };
+        let verdict = verdicts.iter().find(|v| v.claim_id == item.id);
+        if final_routing(score.class, verdict) == FinalClass::Durable
+            && let Some(lint) = report.claims.iter().find(|c| c.claim_id == item.id)
+        {
+            out.push(lint.distinct_sources);
+        }
+    }
+    out
+}
+
 pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
+    run_stats(args).map(|_| ())
+}
+
+pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // Validate --refresh prerequisites BEFORE any model calls or store writes,
     // so an invalid flag combination can never partially mutate the ledger.
     if args.refresh && (args.vault_root.is_none() || args.date.is_none()) {
@@ -197,6 +268,25 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         return Err(CliError::Gate(
             "crystal-synth: --max-units-per-case must be greater than 0".into(),
         ));
+    }
+    if args.cluster_mode == ClusterMode::Llm {
+        if args.max_seeds == 0 {
+            return Err(CliError::Gate(
+                "crystal-synth: --max-seeds must be greater than 0 in llm cluster mode".into(),
+            ));
+        }
+        if args.neighborhood == 0 {
+            return Err(CliError::Gate(
+                "crystal-synth: --neighborhood must be greater than 0 in llm cluster mode".into(),
+            ));
+        }
+        if args.embed_cache_dir.is_none() && args.vault_root.is_none() {
+            return Err(CliError::Io(
+                "crystal-synth: llm cluster mode needs an embedding cache — pass \
+                 --vault-root (uses <vault>/.ovp/cache/embeddings) or --embed-cache-dir"
+                    .into(),
+            ));
+        }
     }
     let paths = resolve_paths(&args);
     std::fs::create_dir_all(&args.work_dir).map_err(|e| {
@@ -226,22 +316,10 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         Some(p) => ThemesFile::load(p).map_err(|e| CliError::Io(format!("crystal-synth: {e}")))?,
         None => None,
     };
-    let clusters = match &themes {
-        Some(t) => clusters_from_themes(&catalog, t),
-        None => {
-            eprintln!(
-                "crystal-synth: no semantic themes available — run `ovp2 crystal-themes` \
-                 (falling back to deterministic date-ordered batches)"
-            );
-            clusters_date_ordered(&catalog, args.max_cases_per_cluster)
-        }
-    };
 
-    // Surface degraded inputs BEFORE any model call: (1) cases whose title fell
+    // Surface degraded inputs BEFORE any model call: cases whose title fell
     // back to the directory name (no reader.md heading / run-status source) —
-    // embedding text + theme labels degrade; (2) clusters larger than the cap.
-    // Stage 3a no longer excludes the overflow; it records deterministic
-    // sub-batches so full coverage is auditably preserved.
+    // embedding text + theme labels degrade (both modes read titles).
     let fallback_title_cases: Vec<String> = catalog
         .cases
         .iter()
@@ -256,122 +334,257 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
             fallback_title_cases.join(", ")
         );
     }
-    let mut cluster_batching: Vec<serde_json::Value> = Vec::new();
-    for cluster in &clusters {
-        if cluster.cases.len() > args.max_cases_per_cluster {
-            let batches = cluster.cases.len().div_ceil(args.max_cases_per_cluster);
-            eprintln!(
-                "crystal-synth: WARNING: cluster `{}` has {} case(s) but the cap is {} — \
-                 Stage 3a will synthesize all cases across {} deterministic batch(es)",
-                cluster.key,
-                cluster.cases.len(),
-                args.max_cases_per_cluster,
-                batches
-            );
-            cluster_batching.push(serde_json::json!({
-                "cluster": cluster.key,
-                "cases": cluster.cases.len(),
-                "cap": args.max_cases_per_cluster,
-                "batches": batches,
-                "mode": "split_all_cases",
-            }));
-        }
-    }
-    let batches = cluster_batches(&clusters, args.max_cases_per_cluster);
-    // Always written (empty on a clean run), so a rerun in the same work dir
-    // can never leave a stale warning report behind.
-    write_json(
-        &args.work_dir.join("warnings.json"),
-        &serde_json::json!({
-            "fallback_title_cases": fallback_title_cases,
-            "cluster_cap_overflow": [],
-            "cluster_batching": cluster_batching,
-        }),
-    )?;
-    // Stage 3a interprets the strict cap as a per-request invariant, not a
-    // cluster-size gate: every synthesized batch must stay within the cap.
-    if args.strict_cluster_cap
-        && batches
-            .iter()
-            .any(|b| b.cases.len() > args.max_cases_per_cluster)
-    {
-        return Err(CliError::Gate(
-            "crystal-synth: internal error: synthesized batch exceeds strict cluster cap".into(),
-        ));
-    }
-    write_json(&args.work_dir.join("synth-batches.json"), &batches)?;
 
-    // (c) Per-batch cross-source synthesis (model, cassette-replayable). -----
+    // Grounding index over the canonical packs dir — shared by the grounded
+    // filter (both modes) and the L3 routing preview.
+    let index = synth_build_index(&packs_dir).map_err(synth_err)?;
     let mut base = build_client(args.client_kind, &paths.cache_dir)?;
     let mut repairs: Vec<RepairLog> = Vec::new();
-    let mut all_claims: Vec<CrystalClaim> = Vec::new();
-    for batch in &batches {
-        let req = crystal_synth_batch_request(&catalog, batch, args.max_units_per_case);
-        let (claims, log): (Vec<CrystalClaim>, Option<RepairLog>) =
-            call_and_parse(base.as_mut(), &req, "synth", |t| {
-                parse_synth_claims(t, &batch.claim_prefix())
-            })?;
-        if let Some(l) = log {
-            repairs.push(l);
+    let mut stats = RunStats {
+        mode: match args.cluster_mode {
+            ClusterMode::Batch => "batch".to_string(),
+            ClusterMode::Llm => "llm".to_string(),
+        },
+        ..RunStats::default()
+    };
+
+    let (grounded, deduped, verdicts, n_synthesized, n_dropped) = match args.cluster_mode {
+        ClusterMode::Batch => {
+            // (b) Deterministic clusters: semantic communities when available,
+            // else date-ordered cap-size batches. Unchanged Stage 3a behavior.
+            let clusters = match &themes {
+                Some(t) => clusters_from_themes(&catalog, t),
+                None => {
+                    eprintln!(
+                        "crystal-synth: no semantic themes available — run `ovp2 crystal-themes` \
+                         (falling back to deterministic date-ordered batches)"
+                    );
+                    clusters_date_ordered(&catalog, args.max_cases_per_cluster)
+                }
+            };
+            let mut cluster_batching: Vec<serde_json::Value> = Vec::new();
+            for cluster in &clusters {
+                if cluster.cases.len() > args.max_cases_per_cluster {
+                    let batches = cluster.cases.len().div_ceil(args.max_cases_per_cluster);
+                    eprintln!(
+                        "crystal-synth: WARNING: cluster `{}` has {} case(s) but the cap is {} — \
+                         Stage 3a will synthesize all cases across {} deterministic batch(es)",
+                        cluster.key,
+                        cluster.cases.len(),
+                        args.max_cases_per_cluster,
+                        batches
+                    );
+                    cluster_batching.push(serde_json::json!({
+                        "cluster": cluster.key,
+                        "cases": cluster.cases.len(),
+                        "cap": args.max_cases_per_cluster,
+                        "batches": batches,
+                        "mode": "split_all_cases",
+                    }));
+                }
+            }
+            let batches = cluster_batches(&clusters, args.max_cases_per_cluster);
+            // Always written (empty on a clean run), so a rerun in the same work
+            // dir can never leave a stale warning report behind.
+            write_json(
+                &args.work_dir.join("warnings.json"),
+                &serde_json::json!({
+                    "fallback_title_cases": fallback_title_cases,
+                    "cluster_cap_overflow": [],
+                    "cluster_batching": cluster_batching,
+                }),
+            )?;
+            // Stage 3a interprets the strict cap as a per-request invariant, not
+            // a cluster-size gate: every batch must stay within the cap.
+            if args.strict_cluster_cap
+                && batches
+                    .iter()
+                    .any(|b| b.cases.len() > args.max_cases_per_cluster)
+            {
+                return Err(CliError::Gate(
+                    "crystal-synth: internal error: synthesized batch exceeds strict cluster cap"
+                        .into(),
+                ));
+            }
+            write_json(&args.work_dir.join("synth-batches.json"), &batches)?;
+
+            // (c) Per-batch cross-source synthesis (model, cassette-replayable).
+            let mut all_claims: Vec<CrystalClaim> = Vec::new();
+            for batch in &batches {
+                let req = crystal_synth_batch_request(&catalog, batch, args.max_units_per_case);
+                let (claims, log): (Vec<CrystalClaim>, Option<RepairLog>) =
+                    call_and_parse(base.as_mut(), &req, "synth", |t| {
+                        parse_synth_claims(t, &batch.claim_prefix())
+                    })?;
+                if let Some(l) = log {
+                    repairs.push(l);
+                }
+                all_claims.extend(claims);
+            }
+            stats.synth_calls = batches.len();
+            let candidate = CrystalCandidate { items: all_claims };
+            write_json(&args.work_dir.join("candidate.json"), &candidate)?;
+            let n_synthesized = candidate.items.len();
+
+            // (d) Grounded filter — drop ungrounded claims (same linter).
+            let (grounded, dropped) = filter_grounded(&candidate, &index);
+            write_json(
+                &args.work_dir.join("candidate.grounded.pre-dedup.json"),
+                &grounded,
+            )?;
+            let n_dropped = dropped.len();
+            let (grounded, deduped) = dedup_exact_citation_sets(&grounded);
+            write_json(&args.work_dir.join("candidate.grounded.json"), &grounded)?;
+            write_json(&args.work_dir.join("deduped-claims.json"), &deduped)?;
+
+            if grounded.items.is_empty() {
+                return Err(CliError::Gate(format!(
+                    "crystal-synth: no grounded claims survived (synthesized={n_synthesized}, \
+                     dropped_ungrounded={n_dropped}). Nothing to write."
+                )));
+            }
+
+            // (e) Chunked claim-strength verdicts (model, cassette-replayable).
+            let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
+            for (idx, chunk) in grounded
+                .items
+                .chunks(MAX_STRENGTH_CLAIMS_PER_CALL)
+                .enumerate()
+            {
+                let req = strength_request(
+                    &CrystalCandidate {
+                        items: chunk.to_vec(),
+                    },
+                    &catalog,
+                );
+                let stage = format!("strength-b{:03}", idx + 1);
+                let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+                    call_and_parse(base.as_mut(), &req, &stage, parse_strength_verdicts)?;
+                if let Some(l) = log {
+                    repairs.push(l);
+                }
+                verdicts.extend(chunk_verdicts);
+                stats.strength_calls += 1;
+            }
+            write_json(&args.work_dir.join("strength.json"), &verdicts)?;
+
+            // Fail loud on incomplete coverage — a durable write needs 1:1.
+            let claim_ids: Vec<String> = grounded.items.iter().map(|c| c.id.clone()).collect();
+            let coverage = strength_coverage(&claim_ids, &verdicts);
+            if !coverage.complete() {
+                return Err(CliError::Gate(format!(
+                    "crystal-synth: strength verdicts incomplete — missing={:?} duplicate={:?} unknown={:?}. \
+                     A durable write requires exactly one verdict per grounded claim.",
+                    coverage.missing, coverage.duplicate, coverage.unknown
+                )));
+            }
+            println!(
+                "crystal-synth: batch mode: {} case(s) → {} cluster(s), {} synth batch(es)",
+                catalog.cases.len(),
+                clusters.len(),
+                batches.len()
+            );
+            (grounded, deduped, verdicts, n_synthesized, n_dropped)
         }
-        all_claims.extend(claims);
-    }
-    let candidate = CrystalCandidate { items: all_claims };
-    write_json(&args.work_dir.join("candidate.json"), &candidate)?;
-    let n_synthesized = candidate.items.len();
-
-    // (d) Grounded filter — drop ungrounded/defective claims (same linter). --
-    let index = synth_build_index(&packs_dir).map_err(synth_err)?;
-    let (grounded, dropped) = filter_grounded(&candidate, &index);
-    write_json(
-        &args.work_dir.join("candidate.grounded.pre-dedup.json"),
-        &grounded,
-    )?;
-    let n_dropped = dropped.len();
-    let (grounded, deduped) = dedup_exact_citation_sets(&grounded);
-    write_json(&args.work_dir.join("candidate.grounded.json"), &grounded)?;
-    write_json(&args.work_dir.join("deduped-claims.json"), &deduped)?;
-
-    if grounded.items.is_empty() {
-        return Err(CliError::Gate(format!(
-            "crystal-synth: no grounded claims survived (synthesized={n_synthesized}, \
-             dropped_ungrounded={n_dropped}). Nothing to write."
-        )));
-    }
-
-    // (e) Chunked claim-strength verdicts (model, cassette-replayable). ------
-    let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
-    for (idx, chunk) in grounded
-        .items
-        .chunks(MAX_STRENGTH_CLAIMS_PER_CALL)
-        .enumerate()
-    {
-        let req = strength_request(
-            &CrystalCandidate {
-                items: chunk.to_vec(),
-            },
-            &catalog,
-        );
-        let stage = format!("strength-b{:03}", idx + 1);
-        let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
-            call_and_parse(base.as_mut(), &req, &stage, parse_strength_verdicts)?;
-        if let Some(l) = log {
-            repairs.push(l);
+        ClusterMode::Llm => {
+            // L3 coverage-first sweep. Only the GROUPING is model-shaped; the
+            // synth prompt, gates, and the durable write are byte-identical.
+            write_json(
+                &args.work_dir.join("warnings.json"),
+                &serde_json::json!({
+                    "fallback_title_cases": fallback_title_cases,
+                    "cluster_cap_overflow": [],
+                    "cluster_batching": [],
+                }),
+            )?;
+            let embed_cache_dir = args
+                .embed_cache_dir
+                .clone()
+                .or_else(|| {
+                    args.vault_root
+                        .as_ref()
+                        .map(|v| v.join(".ovp/cache/embeddings"))
+                })
+                .expect("validated above");
+            let cfg = crate::commands::crystal_synth_llm::SweepConfig {
+                max_seeds: args.max_seeds,
+                neighborhood: args.neighborhood,
+                max_cases_per_cluster: args.max_cases_per_cluster,
+                max_units_per_case: args.max_units_per_case,
+            };
+            let out = crate::commands::crystal_synth_llm::run_sweep(
+                &catalog,
+                &paths.reader_dir,
+                &index,
+                themes.as_ref(),
+                &paths.store,
+                &args.work_dir,
+                &embed_cache_dir,
+                base.as_mut(),
+                &cfg,
+            )?;
+            repairs.extend(out.repairs);
+            stats.select_calls = out.stats.select_calls;
+            stats.synth_calls = out.stats.synth_calls;
+            stats.strength_calls = out.stats.strength_calls;
+            stats.refused = out.stats.refused;
+            stats.guarded = out.stats.guarded;
+            stats.failed_seeds = out.stats.failed;
+            stats.uncovered_before = Some(out.stats.uncovered_before);
+            stats.uncovered_after = Some(out.stats.uncovered_after);
+            write_json(&args.work_dir.join("l3-sweep-stats.json"), &out.stats)?;
+            println!(
+                "crystal-synth: llm sweep: {} uncovered seed(s) → selected={} refused={} \
+                 guarded={} failed={} covered-mid-run={}{}",
+                out.stats.uncovered_before,
+                out.stats.selected,
+                out.stats.refused,
+                out.stats.guarded,
+                out.stats.failed,
+                out.stats.covered_mid_run,
+                if out.stats.budget_exhausted {
+                    " (—max-seeds budget exhausted; rerun to continue)"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "  coverage: {} → {} uncovered pack(s)",
+                out.stats.uncovered_before, out.stats.uncovered_after
+            );
+            let candidate = CrystalCandidate {
+                items: out.raw_claims,
+            };
+            write_json(&args.work_dir.join("candidate.json"), &candidate)?;
+            let n_synthesized = candidate.items.len();
+            let n_dropped = out.dropped_ungrounded.len();
+            write_json(&args.work_dir.join("candidate.grounded.json"), &out.grounded)?;
+            write_json(&args.work_dir.join("deduped-claims.json"), &out.deduped)?;
+            write_json(&args.work_dir.join("strength.json"), &out.verdicts)?;
+            if out.grounded.items.is_empty() {
+                // Refusals / guards everywhere are a first-class outcome for a
+                // coverage sweep — report and succeed (never a gate failure).
+                println!(
+                    "crystal-synth: llm sweep produced no grounded claims \
+                     (synthesized={n_synthesized}, dropped_ungrounded={n_dropped}) — \
+                     nothing to write. Per-seed outcomes: {}",
+                    args.work_dir.join("l3-sweep.jsonl").display()
+                );
+                stats.synthesized = n_synthesized;
+                return Ok(stats);
+            }
+            (
+                out.grounded,
+                out.deduped,
+                out.verdicts,
+                n_synthesized,
+                n_dropped,
+            )
         }
-        verdicts.extend(chunk_verdicts);
-    }
-    write_json(&args.work_dir.join("strength.json"), &verdicts)?;
-
-    // Fail loud on incomplete coverage — a durable write requires 1:1 verdicts.
-    let claim_ids: Vec<String> = grounded.items.iter().map(|c| c.id.clone()).collect();
-    let coverage = strength_coverage(&claim_ids, &verdicts);
-    if !coverage.complete() {
-        return Err(CliError::Gate(format!(
-            "crystal-synth: strength verdicts incomplete — missing={:?} duplicate={:?} unknown={:?}. \
-             A durable write requires exactly one verdict per grounded claim.",
-            coverage.missing, coverage.duplicate, coverage.unknown
-        )));
-    }
+    };
+    stats.synthesized = n_synthesized;
+    stats.grounded = grounded.items.len();
+    stats.durable_distinct_sources = durable_source_counts(&grounded, &index, &verdicts);
 
     let durable_provenance = count_durable_provenance(&grounded, &index);
 
@@ -394,10 +607,10 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     // --- Summary (mirrors crystal-write). ---
     println!("crystal-synth: run_id={}", outcome.run_id);
     println!(
-        "  collected: {} case(s) → {} cluster(s), {} synth batch(es)",
+        "  collected: {} case(s), {} synth call(s) [{}]",
         catalog.cases.len(),
-        clusters.len(),
-        batches.len()
+        stats.synth_calls,
+        stats.mode
     );
     println!(
         "  synthesized {n_synthesized} claim(s); dropped_ungrounded={n_dropped}; deduped={}; durable-provenance={durable_provenance}",
@@ -449,7 +662,10 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
         console_cmd::run(console_cmd::ConsoleArgs { vault_root, date })?;
     }
 
-    Ok(())
+    stats.durable_considered = outcome.considered;
+    stats.durable_appended = outcome.appended;
+    stats.review = outcome.review;
+    Ok(stats)
 }
 
 fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<(), CliError> {
@@ -603,6 +819,10 @@ mod tests {
             date: None,
             strict: false,
             strict_cluster_cap: false,
+            cluster_mode: ClusterMode::Batch,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: None,
         };
 
         // First run: writes candidate.json + a durable ledger line + crystal.md.
@@ -734,6 +954,10 @@ mod tests {
             date: None,
             strict: false,
             strict_cluster_cap: true,
+            cluster_mode: ClusterMode::Batch,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: None,
         })
         .expect("split batches run");
 
@@ -807,6 +1031,10 @@ mod tests {
             date: None,
             strict: false,
             strict_cluster_cap: false,
+            cluster_mode: ClusterMode::Batch,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: None,
         })
         .unwrap_err();
         assert!(
@@ -835,6 +1063,10 @@ mod tests {
             date: None,
             strict: false,
             strict_cluster_cap: false,
+            cluster_mode: ClusterMode::Batch,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: None,
         }
     }
 
