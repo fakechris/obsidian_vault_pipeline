@@ -148,8 +148,11 @@ leave your machine, each under your explicit configuration:
   `PINBOARD_TOKEN` (never stored, never logged).
 - **Web/GitHub enrichment** — enrichment fetches the URLs you bookmarked
   (plus GitHub API metadata for repo links) to capture their content.
+- **`compare-run` (diagnostic, manual)** — the external comparator sends the
+  source path/URL and queries to the Nowledge Mem HTTP service you point it
+  at. It never runs as part of `daily`; skip the command and nothing is sent.
 
-Nothing else is transmitted, ever.
+Nothing else is transmitted.
 
 ## Documentation
 

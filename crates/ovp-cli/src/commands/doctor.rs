@@ -431,7 +431,7 @@ fn check_legacy_artifacts(vault_root: &Path, findings: &mut Vec<Finding>) {
             message: format!(
                 "{rel} ({what}): Python-era OVP artifact; ovp2 does not read it; \
                  safe to archive/delete once you've verified the ovp2 rebuild — \
-                 see docs/ovp-to-ovp2.md §5 \"Migrating an existing OVP vault\""
+                 see https://github.com/fakechris/obsidian_vault_pipeline/blob/main/docs/ovp-to-ovp2.md (§5, Migrating an existing OVP vault; docs/ovp-to-ovp2.md in a source checkout)"
             ),
             fixed: false,
         });
@@ -540,6 +540,7 @@ mod tests {
             assert_eq!(f.check, "legacy-artifacts");
             assert_eq!(f.severity, Severity::Info, "{}", f.message);
             assert!(f.message.contains("Python-era OVP artifact"), "{}", f.message);
+            assert!(f.message.contains("github.com/fakechris/obsidian_vault_pipeline"), "{}", f.message);
             assert!(f.message.contains("docs/ovp-to-ovp2.md"), "{}", f.message);
         }
         let messages: Vec<&str> = findings.iter().map(|f| f.message.as_str()).collect();
