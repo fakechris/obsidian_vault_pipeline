@@ -124,6 +124,25 @@ brew install fakechris/ovp2/ovp2
 | `ovp2 project` | Projection Lanes：按 lane 查看主张，或把 durable 主张写成 vault 笔记（`--write` / `--rebuild`） |
 | `ovp2 mcp` | MCP stdio 服务，向 MCP 兼容编辑器暴露 find/search/status/doctor 工具 |
 
+## 隐私与信任
+
+OVP2 是本地优先的。它知道的一切都以纯文件形式存放在你的 vault 内（`.ovp/`
+账本与投影，加上笔记本身）；没有云端组件、没有账号，也**没有任何遥测**。
+只有以下三类数据会离开你的机器，且每一类都由你显式配置：
+
+- **LLM 调用** —— 在 `daily`、`ask`、`crystal-synth`（以及门户的 Ask 页面）
+  期间，文章/书签文本会发送给**你自己**通过环境变量配置的 LLM 服务商
+  （`ANTHROPIC_API_KEY`，可选 `ANTHROPIC_BASE_URL`）。不配置 key 就没有任何
+  调用：默认运行是离线/回放模式。
+- **Pinboard 同步** —— `pinboard-sync --live` 使用你的 `PINBOARD_TOKEN`
+  与 pinboard.in 通信（token 不落盘、不进日志）。
+- **Web/GitHub 补全** —— 补全功能会抓取你收藏的 URL 本身（GitHub 仓库链接
+  还会请求 GitHub API 元数据）以获得正文内容。
+- **`compare-run`（诊断用，手动触发）** —— 外部对照器会把源路径/URL 与查询发给你
+  指定的 Nowledge Mem HTTP 服务。它不属于 `daily` 流程；不执行该命令就不会有发送。
+
+除此之外，不传输任何东西。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -141,4 +160,19 @@ brew install fakechris/ovp2/ovp2
 覆盖。每日循环、门户、Crystal 合成与复核流程已在真实 vault 上运行。发布
 v0.23.0 延续仓库的发布谱系（v0.22.0 是最后一个 Python 时代版本）；v2.0.0
 保留给合并主干 / Python 退役里程碑。进行中：真实 vault 的持续 dogfood 与
-语义主题投影。历史阶段记录见 `docs/stage-*.md`。
+语义主题投影。历史阶段记录见 `docs/stage-*.md`；版本历史见
+[`CHANGELOG.md`](CHANGELOG.md)。
+
+## 许可证
+
+本项目采用双许可证，二选一：
+
+- MIT 许可证（[LICENSE-MIT](LICENSE-MIT)）
+- Apache 许可证 2.0 版（[LICENSE-APACHE](LICENSE-APACHE)）
+
+除非你另有明确声明，你有意提交并纳入本项目的任何贡献（按 Apache-2.0 许可证
+的定义），都将按上述双许可证授权，不附加任何额外条款。
+
+例外：随仓库分发的 IBM Plex 网页字体（`console-ui/src/design/fonts/`）
+仍遵循 SIL Open Font License 1.1 ——见
+[`console-ui/src/design/fonts/LICENSE.txt`](console-ui/src/design/fonts/LICENSE.txt)。
