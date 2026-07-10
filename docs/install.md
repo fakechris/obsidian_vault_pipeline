@@ -32,11 +32,23 @@ end-to-end.
    install (`env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY brew install
    fakechris/ovp2/ovp2`) or configure git's proxy explicitly.
 
-Verify either channel with `ovp2 --version` (→ `ovp2 0.23.0`).
+Verify either channel with `ovp2 --version` (→ `ovp2 2.0.1`).
 
-Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-`x86_64-unknown-linux-gnu`. An npm wrapper (`npx ovp2` style, binary-download
-shim) is a possible future third channel; skipped for now.
+Prebuilt targets: `aarch64-apple-darwin` (Apple Silicon macOS) and
+`x86_64-unknown-linux-gnu` (Linux x86_64, **glibc ≥ 2.38** — ort's prebuilt
+ONNX Runtime demands it; release builds run on `ubuntu-24.04`, glibc 2.39).
+An npm wrapper (`npx ovp2` style, binary-download shim) is a possible future
+third channel; skipped for now.
+
+**No Intel-mac (`x86_64-apple-darwin`) prebuilt**: the bundled `embed`
+feature pulls in ONNX Runtime, which ships no prebuilt binaries for Intel
+macs (v2.0.0's Intel build failed on exactly that). Intel-mac users build
+from source WITHOUT `embed` (`cargo build --release --features
+anthropic,pinboard-live,web-fetch-live,github-live` — semantic themes then
+degrade gracefully to Unclassified, or run off a warmed embedding cache), or
+use v0.23.0 (the last release with an Intel prebuilt). On
+Linux distros older than glibc 2.38, likewise build from source, omitting
+`embed` if ort's downloaded ONNX Runtime rejects your glibc at link time.
 
 Prebuilt binaries are built with `features = ["anthropic", "pinboard-live",
 "web-fetch-live", "github-live"]`, so `--client live`, `--pinboard-live`, and
@@ -109,7 +121,7 @@ Artifacts are named after the cargo package (`ovp-cli-<target>.tar.xz`,
    version in lockstep); commit via the normal feature-branch → PR flow.
 2. Tag the release commit on `codex/rust-migration` (or `main` post-M32):
    `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. GitHub Actions (`release.yml`) builds all three targets, the shell
+3. GitHub Actions (`release.yml`) builds both prebuilt targets, the shell
    installer, the `ovp2.rb` formula and checksums, then creates the GitHub
    Release with everything attached. The workflow only triggers on version
    tags — normal pushes and PRs are untouched.

@@ -9,8 +9,12 @@ cargo-dist-version = "0.32.0"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell", "homebrew"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Target platforms to build apps for (Rust target-triple syntax).
+# x86_64-apple-darwin was DROPPED after v2.0.0: the `embed` feature pulls in ort,
+# and pyke ships no prebuilt ONNX Runtime for Intel macs (v2.0.0 release run
+# 29096057755 failed there); compiling ONNX Runtime from source is not an
+# acceptable CI cost. Intel-mac users build from source — see docs/install.md.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
@@ -35,3 +39,11 @@ tap = "fakechris/homebrew-ovp2"
 # Name the generated formula after the product binary (`brew install
 # fakechris/ovp2/ovp2`), not the cargo package name (ovp-cli).
 formula = "ovp2"
+
+# ort's prebuilt libonnxruntime (pulled in by the `embed` feature) needs
+# glibc >= 2.38; the default runner's glibc is older and the link fails
+# (`undefined symbol: __isoc23_strtoll`). ubuntu-24.04 ships glibc 2.39.
+# This sets the glibc floor for the Linux prebuilt — documented in
+# docs/install.md.
+[dist.github-custom-runners]
+x86_64-unknown-linux-gnu = "ubuntu-24.04"
