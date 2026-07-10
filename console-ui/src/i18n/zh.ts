@@ -243,7 +243,7 @@ export const zh: Record<keyof typeof en, string> = {
   'system.llmOff':
     '未配置——对话返回 503。设置 ANTHROPIC_API_KEY 后重启 `ovp2 serve`（构建时加 --features anthropic）。',
   'system.askTimeout': '对话超时',
-  'system.askTimeoutValue': '每问 {secs} 秒 · 无并发上限',
+  'system.askTimeoutValue': '每问 {secs} 秒 · 并发上限 {cap}',
   'system.version': '服务端版本',
   'system.togglesNote':
     '主题与语言在顶栏切换（LIGHT/DARK · EN/中）——按浏览器持久化，每页可用。',

@@ -254,7 +254,7 @@ export const en = {
   'system.llmOff':
     'not configured — Ask answers 503. Set ANTHROPIC_API_KEY and restart `ovp2 serve` (built with --features anthropic).',
   'system.askTimeout': 'ask timeout',
-  'system.askTimeoutValue': '{secs}s per question · no concurrency cap',
+  'system.askTimeoutValue': '{secs}s per question · up to {cap} concurrent',
   'system.version': 'server version',
   'system.togglesNote':
     'Theme and language switch in the top bar (LIGHT/DARK · EN/中) — persisted per browser, on every page.',

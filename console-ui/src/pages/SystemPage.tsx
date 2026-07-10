@@ -91,6 +91,24 @@ function AttentionSection({ model }: { model: IndexModel }) {
 
 function SurfacesSection() {
   const { t } = useI18n();
+  // The generated admin pages only exist on vaults with a rendered legacy
+  // console — probe them and hide dead links (codex review P2).
+  const [adminPages, setAdminPages] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      ADMIN_PAGES.map((page) =>
+        fetch(`/${page}`, { method: 'HEAD' })
+          .then((r) => (r.ok ? page : null))
+          .catch(() => null),
+      ),
+    ).then((pages) => {
+      if (!cancelled) setAdminPages(pages.filter((p) => p !== null) as string[]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div className="section">
       <h2>{t('system.surfaces')}</h2>
@@ -103,18 +121,22 @@ function SurfacesSection() {
           <Link to="/monitor">{t('system.monitorLink')} →</Link>
         </li>
       </ul>
-      <p className="tiny muted" style={{ marginBottom: '0.25rem' }}>
-        {t('system.adminPagesNote')}
-      </p>
-      <ul className="legacy-links">
-        {ADMIN_PAGES.map((page) => (
-          <li key={page}>
-            <a className="mono" href={`/${page}`}>
-              {page} →
-            </a>
-          </li>
-        ))}
-      </ul>
+      {adminPages.length > 0 && (
+        <>
+          <p className="tiny muted" style={{ marginBottom: '0.25rem' }}>
+            {t('system.adminPagesNote')}
+          </p>
+          <ul className="legacy-links">
+            {adminPages.map((page) => (
+              <li key={page}>
+                <a className="mono" href={`/${page}`}>
+                  {page} →
+                </a>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -198,6 +220,7 @@ function SettingsSection() {
           <dd className="tiny">
             {t('system.askTimeoutValue', {
               secs: settings.ask_limits.timeout_secs,
+              cap: settings.ask_limits.max_concurrent ?? '∞',
             })}
           </dd>
           <dt>{t('system.version')}</dt>
@@ -215,19 +238,25 @@ function SettingsSection() {
 export default function SystemPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
+  // Only Runs/Attention need the index — Settings, concepts and the
+  // pipeline links must render in exactly the missing-index state this
+  // page helps diagnose (codex review P1). /api/settings returns null
+  // index fields for that case on purpose.
   return (
-    <ModelGate loading={loading} error={error}>
-      {model && (
-        <>
-          <h1 style={{ marginTop: '1rem' }}>{t('nav.system')}</h1>
-          <PageHelp>{t('system.help')}</PageHelp>
-          <RunsSection model={model} />
-          <AttentionSection model={model} />
-          <SurfacesSection />
-          <ConceptsSection />
-          <SettingsSection />
-        </>
-      )}
-    </ModelGate>
+    <>
+      <h1 style={{ marginTop: '1rem' }}>{t('nav.system')}</h1>
+      <PageHelp>{t('system.help')}</PageHelp>
+      <ModelGate loading={loading} error={error}>
+        {model && (
+          <>
+            <RunsSection model={model} />
+            <AttentionSection model={model} />
+          </>
+        )}
+      </ModelGate>
+      <SurfacesSection />
+      <ConceptsSection />
+      <SettingsSection />
+    </>
   );
 }
