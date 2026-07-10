@@ -42,7 +42,8 @@ pub fn build_index(
     let moved = moved_map(&reports);
 
     let mut sources = build_sources(vault_root, &layout, &moved)?;
-    let packs = build_packs(vault_root, &layout, &sources)?;
+    let mut packs = build_packs(vault_root, &layout, &sources)?;
+    backfill_corpus_packs(vault_root, &layout, &mut sources, &mut packs)?;
     enrich_titles_from_packs(&mut sources, &packs);
     let claims = build_claims(vault_root, &layout)?;
 
@@ -269,7 +270,15 @@ fn build_sources(
             }
         })
         .collect();
-    out.sort_by(|a, b| {
+    sort_sources(&mut out);
+    Ok(out)
+}
+
+/// Canonical source-row order: status band, then title, then hash. Shared by
+/// the ledger fold and the corpus backfill so appended rows keep the
+/// projection deterministic.
+fn sort_sources(rows: &mut [SourceRow]) {
+    rows.sort_by(|a, b| {
         (
             a.status,
             a.title.as_deref().unwrap_or(""),
@@ -281,7 +290,6 @@ fn build_sources(
                 b.sha256.as_str(),
             ))
     });
-    Ok(out)
 }
 
 /// All run reports, ordered oldest → newest. Collision-suffixed same-run-id
@@ -457,6 +465,165 @@ fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
         if s.title.is_none() {
             if let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
                 s.title = Some(p.title.clone());
+            }
+        }
+    }
+}
+
+/// Skip hashing anything larger than this during the corpus backfill — real
+/// captures are small markdown files; hashing the odd huge export would
+/// dominate the index build for no join value.
+const MAX_BACKFILL_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// One 8-hex-prefix bucket of the candidate-file hash map. Two files with
+/// the same prefix but DIFFERENT full hashes make the prefix ambiguous:
+/// packs pointing at it stay unjoined rather than guessed.
+#[derive(Debug, PartialEq)]
+enum PrefixHit {
+    Unique { sha256: String, rel_path: String },
+    Ambiguous,
+}
+
+/// Corpus reader packs predate the daily ledgers, so `build_packs` finds no
+/// SourceRow to join them to — their Library rows, `/api/source/:sha` pages
+/// and Ask citation links were dead. Their dir names carry the join key:
+/// `<sha256-first-8-hex>-<date>_<title>`, where the 8-hex prefix hashes the
+/// source md now living under `50-Inbox/03-Processed/` (raw inbox as
+/// fallback). Hash the candidate files ONCE per build, join by prefix, and
+/// synthesize a Processed SourceRow when the ledgers know nothing about the
+/// hash. A synthesized row is recognizable by construction: `last_run_id`
+/// is None (every ledger-derived row has one) and `pack_dir` points at the
+/// corpus pack it was derived from.
+fn backfill_corpus_packs(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    sources: &mut Vec<SourceRow>,
+    packs: &mut [PackRow],
+) -> Result<(), String> {
+    let unjoined: Vec<usize> = packs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.source_sha256.is_none() && corpus_hash8(&p.pack_dir).is_some())
+        .map(|(i, _)| i)
+        .collect();
+    if unjoined.is_empty() {
+        return Ok(()); // no corpus candidates → skip the vault walk entirely
+    }
+
+    let by_prefix = hash_candidate_files(vault_root, layout)?;
+    let mut known: std::collections::HashSet<String> =
+        sources.iter().map(|s| s.sha256.clone()).collect();
+    let mut appended = false;
+    for i in unjoined {
+        let Some(prefix) = corpus_hash8(&packs[i].pack_dir) else {
+            continue;
+        };
+        let Some(PrefixHit::Unique { sha256, rel_path }) = by_prefix.get(&prefix) else {
+            continue; // no candidate file, or an ambiguous prefix — never guess
+        };
+        packs[i].source_sha256 = Some(sha256.clone());
+        if known.insert(sha256.clone()) {
+            sources.push(SourceRow {
+                sha256: sha256.clone(),
+                status: SourceStatus::Processed,
+                title: Some(packs[i].title.clone()),
+                url: None,
+                rel_path: Some(rel_path.clone()),
+                date: corpus_date(&packs[i].pack_dir),
+                last_run_id: None, // no ledger record — the backfill provenance marker
+                pack_dir: Some(packs[i].pack_dir.clone()),
+                fail_count: 0,
+                last_reason: None,
+            });
+            appended = true;
+        }
+        // Hash already known from a ledger: join the pack only, never touch
+        // the ledger-derived row.
+    }
+    if appended {
+        sort_sources(sources);
+    }
+    Ok(())
+}
+
+/// `…/00044cfd-2026-05-07_Title` → `00044cfd`: the pack dir basename must
+/// start with EXACTLY 8 hex chars followed by `-`. Modern pack dirs
+/// (`<date>_<title>-<hash8>`) never match — their fifth char is already `-`.
+fn corpus_hash8(pack_dir: &str) -> Option<String> {
+    let name = pack_dir.rsplit('/').next().unwrap_or(pack_dir);
+    let bytes = name.as_bytes();
+    if bytes.len() > 8 && bytes[8] == b'-' && bytes[..8].iter().all(|b| b.is_ascii_hexdigit()) {
+        Some(name[..8].to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+/// Date segment of a corpus pack dir (`<hash8>-<YYYY-MM-DD>_…`) — the same
+/// loose digits-and-dashes check `build_packs` applies to modern dir names.
+fn corpus_date(pack_dir: &str) -> Option<String> {
+    let name = pack_dir.rsplit('/').next().unwrap_or(pack_dir);
+    name.get(9..19)
+        .filter(|d| d.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
+        .map(String::from)
+}
+
+/// Hash every candidate source md (processed tree first, then the raw inbox)
+/// into an 8-hex-prefix map. Built at most once per index build, and only
+/// when at least one unjoined corpus pack exists. `collect_markdown` walks
+/// in sorted order, so duplicate-content ties resolve deterministically.
+fn hash_candidate_files(
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<HashMap<String, PrefixHit>, String> {
+    let mut map: HashMap<String, PrefixHit> = HashMap::new();
+    let roots = [
+        vault_root.join(layout.processed_root()),
+        vault_root.join(layout.inbox_raw_dir()),
+    ];
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        for path in collect_markdown(&root)? {
+            let meta = std::fs::metadata(&path)
+                .map_err(|e| format!("reading {}: {e}", path.display()))?;
+            if meta.len() > MAX_BACKFILL_FILE_BYTES {
+                continue;
+            }
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+            let sha = hex_sha256(&bytes);
+            let prefix = sha[..8].to_string();
+            insert_prefix_hit(&mut map, prefix, sha, rel_to(vault_root, &path));
+        }
+    }
+    Ok(map)
+}
+
+/// Pure insert step, split out because an 8-hex prefix collision cannot be
+/// forged in an on-disk fixture — the unit test drives this directly. Same
+/// full hash twice is duplicate CONTENT (first path wins); different full
+/// hashes poison the prefix as Ambiguous.
+fn insert_prefix_hit(
+    map: &mut HashMap<String, PrefixHit>,
+    prefix: String,
+    sha256: String,
+    rel_path: String,
+) {
+    use std::collections::hash_map::Entry;
+    match map.entry(prefix) {
+        Entry::Vacant(v) => {
+            v.insert(PrefixHit::Unique { sha256, rel_path });
+        }
+        Entry::Occupied(mut o) => {
+            if let PrefixHit::Unique {
+                sha256: existing, ..
+            } = o.get()
+            {
+                if existing != &sha256 {
+                    o.insert(PrefixHit::Ambiguous);
+                }
             }
         }
     }
@@ -694,4 +861,68 @@ fn from_days(total: u32) -> String {
 
 fn is_leap(y: u32) -> bool {
     y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corpus_hash8_matches_only_the_legacy_prefix_shape() {
+        // Legacy corpus dir: 8 hex + '-'.
+        assert_eq!(
+            corpus_hash8("40-Resources/Reader/00044cfd-2026-05-07_Claude_Code"),
+            Some("00044cfd".into())
+        );
+        // Uppercase hex normalizes to the hex_sha256 lowercase alphabet.
+        assert_eq!(
+            corpus_hash8("40-Resources/Reader/00044CFD-2026-05-07_X"),
+            Some("00044cfd".into())
+        );
+        // Modern pack dir (`<date>_<title>-<hash8>`): fifth char is '-'.
+        assert_eq!(
+            corpus_hash8("40-Resources/Reader/2026-06-09_Good Article-aaaa1111"),
+            None
+        );
+        // Nine leading hex chars → char 8 is hex, not '-'.
+        assert_eq!(corpus_hash8("40-Resources/Reader/00044cfd1-2026_X"), None);
+        // Non-hex within the prefix.
+        assert_eq!(corpus_hash8("40-Resources/Reader/00zz4cfd-2026_X"), None);
+        // Too short.
+        assert_eq!(corpus_hash8("00044cfd"), None);
+    }
+
+    #[test]
+    fn corpus_date_reads_the_segment_after_the_prefix() {
+        assert_eq!(
+            corpus_date("40-Resources/Reader/00044cfd-2026-05-07_Title"),
+            Some("2026-05-07".into())
+        );
+        assert_eq!(
+            corpus_date("40-Resources/Reader/00044cfd-notadate12"),
+            None
+        );
+        assert_eq!(corpus_date("40-Resources/Reader/00044cfd-"), None);
+    }
+
+    #[test]
+    fn ambiguous_prefix_is_poisoned_and_duplicate_content_keeps_first_path() {
+        let mut map = HashMap::new();
+        // Two files, same content hash → duplicate content, first path wins.
+        insert_prefix_hit(&mut map, "00044cfd".into(), "00044cfdaaaa".into(), "a.md".into());
+        insert_prefix_hit(&mut map, "00044cfd".into(), "00044cfdaaaa".into(), "b.md".into());
+        assert_eq!(
+            map.get("00044cfd"),
+            Some(&PrefixHit::Unique {
+                sha256: "00044cfdaaaa".into(),
+                rel_path: "a.md".into()
+            })
+        );
+        // A DIFFERENT full hash on the same prefix → ambiguous, never guess.
+        insert_prefix_hit(&mut map, "00044cfd".into(), "00044cfdbbbb".into(), "c.md".into());
+        assert_eq!(map.get("00044cfd"), Some(&PrefixHit::Ambiguous));
+        // Once poisoned, it stays poisoned.
+        insert_prefix_hit(&mut map, "00044cfd".into(), "00044cfdaaaa".into(), "a.md".into());
+        assert_eq!(map.get("00044cfd"), Some(&PrefixHit::Ambiguous));
+    }
 }
