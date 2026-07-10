@@ -16,6 +16,7 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_domain::units::Unit;
 use ovp_index::{
@@ -447,18 +448,32 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
-    let ledger_path = state
-        .vault_root
-        .join(state.layout.crystal_store_dir())
-        .join("ledger.jsonl");
-    let events: Vec<StoreEvent> = match read_jsonl(&ledger_path) {
+    let store = state.vault_root.join(state.layout.crystal_store_dir());
+    let events: Vec<StoreEvent> = match read_jsonl(&store.join("ledger.jsonl")) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
-    fold_ledger(&events)
+    let mut records: Vec<DurableRecord> = fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)
-        .collect()
+        .collect();
+    // Semantic theme PROJECTION: mirror `ovp-index::build_claims` so every
+    // server surface (/api/themes, graph scopes, claim pages) shows the same
+    // display themes as the read model. The ledger stays untouched. A corrupt
+    // themes.json degrades to passthrough here (the server must keep serving);
+    // `ovp2 index` is where corruption fails loud.
+    match ThemesFile::load(&store.join("themes.json")) {
+        Ok(Some(themes)) => {
+            for r in records.iter_mut() {
+                r.theme = themes
+                    .majority_label(&r.source_cases)
+                    .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string());
+            }
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
+    }
+    records
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1411,21 +1426,24 @@ fn parse_query_string(url: &str) -> std::collections::HashMap<String, String> {
 }
 
 fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.bytes();
-    while let Some(b) = chars.next() {
+    // Decode into BYTES first, then re-validate as UTF-8: percent-escaped
+    // multibyte sequences (e.g. Chinese theme labels — `%E6%99%BA…`) are one
+    // character across SEVERAL escapes, so pushing each decoded byte as a
+    // `char` would produce mojibake and break exact theme matching.
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut iter = s.bytes();
+    while let Some(b) = iter.next() {
         if b == b'%' {
-            let hi = chars.next().unwrap_or(b'0');
-            let lo = chars.next().unwrap_or(b'0');
-            let byte = hex_val(hi) * 16 + hex_val(lo);
-            result.push(byte as char);
+            let hi = iter.next().unwrap_or(b'0');
+            let lo = iter.next().unwrap_or(b'0');
+            bytes.push(hex_val(hi) * 16 + hex_val(lo));
         } else if b == b'+' {
-            result.push(' ');
+            bytes.push(b' ');
         } else {
-            result.push(b as char);
+            bytes.push(b);
         }
     }
-    result
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn hex_val(b: u8) -> u8 {
@@ -1929,6 +1947,82 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn themes_json_projects_record_themes_and_utf8_query_params_decode() {
+        let vault = portal_vault("themes-proj", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        // Both ledger claims cite case `good`; the projection maps it to a
+        // bilingual community label, overriding the baked alpha/beta themes.
+        let store = vault.join(VaultLayout::new().crystal_store_dir());
+        std::fs::write(
+            store.join("themes.json"),
+            serde_json::json!({
+                "schema": "ovp.themes/v1",
+                "model": "test-model",
+                "params": {"k": 10, "cosine_threshold": 0.5, "resolution": 1.5,
+                            "seed": 42, "text_prefix": "", "head_chars": 1500},
+                "generated_from": "deadbeef",
+                "packs": {"good": 0},
+                "communities": [{"id": 0, "label": "智能体记忆 Agent memory",
+                                  "label_zh": "智能体记忆", "keywords": ["memory"],
+                                  "size": 1}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let st = state(vault.clone(), None);
+
+        // /api/themes reflects the projection, not the ledger themes.
+        let v = body_json(dispatch(&st, Method::Get, "/api/themes", ""));
+        let themes: Vec<&str> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["theme"].as_str().unwrap())
+            .collect();
+        assert_eq!(themes, vec!["智能体记忆 Agent memory"]);
+
+        // A percent-encoded multibyte theme (what the portal's
+        // encodeURIComponent produces) round-trips into the exact label.
+        let url = "/api/graph?scope=theme&theme=%E6%99%BA%E8%83%BD%E4%BD%93%E8%AE%B0%E5%BF%86%20Agent%20memory";
+        let resp = dispatch(&st, Method::Get, url, "");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        let ids: Vec<&str> = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"claim:a"), "{ids:?}");
+        assert!(ids.contains(&"claim:b"), "{ids:?}");
+
+        // The retired ledger theme no longer resolves.
+        let resp = dispatch(&st, Method::Get, "/api/graph?scope=theme&theme=alpha", "");
+        assert_eq!(resp.status_code(), 404);
+
+        // Corrupt themes.json degrades to ledger passthrough (server keeps
+        // serving; the index build is where corruption fails loud).
+        std::fs::write(store.join("themes.json"), "not json").unwrap();
+        let v = body_json(dispatch(&st, Method::Get, "/api/themes", ""));
+        let themes: Vec<&str> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["theme"].as_str().unwrap())
+            .collect();
+        assert_eq!(themes, vec!["alpha", "beta"]);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn url_decode_handles_multibyte_utf8() {
+        assert_eq!(url_decode("%E6%99%BA%E8%83%BD"), "智能");
+        assert_eq!(url_decode("a+b%20c"), "a b c");
+        assert_eq!(url_decode("plain"), "plain");
     }
 
     #[test]

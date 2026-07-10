@@ -15,6 +15,7 @@ use std::path::Path;
 
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
@@ -709,6 +710,22 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 run_id: None,
                 lane: enum_str(&entry.lane),
             });
+        }
+    }
+
+    // Semantic theme PROJECTION (M-semantic-themes): when `themes.json`
+    // exists, a claim's display theme is the majority community label among
+    // its cited packs (ties → lexicographically first; nothing mapped →
+    // "Unclassified"). The ledger keeps whatever theme synthesis stamped —
+    // claims are never re-synthesized to re-theme; this overlay is rebuilt on
+    // every index build. Without themes.json the ledger theme passes through.
+    if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
+        for row in claims.iter_mut() {
+            row.theme = Some(
+                themes
+                    .majority_label(&row.sources)
+                    .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string()),
+            );
         }
     }
 

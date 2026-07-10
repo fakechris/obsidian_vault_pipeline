@@ -358,13 +358,16 @@ fn builds_folds_cleans_and_queries_the_full_model() {
     );
     assert_eq!(model.packs[0].card_titles, vec!["Chunks are neutral"]);
 
-    // Claims from ledger + review.
+    // Claims from ledger + review. No themes.json in this fixture, so the
+    // ledger theme passes through untouched.
     let durable = model.claims.iter().find(|c| c.claim_id == "c01").unwrap();
     assert_eq!(durable.status, ClaimStatus::Durable);
     assert_eq!(durable.sources, vec!["case-a", "case-b"]);
+    assert_eq!(durable.theme.as_deref(), Some("memory"), "ledger passthrough");
     let caveated = model.claims.iter().find(|c| c.claim_id == "c02").unwrap();
     assert_eq!(caveated.status, ClaimStatus::Caveated);
     assert_eq!(caveated.strength.as_deref(), Some("opinion_as_fact"));
+    assert_eq!(caveated.theme.as_deref(), Some("strategy"));
 
     // Search: term over claims; status filter over sources.
     let hits = run_query(
@@ -399,6 +402,56 @@ fn builds_folds_cleans_and_queries_the_full_model() {
         hits.iter().any(|h| h.kind == "pack"),
         "card titles searchable: {hits:?}"
     );
+}
+
+#[test]
+fn themes_json_projects_claim_themes_by_majority_cited_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    // Semantic themes projection: case-a and case-b both live in community 0.
+    // The review claim c02 has no citations → no mapped pack → Unclassified.
+    let themes = serde_json::json!({
+        "schema": "ovp.themes/v1",
+        "model": "test-model",
+        "params": {
+            "k": 10, "cosine_threshold": 0.5, "resolution": 1.5, "seed": 42,
+            "text_prefix": "", "head_chars": 1500
+        },
+        "generated_from": "deadbeef",
+        "packs": { "case-a": 0, "case-b": 0 },
+        "communities": [{
+            "id": 0,
+            "label": "Agent memory systems",
+            "label_zh": "智能体记忆系统",
+            "keywords": ["memory", "agent"],
+            "size": 2
+        }]
+    });
+    std::fs::write(
+        root.join(".ovp/crystal/themes.json"),
+        themes.to_string(),
+    )
+    .unwrap();
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let durable = model.claims.iter().find(|c| c.claim_id == "c01").unwrap();
+    assert_eq!(
+        durable.theme.as_deref(),
+        Some("Agent memory systems"),
+        "majority community label replaces the ledger theme"
+    );
+    let caveated = model.claims.iter().find(|c| c.claim_id == "c02").unwrap();
+    assert_eq!(
+        caveated.theme.as_deref(),
+        Some("Unclassified"),
+        "no cited pack mapped → Unclassified"
+    );
+
+    // A corrupt themes.json fails loud instead of silently mis-theming.
+    std::fs::write(root.join(".ovp/crystal/themes.json"), "not json").unwrap();
+    assert!(build_index(root, "2026-06-09", None).is_err());
 }
 
 #[test]

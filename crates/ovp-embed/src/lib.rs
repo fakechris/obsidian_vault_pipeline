@@ -22,17 +22,33 @@ pub mod embedder;
 pub mod knn;
 pub mod louvain;
 
-/// Pinned production embedding model. Recorded in `themes.json` and in every
-/// cache entry; a cache entry embedded by a different model is a miss.
-pub const EMBED_MODEL_ID: &str = "intfloat/multilingual-e5-small";
+/// Pinned production embedding model — the EXACT model the theme spike
+/// validated as winner, served as fp32 ONNX by fastembed. Validation
+/// 2026-07-10 (`.run/theme-spike-20260709/sweep-minilmrs128-rs.json`):
+/// per-doc cosine parity vs the spike's sentence-transformers vectors =
+/// 1.0000, and the pinned recipe reproduces the winning row byte-for-byte
+/// (17 clusters ≥5, 96.6% coverage, 3.2% noise, 12.5% largest, 17/17
+/// bilingual, zh max-share 20.2%, 4/4 sampled bilingual pairs co-clustered).
+/// The originally mandated candidates FAILED the bilingual gates on the same
+/// harness: multilingual-e5-small concentrates 93–100% of zh/mixed docs into
+/// one near-pure Chinese cluster (0–1/4 pairs); mpnet and bge-m3 pass
+/// structure but split a sampled pair (3/4). Recorded in `themes.json` and in
+/// every cache entry; a cache entry embedded by a different model is a miss.
+pub const EMBED_MODEL_ID: &str = "Xenova/paraphrase-multilingual-MiniLM-L12-v2";
 /// Embedding dimension of [`EMBED_MODEL_ID`].
 pub const EMBED_DIM: usize = 384;
-/// E5-family models are trained with an instruction prefix; fastembed does NOT
-/// add it, so we pin it here as part of the recipe (symmetric across all docs —
-/// clustering only needs consistency, but the prefix is what the model saw in
-/// training and measurably improves its geometry).
-pub const EMBED_TEXT_PREFIX: &str = "passage: ";
-/// Head window fed to the embedder: title + first ~1500 chars of the body.
+/// Token cap at inference — part of the validated recipe. sentence-transformers
+/// caps this model at 128; fastembed defaults to 512, and at 512 the same
+/// model drifts back toward language-segregated clusters (zh max-share 46%).
+pub const EMBED_MAX_TOKENS: usize = 128;
+/// Instruction prefix added at inference time. Empty for the paraphrase
+/// family (kept as a pinned recipe knob — E5-family models would need
+/// `"passage: "` here, and the prefix is deliberately NOT part of the cache
+/// key).
+pub const EMBED_TEXT_PREFIX: &str = "";
+/// Head window fed to the embedder: title + first ~1500 chars of the body
+/// (the tokenizer then truncates at [`EMBED_MAX_TOKENS`] — same shape the
+/// spike corpus used).
 pub const EMBED_HEAD_CHARS: usize = 1500;
 
 /// Build the canonical embed text for a document: `title\n` + the first

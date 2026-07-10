@@ -1,9 +1,10 @@
 //! The feature-gated fastembed wrapper (compiled only with `--features embed`).
 //!
-//! Model: [`crate::EMBED_MODEL_ID`] (intfloat/multilingual-e5-small, 384d,
-//! MIT, ~120MB ONNX). fastembed mean-pools and L2-normalizes; the E5
-//! instruction prefix is added HERE (fastembed does not), pinned via
-//! [`crate::EMBED_TEXT_PREFIX`].
+//! Model: [`crate::EMBED_MODEL_ID`] (paraphrase-multilingual-MiniLM-L12-v2,
+//! 384d, Apache-2.0, ~450MB fp32 ONNX — the exact theme-spike winner,
+//! reproduced at cosine parity 1.0000). fastembed mean-pools and
+//! L2-normalizes; the token cap is pinned to [`crate::EMBED_MAX_TOKENS`]
+//! because the validated geometry depends on it.
 //!
 //! Model files download once (checksummed by hf-hub) into the fastembed
 //! cache: `$FASTEMBED_CACHE_DIR` if set, else `~/.cache/ovp/models`. Offline
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
-use crate::{EMBED_DIM, EMBED_MODEL_ID, EMBED_TEXT_PREFIX};
+use crate::{EMBED_DIM, EMBED_MAX_TOKENS, EMBED_MODEL_ID, EMBED_TEXT_PREFIX};
 
 /// Where model files live. `$FASTEMBED_CACHE_DIR` wins; otherwise
 /// `~/.cache/ovp/models`; otherwise (no HOME) a local `.fastembed_cache`.
@@ -42,8 +43,9 @@ impl Embedder {
     /// hf-hub download progress to stderr — enable in interactive commands.
     pub fn new(show_progress: bool) -> Result<Self, String> {
         let cache = model_cache_dir();
-        let opts = InitOptions::new(EmbeddingModel::MultilingualE5Small)
+        let opts = InitOptions::new(EmbeddingModel::ParaphraseMLMiniLML12V2)
             .with_cache_dir(cache.clone())
+            .with_max_length(EMBED_MAX_TOKENS)
             .with_show_download_progress(show_progress);
         let inner = TextEmbedding::try_new(opts).map_err(|e| {
             format!(
@@ -54,8 +56,9 @@ impl Embedder {
         Ok(Self { inner })
     }
 
-    /// Embed documents (the pinned `passage: ` prefix is added internally).
-    /// Returns one L2-normalized [`EMBED_DIM`]-vector per input, in order.
+    /// Embed documents (the pinned [`EMBED_TEXT_PREFIX`] is added
+    /// internally — empty for the paraphrase family). Returns one
+    /// L2-normalized [`EMBED_DIM`]-vector per input, in order.
     pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let prefixed: Vec<String> = texts
             .iter()
