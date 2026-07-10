@@ -184,6 +184,22 @@ pub fn run_experiment(args: ExperimentArgs) -> Result<(), CliError> {
             "crystal-synth: --experiment-slice must be greater than 0".into(),
         ));
     }
+    // Arm B enforces these in run_stats, but by then arm A has already spent
+    // its (possibly live) budget — refuse impossible llm bounds before any arm.
+    if args.max_cases_per_cluster < 3 {
+        return Err(CliError::Gate(
+            "crystal-synth: --experiment needs --max-cases-per-cluster >= 3 \
+             (arm B's cluster_select/v1 selects 3..=cap case ids)"
+                .into(),
+        ));
+    }
+    if args.neighborhood < 2 {
+        return Err(CliError::Gate(
+            "crystal-synth: --experiment needs --neighborhood >= 2 \
+             (arm B offers seed + neighborhood and a valid cluster needs at least 3)"
+                .into(),
+        ));
+    }
     let embed_cache_dir = args
         .embed_cache_dir
         .clone()
@@ -276,6 +292,18 @@ pub fn run_experiment(args: ExperimentArgs) -> Result<(), CliError> {
     write_json(&args.work_dir.join("slice.json"), &slice)?;
 
     // ---- Arms: same packs, fresh stores, separate cassette dirs. ----
+    // The documented live-then-replay workflow reuses the work dir, so each
+    // arm's store must be recreated per run: a leftover ledger would mark the
+    // slice packs covered (arm B skips selection entirely) and contaminate
+    // every yield metric. The cassette dirs are deliberately PRESERVED —
+    // record once with `--client live`, replay offline forever after.
+    for name in ["arm-a", "arm-b"] {
+        let store = args.work_dir.join(name).join("store");
+        if store.exists() {
+            std::fs::remove_dir_all(&store)
+                .map_err(|e| CliError::Io(format!("clearing {}: {e}", store.display())))?;
+        }
+    }
     let arm_args = |mode: ClusterMode, name: &str| CrystalSynthArgs {
         reader_dir: Some(slice_dir.clone()),
         vault_root: None,
@@ -355,11 +383,23 @@ pub fn run_experiment(args: ExperimentArgs) -> Result<(), CliError> {
         "\n  comparison: {}",
         args.work_dir.join("comparison.json").display()
     );
+    // A failed arm is a failed experiment: the diagnostics above (table +
+    // comparison.json with ok=false and the error) are written first, then the
+    // failure propagates so callers/CI never mistake a broken run for data.
+    let mut failures: Vec<String> = Vec::new();
     if let Err(e) = &a {
         eprintln!("crystal-synth: experiment: arm A failed: {e:?}");
+        failures.push(format!("arm A (batch) failed: {e:?}"));
     }
     if let Err(e) = &b {
         eprintln!("crystal-synth: experiment: arm B failed: {e:?}");
+        failures.push(format!("arm B (llm) failed: {e:?}"));
+    }
+    if !failures.is_empty() {
+        return Err(CliError::Gate(format!(
+            "crystal-synth: experiment: {} (see comparison.json for the partial run)",
+            failures.join("; ")
+        )));
     }
     Ok(())
 }
@@ -560,7 +600,7 @@ mod tests {
         let sel_c = cluster_select_request(&digests["2026-06-03_c"], &neighborhood("2026-06-03_c"), 16);
         write_cassette(&cache_b, &sel_c, r#"{"refuse":true,"reason":"no cluster"}"#);
 
-        run_experiment(ExperimentArgs {
+        let mk_args = || ExperimentArgs {
             reader_dir: Some(reader.clone()),
             vault_root: None,
             store: Some(store.clone()),
@@ -574,8 +614,8 @@ mod tests {
             neighborhood: 12,
             max_cases_per_cluster: 16,
             max_units_per_case: 22,
-        })
-        .expect("experiment run");
+        };
+        run_experiment(mk_args()).expect("first experiment run");
 
         // The REAL store was only read — never created/written.
         assert!(!store.join("ledger.jsonl").exists());
@@ -601,6 +641,135 @@ mod tests {
         assert!(work.join("arm-a/store/ledger.jsonl").exists());
         assert!(work.join("arm-b/store/ledger.jsonl").exists());
         assert!(work.join("slice.json").exists());
+
+        // Replay purity: the documented live-then-replay workflow reuses the
+        // SAME work dir. The arm stores from the first run must not leak into
+        // the second (a leftover ledger marks the slice covered → arm B skips
+        // selection and every metric collapses). Same cassettes → the second
+        // run's metrics equal the first's, byte for byte.
+        run_experiment(mk_args()).expect("second experiment run (same work dir)");
+        let comparison2: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(work.join("comparison.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            comparison2, comparison,
+            "replaying in the same work dir must reproduce the first run's metrics"
+        );
+    }
+
+    /// Arm A replays to success but arm B has no cassettes: the experiment
+    /// must still write diagnostics (comparison.json with ok=false + error)
+    /// and then PROPAGATE the failure — a broken run is never reported as Ok.
+    #[test]
+    fn failed_arm_propagates_error_after_writing_comparison() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        let embed = tmp.path().join("embed-cache");
+        let store = tmp.path().join("real-store"); // empty → all uncovered
+        let work = tmp.path().join("work");
+        let cases = [
+            ("2026-06-01_a", "Alpha memory", "Alpha says memory is a scarce budget."),
+            ("2026-06-02_b", "Beta context", "Beta says context is a scarce budget."),
+        ];
+        let vecs: [[f32; 3]; 2] = [[1.0, 0.05, 0.0], [1.0, 0.0, 0.05]];
+        for ((case_id, title, body), v) in cases.iter().zip(vecs) {
+            write_pack(&reader, case_id, title, body);
+            seed_vector(&embed, &reader, case_id, title, v);
+        }
+        let catalog: UnitsCatalog =
+            ovp_domain::crystal::synth::collect_catalog(&reader).unwrap();
+        let ua = catalog.cases["2026-06-01_a"].units[0].unit_id.clone();
+        let ub = catalog.cases["2026-06-02_b"].units[0].unit_id.clone();
+
+        // ---- Arm A cassettes ONLY (arm B's select call will replay-miss). ----
+        let cache_a = work.join("cassettes-arm-a");
+        let clusters = clusters_date_ordered(&catalog, 16);
+        let batches = cluster_batches(&clusters, 16);
+        let synth_a = crystal_synth_batch_request(&catalog, &batches[0], 22);
+        let synth_a_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Alpha and Beta treat capacity as a scarce budget.","theme":"batch","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context is a scarce budget"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache_a, &synth_a, &synth_a_reply);
+        let grounded_a = CrystalCandidate {
+            items: parse_synth_claims(&synth_a_reply, &batches[0].claim_prefix()).unwrap(),
+        };
+        write_cassette(
+            &cache_a,
+            &strength_request(&grounded_a, &catalog),
+            &format!(
+                r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"ok"}}]"#,
+                grounded_a.items[0].id
+            ),
+        );
+
+        let err = run_experiment(ExperimentArgs {
+            reader_dir: Some(reader.clone()),
+            vault_root: None,
+            store: Some(store.clone()),
+            themes_file: None,
+            embed_cache_dir: Some(embed.clone()),
+            work_dir: work.clone(),
+            client_kind: ClientKind::Replay,
+            slice: 2,
+            seed: 42,
+            max_seeds: 0,
+            neighborhood: 12,
+            max_cases_per_cluster: 16,
+            max_units_per_case: 22,
+        })
+        .expect_err("a failed arm must fail the experiment");
+        assert!(matches!(err, CliError::Gate(_)), "{err:?}");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("arm B"), "failure names the failed arm: {msg}");
+
+        // Diagnostics were written BEFORE the failure propagated.
+        let comparison: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(work.join("comparison.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(comparison[0]["ok"], true, "{}", comparison[0]);
+        assert_eq!(comparison[1]["ok"], false, "{}", comparison[1]);
+        assert!(
+            !comparison[1]["error"].as_str().unwrap_or_default().is_empty(),
+            "arm B's error is recorded in comparison.json"
+        );
+    }
+
+    /// llm-arm bounds that make every cluster_select/v1 call unsatisfiable
+    /// are refused BEFORE any arm runs (arm A must never spend live budget
+    /// on an experiment whose arm B is doomed by construction).
+    #[test]
+    fn experiment_rejects_impossible_llm_bounds_before_any_arm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mk = |cap: usize, neigh: usize| ExperimentArgs {
+            reader_dir: Some(tmp.path().join("reader")),
+            vault_root: None,
+            store: Some(tmp.path().join("real-store")),
+            themes_file: None,
+            embed_cache_dir: Some(tmp.path().join("embed-cache")),
+            work_dir: tmp.path().join("work"),
+            client_kind: ClientKind::Replay,
+            slice: 2,
+            seed: 42,
+            max_seeds: 0,
+            neighborhood: neigh,
+            max_cases_per_cluster: cap,
+            max_units_per_case: 22,
+        };
+        let err = run_experiment(mk(2, 12)).expect_err("cap < 3 must be refused");
+        assert!(matches!(err, CliError::Gate(_)), "{err:?}");
+        assert!(format!("{err:?}").contains("max-cases-per-cluster"));
+        let err = run_experiment(mk(16, 1)).expect_err("neighborhood < 2 must be refused");
+        assert!(matches!(err, CliError::Gate(_)), "{err:?}");
+        assert!(format!("{err:?}").contains("neighborhood"));
+        assert!(
+            !tmp.path().join("work").exists(),
+            "refused before creating the work dir or running any arm"
+        );
     }
 
     #[test]

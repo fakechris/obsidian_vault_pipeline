@@ -341,15 +341,18 @@ pub(crate) fn run_sweep(
     let mut repairs: Vec<RepairLog> = Vec::new();
 
     for seed in &seeds {
-        if stats.select_calls >= cfg.max_seeds {
-            stats.budget_exhausted = true;
-            break;
-        }
-        // Seeds covered by claims written earlier in THIS run drop out.
+        // Seeds covered by claims written earlier in THIS run drop out. This
+        // check runs BEFORE the budget check: a final permitted selection that
+        // covers every remaining seed is a complete sweep, not an exhausted
+        // budget (and each covered seed still counts as covered_mid_run).
         if covered.contains(seed) {
             stats.covered_mid_run += 1;
             write_line(&SeedReport::new(seed, "covered"))?;
             continue;
+        }
+        if stats.select_calls >= cfg.max_seeds {
+            stats.budget_exhausted = true;
+            break;
         }
         let neighbor_ids = neighborhood_of(seed, &vectors, cfg.neighborhood);
         let neighbor_digests: Vec<CaseDigest> = neighbor_ids
@@ -1008,6 +1011,134 @@ mod tests {
         let msg = format!("{err:?}");
         assert!(msg.contains("crystal-themes"), "remedy named: {msg}");
         assert!(msg.contains("embed"), "{msg}");
+    }
+
+    /// Bounds that make every cluster_select/v1 call unsatisfiable (the
+    /// prompt demands 3..=cap ids from seed + neighborhood) must be refused
+    /// at validation time — before any IO or model spend.
+    #[test]
+    fn llm_mode_rejects_impossible_selection_bounds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        let work = tmp.path().join("work");
+
+        let mut args = llm_args(&reader, &work, Path::new("unused"));
+        args.max_cases_per_cluster = 2;
+        let err = run_stats(args).expect_err("cap < 3 must fail validation");
+        assert!(matches!(err, CliError::Gate(_)), "{err:?}");
+        assert!(format!("{err:?}").contains("at least 3"), "{err:?}");
+
+        let mut args = llm_args(&reader, &work, Path::new("unused"));
+        args.neighborhood = 1;
+        let err = run_stats(args).expect_err("neighborhood < 2 must fail validation");
+        assert!(matches!(err, CliError::Gate(_)), "{err:?}");
+        assert!(format!("{err:?}").contains("at least 2"), "{err:?}");
+
+        assert!(!work.exists(), "refused before any work-dir IO");
+    }
+
+    /// When the final permitted selection covers every remaining seed, the
+    /// sweep is COMPLETE — the covered check must run before the budget check
+    /// so the run never misreports budget_exhausted=true (or undercounts
+    /// covered_mid_run) with uncovered_after == 0.
+    #[test]
+    fn last_selection_covering_all_seeds_is_not_budget_exhausted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+
+        // Pre-existing ACTIVE claim covers d → uncovered seeds are a, b, c.
+        let store = work.join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        let record = ovp_domain::crystal::DurableRecord {
+            claim_key: "ck-covers-d-000".into(),
+            claim_id: "old-1".into(),
+            claim: "d already synthesized".into(),
+            theme: "t".into(),
+            source_cases: vec!["2026-06-04_d".into()],
+            citations: vec![],
+            provenance_score: 0.9,
+            provenance_class: ovp_domain::crystal::ProvenanceClass::Durable,
+            strength: ovp_domain::crystal::StrengthClass::Supported,
+            strength_rationale: "r".into(),
+            final_class: FinalClass::Durable,
+            run_id: "run-old".into(),
+            status: CrystalStatus::Active,
+        };
+        let event = ovp_domain::crystal::StoreEvent {
+            op: ovp_domain::crystal::StoreOp::Write,
+            record,
+            supersedes: None,
+            reason: None,
+        };
+        std::fs::write(
+            store.join("ledger.jsonl"),
+            format!("{}\n", serde_json::to_string(&event).unwrap()),
+        )
+        .unwrap();
+
+        // Seed a (the ONLY permitted select call): the selection yields one
+        // durable claim citing a, b AND c — everything still uncovered.
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(
+            &cache,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"scarce-budget framing across sources"}"#,
+        );
+        let cluster = Cluster {
+            key: "l3-2026-06-01_a".into(),
+            theme: "cross-source".into(),
+            cases: vec![
+                "2026-06-01_a".into(),
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+            ],
+        };
+        let synth_req = crystal_synth_request(&catalog, &cluster, 16, 22);
+        let ua = catalog.cases["2026-06-01_a"].units[0].unit_id.clone();
+        let ub = catalog.cases["2026-06-02_b"].units[0].unit_id.clone();
+        let uc = catalog.cases["2026-06-03_c"].units[0].unit_id.clone();
+        let synth_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"All three sources treat capacity as a scarce, bounded budget.","theme":"cross-source","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context window is a scarce budget"}},
+                {{"case_id":"2026-06-03_c","unit_id":"{uc}","quote":"retrieval must stay bounded"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache, &synth_req, &synth_reply);
+        let grounded = CrystalCandidate {
+            items: parse_synth_claims(&synth_reply, &cluster.key).unwrap(),
+        };
+        write_cassette(
+            &cache,
+            &strength_request(&grounded, &catalog),
+            &format!(
+                r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"all three quotes state a bounded budget"}}]"#,
+                grounded.items[0].id
+            ),
+        );
+
+        let mut args = llm_args(&reader, &work, &embed);
+        args.max_seeds = 1; // exactly the one permitted call
+        let stats = run_stats(args).expect("budgeted run that covers everything");
+        assert_eq!(stats.select_calls, 1);
+        assert_eq!(stats.durable_appended, 1);
+        assert_eq!(stats.uncovered_after, Some(0), "the last call covered b and c");
+
+        let sweep: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.join("l3-sweep-stats.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sweep["budget_exhausted"], false,
+            "a fully covered sweep is complete, not budget-exhausted: {sweep}"
+        );
+        assert_eq!(sweep["covered_mid_run"], 2, "b and c dropped out covered: {sweep}");
+        assert_eq!(sweep["uncovered_after"], 0, "{sweep}");
+        assert_eq!(sweep["selected"], 1, "{sweep}");
     }
 
     #[test]

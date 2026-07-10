@@ -275,9 +275,24 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                 "crystal-synth: --max-seeds must be greater than 0 in llm cluster mode".into(),
             ));
         }
-        if args.neighborhood == 0 {
+        // cluster_select/v1 must accept 3..=cap case ids and the offered set is
+        // seed + neighborhood. Bounds that make every selection unsatisfiable
+        // (cap < 3, or fewer than 2 neighbors offered) would waste the whole
+        // select budget on guaranteed refusals/failures — refuse them up front.
+        if args.max_cases_per_cluster < 3 {
             return Err(CliError::Gate(
-                "crystal-synth: --neighborhood must be greater than 0 in llm cluster mode".into(),
+                "crystal-synth: --max-cases-per-cluster must be at least 3 in llm cluster mode \
+                 (cluster_select/v1 selects 3..=cap case ids; a smaller cap makes every \
+                 selection invalid)"
+                    .into(),
+            ));
+        }
+        if args.neighborhood < 2 {
+            return Err(CliError::Gate(
+                "crystal-synth: --neighborhood must be at least 2 in llm cluster mode \
+                 (each seed is offered seed + neighborhood case ids and a valid cluster \
+                 needs at least 3)"
+                    .into(),
             ));
         }
         if args.embed_cache_dir.is_none() && args.vault_root.is_none() {
