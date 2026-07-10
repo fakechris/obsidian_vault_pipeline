@@ -114,7 +114,11 @@ fn main() {
                 id: i as i64,
                 label: c.theme.clone(),
                 label_zh: c.theme.clone(),
-                keywords: vec![c.key.clone()],
+                // Synthesis themes derive from KEYWORDS (`synth_theme()`),
+                // never the display label, so the keyword layer must carry
+                // the exact string the live cassettes were recorded with
+                // (the old bucket description) for keys to stay identical.
+                keywords: vec![c.theme.clone()],
                 size: c.cases.len(),
             })
             .collect(),

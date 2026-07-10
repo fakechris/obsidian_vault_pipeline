@@ -900,7 +900,10 @@ mod tests {
         let b = std::fs::read_to_string(work.join("synth-batches.json")).unwrap();
         let batches: serde_json::Value = serde_json::from_str(&b).unwrap();
         assert_eq!(batches.as_array().unwrap().len(), 2);
-        assert_eq!(batches[0]["theme"], "Memory & context budgets");
+        assert_eq!(
+            batches[0]["theme"], "memory",
+            "synthesis theme = deterministic keywords, never the display label"
+        );
 
         // A corrupt themes.json fails loud BEFORE any model call.
         let mut args = bare_args(&reader, &work);

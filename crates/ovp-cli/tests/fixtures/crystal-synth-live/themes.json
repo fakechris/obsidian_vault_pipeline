@@ -52,7 +52,7 @@
       "label": "Agents & agentic systems",
       "label_zh": "Agents & agentic systems",
       "keywords": [
-        "agents"
+        "Agents & agentic systems"
       ],
       "size": 12
     },
@@ -61,7 +61,7 @@
       "label": "Memory & context",
       "label_zh": "Memory & context",
       "keywords": [
-        "memory"
+        "Memory & context"
       ],
       "size": 3
     },
@@ -70,7 +70,7 @@
       "label": "Coding & software",
       "label_zh": "Coding & software",
       "keywords": [
-        "coding"
+        "Coding & software"
       ],
       "size": 4
     },
@@ -79,7 +79,7 @@
       "label": "Product & design",
       "label_zh": "Product & design",
       "keywords": [
-        "product"
+        "Product & design"
       ],
       "size": 2
     },
@@ -88,7 +88,7 @@
       "label": "Miscellaneous",
       "label_zh": "Miscellaneous",
       "keywords": [
-        "misc"
+        "Miscellaneous"
       ],
       "size": 13
     }

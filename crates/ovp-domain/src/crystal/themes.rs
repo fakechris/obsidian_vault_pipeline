@@ -72,6 +72,32 @@ pub struct ThemeCommunity {
     pub size: usize,
 }
 
+/// Keywords joined into a community's synthesis-context theme.
+const SYNTH_THEME_KEYWORDS: usize = 3;
+
+impl ThemeCommunity {
+    /// Deterministic synthesis-context theme: the top c-TF-IDF keywords —
+    /// NEVER `label`/`label_zh` (codex P1). Labels are PRESENTATION-ONLY:
+    /// they change under a `--client live` relabel, and a display rename must
+    /// not change synthesis prompts (→ cassette keys → potentially the
+    /// durable claim wording appended to the ledger). A community's stable
+    /// synthesis identity is its id (the cluster key `t{id:03}`, which
+    /// prefixes claim ids) plus these deterministic keywords.
+    pub fn synth_theme(&self) -> String {
+        let head: Vec<&str> = self
+            .keywords
+            .iter()
+            .take(SYNTH_THEME_KEYWORDS)
+            .map(String::as_str)
+            .collect();
+        if head.is_empty() {
+            format!("t{:03}", self.id)
+        } else {
+            head.join(" · ")
+        }
+    }
+}
+
 /// The whole projection file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThemesFile {
@@ -175,6 +201,8 @@ pub fn input_hash(inputs: &[(String, String)]) -> String {
 /// community. Cases missing from the projection or mapped to noise fall into
 /// a trailing `unclassified` cluster. Deterministic: communities in file
 /// order, cases sorted within each cluster; empty clusters are dropped.
+/// Cluster themes come from [`ThemeCommunity::synth_theme`] (id + keywords),
+/// never the display label — relabeling must not change synthesis requests.
 pub fn clusters_from_themes(catalog: &UnitsCatalog, themes: &ThemesFile) -> Vec<Cluster> {
     let mut by_id: BTreeMap<i64, Vec<String>> = BTreeMap::new();
     let mut unclassified: Vec<String> = Vec::new();
@@ -192,7 +220,7 @@ pub fn clusters_from_themes(catalog: &UnitsCatalog, themes: &ThemesFile) -> Vec<
             cases.sort();
             clusters.push(Cluster {
                 key: format!("t{:03}", community.id),
-                theme: community.label.clone(),
+                theme: community.synth_theme(),
                 cases,
             });
         }
@@ -410,11 +438,53 @@ mod tests {
         let clusters = clusters_from_themes(&cat, &t);
         assert_eq!(clusters.len(), 3);
         assert_eq!(clusters[0].key, "t000");
-        assert_eq!(clusters[0].theme, "Agent memory");
+        assert_eq!(
+            clusters[0].theme, "memory",
+            "synthesis theme = keywords, never the display label"
+        );
         assert_eq!(clusters[0].cases, vec!["case-a", "case-b"]);
         assert_eq!(clusters[1].key, "t001");
+        assert_eq!(clusters[1].theme, "quant");
         assert_eq!(clusters[2].key, "unclassified");
         assert_eq!(clusters[2].cases, vec!["case-new", "case-noise"]);
+    }
+
+    #[test]
+    fn synth_theme_joins_keywords_and_falls_back_to_the_id() {
+        let mut c = themes_fixture().communities[0].clone();
+        c.keywords = vec!["memory".into(), "context".into(), "agent".into(), "extra".into()];
+        assert_eq!(c.synth_theme(), "memory · context · agent", "top-3 join");
+        c.keywords.clear();
+        assert_eq!(c.synth_theme(), "t000", "keyword-less community falls back to its id");
+    }
+
+    #[test]
+    fn relabeling_a_community_does_not_change_synth_requests() {
+        use crate::crystal::synth::{cluster_batches, crystal_synth_batch_request};
+        let cat = catalog_of(&["case-a", "case-b", "case-c"]);
+        let t = themes_fixture();
+        let key_of = |themes: &ThemesFile| -> Vec<String> {
+            cluster_batches(&clusters_from_themes(&cat, themes), 16)
+                .iter()
+                .map(|b| ovp_llm::request_key(&crystal_synth_batch_request(&cat, b, 22)))
+                .collect()
+        };
+        let before = key_of(&t);
+        // A presentation-only relabel (what `--client live` does) must not
+        // move a single cassette key or change any prompt byte.
+        let mut relabeled = t.clone();
+        relabeled.communities[0].label = "Totally new LLM name".into();
+        relabeled.communities[0].label_zh = "全新名字".into();
+        relabeled.communities[1].label = "Another rename".into();
+        relabeled.labels_provenance = LabelsProvenance::Llm;
+        assert_eq!(key_of(&relabeled), before);
+        // And the label text never appears in the request payload.
+        for b in cluster_batches(&clusters_from_themes(&cat, &relabeled), 16) {
+            let req = crystal_synth_batch_request(&cat, &b, 22);
+            let ModelMessage::User { content } = &req.messages[0] else { panic!() };
+            assert!(!content.contains("Totally new LLM name"), "{content}");
+            assert!(!content.contains("Another rename"), "{content}");
+        }
     }
 
     #[test]

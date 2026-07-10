@@ -16,6 +16,8 @@
 //! taxonomy was retired for semantic themes (M-semantic-themes), the fixture
 //! was migrated — synth cassettes byte-identical, strength cassettes re-keyed
 //! for the new claim-id prefixes — by `examples/migrate_live_fixture.rs`.
+//! Synthesis themes derive from community KEYWORDS (never display labels),
+//! so the fixture's keyword layer carries the exact recorded prompt strings.
 
 use std::path::PathBuf;
 use std::process::Command;

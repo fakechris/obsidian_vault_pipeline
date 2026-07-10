@@ -100,10 +100,16 @@ clusters-*RS128*.md}` (main repo).
   - `crystal-synth`: batches = themes.json communities when present
     (`--themes-file` or `<vault>/.ovp/crystal/themes.json`), else
     deterministic date-ordered cap-size batches with an explicit stderr note.
-    Stage 3a full-coverage sub-batching unchanged. The M32 live-repro fixture
-    was migrated losslessly (`crates/ovp-cli/examples/migrate_live_fixture.rs`).
+    The synthesis-context theme is `ThemeCommunity::synth_theme()` — the
+    deterministic c-TF-IDF keywords — NEVER the display label, so a
+    presentation-only relabel cannot change cassette keys or durable claim
+    wording. Stage 3a full-coverage sub-batching unchanged. The M32
+    live-repro fixture was migrated losslessly
+    (`crates/ovp-cli/examples/migrate_live_fixture.rs`).
   - `crystal-review-session`: `new_sources_in_theme` defer triggers count
-    packs by community label (title-containment fallback without themes.json).
+    packs by STABLE community identity — the communities of the entry's
+    cited packs, by id (never label text); without themes.json, the cited
+    packs plus legacy title-containment.
   - `daily`: prints a one-line hint when packs are missing from themes.json;
     it never auto-runs crystal-themes (first-run model download surprise).
 - **Degradation contract**: no `embed` feature / no model / offline cold
