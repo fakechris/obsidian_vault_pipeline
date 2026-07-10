@@ -32,6 +32,10 @@ web-fetch-live = ["ovp-enrich/web-fetch-live"]
 # Forwards to ovp-enrich/github-live: live GitHub API for enriching
 # repo URLs. OFF by default — the offline build only uses fixtures.
 github-live = ["ovp-enrich/github-live"]
+# Forwards to ovp-embed/embed: the fastembed+ONNX multilingual embedder for
+# `crystal-themes`. OFF by default (heavy native deps); without it the command
+# still runs on a warmed .ovp/cache/embeddings and skips gracefully otherwise.
+embed = ["ovp-embed/embed"]
 
 [dependencies]
 ovp-core = { path = "../ovp-core", features = ["fakes"] }
@@ -55,6 +59,9 @@ ovp-memory = { path = "../ovp-memory" }
 ovp-server = { path = "../ovp-server" }
 ovp-mcp = { path = "../ovp-mcp" }
 ovp-evolve = { path = "../ovp-evolve" }
+# Always linked for the pure clustering/cache layer; the heavy ONNX embedder
+# only compiles under the `embed` feature below.
+ovp-embed = { path = "../ovp-embed" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

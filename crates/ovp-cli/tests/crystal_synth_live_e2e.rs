@@ -2,7 +2,7 @@
 //! (captured 2026-07-01 against MiniMax `MiniMax-M2.7-highspeed`) end-to-end
 //! from committed fixtures, zero network.
 //!
-//! Pins the full pipeline shape on real data: 34 reader packs → 5 keyword
+//! Pins the full pipeline shape on real data: 34 reader packs → 5 theme
 //! clusters → 28 synthesized claims → 3 dropped ungrounded → 22 durable
 //! claims + 3 review, idempotent on re-run. The replay client fails loud on
 //! any cassette miss, so this also pins the deterministic request-building
@@ -10,9 +10,12 @@
 //! change that alters a request key breaks this test and must re-record.
 //!
 //! Fixture: `tests/fixtures/crystal-synth-live/` — the 34 pilot reader packs
-//! (units.accepted.json + reader.md) and the 7 replay cassettes (5 synth
-//! clusters + 2 chunked strength calls), curated per AGENTS.md from the run
-//! whose verdict closed M32 P0 #2.
+//! (units.accepted.json + reader.md), the 7 replay cassettes (5 synth
+//! clusters + 2 chunked strength calls), and a `themes.json` whose
+//! communities reproduce the live run's grouping exactly. When the keyword
+//! taxonomy was retired for semantic themes (M-semantic-themes), the fixture
+//! was migrated — synth cassettes byte-identical, strength cassettes re-keyed
+//! for the new claim-id prefixes — by `examples/migrate_live_fixture.rs`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -38,6 +41,8 @@ fn live_repro_34_sources_to_22_durable_and_idempotent() {
             .args(["crystal-synth", "--client", "replay"])
             .arg("--reader-dir")
             .arg(fixture("reader"))
+            .arg("--themes-file")
+            .arg(fixture("themes.json"))
             .arg("--cache-dir")
             .arg(fixture("cassettes"))
             .arg("--work-dir")

@@ -1,0 +1,96 @@
+{
+  "schema": "ovp.themes/v1",
+  "model": "fixture-migration/keyword-era",
+  "params": {
+    "k": 10,
+    "cosine_threshold": 0.5,
+    "resolution": 1.5,
+    "seed": 42,
+    "text_prefix": "",
+    "head_chars": 1500
+  },
+  "generated_from": "keyword-era-live-repro",
+  "packs": {
+    "0951c213": 3,
+    "108a8866": 0,
+    "16b9efb0": 4,
+    "1e46420c": 0,
+    "1e71518d": 4,
+    "35163299": 4,
+    "3762153a": 0,
+    "38bb3a94": 4,
+    "450ff3ad": 4,
+    "55ec4026": 0,
+    "57aad4aa": 0,
+    "613d6af3": 2,
+    "63ed0f12": 2,
+    "69ffd7b8": 2,
+    "6e2a8f16": 0,
+    "6fd03526": 1,
+    "727a61c0": 1,
+    "7b83aeac": 4,
+    "7bfafeb3": 0,
+    "867f87a4": 0,
+    "89acaaf4": 4,
+    "95f46107": 4,
+    "99b4b470": 4,
+    "b53f2eed": 0,
+    "bbf915a7": 4,
+    "bd988563": 0,
+    "c038f472": 1,
+    "c4d3e698": 2,
+    "c5124f0e": 3,
+    "d79530d3": 4,
+    "d96493c6": 0,
+    "ed6ce9ec": 4,
+    "f10a26e4": 4,
+    "facf6200": 0
+  },
+  "communities": [
+    {
+      "id": 0,
+      "label": "Agents & agentic systems",
+      "label_zh": "Agents & agentic systems",
+      "keywords": [
+        "agents"
+      ],
+      "size": 12
+    },
+    {
+      "id": 1,
+      "label": "Memory & context",
+      "label_zh": "Memory & context",
+      "keywords": [
+        "memory"
+      ],
+      "size": 3
+    },
+    {
+      "id": 2,
+      "label": "Coding & software",
+      "label_zh": "Coding & software",
+      "keywords": [
+        "coding"
+      ],
+      "size": 4
+    },
+    {
+      "id": 3,
+      "label": "Product & design",
+      "label_zh": "Product & design",
+      "keywords": [
+        "product"
+      ],
+      "size": 2
+    },
+    {
+      "id": 4,
+      "label": "Miscellaneous",
+      "label_zh": "Miscellaneous",
+      "keywords": [
+        "misc"
+      ],
+      "size": 13
+    }
+  ]
+}

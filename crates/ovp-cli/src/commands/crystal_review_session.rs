@@ -1,9 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use ovp_domain::crystal::synth::{
-    bucket_for, collect_catalog, parse_strength_verdicts, strength_request,
-};
+use ovp_domain::crystal::synth::{collect_catalog, parse_strength_verdicts, strength_request};
+use ovp_domain::crystal::themes::ThemesFile;
 use ovp_domain::crystal::{
     apply_decisions, defer_fired, strength_coverage, triviality_containment,
     ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalHeader, DeferState,
@@ -31,22 +30,37 @@ pub struct CrystalReviewSessionPrepareArgs {
     pub suggest: bool,
 }
 
-/// Does a pack title fall in the claim's theme? Claim themes carry EITHER the
-/// bucket key ("memory" — `parse_synth_claims`' fallback) or the bucket
-/// description ("Memory & context" — what models echo from the synth prompt),
-/// so both must match (gemini PR review).
-fn theme_matches(title: &str, theme: &str) -> bool {
-    let (key, description) = bucket_for(title);
-    key == theme || description == theme
+/// The reader-pack case id is its dir basename (== themes.json packs key).
+fn pack_case_id(pack_dir: &str) -> &str {
+    pack_dir.rsplit('/').next().unwrap_or(pack_dir)
+}
+
+/// Does a pack fall in the claim's theme? With the semantic projection the
+/// answer is exact: the pack's community label equals the theme (claim themes
+/// come from the same communities via the index projection / synth batches).
+/// Without themes.json (fresh vault, keyword-era queue) degrade to a
+/// case-insensitive title⊇theme containment so old defers can still fire.
+fn theme_matches(themes: Option<&ThemesFile>, pack_dir: &str, title: &str, theme: &str) -> bool {
+    match themes {
+        Some(t) => t.label_of(pack_case_id(pack_dir)) == Some(theme),
+        None => title.to_lowercase().contains(&theme.to_lowercase()),
+    }
 }
 
 /// The count a defer trigger is measured against, from the read model.
-fn trigger_count(model: &IndexModel, trigger: DeferTrigger, theme: &str) -> usize {
+fn trigger_count(
+    model: &IndexModel,
+    themes: Option<&ThemesFile>,
+    trigger: DeferTrigger,
+    theme: &str,
+) -> usize {
     match trigger {
         DeferTrigger::CorpusGrowsBy => model.packs.len(),
-        DeferTrigger::NewSourcesInTheme => {
-            model.packs.iter().filter(|p| theme_matches(&p.title, theme)).count()
-        }
+        DeferTrigger::NewSourcesInTheme => model
+            .packs
+            .iter()
+            .filter(|p| theme_matches(themes, &p.pack_dir, &p.title, theme))
+            .count(),
     }
 }
 
@@ -68,11 +82,20 @@ pub fn run_prepare(args: CrystalReviewSessionPrepareArgs) -> Result<(), CliError
     // items just because the index was not built.
     let has_defers = review.iter().any(|e| e.defer.is_some());
     if has_defers {
+        let themes = match ThemesFile::load(&args.vault_root.join(".ovp/crystal/themes.json")) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("  warning: ignoring themes.json for defer triggers ({e})");
+                None
+            }
+        };
         match ovp_index::read_index(&args.vault_root) {
             Ok(model) => {
                 let before = review.len();
                 review.retain(|e| match &e.defer {
-                    Some(d) => defer_fired(d, trigger_count(&model, d.trigger, &e.theme)),
+                    Some(d) => {
+                        defer_fired(d, trigger_count(&model, themes.as_ref(), d.trigger, &e.theme))
+                    }
                     None => true,
                 });
                 let skipped = before - review.len();
@@ -393,6 +416,13 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
     let mut entries = entries;
     let mut n_queue_ops = 0usize;
     let mut index_model: Option<IndexModel> = None;
+    let themes = match ThemesFile::load(&args.vault_root.join(".ovp/crystal/themes.json")) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("  warning: ignoring themes.json for defer baselines ({e})");
+            None
+        }
+    };
     for d in &decisions {
         match d.action {
             ReviewAction::DemoteToSourceInsight => {
@@ -412,7 +442,7 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
                 }
                 let model = index_model.as_ref().expect("just loaded");
                 if let Some(e) = entries.iter_mut().find(|e| e.claim_id == d.claim_id) {
-                    let baseline = trigger_count(model, spec.trigger, &e.theme);
+                    let baseline = trigger_count(model, themes.as_ref(), spec.trigger, &e.theme);
                     e.defer = Some(DeferState { trigger: spec.trigger, n: spec.n, baseline });
                     n_queue_ops += 1;
                 }
@@ -915,13 +945,52 @@ mod tests {
     }
 
     #[test]
-    fn theme_matches_accepts_bucket_key_and_description() {
-        // "Agent memory design" buckets to agents (first-match-wins).
-        assert!(super::theme_matches("Agent memory design", "agents"));
-        assert!(super::theme_matches("Agent memory design", "Agents & agentic systems"));
-        assert!(!super::theme_matches("Agent memory design", "memory"));
-        assert!(super::theme_matches("Context windows and memory", "Memory & context"));
-        assert!(super::theme_matches("Something entirely unrelated", "Miscellaneous"));
+    fn theme_matches_uses_community_labels_with_title_fallback() {
+        use ovp_domain::crystal::themes::{ThemeCommunity, ThemeParams, ThemesFile};
+        let themes = ThemesFile {
+            schema: "ovp.themes/v1".into(),
+            model: "test".into(),
+            params: ThemeParams {
+                k: 10,
+                cosine_threshold: 0.5,
+                resolution: 1.5,
+                seed: 42,
+                text_prefix: String::new(),
+                head_chars: 1500,
+            },
+            generated_from: "x".into(),
+            packs: std::collections::BTreeMap::from([("m18-01".to_string(), 0)]),
+            communities: vec![ThemeCommunity {
+                id: 0,
+                label: "Agent memory systems".into(),
+                label_zh: "智能体记忆系统".into(),
+                keywords: vec![],
+                size: 1,
+            }],
+        };
+        // Semantic path: exact community-label match by case id, regardless
+        // of the pack's display title.
+        assert!(super::theme_matches(
+            Some(&themes),
+            "40-Resources/Reader/m18-01",
+            "any title",
+            "Agent memory systems"
+        ));
+        assert!(!super::theme_matches(
+            Some(&themes),
+            "40-Resources/Reader/m18-01",
+            "any title",
+            "Quant markets"
+        ));
+        assert!(!super::theme_matches(
+            Some(&themes),
+            "40-Resources/Reader/m18-unknown",
+            "any title",
+            "Agent memory systems"
+        ));
+        // Fallback path (no themes.json): case-insensitive title containment.
+        assert!(super::theme_matches(None, "x", "Agent MEMORY design", "memory"));
+        assert!(!super::theme_matches(None, "x", "Something unrelated", "memory"));
     }
 
     #[test]

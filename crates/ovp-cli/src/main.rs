@@ -483,6 +483,12 @@ enum Cmd {
         /// `<work-dir>/store` (diagnostic).
         #[arg(long)]
         store: Option<PathBuf>,
+        /// Semantic themes projection used to group synthesis batches.
+        /// Default: `<vault-root>/.ovp/crystal/themes.json`. When the file is
+        /// absent, batches fall back to deterministic date order (run
+        /// `ovp2 crystal-themes` to build the projection).
+        #[arg(long)]
+        themes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
         /// Cassette root. Default: `<vault-root>/.ovp/cassettes/crystal` or
@@ -517,6 +523,38 @@ enum Cmd {
         /// if an internal batching bug would send an oversized request.
         #[arg(long)]
         strict_cluster_cap: bool,
+    },
+    /// Build the semantic display-theme projection (.ovp/crystal/themes.json)
+    /// over all reader packs: multilingual embeddings (cached) → Louvain
+    /// communities → c-TF-IDF keywords → bilingual labels. Rebuildable
+    /// projection; never touches the crystal ledger. Offline/no-model runs
+    /// skip gracefully (everything stays Unclassified).
+    CrystalThemes {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// `replay` (default) labels communities from their keywords; `live`
+        /// adds one cached bilingual theme_label/v1 LLM call per community.
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Cassette root for theme_label/v1. Default:
+        /// `<vault-root>/.ovp/cassettes/crystal`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Recompute even when themes.json matches the current pack set.
+        #[arg(long)]
+        refresh: bool,
+        /// kNN neighbors per doc (spike-validated default).
+        #[arg(long, default_value_t = 10)]
+        knn_k: usize,
+        /// Cosine edge threshold for the kNN graph.
+        #[arg(long, default_value_t = 0.5)]
+        cosine_threshold: f64,
+        /// Louvain resolution (higher → more, smaller communities).
+        #[arg(long, default_value_t = 1.5)]
+        resolution: f64,
+        /// Louvain shuffle seed (pinned for reproducibility).
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M25 Crystal Review Workbench: apply human review decisions over caveated
@@ -1251,6 +1289,7 @@ fn main() -> ExitCode {
             vault_root,
             work_dir,
             store,
+            themes_file,
             client,
             cache_dir,
             max_cases_per_cluster,
@@ -1275,6 +1314,7 @@ fn main() -> ExitCode {
                 vault_root,
                 work_dir,
                 store,
+                themes_file,
                 client_kind,
                 cache_dir,
                 max_cases_per_cluster,
@@ -1287,6 +1327,33 @@ fn main() -> ExitCode {
                 date,
                 strict,
                 strict_cluster_cap,
+            })
+        }
+        Cmd::CrystalThemes {
+            vault_root,
+            client,
+            cache_dir,
+            refresh,
+            knn_k,
+            cosine_threshold,
+            resolution,
+            seed,
+        } => {
+            use commands::client::ClientKind;
+            use commands::crystal_themes::CrystalThemesArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::crystal_themes::run(CrystalThemesArgs {
+                vault_root,
+                client_kind,
+                cache_dir,
+                refresh,
+                k: knn_k,
+                cosine_threshold,
+                resolution,
+                seed,
             })
         }
         Cmd::CrystalReview {
