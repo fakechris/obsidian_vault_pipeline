@@ -1252,14 +1252,63 @@ body {
   text-decoration: underline;
 }
 
-/* legacy deep links on the System placeholder */
+/* ---------- system page (B5) ---------- */
+
+/* pipeline-surface / admin-page link lists */
 .legacy-links {
   list-style: none;
-  margin: 0.4rem 0 0;
+  margin: 0.4rem 0 0.8rem;
   padding: 0;
 }
 .legacy-links li {
   padding: 0.15rem 0;
+}
+
+/* runs table: quiet 1px rules, numbers right-aligned */
+.runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ovp-text-sm);
+}
+.runs-table th,
+.runs-table td {
+  text-align: left;
+  padding: 0.35rem 0.6rem 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.runs-table th {
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.runs-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.runs-table td.warn {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+/* legacy Flow/Monitor canvas: the views keep their pre-B1 dark styling
+   (they are admin depth, slated for componentization); the portal shell
+   frames them with a fixed-height dark panel so their h-full layouts and
+   fixed dark-canvas colors keep working inside either portal theme. */
+.legacy-canvas {
+  height: 72vh;
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0f1117; /* legacy --color-bg, intentionally theme-fixed */
+}
+.legacy-loading {
+  padding: 2rem;
+  font-size: var(--ovp-text-sm);
+  color: #94a3b8; /* readable on the fixed dark canvas */
 }
 
 /* ---------- empty state ---------- */

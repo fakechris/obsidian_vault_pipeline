@@ -7,7 +7,7 @@
  * button in the top bar) open the same SearchOmnibox the /search page
  * renders (design §3.4). */
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { healthLevel } from '../lib/derive';
 import { useModel } from '../model';
@@ -88,6 +88,12 @@ function LangToggle() {
 export default function Shell() {
   const { t } = useI18n();
   const [searchOpen, setSearchOpen] = useState(false);
+  const location = useLocation();
+  // The legacy Flow/Monitor routes are System panels (B5): keep the System
+  // nav item highlighted while the URL is one of theirs.
+  const onLegacySystemRoute =
+    location.pathname.startsWith('/flow') ||
+    location.pathname.startsWith('/monitor');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -127,7 +133,11 @@ export default function Shell() {
                   key={item.to}
                   to={item.to}
                   end={item.end}
-                  className={({ isActive }) => (isActive ? 'active' : '')}
+                  className={({ isActive }) =>
+                    isActive || (item.to === '/system' && onLegacySystemRoute)
+                      ? 'active'
+                      : ''
+                  }
                 >
                   {t(item.key)}
                 </NavLink>

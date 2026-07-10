@@ -1,84 +1,56 @@
-import { lazy, Suspense } from 'react';
-import {
-  Navigate,
-  NavLink,
-  Outlet,
-  Route,
-  Routes,
-  useLocation,
-} from 'react-router-dom';
+import { lazy, Suspense, type ReactNode } from 'react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Shell from './components/Shell';
 import { ModelProvider } from './model';
-import { SystemPage } from './pages/PlaceholderPages';
+import { useI18n, type MsgKey } from './i18n';
 import AskPage from './pages/AskPage';
 import KnowledgePage from './pages/KnowledgePage';
 import LibraryPage from './pages/LibraryPage';
 import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
+import SystemPage from './pages/SystemPage';
 import ThemeDetailPage from './pages/ThemeDetailPage';
 import TodayPage from './pages/TodayPage';
-import { cn } from './lib/cn';
 
 // Flow/Monitor carry d3 — lazy so the portal pages stay light.
 const FlowPage = lazy(() => import('./pages/FlowPage'));
 const MonitorPage = lazy(() => import('./pages/MonitorPage'));
 
-// The last two pre-B1 console routes. The standalone viz navigation is
-// retired in B3 (design §2/§9): the old Graph page folded into
-// /knowledge?view=graph, Explore into /search. Flow and Monitor remain
-// reachable ONLY from the System placeholder link list until B5 rethemes
-// them into System panels — so this bar links back to the portal only.
-const LEGACY_NAV = [
-  { to: '/flow', label: 'Flow 流程' },
-  { to: '/monitor', label: 'Monitor 监控' },
-];
-
-function LegacyLayout() {
+/** The two remaining legacy views (Flow / Monitor), rethemed minimally in
+ * B5: they now live INSIDE the portal Shell (top nav visible; the System
+ * item stays highlighted — see Shell) with a DS-styled breadcrumb back to
+ * System. Their internal dark canvas is deliberately kept as-is — they are
+ * admin depth slated for componentization, and a full DS retheme is not
+ * worth it before that; what was jarring was the missing navigation. */
+function LegacyPanel({
+  titleKey,
+  children,
+}: {
+  titleKey: MsgKey;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
   return (
-    <div className="flex h-screen flex-col bg-bg font-sans text-slate-200 antialiased">
-      <nav className="flex h-12 shrink-0 items-center gap-1 border-b border-border-soft bg-panel px-4 backdrop-blur-xl">
-        <span className="mr-4 text-sm font-semibold tracking-wide text-slate-100">
-          OVP <span className="text-claim">Crystal</span>
-        </span>
-        {LEGACY_NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              cn(
-                'rounded-md px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200',
-                isActive && 'bg-white/10 text-slate-100',
-              )
-            }
-          >
-            {item.label}
-          </NavLink>
-        ))}
-        <NavLink
-          to="/system"
-          className="ml-auto rounded-md px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
-        >
-          ← ovp2 portal
-        </NavLink>
-      </nav>
-      <main className="relative min-h-0 flex-1">
+    <>
+      <div className="crumbs">
+        <Link to="/system">{t('nav.system')}</Link> / {t(titleKey)}
+      </div>
+      <div className="legacy-canvas">
         <Suspense
           fallback={
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
-              Loading…
-            </div>
+            <div className="legacy-loading">{t('common.loading')}</div>
           }
         >
-          <Outlet />
+          {children}
         </Suspense>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }
 
 /** Old /viz/* deep links (pre-B1 the SPA was mounted under /viz) redirect
  * to the pages that absorbed them: graph → the Knowledge graph view,
- * explore → search; flow/monitor keep their (legacy-themed) routes. */
+ * explore → search; flow/monitor keep their routes (now System panels). */
 function VizRedirect() {
   const location = useLocation();
   const rest = location.pathname.replace(/^\/viz\/?/, '/');
@@ -109,6 +81,22 @@ export default function App() {
           <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
           <Route path="/ask" element={<AskPage />} />
           <Route path="/system" element={<SystemPage />} />
+          <Route
+            path="/flow"
+            element={
+              <LegacyPanel titleKey="system.flowLink">
+                <FlowPage />
+              </LegacyPanel>
+            }
+          />
+          <Route
+            path="/monitor"
+            element={
+              <LegacyPanel titleKey="system.monitorLink">
+                <MonitorPage />
+              </LegacyPanel>
+            }
+          />
         </Route>
         {/* Retired standalone viz routes → their portal homes (design §2). */}
         <Route
@@ -116,10 +104,6 @@ export default function App() {
           element={<Navigate to="/knowledge?view=graph" replace />}
         />
         <Route path="/explore" element={<Navigate to="/search" replace />} />
-        <Route element={<LegacyLayout />}>
-          <Route path="/flow" element={<FlowPage />} />
-          <Route path="/monitor" element={<MonitorPage />} />
-        </Route>
         <Route path="/viz/*" element={<VizRedirect />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

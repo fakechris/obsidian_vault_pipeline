@@ -84,12 +84,15 @@ OVP2 Portal（主导航 = 用户任务 + 三层内容）
 - [ ] B2（进行中）：三层源详情 + `/api/source/:sha` + 邻域作用域 KnowledgeGraph + ClaimRow 日期。
 - [ ] B3：Knowledge 页（主题/主张详情 + 全局/主题图谱收编，/viz 独立导航下线）+ ⌘K 搜索。
 - [ ] B4：Ask 对话（/api/ask + 引用面板）。
-- [ ] B5：System 页收编 Flow/Monitor + 设置（语言/主题落位）+ 空态文案 + runbook 写入 serve 步骤。
 - [x] **B2 merged（#302，原 #299 被 stacked base 删除误关后重建）**：三层源详情 + /api/source/:sha + 邻域图谱。
 - [x] **B3 merged（#301）**：Knowledge 主题/详情页 + global/theme 图谱 + ⌘K 搜索 + /viz 独立导航下线（-1600 行死代码）。
-- [ ] B4 Ask 对话：开发完成，codex 门禁抓到 P1（ask 阻塞单线程 server）+3 P2，修复中。
-- [ ] B5 System 页 + 设置 + flow/monitor 收编 + runbook。
-**Status**: In Progress——B1-B3 已在 trunk 并对真实 vault 部署验证；B4 修门禁发现，B5 待启
+- [x] **B4 merged（#304）**：Ask 对话（POST /api/ask + 引用面板 + 历史会话），三轮 codex 门禁加固
+      （非阻塞 accept loop、读 body 前有界准入、CSRF 门、超时对齐 OVP_LLM_TIMEOUT_SECS、启动配置校验）。
+- [x] B5（本分支）：System 页真身（runs 表 + attention + 管线入口 + 概念说明 + 只读设置
+      `/api/settings`）；邻域图补记忆层（卡片节点 + `has_memory` 边——修 07-09 operator 发现的
+      72% 无引用源孤点问题）；Flow/Monitor 收进 portal Shell；zustand 移除；web_fetch 接受
+      markdown content-type；runbook 写入 serve 步骤。截图在 `.run/portal-v2-b5/`。
+**Status**: B1-B4 merged；B5 本分支收尾——之后 P.5 operator 终验走查
 
 **P.5 终验 demo**
 - [ ] 全链演示由 operator 本人执行一遍（P.1-P.4 全绿后），录入 `.run/m32-product-walkthrough/`。
