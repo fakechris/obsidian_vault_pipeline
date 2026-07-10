@@ -15,8 +15,46 @@ export function StatusPill({ status }: { status: SourceStatus }) {
   );
 }
 
-export function ClaimPill({ status }: { status: 'durable' | 'caveated' }) {
-  return <span className={`pill ${status}`}>{status}</span>;
+/** i18n key of the one-line concept tooltip for a claim status or entity
+ * kind pill; null for kinds the vocabulary does not know (the server may
+ * grow new citation kinds — those pills just render without a tooltip). */
+export function conceptTipKey(kind: string): MsgKey | null {
+  switch (kind) {
+    case 'durable':
+      return 'concept.durableTip';
+    case 'caveated':
+      return 'concept.caveatedTip';
+    case 'claim':
+      return 'concept.claimTip';
+    case 'card':
+      return 'concept.cardTip';
+    case 'unit':
+      return 'concept.unitTip';
+    default:
+      return null;
+  }
+}
+
+/** durable/caveated claim pill. Carries the plain-language one-liner as a
+ * tooltip by default (operator finding: the vocabulary needs explaining
+ * where it appears); `title` overrides it. */
+export function ClaimPill({
+  status,
+  title,
+}: {
+  status: 'durable' | 'caveated';
+  title?: string;
+}) {
+  const { t } = useI18n();
+  const tipKey = conceptTipKey(status);
+  return (
+    <span
+      className={`pill ${status}`}
+      title={title ?? (tipKey ? t(tipKey) : undefined)}
+    >
+      {status}
+    </span>
+  );
 }
 
 /** Collapsible "What is this page?" help block (DS extension #4). */

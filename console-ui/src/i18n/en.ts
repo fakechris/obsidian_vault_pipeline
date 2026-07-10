@@ -21,6 +21,20 @@ export const en = {
   'common.whatIsThisPage': 'What is this page?',
   'common.day': 'dogfood day',
 
+  // concept tooltips — plain-language one-liners for the pipeline vocabulary
+  // (operator finding: durable/caveated and unit/card need explaining
+  // wherever the pills render).
+  'concept.durableTip':
+    'Verified: every quoted citation was checked against the source text',
+  'concept.caveatedTip':
+    "Unverified: promising but the evidence didn't fully check out — treat with skepticism",
+  'concept.claimTip':
+    'Claim: a cross-source conclusion — durable (verified) or caveated (unverified)',
+  'concept.cardTip':
+    'Card: a readable distillation — every statement traceable to a grounded unit',
+  'concept.unitTip':
+    'Unit: a verbatim excerpt with line numbers — the evidence itself',
+
   // source statuses
   'sourceStatus.processed': 'processed',
   'sourceStatus.queued': 'queued',
@@ -93,7 +107,12 @@ export const en = {
   'source.tabMemory': 'Memory',
   'source.tabMemoryCounts': '{cards} cards · {units} units',
   'source.tabSource': 'Source',
+  'source.cardsTitle': 'Cards',
+  'source.cardsHint':
+    'Readable distillations of this source — every statement traceable to a grounded unit below.',
   'source.groundedUnits': 'Grounded units',
+  'source.unitsHint':
+    'Verbatim excerpts with line numbers — the evidence itself.',
   'source.unitNoLine': 'no line anchor',
   'source.noMemory':
     'No memory yet — this source has no cards or grounded units in its reader pack.',
@@ -134,6 +153,8 @@ export const en = {
     'What the knowledge base currently believes, grouped by theme. Durable claims passed every evidence gate; caveated claims carry a known weakness and await review.',
   'knowledge.helpLayers':
     'Three layers ground every claim: the source (the original markdown), its memory (cards and quoted units with line anchors), and the crystal (cross-source claims citing those units). Click through any claim to verify the chain.',
+  'knowledge.helpLadder':
+    'The ladder in plain language: source text → unit (a verifiable excerpt) → card (a readable understanding) → claim (a cross-source conclusion, always either durable or caveated).',
   'knowledge.viewList': 'List',
   'knowledge.viewGraph': 'Graph',
   'knowledge.empty':
@@ -145,6 +166,12 @@ export const en = {
     'All claims, colored by community. Click a node for a summary, double-click to open its theme.',
   'knowledge.unknownClaim':
     'No active claim "{id}" — it may have been superseded or retracted.',
+
+  // theme naming — the synthesizer's 'misc' fallback bucket is displayed
+  // honestly (display layer ONLY: keys, URLs and data stay 'misc').
+  'theme.unclassified': 'Unclassified',
+  'theme.unclassifiedNote':
+    "Sources that didn't match any keyword bucket — automatic clustering is a planned improvement (M34).",
 
   // theme detail
   'theme.counts': 'durable {durable} · caveated {caveated}',
