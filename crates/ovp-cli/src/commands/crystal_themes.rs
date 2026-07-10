@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 
 use ovp_domain::crystal::synth::resolve_title;
 use ovp_domain::crystal::themes::{
-    THEMES_SCHEMA, ThemeCommunity, ThemeParams, ThemesFile, UNCLASSIFIED_ID, input_hash,
-    parse_theme_label, theme_label_request,
+    LabelsProvenance, THEMES_SCHEMA, ThemeCommunity, ThemeParams, ThemesFile, UNCLASSIFIED_ID,
+    input_hash, parse_theme_label, theme_label_request,
 };
 use ovp_domain::vault_layout::VaultLayout;
 use ovp_embed::cache as embed_cache;
@@ -129,10 +129,12 @@ fn clean_reader_body(md: &str) -> String {
 /// `_fact_`, …) if present.
 fn strip_trailing_em_tag(s: &str) -> &str {
     let trimmed = s.trim_end();
-    if let Some(last) = trimmed.rsplit_once(char::is_whitespace).map(|(_, l)| l) {
-        if last.len() > 2 && last.starts_with('_') && last.ends_with('_') {
-            return trimmed[..trimmed.len() - last.len()].trim_end();
-        }
+    if let Some(last) = trimmed.rsplit_once(char::is_whitespace).map(|(_, l)| l)
+        && last.len() > 2
+        && last.starts_with('_')
+        && last.ends_with('_')
+    {
+        return trimmed[..trimmed.len() - last.len()].trim_end();
     }
     trimmed
 }
@@ -257,6 +259,28 @@ fn keyword_label(keywords: &[String]) -> String {
     }
 }
 
+/// Is an existing themes.json current for THIS invocation? The input hash
+/// alone is not enough (codex P1): clustering params can change without the
+/// pack set changing, and a keyword-labeled file must not satisfy the
+/// documented `--client live` relabel run. Provenance is one-way — `Llm`
+/// labels satisfy a keyword (replay) request, so an offline rerun never
+/// downgrades paid bilingual labels, but never the reverse. Any mismatch
+/// takes the full recompute path: embeddings are content-cached and the
+/// clustering is deterministic, so recompute costs seconds (correctness
+/// over cleverness).
+fn up_to_date(
+    existing: &ThemesFile,
+    generated_from: &str,
+    params: &ThemeParams,
+    requested_labels: LabelsProvenance,
+) -> bool {
+    existing.generated_from == generated_from
+        && existing.model == EMBED_MODEL_ID
+        && existing.params == *params
+        && (existing.labels_provenance == requested_labels
+            || requested_labels == LabelsProvenance::Keyword)
+}
+
 /// The `LABEL_SAMPLE_TITLES` member titles nearest the community centroid.
 fn centroid_titles(docs: &[ThemeDoc], vectors: &[Vec<f32>], members: &[usize]) -> Vec<String> {
     let dim = vectors.first().map(|v| v.len()).unwrap_or(0);
@@ -313,19 +337,30 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         .map(|d| (d.case_id.clone(), d.sha.clone()))
         .collect();
     let generated_from = input_hash(&inputs);
+    let requested_params = ThemeParams {
+        k: args.k,
+        cosine_threshold: args.cosine_threshold,
+        resolution: args.resolution,
+        seed: args.seed,
+        text_prefix: EMBED_TEXT_PREFIX.to_string(),
+        head_chars: EMBED_HEAD_CHARS,
+    };
+    let requested_labels = match args.client_kind {
+        ClientKind::Live => LabelsProvenance::Llm,
+        ClientKind::Replay => LabelsProvenance::Keyword,
+    };
 
-    if !args.refresh {
-        if let Ok(Some(existing)) = ThemesFile::load(&themes_path) {
-            if existing.generated_from == generated_from && existing.model == EMBED_MODEL_ID {
-                println!(
-                    "crystal-themes: up to date ({} pack(s), {} communit(ies)) — use --refresh to recompute",
-                    existing.packs.len(),
-                    existing.communities.len()
-                );
-                print_table(&existing);
-                return Ok(());
-            }
-        }
+    if !args.refresh
+        && let Ok(Some(existing)) = ThemesFile::load(&themes_path)
+        && up_to_date(&existing, &generated_from, &requested_params, requested_labels)
+    {
+        println!(
+            "crystal-themes: up to date ({} pack(s), {} communit(ies)) — use --refresh to recompute",
+            existing.packs.len(),
+            existing.communities.len()
+        );
+        print_table(&existing);
+        return Ok(());
     }
 
     // ---- Embeddings (cached, incremental) ----
@@ -419,17 +454,11 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
     let file = ThemesFile {
         schema: THEMES_SCHEMA.to_string(),
         model: EMBED_MODEL_ID.to_string(),
-        params: ThemeParams {
-            k: args.k,
-            cosine_threshold: args.cosine_threshold,
-            resolution: args.resolution,
-            seed: args.seed,
-            text_prefix: EMBED_TEXT_PREFIX.to_string(),
-            head_chars: EMBED_HEAD_CHARS,
-        },
+        params: requested_params,
         generated_from,
         packs,
         communities,
+        labels_provenance: requested_labels,
     };
     std::fs::create_dir_all(&store)
         .map_err(|e| CliError::Io(format!("creating {}: {e}", store.display())))?;
@@ -564,6 +593,135 @@ mod tests {
         a.refresh = true;
         run(a).expect("refresh run");
         assert_eq!(std::fs::read_to_string(&themes_path).unwrap(), first);
+    }
+
+    /// Minimal 2-pack vault with pre-seeded (near-identical) vectors — one
+    /// community, no network, works in `embed`-less builds.
+    fn seed_two_pack_vault(vault: &Path) {
+        let reader = vault.join(VaultLayout::new().reader_root());
+        let cases: [(&str, &str, &str, [f32; 3]); 2] = [
+            ("2026-06-01_mem-a", "Agent memory systems", "memory memory context agent", [1.0, 0.05, 0.0]),
+            ("2026-06-02_mem-b", "Working memory budget", "memory context budget agent", [1.0, 0.0, 0.05]),
+        ];
+        for (case_id, title, body, v) in cases {
+            write_pack(&reader, case_id, title, body);
+            seed_vector(vault, case_id, title, body, v);
+        }
+    }
+
+    fn test_params() -> ThemeParams {
+        ThemeParams {
+            k: 2,
+            cosine_threshold: 0.5,
+            resolution: 1.0,
+            seed: 42,
+            text_prefix: EMBED_TEXT_PREFIX.to_string(),
+            head_chars: EMBED_HEAD_CHARS,
+        }
+    }
+
+    fn themes_file(labels: LabelsProvenance) -> ThemesFile {
+        ThemesFile {
+            schema: THEMES_SCHEMA.to_string(),
+            model: EMBED_MODEL_ID.to_string(),
+            params: test_params(),
+            generated_from: "gf".to_string(),
+            packs: BTreeMap::new(),
+            communities: Vec::new(),
+            labels_provenance: labels,
+        }
+    }
+
+    #[test]
+    fn up_to_date_checks_params_and_label_provenance() {
+        let keyword = themes_file(LabelsProvenance::Keyword);
+        let llm = themes_file(LabelsProvenance::Llm);
+        let p = test_params();
+        // Identical rerun: fast path in both provenance directions that keep
+        // or improve labels.
+        assert!(up_to_date(&keyword, "gf", &p, LabelsProvenance::Keyword));
+        assert!(up_to_date(&llm, "gf", &p, LabelsProvenance::Llm));
+        // A replay run never downgrades paid LLM labels.
+        assert!(up_to_date(&llm, "gf", &p, LabelsProvenance::Keyword));
+        // The documented replay-then-live relabel: keyword file must NOT
+        // satisfy a live request.
+        assert!(!up_to_date(&keyword, "gf", &p, LabelsProvenance::Llm));
+        // Input-set change → recompute.
+        assert!(!up_to_date(&keyword, "other", &p, LabelsProvenance::Keyword));
+        // Any clustering-param change → recompute, even with the same packs.
+        for mutated in [
+            ThemeParams { k: 3, ..test_params() },
+            ThemeParams { cosine_threshold: 0.6, ..test_params() },
+            ThemeParams { resolution: 1.5, ..test_params() },
+            ThemeParams { seed: 7, ..test_params() },
+        ] {
+            assert!(
+                !up_to_date(&keyword, "gf", &mutated, LabelsProvenance::Keyword),
+                "{mutated:?} must force a recompute"
+            );
+        }
+    }
+
+    #[test]
+    fn param_change_recomputes_without_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        seed_two_pack_vault(vault);
+        run(args(vault)).expect("first run");
+        let themes_path = vault.join(".ovp/crystal/themes.json");
+        let first = ThemesFile::load(&themes_path).unwrap().unwrap();
+        assert_eq!(first.params.resolution, 1.0);
+        assert_eq!(first.labels_provenance, LabelsProvenance::Keyword);
+
+        // Same packs, different resolution, NO --refresh: must recompute.
+        let mut a = args(vault);
+        a.resolution = 2.0;
+        run(a).expect("param-change run");
+        let second = ThemesFile::load(&themes_path).unwrap().unwrap();
+        assert_eq!(
+            second.params.resolution, 2.0,
+            "reconfigured params must not be swallowed by the freshness fast path"
+        );
+    }
+
+    #[test]
+    fn live_request_over_llm_labeled_file_takes_the_fast_path() {
+        // An up-to-date, already-LLM-labeled file satisfies a `--client live`
+        // request WITHOUT building a client (run() returns before
+        // build_client), so this passes even in anthropic-less test builds.
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        seed_two_pack_vault(vault);
+        run(args(vault)).expect("replay run");
+        let themes_path = vault.join(".ovp/crystal/themes.json");
+        let body = std::fs::read_to_string(&themes_path)
+            .unwrap()
+            .replace("\"labels_provenance\": \"keyword\"", "\"labels_provenance\": \"llm\"");
+        std::fs::write(&themes_path, &body).unwrap();
+
+        let mut a = args(vault);
+        a.client_kind = ClientKind::Live;
+        run(a).expect("live rerun over llm-labeled file is a no-op fast path");
+        assert_eq!(std::fs::read_to_string(&themes_path).unwrap(), body, "file untouched");
+    }
+
+    #[cfg(not(feature = "anthropic"))]
+    #[test]
+    fn live_request_over_keyword_file_skips_the_fast_path() {
+        // A replay-generated (keyword-labeled) file must NOT satisfy a
+        // `--client live` relabel run. In an anthropic-less build the only
+        // observable difference is that run() proceeds far enough to try to
+        // build the live client — and fails loud instead of reporting
+        // "up to date" with keyword labels.
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        seed_two_pack_vault(vault);
+        run(args(vault)).expect("replay run");
+
+        let mut a = args(vault);
+        a.client_kind = ClientKind::Live;
+        let err = run(a).expect_err("live relabel must not take the keyword fast path");
+        assert!(format!("{err:?}").contains("--client live"), "got {err:?}");
     }
 
     #[test]

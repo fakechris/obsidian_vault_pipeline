@@ -48,6 +48,20 @@ pub struct ThemeParams {
     pub head_chars: usize,
 }
 
+/// How the community labels were produced. ADDITIVE to `ovp.themes/v1`:
+/// files written before this field existed deserialize as [`Keyword`]
+/// (`Keyword` was the only offline writer back then), so a later
+/// `--client live` run knows it still owes the bilingual naming pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelsProvenance {
+    /// Deterministic c-TF-IDF keyword labels (the offline default).
+    #[default]
+    Keyword,
+    /// Bilingual model-named labels (`--client live`, `theme_label/v1`).
+    Llm,
+}
+
 /// One discovered community.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThemeCommunity {
@@ -71,6 +85,12 @@ pub struct ThemesFile {
     /// pack missing from this map is by definition NEW (staleness check).
     pub packs: BTreeMap<String, i64>,
     pub communities: Vec<ThemeCommunity>,
+    /// How `communities[].label` was produced (additive; absent in older
+    /// files → [`LabelsProvenance::Keyword`]). Lets `crystal-themes` decide
+    /// whether a `--client live` run still needs to relabel an otherwise
+    /// up-to-date projection.
+    #[serde(default)]
+    pub labels_provenance: LabelsProvenance,
 }
 
 impl ThemesFile {
@@ -194,15 +214,15 @@ fn case_date(case_id: &str) -> Option<&str> {
     let is_date = |s: &str| {
         s.len() == 10 && s.bytes().all(|b| b.is_ascii_digit() || b == b'-') && s.as_bytes()[4] == b'-'
     };
-    if let Some(d) = case_id.get(..10) {
-        if is_date(d) {
-            return Some(d);
-        }
+    if let Some(d) = case_id.get(..10)
+        && is_date(d)
+    {
+        return Some(d);
     }
-    if let Some(d) = case_id.get(9..19) {
-        if is_date(d) {
-            return Some(d);
-        }
+    if let Some(d) = case_id.get(9..19)
+        && is_date(d)
+    {
+        return Some(d);
     }
     None
 }
@@ -309,7 +329,30 @@ mod tests {
                     size: 1,
                 },
             ],
+            labels_provenance: LabelsProvenance::Keyword,
         }
+    }
+
+    #[test]
+    fn labels_provenance_is_additive_older_files_default_to_keyword() {
+        // A pre-provenance v1 file (no `labels_provenance` key) must load,
+        // and default to Keyword.
+        let raw = serde_json::json!({
+            "schema": THEMES_SCHEMA,
+            "model": "test-model",
+            "params": {
+                "k": 10, "cosine_threshold": 0.5, "resolution": 1.5,
+                "seed": 42, "text_prefix": "passage: ", "head_chars": 1500
+            },
+            "generated_from": "abc",
+            "packs": {},
+            "communities": []
+        });
+        let file: ThemesFile = serde_json::from_value(raw).unwrap();
+        assert_eq!(file.labels_provenance, LabelsProvenance::Keyword);
+        // And the field round-trips snake_case.
+        let s = serde_json::to_string(&ThemesFile { labels_provenance: LabelsProvenance::Llm, ..file }).unwrap();
+        assert!(s.contains(r#""labels_provenance":"llm""#), "{s}");
     }
 
     fn catalog_of(ids: &[&str]) -> UnitsCatalog {

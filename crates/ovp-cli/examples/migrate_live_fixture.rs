@@ -21,7 +21,8 @@ use ovp_domain::crystal::synth::{
     strength_request, write_packs,
 };
 use ovp_domain::crystal::themes::{
-    THEMES_SCHEMA, ThemeCommunity, ThemeParams, ThemesFile, clusters_from_themes,
+    LabelsProvenance, THEMES_SCHEMA, ThemeCommunity, ThemeParams, ThemesFile,
+    clusters_from_themes,
 };
 use ovp_llm::{ModelReply, ModelRequest, request_key};
 
@@ -117,6 +118,8 @@ fn main() {
                 size: c.cases.len(),
             })
             .collect(),
+        // The old bucket descriptions were hand-written, not model-named.
+        labels_provenance: LabelsProvenance::Keyword,
     };
     std::fs::write(
         fixture.join("themes.json"),

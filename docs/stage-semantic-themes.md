@@ -79,10 +79,14 @@ clusters-*RS128*.md}` (main repo).
 - **L2 (display themes)**: `ovp2 crystal-themes` writes
   `.ovp/crystal/themes.json` (`ovp.themes/v1`: model, params, generated_from
   input-hash, packs → community id incl. `-1` noise, communities with
-  id/label/label_zh/keywords/size). It is a **rebuildable projection** —
+  id/label/label_zh/keywords/size, labels_provenance keyword|llm — additive,
+  older files default to keyword). It is a **rebuildable projection** —
   never baked into the crystal ledger; claims are NEVER re-synthesized to
-  re-theme. Deterministic given inputs; `--refresh` recomputes; a matching
-  `generated_from` short-circuits.
+  re-theme. Deterministic given inputs; `--refresh` recomputes; the
+  freshness short-circuit needs matching `generated_from` AND matching
+  clustering params AND label provenance compatible with the requested
+  client (`--client live` over a keyword-labeled file relabels; a replay
+  run never downgrades llm labels).
 - **Projection consumers**:
   - `ovp-index::build_claims`: `ClaimRow.theme` = majority community label
     among the claim's cited packs (tie → lexicographically first; nothing
