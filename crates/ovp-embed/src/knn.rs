@@ -71,8 +71,8 @@ mod tests {
         // c is closest to a and b; with k=1, a picks b, b picks a, c picks a —
         // the union must still contain (a, c) even though a never picked c.
         let a = vec![1.0, 0.0];
-        let b = vec![0.98, 0.198_997_49]; // ~a
-        let c = vec![0.9, 0.435_889_89]; // closer to a than to b? both above threshold
+        let b = vec![0.98, 0.198_997]; // ~a
+        let c = vec![0.9, 0.435_889]; // near a; all pairs above the threshold
         let edges = knn_edges(&[a, b, c], 1, 0.5);
         let pairs: Vec<(usize, usize)> = edges.iter().map(|e| (e.a, e.b)).collect();
         assert!(pairs.contains(&(0, 1)), "mutual top pick kept: {pairs:?}");

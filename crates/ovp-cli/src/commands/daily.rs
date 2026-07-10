@@ -362,6 +362,17 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     );
     println!("  index: {index_rel} · evidence: {evidence_rel} · console: {console_rel}");
 
+    // Semantic-theme staleness HINT (never an action): daily must not
+    // auto-run crystal-themes — a cold model cache means a surprise ~450MB
+    // download — but the operator should know when new packs are unthemed.
+    if let Some(n) = stale_theme_packs(&args.vault_root, &model) {
+        if n > 0 {
+            println!(
+                "  themes: {n} pack(s) not in .ovp/crystal/themes.json — run `ovp2 crystal-themes` to re-theme"
+            );
+        }
+    }
+
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now
         // BLOCKED, not silently retried.
@@ -391,6 +402,36 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         return Err(CliError::Gate(msg));
     }
     Ok(())
+}
+
+/// How many packs in the read model are missing from the semantic-themes
+/// projection. `None` = nothing to hint about (no packs); a missing or
+/// corrupt themes.json counts every pack as unthemed (the hint is exactly
+/// how the operator learns to run `crystal-themes`). Pure read; never blocks.
+fn stale_theme_packs(
+    vault_root: &std::path::Path,
+    model: &ovp_index::IndexModel,
+) -> Option<usize> {
+    if model.packs.is_empty() {
+        return None;
+    }
+    let themes = ovp_domain::crystal::themes::ThemesFile::load(
+        &vault_root.join(".ovp/crystal/themes.json"),
+    )
+    .ok()
+    .flatten();
+    let count = match &themes {
+        Some(t) => model
+            .packs
+            .iter()
+            .filter(|p| {
+                let case_id = p.pack_dir.rsplit('/').next().unwrap_or(&p.pack_dir);
+                !t.packs.contains_key(case_id)
+            })
+            .count(),
+        None => model.packs.len(),
+    };
+    Some(count)
 }
 
 fn build_pinboard_fetch(args: &DailyArgs) -> Result<Box<dyn PinboardFetch>, CliError> {
@@ -502,4 +543,68 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
          offline runs use --image-fixture <dir>"
             .into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stale_theme_packs;
+
+    fn model_with_packs(dirs: &[&str]) -> ovp_index::IndexModel {
+        ovp_index::IndexModel {
+            schema: "test".into(),
+            date: "2026-07-10".into(),
+            run_id: None,
+            totals: Default::default(),
+            sources: vec![],
+            packs: dirs
+                .iter()
+                .map(|d| ovp_index::PackRow {
+                    pack_dir: (*d).to_string(),
+                    title: "t".into(),
+                    date: None,
+                    units: 1,
+                    cards: 1,
+                    json_repaired: false,
+                    card_titles: vec![],
+                    source_sha256: None,
+                })
+                .collect(),
+            claims: vec![],
+            runs: vec![],
+            ops: Default::default(),
+        }
+    }
+
+    #[test]
+    fn stale_hint_counts_unthemed_packs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        // No packs → no hint at all.
+        assert_eq!(stale_theme_packs(vault, &model_with_packs(&[])), None);
+        // Packs but no themes.json → everything is unthemed.
+        let model = model_with_packs(&[
+            "40-Resources/Reader/case-a",
+            "40-Resources/Reader/case-b",
+        ]);
+        assert_eq!(stale_theme_packs(vault, &model), Some(2));
+        // themes.json covering case-a only → one stale pack.
+        let store = vault.join(".ovp/crystal");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            store.join("themes.json"),
+            serde_json::json!({
+                "schema": "ovp.themes/v1",
+                "model": "m",
+                "params": {"k": 10, "cosine_threshold": 0.5, "resolution": 1.5,
+                            "seed": 42, "text_prefix": "", "head_chars": 1500},
+                "generated_from": "h",
+                "packs": {"case-a": 0},
+                "communities": [{"id": 0, "label": "L", "label_zh": "L",
+                                  "keywords": [], "size": 1}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(stale_theme_packs(vault, &model), Some(1));
+    }
 }

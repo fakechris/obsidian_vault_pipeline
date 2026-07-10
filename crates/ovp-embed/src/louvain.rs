@@ -78,7 +78,7 @@ fn local_move(level: &Level, resolution: f64, rng: &mut SplitMix64) -> (Vec<usiz
             // current community, then the smallest id (BTreeMap order).
             let mut best_c = old;
             let mut best_gain = gain_of(old);
-            for (&c, _) in &w_to {
+            for &c in w_to.keys() {
                 let g = gain_of(c);
                 if g > best_gain + 1e-12 {
                     best_c = c;

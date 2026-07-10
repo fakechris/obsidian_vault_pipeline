@@ -23,8 +23,10 @@ pr-run-mode = "skip"
 # End users install prebuilt binaries precisely because they have no Rust
 # toolchain — so the live capabilities (`--client live`, `--pinboard-live`,
 # web/GitHub enrich) must be compiled in. Runtime behavior stays opt-in via
-# flags/env; the default run is still offline/replay.
-features = ["anthropic", "pinboard-live", "web-fetch-live", "github-live"]
+# flags/env; the default run is still offline/replay. `embed` bundles the
+# ONNX embedder for `crystal-themes` (model files still download on first
+# use; offline stays a graceful skip).
+features = ["anthropic", "pinboard-live", "web-fetch-live", "github-live", "embed"]
 # Homebrew tap the generated formula targets. Formula GENERATION only: there is
 # intentionally no `publish-jobs = ["homebrew"]` — pushing the formula to the
 # tap is a manual operator step (see docs/install.md). The tap repo must exist
