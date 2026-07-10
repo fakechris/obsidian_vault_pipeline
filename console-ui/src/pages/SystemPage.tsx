@@ -93,8 +93,15 @@ function SurfacesSection() {
   const { t } = useI18n();
   // The generated admin pages only exist on vaults with a rendered legacy
   // console — probe them and hide dead links (codex review P2).
-  const [adminPages, setAdminPages] = useState<string[]>([]);
+  // In dev/preview, Vite answers ANY missing path with the SPA shell and
+  // HTTP 200, so the probe can't distinguish real pages (codex review P2)
+  // — show the links unprobed there; the production server 404s missing
+  // extension-paths correctly.
+  const [adminPages, setAdminPages] = useState<string[]>(
+    import.meta.env.PROD ? [] : [...ADMIN_PAGES],
+  );
   useEffect(() => {
+    if (!import.meta.env.PROD) return;
     let cancelled = false;
     Promise.all(
       ADMIN_PAGES.map((page) =>
