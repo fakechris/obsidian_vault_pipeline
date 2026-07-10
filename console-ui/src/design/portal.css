@@ -640,6 +640,13 @@ body {
   border-radius: var(--ovp-radius-input);
   transition: background 300ms;
 }
+/* gutterless variant (Ask answers — no source lines to anchor). */
+.md-preview.no-gut {
+  max-width: none;
+}
+.md-preview.no-gut .md-row {
+  grid-template-columns: minmax(0, 1fr);
+}
 .md-row .gut {
   font-family: var(--ovp-font-mono);
   font-size: 0.68rem;
@@ -1069,11 +1076,15 @@ body {
 .chat-a.chat-pending {
   font-size: var(--ovp-text-sm);
 }
+/* Answer bodies render through the markdown reading view (gutterless) —
+   the renderer owns whitespace, so no pre-wrap here. */
 .answer-text {
-  white-space: pre-wrap;
   font-size: var(--ovp-text-sm);
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+.answer-text .md-block > :last-child {
+  margin-bottom: 0;
 }
 .cite-marker {
   border: 0;

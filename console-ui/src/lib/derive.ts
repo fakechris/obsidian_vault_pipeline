@@ -199,6 +199,14 @@ export interface ThemeGroup {
   topClaim?: string;
 }
 
+/** The synthesizer's fallback bucket — sources that matched no keyword
+ * bucket land under 'misc' (key) / 'Miscellaneous' (description). The
+ * portal displays it honestly as "Unclassified" — DISPLAY LAYER ONLY: keys,
+ * URLs and index data keep the literal value. */
+export function isMiscTheme(theme: string | null | undefined): boolean {
+  return theme === 'misc' || theme === 'Miscellaneous';
+}
+
 /** Active claims only — the knowledge surface never lists superseded or
  * retracted claims (they remain reachable through the ledger/CLI). */
 export function activeClaims(claims: ClaimRow[]): ClaimRow[] {

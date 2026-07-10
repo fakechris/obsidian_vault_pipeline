@@ -12,18 +12,12 @@
  *
  * The textarea sets `data-omnibox-suppress` so the Shell's global ⌘K
  * handler leaves it alone while composing. */
-import {
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { EmptyState, PageHelp } from '../components/ui';
+import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import { AskError, fetchChatMarkdown, fetchChats, postAsk } from '../lib/api';
-import { MarkdownView } from '../lib/markdown';
+import { MarkdownView, type InlineMarker } from '../lib/markdown';
 import type { AskCitation, AskResponse, ChatEntry } from '../lib/types';
 
 interface Turn {
@@ -52,7 +46,11 @@ function errorKeyFor(err: unknown): MsgKey {
   return 'ask.errGeneric';
 }
 
-/** Answer text with `[kind:id]` citations replaced by numbered markers. */
+/** Answer body rendered as markdown through the shared escape-first
+ * renderer (no HTML pathway, design §0.5) with `[kind:id]` citations turned
+ * into numbered markers via the renderer's inline marker hook — markers stay
+ * clickable INSIDE paragraphs, lists and emphasis. Tokens the server did not
+ * return as citations render as plain text (renderer default). */
 function AnswerText({
   answer,
   citations,
@@ -65,35 +63,34 @@ function AnswerText({
   onOpen: (cit: AskCitation) => void;
 }) {
   const index = new Map(citations.map((c, i) => [c.id, i]));
-  const nodes: ReactNode[] = [];
-  let last = 0;
-  let k = 0;
-  for (const m of answer.matchAll(CITE_RE)) {
-    const at = m.index ?? 0;
-    const i = index.get(m[1]);
-    if (i === undefined) continue; // not a returned citation — leave as text
-    if (at > last) nodes.push(answer.slice(last, at));
-    const cit = citations[i];
-    nodes.push(
-      <button
-        key={`m${k}`}
-        type="button"
-        className={`cite-marker${cit.verified ? '' : ' warn'}`}
-        onMouseEnter={() => onHover(cit.id)}
-        onMouseLeave={() => onHover(null)}
-        onFocus={() => onHover(cit.id)}
-        onBlur={() => onHover(null)}
-        onClick={() => onOpen(cit)}
-        title={cit.title ?? cit.id}
-      >
-        [{i + 1}]
-      </button>,
-    );
-    k += 1;
-    last = at + m[0].length;
-  }
-  nodes.push(answer.slice(last));
-  return <div className="answer-text">{nodes}</div>;
+  const marker: InlineMarker = {
+    pattern: CITE_RE,
+    render: (m, key) => {
+      const i = index.get(m[1]);
+      if (i === undefined) return null; // not a returned citation — plain text
+      const cit = citations[i];
+      return (
+        <button
+          key={key}
+          type="button"
+          className={`cite-marker${cit.verified ? '' : ' warn'}`}
+          onMouseEnter={() => onHover(cit.id)}
+          onMouseLeave={() => onHover(null)}
+          onFocus={() => onHover(cit.id)}
+          onBlur={() => onHover(null)}
+          onClick={() => onOpen(cit)}
+          title={cit.title ?? cit.id}
+        >
+          [{i + 1}]
+        </button>
+      );
+    },
+  };
+  return (
+    <div className="answer-text">
+      <MarkdownView markdown={answer} gutter={false} marker={marker} />
+    </div>
+  );
 }
 
 function CitationPanel({
@@ -115,33 +112,38 @@ function CitationPanel({
   }
   return (
     <div>
-      {citations.map((c, i) => (
-        <div
-          key={c.id}
-          className={`cite-entry${hoverId === c.id ? ' hover-hit' : ''}`}
-        >
-          <div className="cite-entry-top">
-            <span className="cite-num mono">[{i + 1}]</span>
-            <span className="pill">{c.kind}</span>
-            {!c.verified && (
-              <span className="pill unverified">{t('ask.unverified')}</span>
+      {citations.map((c, i) => {
+        const kindTip = conceptTipKey(c.kind);
+        return (
+          <div
+            key={c.id}
+            className={`cite-entry${hoverId === c.id ? ' hover-hit' : ''}`}
+          >
+            <div className="cite-entry-top">
+              <span className="cite-num mono">[{i + 1}]</span>
+              <span className="pill" title={kindTip ? t(kindTip) : undefined}>
+                {c.kind}
+              </span>
+              {!c.verified && (
+                <span className="pill unverified">{t('ask.unverified')}</span>
+              )}
+            </div>
+            <div className="cite-title">{c.title ?? c.id}</div>
+            {c.snippet && <blockquote>“{c.snippet}”</blockquote>}
+            {c.link_target ? (
+              <button
+                type="button"
+                className="cite-open tiny"
+                onClick={() => onOpen(c)}
+              >
+                {t('ask.openCitation')} →
+              </button>
+            ) : (
+              <span className="tiny muted">{t('ask.noLink')}</span>
             )}
           </div>
-          <div className="cite-title">{c.title ?? c.id}</div>
-          {c.snippet && <blockquote>“{c.snippet}”</blockquote>}
-          {c.link_target ? (
-            <button
-              type="button"
-              className="cite-open tiny"
-              onClick={() => onOpen(c)}
-            >
-              {t('ask.openCitation')} →
-            </button>
-          ) : (
-            <span className="tiny muted">{t('ask.noLink')}</span>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -29,6 +29,7 @@ import {
   fetchSourceNeighborhood,
   fetchThemeGraph,
 } from '../lib/api';
+import { isMiscTheme } from '../lib/derive';
 import type { GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
@@ -359,7 +360,11 @@ export default function KnowledgeGraph({
               </div>
               <div className="graph-info-title">{selected.label}</div>
               {selected.theme && (
-                <div className="tiny muted">{selected.theme}</div>
+                <div className="tiny muted">
+                  {isMiscTheme(selected.theme)
+                    ? t('theme.unclassified')
+                    : selected.theme}
+                </div>
               )}
               <div className="tiny muted">
                 {selected.type === 'card'

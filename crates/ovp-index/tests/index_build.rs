@@ -499,6 +499,205 @@ fn persisted_index_is_deterministic_and_rebuildable() {
 }
 
 #[test]
+fn corpus_pack_hash_prefix_joins_and_synthesizes_a_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Corpus source: lives in 03-Processed, known to NO ledger. The pack dir
+    // carries the first 8 hex chars of the file's sha256 as its prefix.
+    let sha = place(
+        root,
+        "50-Inbox/03-Processed/2026-05/2026-05-07_Corpus_Article.md",
+        "corpus article body bytes",
+    );
+    let joined_pack = write_pack(
+        root,
+        &format!("{}-2026-05-07_Corpus Article", &sha[..8]),
+        "Corpus Article",
+        1,
+    );
+    // Corpus pack whose prefix matches no file on disk → must stay unjoined.
+    write_pack(root, "deadbeef-2026-05-08_No Source", "No Source", 1);
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+
+    let pack = model
+        .packs
+        .iter()
+        .find(|p| p.pack_dir == joined_pack)
+        .unwrap();
+    assert_eq!(pack.source_sha256.as_deref(), Some(sha.as_str()));
+
+    let src = model.sources.iter().find(|s| s.sha256 == sha).unwrap();
+    assert_eq!(src.status, SourceStatus::Processed);
+    assert_eq!(src.title.as_deref(), Some("Corpus Article"));
+    assert_eq!(
+        src.rel_path.as_deref(),
+        Some("50-Inbox/03-Processed/2026-05/2026-05-07_Corpus_Article.md")
+    );
+    assert_eq!(src.date.as_deref(), Some("2026-05-07"));
+    assert_eq!(src.pack_dir.as_deref(), Some(joined_pack.as_str()));
+    assert_eq!(src.last_run_id, None, "backfill rows carry no run id");
+
+    let orphan = model
+        .packs
+        .iter()
+        .find(|p| p.pack_dir.contains("deadbeef"))
+        .unwrap();
+    assert_eq!(orphan.source_sha256, None, "prefix without a file stays unjoined");
+    assert_eq!(model.totals.sources, 1, "no source invented for the orphan");
+}
+
+#[test]
+fn corpus_pack_joins_an_existing_ledger_row_without_duplicating_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let fx = build_fixture_vault(root);
+
+    // A corpus-named alias pack whose prefix hashes to the ledger-processed
+    // source: it must join the EXISTING row, not synthesize a second one,
+    // and the ledger-joined pack must stay exactly as the ledger said.
+    let alias_pack = write_pack(
+        root,
+        &format!("{}-2026-06-09_Alias Pack", &fx.processed_sha[..8]),
+        "Alias Pack",
+        1,
+    );
+
+    let model = build_index(root, "2026-06-09", Some("daily-2026-06-09")).unwrap();
+
+    assert_eq!(model.totals.sources, 7, "no synthesized duplicate row");
+    let alias = model
+        .packs
+        .iter()
+        .find(|p| p.pack_dir == alias_pack)
+        .unwrap();
+    assert_eq!(alias.source_sha256.as_deref(), Some(fx.processed_sha.as_str()));
+
+    // The ledger-joined pack is unchanged by the backfill pass.
+    let ledgered = model
+        .packs
+        .iter()
+        .find(|p| p.pack_dir.ends_with("2026-06-09_Good Article-aaaa1111"))
+        .unwrap();
+    assert_eq!(
+        ledgered.source_sha256.as_deref(),
+        Some(fx.processed_sha.as_str())
+    );
+    let processed = model
+        .sources
+        .iter()
+        .find(|s| s.sha256 == fx.processed_sha)
+        .unwrap();
+    assert_eq!(
+        processed.last_run_id.as_deref(),
+        Some("daily-2026-06-09"),
+        "ledger row untouched"
+    );
+}
+
+#[test]
+fn corpus_pack_promotes_a_raw_scan_queued_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Corpus source still sitting in 01-Raw: the raw sweep makes a QUEUED
+    // row for it before the backfill runs. The prefix join must PROMOTE that
+    // row (processed + pack link) — not skip it, and not duplicate it.
+    let sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-05/corpus.md",
+        "---\ntitle: Raw Frontmatter Title\nsource: https://e.x/corpus\n---\ncorpus body\n",
+    );
+    let pack = write_pack(
+        root,
+        &format!("{}-2026-05-07_Corpus", &sha[..8]),
+        "Pack Title",
+        1,
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+
+    assert_eq!(model.totals.sources, 1, "promoted, not duplicated");
+    assert_eq!(model.totals.processed, 1);
+    assert_eq!(model.totals.queued, 0, "no pack-linked source stuck queued");
+    let row = model.sources.iter().find(|s| s.sha256 == sha).unwrap();
+    assert_eq!(row.status, SourceStatus::Processed);
+    assert_eq!(row.pack_dir.as_deref(), Some(pack.as_str()));
+    // Frontmatter metadata from the raw scan beats pack metadata.
+    assert_eq!(row.title.as_deref(), Some("Raw Frontmatter Title"));
+    assert_eq!(row.url.as_deref(), Some("https://e.x/corpus"));
+    assert_eq!(
+        row.rel_path.as_deref(),
+        Some("50-Inbox/01-Raw/2026-05/corpus.md")
+    );
+    // Gaps fill from the pack dir.
+    assert_eq!(row.date.as_deref(), Some("2026-05-07"));
+    assert_eq!(row.last_run_id, None, "still no ledger record");
+    let joined = model.packs.iter().find(|p| p.pack_dir == pack).unwrap();
+    assert_eq!(joined.source_sha256.as_deref(), Some(sha.as_str()));
+}
+
+#[test]
+fn corpus_pack_never_promotes_a_ledger_queued_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let intake_ledger = root.join(".ovp/intake.jsonl");
+
+    // Same shape, but the INTAKE ledger owns this row (queued, with a run
+    // id): the pack may join, the lifecycle must not move — the ledgers are
+    // the authority, only the daily run promotes ledgered sources.
+    let sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-05/ledgered.md",
+        "ledgered corpus bytes",
+    );
+    append_intake_record(
+        &intake_ledger,
+        &intake_rec(
+            &sha,
+            IntakeAction::Ingested,
+            "Ledgered Piece",
+            "https://e.x/l",
+            "Clippings/Ledgered Piece.md",
+            Some("50-Inbox/01-Raw/2026-05/ledgered.md"),
+        ),
+    )
+    .unwrap();
+    let pack = write_pack(
+        root,
+        &format!("{}-2026-05-07_Ledgered", &sha[..8]),
+        "Ledgered Piece",
+        1,
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+
+    let row = model.sources.iter().find(|s| s.sha256 == sha).unwrap();
+    assert_eq!(row.status, SourceStatus::Queued, "ledger rows stay untouched");
+    assert_eq!(row.pack_dir, None);
+    assert_eq!(row.last_run_id.as_deref(), Some("daily-2026-06-09"));
+    let joined = model.packs.iter().find(|p| p.pack_dir == pack).unwrap();
+    assert_eq!(joined.source_sha256.as_deref(), Some(sha.as_str()));
+}
+
+#[test]
+fn corpus_backfill_skips_files_over_the_size_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // 3 MB of markdown — over the 2 MB hashing cap, so never a candidate.
+    let big = "x".repeat(3 * 1024 * 1024);
+    let sha = place(root, "50-Inbox/03-Processed/2026-05/huge.md", &big);
+    write_pack(root, &format!("{}-2026-05-07_Huge", &sha[..8]), "Huge", 1);
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let pack = model.packs.iter().find(|p| p.pack_dir.contains("_Huge")).unwrap();
+    assert_eq!(pack.source_sha256, None, "oversized files are not hashed");
+    assert_eq!(model.totals.sources, 0);
+}
+
+#[test]
 fn empty_vault_builds_an_empty_model() {
     let dir = tempfile::tempdir().unwrap();
     let model = build_index(dir.path(), "2026-06-09", None).unwrap();

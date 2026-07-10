@@ -21,6 +21,13 @@ export const zh: Record<keyof typeof en, string> = {
   'common.whatIsThisPage': '这是什么页？',
   'common.day': '试用第',
 
+  // concept tooltips
+  'concept.durableTip': '已验证：每条引文均逐字核对过原文',
+  'concept.caveatedTip': '未验证：有价值但证据未完全过关，需带着怀疑使用',
+  'concept.claimTip': '主张：跨源结论——durable（已验证）或 caveated（未验证）',
+  'concept.cardTip': '卡片：可读的提炼——每句话都可追溯到接地单元',
+  'concept.unitTip': '单元：带行号的逐字摘录——证据本身',
+
   // source statuses
   'sourceStatus.processed': '已处理',
   'sourceStatus.queued': '待读',
@@ -92,7 +99,10 @@ export const zh: Record<keyof typeof en, string> = {
   'source.tabMemory': '记忆',
   'source.tabMemoryCounts': '{cards} 卡片 · {units} 单元',
   'source.tabSource': '原文',
+  'source.cardsTitle': '卡片',
+  'source.cardsHint': '本源的可读提炼——每句话都可追溯到下方的接地单元。',
   'source.groundedUnits': '接地单元',
+  'source.unitsHint': '带行号的逐字摘录——证据本身。',
   'source.unitNoLine': '无行号锚点',
   'source.noMemory': '还没有记忆——该源的阅读包中没有卡片或接地单元。',
   'source.evidenceMissing':
@@ -130,6 +140,8 @@ export const zh: Record<keyof typeof en, string> = {
     '知识库当前"相信"的内容，按主题分组。durable（持久）主张通过了全部证据门；caveated（存疑）主张带有已知弱点，等待复核。',
   'knowledge.helpLayers':
     '每条主张由三层支撑：原文（markdown 源文件）、记忆（卡片与带行号锚点的引文单元）、结晶（引用这些单元的跨源主张）。点进任意主张即可核查全链。',
+  'knowledge.helpLadder':
+    '一句话的阶梯：原文 → unit（可验证摘录）→ card（可读理解）→ claim（跨源结论，durable/caveated 二态）。',
   'knowledge.viewList': '列表',
   'knowledge.viewGraph': '图谱',
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
@@ -138,6 +150,11 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.ratioLine': '持久 {durable} · 存疑 {caveated}',
   'knowledge.graphCaption': '全部主张，按社区着色。单击节点看摘要，双击进入其主题。',
   'knowledge.unknownClaim': '没有活跃主张 "{id}"——它可能已被取代或撤回。',
+
+  // theme naming
+  'theme.unclassified': '未分类',
+  'theme.unclassifiedNote':
+    '未命中任何关键词分组的来源——自动聚类是计划中的改进（M34）。',
 
   // theme detail
   'theme.counts': '持久 {durable} · 存疑 {caveated}',

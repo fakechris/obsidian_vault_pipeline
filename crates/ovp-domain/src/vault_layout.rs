@@ -84,9 +84,16 @@ impl VaultLayout {
         "50-Inbox/01-Raw"
     }
 
+    /// Root of the processed-inbox tree (all months, vault-relative). The
+    /// directory the index backfill sweeps when joining ledger-less corpus
+    /// packs back to their source files.
+    pub fn processed_root(&self) -> &'static str {
+        "50-Inbox/03-Processed"
+    }
+
     /// Processed-inbox directory for a given `YYYY-MM`.
     pub fn processed_dir(&self, month: &str) -> String {
-        format!("50-Inbox/03-Processed/{month}")
+        format!("{}/{month}", self.processed_root())
     }
 
     /// Where duplicate captures are parked (M31 intake): content/URL already
@@ -284,6 +291,7 @@ mod tests {
     fn inbox_dirs() {
         let l = VaultLayout::new();
         assert_eq!(l.inbox_raw_dir(), "50-Inbox/01-Raw");
+        assert_eq!(l.processed_root(), "50-Inbox/03-Processed");
         assert_eq!(l.processed_dir("2026-05"), "50-Inbox/03-Processed/2026-05");
     }
 

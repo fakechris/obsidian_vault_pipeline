@@ -11,7 +11,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
 import { useI18n } from '../i18n';
-import { sourcesByCase, themeClaims } from '../lib/derive';
+import { isMiscTheme, sourcesByCase, themeClaims } from '../lib/derive';
 import type { ClaimRow, IndexModel, SourceRow } from '../lib/types';
 import { useModel } from '../model';
 
@@ -159,15 +159,26 @@ export default function ThemeDetailPage() {
   const theme = rawTheme ?? '';
   const { model, error, loading } = useModel();
 
+  // 'misc' displays honestly as "Unclassified"; the route param and all
+  // claim data keep the literal theme key (display layer only).
+  const misc = isMiscTheme(theme);
+  const displayName = misc
+    ? t('theme.unclassified')
+    : theme || t('knowledge.untitledTheme');
+
   return (
     <ModelGate loading={loading} error={error}>
       {model && (
         <>
           <div className="crumbs">
-            <Link to="/knowledge">{t('nav.knowledge')}</Link> /{' '}
-            {theme || t('knowledge.untitledTheme')}
+            <Link to="/knowledge">{t('nav.knowledge')}</Link> / {displayName}
           </div>
-          <h1>{theme || t('knowledge.untitledTheme')}</h1>
+          <h1>{displayName}</h1>
+          {misc && (
+            <p className="muted tiny" style={{ marginTop: '-0.35rem' }}>
+              {t('theme.unclassifiedNote')}
+            </p>
+          )}
           <ThemeBody model={model} theme={theme} />
         </>
       )}
