@@ -1,6 +1,6 @@
 # Live LLM + cassette capture (C9/C10)
 
-The default build is **replay-only**: `cargo test` and `ovp-next interpret-article`
+The default build is **replay-only**: `cargo test` and `ovp2 interpret-article`
 read committed cassettes and never touch the network. This doc covers the
 *live* path used to capture new cassettes against the real Anthropic API.
 
