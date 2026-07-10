@@ -186,8 +186,10 @@ const INLINE =
  * on `pattern` (which MUST carry the `g` flag) and each match is handed to
  * `render`. Returning null leaves the token as plain text. The hook only
  * ever produces React elements from the caller — matched source text still
- * never becomes markup, so the XSS story is unchanged. Used by the Ask page
- * to turn `[kind:id]` citations into live markers inside markdown. */
+ * never becomes markup, so the XSS story is unchanged. Suppressed inside
+ * link labels: an interactive marker nested in an <a> would be invalid
+ * markup with double navigation. Used by the Ask page to turn `[kind:id]`
+ * citations into live markers inside markdown. */
 export interface InlineMarker {
   pattern: RegExp;
   render: (match: RegExpMatchArray, key: string) => ReactNode | null;
@@ -245,9 +247,13 @@ export function renderInline(
       const label = lm?.[1] ?? token;
       const href = safeLinkHref(lm?.[2] ?? '');
       if (href) {
+        // No marker hook inside a link label: an interactive marker nested
+        // in an anchor would be invalid markup with two competing
+        // navigations — a citation-shaped label renders as the link's plain
+        // text and the <a> keeps single-navigation semantics.
         out.push(
           <a key={key} href={href} target="_blank" rel="noreferrer">
-            {renderInline(label, key, marker)}
+            {renderInline(label, key)}
           </a>,
         );
       } else {
