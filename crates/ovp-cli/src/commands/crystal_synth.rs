@@ -348,7 +348,9 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
         ..RunStats::default()
     };
 
-    let (grounded, deduped, verdicts, n_synthesized, n_dropped) = match args.cluster_mode {
+    let (grounded, deduped, verdicts, n_synthesized, n_dropped, collected_line) = match args
+        .cluster_mode
+    {
         ClusterMode::Batch => {
             // (b) Deterministic clusters: semantic communities when available,
             // else date-ordered cap-size batches. Unchanged Stage 3a behavior.
@@ -478,13 +480,13 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                     coverage.missing, coverage.duplicate, coverage.unknown
                 )));
             }
-            println!(
-                "crystal-synth: batch mode: {} case(s) → {} cluster(s), {} synth batch(es)",
+            let collected_line = format!(
+                "  collected: {} case(s) → {} cluster(s), {} synth batch(es)",
                 catalog.cases.len(),
                 clusters.len(),
                 batches.len()
             );
-            (grounded, deduped, verdicts, n_synthesized, n_dropped)
+            (grounded, deduped, verdicts, n_synthesized, n_dropped, collected_line)
         }
         ClusterMode::Llm => {
             // L3 coverage-first sweep. Only the GROUPING is model-shaped; the
@@ -573,12 +575,20 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                 stats.synthesized = n_synthesized;
                 return Ok(stats);
             }
+            let collected_line = format!(
+                "  collected: {} case(s); llm sweep: {} select / {} synth / {} strength call(s)",
+                catalog.cases.len(),
+                out.stats.select_calls,
+                out.stats.synth_calls,
+                out.stats.strength_calls
+            );
             (
                 out.grounded,
                 out.deduped,
                 out.verdicts,
                 n_synthesized,
                 n_dropped,
+                collected_line,
             )
         }
     };
@@ -606,12 +616,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
 
     // --- Summary (mirrors crystal-write). ---
     println!("crystal-synth: run_id={}", outcome.run_id);
-    println!(
-        "  collected: {} case(s), {} synth call(s) [{}]",
-        catalog.cases.len(),
-        stats.synth_calls,
-        stats.mode
-    );
+    println!("{collected_line}");
     println!(
         "  synthesized {n_synthesized} claim(s); dropped_ungrounded={n_dropped}; deduped={}; durable-provenance={durable_provenance}",
         deduped.len()

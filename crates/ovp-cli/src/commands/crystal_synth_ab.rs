@@ -374,6 +374,234 @@ fn write_json<T: serde::Serialize>(path: &Path, v: &T) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    use ovp_domain::crystal::CrystalCandidate;
+    use ovp_domain::crystal::select::{CaseDigest, cluster_select_request, digest_from_reader_md};
+    use ovp_domain::crystal::synth::{
+        Cluster, UnitsCatalog, cluster_batches, crystal_synth_batch_request,
+        crystal_synth_request, parse_synth_claims, strength_request,
+    };
+    use ovp_domain::crystal::themes::clusters_date_ordered;
+    use ovp_domain::source_doc::SourceDoc;
+    use ovp_domain::units::{Unit, validate};
+    use ovp_embed::cache as embed_cache;
+    use ovp_embed::{EMBED_DIM, EMBED_HEAD_CHARS, EMBED_MODEL_ID, document_text};
+    use ovp_llm::request_key;
+
+    use crate::commands::crystal_synth_llm::resolve_catalog_vectors;
+    use crate::commands::crystal_themes::clean_reader_body;
+
+    fn write_pack(dir: &Path, case_id: &str, title: &str, body: &str) {
+        let case_dir = dir.join(case_id);
+        std::fs::create_dir_all(&case_dir).unwrap();
+        let raw = vec![serde_json::json!({
+            "kind": "assertion", "text": "t0", "evidence_ref": "p001",
+            "evidence_quote": body, "attribution": "author", "modality": "asserted", "arguments": []
+        })];
+        let ex = validate(
+            &raw,
+            &SourceDoc::article("T", "https://e/x", None, None, vec![], body),
+        );
+        let units: Vec<Unit> = ex.accepted().cloned().collect();
+        std::fs::write(
+            case_dir.join("units.accepted.json"),
+            serde_json::to_string_pretty(&units).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            case_dir.join("reader.md"),
+            format!("# {title}\n\n## 1. Key point  _fact_\n\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    fn seed_vector(embed_dir: &Path, reader_dir: &Path, case_id: &str, title: &str, v: [f32; 3]) {
+        let md = std::fs::read_to_string(reader_dir.join(case_id).join("reader.md")).unwrap();
+        let text = document_text(title, &clean_reader_body(&md), EMBED_HEAD_CHARS);
+        let sha = embed_cache::text_sha256(&text);
+        let norm = (v.iter().map(|x| x * x).sum::<f32>()).sqrt();
+        let mut full = vec![0.0f32; EMBED_DIM];
+        for (slot, x) in full.iter_mut().zip(v) {
+            *slot = x / norm;
+        }
+        embed_cache::store(embed_dir, &sha, EMBED_MODEL_ID, &full).unwrap();
+    }
+
+    fn write_cassette(cache_dir: &Path, req: &ovp_llm::ModelRequest, reply_text: &str) {
+        let ns = req.cache_namespace.as_deref().unwrap();
+        let dir = cache_dir.join(ns);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reply = ovp_llm::ModelReply {
+            model: "canned".into(),
+            text: reply_text.to_string(),
+            stop_reason: ovp_llm::StopReason::EndTurn,
+            usage: ovp_llm::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+        };
+        std::fs::write(
+            dir.join(format!("{}.json", request_key(req))),
+            serde_json::to_string_pretty(&reply).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Full replay experiment: three uncovered packs, arm A (one date-ordered
+    /// batch) vs arm B (select→synth→strength + covered + refusal), each from
+    /// its own cassette dir; both arms yield one durable claim.
+    #[test]
+    fn experiment_runs_both_arms_and_writes_comparison() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        let embed = tmp.path().join("embed-cache");
+        let store = tmp.path().join("real-store"); // empty → all uncovered
+        let work = tmp.path().join("work");
+        let cases = [
+            ("2026-06-01_a", "Alpha memory", "Alpha says memory is a scarce budget."),
+            ("2026-06-02_b", "Beta context", "Beta says context is a scarce budget."),
+            ("2026-06-03_c", "Gamma bounds", "Gamma says retrieval must stay bounded."),
+        ];
+        let vecs: [[f32; 3]; 3] = [[1.0, 0.05, 0.0], [1.0, 0.0, 0.05], [0.9, 0.3, 0.0]];
+        for ((case_id, title, body), v) in cases.iter().zip(vecs) {
+            write_pack(&reader, case_id, title, body);
+            seed_vector(&embed, &reader, case_id, title, v);
+        }
+        let catalog: UnitsCatalog =
+            ovp_domain::crystal::synth::collect_catalog(&reader).unwrap();
+        let ua = catalog.cases["2026-06-01_a"].units[0].unit_id.clone();
+        let ub = catalog.cases["2026-06-02_b"].units[0].unit_id.clone();
+
+        // ---- Arm A cassettes (batch: one date-ordered batch of 3). ----
+        let cache_a = work.join("cassettes-arm-a");
+        let clusters = clusters_date_ordered(&catalog, 16);
+        assert_eq!(clusters.len(), 1);
+        let batches = cluster_batches(&clusters, 16);
+        let synth_a = crystal_synth_batch_request(&catalog, &batches[0], 22);
+        let synth_a_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Alpha and Beta treat capacity as a scarce budget.","theme":"batch","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context is a scarce budget"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache_a, &synth_a, &synth_a_reply);
+        let grounded_a = CrystalCandidate {
+            items: parse_synth_claims(&synth_a_reply, &batches[0].claim_prefix()).unwrap(),
+        };
+        write_cassette(
+            &cache_a,
+            &strength_request(&grounded_a, &catalog),
+            &format!(
+                r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"ok"}}]"#,
+                grounded_a.items[0].id
+            ),
+        );
+
+        // ---- Arm B cassettes (llm sweep). ----
+        let cache_b = work.join("cassettes-arm-b");
+        let vectors = resolve_catalog_vectors(&reader, &catalog, &embed).unwrap();
+        let digests: BTreeMap<String, CaseDigest> = catalog
+            .cases
+            .iter()
+            .map(|(id, case)| {
+                let md = std::fs::read_to_string(reader.join(id).join("reader.md")).unwrap();
+                (id.clone(), digest_from_reader_md(id, &case.title, &md))
+            })
+            .collect();
+        let neighborhood = |seed: &str| -> Vec<CaseDigest> {
+            let mut scored: Vec<(f64, &String)> = vectors
+                .iter()
+                .filter(|(id, _)| id.as_str() != seed)
+                .map(|(id, v)| (ovp_embed::knn::cosine(&vectors[seed], v), id))
+                .collect();
+            scored.sort_by(|(sa, ia), (sb, ib)| {
+                sb.partial_cmp(sa)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(ia.cmp(ib))
+            });
+            scored
+                .into_iter()
+                .take(12)
+                .map(|(_, id)| digests[id].clone())
+                .collect()
+        };
+        let sel_a = cluster_select_request(&digests["2026-06-01_a"], &neighborhood("2026-06-01_a"), 16);
+        write_cassette(
+            &cache_b,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"budget framing"}"#,
+        );
+        let cluster = Cluster {
+            key: "l3-2026-06-01_a".into(),
+            theme: "cross-source".into(),
+            cases: cases.iter().map(|(id, _, _)| (*id).to_string()).collect(),
+        };
+        let synth_b = crystal_synth_request(&catalog, &cluster, 16, 22);
+        let synth_b_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Capacity is treated as a scarce budget across sources.","theme":"cross-source","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context is a scarce budget"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache_b, &synth_b, &synth_b_reply);
+        let grounded_b = CrystalCandidate {
+            items: parse_synth_claims(&synth_b_reply, &cluster.key).unwrap(),
+        };
+        write_cassette(
+            &cache_b,
+            &strength_request(&grounded_b, &catalog),
+            &format!(
+                r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"ok"}}]"#,
+                grounded_b.items[0].id
+            ),
+        );
+        // Seed b gets covered mid-run; seed c refuses.
+        let sel_c = cluster_select_request(&digests["2026-06-03_c"], &neighborhood("2026-06-03_c"), 16);
+        write_cassette(&cache_b, &sel_c, r#"{"refuse":true,"reason":"no cluster"}"#);
+
+        run_experiment(ExperimentArgs {
+            reader_dir: Some(reader.clone()),
+            vault_root: None,
+            store: Some(store.clone()),
+            themes_file: None,
+            embed_cache_dir: Some(embed.clone()),
+            work_dir: work.clone(),
+            client_kind: ClientKind::Replay,
+            slice: 3,
+            seed: 42,
+            max_seeds: 0,
+            neighborhood: 12,
+            max_cases_per_cluster: 16,
+            max_units_per_case: 22,
+        })
+        .expect("experiment run");
+
+        // The REAL store was only read — never created/written.
+        assert!(!store.join("ledger.jsonl").exists());
+        let comparison: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(work.join("comparison.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(comparison.len(), 2);
+        let a = &comparison[0];
+        let b = &comparison[1];
+        assert_eq!((a["arm"].as_str(), a["mode"].as_str()), (Some("A"), Some("batch")));
+        assert_eq!(a["ok"], true, "{a}");
+        assert_eq!(a["synth_calls"], 1);
+        assert_eq!(a["durable"], 1);
+        assert_eq!(a["select_calls"], 0);
+        assert_eq!((b["arm"].as_str(), b["mode"].as_str()), (Some("B"), Some("llm")));
+        assert_eq!(b["ok"], true, "{b}");
+        assert_eq!(b["select_calls"], 2, "seed a + seed c (b covered mid-run)");
+        assert_eq!(b["durable"], 1);
+        assert_eq!(b["refusal_rate"], 0.5);
+        assert_eq!(b["mean_distinct_sources_per_durable"], 2.0);
+        // Both arms wrote their own fresh stores.
+        assert!(work.join("arm-a/store/ledger.jsonl").exists());
+        assert!(work.join("arm-b/store/ledger.jsonl").exists());
+        assert!(work.join("slice.json").exists());
+    }
 
     #[test]
     fn seeded_sample_is_deterministic_and_sorted() {

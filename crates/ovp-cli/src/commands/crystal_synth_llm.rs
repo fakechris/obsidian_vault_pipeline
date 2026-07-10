@@ -605,6 +605,422 @@ mod tests {
         assert_eq!(all, vec!["near", "near-2", "far"], "k caps, order stable");
     }
 
+    // ---- e2e fixtures: the full `--cluster-mode llm` run over replay
+    // cassettes (no themes file → theme "cross-source"). ----
+
+    use crate::commands::client::ClientKind;
+    use crate::commands::crystal_synth::{ClusterMode, CrystalSynthArgs, run_stats};
+    use crate::commands::crystal_themes::clean_reader_body;
+    use ovp_domain::crystal::synth::collect_catalog;
+    use ovp_domain::source_doc::SourceDoc;
+    use ovp_domain::units::{Unit, validate};
+    use ovp_llm::request_key;
+    use std::path::Path;
+
+    /// Reader pack with real reader.md content (title + one card + body).
+    fn write_pack(dir: &Path, case_id: &str, title: &str, body: &str, quotes: &[&str]) {
+        let case_dir = dir.join(case_id);
+        std::fs::create_dir_all(&case_dir).unwrap();
+        let raw: Vec<_> = quotes
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                serde_json::json!({
+                    "kind": "assertion", "text": format!("t{i}"), "evidence_ref": "p001",
+                    "evidence_quote": q, "attribution": "author", "modality": "asserted", "arguments": []
+                })
+            })
+            .collect();
+        let ex = validate(
+            &raw,
+            &SourceDoc::article("T", "https://e/x", None, None, vec![], body),
+        );
+        let units: Vec<Unit> = ex.accepted().cloned().collect();
+        std::fs::write(
+            case_dir.join("units.accepted.json"),
+            serde_json::to_string_pretty(&units).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            case_dir.join("reader.md"),
+            format!("# {title}\n\n## 1. Key point of {title}  _fact_\n\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    /// Seed the embedding cache with a normalized EMBED_DIM vector for a
+    /// pack, keyed by the EXACT text derivation the sweep uses.
+    fn seed_vector(embed_dir: &Path, reader_dir: &Path, case_id: &str, title: &str, v: [f32; 3]) {
+        let md = std::fs::read_to_string(reader_dir.join(case_id).join("reader.md")).unwrap();
+        let text = document_text(title, &clean_reader_body(&md), EMBED_HEAD_CHARS);
+        let sha = embed_cache::text_sha256(&text);
+        let norm = (v.iter().map(|x| x * x).sum::<f32>()).sqrt();
+        let mut full = vec![0.0f32; EMBED_DIM];
+        for (slot, x) in full.iter_mut().zip(v) {
+            *slot = x / norm;
+        }
+        embed_cache::store(embed_dir, &sha, EMBED_MODEL_ID, &full).unwrap();
+    }
+
+    fn write_cassette(cache_dir: &Path, req: &ovp_llm::ModelRequest, reply_text: &str) {
+        let ns = req.cache_namespace.as_deref().unwrap();
+        let dir = cache_dir.join(ns);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reply = ovp_llm::ModelReply {
+            model: "canned".into(),
+            text: reply_text.to_string(),
+            stop_reason: ovp_llm::StopReason::EndTurn,
+            usage: ovp_llm::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+        };
+        std::fs::write(
+            dir.join(format!("{}.json", request_key(req))),
+            serde_json::to_string_pretty(&reply).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn llm_args(reader: &Path, work: &Path, embed: &Path) -> CrystalSynthArgs {
+        CrystalSynthArgs {
+            reader_dir: Some(reader.to_path_buf()),
+            vault_root: None,
+            work_dir: work.to_path_buf(),
+            store: Some(work.join("store")),
+            themes_file: None,
+            client_kind: ClientKind::Replay,
+            cache_dir: Some(work.join("cassettes")),
+            max_cases_per_cluster: 16,
+            max_units_per_case: 22,
+            run_id: None,
+            title: Some("L3 Test".into()),
+            scope: None,
+            not_claiming: None,
+            refresh: false,
+            date: None,
+            strict: false,
+            strict_cluster_cap: false,
+            cluster_mode: ClusterMode::Llm,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: Some(embed.to_path_buf()),
+        }
+    }
+
+    /// The four-pack corpus every e2e test uses: a/b/c near one another, d
+    /// off-axis. Returns (reader_dir, embed_dir) under `root`.
+    const CASES: [(&str, &str, &str); 4] = [
+        (
+            "2026-06-01_a",
+            "Alpha memory systems",
+            "Alpha says agent memory is a scarce budget.",
+        ),
+        (
+            "2026-06-02_b",
+            "Beta context budgets",
+            "Beta says the context window is a scarce budget.",
+        ),
+        (
+            "2026-06-03_c",
+            "Gamma retrieval bounds",
+            "Gamma says retrieval must stay bounded.",
+        ),
+        (
+            "2026-06-04_d",
+            "Delta gardening notes",
+            "Delta says tomatoes need regular watering.",
+        ),
+    ];
+
+    fn seed_corpus(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let reader = root.join("reader");
+        let embed = root.join("embed-cache");
+        let vecs: [[f32; 3]; 4] = [
+            [1.0, 0.05, 0.0],
+            [1.0, 0.0, 0.05],
+            [0.9, 0.3, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        for ((case_id, title, body), v) in CASES.iter().zip(vecs) {
+            write_pack(&reader, case_id, title, body, &[body]);
+            seed_vector(&embed, &reader, case_id, title, v);
+        }
+        (reader, embed)
+    }
+
+    /// Build the exact select request the sweep will issue for `seed`.
+    fn select_request_for(
+        reader: &Path,
+        embed: &Path,
+        catalog: &UnitsCatalog,
+        seed: &str,
+    ) -> ovp_llm::ModelRequest {
+        let vectors = resolve_catalog_vectors(reader, catalog, embed).unwrap();
+        let digests: BTreeMap<String, CaseDigest> = catalog
+            .cases
+            .iter()
+            .map(|(id, case)| {
+                let md =
+                    std::fs::read_to_string(reader.join(id).join("reader.md")).unwrap_or_default();
+                (id.clone(), digest_from_reader_md(id, &case.title, &md))
+            })
+            .collect();
+        let neighbor_ids = neighborhood_of(seed, &vectors, 12);
+        let neighbor_digests: Vec<CaseDigest> =
+            neighbor_ids.iter().map(|id| digests[id].clone()).collect();
+        cluster_select_request(&digests[seed], &neighbor_digests, 16)
+    }
+
+    #[test]
+    fn llm_e2e_selects_refuses_fails_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+
+        // Seed a: selection [a, b, c] → synth → one claim citing a+b →
+        // durable → covers a and b mid-run.
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(
+            &cache,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"scarce-budget framing across sources"}"#,
+        );
+        let cluster = Cluster {
+            key: "l3-2026-06-01_a".into(),
+            theme: "cross-source".into(),
+            cases: vec![
+                "2026-06-01_a".into(),
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+            ],
+        };
+        let synth_req = crystal_synth_request(&catalog, &cluster, 16, 22);
+        let ua = catalog.cases["2026-06-01_a"].units[0].unit_id.clone();
+        let ub = catalog.cases["2026-06-02_b"].units[0].unit_id.clone();
+        let synth_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Alpha and Beta both treat capacity as a scarce budget.","theme":"cross-source","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context window is a scarce budget"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache, &synth_req, &synth_reply);
+        let grounded = CrystalCandidate {
+            items: parse_synth_claims(&synth_reply, &cluster.key).unwrap(),
+        };
+        let strength_req = strength_request(&grounded, &catalog);
+        write_cassette(
+            &cache,
+            &strength_req,
+            &format!(
+                r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"both quotes state a scarce budget"}}]"#,
+                grounded.items[0].id
+            ),
+        );
+        // Seed b is covered mid-run (no cassette needed). Seed c: refusal.
+        let sel_c = select_request_for(&reader, &embed, &catalog, "2026-06-03_c");
+        write_cassette(
+            &cache,
+            &sel_c,
+            r#"{"refuse":true,"reason":"neighborhood is topically scattered"}"#,
+        );
+        // Seed d: a selection VIOLATION (id outside the offered set).
+        let sel_d = select_request_for(&reader, &embed, &catalog, "2026-06-04_d");
+        write_cassette(
+            &cache,
+            &sel_d,
+            r#"{"selected_case_ids":["2026-06-04_d","bogus-case","another-bogus"],"rationale":"?"}"#,
+        );
+
+        let stats = run_stats(llm_args(&reader, &work, &embed)).expect("first llm run");
+        assert_eq!(stats.mode, "llm");
+        assert_eq!(stats.select_calls, 3, "a, c, d (b covered mid-run)");
+        assert_eq!(stats.synth_calls, 1);
+        assert_eq!(stats.strength_calls, 1);
+        assert_eq!(stats.refused, 1);
+        assert_eq!(stats.failed_seeds, 1);
+        assert_eq!(stats.durable_appended, 1);
+        assert_eq!(stats.durable_distinct_sources, vec![2]);
+        assert_eq!(stats.uncovered_before, Some(4));
+        assert_eq!(
+            stats.uncovered_after,
+            Some(2),
+            "a+b covered by the new durable claim; c, d remain"
+        );
+
+        // Per-seed outcomes: one line each, in sweep order.
+        let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let outcomes: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|v| {
+                (
+                    v["seed"].as_str().unwrap(),
+                    v["outcome"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                ("2026-06-01_a", "selected"),
+                ("2026-06-02_b", "covered"),
+                ("2026-06-03_c", "refused"),
+                ("2026-06-04_d", "failed"),
+            ]
+        );
+        assert!(lines[3]["error"].as_str().unwrap().contains("bogus-case"));
+        assert!(work.join("l3-sweep-stats.json").exists());
+        assert!(work.join("candidate.json").exists());
+
+        let ledger = std::fs::read_to_string(work.join("store/ledger.jsonl")).unwrap();
+        assert_eq!(ledger.lines().filter(|l| !l.trim().is_empty()).count(), 1);
+
+        // Second run: a+b now covered BY THE LEDGER → only c and d sweep;
+        // both replay to refusal/violation → 0 new ledger lines (idempotent).
+        let stats2 = run_stats(llm_args(&reader, &work, &embed)).expect("second llm run");
+        assert_eq!(stats2.uncovered_before, Some(2));
+        assert_eq!(stats2.select_calls, 2);
+        assert_eq!(stats2.synth_calls, 0, "no synth spend on a rerun");
+        assert_eq!(stats2.durable_appended, 0, "re-run adds nothing");
+        let ledger2 = std::fs::read_to_string(work.join("store/ledger.jsonl")).unwrap();
+        assert_eq!(ledger2.lines().filter(|l| !l.trim().is_empty()).count(), 1);
+    }
+
+    #[test]
+    fn superset_guard_blocks_before_the_synth_spend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+
+        // Pre-existing ACTIVE durable claim citing b, c, d → only a uncovered.
+        let store = work.join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        let record = ovp_domain::crystal::DurableRecord {
+            claim_key: "ck-preexisting-000".into(),
+            claim_id: "old-1".into(),
+            claim: "b, c and d already synthesized".into(),
+            theme: "t".into(),
+            source_cases: vec![
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+                "2026-06-04_d".into(),
+            ],
+            citations: vec![],
+            provenance_score: 0.9,
+            provenance_class: ovp_domain::crystal::ProvenanceClass::Durable,
+            strength: ovp_domain::crystal::StrengthClass::Supported,
+            strength_rationale: "r".into(),
+            final_class: FinalClass::Durable,
+            run_id: "run-old".into(),
+            status: CrystalStatus::Active,
+        };
+        let event = ovp_domain::crystal::StoreEvent {
+            op: ovp_domain::crystal::StoreOp::Write,
+            record,
+            supersedes: None,
+            reason: None,
+        };
+        std::fs::write(
+            store.join("ledger.jsonl"),
+            format!("{}\n", serde_json::to_string(&event).unwrap()),
+        )
+        .unwrap();
+
+        // Seed a's selection EXCLUDES the seed and re-picks the covered trio —
+        // exactly the case the guard exists for. No synth cassette exists, so
+        // reaching synthesis would fail the test loudly.
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(
+            &cache,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-02_b","2026-06-03_c","2026-06-04_d"],"rationale":"the trio clusters"}"#,
+        );
+
+        let stats = run_stats(llm_args(&reader, &work, &embed)).expect("guarded run succeeds");
+        assert_eq!(stats.guarded, 1);
+        assert_eq!(stats.synth_calls, 0, "guard fires BEFORE the synth spend");
+        assert_eq!(stats.durable_appended, 0);
+        let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
+        let line: serde_json::Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        assert_eq!(line["outcome"], "guarded");
+        assert_eq!(line["guarded_by"], "ck-preexisting-000");
+        let ledger = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
+        assert_eq!(
+            ledger.lines().filter(|l| !l.trim().is_empty()).count(),
+            1,
+            "ledger untouched"
+        );
+    }
+
+    #[test]
+    fn max_seeds_budget_caps_select_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+        // Only the FIRST seed gets a cassette; with --max-seeds 1 the sweep
+        // must stop before ever asking about the others.
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(&cache, &sel_a, r#"{"refuse":true,"reason":"nothing here"}"#);
+        let mut args = llm_args(&reader, &work, &embed);
+        args.max_seeds = 1;
+        let stats = run_stats(args).expect("budgeted run");
+        assert_eq!(stats.select_calls, 1);
+        assert_eq!(stats.refused, 1);
+        let sweep_stats: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.join("l3-sweep-stats.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sweep_stats["budget_exhausted"], true);
+        assert_eq!(sweep_stats["uncovered_after"], 4, "nothing got covered");
+    }
+
+    #[cfg(not(feature = "embed"))]
+    #[test]
+    fn llm_mode_without_embeddings_fails_with_clear_remedy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        write_pack(
+            &reader,
+            "2026-06-01_a",
+            "Alpha",
+            "Alpha says memory is scarce.",
+            &["Alpha says memory is scarce."],
+        );
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        // Empty embedding cache + no embed feature → loud, actionable error
+        // (llm mode is meaningless without neighborhoods — no graceful skip).
+        let err = run_stats(llm_args(&reader, &work, &tmp.path().join("empty-cache")))
+            .expect_err("must fail loud");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("crystal-themes"), "remedy named: {msg}");
+        assert!(msg.contains("embed"), "{msg}");
+    }
+
+    #[test]
+    fn llm_mode_needs_vault_root_or_embed_cache_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        let work = tmp.path().join("work");
+        let mut args = llm_args(&reader, &work, Path::new("unused"));
+        args.embed_cache_dir = None; // and vault_root is None
+        let err = run_stats(args).expect_err("must fail before any IO");
+        assert!(format!("{err:?}").contains("--embed-cache-dir"));
+    }
+
     #[test]
     fn cluster_theme_uses_seed_community_keywords_never_labels() {
         use ovp_domain::crystal::themes::{

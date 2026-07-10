@@ -49,6 +49,13 @@
       "quality_buckets": ["crystal_provenance"]
     },
     {
+      "id": "prompt.cluster_select",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/cluster_select.md",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
       "id": "prompt.theme_label",
       "surface": "prompt",
       "current_version": "v1",
