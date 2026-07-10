@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [2.0.1] - 2026-07-10
+
+### Fixed
+- Release builds: Linux artifacts build on `ubuntu-24.04` (ort's prebuilt ONNX
+  Runtime needs glibc >= 2.38); the Intel-mac (`x86_64-apple-darwin`) target is
+  dropped from the prebuilt matrix (ort ships no ONNX prebuilts for it —
+  operator decision: unsupported; build from source without `embed`).
+
 ## [2.0.0] - 2026-07-10
 
 **OVP2 replaces OVP.** This release marks the merge of the Rust rewrite to
