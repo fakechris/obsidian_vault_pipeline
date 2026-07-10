@@ -8,10 +8,11 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
-import { EmptyState, ModelGate, PageHelp } from '../components/ui';
+import { ClaimPill, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   attentionSources,
+  isMiscTheme,
   readToday,
   claimsSample,
   timeline,
@@ -98,7 +99,9 @@ function RecentClaims({ model }: { model: IndexModel }) {
       {claims.map((c) => (
         <div className="card" key={c.claim_id}>
           <div className="claim-top">
-            <span className={`pill ${c.status}`}>{c.status}</span>
+            {(c.status === 'durable' || c.status === 'caveated') && (
+              <ClaimPill status={c.status} />
+            )}
             {c.strength && (
               <span className="claim-meta">
                 {t('today.strength')}: {c.strength}
@@ -106,7 +109,11 @@ function RecentClaims({ model }: { model: IndexModel }) {
             )}
           </div>
           <p className="claim-text">{c.claim}</p>
-          {c.theme && <div className="claim-meta">{c.theme}</div>}
+          {c.theme && (
+            <div className="claim-meta">
+              {isMiscTheme(c.theme) ? t('theme.unclassified') : c.theme}
+            </div>
+          )}
         </div>
       ))}
     </div>

@@ -224,6 +224,12 @@ export default function SourceDetailPage() {
 
           {tab === 'memory' && (
             <>
+              {memory.cards.length > 0 && (
+                <>
+                  <h3>{t('source.cardsTitle')}</h3>
+                  <p className="tiny muted">{t('source.cardsHint')}</p>
+                </>
+              )}
               {memory.cards.map((card, i) => (
                 <div className="card mem-card" key={`c${i}`}>
                   <div className="mem-title">{card.title}</div>
@@ -242,6 +248,7 @@ export default function SourceDetailPage() {
               {memory.units.length > 0 && (
                 <div className="section">
                   <h3>{t('source.groundedUnits')}</h3>
+                  <p className="tiny muted">{t('source.unitsHint')}</p>
                   {memory.units.map((unit) => (
                     <div className="unit-row" key={unit.unit_id}>
                       <blockquote>“{unit.quote}”</blockquote>

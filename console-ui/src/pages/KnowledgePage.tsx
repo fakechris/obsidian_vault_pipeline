@@ -16,7 +16,7 @@ import KnowledgeGraph from '../components/KnowledgeGraph';
 import { EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
-import { themeWall, type ThemeGroup } from '../lib/derive';
+import { isMiscTheme, themeWall, type ThemeGroup } from '../lib/derive';
 import type { IndexModel, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
 
@@ -30,11 +30,16 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
   const { t } = useI18n();
   const active = group.durable + group.caveated;
   const pct = active > 0 ? Math.round((group.durable / active) * 100) : 0;
+  // The 'misc' fallback bucket displays honestly as "Unclassified" — the
+  // link target keeps the literal theme key (display layer only).
+  const misc = isMiscTheme(group.theme);
   return (
     <Link className="theme-card" to={themePath(group.theme)}>
       <div className="theme-card-head">
         <span className="theme-card-name">
-          {group.theme || t('knowledge.untitledTheme')}
+          {misc
+            ? t('theme.unclassified')
+            : group.theme || t('knowledge.untitledTheme')}
         </span>
         <span className="theme-card-count mono">
           {t('knowledge.claimCount', { n: group.total })}
@@ -49,12 +54,20 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
       >
         <span className="ratio-durable" style={{ width: `${pct}%` }} />
       </div>
-      <div className="theme-card-ratio tiny muted">
+      <div
+        className="theme-card-ratio tiny muted"
+        title={`durable — ${t('concept.durableTip')}\ncaveated — ${t('concept.caveatedTip')}`}
+      >
         {t('knowledge.ratioLine', {
           durable: group.durable,
           caveated: group.caveated,
         })}
       </div>
+      {misc && (
+        <p className="theme-card-ratio tiny muted">
+          {t('theme.unclassifiedNote')}
+        </p>
+      )}
       {group.topClaim && <p className="theme-card-snippet">{group.topClaim}</p>}
     </Link>
   );
@@ -168,6 +181,8 @@ export default function KnowledgePage() {
             {t('knowledge.help')}
             <br />
             {t('knowledge.helpLayers')}
+            <br />
+            {t('knowledge.helpLadder')}
           </PageHelp>
           <KnowledgeBody model={model} />
         </>
