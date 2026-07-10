@@ -41,6 +41,28 @@ use crate::commands::crystal_synth::call_and_parse;
 
 /// Keywords kept per community (auditable label layer).
 const KEYWORDS_PER_THEME: usize = 10;
+/// Tokens present in more than this fraction of ALL documents are stop-words
+/// for keyword purposes (function words, residual scaffolding). 0.3 was tuned
+/// on the real 1077-pack vault: 0.4 still admitted "but/not/can/when".
+const MAX_KEYWORD_DOC_FREQ: f64 = 0.3;
+
+/// Minimal function-word stoplist for the KEYWORD layer only (labels are
+/// presentation; clustering never sees this). The df filter above catches
+/// corpus-wide noise; this catches the mid-frequency function words a
+/// truncated corpus lets through. English words + the CJK bigrams the search
+/// tokenizer emits for common function pairs. Deliberately small — c-TF-IDF
+/// does the real work.
+const KEYWORD_STOPLIST: &[&str] = &[
+    // English
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "for", "from", "has",
+    "have", "how", "if", "in", "into", "is", "it", "its", "more", "no", "not", "of", "on", "or",
+    "so", "than", "that", "the", "their", "them", "then", "there", "these", "they", "this", "to",
+    "until", "via", "was", "we", "what", "when", "where", "which", "while", "who", "why", "will",
+    "with", "you", "your",
+    // common CJK function bigrams (as emitted by the sliding-bigram tokenizer)
+    "一个", "不是", "我们", "可以", "没有", "这个", "什么", "就是", "但是", "因为", "所以",
+    "如果", "他们", "你的", "我的", "自己", "这些", "那些", "使用", "需要", "通过",
+];
 /// Keywords joined into the offline label.
 const LABEL_KEYWORDS: usize = 3;
 /// Centroid-nearest titles shown to the labeling model.
@@ -68,6 +90,53 @@ struct ThemeDoc {
     sha: String,
 }
 
+/// Strip reader.md presentation boilerplate before embedding — mirrors the
+/// spike's `prep_docs.py` (which fed "title + first 1500 chars of evidence
+/// text, boilerplate stripped"). Removed: the title heading (carried
+/// separately), stats blockquotes (`> 12 cards · …`), `<details>/<summary>`
+/// evidence scaffolding, trailing `` `[u-… · line N]` `` unit refs, heading
+/// markers, and trailing `_definition_`-style card-kind tags. Deterministic,
+/// line-based, no regex.
+fn clean_reader_body(md: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in md.lines() {
+        let s = line.trim();
+        if s.is_empty()
+            || s.starts_with("# ")
+            || s.starts_with('>')
+            || s.starts_with("<details")
+            || s.starts_with("</details")
+            || s.starts_with("<summary")
+        {
+            continue;
+        }
+        // Drop the trailing backticked unit reference on quote bullets.
+        let s = match s.find("`[u-") {
+            Some(i) => s[..i].trim_end(),
+            None => s,
+        };
+        // "## 3. Card heading  _definition_" → keep the heading text.
+        let s = s.trim_start_matches('#').trim_start();
+        let s = strip_trailing_em_tag(s);
+        if !s.is_empty() {
+            out.push(s);
+        }
+    }
+    out.join(" ")
+}
+
+/// Drop a trailing `_tag_` token (the card-kind italics: `_definition_`,
+/// `_fact_`, …) if present.
+fn strip_trailing_em_tag(s: &str) -> &str {
+    let trimmed = s.trim_end();
+    if let Some(last) = trimmed.rsplit_once(char::is_whitespace).map(|(_, l)| l) {
+        if last.len() > 2 && last.starts_with('_') && last.ends_with('_') {
+            return trimmed[..trimmed.len() - last.len()].trim_end();
+        }
+    }
+    trimmed
+}
+
 /// Collect every reader-pack dir (any dir carrying reader.md /
 /// run-status.json / units.accepted.json), sorted by case_id.
 fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
@@ -92,7 +161,7 @@ fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
         let case_id = entry.file_name().to_string_lossy().into_owned();
         let title = resolve_title(&dir, &case_id);
         let body = std::fs::read_to_string(dir.join("reader.md")).unwrap_or_default();
-        let text = document_text(&title, &body, EMBED_HEAD_CHARS);
+        let text = document_text(&title, &clean_reader_body(&body), EMBED_HEAD_CHARS);
         let sha = embed_cache::text_sha256(&text);
         docs.push(ThemeDoc {
             case_id,
@@ -276,11 +345,36 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
     }
 
     // ---- c-TF-IDF keywords (CJK-aware search tokenizer) ----
+    // Corpus-level stop filter first: tokens present in most documents
+    // (function words, residual pack scaffolding) carry no theme signal, and
+    // c-TF-IDF's global penalty alone cannot beat their sheer term frequency.
+    // Deterministic: document frequency over the same tokenizer.
+    let doc_tokens: Vec<Vec<String>> = docs
+        .iter()
+        .map(|d| tokenize_for_search(&d.text))
+        .collect();
+    let mut df: BTreeMap<&str, usize> = BTreeMap::new();
+    for tokens in &doc_tokens {
+        let uniq: std::collections::BTreeSet<&str> =
+            tokens.iter().map(String::as_str).collect();
+        for t in uniq {
+            *df.entry(t).or_insert(0) += 1;
+        }
+    }
+    let df_cap = (docs.len() as f64 * MAX_KEYWORD_DOC_FREQ).ceil() as usize;
+    let keep = |t: &str| -> bool {
+        t.chars().count() > 1
+            && !t.bytes().all(|b| b.is_ascii_digit())
+            && !KEYWORD_STOPLIST.contains(&t)
+            && df.get(t).copied().unwrap_or(0) <= df_cap
+    };
     let token_clusters: Vec<Vec<String>> = members
         .iter()
         .map(|ms| {
             ms.iter()
-                .flat_map(|&m| tokenize_for_search(&docs[m].text))
+                .flat_map(|&m| doc_tokens[m].iter())
+                .filter(|t| keep(t))
+                .cloned()
                 .collect()
         })
         .collect();
@@ -390,7 +484,11 @@ mod tests {
     fn seed_vector(vault: &Path, case_id: &str, title: &str, body: &str, v: [f32; 3]) {
         // Mirror collect_docs' text derivation exactly.
         let _ = case_id;
-        let text = document_text(title, &format!("# {title}\n\n{body}\n"), EMBED_HEAD_CHARS);
+        let text = document_text(
+            title,
+            &clean_reader_body(&format!("# {title}\n\n{body}\n")),
+            EMBED_HEAD_CHARS,
+        );
         let sha = embed_cache::text_sha256(&text);
         let norm = (v.iter().map(|x| x * x).sum::<f32>()).sqrt();
         // EMBED_DIM-length L2-normalized vectors are required by the loader — pad.
@@ -482,6 +580,26 @@ mod tests {
         write_pack(&reader, "2026-06-01_solo", "Solo pack", "body");
         run(args(vault)).expect("graceful skip");
         assert!(!vault.join(".ovp/crystal/themes.json").exists());
+    }
+
+    #[test]
+    fn clean_reader_body_strips_pack_boilerplate() {
+        let md = "# Claude Code 源码解读\n\n\
+            > 12 cards · 26 grounded units · critic trims 0 / adds 4\n\n\
+            ## 1. Agent Loop 是心脏，采用 async generator。  _definition_\n\n\
+            **分层解耦将 Agent Loop、状态管理分离。**\n\n\
+            <details><summary>Evidence — 1 quote(s)</summary>\n\n\
+            - “Agent Loop 是 Claude Code 的心脏” `[u-002-227a2a68 · line 209]`\n\n\
+            </details>\n";
+        let cleaned = clean_reader_body(md);
+        assert!(!cleaned.contains("cards ·"), "{cleaned}");
+        assert!(!cleaned.contains("details"), "{cleaned}");
+        assert!(!cleaned.contains("u-002"), "{cleaned}");
+        assert!(!cleaned.contains("_definition_"), "{cleaned}");
+        assert!(!cleaned.contains('#'), "{cleaned}");
+        assert!(cleaned.contains("Agent Loop 是心脏"), "{cleaned}");
+        assert!(cleaned.contains("“Agent Loop 是 Claude Code 的心脏”"), "{cleaned}");
+        assert!(cleaned.contains("分层解耦"), "{cleaned}");
     }
 
     #[test]
