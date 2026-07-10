@@ -23,6 +23,7 @@ members = [
     "crates/ovp-server",
     "crates/ovp-mcp",
     "crates/ovp-evolve",
+    "crates/ovp-embed",
 ]
 
 [workspace.package]

@@ -1,0 +1,21 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_label-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.theme_label",
+  "hypothesis": "Given a semantic community's deterministic c-TF-IDF keywords plus 3 centroid-nearest titles, one small LLM call yields a short bilingual (en+zh) theme name that is more readable than raw keyword joins while staying presentation-only (keywords remain the auditable layer; labels never affect gating, grounding, or the ledger). Predicted: >=80% of community names judged specific-and-correct by the operator on the real ~17-community vault run, vs keyword-join fallback.",
+  "predicted_delta": {
+    "label_readability": "operator-judged specific-and-correct >= 0.8 on the real-vault communities",
+    "cost": "<= 1 cached call per community per themes.json rebuild"
+  },
+  "guardrails": {},
+  "eval_plan": {
+    "replay_set": "themes.json communities from the real-vault crystal-themes run (keyword labels are the offline fallback, so every run has a baseline)",
+    "paired_sources": 17,
+    "soak": false
+  },
+  "rollback": "Drop --client live from crystal-themes (offline keyword-derived labels are the built-in fallback) and remove prompt.theme_label from evolution/components.json. themes.json is a rebuildable projection, so no durable state carries the labels.",
+  "ablation_required": false
+}
