@@ -8,14 +8,23 @@
 //!       violation fails THAT seed loudly (recorded) and the sweep continues
 //!     → superset guard: an active claim whose source_cases ⊇ the chosen set
 //!       skips the synth call; ditto a cluster already attempted this run
-//!     → EXISTING `crystal_synth/v1` + grounded filter + dedup + strength —
-//!       completely unchanged; gates and the ledger cannot drift
-//!     → seeds covered by claims routed durable this run drop out mid-sweep.
+//!     → EXISTING `crystal_synth/v1` + grounded filter + dedup — unchanged;
+//!       gates and the ledger cannot drift
+//!     → grounded claims pool up and strength runs in micro-batched WAVES:
+//!       whenever the pool reaches batch mode's chunk size (or the sweep
+//!       ends) full chunks flush through `crystal_strength/v1`, so a
+//!       many-cluster sweep no longer pays one strength call per cluster
+//!     → seeds covered by claims routed durable in a flushed wave drop out
+//!       mid-sweep. Coverage therefore updates in waves, not per cluster:
+//!       the lag is bounded by one chunk of pending claims, and a seed that
+//!       would previously have dropped out immediately may still spend a
+//!       select call — the honest cost of the batching, measured by the A/B.
 //!
 //! Per-seed outcomes go to stdout AND `<work-dir>/l3-sweep.jsonl` (written
-//! incrementally, so even a failed run leaves evidence). The sweep only
-//! PROPOSES groupings — every claim still passes the untouched citation +
-//! provenance + strength gates before the idempotent durable write.
+//! incrementally, so even a failed run leaves evidence); each strength wave
+//! appends its own `{"outcome":"wave",...}` line. The sweep only PROPOSES
+//! groupings — every claim still passes the untouched citation + provenance +
+//! strength gates before the idempotent durable write.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
@@ -41,7 +50,7 @@ use ovp_llm::ModelClient;
 use serde::Serialize;
 
 use crate::CliError;
-use crate::commands::crystal_synth::{RepairLog, call_and_parse};
+use crate::commands::crystal_synth::{MAX_STRENGTH_CLAIMS_PER_CALL, RepairLog, call_and_parse};
 use crate::commands::crystal_themes::clean_reader_body;
 use crate::commands::crystal_write::read_ledger;
 
@@ -73,7 +82,11 @@ pub(crate) struct SweepStats {
     pub budget_exhausted: bool,
     pub select_calls: usize,
     pub synth_calls: usize,
+    /// Chunked `crystal_strength/v1` calls (≤ `MAX_STRENGTH_CLAIMS_PER_CALL`
+    /// claims each — batch mode's constant), NOT clusters.
     pub strength_calls: usize,
+    /// Flush events (one wave may span several chunked calls).
+    pub strength_waves: usize,
 }
 
 /// Everything the shared crystal-synth tail (durable write + summary) needs.
@@ -108,10 +121,10 @@ struct SeedReport<'a> {
     claims: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     grounded: Option<usize>,
+    /// Strength-pool size after this cluster's grounded claims joined it —
+    /// they are verdict-pending until the next wave flush.
     #[serde(skip_serializing_if = "Option::is_none")]
-    durable_routed: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    newly_covered: Option<Vec<String>>,
+    pending: Option<usize>,
 }
 
 impl<'a> SeedReport<'a> {
@@ -126,10 +139,34 @@ impl<'a> SeedReport<'a> {
             guarded_by: None,
             claims: None,
             grounded: None,
-            durable_routed: None,
-            newly_covered: None,
+            pending: None,
         }
     }
+}
+
+/// One line of `l3-sweep.jsonl` for a strength wave (no `seed` field —
+/// consumers keep per-seed lines by filtering on `seed`). `durable_routed` /
+/// `newly_covered` live here now: routing is only known once a wave flushes.
+#[derive(Debug, Serialize)]
+struct WaveReport {
+    /// Always `"wave"`, so line consumers keyed on `outcome` stay simple.
+    outcome: &'static str,
+    wave: usize,
+    claims: usize,
+    /// Chunked `crystal_strength/v1` calls this wave spent.
+    strength_calls: usize,
+    durable_routed: usize,
+    newly_covered: Vec<String>,
+}
+
+fn write_jsonl<T: Serialize>(report: &mut std::fs::File, line: &T) -> Result<(), CliError> {
+    let s = serde_json::to_string(line).map_err(|e| CliError::Io(e.to_string()))?;
+    writeln!(report, "{s}").map_err(|e| CliError::Io(format!("l3-sweep.jsonl: {e}")))
+}
+
+fn write_seed_line(report: &mut std::fs::File, line: &SeedReport) -> Result<(), CliError> {
+    println!("  l3[{}]: {}", line.seed, line.outcome);
+    write_jsonl(report, line)
 }
 
 /// Resolve one embedding vector per catalog case from the content-addressed
@@ -269,6 +306,121 @@ fn cluster_theme(seed: &str, themes: Option<&ThemesFile>) -> String {
     FALLBACK_THEME.to_string()
 }
 
+/// Flush the pending strength pool in ≤`MAX_STRENGTH_CLAIMS_PER_CALL` chunks
+/// (batch mode's constant — one shared knob, never redeclared).
+///
+/// `drain_all=false` (mid-sweep trigger) flushes FULL chunks only, so the
+/// pool — and with it the mid-run coverage lag — always stays under one
+/// chunk, and the total call count stays at `ceil(total_claims / chunk)`.
+/// `drain_all=true` (end of sweep, or the select budget is spent) flushes
+/// the remainder too. Each chunk is ONE `crystal_strength/v1` call; a
+/// failure fails the RUN, exactly like batch mode (`call_and_parse` already
+/// invalidates the cassette on content failures). After the verdicts land,
+/// the wave's claims are routed with the SAME `final_routing` the write path
+/// uses and every case cited by a durable-routed claim joins `covered`, so
+/// later seeds drop out — coverage now moves in waves, not per cluster.
+#[allow(clippy::too_many_arguments)]
+fn flush_strength_wave(
+    client: &mut dyn ModelClient,
+    catalog: &UnitsCatalog,
+    index: &GroundingIndex,
+    pending: &mut Vec<CrystalClaim>,
+    drain_all: bool,
+    covered: &mut BTreeSet<String>,
+    grounded_all: &mut Vec<CrystalClaim>,
+    verdicts_all: &mut Vec<ClaimStrengthVerdict>,
+    stats: &mut SweepStats,
+    repairs: &mut Vec<RepairLog>,
+    report: &mut std::fs::File,
+) -> Result<(), CliError> {
+    let full_chunks = pending.len() - pending.len() % MAX_STRENGTH_CLAIMS_PER_CALL;
+    let n_take = if drain_all { pending.len() } else { full_chunks };
+    if n_take == 0 {
+        return Ok(());
+    }
+    stats.strength_waves += 1;
+    let wave = stats.strength_waves;
+    let wave_claims: Vec<CrystalClaim> = pending.drain(..n_take).collect();
+
+    // Chunked verdicts — 1:1 coverage per wave or the run fails loud, the
+    // same invariant batch mode enforces globally.
+    let mut wave_verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
+    let mut calls = 0usize;
+    for chunk in wave_claims.chunks(MAX_STRENGTH_CLAIMS_PER_CALL) {
+        let req = strength_request(
+            &CrystalCandidate {
+                items: chunk.to_vec(),
+            },
+            catalog,
+        );
+        calls += 1;
+        stats.strength_calls += 1;
+        let stage = format!("strength-w{wave:03}-{calls:03}");
+        let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, _) =
+            call_and_parse(client, &req, &stage, parse_strength_verdicts)?;
+        if let Some(l) = log {
+            repairs.push(l);
+        }
+        wave_verdicts.extend(chunk_verdicts);
+    }
+    let ids: Vec<String> = wave_claims.iter().map(|c| c.id.clone()).collect();
+    let coverage = strength_coverage(&ids, &wave_verdicts);
+    if !coverage.complete() {
+        return Err(CliError::Gate(format!(
+            "crystal-synth: strength verdicts incomplete for wave {wave} — \
+             missing={:?} duplicate={:?} unknown={:?}",
+            coverage.missing, coverage.duplicate, coverage.unknown
+        )));
+    }
+
+    // Deterministic routing preview (the SAME gate functions the durable
+    // write uses): cases cited by durable-routed claims join the covered set
+    // so later seeds drop out of the sweep.
+    let wave_candidate = CrystalCandidate { items: wave_claims };
+    let lint = lint_candidate(&wave_candidate, index);
+    let scores = score_candidate(&lint);
+    let mut durable_routed = 0usize;
+    let mut newly_covered: Vec<String> = Vec::new();
+    for item in &wave_candidate.items {
+        let class = scores
+            .iter()
+            .find(|s| s.claim_id == item.id)
+            .map(|s| s.class);
+        let verdict = wave_verdicts.iter().find(|v| v.claim_id == item.id);
+        let routed = match class {
+            Some(c) => final_routing(c, verdict),
+            None => FinalClass::Reject,
+        };
+        if routed == FinalClass::Durable {
+            durable_routed += 1;
+            for c in &item.citations {
+                if covered.insert(c.case_id.clone()) {
+                    newly_covered.push(c.case_id.clone());
+                }
+            }
+        }
+    }
+    newly_covered.sort();
+
+    grounded_all.extend(wave_candidate.items);
+    verdicts_all.extend(wave_verdicts);
+    println!(
+        "  l3[wave {wave:03}]: {} claim(s) → {calls} strength call(s), {durable_routed} durable-routed",
+        ids.len()
+    );
+    write_jsonl(
+        report,
+        &WaveReport {
+            outcome: "wave",
+            wave,
+            claims: ids.len(),
+            strength_calls: calls,
+            durable_routed,
+            newly_covered,
+        },
+    )
+}
+
 /// Run the sweep. `index` is the grounding index over the canonical packs dir
 /// (already written by the caller); `store` is read for ACTIVE durable claims
 /// (coverage + superset guard) and never written here.
@@ -321,11 +473,6 @@ pub(crate) fn run_sweep(
     let report_path = work_dir.join("l3-sweep.jsonl");
     let mut report = std::fs::File::create(&report_path)
         .map_err(|e| CliError::Io(format!("creating {}: {e}", report_path.display())))?;
-    let mut write_line = |line: &SeedReport| -> Result<(), CliError> {
-        let s = serde_json::to_string(line).map_err(|e| CliError::Io(e.to_string()))?;
-        println!("  l3[{}]: {}", line.seed, line.outcome);
-        writeln!(report, "{s}").map_err(|e| CliError::Io(format!("l3-sweep.jsonl: {e}")))
-    };
 
     let mut stats = SweepStats {
         uncovered_before,
@@ -339,18 +486,45 @@ pub(crate) fn run_sweep(
     let mut deduped: Vec<ovp_domain::crystal::synth::DedupedClaim> = Vec::new();
     let mut dropped_ungrounded: Vec<String> = Vec::new();
     let mut repairs: Vec<RepairLog> = Vec::new();
+    // Grounded claims awaiting a strength wave. Always smaller than one
+    // chunk right after a flush check — the bounded coverage lag.
+    let mut pending: Vec<CrystalClaim> = Vec::new();
 
     for seed in &seeds {
-        // Seeds covered by claims written earlier in THIS run drop out. This
-        // check runs BEFORE the budget check: a final permitted selection that
-        // covers every remaining seed is a complete sweep, not an exhausted
-        // budget (and each covered seed still counts as covered_mid_run).
+        // Seeds covered by claims routed durable earlier in THIS run drop
+        // out. This check runs BEFORE the budget check: a final permitted
+        // selection that covers every remaining seed is a complete sweep, not
+        // an exhausted budget (each covered seed counts as covered_mid_run).
         if covered.contains(seed) {
             stats.covered_mid_run += 1;
-            write_line(&SeedReport::new(seed, "covered"))?;
+            write_seed_line(&mut report, &SeedReport::new(seed, "covered"))?;
             continue;
         }
         if stats.select_calls >= cfg.max_seeds {
+            // The select budget is spent, but the pending pool may still
+            // cover this seed: flush it first (those strength calls are owed
+            // no matter what) and only then declare exhaustion — a fully
+            // covered sweep stays a COMPLETE sweep under waves.
+            if !pending.is_empty() {
+                flush_strength_wave(
+                    client,
+                    catalog,
+                    index,
+                    &mut pending,
+                    true,
+                    &mut covered,
+                    &mut grounded_all,
+                    &mut verdicts,
+                    &mut stats,
+                    &mut repairs,
+                    &mut report,
+                )?;
+                if covered.contains(seed) {
+                    stats.covered_mid_run += 1;
+                    write_seed_line(&mut report, &SeedReport::new(seed, "covered"))?;
+                    continue;
+                }
+            }
             stats.budget_exhausted = true;
             break;
         }
@@ -389,7 +563,7 @@ pub(crate) fn run_sweep(
                     let msg = e.to_string();
                     let mut line = SeedReport::new(seed, "failed");
                     line.error = Some(&msg);
-                    write_line(&line)?;
+                    write_seed_line(&mut report, &line)?;
                     continue;
                 }
             };
@@ -401,7 +575,7 @@ pub(crate) fn run_sweep(
                 stats.refused += 1;
                 let mut line = SeedReport::new(seed, "refused");
                 line.reason = Some(&reason);
-                write_line(&line)?;
+                write_seed_line(&mut report, &line)?;
                 continue;
             }
             ClusterSelection::Selected {
@@ -420,7 +594,7 @@ pub(crate) fn run_sweep(
                 client.invalidate(&req);
                 let mut line = SeedReport::new(seed, "failed");
                 line.error = Some(&e);
-                write_line(&line)?;
+                write_seed_line(&mut report, &line)?;
                 continue;
             }
         };
@@ -436,7 +610,7 @@ pub(crate) fn run_sweep(
             let mut line = SeedReport::new(seed, "guarded");
             line.selected = Some(&selected);
             line.guarded_by = Some(key);
-            write_line(&line)?;
+            write_seed_line(&mut report, &line)?;
             continue;
         }
         if attempted_clusters.contains(&selected) {
@@ -444,7 +618,7 @@ pub(crate) fn run_sweep(
             let mut line = SeedReport::new(seed, "guarded");
             line.selected = Some(&selected);
             line.reason = Some("cluster already attempted this run");
-            write_line(&line)?;
+            write_seed_line(&mut report, &line)?;
             continue;
         }
         attempted_clusters.insert(selected.clone());
@@ -499,78 +673,53 @@ pub(crate) fn run_sweep(
             kept.push(claim);
         }
         let n_grounded = kept.len();
-        if kept.is_empty() {
-            let mut line = SeedReport::new(seed, "selected");
-            line.selected = Some(&selected);
-            line.rationale = Some(&rationale);
-            line.claims = Some(n_claims);
-            line.grounded = Some(0);
-            write_line(&line)?;
-            stats.selected += 1;
-            continue;
-        }
-
-        // Strength for this cluster's grounded claims (1:1 or fail loud —
-        // same invariant the batch mode enforces globally).
-        let cluster_candidate = CrystalCandidate { items: kept };
-        let strength_req = strength_request(&cluster_candidate, catalog);
-        stats.strength_calls += 1;
-        let stage = format!("strength-{}", cluster.key);
-        let (cluster_verdicts, log): (Vec<ClaimStrengthVerdict>, _) =
-            call_and_parse(client, &strength_req, &stage, parse_strength_verdicts)?;
-        if let Some(l) = log {
-            repairs.push(l);
-        }
-        let ids: Vec<String> = cluster_candidate.items.iter().map(|c| c.id.clone()).collect();
-        let coverage = strength_coverage(&ids, &cluster_verdicts);
-        if !coverage.complete() {
-            return Err(CliError::Gate(format!(
-                "crystal-synth: strength verdicts incomplete for cluster {} — \
-                 missing={:?} duplicate={:?} unknown={:?}",
-                cluster.key, coverage.missing, coverage.duplicate, coverage.unknown
-            )));
-        }
-
-        // Deterministic routing preview: seeds cited by claims that will be
-        // written durable drop out of the remainder of the sweep.
-        let lint = lint_candidate(&cluster_candidate, index);
-        let scores = score_candidate(&lint);
-        let mut durable_routed = 0usize;
-        let mut newly_covered: Vec<String> = Vec::new();
-        for item in &cluster_candidate.items {
-            let class = scores
-                .iter()
-                .find(|s| s.claim_id == item.id)
-                .map(|s| s.class);
-            let verdict = cluster_verdicts.iter().find(|v| v.claim_id == item.id);
-            let routed = match class {
-                Some(c) => final_routing(c, verdict),
-                None => FinalClass::Reject,
-            };
-            if routed == FinalClass::Durable {
-                durable_routed += 1;
-                for c in &item.citations {
-                    if covered.insert(c.case_id.clone()) {
-                        newly_covered.push(c.case_id.clone());
-                    }
-                }
-            }
-        }
-        newly_covered.sort();
-        newly_covered.dedup();
-
-        grounded_all.extend(cluster_candidate.items);
-        verdicts.extend(cluster_verdicts);
         stats.selected += 1;
         let mut line = SeedReport::new(seed, "selected");
         line.selected = Some(&selected);
         line.rationale = Some(&rationale);
         line.claims = Some(n_claims);
         line.grounded = Some(n_grounded);
-        line.durable_routed = Some(durable_routed);
-        line.newly_covered = Some(newly_covered);
-        write_line(&line)?;
+        if kept.is_empty() {
+            write_seed_line(&mut report, &line)?;
+            continue;
+        }
+
+        // Micro-batched strength: this cluster's grounded claims join the
+        // pending pool; full chunks flush as soon as the pool reaches batch
+        // mode's chunk size, and coverage updates with the wave (never per
+        // cluster — the durable routing is unknowable before its wave).
+        pending.extend(kept);
+        line.pending = Some(pending.len());
+        write_seed_line(&mut report, &line)?;
+        flush_strength_wave(
+            client,
+            catalog,
+            index,
+            &mut pending,
+            false,
+            &mut covered,
+            &mut grounded_all,
+            &mut verdicts,
+            &mut stats,
+            &mut repairs,
+            &mut report,
+        )?;
     }
+
+    // End of sweep: flush the remainder (< one chunk by construction).
+    flush_strength_wave(
+        client,
+        catalog,
+        index,
+        &mut pending,
+        true,
+        &mut covered,
+        &mut grounded_all,
+        &mut verdicts,
+        &mut stats,
+        &mut repairs,
+        &mut report,
+    )?;
 
     stats.uncovered_after = uncovered_seeds(catalog, &covered).len();
     Ok(SweepOutcome {
@@ -838,7 +987,8 @@ mod tests {
         let catalog = collect_catalog(&reader).unwrap();
 
         // Seed a: selection [a, b, c] → synth → one claim citing a+b →
-        // durable → covers a and b mid-run.
+        // pools up for the end-of-sweep strength wave → durable → covers a
+        // and b (AFTER the wave, not per cluster).
         let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
         write_cassette(
             &cache,
@@ -876,7 +1026,17 @@ mod tests {
                 grounded.items[0].id
             ),
         );
-        // Seed b is covered mid-run (no cassette needed). Seed c: refusal.
+        // Seed b: seed a's claim is still verdict-pending (the wave hasn't
+        // flushed), so b is NOT covered yet — the honest cost of batching.
+        // It re-selects the same trio and the attempted-cluster guard blocks
+        // the duplicate synth spend.
+        let sel_b = select_request_for(&reader, &embed, &catalog, "2026-06-02_b");
+        write_cassette(
+            &cache,
+            &sel_b,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"same scarce-budget trio"}"#,
+        );
+        // Seed c: refusal.
         let sel_c = select_request_for(&reader, &embed, &catalog, "2026-06-03_c");
         write_cassette(
             &cache,
@@ -893,10 +1053,17 @@ mod tests {
 
         let stats = run_stats(llm_args(&reader, &work, &embed)).expect("first llm run");
         assert_eq!(stats.mode, "llm");
-        assert_eq!(stats.select_calls, 3, "a, c, d (b covered mid-run)");
+        assert_eq!(
+            stats.select_calls, 4,
+            "a, b, c, d — b is no longer covered before the wave flushes"
+        );
         assert_eq!(stats.synth_calls, 1);
-        assert_eq!(stats.strength_calls, 1);
+        assert_eq!(
+            stats.strength_calls, 1,
+            "one end-of-sweep wave (pool < one chunk)"
+        );
         assert_eq!(stats.refused, 1);
+        assert_eq!(stats.guarded, 1, "b re-selected the attempted trio");
         assert_eq!(stats.failed_seeds, 1);
         assert_eq!(stats.durable_appended, 1);
         assert_eq!(stats.durable_distinct_sources, vec![2]);
@@ -907,7 +1074,8 @@ mod tests {
             "a+b covered by the new durable claim; c, d remain"
         );
 
-        // Per-seed outcomes: one line each, in sweep order.
+        // Per-seed outcomes: one line each, in sweep order; the strength wave
+        // appends its own line (no `seed` field) at the end-of-sweep flush.
         let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
         let lines: Vec<serde_json::Value> = jsonl
             .lines()
@@ -915,6 +1083,7 @@ mod tests {
             .collect();
         let outcomes: Vec<(&str, &str)> = lines
             .iter()
+            .filter(|v| v.get("seed").is_some())
             .map(|v| {
                 (
                     v["seed"].as_str().unwrap(),
@@ -926,12 +1095,24 @@ mod tests {
             outcomes,
             vec![
                 ("2026-06-01_a", "selected"),
-                ("2026-06-02_b", "covered"),
+                ("2026-06-02_b", "guarded"),
                 ("2026-06-03_c", "refused"),
                 ("2026-06-04_d", "failed"),
             ]
         );
-        assert!(lines[3]["error"].as_str().unwrap().contains("bogus-case"));
+        let failed = lines.iter().find(|v| v["outcome"] == "failed").unwrap();
+        assert!(failed["error"].as_str().unwrap().contains("bogus-case"));
+        let selected = lines.iter().find(|v| v["outcome"] == "selected").unwrap();
+        assert_eq!(selected["pending"], 1, "claim pooled, wave still ahead");
+        let wave = lines.last().unwrap();
+        assert_eq!(wave["outcome"], "wave", "end-of-sweep flush is last: {wave}");
+        assert_eq!(wave["claims"], 1);
+        assert_eq!(wave["strength_calls"], 1);
+        assert_eq!(wave["durable_routed"], 1);
+        assert_eq!(
+            wave["newly_covered"],
+            serde_json::json!(["2026-06-01_a", "2026-06-02_b"])
+        );
         assert!(work.join("l3-sweep-stats.json").exists());
         assert!(work.join("candidate.json").exists());
 
@@ -944,9 +1125,330 @@ mod tests {
         assert_eq!(stats2.uncovered_before, Some(2));
         assert_eq!(stats2.select_calls, 2);
         assert_eq!(stats2.synth_calls, 0, "no synth spend on a rerun");
+        assert_eq!(stats2.strength_calls, 0, "empty pool → no wave, no calls");
         assert_eq!(stats2.durable_appended, 0, "re-run adds nothing");
         let ledger2 = std::fs::read_to_string(work.join("store/ledger.jsonl")).unwrap();
         assert_eq!(ledger2.lines().filter(|l| !l.trim().is_empty()).count(), 1);
+    }
+
+    /// Two selected clusters whose grounded claims total UNDER one chunk
+    /// share ONE strength call at the end-of-sweep flush (previously: one
+    /// call per cluster). The wave still covers every cited case afterwards.
+    #[test]
+    fn end_of_sweep_wave_pools_two_clusters_into_one_strength_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reader, embed) = seed_corpus(tmp.path());
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+
+        // Seed a: cluster [a, b, c] → one claim citing a+b.
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(
+            &cache,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"scarce-budget framing"}"#,
+        );
+        let cluster_a = Cluster {
+            key: "l3-2026-06-01_a".into(),
+            theme: "cross-source".into(),
+            cases: vec![
+                "2026-06-01_a".into(),
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+            ],
+        };
+        let ua = catalog.cases["2026-06-01_a"].units[0].unit_id.clone();
+        let ub = catalog.cases["2026-06-02_b"].units[0].unit_id.clone();
+        let synth_a_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Alpha and Beta both treat capacity as a scarce budget.","theme":"cross-source","citations":[
+                {{"case_id":"2026-06-01_a","unit_id":"{ua}","quote":"memory is a scarce budget"}},
+                {{"case_id":"2026-06-02_b","unit_id":"{ub}","quote":"context window is a scarce budget"}}
+            ]}}]}}"#
+        );
+        write_cassette(
+            &cache,
+            &crystal_synth_request(&catalog, &cluster_a, 16, 22),
+            &synth_a_reply,
+        );
+
+        // Seed b (NOT covered — seed a's claim is still verdict-pending):
+        // a DIFFERENT cluster [b, c, d] → one claim citing c+d.
+        let sel_b = select_request_for(&reader, &embed, &catalog, "2026-06-02_b");
+        write_cassette(
+            &cache,
+            &sel_b,
+            r#"{"selected_case_ids":["2026-06-02_b","2026-06-03_c","2026-06-04_d"],"rationale":"boundedness framing"}"#,
+        );
+        let cluster_b = Cluster {
+            key: "l3-2026-06-02_b".into(),
+            theme: "cross-source".into(),
+            cases: vec![
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+                "2026-06-04_d".into(),
+            ],
+        };
+        let uc = catalog.cases["2026-06-03_c"].units[0].unit_id.clone();
+        let ud = catalog.cases["2026-06-04_d"].units[0].unit_id.clone();
+        let synth_b_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Gamma and Delta both describe bounded routines.","theme":"cross-source","citations":[
+                {{"case_id":"2026-06-03_c","unit_id":"{uc}","quote":"retrieval must stay bounded"}},
+                {{"case_id":"2026-06-04_d","unit_id":"{ud}","quote":"tomatoes need regular watering"}}
+            ]}}]}}"#
+        );
+        write_cassette(
+            &cache,
+            &crystal_synth_request(&catalog, &cluster_b, 16, 22),
+            &synth_b_reply,
+        );
+
+        // Seeds c, d: still uncovered mid-sweep (both claims verdict-pending)
+        // — under the old per-cluster flow they would have dropped out
+        // covered. Both refuse.
+        for seed in ["2026-06-03_c", "2026-06-04_d"] {
+            let r = select_request_for(&reader, &embed, &catalog, seed);
+            write_cassette(&cache, &r, r#"{"refuse":true,"reason":"scattered"}"#);
+        }
+
+        // ONE strength cassette for BOTH clusters' claims, in pool order.
+        let mut combined = parse_synth_claims(&synth_a_reply, &cluster_a.key).unwrap();
+        combined.extend(parse_synth_claims(&synth_b_reply, &cluster_b.key).unwrap());
+        let pooled = CrystalCandidate { items: combined };
+        let verdicts_reply = format!(
+            "[{}]",
+            pooled
+                .items
+                .iter()
+                .map(|c| format!(
+                    r#"{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"both quotes support it"}}"#,
+                    c.id
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        write_cassette(&cache, &strength_request(&pooled, &catalog), &verdicts_reply);
+
+        let stats = run_stats(llm_args(&reader, &work, &embed)).expect("pooled run");
+        assert_eq!(stats.select_calls, 4);
+        assert_eq!(stats.synth_calls, 2);
+        assert_eq!(
+            stats.strength_calls, 1,
+            "two clusters' claims share one end-of-sweep strength call"
+        );
+        assert_eq!(stats.refused, 2, "c and d refused BEFORE the wave covered them");
+        assert_eq!(stats.durable_appended, 2);
+        assert_eq!(
+            stats.uncovered_after,
+            Some(0),
+            "the wave's durable claims cover all four packs"
+        );
+
+        let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let wave = lines.last().unwrap();
+        assert_eq!(wave["outcome"], "wave", "{wave}");
+        assert_eq!(wave["claims"], 2);
+        assert_eq!(wave["strength_calls"], 1);
+        assert_eq!(
+            wave["newly_covered"],
+            serde_json::json!([
+                "2026-06-01_a",
+                "2026-06-02_b",
+                "2026-06-03_c",
+                "2026-06-04_d"
+            ])
+        );
+    }
+
+    /// A pool that exceeds one chunk flushes MID-SWEEP: the wave's coverage
+    /// update lands before later seeds, so a later seed drops out `covered`
+    /// (the whole point of updating coverage in waves), while the sub-chunk
+    /// remainder waits for the end-of-sweep flush.
+    #[test]
+    fn mid_sweep_wave_flushes_and_covers_later_seeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("reader");
+        let embed = tmp.path().join("embed-cache");
+        // Packs a and b carry MAX_STRENGTH_CLAIMS_PER_CALL + 1 units each, so
+        // ONE cluster can ground a chunk-overflowing claim set.
+        let n = MAX_STRENGTH_CLAIMS_PER_CALL + 1;
+        let a_quotes: Vec<String> = (0..n)
+            .map(|i| format!("Alpha fact number {i:02} states a scarce budget."))
+            .collect();
+        let b_quotes: Vec<String> = (0..n)
+            .map(|i| format!("Beta fact number {i:02} states a scarce budget."))
+            .collect();
+        write_pack(
+            &reader,
+            "2026-06-01_a",
+            "Alpha memory systems",
+            &a_quotes.join(" "),
+            &a_quotes.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        write_pack(
+            &reader,
+            "2026-06-02_b",
+            "Beta context budgets",
+            &b_quotes.join(" "),
+            &b_quotes.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        write_pack(
+            &reader,
+            "2026-06-03_c",
+            "Gamma retrieval bounds",
+            "Gamma says retrieval must stay bounded.",
+            &["Gamma says retrieval must stay bounded."],
+        );
+        write_pack(
+            &reader,
+            "2026-06-04_d",
+            "Delta gardening notes",
+            "Delta says tomatoes need regular watering.",
+            &["Delta says tomatoes need regular watering."],
+        );
+        let vecs: [[f32; 3]; 4] = [
+            [1.0, 0.05, 0.0],
+            [1.0, 0.0, 0.05],
+            [0.9, 0.3, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let titles = [
+            ("2026-06-01_a", "Alpha memory systems"),
+            ("2026-06-02_b", "Beta context budgets"),
+            ("2026-06-03_c", "Gamma retrieval bounds"),
+            ("2026-06-04_d", "Delta gardening notes"),
+        ];
+        for ((case_id, title), v) in titles.iter().zip(vecs) {
+            seed_vector(&embed, &reader, case_id, title, v);
+        }
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let cache = work.join("cassettes");
+        let catalog = collect_catalog(&reader).unwrap();
+        assert_eq!(catalog.cases["2026-06-01_a"].units.len(), n, "fixture sanity");
+
+        // Seed a: cluster [a, b, c] → n cross-source claims (a+b each).
+        let sel_a = select_request_for(&reader, &embed, &catalog, "2026-06-01_a");
+        write_cassette(
+            &cache,
+            &sel_a,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"scarce-budget framing"}"#,
+        );
+        let cluster = Cluster {
+            key: "l3-2026-06-01_a".into(),
+            theme: "cross-source".into(),
+            cases: vec![
+                "2026-06-01_a".into(),
+                "2026-06-02_b".into(),
+                "2026-06-03_c".into(),
+            ],
+        };
+        let claims_json: Vec<String> = (0..n)
+            .map(|i| {
+                let ua = &catalog.cases["2026-06-01_a"].units[i];
+                let ub = &catalog.cases["2026-06-02_b"].units[i];
+                format!(
+                    r#"{{"id":"{}","claim":"Cross-source scarce-budget fact {i:02}.","theme":"cross-source","citations":[
+                        {{"case_id":"2026-06-01_a","unit_id":"{}","quote":"{}"}},
+                        {{"case_id":"2026-06-02_b","unit_id":"{}","quote":"{}"}}
+                    ]}}"#,
+                    i + 1,
+                    ua.unit_id,
+                    ua.quote,
+                    ub.unit_id,
+                    ub.quote
+                )
+            })
+            .collect();
+        let synth_reply = format!(r#"{{"claims":[{}]}}"#, claims_json.join(","));
+        write_cassette(
+            &cache,
+            &crystal_synth_request(&catalog, &cluster, 16, 22),
+            &synth_reply,
+        );
+
+        // Strength cassettes for BOTH waves: the mid-sweep full chunk and
+        // the end-of-sweep remainder.
+        let all = parse_synth_claims(&synth_reply, &cluster.key).unwrap();
+        assert_eq!(all.len(), n);
+        for chunk in all.chunks(MAX_STRENGTH_CLAIMS_PER_CALL) {
+            let cand = CrystalCandidate {
+                items: chunk.to_vec(),
+            };
+            let reply = format!(
+                "[{}]",
+                cand.items
+                    .iter()
+                    .map(|c| format!(
+                        r#"{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"both quotes state a scarce budget"}}"#,
+                        c.id
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            write_cassette(&cache, &strength_request(&cand, &catalog), &reply);
+        }
+
+        // Seed b must drop out COVERED (the mid-sweep wave already routed
+        // a+b-citing claims durable) — no select cassette for b on purpose:
+        // reaching the model for b would fail the test with a replay miss.
+        // Seeds c and d stay uncovered → refusals.
+        for seed in ["2026-06-03_c", "2026-06-04_d"] {
+            let r = select_request_for(&reader, &embed, &catalog, seed);
+            write_cassette(&cache, &r, r#"{"refuse":true,"reason":"scattered"}"#);
+        }
+
+        let stats = run_stats(llm_args(&reader, &work, &embed)).expect("wave run");
+        assert_eq!(stats.select_calls, 3, "a, c, d — b covered by the mid-sweep wave");
+        assert_eq!(stats.synth_calls, 1);
+        assert_eq!(
+            stats.strength_calls, 2,
+            "n = chunk+1 pending → one full chunk mid-sweep + remainder at end"
+        );
+        assert_eq!(stats.durable_appended, n);
+        assert_eq!(stats.uncovered_after, Some(2), "c and d remain");
+
+        let sweep: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.join("l3-sweep-stats.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sweep["covered_mid_run"], 1, "{sweep}");
+        assert_eq!(sweep["strength_waves"], 2, "{sweep}");
+
+        // Line order proves the coverage wave landed BEFORE seed b:
+        // a selected → wave 1 (full chunk) → b covered → c, d refused →
+        // wave 2 (remainder).
+        let jsonl = std::fs::read_to_string(work.join("l3-sweep.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["seed"], "2026-06-01_a");
+        assert_eq!(lines[0]["outcome"], "selected");
+        assert_eq!(lines[0]["pending"], n, "whole pool pending at selection time");
+        assert_eq!(lines[1]["outcome"], "wave", "{}", lines[1]);
+        assert_eq!(lines[1]["claims"], MAX_STRENGTH_CLAIMS_PER_CALL);
+        assert_eq!(
+            lines[1]["newly_covered"],
+            serde_json::json!(["2026-06-01_a", "2026-06-02_b"])
+        );
+        assert_eq!(lines[2]["seed"], "2026-06-02_b");
+        assert_eq!(lines[2]["outcome"], "covered", "covered BY the wave: {}", lines[2]);
+        assert_eq!(lines[3]["outcome"], "refused");
+        assert_eq!(lines[4]["outcome"], "refused");
+        let wave2 = lines.last().unwrap();
+        assert_eq!(wave2["outcome"], "wave", "{wave2}");
+        assert_eq!(wave2["claims"], 1, "sub-chunk remainder at end of sweep");
+        assert_eq!(
+            wave2["newly_covered"],
+            serde_json::json!([]),
+            "a and b were already covered by wave 1"
+        );
     }
 
     #[test]
@@ -1091,7 +1593,8 @@ mod tests {
     }
 
     /// When the final permitted selection covers every remaining seed, the
-    /// sweep is COMPLETE — the covered check must run before the budget check
+    /// sweep is COMPLETE — under waves that means the budget check must flush
+    /// the pending pool (and re-check coverage) BEFORE declaring exhaustion,
     /// so the run never misreports budget_exhausted=true (or undercounts
     /// covered_mid_run) with uncovered_after == 0.
     #[test]

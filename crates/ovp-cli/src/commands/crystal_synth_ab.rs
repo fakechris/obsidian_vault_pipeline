@@ -489,8 +489,8 @@ mod tests {
     }
 
     /// Full replay experiment: three uncovered packs, arm A (one date-ordered
-    /// batch) vs arm B (select→synth→strength + covered + refusal), each from
-    /// its own cassette dir; both arms yield one durable claim.
+    /// batch) vs arm B (select→synth→wave strength + guard + refusal), each
+    /// from its own cassette dir; both arms yield one durable claim.
     #[test]
     fn experiment_runs_both_arms_and_writes_comparison() {
         let tmp = tempfile::tempdir().unwrap();
@@ -596,7 +596,16 @@ mod tests {
                 grounded_b.items[0].id
             ),
         );
-        // Seed b gets covered mid-run; seed c refuses.
+        // Seed b: NOT covered before the end-of-sweep strength wave flushes
+        // (coverage updates in waves now) — it re-selects the same trio and
+        // the attempted-cluster guard blocks the duplicate synth spend.
+        let sel_b = cluster_select_request(&digests["2026-06-02_b"], &neighborhood("2026-06-02_b"), 16);
+        write_cassette(
+            &cache_b,
+            &sel_b,
+            r#"{"selected_case_ids":["2026-06-01_a","2026-06-02_b","2026-06-03_c"],"rationale":"same trio"}"#,
+        );
+        // Seed c refuses.
         let sel_c = cluster_select_request(&digests["2026-06-03_c"], &neighborhood("2026-06-03_c"), 16);
         write_cassette(&cache_b, &sel_c, r#"{"refuse":true,"reason":"no cluster"}"#);
 
@@ -633,9 +642,13 @@ mod tests {
         assert_eq!(a["select_calls"], 0);
         assert_eq!((b["arm"].as_str(), b["mode"].as_str()), (Some("B"), Some("llm")));
         assert_eq!(b["ok"], true, "{b}");
-        assert_eq!(b["select_calls"], 2, "seed a + seed c (b covered mid-run)");
+        assert_eq!(
+            b["select_calls"], 3,
+            "a, b, c — b guarded, not covered, before the strength wave"
+        );
+        assert_eq!(b["strength_calls"], 1);
         assert_eq!(b["durable"], 1);
-        assert_eq!(b["refusal_rate"], 0.5);
+        assert_eq!(b["refusal_rate"], serde_json::json!(1.0 / 3.0));
         assert_eq!(b["mean_distinct_sources_per_durable"], 2.0);
         // Both arms wrote their own fresh stores.
         assert!(work.join("arm-a/store/ledger.jsonl").exists());
