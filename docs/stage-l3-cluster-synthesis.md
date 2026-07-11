@@ -31,9 +31,14 @@ coverage-first sweep: uncovered packs (not cited by any ACTIVE durable claim),
   → superset guard: an ACTIVE claim's source_cases ⊇ the chosen set → skip
     (logged, no synth spend); ditto a cluster already attempted this run
   → EXISTING crystal_synth/v1 + grounded filter + exact-citation dedup +
-    crystal_strength/v1 + provenance/strength gates + idempotent durable
-    write — completely unchanged
-  → seeds covered by claims routed durable this run drop out mid-sweep
+    provenance/strength gates + idempotent durable write — completely
+    unchanged
+  → grounded claims pool up; strength runs in MICRO-BATCHED WAVES of
+    crystal_strength/v1 (≤ batch mode's chunk size, 20 claims/call — the
+    same shared constant), flushed when the pool reaches a full chunk or
+    the sweep ends, instead of one strength call per cluster
+  → seeds covered by claims routed durable in a flushed wave drop out
+    mid-sweep (coverage lag bounded by one chunk of pending claims)
 ```
 
 Layer separation is the same as L2: the selector shapes GROUPS ONLY. It can
@@ -73,12 +78,25 @@ cannot corrupt the ledger.
   `claim_key`). Note the guard can only fire on selections that exclude the
   seed — a selection containing an uncovered seed is never a subset of an
   active claim's sources. Repeat clusters within one run are also `guarded`.
-- **Mid-run coverage**: after each cluster's strength verdicts, claims are
-  routed with the SAME `final_routing` the write path uses; cases cited by
-  durable-routed claims join the covered set, and later seeds already covered
-  record outcome `covered` without spending budget.
+- **Mid-run coverage (in waves)**: each cluster's grounded claims join a
+  pending pool; when the pool reaches batch mode's strength chunk size
+  (`MAX_STRENGTH_CLAIMS_PER_CALL` = 20 — one shared constant) full chunks
+  flush as a strength WAVE (one `crystal_strength/v1` call per ≤20-claim
+  chunk), and only then are the wave's claims routed with the SAME
+  `final_routing` the write path uses; cases cited by durable-routed claims
+  join the covered set and later seeds record outcome `covered` without
+  spending budget. The remainder (< one chunk) flushes when the sweep ends.
+  Consequence (the honest cost of batching, measured by the A/B): coverage
+  lags by at most one chunk, so a seed that per-cluster strength would have
+  dropped out `covered` may still spend a select call — the duplicate-cluster
+  and superset guards still block duplicate synth spend. A strength-call
+  failure fails the RUN (batch-mode semantics; the cassette is invalidated on
+  content failures so a rerun re-asks).
 - **Budget**: `--max-seeds` (default 25) caps `cluster_select/v1` calls per
-  run; hitting it sets `budget_exhausted` in the stats (rerun to continue —
+  run; hitting it with the pending pool non-empty first flushes the pool
+  (those strength calls are owed regardless) and re-checks coverage, so a
+  fully covered sweep is still reported COMPLETE; only a genuinely uncovered
+  seed then sets `budget_exhausted` in the stats (rerun to continue —
   coverage state comes from the ledger, so sweeps are resumable and
   idempotent).
 - **Zero grounded claims** is a SUCCESS in llm mode (refusals/guards
@@ -86,14 +104,20 @@ cannot corrupt the ledger.
 
 ## Run report
 
-- stdout: one `l3[<seed>]: <outcome>` line per seed + sweep totals + coverage
-  delta (`N → M uncovered pack(s)`).
+- stdout: one `l3[<seed>]: <outcome>` line per seed, one `l3[wave NNN]: ...`
+  line per strength wave + sweep totals + coverage delta
+  (`N → M uncovered pack(s)`).
 - `<work-dir>/l3-sweep.jsonl` (written incrementally): per-seed
   `{seed, outcome: selected|refused|guarded|failed|covered, selected?,
-  rationale?, reason?, error?, guarded_by?, claims?, grounded?,
-  durable_routed?, newly_covered?}`.
+  rationale?, reason?, error?, guarded_by?, claims?, grounded?, pending?}`
+  (`pending` = pool size after a selected cluster's claims joined), plus one
+  `{outcome: "wave", wave, claims, strength_calls, durable_routed,
+  newly_covered}` line per flush (no `seed` field — filter on it for
+  per-seed lines). Routing/coverage facts live on wave lines now: they are
+  unknowable at selection time.
 - `<work-dir>/l3-sweep-stats.json`: counters incl. `uncovered_before/after`,
-  `select/synth/strength_calls`, `budget_exhausted`.
+  `select/synth/strength_calls` (strength = chunked calls, not clusters),
+  `strength_waves`, `budget_exhausted`.
 - The usual artifacts (`candidate.json`, `candidate.grounded.json`,
   `deduped-claims.json`, `strength.json`, `warnings.json`) are written in both
   modes.
@@ -136,10 +160,13 @@ durable/review counts, and coverage delta (arm B).
 `_tag_` stripping, CJK), request purity (cap in the key), parse
 selected/refused/garbage, validation bounds. `ovp-cli`
 `crystal_synth_llm`: sweep-order determinism; full e2e
-(selected/covered/refused/failed in one sweep + idempotent rerun adds 0);
-superset guard fires BEFORE the synth spend and leaves the ledger untouched;
-`--max-seeds` budget; missing-embeddings clear error; missing cache-dir
-config error; neighborhood ranking; theme = keywords never labels.
+(selected/guarded/refused/failed in one sweep + idempotent rerun adds 0);
+strength waves — two clusters under one chunk share ONE end-of-sweep
+strength call, and a chunk-overflowing pool flushes MID-SWEEP so a later
+seed drops out `covered`; superset guard fires BEFORE the synth spend and
+leaves the ledger untouched; `--max-seeds` budget (incl. flush-then-recheck
+before declaring exhaustion); missing-embeddings clear error; missing
+cache-dir config error; neighborhood ranking; theme = keywords never labels.
 `crystal_synth_ab`: seeded sample determinism; full two-arm replay experiment
 (real store untouched, comparison.json metrics). All pre-existing batch-mode
 tests unchanged and green.
