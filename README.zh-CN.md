@@ -70,7 +70,18 @@ brew install fakechris/ovp2/ovp2
    阅读主干、把 reader pack 写进 vault、把每次尝试记录进 append-only 账本，
    并重建读模型。
 
-3. **打开门户**：
+3. **装上日程**——从此不用惦记流水线心跳：
+
+   ```sh
+   ovp2 schedule install --vault-root ~/Documents/my-vault
+   ```
+
+   安装一个操作系统级定时任务（macOS 用 launchd，Linux 用 systemd 用户
+   timer），每天 09:00 自动运行 `ovp2 daily`（`--time HH:MM` 可改）。凭证
+   填进生成的 `<vault>/.ovp/daily.env`（chmod 600），`install` 会打印需要
+   填什么。用 `ovp2 schedule status` 查看，`ovp2 schedule uninstall` 移除。
+
+4. **打开门户**：
 
    ```sh
    ovp2 serve --vault-root ~/Documents/my-vault
@@ -78,7 +89,7 @@ brew install fakechris/ovp2/ovp2
 
    然后在浏览器打开打印出的 URL（默认 `http://127.0.0.1:3141`）。
 
-4. **可选——Pinboard 捕获**：
+5. **可选——Pinboard 捕获**：
 
    ```sh
    ovp2 pinboard-sync --vault-root ~/Documents/my-vault --live --max 200
@@ -112,6 +123,7 @@ brew install fakechris/ovp2/ovp2
 | 命令 | 作用 |
 |---|---|
 | `ovp2 daily` | 每日主循环：捕获清扫 → 每个新源走接地阅读主干 → 生命周期流转 → 账本 + 报告 → 读模型与控制台刷新 |
+| `ovp2 schedule` | 安装/移除/查看操作系统级每日定时任务（launchd / systemd 用户 timer）——`install` 一次，循环自己跑 |
 | `ovp2 serve` | 启动本机门户服务：`.ovp/console/` 页面 + JSON API（`/api/find`、`/api/search`、`/api/ask` 等） |
 | `ovp2 ask` | 对产品状态做检索增强问答；输出带引用的回答，并做确定性引用校验 |
 | `ovp2 pinboard-sync` | 把 Pinboard 书签物化为收件箱笔记，URL 去重，带首次同步防洪保护 |

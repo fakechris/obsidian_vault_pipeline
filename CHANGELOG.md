@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- `ovp2 schedule <install|uninstall|status>` — productized OS scheduler for
+  the daily loop (launchd user agent on macOS, systemd user timer on Linux).
+  `install` writes the unit file(s) + a chmod-600 env-file template
+  (`<vault>/.ovp/daily.env`) and loads the job; `status` reports
+  loaded/enabled state, schedule, env file, last log lines, and warns when
+  the last daily run is more than 2 days old; `uninstall` removes the job
+  and keeps logs + env file. No daemon (M32 §9) — the OS owns the clock.
 
 ## [2.0.1] - 2026-07-10
 
