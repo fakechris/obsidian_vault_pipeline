@@ -25,4 +25,8 @@ tr:hover{background:rgba(79,195,247,.05)}
 code{font-size:.8rem;background:var(--card);padding:.1em .3em;border-radius:3px}
 .ok{color:var(--ok)}
 .bad{color:var(--bad)}
+p.warn{color:var(--warn);font-size:.85rem;margin-top:.3rem}
+.aging-ok{color:var(--ok)}
+.aging-amber{color:var(--warn);font-weight:600}
+.aging-red{color:var(--bad);font-weight:700}
 section{margin-bottom:2rem}

@@ -91,8 +91,14 @@ pub fn run(args: AutoRunArgs) -> Result<(), CliError> {
     };
 
     let opts = SweepOptions { inbox_root, vault_root, canonical_root, lint_threshold };
-    let report =
-        AutoRun::sweep(&opts, make_inputs).map_err(|e| CliError::Io(format!("auto-run: {e}")))?;
+    // Per-file flushed progress: the sweep runs the full L4 cycle (LLM calls) on
+    // each input and can take minutes per file, so stream `[i/total] <file>`
+    // before each one — the sweep crate stays print-free (callback pattern).
+    let mut on_progress = |i: usize, total: usize, label: &str| {
+        sayln!("  [{i}/{total}] {label}");
+    };
+    let report = AutoRun::sweep_with_progress(&opts, make_inputs, &mut on_progress)
+        .map_err(|e| CliError::Io(format!("auto-run: {e}")))?;
 
     if json {
         let json = serde_json::to_string_pretty(&report)

@@ -426,8 +426,17 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
             write_json(&args.work_dir.join("synth-batches.json"), &batches)?;
 
             // (c) Per-batch cross-source synthesis (model, cassette-replayable).
+            // Each batch is one live LLM call (minutes under load); stream a
+            // flushed heartbeat so a watched run never looks hung.
+            let n_batches = batches.len();
             let mut all_claims: Vec<CrystalClaim> = Vec::new();
-            for batch in &batches {
+            for (bi, batch) in batches.iter().enumerate() {
+                sayln!(
+                    "  [{}/{n_batches}] synthesizing cluster `{}` ({} case(s))",
+                    bi + 1,
+                    batch.claim_prefix(),
+                    batch.cases.len()
+                );
                 let req = crystal_synth_batch_request(&catalog, batch, args.max_units_per_case);
                 let (claims, log): (Vec<CrystalClaim>, Option<RepairLog>) =
                     call_and_parse(base.as_mut(), &req, "synth", |t| {
@@ -462,12 +471,22 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
             }
 
             // (e) Chunked claim-strength verdicts (model, cassette-replayable).
+            let n_strength_chunks = grounded
+                .items
+                .len()
+                .div_ceil(MAX_STRENGTH_CLAIMS_PER_CALL)
+                .max(1);
             let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
             for (idx, chunk) in grounded
                 .items
                 .chunks(MAX_STRENGTH_CLAIMS_PER_CALL)
                 .enumerate()
             {
+                sayln!(
+                    "  [{}/{n_strength_chunks}] strength ({} claim(s))",
+                    idx + 1,
+                    chunk.len()
+                );
                 let req = strength_request(
                     &CrystalCandidate {
                         items: chunk.to_vec(),

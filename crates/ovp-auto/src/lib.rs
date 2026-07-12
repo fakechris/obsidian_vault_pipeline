@@ -105,9 +105,30 @@ impl AutoRun {
     /// a caller responsibility is what stops `ovp-auto` from duplicating the L4
     /// wiring; the sweep itself owns only discovery, the loop, lint, and the
     /// report.
-    pub fn sweep<F>(opts: &SweepOptions, mut make_inputs: F) -> Result<AutoReport, AutoError>
+    pub fn sweep<F>(opts: &SweepOptions, make_inputs: F) -> Result<AutoReport, AutoError>
     where
         F: FnMut(&Path) -> Result<RunCycleInputs, String>,
+    {
+        Self::sweep_with_progress(opts, make_inputs, |_, _, _| {})
+    }
+
+    /// [`sweep`](Self::sweep) with a per-file progress callback.
+    ///
+    /// `on_progress(i, total, label)` fires once per discovered input, in
+    /// discovery order, with a **1-based** index BEFORE that input runs — so a
+    /// watched auto-run streams `[i/total] <file>` and the last call reads
+    /// `[total/total]`. The sweep itself stays print-free (a leaf automation
+    /// crate); the CLI renders the flushed line. `total` counts every
+    /// discovered file, including the empty ones the loop then skips, so the
+    /// index sequence is contiguous.
+    pub fn sweep_with_progress<F, P>(
+        opts: &SweepOptions,
+        mut make_inputs: F,
+        mut on_progress: P,
+    ) -> Result<AutoReport, AutoError>
+    where
+        F: FnMut(&Path) -> Result<RunCycleInputs, String>,
+        P: FnMut(usize, usize, &str),
     {
         // Discover. Explicit existence check first so a typo'd inbox is loud
         // (a missing root otherwise walks to an empty list). Any I/O error while
@@ -123,12 +144,14 @@ impl AutoRun {
         })?;
 
         let cycle = RunCycle::new();
+        let total = files.len();
         let mut cycles = Vec::new();
         let mut skipped = Vec::new();
 
-        for (rel, content) in &files {
+        for (i, (rel, content)) in files.iter().enumerate() {
             let abs = opts.inbox_root.join(rel);
             let label = abs.display().to_string();
+            on_progress(i + 1, total, &label);
 
             if content.trim().is_empty() {
                 skipped.push(SkippedInput { input: label, reason: "empty markdown file".into() });
@@ -259,6 +282,39 @@ mod tests {
         assert!(!report.lint_passed, "corrupt canonical → lint error → gate fails");
         assert!(!report.succeeded(), "a failing lint gate fails the sweep");
         assert!(report.lint.findings.iter().any(|f| f.code == "canonical.unparseable"));
+    }
+
+    #[test]
+    fn progress_callback_fires_per_input_in_order() {
+        // Three discovered files → three callbacks with 1-based contiguous
+        // indices, all reporting the same total, in discovery order. Content is
+        // whitespace-only so no cycle runs (make_inputs stays unused) — the
+        // progress hook must still fire for every discovered file, including
+        // skipped ones.
+        let inbox = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let canon = tempfile::tempdir().unwrap();
+        std::fs::write(inbox.path().join("a.md"), " ").unwrap();
+        std::fs::write(inbox.path().join("b.md"), " ").unwrap();
+        std::fs::write(inbox.path().join("c.md"), " ").unwrap();
+
+        let mut calls: Vec<(usize, usize, String)> = Vec::new();
+        let report = AutoRun::sweep_with_progress(
+            &opts(inbox.path(), vault.path(), canon.path(), Severity::Error),
+            unused_factory,
+            |i, total, label| calls.push((i, total, label.to_string())),
+        )
+        .unwrap();
+
+        assert_eq!(report.considered, 3);
+        assert_eq!(calls.len(), 3, "one callback per discovered file");
+        // 1-based, contiguous, constant total.
+        assert_eq!(calls.iter().map(|(i, _, _)| *i).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert!(calls.iter().all(|(_, t, _)| *t == 3), "total is constant");
+        // Order is discovery order (walk_markdown is sorted): a, b, c.
+        assert!(calls[0].2.ends_with("a.md"));
+        assert!(calls[1].2.ends_with("b.md"));
+        assert!(calls[2].2.ends_with("c.md"));
     }
 
     #[test]

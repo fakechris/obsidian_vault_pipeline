@@ -332,9 +332,12 @@ pub fn run_experiment(args: ExperimentArgs) -> Result<(), CliError> {
         embed_cache_dir: Some(embed_cache_dir.clone()),
     };
 
-    println!("\n=== arm A (batch) ===");
+    // Each arm is a full (possibly live) synth run — minutes to tens of
+    // minutes. Flush the arm banner so a watched experiment shows which arm is
+    // in flight; `run_stats` itself now streams per-batch/per-chunk progress.
+    sayln!("\n=== arm A (batch) — running ({} case slice) ===", slice.len());
     let a = run_stats(arm_args(ClusterMode::Batch, "arm-a"));
-    println!("\n=== arm B (llm) ===");
+    sayln!("\n=== arm B (llm) — running ({} case slice) ===", slice.len());
     let b = run_stats(arm_args(ClusterMode::Llm, "arm-b"));
 
     let reports = vec![

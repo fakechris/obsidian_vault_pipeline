@@ -29,17 +29,12 @@ use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
 
-/// `println!` + explicit stdout flush. Daily runs are watched through nohup /
-/// pipes (block-buffered stdout) and the reader phase can run for hours; every
-/// phase header and per-source line must hit the log the moment it is printed —
-/// a healthy 46-minute run was once killed as "hung" because nothing showed.
-macro_rules! sayln {
-    ($($arg:tt)*) => {{
-        println!($($arg)*);
-        use std::io::Write as _;
-        let _ = std::io::stdout().flush();
-    }};
-}
+// `sayln!` (println + flush) now lives in `crate::progress` (shared across all
+// commands, re-exported crate-wide via `#[macro_export]`). Daily runs are
+// watched through nohup / pipes (block-buffered stdout) and the reader phase can
+// run for hours; every phase header and per-source line must hit the log the
+// moment it is printed — a healthy 46-minute run was once killed as "hung"
+// because nothing showed.
 
 pub struct DailyArgs {
     pub vault_root: PathBuf,
@@ -222,6 +217,20 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         "  plan: {} new source(s), {} skipped, {} blocked",
         work.todo.len(), work.skipped.len(), work.blocked.len()
     );
+    // Drain estimate — the operator is otherwise blind to how many runs the
+    // backlog needs to clear at the current cap. `daily` processes at most
+    // `--max-sources` per run, so ceil(queued / cap) runs remain (≈ that many
+    // days at the blessed 1 run/day). Only meaningful when the backlog exceeds
+    // one run's worth.
+    let queued = work.todo.len();
+    if let Some(runs) = drain_runs(queued, args.max_sources)
+        && runs > 1
+    {
+        sayln!(
+            "  drain: {queued} queued · --max-sources {} → ~{runs} run(s) (~{runs} day(s) at 1 run/day) to drain",
+            args.max_sources
+        );
+    }
     for item in &work.blocked {
         sayln!("    blocked ({} failures): {} — rerun with --retry-blocked after review",
             item.prior_failures, item.rel);
@@ -444,6 +453,19 @@ fn stale_theme_packs(
     Some(count)
 }
 
+/// Runs needed to drain `queued` sources at `cap` sources per run.
+///
+/// `ceil(queued / cap)`. Returns `None` when there is nothing to estimate —
+/// either `cap == 0` (no rate limit configured) or `queued == 0` (empty
+/// backlog). The caller only surfaces the line when the result is > 1 (a
+/// single-run backlog needs no drain story).
+fn drain_runs(queued: usize, cap: usize) -> Option<usize> {
+    if cap == 0 || queued == 0 {
+        return None;
+    }
+    Some(queued.div_ceil(cap))
+}
+
 fn build_pinboard_fetch(args: &DailyArgs) -> Result<Box<dyn PinboardFetch>, CliError> {
     if args.pinboard_live && args.pinboard_fixture.is_some() {
         return Err(CliError::Io("pass either --pinboard-fixture or --pinboard-live, not both".into()));
@@ -557,7 +579,27 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
 
 #[cfg(test)]
 mod tests {
-    use super::stale_theme_packs;
+    use super::{drain_runs, stale_theme_packs};
+
+    #[test]
+    fn drain_runs_is_ceiling_division() {
+        // Exact multiple → no partial run.
+        assert_eq!(drain_runs(16, 8), Some(2));
+        // Remainder rounds up (one extra run for the tail).
+        assert_eq!(drain_runs(17, 8), Some(3));
+        assert_eq!(drain_runs(1, 8), Some(1));
+        // Boundary: exactly one run's worth.
+        assert_eq!(drain_runs(8, 8), Some(1));
+    }
+
+    #[test]
+    fn drain_runs_none_when_nothing_to_estimate() {
+        // No rate limit configured.
+        assert_eq!(drain_runs(100, 0), None);
+        // Empty backlog.
+        assert_eq!(drain_runs(0, 8), None);
+        assert_eq!(drain_runs(0, 0), None);
+    }
 
     fn model_with_packs(dirs: &[&str]) -> ovp_index::IndexModel {
         ovp_index::IndexModel {

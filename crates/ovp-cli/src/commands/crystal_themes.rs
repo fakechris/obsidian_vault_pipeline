@@ -237,11 +237,16 @@ fn embed_missing(docs: &[ThemeDoc], missing: &[usize]) -> Result<Option<Vec<Vec<
     };
     let texts: Vec<String> = missing.iter().map(|&i| docs[i].text.clone()).collect();
     let mut out = Vec::with_capacity(texts.len());
+    // Embedding is CPU-bound and the first cold run also downloads ~450MB —
+    // stream a flushed per-batch line so it never looks stalled. stderr is
+    // line-buffered and survives a kill under launchd.
+    let total = texts.len();
     for chunk in texts.chunks(64) {
         let batch = embedder
             .embed(chunk)
             .map_err(|e| CliError::Io(format!("crystal-themes: {e}")))?;
         out.extend(batch);
+        sayln_err!("  [{}/{total}] embedding …", out.len());
     }
     Ok(Some(out))
 }
@@ -393,9 +398,17 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
     };
 
     // ---- Communities ----
+    // Louvain is deterministic and print-free (leaf crate); the CLI brackets
+    // the call with flushed coarse lines so the phase boundary is visible.
     let edges = knn_edges(&vectors, args.k, args.cosine_threshold);
+    sayln!(
+        "  clustering {} node(s) over {} kNN edge(s) …",
+        docs.len(),
+        edges.len()
+    );
     let labels = louvain_labels(docs.len(), &edges, args.resolution, args.seed);
     let n_communities = labels.iter().copied().max().map_or(0, |m| (m + 1).max(0)) as usize;
+    sayln!("  … {n_communities} community(ies)");
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); n_communities];
     for (i, &l) in labels.iter().enumerate() {
         if l >= 0 {

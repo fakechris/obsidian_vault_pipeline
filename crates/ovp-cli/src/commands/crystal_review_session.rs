@@ -540,7 +540,19 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
     let mut client = build_client(args.client_kind, &cache_dir)?;
     let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
     let mut repairs: Vec<RepairLog> = Vec::new();
-    for chunk in revised.items.chunks(MAX_STRENGTH_CLAIMS_PER_CALL) {
+    // Each chunk is one live re-gate LLM call; stream a flushed heartbeat so a
+    // watched apply never looks hung.
+    let n_regate_chunks = revised
+        .items
+        .len()
+        .div_ceil(MAX_STRENGTH_CLAIMS_PER_CALL)
+        .max(1);
+    for (ci, chunk) in revised.items.chunks(MAX_STRENGTH_CLAIMS_PER_CALL).enumerate() {
+        sayln!(
+            "  [{}/{n_regate_chunks}] re-gating {} revision(s)",
+            ci + 1,
+            chunk.len()
+        );
         let sub = CrystalCandidate { items: chunk.to_vec() };
         let req = strength_request(&sub, &catalog);
         let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
