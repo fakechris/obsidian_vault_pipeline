@@ -523,14 +523,17 @@ enum Cmd {
         /// if an internal batching bug would send an oversized request.
         #[arg(long)]
         strict_cluster_cap: bool,
-        /// L3: how synthesis inputs are grouped. `batch` (default) keeps the
-        /// deterministic themes/date batching; `llm` runs the coverage-first
-        /// sweep — one cluster_select/v1 call per uncovered pack picks 3..cap
-        /// case ids (or refuses), the superset guard skips clusters an active
-        /// claim already covers, then the UNCHANGED crystal_synth/v1 + gates +
-        /// idempotent write run per cluster. Needs cached embeddings
-        /// (`ovp2 crystal-themes` warms them).
-        #[arg(long, value_enum, default_value_t = ClusterModeArg::Batch)]
+        /// L3: how synthesis inputs are grouped. `llm` (default since the
+        /// 2026-07-10 A/B GO: 2.63x durable yield/synth call, 2.20 mean
+        /// sources, 42 vs cap-51 calls — all three pre-registered criteria)
+        /// runs the coverage-first sweep — one cluster_select/v1 call per
+        /// uncovered pack picks 3..cap case ids (or refuses), the superset
+        /// guard skips clusters an active claim already covers, then the
+        /// UNCHANGED crystal_synth/v1 + gates + idempotent write run per
+        /// wave. Needs cached embeddings (`ovp2 crystal-themes` warms them);
+        /// `batch` keeps the deterministic themes/date batching (and remains
+        /// the automatic fallback when embeddings are unavailable).
+        #[arg(long, value_enum, default_value_t = ClusterModeArg::Auto)]
         cluster_mode: ClusterModeArg,
         /// llm mode: per-run budget cap on cluster_select/v1 calls.
         #[arg(long, default_value_t = 25)]
@@ -975,9 +978,13 @@ enum ClientKindArg {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum ClusterModeArg {
+    /// `llm` when the embed feature + warmed themes/embeddings are present,
+    /// else `batch` with a stderr note — the safe default everywhere.
+    Auto,
     /// Deterministic ≤cap batches (themes.json communities / date order).
     Batch,
-    /// L3 coverage-first LLM cluster selection (cluster_select/v1).
+    /// L3 coverage-first LLM cluster selection (cluster_select/v1) —
+    /// explicit choice fails loud when embeddings are unavailable.
     Llm,
 }
 
@@ -1358,6 +1365,26 @@ fn main() -> ExitCode {
             let cluster_mode = match cluster_mode {
                 ClusterModeArg::Batch => ClusterMode::Batch,
                 ClusterModeArg::Llm => ClusterMode::Llm,
+                // Auto = llm where the L3 prerequisites exist (embed build +
+                // a themes projection as the warmed-embeddings signal), else
+                // the deterministic batcher. Explicit --cluster-mode llm
+                // keeps its fail-loud contract.
+                ClusterModeArg::Auto => {
+                    let themes_present = vault_root
+                        .as_ref()
+                        .map(|v| v.join(".ovp/crystal/themes.json").is_file())
+                        .unwrap_or(false);
+                    if cfg!(feature = "embed") && themes_present {
+                        ClusterMode::Llm
+                    } else {
+                        eprintln!(
+                            "crystal-synth: auto cluster mode → batch (embed feature: {}, themes.json: {}) — run `ovp2 crystal-themes` with an embed build to enable llm clustering",
+                            cfg!(feature = "embed"),
+                            themes_present
+                        );
+                        ClusterMode::Batch
+                    }
+                }
             };
             if experiment {
                 commands::crystal_synth_ab::run_experiment(
