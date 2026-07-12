@@ -391,7 +391,26 @@ fn check_run_recency(
     findings: &mut Vec<Finding>,
 ) {
     let threshold_secs = threshold_hours as i64 * 3600;
-    let hb = ovp_daily::read_last_run(vault_root).ok().flatten();
+
+    // A PRESENT-but-corrupt heartbeat is a hard FAIL, never a silent fallback:
+    // `.ok().flatten()` would treat a malformed file as absent and quietly fall
+    // back to report mtimes, so doctor could PASS while the latest failed or
+    // aborted run is unknowable. Absent (Ok(None)) is fine — a fresh vault.
+    let hb = match ovp_daily::read_last_run(vault_root) {
+        Ok(hb) => hb,
+        Err(e) => {
+            findings.push(Finding {
+                check: "run-recency".into(),
+                severity: Severity::Fail,
+                message: format!(
+                    ".ovp/last-run.json is present but unreadable/corrupt ({e}) — the last run's \
+                     status is unknowable; repair or remove it, then rerun `ovp2 daily`"
+                ),
+                fixed: false,
+            });
+            return;
+        }
+    };
 
     // 1) Terminal-status failures are unconditional FAILs regardless of age.
     if let Some(rec) = &hb {
@@ -886,6 +905,23 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = recency_findings(tmp.path(), now_unix_secs(), 26);
         assert_eq!(recency(&f).severity, Severity::Warn);
+    }
+
+    #[test]
+    fn recency_fails_loud_on_corrupt_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A present-but-malformed last-run.json must FAIL, not silently fall
+        // back to report mtimes (which could let doctor PASS while the latest
+        // failed/aborted run is unknowable).
+        let hb = tmp.path().join(".ovp/last-run.json");
+        std::fs::create_dir_all(hb.parent().unwrap()).unwrap();
+        std::fs::write(&hb, b"{ not valid json").unwrap();
+        // A fresh report on disk would otherwise mask the corruption.
+        touch(tmp.path(), ".ovp/reports/daily-2026-07-12.json");
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        let r = recency(&f);
+        assert_eq!(r.severity, Severity::Fail);
+        assert!(r.message.contains("corrupt"), "{}", r.message);
     }
 
     #[test]

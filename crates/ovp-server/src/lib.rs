@@ -20,8 +20,8 @@ use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_domain::units::Unit;
 use ovp_index::{
-    EvidenceModel, IndexModel, Query, QueryKind, evidence_path, read_evidence, read_index,
-    run_query,
+    EvidenceModel, IndexModel, LastRunModel, Query, QueryKind, evidence_path, read_evidence,
+    read_index, read_last_run_model, run_query,
 };
 use ovp_intake::read_jsonl;
 use ovp_llm::ModelClient;
@@ -203,6 +203,12 @@ struct AppState {
     /// Card/unit bodies for the /api/source/:sha memory layer — same
     /// mtime-keyed auto-reload as the model, keyed on `evidence.json`.
     evidence: RwLock<Cached<EvidenceModel>>,
+    /// The run-liveness heartbeat (`.ovp/last-run.json`), read LIVE (mtime
+    /// auto-reload) — NOT the baked `index.json` snapshot. The heartbeat is a
+    /// live sidecar: `daily` writes it before the index is rebuilt (and a crash
+    /// can leave the index's baked copy saying "running" forever), so every
+    /// server surface overlays THIS fresh value over `model.ops.last_run`.
+    last_run: RwLock<Cached<LastRunModel>>,
     viz_dir: Option<PathBuf>,
     ask_client: Option<AskClientFactory>,
     /// The /api/ask wall-clock guard — [`ask_guard_from_env`] unless
@@ -219,6 +225,33 @@ impl AppState {
 
     fn evidence_path(&self) -> PathBuf {
         evidence_path(&self.vault_root)
+    }
+
+    fn last_run_path(&self) -> PathBuf {
+        self.vault_root.join(self.layout.last_run_file())
+    }
+
+    /// The LIVE run-liveness heartbeat, mtime-freshened against
+    /// `.ovp/last-run.json`. This is the single source of truth for last-run
+    /// status on every API surface — never the baked `index.json` copy, which
+    /// can be a stale "running" snapshot from before a crash. A corrupt file
+    /// degrades to `None` here (the server must keep serving); `doctor` is the
+    /// fail-loud gate for corruption.
+    fn current_last_run(&self) -> Option<LastRunModel> {
+        let path = self.last_run_path();
+        freshen(&self.last_run, &path, || {
+            read_last_run_model(&self.vault_root).ok().flatten()
+        })
+    }
+
+    /// The index model with its `ops.last_run` field OVERLAID by the live
+    /// heartbeat sidecar — so `/api/model` (and the SPA banner reading it) never
+    /// sees a stale baked "running". Returns None only when there is no index
+    /// at all.
+    fn model_with_live_last_run(&self) -> Option<IndexModel> {
+        let mut model = self.current_model()?;
+        model.ops.last_run = self.current_last_run();
+        Some(model)
     }
 
     /// The cached index read-model, auto-freshened against `index.json`'s
@@ -253,6 +286,11 @@ impl AppState {
             &self.evidence,
             &self.evidence_path(),
             read_evidence(&self.vault_root).ok(),
+        );
+        force_reload(
+            &self.last_run,
+            &self.last_run_path(),
+            read_last_run_model(&self.vault_root).ok().flatten(),
         );
     }
 
@@ -315,6 +353,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         layout: VaultLayout::new(),
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
+        last_run: RwLock::new(Cached::default()),
         viz_dir: config.viz_dir,
         ask_client: config.ask_client,
         ask_timeout: config.ask_timeout.unwrap_or_else(ask_guard_from_env),
@@ -516,7 +555,9 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
-    let model = match state.current_model() {
+    // Overlay the LIVE heartbeat over the baked `ops.last_run` so the SPA banner
+    // never reads a stale "running" snapshot baked into index.json.
+    let model = match state.model_with_live_last_run() {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
@@ -942,10 +983,11 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             "max_concurrent": state.ask_slots.max,
         },
         // Run-liveness heartbeat (OVP2 observability P0) so `schedule status`
-        // and any client read the same last-run block uniformly. Null on a
-        // fresh vault / pre-P0 index. The client derives age from
+        // and any client read the same last-run block uniformly. Read LIVE from
+        // `.ovp/last-run.json` (NOT the baked index snapshot, which can be a
+        // stale "running"). Null on a fresh vault. The client derives age from
         // started_at/ended_at + now — the server ships no `minutes_since`.
-        "last_run": model.as_ref().and_then(|m| m.ops.last_run.clone()),
+        "last_run": state.current_last_run(),
         "version": env!("CARGO_PKG_VERSION"),
     });
     json_response(200, &body.to_string())
@@ -1553,6 +1595,7 @@ mod tests {
             layout: VaultLayout::new(),
             model: RwLock::new(Cached::default()),
             evidence: RwLock::new(Cached::default()),
+            last_run: RwLock::new(Cached::default()),
             viz_dir,
             ask_client: None,
             // Fixed (not env-derived) so tests stay deterministic on
@@ -2902,6 +2945,86 @@ mod tests {
         // (absent-file stamp was None; a present file's stamp differs).
         ovp_index::write_index(&vault, &index_dated("2026-03-03")).unwrap();
         assert_eq!(st.current_model().unwrap().date, "2026-03-03");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// P1 regression: the index bakes `ops.last_run` at build time, so a crash
+    /// after the heartbeat starts but before the index rebuild leaves the baked
+    /// copy saying "running" forever. The server MUST read the sidecar LIVE and
+    /// report the finalized status — never the stale baked snapshot.
+    #[test]
+    fn server_prefers_live_heartbeat_over_stale_baked_last_run() {
+        let root = temp_root("live-heartbeat-overlay");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+
+        // Bake an index whose ops.last_run says "running" (the stale snapshot).
+        let mut baked = index_dated("2026-07-12");
+        baked.ops.last_run = Some(LastRunModel {
+            run_id: "daily-2026-07-12".into(),
+            started_at: "2026-07-12T09:00:00Z".into(),
+            ended_at: None,
+            status: "running".into(),
+            processed: None,
+            failed: None,
+            blocked: None,
+            capped: None,
+            queued_after: None,
+            error: None,
+        });
+        ovp_index::write_index(&vault, &baked).unwrap();
+
+        // On disk the run actually FINISHED — write a finalized sidecar.
+        let (g, _) = ovp_daily::HeartbeatGuard::start(&vault, "daily-2026-07-12");
+        g.finalize_completed(ovp_daily::RunCounts {
+            processed: 8,
+            queued_after: 180,
+            ..Default::default()
+        });
+
+        // /api/model overlays the live sidecar over the baked "running".
+        let live = st.model_with_live_last_run().unwrap();
+        let lr = live.ops.last_run.expect("live last_run present");
+        assert_eq!(lr.status, "completed", "must reflect the finalized sidecar, not baked 'running'");
+        assert_eq!(lr.processed, Some(8));
+
+        // /api/settings reads the same live value.
+        let resp = dispatch(&st, Method::Get, "/api/settings", "");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["last_run"]["status"], "completed");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A still-running index snapshot with NO sidecar (e.g. sidecar deleted)
+    /// overlays to None — the server never re-serves the stale baked value.
+    #[test]
+    fn live_overlay_nulls_baked_last_run_when_sidecar_absent() {
+        let root = temp_root("live-heartbeat-absent");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+
+        let mut baked = index_dated("2026-07-12");
+        baked.ops.last_run = Some(LastRunModel {
+            run_id: "r".into(),
+            started_at: "2026-07-12T09:00:00Z".into(),
+            ended_at: None,
+            status: "running".into(),
+            processed: None,
+            failed: None,
+            blocked: None,
+            capped: None,
+            queued_after: None,
+            error: None,
+        });
+        ovp_index::write_index(&vault, &baked).unwrap();
+
+        let live = st.model_with_live_last_run().unwrap();
+        assert!(live.ops.last_run.is_none(), "no sidecar → live overlay is None, not the stale baked snapshot");
 
         let _ = std::fs::remove_dir_all(&root);
     }

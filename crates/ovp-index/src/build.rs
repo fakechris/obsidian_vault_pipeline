@@ -823,19 +823,17 @@ fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsSt
     }
 }
 
-/// Read the run-liveness heartbeat (`.ovp/last-run.json`) into the read-model
-/// shape. A corrupt file degrades to `None` (the projection must always build;
-/// `ovp2 doctor`/the CLI surface the corruption loudly), and an absent file on
-/// a fresh vault is `None` too.
-fn build_last_run(vault_root: &Path) -> Option<LastRunModel> {
-    let hb = ovp_daily::read_last_run(vault_root).ok().flatten()?;
+/// Map a raw heartbeat record to the read-model shape. Pure; the string
+/// status keeps the model self-describing for the static console pages and the
+/// SPA alike.
+pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
     let status = match hb.status {
         ovp_daily::LastRunStatus::Running => "running",
         ovp_daily::LastRunStatus::Completed => "completed",
         ovp_daily::LastRunStatus::Failed => "failed",
         ovp_daily::LastRunStatus::Aborted => "aborted",
     };
-    Some(LastRunModel {
+    LastRunModel {
         run_id: hb.run_id,
         started_at: hb.started_at,
         ended_at: hb.ended_at,
@@ -846,7 +844,28 @@ fn build_last_run(vault_root: &Path) -> Option<LastRunModel> {
         capped: hb.capped,
         queued_after: hb.queued_after,
         error: hb.error,
-    })
+    }
+}
+
+/// Read the run-liveness heartbeat (`.ovp/last-run.json`) LIVE into the
+/// read-model shape, PRESERVING errors. This is the fail-loud reader the
+/// server and `doctor` use so a corrupt/unreadable heartbeat is never silently
+/// treated as absent (that would hide the very failed/aborted run this feature
+/// exists to surface). `Ok(None)` = fresh vault (no file); `Err` = present but
+/// unparseable.
+pub fn read_last_run_model(vault_root: &Path) -> Result<Option<LastRunModel>, String> {
+    Ok(ovp_daily::read_last_run(vault_root)?.map(last_run_to_model))
+}
+
+/// Read the heartbeat for the BAKED projection. The projection must always
+/// build, so a corrupt file degrades to `None` here (the CLI/`doctor`/server
+/// surface the corruption loudly via [`read_last_run_model`]); an absent file
+/// on a fresh vault is `None` too. NOTE: the baked field is a build-time
+/// SNAPSHOT — it can say `running` forever if the process died before the
+/// phase-5 rebuild. Live surfaces (server `/api/*`, `doctor`, `schedule
+/// status`) must read the sidecar fresh, never trust this field.
+fn build_last_run(vault_root: &Path) -> Option<LastRunModel> {
+    read_last_run_model(vault_root).ok().flatten()
 }
 
 fn compute_run_stats(runs: &[RunRow], today: &str) -> Option<RunStats> {
