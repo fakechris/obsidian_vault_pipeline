@@ -95,7 +95,7 @@ fn queue_section(model: &IndexModel) -> String {
     let capped = model.ops.capped;
     // "Backlog not draining" note: a capped last run with a non-empty queue is
     // the visible signal the operator was blind to.
-    let capped_note = if capped > 0 {
+    let capped_note = if capped > 0 && depth > 0 {
         format!(
             r#"<p class="warn">last run capped {capped} source(s) — backlog not draining at the current --max-sources</p>"#
         )

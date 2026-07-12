@@ -94,8 +94,13 @@ pub fn run(args: AutoRunArgs) -> Result<(), CliError> {
     // Per-file flushed progress: the sweep runs the full L4 cycle (LLM calls) on
     // each input and can take minutes per file, so stream `[i/total] <file>`
     // before each one — the sweep crate stays print-free (callback pattern).
+    // Progress goes to STDERR (never stdout) so `--json` keeps a clean,
+    // machine-parseable JSON document on stdout; also suppressed entirely in
+    // json mode to keep logs quiet for scripted callers.
     let mut on_progress = |i: usize, total: usize, label: &str| {
-        sayln!("  [{i}/{total}] {label}");
+        if !json {
+            sayln_err!("  [{i}/{total}] {label}");
+        }
     };
     let report = AutoRun::sweep_with_progress(&opts, make_inputs, &mut on_progress)
         .map_err(|e| CliError::Io(format!("auto-run: {e}")))?;
