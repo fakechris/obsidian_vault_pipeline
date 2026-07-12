@@ -201,6 +201,13 @@ pub struct IndexModel {
     pub schema: String,
     /// Date the model was built (caller-provided; keeps rebuilds deterministic).
     pub date: String,
+    /// Wall-clock build instant (UTC RFC3339). Unlike `date` (a day string,
+    /// deterministic on purpose) this is a true instant, so three runs on the
+    /// same day are distinguishable and a stale projection no longer renders
+    /// identically to a fresh one. Serde-additive: pre-P1 indexes deserialize
+    /// with `None` and every surface shows "unknown age".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub totals: Totals,

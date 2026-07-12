@@ -509,7 +509,7 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
 
     let hits = run_query(&model, &query);
     let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
-    json_response(200, &body)
+    json_stamped(200, &body, Some(&model))
 }
 
 fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -522,11 +522,14 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         let Some(term) = term.filter(|t| !t.trim().is_empty()) else {
             return json_response(400, r#"{"error":"subgraph search requires q"}"#);
         };
-        let records = load_active_records(state);
+        // One model read for the whole handler: the subgraph is joined against
+        // the ledger records AND the index, so both halves must reflect the
+        // same freshness — the stamp pairs them.
         let model = state.current_model();
+        let records = load_active_records(state);
         let resp = graph::search_subgraph(&records, model.as_ref(), term.trim());
         let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-        return json_response(200, &body);
+        return json_stamped(200, &body, model.as_ref());
     }
 
     let model = match state.current_model() {
@@ -541,17 +544,21 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
     };
     let hits = run_query(&model, &query);
     let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
-    json_response(200, &body)
+    json_stamped(200, &body, Some(&model))
 }
 
 fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    // Read the model ONCE up front so the theme counts (from the live ledger)
+    // ship with the projection stamp they were paired against — the client can
+    // see both halves came from the same freshness.
+    let model = state.current_model();
     let records = load_active_records(state);
     let themes: Vec<serde_json::Value> = graph::theme_counts(&records)
         .into_iter()
         .map(|(theme, count)| serde_json::json!({ "theme": theme, "count": count }))
         .collect();
     let body = serde_json::to_string(&themes).unwrap_or_else(|_| "[]".into());
-    json_response(200, &body)
+    json_stamped(200, &body, model.as_ref())
 }
 
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -561,8 +568,18 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
-    let body = serde_json::to_string(&model).unwrap_or_else(|_| "{}".into());
-    json_response(200, &body)
+    // The IndexModel already carries `built_at`/`run_id`; splice in the
+    // server-computed `age_seconds` (now - built_at) so the client need not
+    // trust its own clock, and echo the same three as headers.
+    let mut value = serde_json::to_value(&model).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "age_seconds".into(),
+            serde_json::json!(age_seconds(model.built_at.as_deref())),
+        );
+    }
+    let body = serde_json::to_string(&value).unwrap_or_else(|_| "{}".into());
+    json_stamped(200, &body, Some(&model))
 }
 
 fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
@@ -597,6 +614,11 @@ fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let query = parse_query_string(url);
 
+    // Read the model ONCE for the whole handler (torn-read fix): every scope
+    // joins the live ledger records against this projection, so a single read
+    // pairs both halves at one freshness and the stamp reflects that pairing.
+    let model = state.current_model();
+
     // Portal v2 scoped-component API (design §4) — one KnowledgeGraph
     // component, three scopes:
     //   scope=neighborhood&source=<sha>  this source → citing claims →
@@ -617,7 +639,6 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     );
                 };
                 let records = load_active_records(state);
-                let model = state.current_model();
                 // Evidence sidecar feeds the memory-layer card nodes (B5).
                 let evidence = state.current_evidence();
                 graph::source_neighborhood(&records, model.as_ref(), evidence.as_ref(), sha)
@@ -636,7 +657,6 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     hops: graph::MAX_HOPS,
                 };
                 let records = load_active_records(state);
-                let model = state.current_model();
                 graph::build_graph(&records, model.as_ref(), &params)
             }
             "theme" => {
@@ -644,7 +664,6 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     return json_response(400, r#"{"error":"scope=theme requires theme=<theme>"}"#);
                 };
                 let records = load_active_records(state);
-                let model = state.current_model();
                 graph::theme_subgraph(&records, model.as_ref(), theme)
             }
             other => {
@@ -657,7 +676,7 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         return match result {
             Ok(resp) => {
                 let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-                json_response(200, &body)
+                json_stamped(200, &body, model.as_ref())
             }
             Err(e) => {
                 let body = serde_json::json!({ "error": e.message });
@@ -675,12 +694,11 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     };
 
     let records = load_active_records(state);
-    let model = state.current_model();
 
     match graph::build_graph(&records, model.as_ref(), &params) {
         Ok(resp) => {
             let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-            json_response(200, &body)
+            json_stamped(200, &body, model.as_ref())
         }
         Err(e) => {
             let body = serde_json::json!({ "error": e.message });
@@ -696,6 +714,11 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         return json_response(400, r#"{"error":"missing claim id"}"#);
     }
 
+    // Read the model BEFORE the ledger records so a claim's citations resolve
+    // their source metadata against the SAME freshness the claim came from
+    // (torn-read fix): the auto-freshen keeps them paired, and the stamp on the
+    // response lets the client see the pairing.
+    let model = state.current_model();
     let records = load_active_records(state);
     let rec = records
         .iter()
@@ -705,7 +728,6 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         None => return json_response(404, r#"{"error":"claim not found"}"#),
     };
 
-    let model = state.current_model();
     let source_lookup: HashMap<String, &ovp_index::SourceRow> = model
         .as_ref()
         .map(|m| m.sources.iter().map(|s| (s.sha256.clone(), s)).collect())
@@ -772,7 +794,7 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         "strength": format!("{:?}", rec.strength).to_lowercase(),
         "citations": citations,
     });
-    json_response(200, &body.to_string())
+    json_stamped(200, &body.to_string(), model.as_ref())
 }
 
 /// GET /api/source/<sha256> — JSON for the portal's three-layer source
@@ -972,6 +994,13 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         "vault_root": state.vault_root.display().to_string(),
         "schema_version": model.as_ref().map(|m| m.schema.clone()),
         "index_date": model.as_ref().map(|m| m.date.clone()),
+        // Provenance stamp (P1): the wall-clock build instant, its run id, and
+        // the server-computed age. The System page shows "as of <built_at> ·
+        // N min ago" so `index_date` (a day string) can no longer stand in for
+        // freshness.
+        "built_at": model.as_ref().and_then(|m| m.built_at.clone()),
+        "run_id": model.as_ref().and_then(|m| m.run_id.clone()),
+        "age_seconds": model.as_ref().and_then(|m| age_seconds(m.built_at.as_deref())),
         "counts": model.as_ref().map(|m| serde_json::json!({
             "sources": m.totals.sources,
             "packs": m.totals.packs,
@@ -990,7 +1019,7 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         "last_run": state.current_last_run(),
         "version": env!("CARGO_PKG_VERSION"),
     });
-    json_response(200, &body.to_string())
+    json_stamped(200, &body.to_string(), model.as_ref())
 }
 
 /// The request headers `POST /api/ask` validates — the endpoint triggers
@@ -1502,6 +1531,46 @@ fn json_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> 
         .with_status_code(status)
 }
 
+/// Seconds since an RFC3339 `built_at` instant, per the server's wall clock.
+/// `None` when the stamp is absent (pre-P1 index) or unparseable — the client
+/// then shows "unknown age" rather than a fabricated 0. Clamped at 0 so a
+/// slight clock skew never reports a negative age.
+fn age_seconds(built_at: Option<&str>) -> Option<i64> {
+    let built = chrono::DateTime::parse_from_rfc3339(built_at?).ok()?;
+    Some((chrono::Utc::now().timestamp() - built.timestamp()).max(0))
+}
+
+/// `json_response` plus provenance HEADERS (`X-OVP-Built-At`, `X-OVP-Run-Id`,
+/// `X-OVP-Age-Seconds`) — so array-bodied routes (`/api/find|search|graph|
+/// claim|themes`) still echo which build answered. Absent fields are omitted;
+/// the header set is the client's pairing signal that ledger reads and model
+/// reads in one handler came from the same freshness.
+fn json_stamped(
+    status: u16,
+    body: &str,
+    model: Option<&IndexModel>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut resp = json_response(status, body);
+    if let Some(m) = model {
+        if let Some(built) = m.built_at.as_deref()
+            && let Ok(h) = Header::from_bytes("X-OVP-Built-At", built.as_bytes())
+        {
+            resp.add_header(h);
+        }
+        if let Some(run) = m.run_id.as_deref()
+            && let Ok(h) = Header::from_bytes("X-OVP-Run-Id", run.as_bytes())
+        {
+            resp.add_header(h);
+        }
+        if let Some(age) = age_seconds(m.built_at.as_deref())
+            && let Ok(h) = Header::from_bytes("X-OVP-Age-Seconds", age.to_string().as_bytes())
+        {
+            resp.add_header(h);
+        }
+    }
+    resp
+}
+
 fn text_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let data = body.as_bytes().to_vec();
     let header = Header::from_bytes("Content-Type", "text/plain; charset=utf-8").unwrap();
@@ -1804,7 +1873,11 @@ mod tests {
         let model = IndexModel {
             schema: "ovp.index/v2".into(),
             date: "2026-07-09".into(),
-            run_id: None,
+            // Provenance stamp present so the P1 echo tests have a value; the
+            // instant is fixed 1s in the past so `age_seconds` is a small,
+            // stable, non-negative number.
+            built_at: Some("2026-07-09T00:00:00Z".into()),
+            run_id: Some("daily-2026-07-09".into()),
             totals: Totals {
                 sources: 1,
                 processed: 1,
@@ -2197,6 +2270,10 @@ mod tests {
         );
         assert_eq!(v["schema_version"], "ovp.index/v2");
         assert_eq!(v["index_date"], "2026-07-09");
+        // P1 provenance: the instant, its producer, and a non-negative age.
+        assert_eq!(v["built_at"], "2026-07-09T00:00:00Z");
+        assert_eq!(v["run_id"], "daily-2026-07-09");
+        assert!(v["age_seconds"].as_i64().unwrap() >= 0, "age is present and non-negative");
         assert_eq!(v["counts"]["sources"], 1);
         assert_eq!(v["counts"]["packs"], 1);
         assert!(v["counts"]["claims"].is_u64());
@@ -2227,10 +2304,70 @@ mod tests {
         let v = body_json(resp);
         assert!(v["schema_version"].is_null());
         assert!(v["index_date"].is_null());
+        // No index → provenance is uniformly null (client shows "unknown age").
+        assert!(v["built_at"].is_null());
+        assert!(v["run_id"].is_null());
+        assert!(v["age_seconds"].is_null());
         assert!(v["counts"].is_null());
         assert_eq!(v["llm_configured"], false);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Value of a response header, case-insensitive, or `None`.
+    fn header_of(resp: &Response<std::io::Cursor<Vec<u8>>>, name: &str) -> Option<String> {
+        resp.headers()
+            .iter()
+            .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+            .map(|h| h.value.as_str().to_string())
+    }
+
+    #[test]
+    fn model_endpoint_carries_built_at_run_id_and_age() {
+        let vault = portal_vault("model-provenance", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/model", "");
+        assert_eq!(resp.status_code(), 200);
+        // Provenance headers pair the body with the build that produced it.
+        assert_eq!(header_of(&resp, "X-OVP-Built-At").as_deref(), Some("2026-07-09T00:00:00Z"));
+        assert_eq!(header_of(&resp, "X-OVP-Run-Id").as_deref(), Some("daily-2026-07-09"));
+        assert!(header_of(&resp, "X-OVP-Age-Seconds").is_some(), "age header present");
+
+        let v = body_json(resp);
+        assert_eq!(v["built_at"], "2026-07-09T00:00:00Z");
+        assert_eq!(v["run_id"], "daily-2026-07-09");
+        assert!(v["age_seconds"].as_i64().unwrap() >= 0, "server-computed age spliced in");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn claim_endpoint_resolves_a_fresh_sources_metadata_without_a_dangling_citation() {
+        // Torn-read guard: a claim cites case `good`, whose pack links source
+        // `aaaa1111`, which is present in the freshly-loaded index. handle_claim
+        // reads the model ONCE (before the ledger) so the citation joins the
+        // SAME freshness — the source title/url/sha resolve, never a dangling
+        // citation. write_ledger's claim `a` cites case `good`, unit `u-001`.
+        let vault = portal_vault("claim-torn-read", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+
+        let resp = dispatch(&st, Method::Get, "/api/claim/a", "");
+        assert_eq!(resp.status_code(), 200);
+        // Response is paired with the projection it resolved against.
+        assert_eq!(header_of(&resp, "X-OVP-Built-At").as_deref(), Some("2026-07-09T00:00:00Z"));
+        let v = body_json(resp);
+        assert_eq!(v["claim_id"], "a");
+        let cit = &v["citations"][0];
+        assert_eq!(cit["case_id"], "good");
+        // The fresh source's metadata resolved from the SAME-freshness index —
+        // NOT a dangling citation (case `good` → sha aaaa1111 via the pack).
+        assert_eq!(cit["source_sha256"], "aaaa1111", "source sha resolved from the index");
+        assert_eq!(cit["source_title"], "Good Article", "source title resolved");
+        assert_eq!(cit["source_url"], "https://example.com/good");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
 
     #[test]
@@ -2799,6 +2936,7 @@ mod tests {
         IndexModel {
             schema: "ovp.index/v2".into(),
             date: date.into(),
+            built_at: Some(format!("{date}T00:00:00Z")),
             run_id: None,
             totals: Totals::default(),
             sources: vec![],

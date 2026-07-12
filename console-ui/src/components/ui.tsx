@@ -1,7 +1,49 @@
 /** Small DS-conformant building blocks shared by the portal pages. */
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useI18n, type MsgKey } from '../i18n';
+import { ageParts } from '../lib/derive';
 import type { SourceStatus } from '../lib/types';
+
+/** Muted "as of <built_at> · N min ago" freshness stamp, derived client-side
+ * from the projection's build instant and a ticking clock. Every surface that
+ * shows counts renders one, so a stale number can never read like a fresh one.
+ * Absent/unparseable `built_at` (pre-P1 index) → "unknown age". Bilingual via
+ * the age.* keys. The clock ticks on an interval (default 30s) so a left-open
+ * tab's label converges without a reload. */
+export function AgeLabel({
+  builtAt,
+  tickMs = 30_000,
+}: {
+  builtAt?: string | null;
+  tickMs?: number;
+}) {
+  const { t } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), tickMs);
+    return () => clearInterval(id);
+  }, [tickMs]);
+
+  const a = ageParts(builtAt, now);
+  if (a.unknown) {
+    return <span className="muted tiny age-label">{t('age.unknown')}</span>;
+  }
+  const rel =
+    a.unit === 'now'
+      ? t('age.now')
+      : a.unit === 'minute'
+        ? t('age.minutes', { n: a.value })
+        : a.unit === 'hour'
+          ? t('age.hours', { n: a.value })
+          : t('age.days', { n: a.value });
+  // The instant is a machine timestamp — show it verbatim (mono), the relative
+  // phrase is the human-readable half.
+  return (
+    <span className="muted tiny age-label" title={a.builtAt ?? undefined}>
+      {t('age.stamp', { instant: a.builtAt ?? '', rel })}
+    </span>
+  );
+}
 
 /** Semantic status pill (DS extension #2). */
 export function StatusPill({ status }: { status: SourceStatus }) {

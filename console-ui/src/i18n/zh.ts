@@ -35,6 +35,16 @@ export const zh: Record<keyof typeof en, string> = {
   'common.whatIsThisPage': '这是什么页？',
   'common.day': '试用第',
 
+  // 数据新鲜度标签（P1）：“截至 <时刻> · N 分钟前”。凡展示计数的界面都标注
+  // 构建时刻，陈旧数字不再伪装成最新。
+  'age.asOf': '截至 {instant}',
+  'age.now': '刚刚',
+  'age.minutes': '{n} 分钟前',
+  'age.hours': '{n} 小时前',
+  'age.days': '{n} 天前',
+  'age.unknown': '时间未知',
+  'age.stamp': '截至 {instant} · {rel}',
+
   // concept tooltips
   'concept.durableTip': '已验证：每条引文均逐字核对过原文',
   'concept.caveatedTip': '未验证：有价值但证据未完全过关，需带着怀疑使用',
@@ -266,6 +276,8 @@ export const zh: Record<keyof typeof en, string> = {
   'system.vaultRoot': 'vault 路径',
   'system.schema': '索引 schema',
   'system.indexDate': '索引日期',
+  'system.builtAt': '构建时刻',
+  'system.runId': '运行 id',
   'system.counts': '统计',
   'system.countsLine': '{sources} 源 · {packs} 阅读包 · {claims} 主张',
   'system.noIndex': '索引未构建——运行 `ovp2 index`',

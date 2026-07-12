@@ -36,12 +36,14 @@ fn header(model: &IndexModel) -> String {
 <style>{CSS}</style></head>
 <body><main>
 <h1>OVP Console <span class="zh">工作台</span></h1>
-<p class="sub">read model built {date}{run} · product state only · regenerate: <code>ovp2 console --vault-root …</code></p>
+<p class="sub">read model built {built}{run} · product state only · regenerate: <code>ovp2 console --vault-root …</code></p>
 <div class="strip">
 {queued}{processed}{failed}{blocked}{needs}{packs}{durable}{caveated}
 </div>
 "##,
-        date = esc(&model.date),
+        // Prefer the wall-clock instant so multiple runs the same day are
+        // distinguishable; fall back to the day string on pre-P1 indexes.
+        built = esc(model.built_at.as_deref().unwrap_or(&model.date)),
         run = model
             .run_id
             .as_deref()
@@ -331,6 +333,7 @@ mod tests {
         IndexModel {
             schema: "ovp.index/v1".into(),
             date: "2026-06-09".into(),
+            built_at: Some("2026-06-09T08:30:00Z".into()),
             run_id: Some("daily-2026-06-09".into()),
             totals: Totals { sources: 2, processed: 1, blocked: 1, packs: 1, claims_durable: 1, claims_caveated: 1, runs: 1, ..Default::default() },
             sources: vec![
@@ -431,6 +434,9 @@ mod tests {
         assert!(html.contains("opinion_as_fact"));
         // Runs table links the report file.
         assert!(html.contains(".ovp/reports/daily-2026-06-09.json"));
+        // P1: the header shows the wall-clock BUILD INSTANT, not the day
+        // string, so multiple runs the same day are distinguishable.
+        assert!(html.contains("read model built 2026-06-09T08:30:00Z"), "instant in header");
         // Deterministic.
         assert_eq!(html, render_console(&model()));
     }
@@ -440,6 +446,7 @@ mod tests {
         let empty = IndexModel {
             schema: "ovp.index/v1".into(),
             date: "2026-06-09".into(),
+            built_at: None,
             run_id: None,
             totals: Totals::default(),
             sources: vec![],
@@ -452,6 +459,8 @@ mod tests {
         assert!(html.contains("Nothing needs attention"));
         assert!(html.contains("No runs recorded yet"));
         assert!(html.contains("No crystal store yet"));
+        // Pre-P1 index (built_at None) → header falls back to the day string.
+        assert!(html.contains("read model built 2026-06-09 "), "fallback to date");
     }
 
     #[test]

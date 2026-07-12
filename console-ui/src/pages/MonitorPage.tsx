@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AgeLabel } from '../components/ui';
 import { fetchModel } from '../lib/api';
 import type { IndexModel } from '../lib/types';
 
@@ -67,9 +68,15 @@ export default function MonitorPage() {
           {live ? '● CONNECTED' : '○ OFFLINE'}
         </span>
         {model && (
-          <span className="text-xs text-slate-500">
-            index {model.date}
-            {model.run_id && ` · ${model.run_id.slice(0, 12)}…`}
+          <span className="flex items-center gap-2 text-xs text-slate-500">
+            <span>
+              index {model.date}
+              {model.run_id && ` · ${model.run_id.slice(0, 12)}…`}
+            </span>
+            {/* "connected" ≠ "fresh": the socket may be live while the model on
+                disk is hours old. Show the model AGE next to the dot so the two
+                signals can't be conflated (P1). */}
+            <AgeLabel builtAt={model.built_at} />
           </span>
         )}
       </div>

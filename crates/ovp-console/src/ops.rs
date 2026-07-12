@@ -45,9 +45,9 @@ fn ops_header(model: &IndexModel) -> String {
 <style>{CSS}</style></head>
 <body><main>
 <h1>OVP Ops <span class="zh">运维面板</span></h1>
-<p class="sub">built {date} · <a href="index.html">← console</a> · <a href="audit.html">audit</a> · <a href="candidates.html">candidates</a></p>
+<p class="sub">built {built} · <a href="index.html">← console</a> · <a href="audit.html">audit</a> · <a href="candidates.html">candidates</a></p>
 "##,
-        date = esc(&model.date),
+        built = esc(model.built_at.as_deref().unwrap_or(&model.date)),
     )
 }
 
@@ -172,9 +172,9 @@ fn audit_header(model: &IndexModel) -> String {
 <style>{CSS}</style></head>
 <body><main>
 <h1>OVP Audit <span class="zh">审计时间线</span></h1>
-<p class="sub">built {date} · <a href="index.html">← console</a> · <a href="ops.html">ops</a> · <a href="candidates.html">candidates</a></p>
+<p class="sub">built {built} · <a href="index.html">← console</a> · <a href="ops.html">ops</a> · <a href="candidates.html">candidates</a></p>
 "##,
-        date = esc(&model.date),
+        built = esc(model.built_at.as_deref().unwrap_or(&model.date)),
     )
 }
 
@@ -211,9 +211,9 @@ fn candidates_header(model: &IndexModel) -> String {
 <style>{CSS}</style></head>
 <body><main>
 <h1>OVP Candidates <span class="zh">待审候选</span></h1>
-<p class="sub">built {date} · <a href="index.html">← console</a> · <a href="ops.html">ops</a> · <a href="audit.html">audit</a></p>
+<p class="sub">built {built} · <a href="index.html">← console</a> · <a href="ops.html">ops</a> · <a href="audit.html">audit</a></p>
 "##,
-        date = esc(&model.date),
+        built = esc(model.built_at.as_deref().unwrap_or(&model.date)),
     )
 }
 

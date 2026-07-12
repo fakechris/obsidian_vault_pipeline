@@ -978,6 +978,7 @@ mod tests {
         ovp_index::model::IndexModel {
             schema: "test".into(),
             date: "2026-07-07".into(),
+            built_at: None,
             run_id: None,
             totals: Default::default(),
             sources: vec![],

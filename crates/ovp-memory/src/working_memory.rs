@@ -154,6 +154,7 @@ mod tests {
         IndexModel {
             schema: "ovp.index/v2".into(),
             date: "2026-06-15".into(),
+            built_at: None,
             run_id: None,
             totals: Totals::default(),
             sources: vec![],

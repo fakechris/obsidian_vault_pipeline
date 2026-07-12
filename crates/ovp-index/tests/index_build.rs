@@ -9,7 +9,8 @@ use ovp_daily::{
     DAILY_SCHEMA, DailyRunRecord, RunReport, RunStatus as DailyStatus, append_daily_record,
 };
 use ovp_index::{
-    ClaimStatus, Query, QueryKind, SourceStatus, build_index, read_index, run_query, write_index,
+    ClaimStatus, Query, QueryKind, SourceStatus, build_index, build_index_at, read_index,
+    run_query, write_index,
 };
 use ovp_intake::{INTAKE_SCHEMA, IntakeAction, IntakeRecord, append_intake_record, hex_sha256};
 
@@ -535,20 +536,77 @@ fn persisted_index_is_deterministic_and_rebuildable() {
     let root = dir.path();
     build_fixture_vault(root);
 
-    let model = build_index(root, "2026-06-09", None).unwrap();
+    // `built_at` is the ONE non-deterministic field (wall-clock, P1): pin it
+    // via `build_index_at` so the "delete → rebuild → byte-identical" story
+    // still holds for everything else. In production the instant advances on
+    // every rebuild by design — that is what makes a stale projection
+    // distinguishable from a fresh one.
+    let model = build_index_at(root, "2026-06-09", None, "2026-06-09T00:00:00Z").unwrap();
     let rel = write_index(root, &model).unwrap();
     assert_eq!(rel, ".ovp/index/index.json");
     let first = std::fs::read_to_string(root.join(&rel)).unwrap();
 
     // The rebuild story: delete the projection, rebuild, byte-identical.
     std::fs::remove_file(root.join(&rel)).unwrap();
-    let model2 = build_index(root, "2026-06-09", None).unwrap();
+    let model2 = build_index_at(root, "2026-06-09", None, "2026-06-09T00:00:00Z").unwrap();
     write_index(root, &model2).unwrap();
     let second = std::fs::read_to_string(root.join(&rel)).unwrap();
     assert_eq!(first, second, "projection must be deterministic");
 
     let loaded = read_index(root).unwrap();
     assert_eq!(loaded, model2);
+}
+
+#[test]
+fn build_index_stamps_built_at_and_synthesizes_a_run_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    // No run to name (the ad-hoc `index` command path): built_at is stamped
+    // with the wall clock and run_id is never silently None — it falls back to
+    // the `index-<built_at>` marker.
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let built = model.built_at.expect("built_at stamped unconditionally");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&built).is_ok(),
+        "built_at is RFC3339: {built}"
+    );
+    assert_eq!(
+        model.run_id.as_deref(),
+        Some(format!("index-{built}").as_str()),
+        "index path synthesizes an index-<built_at> marker",
+    );
+    // `date` stays the deterministic day header — unchanged by the stamp.
+    assert_eq!(model.date, "2026-06-09");
+}
+
+#[test]
+fn build_index_passes_through_a_caller_run_id() {
+    // The daily path supplies its own run id — build_index must keep it and
+    // still stamp built_at.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    let model = build_index(root, "2026-06-09", Some("daily-2026-06-09")).unwrap();
+    assert_eq!(model.run_id.as_deref(), Some("daily-2026-06-09"));
+    assert!(model.built_at.is_some(), "built_at still stamped");
+}
+
+#[test]
+fn build_index_at_pins_built_at_for_deterministic_tests() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    let a = build_index_at(root, "2026-06-09", None, "2026-06-09T12:00:00Z").unwrap();
+    let b = build_index_at(root, "2026-06-09", None, "2026-06-09T12:00:00Z").unwrap();
+    assert_eq!(a, b, "same injected built_at → identical projection");
+    assert_eq!(a.built_at.as_deref(), Some("2026-06-09T12:00:00Z"));
+    // The console command's marker shape, verified end-to-end via the CLI in
+    // its own test; here we assert the synth rule for an injected instant.
+    assert_eq!(a.run_id.as_deref(), Some("index-2026-06-09T12:00:00Z"));
 }
 
 #[test]

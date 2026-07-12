@@ -24,8 +24,8 @@ pub mod query;
 pub mod score;
 
 pub use build::{
-    build_index, failed_reader_attempt, last_run_to_model, read_index, read_last_run_model,
-    write_index,
+    build_index, build_index_at, failed_reader_attempt, last_run_to_model, now_rfc3339,
+    read_index, read_last_run_model, write_index,
 };
 pub use evidence::{EvidenceModel, build_evidence, evidence_path, read_evidence, write_evidence};
 pub use model::{

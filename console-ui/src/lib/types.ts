@@ -239,6 +239,11 @@ export interface SettingsPayload {
   vault_root: string;
   schema_version: string | null;
   index_date: string | null;
+  /** P1 provenance: the projection's build instant, its producer run id, and
+   * the server-computed age. Null when no index is built yet. */
+  built_at: string | null;
+  run_id: string | null;
+  age_seconds: number | null;
   counts: SettingsCounts | null;
   llm_configured: boolean;
   ask_limits: AskLimits;
@@ -324,7 +329,14 @@ export interface Totals {
 export interface IndexModel {
   schema: string;
   date: string;
+  /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the
+   * UI then shows "unknown age". */
+  built_at?: string | null;
   run_id?: string;
+  /** Server-computed seconds since `built_at` (spliced into /api/model). The
+   * client ticks its own age from `built_at`; this is the server's reading at
+   * fetch time. */
+  age_seconds?: number | null;
   totals: Totals;
   sources: SourceRow[];
   packs: PackRow[];

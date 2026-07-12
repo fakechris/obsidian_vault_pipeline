@@ -2,7 +2,7 @@
  * navigation over three dimensions (collection × month × status), month-
  * grouped rows, all state URL-parameterized: /library?c=&m=&status=. */
 import { Link, useSearchParams } from 'react-router-dom';
-import { EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
+import { AgeLabel, EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import {
   collectionOf,
@@ -167,6 +167,9 @@ export default function LibraryPage() {
       {model && (
         <>
           <h1 style={{ marginTop: '1rem' }}>{t('library.title')}</h1>
+          <p className="muted sm" style={{ marginTop: '-2px' }}>
+            <AgeLabel builtAt={model.built_at} />
+          </p>
           <PageHelp>{t('library.help')}</PageHelp>
           <LibraryBody model={model} />
         </>

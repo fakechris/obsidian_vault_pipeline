@@ -27,11 +27,39 @@ use crate::model::{
     PackRow, RunRow, RunStats, SourceRow, SourceStatus, Totals,
 };
 
-/// Build the full read model. `date`/`run_id` only stamp the header.
+/// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
+/// non-deterministic input to the index build; tests that need determinism
+/// stamp `date` and use [`build_index_at`] to inject a fixed instant instead.
+pub fn now_rfc3339() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    chrono::DateTime::<chrono::Utc>::from(UNIX_EPOCH + dur)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Build the full read model. `date` stamps the deterministic day header;
+/// `run_id` names which run produced this projection, falling back to an
+/// `index-<built_at>` marker so the field is never silently `None`. `built_at`
+/// is stamped unconditionally with the wall-clock instant so a stale
+/// projection never renders identically to a fresh one.
 pub fn build_index(
     vault_root: &Path,
     date: &str,
     run_id: Option<&str>,
+) -> Result<IndexModel, String> {
+    build_index_at(vault_root, date, run_id, &now_rfc3339())
+}
+
+/// Testable core of [`build_index`] with an injected `built_at` instant so a
+/// test can assert the stamp deterministically. When `run_id` is `None`, the
+/// projection synthesizes `index-<built_at>` so it always names a producer.
+pub fn build_index_at(
+    vault_root: &Path,
+    date: &str,
+    run_id: Option<&str>,
+    built_at: &str,
 ) -> Result<IndexModel, String> {
     let layout = VaultLayout::new();
 
@@ -72,10 +100,18 @@ pub fn build_index(
     let mut ops = build_ops_state(&sources, &runs, date);
     ops.last_run = build_last_run(vault_root);
 
+    // Never silently None: an ad-hoc `index`/`console` build with no run to
+    // name still gets an `index-<built_at>` marker so every projection can be
+    // traced to the moment it was built.
+    let run_id = run_id
+        .map(String::from)
+        .unwrap_or_else(|| format!("index-{built_at}"));
+
     Ok(IndexModel {
         schema: INDEX_SCHEMA.into(),
         date: date.into(),
-        run_id: run_id.map(String::from),
+        built_at: Some(built_at.into()),
+        run_id: Some(run_id),
         totals,
         sources,
         packs,
