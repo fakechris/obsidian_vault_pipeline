@@ -150,8 +150,15 @@ pub fn write_last_run(vault_root: &Path, record: &LastRun) -> Result<(), String>
     }
     let body = serde_json::to_string_pretty(record)
         .map_err(|e| format!("serializing last-run heartbeat: {e}"))?;
-    std::fs::write(&target, format!("{body}\n"))
-        .map_err(|e| format!("writing {}: {e}", target.display()))
+    // Atomic overwrite: a reader (the live server) or a mid-write crash must
+    // never observe partial JSON. Write a sibling temp then rename over the
+    // target — rename is atomic on the same filesystem, so the file is always
+    // either the old complete record or the new complete record.
+    let tmp = target.with_extension(format!("json.tmp.{}", std::process::id()));
+    std::fs::write(&tmp, format!("{body}\n"))
+        .map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &target)
+        .map_err(|e| format!("renaming {} → {}: {e}", tmp.display(), target.display()))
 }
 
 /// Read the heartbeat if present. `Ok(None)` on a fresh vault (no file yet);

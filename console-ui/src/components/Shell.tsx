@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { healthLevel } from '../lib/derive';
+import { useNowTick } from './RunBanner';
 import { useModel } from '../model';
 import { useTheme } from '../theme';
 import RunBanner from './RunBanner';
@@ -27,8 +28,11 @@ const NAV = [
 function StatusLight() {
   const { t } = useI18n();
   const { model } = useModel();
+  // Tick so a heartbeat that crosses the staleness threshold flips the dot
+  // to red even on a portal left open with no other re-render (codex P2).
+  const now = useNowTick();
   if (!model) return null;
-  const level = healthLevel(model);
+  const level = healthLevel(model, now);
   const label = {
     ok: t('status.ok'),
     attention: t('status.attention'),

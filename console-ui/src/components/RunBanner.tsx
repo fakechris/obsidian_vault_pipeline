@@ -17,7 +17,7 @@ import { useModel } from '../model';
 
 /** Re-render tick so the age string advances. A minute is granular enough for
  * a wall-clock banner; the interval is cleared on unmount. */
-function useNowTick(intervalMs = 60_000): number {
+export function useNowTick(intervalMs = 60_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), intervalMs);
