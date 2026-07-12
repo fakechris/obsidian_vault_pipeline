@@ -209,6 +209,16 @@ pub fn daily_shell_command(cfg: &ScheduleConfig) -> String {
     cmd
 }
 
+/// Inverse of [`xml_escape`] for metadata parsing (entities in the order
+/// that can't double-decode: amp last).
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
 pub fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -293,7 +303,13 @@ pub fn render_systemd_service(cfg: &ScheduleConfig) -> String {
         "{meta}\n[Unit]\nDescription=OVP2 daily pipeline run\n\n[Service]\nType=oneshot\nExecStart=/bin/sh -c {cmd}\nStandardOutput=append:{log}\nStandardError=append:{log}\n",
         meta = systemd_metadata(cfg),
         cmd = systemd_quote_arg(&daily_shell_command(cfg)),
-        log = cfg.log_path(Flavor::Systemd).display(),
+        // systemd expands %-specifiers in path directives — a vault path
+        // like /home/me/100%notes must render as 100%%notes (codex P2).
+        log = cfg
+            .log_path(Flavor::Systemd)
+            .display()
+            .to_string()
+            .replace('%', "%%"),
     )
 }
 
@@ -357,6 +373,10 @@ pub fn parse_unit_metadata(content: &str) -> Option<UnitMeta> {
         let Some((key, value)) = rest.split_once('=') else {
             continue;
         };
+        // Launchd metadata comments store xml-escaped values — decode so
+        // `status` resolves the real filesystem paths (codex review P2).
+        let value = xml_unescape(value);
+        let value = value.as_str();
         match key {
             "vault-root" => vault_root = Some(PathBuf::from(value)),
             "time" => time = Some(value.to_string()),
@@ -1002,6 +1022,28 @@ mod tests {
             parse_unit_metadata(&render_systemd_service(&cfg())).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn xml_entities_in_metadata_round_trip() {
+        // Paths with XML-sensitive characters must decode back to the real
+        // filesystem path when status parses launchd metadata (codex P2).
+        let mut c = cfg();
+        c.vault_root = PathBuf::from("/Users/op/A&B <vault>");
+        c.env_file = PathBuf::from("/Users/op/A&B <vault>/.ovp/daily.env");
+        let plist = render_launchd_plist(&c);
+        let meta = parse_unit_metadata(&plist).expect("metadata parses");
+        assert_eq!(meta.vault_root, PathBuf::from("/Users/op/A&B <vault>"));
+    }
+
+    #[test]
+    fn systemd_log_paths_escape_percent_specifiers() {
+        let mut c = cfg();
+        c.vault_root = PathBuf::from("/home/me/100%notes");
+        c.env_file = PathBuf::from("/home/me/100%notes/.ovp/daily.env");
+        let svc = render_systemd_service(&c);
+        assert!(svc.contains("StandardOutput=append:/home/me/100%%notes/"));
+        assert!(!svc.contains("append:/home/me/100%notes/"));
     }
 
     #[test]
