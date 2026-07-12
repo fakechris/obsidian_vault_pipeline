@@ -2,7 +2,7 @@
 //! Pure HTML rendering from IndexModel (same as the main console — no JS,
 //! no runtime, rebuildable from index.json).
 
-use ovp_index::{ClaimStatus, IndexModel, SourceStatus};
+use ovp_index::{ClaimStatus, DAYS_STUCK_AMBER, DAYS_STUCK_RED, IndexModel, SourceStatus};
 
 use crate::{claim_status_label, source_status_label};
 
@@ -14,10 +14,23 @@ pub fn render_ops_page(model: &IndexModel) -> String {
     page.push_str(&health_section(model));
     page.push_str(&queue_section(model));
     page.push_str(&blocked_section(model));
+    page.push_str(&stuck_section(model));
     page.push_str(&recent_failures_section(model));
     page.push_str(&run_stats_section(model));
     page.push_str("</main></body></html>\n");
     page
+}
+
+/// Aging label + CSS class for a `days_stuck` value: fresh / amber (warn) /
+/// red (chronic). Returns `("", "")` when the age is unknown — the render then
+/// shows a neutral dash rather than a misleading "0d".
+fn aging(days: Option<usize>) -> (String, &'static str) {
+    match days {
+        None => (String::new(), ""),
+        Some(d) if d >= DAYS_STUCK_RED => (format!("{d}d"), "aging-red"),
+        Some(d) if d >= DAYS_STUCK_AMBER => (format!("{d}d"), "aging-amber"),
+        Some(d) => (format!("{d}d"), "aging-ok"),
+    }
 }
 
 pub fn render_audit_page(model: &IndexModel) -> String {
@@ -79,11 +92,21 @@ fn health_section(model: &IndexModel) -> String {
 
 fn queue_section(model: &IndexModel) -> String {
     let depth = model.ops.queue_depth;
+    let capped = model.ops.capped;
+    // "Backlog not draining" note: a capped last run with a non-empty queue is
+    // the visible signal the operator was blind to.
+    let capped_note = if capped > 0 && depth > 0 {
+        format!(
+            r#"<p class="warn">last run capped {capped} source(s) — backlog not draining at the current --max-sources</p>"#
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"<section><h2>Queue <span class="zh">待处理队列</span></h2>
 <div class="metric">{depth}</div>
 <p>sources waiting for reader processing</p>
-</section>
+{capped_note}</section>
 "#,
     )
 }
@@ -95,15 +118,45 @@ fn blocked_section(model: &IndexModel) -> String {
         .into();
     }
     let mut out = String::from(
-        "<section><h2>Blocked <span class=\"zh\">阻塞来源</span></h2>\n<table><thead><tr><th>Source</th><th>Fails</th><th>Last Reason</th><th>Last Attempt</th></tr></thead><tbody>\n",
+        "<section><h2>Blocked <span class=\"zh\">阻塞来源</span></h2>\n<table><thead><tr><th>Source</th><th>Fails</th><th>Stuck</th><th>Last Reason</th><th>Last Attempt</th></tr></thead><tbody>\n",
     );
     for b in &model.ops.blocked_sources {
+        let (age_label, age_class) = aging(b.days_stuck);
+        let age_cell = if age_label.is_empty() {
+            "<td>—</td>".to_string()
+        } else {
+            format!("<td class=\"{age_class}\">{age_label}</td>")
+        };
         out.push_str(&format!(
-            "<tr><td>{title}</td><td>{fails}</td><td>{reason}</td><td>{date}</td></tr>\n",
+            "<tr><td>{title}</td><td>{fails}</td>{age_cell}<td>{reason}</td><td>{date}</td></tr>\n",
             title = esc(b.title.as_deref().unwrap_or(&b.sha256[..8])),
             fails = b.fail_count,
             reason = esc(b.last_reason.as_deref().unwrap_or("—")),
             date = esc(b.last_attempt.as_deref().unwrap_or("—")),
+        ));
+    }
+    out.push_str("</tbody></table></section>\n");
+    out
+}
+
+fn stuck_section(model: &IndexModel) -> String {
+    if model.ops.stuck_sources.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "<section><h2>Needs Content <span class=\"zh\">待补内容</span></h2>\n<table><thead><tr><th>Source</th><th>Stuck</th><th>First Seen</th></tr></thead><tbody>\n",
+    );
+    for s in &model.ops.stuck_sources {
+        let (age_label, age_class) = aging(s.days_stuck);
+        let age_cell = if age_label.is_empty() {
+            "<td>—</td>".to_string()
+        } else {
+            format!("<td class=\"{age_class}\">{age_label}</td>")
+        };
+        out.push_str(&format!(
+            "<tr><td>{title}</td>{age_cell}<td>{seen}</td></tr>\n",
+            title = esc(s.title.as_deref().unwrap_or(&s.sha256[..8])),
+            seen = esc(s.first_seen.as_deref().unwrap_or("—")),
         ));
     }
     out.push_str("</tbody></table></section>\n");

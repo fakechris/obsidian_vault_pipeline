@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use ovp_index::{
-    build_evidence, build_index, read_evidence, read_index, run_evidence_query, run_query,
-    write_evidence, write_index, Query, QueryKind,
+    build_evidence, build_index_with_progress, read_evidence, read_index, run_evidence_query,
+    run_query, write_evidence, write_index, Query, QueryKind,
 };
 
 use crate::CliError;
@@ -18,7 +18,11 @@ pub struct IndexArgs {
 }
 
 pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
-    let model = build_index(&args.vault_root, &args.date, None).map_err(CliError::Io)?;
+    // Coarse phase lines (flushed) so a large-vault rebuild shows the
+    // scan/hash/fold boundaries instead of one silent pause under nohup.
+    let mut on_phase = |phase: &str| sayln!("  {phase}");
+    let model = build_index_with_progress(&args.vault_root, &args.date, None, &mut on_phase)
+        .map_err(CliError::Io)?;
     let rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;

@@ -3,6 +3,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+#[macro_use]
+mod progress;
 mod commands;
 
 #[derive(Debug)]

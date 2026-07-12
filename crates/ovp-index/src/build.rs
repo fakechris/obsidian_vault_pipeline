@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::model::{
     BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState,
-    PackRow, RunRow, RunStats, SourceRow, SourceStatus, Totals,
+    PackRow, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
 };
 
 /// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
@@ -49,17 +49,46 @@ pub fn build_index(
     date: &str,
     run_id: Option<&str>,
 ) -> Result<IndexModel, String> {
-    build_index_at(vault_root, date, run_id, &now_rfc3339())
+    build_index_at_with_progress(vault_root, date, run_id, &now_rfc3339(), &mut |_| {})
 }
 
-/// Testable core of [`build_index`] with an injected `built_at` instant so a
-/// test can assert the stamp deterministically. When `run_id` is `None`, the
-/// projection synthesizes `index-<built_at>` so it always names a producer.
+/// [`build_index`] with an injected `built_at` instant so a test can assert the
+/// stamp deterministically (P1's determinism seam). When `run_id` is `None`,
+/// the projection synthesizes `index-<built_at>` so it always names a producer.
 pub fn build_index_at(
     vault_root: &Path,
     date: &str,
     run_id: Option<&str>,
     built_at: &str,
+) -> Result<IndexModel, String> {
+    build_index_at_with_progress(vault_root, date, run_id, built_at, &mut |_| {})
+}
+
+/// [`build_index`] with a coarse phase callback. The projection is print-free
+/// (this is a domain crate); the CLI passes a callback that renders a flushed
+/// `"<phase> (N …)"` line per phase so `ovp2 index` on a large vault shows the
+/// scan/hash/backfill boundaries instead of one silent pause. Callbacks fire
+/// AFTER each phase completes, carrying its count for the operator.
+pub fn build_index_with_progress(
+    vault_root: &Path,
+    date: &str,
+    run_id: Option<&str>,
+    on_phase: &mut dyn FnMut(&str),
+) -> Result<IndexModel, String> {
+    build_index_at_with_progress(vault_root, date, run_id, &now_rfc3339(), on_phase)
+}
+
+/// The real build. Composes P1's `built_at`/`run_id` stamping with P2's phase
+/// callbacks: every phase boundary fires `on_phase`, and the projection is
+/// stamped with `built_at` (wall-clock or injected) and a `run_id` that never
+/// silently stays `None`. The three functions above are thin wrappers that pin
+/// `built_at` and/or `on_phase` for their respective callers/tests.
+pub fn build_index_at_with_progress(
+    vault_root: &Path,
+    date: &str,
+    run_id: Option<&str>,
+    built_at: &str,
+    on_phase: &mut dyn FnMut(&str),
 ) -> Result<IndexModel, String> {
     let layout = VaultLayout::new();
 
@@ -69,12 +98,16 @@ pub fn build_index_at(
     let reports = read_reports(vault_root, &layout)?;
     let runs = runs_from_reports(vault_root, &reports);
     let moved = moved_map(&reports);
+    on_phase(&format!("read {} run report(s)", reports.len()));
 
     let mut sources = build_sources(vault_root, &layout, &moved)?;
+    on_phase(&format!("scanned {} source(s)", sources.len()));
     let mut packs = build_packs(vault_root, &layout, &sources)?;
     backfill_corpus_packs(vault_root, &layout, &mut sources, &mut packs)?;
+    on_phase(&format!("hashed {} pack(s)", packs.len()));
     enrich_titles_from_packs(&mut sources, &packs);
     let claims = build_claims(vault_root, &layout)?;
+    on_phase(&format!("folded {} claim(s)", claims.len()));
 
     let totals = Totals {
         sources: sources.len(),
@@ -97,7 +130,7 @@ pub fn build_index_at(
         runs: runs.len(),
     };
 
-    let mut ops = build_ops_state(&sources, &runs, date);
+    let mut ops = build_ops_state(&sources, &runs, &reports, date);
     ops.last_run = build_last_run(vault_root);
 
     // Never silently None: an ad-hoc `index`/`console` build with no run to
@@ -831,8 +864,13 @@ fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsState {
-    let blocked_sources: Vec<BlockedSource> = sources
+fn build_ops_state(
+    sources: &[SourceRow],
+    runs: &[RunRow],
+    reports: &[(String, RunReport)],
+    today: &str,
+) -> OpsState {
+    let mut blocked_sources: Vec<BlockedSource> = sources
         .iter()
         .filter(|s| s.status == SourceStatus::Blocked)
         .map(|s| BlockedSource {
@@ -841,22 +879,68 @@ fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsSt
             fail_count: s.fail_count,
             last_reason: s.last_reason.clone(),
             last_attempt: s.date.clone(),
+            // Aging: whole days since the last attempt. Chronic blocks (large
+            // days_stuck) are what the console/portal escalate amber→red.
+            days_stuck: s.date.as_deref().and_then(|d| days_between(d, today)),
         })
         .collect();
+    // Most-stuck first so the render escalates the worst offenders at the top.
+    blocked_sources.sort_by(|a, b| b.days_stuck.cmp(&a.days_stuck));
+
+    let mut stuck_sources: Vec<StuckSource> = sources
+        .iter()
+        .filter(|s| s.status == SourceStatus::NeedsContent)
+        .map(|s| StuckSource {
+            sha256: s.sha256.clone(),
+            title: s.title.clone(),
+            first_seen: s.date.clone(),
+            days_stuck: s.date.as_deref().and_then(|d| days_between(d, today)),
+        })
+        .collect();
+    stuck_sources.sort_by(|a, b| b.days_stuck.cmp(&a.days_stuck));
 
     let queue_depth = sources
         .iter()
         .filter(|s| s.status == SourceStatus::Queued)
         .count();
 
+    // "Backlog not draining" signal: the most recent run's capped count. Reports
+    // are sorted ascending by (date, seq) in read_reports, so the last is newest.
+    let capped = reports
+        .last()
+        .map(|(_, r)| r.reader.capped)
+        .unwrap_or(0);
+
     let run_stats = compute_run_stats(runs, today);
 
     OpsState {
         blocked_sources,
+        stuck_sources,
         queue_depth,
+        capped,
         run_stats,
         last_run: None,
     }
+}
+
+/// Whole days from `from` to `to` (both YYYY-MM-DD). `None` on unparseable
+/// input; `Some(0)` when equal or `to` precedes `from` (aging never goes
+/// negative). The build date is `to`; the source's last activity is `from`.
+fn days_between(from: &str, to: &str) -> Option<usize> {
+    let parse = |s: &str| -> Option<u32> {
+        let p: Vec<&str> = s.split('-').collect();
+        if p.len() != 3 {
+            return None;
+        }
+        match (p[0].parse::<i32>(), p[1].parse::<u32>(), p[2].parse::<u32>()) {
+            (Ok(y), Ok(m), Ok(d)) if (1..=12).contains(&m) && (1..=31).contains(&d) => {
+                Some(to_days(y, m, d))
+            }
+            _ => None,
+        }
+    };
+    let (a, b) = (parse(from)?, parse(to)?);
+    Some(b.saturating_sub(a) as usize)
 }
 
 /// Map a raw heartbeat record to the read-model shape. Pure; the string
@@ -1024,6 +1108,62 @@ fn is_leap(y: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn days_between_counts_whole_days() {
+        assert_eq!(days_between("2026-07-01", "2026-07-08"), Some(7));
+        // Same day → 0 (a source attempted today is not "stuck").
+        assert_eq!(days_between("2026-07-08", "2026-07-08"), Some(0));
+        // Across a month boundary (June has 30 days).
+        assert_eq!(days_between("2026-06-28", "2026-07-02"), Some(4));
+        // Across a leap-year Feb (2024-02-29 exists).
+        assert_eq!(days_between("2024-02-27", "2024-03-01"), Some(3));
+    }
+
+    #[test]
+    fn days_between_never_negative_and_none_on_garbage() {
+        // `to` precedes `from` → clamped to 0, never underflows.
+        assert_eq!(days_between("2026-07-08", "2026-07-01"), Some(0));
+        // Unparseable inputs.
+        assert_eq!(days_between("not-a-date", "2026-07-08"), None);
+        assert_eq!(days_between("2026-07-08", ""), None);
+        assert_eq!(days_between("2026-13-01", "2026-07-08"), None);
+    }
+
+    #[test]
+    fn ops_state_ages_blocked_and_needs_content() {
+        let src = |sha: &str, status: SourceStatus, date: &str| SourceRow {
+            sha256: sha.into(),
+            status,
+            title: Some(format!("t-{sha}")),
+            url: None,
+            rel_path: None,
+            date: Some(date.into()),
+            last_run_id: None,
+            pack_dir: None,
+            fail_count: 3,
+            last_reason: Some("boom".into()),
+        };
+        let sources = vec![
+            src("aaaa", SourceStatus::Blocked, "2026-06-30"), // 8 days stuck
+            src("bbbb", SourceStatus::Blocked, "2026-07-06"), // 2 days stuck
+            src("cccc", SourceStatus::NeedsContent, "2026-07-01"), // 7 days
+            src("dddd", SourceStatus::Queued, "2026-07-08"),  // queue only
+        ];
+        let ops = build_ops_state(&sources, &[], &[], "2026-07-08");
+
+        assert_eq!(ops.queue_depth, 1);
+        // Blocked: aged, most-stuck first.
+        assert_eq!(ops.blocked_sources.len(), 2);
+        assert_eq!(ops.blocked_sources[0].sha256, "aaaa");
+        assert_eq!(ops.blocked_sources[0].days_stuck, Some(8));
+        assert_eq!(ops.blocked_sources[1].days_stuck, Some(2));
+        assert!(ops.blocked_sources[0].days_stuck >= Some(crate::model::DAYS_STUCK_RED));
+        // Needs-content aged separately.
+        assert_eq!(ops.stuck_sources.len(), 1);
+        assert_eq!(ops.stuck_sources[0].sha256, "cccc");
+        assert_eq!(ops.stuck_sources[0].days_stuck, Some(7));
+    }
 
     #[test]
     fn last_run_none_when_no_heartbeat_file() {

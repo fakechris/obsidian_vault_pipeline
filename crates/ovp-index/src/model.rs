@@ -144,7 +144,36 @@ pub struct BlockedSource {
     pub last_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_attempt: Option<String>,
+    /// Whole days since `last_attempt` (build date − last_attempt). `None` when
+    /// the date is unknown/unparseable. The aging signal the console/portal use
+    /// to escalate chronic blocks visually (amber, then red past a threshold).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_stuck: Option<usize>,
 }
+
+/// A source stuck outside the reader trunk because it lacks fetchable content
+/// (a bare bookmark / needs-content flag that enrichment has not resolved).
+/// Distinct from `BlockedSource` (which is 3-strikes reader failure): a stuck
+/// source never entered the reader loop. Carries the same `days_stuck` aging
+/// so "needs content 12d" can escalate the same way.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StuckSource {
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// First time this source was seen queued/flagged (the ledger date).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_stuck: Option<usize>,
+}
+
+/// Days-stuck thresholds for visual escalation. A field, not a render — the
+/// portal/console decide the colors, but the amber→red boundary lives here so
+/// every surface agrees. `< AMBER` = fresh, `[AMBER, RED)` = amber (warn),
+/// `>= RED` = red (chronic).
+pub const DAYS_STUCK_AMBER: usize = 3;
+pub const DAYS_STUCK_RED: usize = 7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunStats {
@@ -188,7 +217,16 @@ pub struct LastRunModel {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpsState {
     pub blocked_sources: Vec<BlockedSource>,
+    /// Needs-content sources aging in place (bare bookmarks enrichment has not
+    /// resolved). Ordered most-stuck first.
+    #[serde(default)]
+    pub stuck_sources: Vec<StuckSource>,
     pub queue_depth: usize,
+    /// Sources the most recent run left unprocessed because `--max-sources`
+    /// capped it. Non-zero with a non-empty queue = the backlog is not draining
+    /// — the "why is nothing moving" signal the operator was otherwise blind to.
+    #[serde(default)]
+    pub capped: usize,
     pub run_stats: Option<RunStats>,
     /// The run-liveness heartbeat (`.ovp/last-run.json`) at build time. None on
     /// a fresh vault (no runs yet) or a pre-P0 index.
