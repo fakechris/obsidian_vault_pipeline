@@ -4,18 +4,103 @@
 import type {
   ClaimRow,
   IndexModel,
+  LastRunModel,
   PackRow,
   RunRow,
   SourceRow,
 } from './types';
 
+// ------------------------------------------------------ run-liveness heartbeat
+
+/** Default staleness window (ms): 26 hours — one 09:00 daily schedule interval
+ * (24h) plus slack. Beyond this the unattended loop is treated as stalled and
+ * the banner turns amber. Mirrors the doctor default. */
+export const STALE_AFTER_MS = 26 * 60 * 60 * 1000;
+
+export type BannerLevel = 'none' | 'ok' | 'stale' | 'failed';
+
+/** Everything the fixed portal banner needs, derived from the heartbeat and
+ * the CURRENT wall clock (passed in for testability + client-side ticking).
+ * Deliberately tolerates a null model — the banner must render even when the
+ * rest of the model is empty (fresh/failed vault), so a null model never hides
+ * it: it just shows the muted "no runs yet" state. */
+export interface LastRunBanner {
+  level: BannerLevel;
+  status: LastRunModel['status'] | null;
+  /** Whole minutes since the run's terminal (or start) instant. null when
+   * there is no run or the timestamp is unparseable. */
+  ageMinutes: number | null;
+  error: string | null;
+  processed: number | null;
+  queuedAfter: number | null;
+}
+
+/** The instant the banner ages from: the terminal time if the run ended, else
+ * its start (a still-running or hard-killed run ages from when it began). */
+function lastRunInstantMs(lr: LastRunModel): number | null {
+  const raw = lr.ended_at ?? lr.started_at;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+export function lastRunBanner(
+  model: IndexModel | null,
+  nowMs: number,
+  staleAfterMs: number = STALE_AFTER_MS,
+): LastRunBanner {
+  const lr = model?.ops?.last_run ?? null;
+  if (!lr) {
+    return {
+      level: 'none',
+      status: null,
+      ageMinutes: null,
+      error: null,
+      processed: null,
+      queuedAfter: null,
+    };
+  }
+  const instant = lastRunInstantMs(lr);
+  const ageMinutes =
+    instant == null ? null : Math.max(0, Math.floor((nowMs - instant) / 60000));
+
+  let level: BannerLevel;
+  if (lr.status === 'failed' || lr.status === 'aborted') {
+    level = 'failed';
+  } else if (
+    instant != null &&
+    nowMs - instant > staleAfterMs
+  ) {
+    // A completed-but-old run, or a run still claiming "running" long past the
+    // schedule interval (it died without the drop-guard firing), is stale.
+    level = 'stale';
+  } else {
+    level = 'ok';
+  }
+
+  return {
+    level,
+    status: lr.status,
+    ageMinutes,
+    error: lr.error ?? null,
+    processed: lr.processed ?? null,
+    queuedAfter: lr.queued_after ?? null,
+  };
+}
+
 // ---------------------------------------------------------------- status dot
 
 export type HealthLevel = 'ok' | 'attention' | 'failed';
 
-/** Nav status dot: red when the most recent run failed, amber when operator
- * attention is pending (blocked / needs-content sources), green otherwise. */
-export function healthLevel(model: IndexModel): HealthLevel {
+/** Nav status dot: red when the most recent run failed/aborted/stale (from the
+ * heartbeat) OR when the most recent per-source run failed; amber when operator
+ * attention is pending (blocked / needs-content sources); green otherwise.
+ * `nowMs` lets the heartbeat staleness be evaluated at render time. */
+export function healthLevel(
+  model: IndexModel,
+  nowMs: number = Date.now(),
+): HealthLevel {
+  const banner = lastRunBanner(model, nowMs);
+  if (banner.level === 'failed' || banner.level === 'stale') return 'failed';
   const lastRun = model.runs[model.runs.length - 1];
   if (lastRun && lastRun.failed > 0) return 'failed';
   if (attentionCount(model) > 0) return 'attention';
@@ -292,4 +377,51 @@ export function countBy<T, K>(items: T[], key: (item: T) => K): Map<K, number> {
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   return counts;
+}
+
+// ------------------------------------------------------------------ freshness
+
+/** The pieces a freshness label needs, derived client-side from a projection's
+ * `built_at` and the current wall clock. `unit`/`value` name a coarse bucket
+ * (seconds → just now, minutes, hours, days) so the i18n layer can render
+ * "N min ago" bilingually WITHOUT owning the arithmetic. `unknown` is true when
+ * `built_at` is absent (pre-P1 index) or unparseable — the label then reads
+ * "unknown age" rather than fabricating a 0. */
+export interface AgeParts {
+  unknown: boolean;
+  /** RFC3339 instant, echoed for the "as of <built_at>" prefix (null when unknown). */
+  builtAt: string | null;
+  /** Whole seconds since built_at, clamped at 0 (0 when unknown). */
+  seconds: number;
+  /** Coarse bucket for the relative phrase. */
+  unit: 'now' | 'minute' | 'hour' | 'day';
+  /** The count for `unit` (e.g. 5 for "5 min ago"); 0 for the 'now' bucket. */
+  value: number;
+}
+
+const MINUTE = 60;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** Derive the age of a projection built at `builtAt` as of `nowMs`. Pure: the
+ * ticking clock is injected so the helper is deterministic under test. */
+export function ageParts(
+  builtAt: string | null | undefined,
+  nowMs: number,
+): AgeParts {
+  if (!builtAt) {
+    return { unknown: true, builtAt: null, seconds: 0, unit: 'now', value: 0 };
+  }
+  const builtMs = Date.parse(builtAt);
+  if (Number.isNaN(builtMs)) {
+    return { unknown: true, builtAt: null, seconds: 0, unit: 'now', value: 0 };
+  }
+  // Clamp at 0 so a small clock skew never shows a negative age.
+  const seconds = Math.max(0, Math.floor((nowMs - builtMs) / 1000));
+  if (seconds < MINUTE) return { unknown: false, builtAt, seconds, unit: 'now', value: 0 };
+  if (seconds < HOUR)
+    return { unknown: false, builtAt, seconds, unit: 'minute', value: Math.floor(seconds / MINUTE) };
+  if (seconds < DAY)
+    return { unknown: false, builtAt, seconds, unit: 'hour', value: Math.floor(seconds / HOUR) };
+  return { unknown: false, builtAt, seconds, unit: 'day', value: Math.floor(seconds / DAY) };
 }

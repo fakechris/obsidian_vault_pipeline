@@ -32,9 +32,14 @@ use ovp_domain::VaultLayout;
 use ovp_intake::vaultops::{hex_sha256, rel_to, safe_move};
 use ovp_llm::ModelClient;
 
+pub mod heartbeat;
 pub mod ledger;
 pub mod report;
 
+pub use heartbeat::{
+    read_last_run, write_last_run, HeartbeatGuard, LastRun, LastRunStatus, RunCounts,
+    LAST_RUN_SCHEMA,
+};
 pub use ledger::{
     append_daily_record, append_pipeline_event, failed_counts, read_daily_ledger,
     succeeded_hashes, DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,

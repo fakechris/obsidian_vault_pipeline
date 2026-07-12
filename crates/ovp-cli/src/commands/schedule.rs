@@ -791,8 +791,44 @@ fn status_with(
         Err(_) => println!("  log:       {} (no log yet)", log.display()),
     }
 
-    // Last daily run + staleness, from the append-only ledger.
-    let ledger_path = meta.vault_root.join(".ovp/daily-runs.jsonl");
+    // Last run — PREFER the run-liveness heartbeat (`.ovp/last-run.json`, OVP2
+    // observability P0): it carries the terminal status of the most recent run,
+    // so an unattended run that FAILED or ABORTED before writing a report is
+    // still surfaced here. The append-only ledger's date is the fallback for a
+    // vault whose last successful run predates the heartbeat.
+    match ovp_daily::read_last_run(&meta.vault_root) {
+        Ok(Some(hb)) => {
+            let when = hb.ended_at.as_deref().unwrap_or(hb.started_at.as_str());
+            let status = match hb.status {
+                ovp_daily::LastRunStatus::Completed => "completed",
+                ovp_daily::LastRunStatus::Failed => "FAILED",
+                ovp_daily::LastRunStatus::Aborted => "ABORTED",
+                ovp_daily::LastRunStatus::Running => "running",
+            };
+            println!("  last run:  {status} at {when} ({})", hb.run_id);
+            match hb.status {
+                ovp_daily::LastRunStatus::Failed | ovp_daily::LastRunStatus::Aborted => {
+                    println!(
+                        "  WARN: the last run did not complete ({status}){} — check the schedule log and rerun `ovp2 daily`",
+                        hb.error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(None) => report_last_run_from_ledger(&meta.vault_root, today),
+        Err(e) => {
+            println!("  WARN: cannot read .ovp/last-run.json: {e}");
+            report_last_run_from_ledger(&meta.vault_root, today);
+        }
+    }
+    Ok(())
+}
+
+/// Fallback last-run report from the append-only daily ledger (date only; no
+/// terminal status), used when the heartbeat file is absent or unreadable.
+fn report_last_run_from_ledger(vault_root: &Path, today: &str) {
+    let ledger_path = vault_root.join(".ovp/daily-runs.jsonl");
     match read_daily_ledger(&ledger_path) {
         Ok(records) => match last_run_date(&records) {
             Some(last) => {
@@ -808,7 +844,6 @@ fn status_with(
         },
         Err(e) => println!("  WARN: cannot read {}: {e}", ledger_path.display()),
     }
-    Ok(())
 }
 
 fn first_word_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {

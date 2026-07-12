@@ -13,6 +13,8 @@ ovp-daily = { path = "../ovp-daily" }
 ovp-intake = { path = "../ovp-intake" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+chrono = { workspace = true }

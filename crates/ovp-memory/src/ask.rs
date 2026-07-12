@@ -481,6 +481,7 @@ mod tests {
         IndexModel {
             schema: INDEX_SCHEMA.into(),
             date: "2026-07-06".into(),
+            built_at: None,
             run_id: None,
             totals: Totals::default(),
             sources: vec![],

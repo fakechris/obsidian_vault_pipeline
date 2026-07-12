@@ -15,11 +15,36 @@ export const en = {
   'status.attention': 'attention',
   'status.failed': 'last run failed',
 
+  // run-liveness banner (fixed top strip, every page)
+  'banner.none': 'No runs yet',
+  'banner.completed': 'Last run: completed {ago}',
+  'banner.completedCounts': 'Last run: completed {ago} · {read} read · {queued} queued',
+  'banner.running': 'Run in progress · started {ago}',
+  'banner.stale': 'Last run: {ago} — the daily loop may be stalled',
+  'banner.failed': 'Last run: FAILED {ago}{error}',
+  'banner.aborted': 'Last run: ABORTED {ago}{error}',
+  'banner.agoJustNow': 'just now',
+  'banner.agoMinutes': '{n}m ago',
+  'banner.agoHours': '{n}h ago',
+  'banner.agoDays': '{n}d ago',
+  'banner.viewSystem': 'View system status',
+
   // shared
   'common.loading': 'Loading…',
   'common.error': 'Could not load the index model — is the server running against a vault?',
   'common.whatIsThisPage': 'What is this page?',
   'common.day': 'dogfood day',
+
+  // data-freshness label (P1): "as of <instant> · N min ago". Every surface
+  // that shows counts stamps the projection's build instant so a stale number
+  // never reads like a fresh one.
+  'age.asOf': 'as of {instant}',
+  'age.now': 'just now',
+  'age.minutes': '{n} min ago',
+  'age.hours': '{n} hr ago',
+  'age.days': '{n} d ago',
+  'age.unknown': 'unknown age',
+  'age.stamp': 'as of {instant} · {rel}',
 
   // concept tooltips — plain-language one-liners for the pipeline vocabulary
   // (operator finding: durable/caveated and unit/card need explaining
@@ -273,6 +298,8 @@ export const en = {
   'system.vaultRoot': 'vault',
   'system.schema': 'index schema',
   'system.indexDate': 'index date',
+  'system.builtAt': 'built',
+  'system.runId': 'run id',
   'system.counts': 'counts',
   'system.countsLine': '{sources} sources · {packs} packs · {claims} claims',
   'system.noIndex': 'no index built — run `ovp2 index`',

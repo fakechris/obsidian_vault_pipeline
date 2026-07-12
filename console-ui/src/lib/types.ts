@@ -239,9 +239,17 @@ export interface SettingsPayload {
   vault_root: string;
   schema_version: string | null;
   index_date: string | null;
+  /** P1 provenance: the projection's build instant, its producer run id, and
+   * the server-computed age. Null when no index is built yet. */
+  built_at: string | null;
+  run_id: string | null;
+  age_seconds: number | null;
   counts: SettingsCounts | null;
   llm_configured: boolean;
   ask_limits: AskLimits;
+  /** Run-liveness heartbeat block (OVP2 observability P0); null on a fresh
+   * vault / pre-P0 index. Mirrors `model.ops.last_run`. */
+  last_run: LastRunModel | null;
   version: string;
 }
 
@@ -262,10 +270,32 @@ export interface RunStats {
   avg_processed_per_run: number;
 }
 
+export type LastRunStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
+/** Run-liveness heartbeat (`.ovp/last-run.json`), surfaced into the read
+ * model. Age is computed client-side from started_at/ended_at + Date.now so
+ * the banner ticks without a refetch — the server ships no `minutes_since`. */
+export interface LastRunModel {
+  run_id: string;
+  /** UTC RFC3339. */
+  started_at: string;
+  /** UTC RFC3339; absent while `running`. */
+  ended_at?: string;
+  status: LastRunStatus;
+  processed?: number;
+  failed?: number;
+  blocked?: number;
+  capped?: number;
+  queued_after?: number;
+  error?: string;
+}
+
 export interface OpsState {
   blocked_sources: BlockedSource[];
   queue_depth: number;
   run_stats?: RunStats | null;
+  /** Null on a fresh vault (no runs yet) or a pre-P0 index. */
+  last_run?: LastRunModel | null;
 }
 
 export interface RunRow {
@@ -299,7 +329,14 @@ export interface Totals {
 export interface IndexModel {
   schema: string;
   date: string;
+  /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the
+   * UI then shows "unknown age". */
+  built_at?: string | null;
   run_id?: string;
+  /** Server-computed seconds since `built_at` (spliced into /api/model). The
+   * client ticks its own age from `built_at`; this is the server's reading at
+   * fetch time. */
+  age_seconds?: number | null;
   totals: Totals;
   sources: SourceRow[];
   packs: PackRow[];

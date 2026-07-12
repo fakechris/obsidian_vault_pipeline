@@ -13,7 +13,7 @@
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
-import { EmptyState, ModelGate, PageHelp } from '../components/ui';
+import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
 import { isMiscTheme, themeWall, type ThemeGroup } from '../lib/derive';
@@ -172,6 +172,9 @@ export default function KnowledgePage() {
       {model && (
         <>
           <h1 style={{ marginTop: '1rem' }}>{t('knowledge.title')}</h1>
+          <p className="muted sm" style={{ marginTop: '-2px' }}>
+            <AgeLabel builtAt={model.built_at} />
+          </p>
           {anchor && (
             <div className="portal-note tiny">
               {t('knowledge.unknownClaim', { id: anchor })}

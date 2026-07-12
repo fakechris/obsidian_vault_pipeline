@@ -23,17 +23,45 @@ use ovp_intake::{IntakeAction, read_intake_ledger};
 use serde::Deserialize;
 
 use crate::model::{
-    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, RunRow,
-    RunStats, SourceRow, SourceStatus, StuckSource, Totals,
+    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState,
+    PackRow, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
 };
 
-/// Build the full read model. `date`/`run_id` only stamp the header.
+/// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
+/// non-deterministic input to the index build; tests that need determinism
+/// stamp `date` and use [`build_index_at`] to inject a fixed instant instead.
+pub fn now_rfc3339() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    chrono::DateTime::<chrono::Utc>::from(UNIX_EPOCH + dur)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Build the full read model. `date` stamps the deterministic day header;
+/// `run_id` names which run produced this projection, falling back to an
+/// `index-<built_at>` marker so the field is never silently `None`. `built_at`
+/// is stamped unconditionally with the wall-clock instant so a stale
+/// projection never renders identically to a fresh one.
 pub fn build_index(
     vault_root: &Path,
     date: &str,
     run_id: Option<&str>,
 ) -> Result<IndexModel, String> {
-    build_index_with_progress(vault_root, date, run_id, &mut |_| {})
+    build_index_at_with_progress(vault_root, date, run_id, &now_rfc3339(), &mut |_| {})
+}
+
+/// [`build_index`] with an injected `built_at` instant so a test can assert the
+/// stamp deterministically (P1's determinism seam). When `run_id` is `None`,
+/// the projection synthesizes `index-<built_at>` so it always names a producer.
+pub fn build_index_at(
+    vault_root: &Path,
+    date: &str,
+    run_id: Option<&str>,
+    built_at: &str,
+) -> Result<IndexModel, String> {
+    build_index_at_with_progress(vault_root, date, run_id, built_at, &mut |_| {})
 }
 
 /// [`build_index`] with a coarse phase callback. The projection is print-free
@@ -45,6 +73,21 @@ pub fn build_index_with_progress(
     vault_root: &Path,
     date: &str,
     run_id: Option<&str>,
+    on_phase: &mut dyn FnMut(&str),
+) -> Result<IndexModel, String> {
+    build_index_at_with_progress(vault_root, date, run_id, &now_rfc3339(), on_phase)
+}
+
+/// The real build. Composes P1's `built_at`/`run_id` stamping with P2's phase
+/// callbacks: every phase boundary fires `on_phase`, and the projection is
+/// stamped with `built_at` (wall-clock or injected) and a `run_id` that never
+/// silently stays `None`. The three functions above are thin wrappers that pin
+/// `built_at` and/or `on_phase` for their respective callers/tests.
+pub fn build_index_at_with_progress(
+    vault_root: &Path,
+    date: &str,
+    run_id: Option<&str>,
+    built_at: &str,
     on_phase: &mut dyn FnMut(&str),
 ) -> Result<IndexModel, String> {
     let layout = VaultLayout::new();
@@ -87,12 +130,21 @@ pub fn build_index_with_progress(
         runs: runs.len(),
     };
 
-    let ops = build_ops_state(&sources, &runs, &reports, date);
+    let mut ops = build_ops_state(&sources, &runs, &reports, date);
+    ops.last_run = build_last_run(vault_root);
+
+    // Never silently None: an ad-hoc `index`/`console` build with no run to
+    // name still gets an `index-<built_at>` marker so every projection can be
+    // traced to the moment it was built.
+    let run_id = run_id
+        .map(String::from)
+        .unwrap_or_else(|| format!("index-{built_at}"));
 
     Ok(IndexModel {
         schema: INDEX_SCHEMA.into(),
         date: date.into(),
-        run_id: run_id.map(String::from),
+        built_at: Some(built_at.into()),
+        run_id: Some(run_id),
         totals,
         sources,
         packs,
@@ -867,6 +919,7 @@ fn build_ops_state(
         queue_depth,
         capped,
         run_stats,
+        last_run: None,
     }
 }
 
@@ -888,6 +941,51 @@ fn days_between(from: &str, to: &str) -> Option<usize> {
     };
     let (a, b) = (parse(from)?, parse(to)?);
     Some(b.saturating_sub(a) as usize)
+}
+
+/// Map a raw heartbeat record to the read-model shape. Pure; the string
+/// status keeps the model self-describing for the static console pages and the
+/// SPA alike.
+pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
+    let status = match hb.status {
+        ovp_daily::LastRunStatus::Running => "running",
+        ovp_daily::LastRunStatus::Completed => "completed",
+        ovp_daily::LastRunStatus::Failed => "failed",
+        ovp_daily::LastRunStatus::Aborted => "aborted",
+    };
+    LastRunModel {
+        run_id: hb.run_id,
+        started_at: hb.started_at,
+        ended_at: hb.ended_at,
+        status: status.into(),
+        processed: hb.processed,
+        failed: hb.failed,
+        blocked: hb.blocked,
+        capped: hb.capped,
+        queued_after: hb.queued_after,
+        error: hb.error,
+    }
+}
+
+/// Read the run-liveness heartbeat (`.ovp/last-run.json`) LIVE into the
+/// read-model shape, PRESERVING errors. This is the fail-loud reader the
+/// server and `doctor` use so a corrupt/unreadable heartbeat is never silently
+/// treated as absent (that would hide the very failed/aborted run this feature
+/// exists to surface). `Ok(None)` = fresh vault (no file); `Err` = present but
+/// unparseable.
+pub fn read_last_run_model(vault_root: &Path) -> Result<Option<LastRunModel>, String> {
+    Ok(ovp_daily::read_last_run(vault_root)?.map(last_run_to_model))
+}
+
+/// Read the heartbeat for the BAKED projection. The projection must always
+/// build, so a corrupt file degrades to `None` here (the CLI/`doctor`/server
+/// surface the corruption loudly via [`read_last_run_model`]); an absent file
+/// on a fresh vault is `None` too. NOTE: the baked field is a build-time
+/// SNAPSHOT — it can say `running` forever if the process died before the
+/// phase-5 rebuild. Live surfaces (server `/api/*`, `doctor`, `schedule
+/// status`) must read the sidecar fresh, never trust this field.
+fn build_last_run(vault_root: &Path) -> Option<LastRunModel> {
+    read_last_run_model(vault_root).ok().flatten()
 }
 
 fn compute_run_stats(runs: &[RunRow], today: &str) -> Option<RunStats> {
@@ -1065,6 +1163,49 @@ mod tests {
         assert_eq!(ops.stuck_sources.len(), 1);
         assert_eq!(ops.stuck_sources[0].sha256, "cccc");
         assert_eq!(ops.stuck_sources[0].days_stuck, Some(7));
+    }
+
+    #[test]
+    fn last_run_none_when_no_heartbeat_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        assert!(model.ops.last_run.is_none(), "fresh vault → no last_run");
+    }
+
+    #[test]
+    fn last_run_surfaces_completed_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let counts = ovp_daily::RunCounts {
+            processed: 8,
+            failed: 0,
+            blocked: 1,
+            capped: 2,
+            queued_after: 180,
+        };
+        let (guard, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "daily-2026-07-12");
+        assert!(guard.finalize_completed(counts).is_none());
+
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        let lr = model.ops.last_run.expect("heartbeat surfaced");
+        assert_eq!(lr.status, "completed");
+        assert_eq!(lr.run_id, "daily-2026-07-12");
+        assert_eq!(lr.processed, Some(8));
+        assert_eq!(lr.queued_after, Some(180));
+        assert!(lr.ended_at.is_some());
+        assert!(lr.error.is_none());
+    }
+
+    #[test]
+    fn last_run_surfaces_aborted_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let (_g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+            // drop without finalize → aborted
+        }
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        let lr = model.ops.last_run.expect("aborted heartbeat surfaced");
+        assert_eq!(lr.status, "aborted");
+        assert!(lr.error.is_some());
     }
 
     #[test]

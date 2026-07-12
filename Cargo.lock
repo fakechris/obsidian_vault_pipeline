@@ -1640,6 +1640,7 @@ dependencies = [
 name = "ovp-server"
 version = "2.0.1"
 dependencies = [
+ "ovp-daily",
  "ovp-domain",
  "ovp-index",
  "ovp-intake",

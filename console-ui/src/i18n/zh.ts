@@ -15,11 +15,35 @@ export const zh: Record<keyof typeof en, string> = {
   'status.attention': '需处理',
   'status.failed': '最近运行失败',
 
+  // run-liveness banner (fixed top strip, every page)
+  'banner.none': '尚无运行记录',
+  'banner.completed': '最近运行：已完成 {ago}',
+  'banner.completedCounts': '最近运行：已完成 {ago} · 阅读 {read} · 队列 {queued}',
+  'banner.running': '运行进行中 · 开始于 {ago}',
+  'banner.stale': '最近运行：{ago} —— 每日流程可能已停滞',
+  'banner.failed': '最近运行：失败 {ago}{error}',
+  'banner.aborted': '最近运行：中断 {ago}{error}',
+  'banner.agoJustNow': '刚刚',
+  'banner.agoMinutes': '{n} 分钟前',
+  'banner.agoHours': '{n} 小时前',
+  'banner.agoDays': '{n} 天前',
+  'banner.viewSystem': '查看系统状态',
+
   // shared
   'common.loading': '加载中…',
   'common.error': '无法加载索引模型——服务是否已连接 vault？',
   'common.whatIsThisPage': '这是什么页？',
   'common.day': '试用第',
+
+  // 数据新鲜度标签（P1）：“截至 <时刻> · N 分钟前”。凡展示计数的界面都标注
+  // 构建时刻，陈旧数字不再伪装成最新。
+  'age.asOf': '截至 {instant}',
+  'age.now': '刚刚',
+  'age.minutes': '{n} 分钟前',
+  'age.hours': '{n} 小时前',
+  'age.days': '{n} 天前',
+  'age.unknown': '时间未知',
+  'age.stamp': '截至 {instant} · {rel}',
 
   // concept tooltips
   'concept.durableTip': '已验证：每条引文均逐字核对过原文',
@@ -252,6 +276,8 @@ export const zh: Record<keyof typeof en, string> = {
   'system.vaultRoot': 'vault 路径',
   'system.schema': '索引 schema',
   'system.indexDate': '索引日期',
+  'system.builtAt': '构建时刻',
+  'system.runId': '运行 id',
   'system.counts': '统计',
   'system.countsLine': '{sources} 源 · {packs} 阅读包 · {claims} 主张',
   'system.noIndex': '索引未构建——运行 `ovp2 index`',

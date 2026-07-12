@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
-import { EmptyState, ModelGate, PageHelp } from '../components/ui';
+import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchSettings } from '../lib/api';
 import { attentionSources } from '../lib/derive';
@@ -208,6 +208,16 @@ function SettingsSection() {
           <dt>{t('system.indexDate')}</dt>
           <dd className="mono tiny">
             {settings.index_date ?? t('system.noIndex')}
+          </dd>
+          {/* P1: the projection's BUILD INSTANT + live age, so `index_date`
+              (a day string) can no longer stand in for freshness. */}
+          <dt>{t('system.builtAt')}</dt>
+          <dd className="tiny">
+            <AgeLabel builtAt={settings.built_at} />
+          </dd>
+          <dt>{t('system.runId')}</dt>
+          <dd className="mono tiny">
+            {settings.run_id ?? t('system.noIndex')}
           </dd>
           <dt>{t('system.counts')}</dt>
           <dd className="tiny">

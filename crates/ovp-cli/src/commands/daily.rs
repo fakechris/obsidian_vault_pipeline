@@ -75,19 +75,65 @@ pub struct DailyArgs {
     pub no_digest: bool,
 }
 
+/// Entry point. Wraps [`run_inner`] in the run-liveness heartbeat
+/// ([`HeartbeatGuard`]): the guard is armed the moment a real (non-dry) run
+/// starts, finalized `completed` / `failed` on the two clean exit paths, and
+/// left to its RAII `Drop` — which writes `status: aborted` — if the run
+/// panics or an error propagates out past the finalize. This is the OVP2
+/// observability P0: an unattended run that crashes before its end-of-run
+/// report is still visible in `.ovp/last-run.json`.
+///
+/// A dry run does no mutating work, takes no lock, and writes no heartbeat.
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
+    if args.dry_run {
+        return run_inner(args, None, None);
+    }
+
+    // Acquire the run lock BEFORE arming the heartbeat. One mutating run at a
+    // time (cron + manual overlap would double-spend LLM calls and race the
+    // lifecycle moves). A contender that can't get the lock must NOT touch
+    // `.ovp/last-run.json` — otherwise it would write "running", then fail the
+    // acquire, then finalize itself "failed", clobbering the legitimate active
+    // run's heartbeat with a false failure. So the guard is only started once
+    // the lock is held.
+    let lock = ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?;
+
+    let (guard, warn) = ovp_daily::HeartbeatGuard::start(&args.vault_root, &args.run_id);
+    if let Some(w) = warn {
+        sayln!("  warn {w}");
+    }
+    // Track counts across the inner run so a clean completion can finalize with
+    // real numbers. `finalize` is threaded through the Ok path; the Err path
+    // and any panic fall to `finalize_failed` / the Drop-guard's abort write.
+    let mut counts = ovp_daily::RunCounts::default();
+    match run_inner(args, Some(lock), Some(&mut counts)) {
+        Ok(()) => {
+            if let Some(w) = guard.finalize_completed(counts) {
+                sayln!("  warn {w}");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Record the terminal failure with the operator-facing message,
+            // then re-propagate so the exit code and stderr are unchanged.
+            let _ = guard.finalize_failed(&e.to_string());
+            Err(e)
+        }
+    }
+}
+
+fn run_inner(
+    args: DailyArgs,
+    // The run lock, acquired by `run()` BEFORE the heartbeat (so a lock
+    // contender never writes a heartbeat). Held for the lifetime of this call.
+    // None only for dry runs, which take no lock.
+    _lock: Option<ovp_intake::RunLock>,
+    mut counts: Option<&mut ovp_daily::RunCounts>,
+) -> Result<(), CliError> {
     let layout = VaultLayout::new();
     let inbox = args.inbox.clone().unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
     let ledger_path = args.vault_root.join(layout.daily_ledger());
     let intake_cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id.clone());
-
-    // One mutating run at a time (cron + manual overlap would double-spend
-    // LLM calls and race the lifecycle moves). Dry runs read only.
-    let _lock = if args.dry_run {
-        None
-    } else {
-        Some(ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?)
-    };
 
     let mut report = RunReport::new(&args.run_id, &args.date);
     sayln!("daily [{}]: vault {}", args.date, args.vault_root.display());
@@ -346,6 +392,21 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
 
     let model = build_index(&args.vault_root, &args.date, Some(&args.run_id))
         .map_err(CliError::Io)?;
+
+    // Heartbeat counts: populated once the model is built so BOTH the clean
+    // completion and the failed-source (Gate) exit below finalize with real
+    // numbers. `queued_after` reads the rebuilt backlog gauge (post-run queue
+    // depth), not just this run's cap remainder.
+    if let Some(c) = counts.take() {
+        *c = ovp_daily::RunCounts {
+            processed: daily.processed.len(),
+            failed: daily.failed(),
+            blocked: daily.blocked,
+            capped: daily.capped,
+            queued_after: model.totals.queued,
+        };
+    }
+
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
@@ -579,7 +640,8 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
 
 #[cfg(test)]
 mod tests {
-    use super::{drain_runs, stale_theme_packs};
+    use super::{drain_runs, run, stale_theme_packs, DailyArgs};
+    use crate::commands::client::ClientKind;
 
     #[test]
     fn drain_runs_is_ceiling_division() {
@@ -601,10 +663,72 @@ mod tests {
         assert_eq!(drain_runs(0, 0), None);
     }
 
+    fn min_args(vault: std::path::PathBuf) -> DailyArgs {
+        DailyArgs {
+            vault_root: vault,
+            inbox: None,
+            cache_dir: None,
+            client_kind: ClientKind::Replay,
+            date: "2026-07-12".into(),
+            run_id: "daily-2026-07-12".into(),
+            dry_run: false,
+            max_sources: 0,
+            no_intake: true,
+            pinboard_fixture: None,
+            pinboard_live: false,
+            pinboard_since: None,
+            pinboard_max: None,
+            no_lifecycle: false,
+            retry_blocked: false,
+            web_fetch_fixture: None,
+            web_fetch_live: false,
+            github_fixture: None,
+            github_live: false,
+            no_images: true,
+            image_fixture: None,
+            image_live: false,
+            no_digest: true,
+        }
+    }
+
+    /// P2 regression: a contender that cannot get the run lock must NEVER touch
+    /// `.ovp/last-run.json` — otherwise it would clobber the active run's
+    /// legitimate "running" heartbeat with a false "failed". The lock is
+    /// acquired BEFORE the heartbeat guard is armed, so the contender errors
+    /// out first and the heartbeat is left exactly as the active run wrote it.
+    #[test]
+    fn lock_contender_does_not_clobber_active_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().to_path_buf();
+
+        // Simulate the legitimate active run: hold the lock and write its
+        // "running" heartbeat.
+        let _held = ovp_intake::RunLock::acquire(&vault).expect("acquire lock");
+        let (active_guard, _) =
+            ovp_daily::HeartbeatGuard::start(&vault, "daily-active");
+        // Keep the active guard alive (its Drop would otherwise write aborted).
+        let active = ovp_daily::read_last_run(&vault).unwrap().unwrap();
+        assert_eq!(active.status, ovp_daily::LastRunStatus::Running);
+        assert_eq!(active.run_id, "daily-active");
+
+        // The contender cannot get the lock → errors, writes NOTHING.
+        let err = run(min_args(vault.clone()));
+        assert!(err.is_err(), "contender must fail to acquire the lock");
+
+        // The heartbeat is still the ACTIVE run's untouched "running" record.
+        let after = ovp_daily::read_last_run(&vault).unwrap().unwrap();
+        assert_eq!(after.status, ovp_daily::LastRunStatus::Running);
+        assert_eq!(after.run_id, "daily-active", "contender must not overwrite the heartbeat");
+
+        // Finalize the active run so its guard's Drop doesn't write aborted.
+        active_guard.finalize_completed(ovp_daily::RunCounts::default());
+    }
+
     fn model_with_packs(dirs: &[&str]) -> ovp_index::IndexModel {
         ovp_index::IndexModel {
             schema: "test".into(),
             date: "2026-07-10".into(),
+            built_at: None,
             run_id: None,
             totals: Default::default(),
             sources: vec![],
