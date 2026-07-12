@@ -171,10 +171,24 @@ cache-dir config error; neighborhood ranking; theme = keywords never labels.
 (real store untouched, comparison.json metrics). All pre-existing batch-mode
 tests unchanged and green.
 
-## RESULTS (TODO — operator live run)
+## RESULTS — GO (2026-07-10, three rounds recorded)
 
-> Not yet run against the live model. Record once, then replays are free.
-> Baseline at design time: 1077 packs / 585 uncovered (54.3%).
+> Baseline: 1077 packs / 585 uncovered (54.3%). Slice = 30 packs, seed 42.
+> Three live rounds, full decision trail:
+>
+> - **Round 1**: arm B ABORTED whole-arm on one envelope-less cluster-select
+>   reply → fix #316 (parse garbage fails one seed, keeps sweeping; replay
+>   cache misses stay fatal to protect reproducibility).
+> - **Round 2**: arm B completed — yield 2.53 (2.36×) and sources 2.26 both
+>   PASSED, but total calls 52 vs the ≤51 cap: **criterion #3 missed by one
+>   call**. Decomposition showed the overage was per-cluster strength calls
+>   (15 for 79 claims) while batch mode chunks ≤20/call → fix #317
+>   (micro-batched strength waves, coverage lag bounded to one chunk). The
+>   pre-registered rule was honored: no flip on 2/3.
+> - **Round 3 (final, table below)**: all three criteria pass → default
+>   flipped to llm via a safe `auto` mode (llm when embed build + warmed
+>   themes exist, else batch with a stderr note; explicit `--cluster-mode
+>   llm` keeps fail-loud).
 
 ```bash
 # 0) one-time prep (warms embeddings + themes; skip if already fresh)
@@ -196,16 +210,16 @@ ovp2 crystal-synth --experiment \
 # 3) fill in this table from .ovp/l3-ab/comparison.json
 ```
 
-| metric | arm A (batch) | arm B (llm) |
-|---|---|---|
-| total LLM calls | TODO | TODO |
-| synth calls | TODO | TODO |
-| durable claims | TODO | TODO |
-| durable yield / synth call | TODO | TODO |
-| gate pass rate | TODO | TODO |
-| mean distinct sources / durable | TODO | TODO |
-| refusal rate | — | TODO |
-| uncovered before → after (slice) | — | TODO |
+| metric | arm A (batch) | arm B (llm) | criterion | verdict |
+|---|---|---|---|---|
+| total LLM calls | 17 | **42** | ≤ 3× A (51) | ✅ |
+| synth calls | 14 | 16 | — | — |
+| durable claims | 15 | **45** | — | 3.0× |
+| durable yield / synth call | 1.07 | **2.81** | ≥ 1.3× A (1.39) | ✅ 2.63× |
+| gate pass rate | 0.25 | **0.54** | — | 2.2× |
+| mean distinct sources / durable | 2.07 | **2.20** | ≥ A | ✅ |
+| refusal rate | — | 0.27 | — | healthy |
+| select / synth / strength split | 0/14/3 | 22/16/4 | — | — |
 
 Decision rule (pre-registered in `evolution/candidates/cluster_select-v1.json`):
 flip the default to llm only if arm B ≥ 1.3× durable yield per synth call AND
