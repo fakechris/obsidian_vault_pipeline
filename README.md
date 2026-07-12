@@ -75,7 +75,19 @@ proxy note for `brew` are in [`docs/install.md`](docs/install.md).
    packs into the vault, records every attempt in append-only ledgers, and
    rebuilds the read model.
 
-3. **Open the portal**:
+3. **Put it on a schedule** — never think about the heartbeat again:
+
+   ```sh
+   ovp2 schedule install --vault-root ~/Documents/my-vault
+   ```
+
+   Installs an OS-level job (launchd on macOS, systemd user timer on Linux)
+   that runs `ovp2 daily` every day at 09:00 (`--time HH:MM` to change).
+   Credentials go in the generated `<vault>/.ovp/daily.env` (chmod 600) —
+   `install` prints what to fill in. Check with `ovp2 schedule status`,
+   remove with `ovp2 schedule uninstall`.
+
+4. **Open the portal**:
 
    ```sh
    ovp2 serve --vault-root ~/Documents/my-vault
@@ -83,7 +95,7 @@ proxy note for `brew` are in [`docs/install.md`](docs/install.md).
 
    then open the printed URL (default `http://127.0.0.1:3141`).
 
-4. **Optional — Pinboard capture**:
+5. **Optional — Pinboard capture**:
 
    ```sh
    ovp2 pinboard-sync --vault-root ~/Documents/my-vault --live --max 200
@@ -121,6 +133,7 @@ product surface:
 | Command | Does |
 |---|---|
 | `ovp2 daily` | The blessed daily loop: capture sweep → grounded reader trunk per new source → lifecycle → ledgers + report → read model + console refresh |
+| `ovp2 schedule` | Install/uninstall/inspect the OS-level daily schedule (launchd / systemd user timer) — `install` once and the loop runs itself |
 | `ovp2 serve` | Start the localhost portal server: `.ovp/console/` pages + JSON API (`/api/find`, `/api/search`, `/api/ask`, …) |
 | `ovp2 ask` | Retrieval-augmented Q&A over product state; prints a cited answer with deterministic citation verification |
 | `ovp2 pinboard-sync` | Materialize Pinboard bookmarks as inbox notes, URL-deduped, with the first-sync flood guard |

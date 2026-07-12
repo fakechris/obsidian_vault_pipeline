@@ -413,6 +413,16 @@ enum Cmd {
         #[arg(long)]
         viz_dir: Option<PathBuf>,
     },
+    /// PRODUCT — put the daily loop on the OS scheduler (launchd on macOS,
+    /// systemd user timer on Linux) so the pipeline heartbeat never depends
+    /// on a human remembering to run `ovp2 daily`. `install` writes the unit
+    /// file(s) + an env-file template and loads the job; `status` shows job
+    /// health + last-run staleness; `uninstall` removes the job (logs and
+    /// env file stay). No daemon by decision (M32 §9) — the OS owns the clock.
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -976,6 +986,47 @@ enum ClientKindArg {
     Live,
 }
 
+#[derive(Subcommand, Debug)]
+enum ScheduleAction {
+    /// Write the scheduler unit(s) + env-file template (if missing) and load
+    /// the job. Idempotent: re-running overwrites the previous install
+    /// cleanly (same launchd label / unit names). The job pins the current
+    /// `ovp2` binary path — re-run after moving the binary (brew upgrades
+    /// keep the path stable).
+    Install {
+        /// The real vault root (e.g. ~/Documents/ovp-vault).
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Local time of day to run, HH:MM (24h).
+        #[arg(long, default_value = "09:00")]
+        time: String,
+        /// Passed through to `daily --max-sources`.
+        #[arg(long)]
+        max_sources: Option<usize>,
+        /// Client for the scheduled run (live needs credentials in the env file).
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Live)]
+        client: ClientKindArg,
+        /// Env file sourced before each run (credentials live here, chmod 600).
+        /// Default: `<vault>/.ovp/daily.env`; a commented template is created
+        /// if the file does not exist.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
+        /// Live enrichment for the scheduled run (`--web-fetch-live
+        /// --github-live`). Default: on.
+        #[arg(long, overrides_with = "no_enrich")]
+        enrich: bool,
+        /// Disable live enrichment for the scheduled run.
+        #[arg(long, overrides_with = "enrich")]
+        no_enrich: bool,
+    },
+    /// Unload/disable the job and remove the unit file(s). Logs and the env
+    /// file are left untouched.
+    Uninstall,
+    /// Show whether the job is loaded/enabled, the schedule, the target
+    /// vault + env file, the last log lines, and last-run staleness.
+    Status,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum ClusterModeArg {
     /// `llm` when the embed feature + warmed themes/embeddings are present,
@@ -1294,6 +1345,31 @@ fn main() -> ExitCode {
             port,
             viz_dir,
         }),
+        Cmd::Schedule { action } => match action {
+            ScheduleAction::Install {
+                vault_root,
+                time,
+                max_sources,
+                client,
+                env_file,
+                enrich,
+                no_enrich,
+            } => commands::schedule::run_install(commands::schedule::InstallArgs {
+                vault_root,
+                time,
+                max_sources,
+                client: match client {
+                    ClientKindArg::Live => commands::schedule::ScheduleClient::Live,
+                    ClientKindArg::Replay => commands::schedule::ScheduleClient::Replay,
+                },
+                env_file,
+                // Default on; `--no-enrich` turns it off, `--enrich` turns it
+                // back on (clap `overrides_with` keeps only the last flag).
+                enrich: enrich || !no_enrich,
+            }),
+            ScheduleAction::Uninstall => commands::schedule::run_uninstall(),
+            ScheduleAction::Status => commands::schedule::run_status(&today_iso()),
+        },
         Cmd::CrystalLint {
             candidate,
             packs_dir,

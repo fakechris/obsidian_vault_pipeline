@@ -33,5 +33,6 @@ pub mod review_run;
 pub mod mcp;
 pub mod run;
 pub mod run_cycle;
+pub mod schedule;
 pub mod serve;
 pub mod evolve;
