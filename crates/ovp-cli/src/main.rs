@@ -385,6 +385,11 @@ enum Cmd {
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
+        /// Run-recency staleness threshold in HOURS (default 26 — one schedule
+        /// interval + slack). The recency check FAILs when the last run
+        /// (heartbeat or report) is older than this.
+        #[arg(long = "since")]
+        since_hours: Option<u64>,
     },
     /// PRODUCT — start the OVP MCP server (stdio JSON-RPC, synchronous).
     /// Exposes OVP tools (find/search/status/doctor) and resources
@@ -1331,10 +1336,12 @@ fn main() -> ExitCode {
             vault_root,
             fix,
             json,
+            since_hours,
         } => commands::doctor::run(commands::doctor::DoctorArgs {
             vault_root,
             fix,
             json,
+            since_hours,
         }),
         Cmd::Mcp { vault_root } => commands::mcp::run(commands::mcp::McpArgs { vault_root }),
         Cmd::Serve {

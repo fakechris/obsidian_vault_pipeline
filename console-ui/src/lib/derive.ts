@@ -4,18 +4,103 @@
 import type {
   ClaimRow,
   IndexModel,
+  LastRunModel,
   PackRow,
   RunRow,
   SourceRow,
 } from './types';
 
+// ------------------------------------------------------ run-liveness heartbeat
+
+/** Default staleness window (ms): 26 hours — one 09:00 daily schedule interval
+ * (24h) plus slack. Beyond this the unattended loop is treated as stalled and
+ * the banner turns amber. Mirrors the doctor default. */
+export const STALE_AFTER_MS = 26 * 60 * 60 * 1000;
+
+export type BannerLevel = 'none' | 'ok' | 'stale' | 'failed';
+
+/** Everything the fixed portal banner needs, derived from the heartbeat and
+ * the CURRENT wall clock (passed in for testability + client-side ticking).
+ * Deliberately tolerates a null model — the banner must render even when the
+ * rest of the model is empty (fresh/failed vault), so a null model never hides
+ * it: it just shows the muted "no runs yet" state. */
+export interface LastRunBanner {
+  level: BannerLevel;
+  status: LastRunModel['status'] | null;
+  /** Whole minutes since the run's terminal (or start) instant. null when
+   * there is no run or the timestamp is unparseable. */
+  ageMinutes: number | null;
+  error: string | null;
+  processed: number | null;
+  queuedAfter: number | null;
+}
+
+/** The instant the banner ages from: the terminal time if the run ended, else
+ * its start (a still-running or hard-killed run ages from when it began). */
+function lastRunInstantMs(lr: LastRunModel): number | null {
+  const raw = lr.ended_at ?? lr.started_at;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+export function lastRunBanner(
+  model: IndexModel | null,
+  nowMs: number,
+  staleAfterMs: number = STALE_AFTER_MS,
+): LastRunBanner {
+  const lr = model?.ops?.last_run ?? null;
+  if (!lr) {
+    return {
+      level: 'none',
+      status: null,
+      ageMinutes: null,
+      error: null,
+      processed: null,
+      queuedAfter: null,
+    };
+  }
+  const instant = lastRunInstantMs(lr);
+  const ageMinutes =
+    instant == null ? null : Math.max(0, Math.floor((nowMs - instant) / 60000));
+
+  let level: BannerLevel;
+  if (lr.status === 'failed' || lr.status === 'aborted') {
+    level = 'failed';
+  } else if (
+    instant != null &&
+    nowMs - instant > staleAfterMs
+  ) {
+    // A completed-but-old run, or a run still claiming "running" long past the
+    // schedule interval (it died without the drop-guard firing), is stale.
+    level = 'stale';
+  } else {
+    level = 'ok';
+  }
+
+  return {
+    level,
+    status: lr.status,
+    ageMinutes,
+    error: lr.error ?? null,
+    processed: lr.processed ?? null,
+    queuedAfter: lr.queued_after ?? null,
+  };
+}
+
 // ---------------------------------------------------------------- status dot
 
 export type HealthLevel = 'ok' | 'attention' | 'failed';
 
-/** Nav status dot: red when the most recent run failed, amber when operator
- * attention is pending (blocked / needs-content sources), green otherwise. */
-export function healthLevel(model: IndexModel): HealthLevel {
+/** Nav status dot: red when the most recent run failed/aborted/stale (from the
+ * heartbeat) OR when the most recent per-source run failed; amber when operator
+ * attention is pending (blocked / needs-content sources); green otherwise.
+ * `nowMs` lets the heartbeat staleness be evaluated at render time. */
+export function healthLevel(
+  model: IndexModel,
+  nowMs: number = Date.now(),
+): HealthLevel {
+  const banner = lastRunBanner(model, nowMs);
+  if (banner.level === 'failed' || banner.level === 'stale') return 'failed';
   const lastRun = model.runs[model.runs.length - 1];
   if (lastRun && lastRun.failed > 0) return 'failed';
   if (attentionCount(model) > 0) return 'attention';

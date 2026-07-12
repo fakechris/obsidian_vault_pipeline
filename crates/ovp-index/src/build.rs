@@ -23,8 +23,8 @@ use ovp_intake::{IntakeAction, read_intake_ledger};
 use serde::Deserialize;
 
 use crate::model::{
-    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, RunRow,
-    RunStats, SourceRow, SourceStatus, Totals,
+    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState,
+    PackRow, RunRow, RunStats, SourceRow, SourceStatus, Totals,
 };
 
 /// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
@@ -97,7 +97,8 @@ pub fn build_index_at(
         runs: runs.len(),
     };
 
-    let ops = build_ops_state(&sources, &runs, date);
+    let mut ops = build_ops_state(&sources, &runs, date);
+    ops.last_run = build_last_run(vault_root);
 
     // Never silently None: an ad-hoc `index`/`console` build with no run to
     // name still gets an `index-<built_at>` marker so every projection can be
@@ -854,7 +855,53 @@ fn build_ops_state(sources: &[SourceRow], runs: &[RunRow], today: &str) -> OpsSt
         blocked_sources,
         queue_depth,
         run_stats,
+        last_run: None,
     }
+}
+
+/// Map a raw heartbeat record to the read-model shape. Pure; the string
+/// status keeps the model self-describing for the static console pages and the
+/// SPA alike.
+pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
+    let status = match hb.status {
+        ovp_daily::LastRunStatus::Running => "running",
+        ovp_daily::LastRunStatus::Completed => "completed",
+        ovp_daily::LastRunStatus::Failed => "failed",
+        ovp_daily::LastRunStatus::Aborted => "aborted",
+    };
+    LastRunModel {
+        run_id: hb.run_id,
+        started_at: hb.started_at,
+        ended_at: hb.ended_at,
+        status: status.into(),
+        processed: hb.processed,
+        failed: hb.failed,
+        blocked: hb.blocked,
+        capped: hb.capped,
+        queued_after: hb.queued_after,
+        error: hb.error,
+    }
+}
+
+/// Read the run-liveness heartbeat (`.ovp/last-run.json`) LIVE into the
+/// read-model shape, PRESERVING errors. This is the fail-loud reader the
+/// server and `doctor` use so a corrupt/unreadable heartbeat is never silently
+/// treated as absent (that would hide the very failed/aborted run this feature
+/// exists to surface). `Ok(None)` = fresh vault (no file); `Err` = present but
+/// unparseable.
+pub fn read_last_run_model(vault_root: &Path) -> Result<Option<LastRunModel>, String> {
+    Ok(ovp_daily::read_last_run(vault_root)?.map(last_run_to_model))
+}
+
+/// Read the heartbeat for the BAKED projection. The projection must always
+/// build, so a corrupt file degrades to `None` here (the CLI/`doctor`/server
+/// surface the corruption loudly via [`read_last_run_model`]); an absent file
+/// on a fresh vault is `None` too. NOTE: the baked field is a build-time
+/// SNAPSHOT — it can say `running` forever if the process died before the
+/// phase-5 rebuild. Live surfaces (server `/api/*`, `doctor`, `schedule
+/// status`) must read the sidecar fresh, never trust this field.
+fn build_last_run(vault_root: &Path) -> Option<LastRunModel> {
+    read_last_run_model(vault_root).ok().flatten()
 }
 
 fn compute_run_stats(runs: &[RunRow], today: &str) -> Option<RunStats> {
@@ -977,6 +1024,49 @@ fn is_leap(y: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_run_none_when_no_heartbeat_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        assert!(model.ops.last_run.is_none(), "fresh vault → no last_run");
+    }
+
+    #[test]
+    fn last_run_surfaces_completed_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let counts = ovp_daily::RunCounts {
+            processed: 8,
+            failed: 0,
+            blocked: 1,
+            capped: 2,
+            queued_after: 180,
+        };
+        let (guard, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "daily-2026-07-12");
+        assert!(guard.finalize_completed(counts).is_none());
+
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        let lr = model.ops.last_run.expect("heartbeat surfaced");
+        assert_eq!(lr.status, "completed");
+        assert_eq!(lr.run_id, "daily-2026-07-12");
+        assert_eq!(lr.processed, Some(8));
+        assert_eq!(lr.queued_after, Some(180));
+        assert!(lr.ended_at.is_some());
+        assert!(lr.error.is_none());
+    }
+
+    #[test]
+    fn last_run_surfaces_aborted_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let (_g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+            // drop without finalize → aborted
+        }
+        let model = build_index(tmp.path(), "2026-07-12", None).unwrap();
+        let lr = model.ops.last_run.expect("aborted heartbeat surfaced");
+        assert_eq!(lr.status, "aborted");
+        assert!(lr.error.is_some());
+    }
 
     #[test]
     fn corpus_hash8_matches_only_the_legacy_prefix_shape() {

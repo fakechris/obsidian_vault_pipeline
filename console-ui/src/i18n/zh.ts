@@ -15,6 +15,20 @@ export const zh: Record<keyof typeof en, string> = {
   'status.attention': '需处理',
   'status.failed': '最近运行失败',
 
+  // run-liveness banner (fixed top strip, every page)
+  'banner.none': '尚无运行记录',
+  'banner.completed': '最近运行：已完成 {ago}',
+  'banner.completedCounts': '最近运行：已完成 {ago} · 阅读 {read} · 队列 {queued}',
+  'banner.running': '运行进行中 · 开始于 {ago}',
+  'banner.stale': '最近运行：{ago} —— 每日流程可能已停滞',
+  'banner.failed': '最近运行：失败 {ago}{error}',
+  'banner.aborted': '最近运行：中断 {ago}{error}',
+  'banner.agoJustNow': '刚刚',
+  'banner.agoMinutes': '{n} 分钟前',
+  'banner.agoHours': '{n} 小时前',
+  'banner.agoDays': '{n} 天前',
+  'banner.viewSystem': '查看系统状态',
+
   // shared
   'common.loading': '加载中…',
   'common.error': '无法加载索引模型——服务是否已连接 vault？',

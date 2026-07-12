@@ -156,11 +156,44 @@ pub struct RunStats {
     pub avg_processed_per_run: f64,
 }
 
+/// Run-liveness heartbeat surfaced into the read model (OVP2 observability P0).
+/// Mirrors `.ovp/last-run.json`; `minutes_since` is deliberately NOT stored —
+/// the portal computes age client-side from `started_at`/`ended_at` + now, so
+/// the banner ages without a rebuild. Serde-additive: a pre-P0 index has no
+/// `last_run` field and deserializes to `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LastRunModel {
+    pub run_id: String,
+    /// Wall-clock start (UTC, RFC3339).
+    pub started_at: String,
+    /// Wall-clock terminal time (UTC, RFC3339); None while `running`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    /// `running` | `completed` | `failed` | `aborted`.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capped: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_after: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpsState {
     pub blocked_sources: Vec<BlockedSource>,
     pub queue_depth: usize,
     pub run_stats: Option<RunStats>,
+    /// The run-liveness heartbeat (`.ovp/last-run.json`) at build time. None on
+    /// a fresh vault (no runs yet) or a pre-P0 index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<LastRunModel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

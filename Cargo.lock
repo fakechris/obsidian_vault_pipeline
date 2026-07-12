@@ -1507,7 +1507,6 @@ dependencies = [
 name = "ovp-index"
 version = "2.0.1"
 dependencies = [
- "chrono",
  "ovp-daily",
  "ovp-domain",
  "ovp-intake",
@@ -1641,7 +1640,7 @@ dependencies = [
 name = "ovp-server"
 version = "2.0.1"
 dependencies = [
- "chrono",
+ "ovp-daily",
  "ovp-domain",
  "ovp-index",
  "ovp-intake",

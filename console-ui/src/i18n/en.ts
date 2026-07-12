@@ -15,6 +15,20 @@ export const en = {
   'status.attention': 'attention',
   'status.failed': 'last run failed',
 
+  // run-liveness banner (fixed top strip, every page)
+  'banner.none': 'No runs yet',
+  'banner.completed': 'Last run: completed {ago}',
+  'banner.completedCounts': 'Last run: completed {ago} · {read} read · {queued} queued',
+  'banner.running': 'Run in progress · started {ago}',
+  'banner.stale': 'Last run: {ago} — the daily loop may be stalled',
+  'banner.failed': 'Last run: FAILED {ago}{error}',
+  'banner.aborted': 'Last run: ABORTED {ago}{error}',
+  'banner.agoJustNow': 'just now',
+  'banner.agoMinutes': '{n}m ago',
+  'banner.agoHours': '{n}h ago',
+  'banner.agoDays': '{n}d ago',
+  'banner.viewSystem': 'View system status',
+
   // shared
   'common.loading': 'Loading…',
   'common.error': 'Could not load the index model — is the server running against a vault?',
