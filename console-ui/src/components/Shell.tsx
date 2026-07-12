@@ -12,6 +12,7 @@ import { useI18n } from '../i18n';
 import { healthLevel } from '../lib/derive';
 import { useModel } from '../model';
 import { useTheme } from '../theme';
+import RunBanner from './RunBanner';
 import SearchOmnibox from './SearchOmnibox';
 
 const NAV = [
@@ -121,6 +122,7 @@ export default function Shell() {
 
   return (
     <div className="portal">
+      <RunBanner />
       <div className="page">
         <div className="shell">
           <div className="shell-head">

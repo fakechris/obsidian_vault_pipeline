@@ -941,6 +941,11 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             "timeout_secs": state.ask_timeout.as_secs(),
             "max_concurrent": state.ask_slots.max,
         },
+        // Run-liveness heartbeat (OVP2 observability P0) so `schedule status`
+        // and any client read the same last-run block uniformly. Null on a
+        // fresh vault / pre-P0 index. The client derives age from
+        // started_at/ended_at + now — the server ships no `minutes_since`.
+        "last_run": model.as_ref().and_then(|m| m.ops.last_run.clone()),
         "version": env!("CARGO_PKG_VERSION"),
     });
     json_response(200, &body.to_string())

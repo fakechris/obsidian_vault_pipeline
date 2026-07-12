@@ -194,6 +194,16 @@ impl VaultLayout {
         ".ovp/index/index.json"
     }
 
+    /// Unconditional run-liveness heartbeat (OVP2 observability P0). Written at
+    /// the START of every `daily` invocation (`status: running`) and overwritten
+    /// with a terminal status (`completed` / `failed` / `aborted`) as the run
+    /// ends — so an unattended run that crashes before its end-of-run report is
+    /// still visible to the operator. Overwrite is CORRECT: it is a single
+    /// liveness snapshot, not an append-only ledger.
+    pub fn last_run_file(&self) -> &'static str {
+        ".ovp/last-run.json"
+    }
+
     /// The product console directory (static HTML over product state, M31).
     pub fn console_dir(&self) -> &'static str {
         ".ovp/console"

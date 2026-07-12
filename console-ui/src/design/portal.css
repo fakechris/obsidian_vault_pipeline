@@ -164,6 +164,66 @@ body {
   background: var(--c-6);
 }
 
+/* ---------- run-liveness banner: fixed top strip, every page ---------- */
+.run-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 1.5rem;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  background: var(--surface);
+  color: var(--muted);
+  transition:
+    background 200ms,
+    color 200ms;
+}
+.run-banner:hover {
+  filter: brightness(0.98);
+}
+.run-banner .run-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ovp-radius-pill);
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+.run-banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-banner.ok {
+  color: var(--c-3);
+  background: color-mix(in srgb, var(--c-3) 8%, var(--surface));
+}
+.run-banner.ok .run-banner-dot {
+  background: var(--c-3);
+}
+.run-banner.attention {
+  color: var(--warn-text);
+  background: var(--warn-bg);
+}
+.run-banner.attention .run-banner-dot {
+  background: var(--warn-border);
+}
+.run-banner.failed {
+  color: var(--c-6);
+  background: color-mix(in srgb, var(--c-6) 10%, var(--surface));
+}
+.run-banner.failed .run-banner-dot {
+  background: var(--c-6);
+}
+
 /* ---------- toggles (theme + language): text buttons in a pill ---------- */
 .seg-toggle {
   display: inline-flex;

@@ -80,7 +80,47 @@ pub struct DailyArgs {
     pub no_digest: bool,
 }
 
+/// Entry point. Wraps [`run_inner`] in the run-liveness heartbeat
+/// ([`HeartbeatGuard`]): the guard is armed the moment a real (non-dry) run
+/// starts, finalized `completed` / `failed` on the two clean exit paths, and
+/// left to its RAII `Drop` — which writes `status: aborted` — if the run
+/// panics or an error propagates out past the finalize. This is the OVP2
+/// observability P0: an unattended run that crashes before its end-of-run
+/// report is still visible in `.ovp/last-run.json`.
+///
+/// A dry run does no mutating work, takes no lock, and writes no heartbeat.
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
+    if args.dry_run {
+        return run_inner(args, None);
+    }
+    let (guard, warn) = ovp_daily::HeartbeatGuard::start(&args.vault_root, &args.run_id);
+    if let Some(w) = warn {
+        sayln!("  warn {w}");
+    }
+    // Track counts across the inner run so a clean completion can finalize with
+    // real numbers. `finalize` is threaded through the Ok path; the Err path
+    // and any panic fall to `finalize_failed` / the Drop-guard's abort write.
+    let mut counts = ovp_daily::RunCounts::default();
+    match run_inner(args, Some(&mut counts)) {
+        Ok(()) => {
+            if let Some(w) = guard.finalize_completed(counts) {
+                sayln!("  warn {w}");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Record the terminal failure with the operator-facing message,
+            // then re-propagate so the exit code and stderr are unchanged.
+            let _ = guard.finalize_failed(&e.to_string());
+            Err(e)
+        }
+    }
+}
+
+fn run_inner(
+    args: DailyArgs,
+    mut counts: Option<&mut ovp_daily::RunCounts>,
+) -> Result<(), CliError> {
     let layout = VaultLayout::new();
     let inbox = args.inbox.clone().unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
     let ledger_path = args.vault_root.join(layout.daily_ledger());
@@ -337,6 +377,21 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
 
     let model = build_index(&args.vault_root, &args.date, Some(&args.run_id))
         .map_err(CliError::Io)?;
+
+    // Heartbeat counts: populated once the model is built so BOTH the clean
+    // completion and the failed-source (Gate) exit below finalize with real
+    // numbers. `queued_after` reads the rebuilt backlog gauge (post-run queue
+    // depth), not just this run's cap remainder.
+    if let Some(c) = counts.take() {
+        *c = ovp_daily::RunCounts {
+            processed: daily.processed.len(),
+            failed: daily.failed(),
+            blocked: daily.blocked,
+            capped: daily.capped,
+            queued_after: model.totals.queued,
+        };
+    }
+
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;

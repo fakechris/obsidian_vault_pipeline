@@ -14,10 +14,17 @@ use ovp_index::{build_index, write_index};
 
 use crate::CliError;
 
+/// Default run-recency staleness threshold: 26 hours — one 09:00 daily
+/// schedule interval (24h) plus slack for a long reader batch. Beyond this the
+/// unattended loop is assumed stalled.
+pub const DEFAULT_RECENCY_HOURS: u64 = 26;
+
 pub struct DoctorArgs {
     pub vault_root: PathBuf,
     pub fix: bool,
     pub json: bool,
+    /// Override for the run-recency staleness threshold (hours).
+    pub since_hours: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +65,8 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
     check_orphan_packs(&args.vault_root, &layout, &mut findings);
     check_stale_index(&args.vault_root, &mut findings, args.fix);
     check_crystal_integrity(&args.vault_root, &mut findings);
+    let threshold_hours = args.since_hours.unwrap_or(DEFAULT_RECENCY_HOURS);
+    check_run_recency(&args.vault_root, &layout, now_unix_secs(), threshold_hours, &mut findings);
     check_disk_usage(&args.vault_root, &layout, &mut findings);
     check_legacy_artifacts(&args.vault_root, &mut findings);
 
@@ -364,6 +373,214 @@ fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
     }
 }
 
+/// Run-recency + backlog check (OVP2 observability P0). Now that `daily` runs
+/// unattended, a run that crashes before its end-of-run report leaves the
+/// portal frozen with a green dot — so `doctor` must fail loudly when:
+///   * the heartbeat says `failed` or `aborted` (a crashed/aborted run), or
+///   * the last run (heartbeat `ended_at`/`started_at`, else the newest report
+///     file's mtime) is older than `threshold_hours`.
+///
+/// It also emits an INFO when the capped backlog is growing (heartbeat
+/// `queued_after` not shrinking vs the prior report's residual queue — a
+/// best-effort signal, never a failure).
+fn check_run_recency(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    now_secs: i64,
+    threshold_hours: u64,
+    findings: &mut Vec<Finding>,
+) {
+    let threshold_secs = threshold_hours as i64 * 3600;
+    let hb = ovp_daily::read_last_run(vault_root).ok().flatten();
+
+    // 1) Terminal-status failures are unconditional FAILs regardless of age.
+    if let Some(rec) = &hb {
+        match rec.status {
+            ovp_daily::LastRunStatus::Failed => {
+                findings.push(Finding {
+                    check: "run-recency".into(),
+                    severity: Severity::Fail,
+                    message: format!(
+                        "last run FAILED ({}){}",
+                        rec.run_id,
+                        rec.error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default()
+                    ),
+                    fixed: false,
+                });
+                return;
+            }
+            ovp_daily::LastRunStatus::Aborted => {
+                findings.push(Finding {
+                    check: "run-recency".into(),
+                    severity: Severity::Fail,
+                    message: format!(
+                        "last run ABORTED ({}) — the process died mid-run (panic/kill/provider error); \
+                         check the schedule log and rerun `ovp2 daily`",
+                        rec.run_id
+                    ),
+                    fixed: false,
+                });
+                return;
+            }
+            ovp_daily::LastRunStatus::Running | ovp_daily::LastRunStatus::Completed => {}
+        }
+    }
+
+    // 2) Age: heartbeat timestamp preferred (has wall-clock time), else newest
+    // report file mtime. A `running` heartbeat ages from `started_at`.
+    let hb_secs = hb.as_ref().and_then(|r| {
+        let ts = r.ended_at.as_deref().unwrap_or(r.started_at.as_str());
+        parse_rfc3339_utc(ts)
+    });
+    let report_secs = newest_report_mtime_secs(vault_root, layout);
+    let last_secs = match (hb_secs, report_secs) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+
+    match last_secs {
+        None => {
+            findings.push(Finding {
+                check: "run-recency".into(),
+                severity: Severity::Warn,
+                message: "no run recorded yet (no heartbeat, no reports)".into(),
+                fixed: false,
+            });
+        }
+        Some(ts) => {
+            let age = now_secs - ts;
+            if age > threshold_secs {
+                let hours = age / 3600;
+                findings.push(Finding {
+                    check: "run-recency".into(),
+                    severity: Severity::Fail,
+                    message: format!(
+                        "last run was ~{hours}h ago (> {threshold_hours}h) — the unattended loop may be \
+                         stalled; check `ovp2 schedule status` and the schedule log"
+                    ),
+                    fixed: false,
+                });
+            } else {
+                let hours = age.max(0) / 3600;
+                findings.push(Finding {
+                    check: "run-recency".into(),
+                    severity: Severity::Pass,
+                    message: format!("last run ~{hours}h ago (< {threshold_hours}h)"),
+                    fixed: false,
+                });
+            }
+        }
+    }
+
+    // 3) INFO: capped backlog growing (best-effort). Compare the heartbeat's
+    // post-run queue depth to the current queue depth on disk; a strictly
+    // larger live queue than the last recorded run's residual is a growing
+    // backlog worth surfacing, never a failure.
+    if let Some(rec) = &hb
+        && let Some(queued_after) = rec.queued_after
+    {
+        let live_queued = current_queue_depth(vault_root);
+        if live_queued > queued_after {
+            findings.push(Finding {
+                check: "run-backlog".into(),
+                severity: Severity::Info,
+                message: format!(
+                    "queue is growing: {live_queued} queued now vs {queued_after} after the last run \
+                     — capture is outpacing reading; raise --max-sources or run more often"
+                ),
+                fixed: false,
+            });
+        }
+    }
+}
+
+/// Newest mtime (unix secs) across `.ovp/reports/*.json`, if any.
+fn newest_report_mtime_secs(vault_root: &Path, layout: &VaultLayout) -> Option<i64> {
+    let dir = vault_root.join(layout.reports_dir());
+    let entries = std::fs::read_dir(&dir).ok()?;
+    let mut newest: Option<i64> = None;
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        if let Some(secs) = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+        {
+            newest = Some(newest.map_or(secs, |n| n.max(secs)));
+        }
+    }
+    newest
+}
+
+/// Live queue depth on disk: markdown files sitting in `50-Inbox/01-Raw`. A
+/// cheap proxy for the backlog — the read model computes the same, but doctor
+/// stays index-independent here.
+fn current_queue_depth(vault_root: &Path) -> usize {
+    let inbox = vault_root.join(VaultLayout::new().inbox_raw_dir());
+    fn count_md(dir: &Path) -> usize {
+        let mut n = 0;
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let name = e.file_name();
+                if name.to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                if p.is_dir() {
+                    n += count_md(&p);
+                } else if p.extension().is_some_and(|x| x == "md") {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+    count_md(&inbox)
+}
+
+/// Parse an RFC3339 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`, as the heartbeat
+/// writes) into unix seconds. Returns None on any shape it does not recognize
+/// (the recency check then falls back to report mtime).
+fn parse_rfc3339_utc(s: &str) -> Option<i64> {
+    let s = s.trim_end_matches('Z');
+    let (date, time) = s.split_once('T')?;
+    let mut dp = date.splitn(3, '-');
+    let y: i64 = dp.next()?.parse().ok()?;
+    let mo: i64 = dp.next()?.parse().ok()?;
+    let d: i64 = dp.next()?.parse().ok()?;
+    let mut tp = time.splitn(3, ':');
+    let h: i64 = tp.next()?.parse().ok()?;
+    let mi: i64 = tp.next()?.parse().ok()?;
+    let se: i64 = tp.next().unwrap_or("0").parse().ok()?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + se)
+}
+
+/// Howard Hinnant's `days_from_civil` — days since the unix epoch.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn now_unix_secs() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn check_disk_usage(vault_root: &Path, layout: &VaultLayout, findings: &mut Vec<Finding>) {
     let dirs = [
         (".ovp", vault_root.join(".ovp")),
@@ -590,7 +807,101 @@ mod tests {
             vault_root: tmp.path().to_path_buf(),
             fix: false,
             json: false,
+            since_hours: None,
         });
         assert!(result.is_ok(), "INFO finding must not fail doctor: {result:?}");
+    }
+
+    // ---- run-recency (OVP2 observability P0) ----
+
+    fn recency_findings(
+        vault: &Path,
+        now: i64,
+        threshold: u64,
+    ) -> Vec<Finding> {
+        let layout = VaultLayout::new();
+        let mut f = Vec::new();
+        check_run_recency(vault, &layout, now, threshold, &mut f);
+        f
+    }
+
+    fn recency(f: &[Finding]) -> &Finding {
+        f.iter().find(|x| x.check == "run-recency").expect("a run-recency finding")
+    }
+
+    #[test]
+    fn recency_parses_rfc3339() {
+        assert_eq!(parse_rfc3339_utc("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_rfc3339_utc("2026-07-12T09:00:00Z"), Some(1_783_846_800));
+        assert_eq!(parse_rfc3339_utc("garbage"), None);
+    }
+
+    #[test]
+    fn recency_fails_on_failed_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+        g.finalize_failed("ANTHROPIC_API_KEY expired");
+        // now == same instant, well within threshold — but failed status FAILs.
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        let r = recency(&f);
+        assert_eq!(r.severity, Severity::Fail);
+        assert!(r.message.contains("FAILED"));
+        assert!(r.message.contains("expired"));
+    }
+
+    #[test]
+    fn recency_fails_on_aborted_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let (_g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+        } // drop → aborted
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        let r = recency(&f);
+        assert_eq!(r.severity, Severity::Fail);
+        assert!(r.message.contains("ABORTED"));
+    }
+
+    #[test]
+    fn recency_passes_on_fresh_completed_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+        g.finalize_completed(ovp_daily::RunCounts::default());
+        // A completed run stamped ~now → well within any threshold.
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        assert_eq!(recency(&f).severity, Severity::Pass);
+    }
+
+    #[test]
+    fn recency_fails_on_stale_completed_heartbeat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+        g.finalize_completed(ovp_daily::RunCounts::default());
+        // Advance "now" 100h past the heartbeat write → stale.
+        let future = now_unix_secs() + 100 * 3600;
+        assert_eq!(recency_findings(tmp.path(), future, 26)[0].severity, Severity::Fail);
+    }
+
+    #[test]
+    fn recency_warns_when_no_run_at_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        assert_eq!(recency(&f).severity, Severity::Warn);
+    }
+
+    #[test]
+    fn backlog_info_when_queue_grows_past_last_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (g, _) = ovp_daily::HeartbeatGuard::start(tmp.path(), "r");
+        g.finalize_completed(ovp_daily::RunCounts { queued_after: 2, ..Default::default() });
+        // Five markdown sources now sit in the inbox → live queue 5 > 2.
+        let inbox = tmp.path().join("50-Inbox/01-Raw");
+        std::fs::create_dir_all(&inbox).unwrap();
+        for i in 0..5 {
+            std::fs::write(inbox.join(format!("s{i}.md")), "x").unwrap();
+        }
+        let f = recency_findings(tmp.path(), now_unix_secs(), 26);
+        let info = f.iter().find(|x| x.check == "run-backlog").expect("backlog info");
+        assert_eq!(info.severity, Severity::Info);
+        assert!(info.message.contains("growing"));
     }
 }
