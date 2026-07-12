@@ -396,7 +396,10 @@ enum Cmd {
     },
     /// PRODUCT — start the OVP console HTTP server (synchronous, localhost-only
     /// by default). Serves `.ovp/console/` HTML pages + JSON API endpoints
-    /// (`/api/find`, `/api/search`, `/api/model`, `/api/refresh`).
+    /// (`/api/find`, `/api/search`, `/api/model`, `/api/refresh`). The portal
+    /// auto-reflects the latest completed `daily`/`crystal-synth` run
+    /// (index.json mtime is polled per request); `/api/refresh` still
+    /// force-reloads but is now optional.
     Serve {
         #[arg(long)]
         vault_root: PathBuf,

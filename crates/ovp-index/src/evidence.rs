@@ -10,6 +10,13 @@ use crate::model::IndexModel;
 pub const EVIDENCE_SCHEMA: &str = "ovp.index.evidence/v1";
 const EVIDENCE_FILE: &str = ".ovp/index/evidence.json";
 
+/// The on-disk path `read_evidence`/`write_evidence` use, so callers that
+/// cache the model can `stat` the underlying file for freshness without
+/// duplicating the relative path.
+pub fn evidence_path(vault_root: &Path) -> std::path::PathBuf {
+    vault_root.join(EVIDENCE_FILE)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceModel {
     pub schema: String,

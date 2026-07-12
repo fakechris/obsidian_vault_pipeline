@@ -11,16 +11,17 @@
 mod graph;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_domain::units::Unit;
 use ovp_index::{
-    EvidenceModel, IndexModel, Query, QueryKind, read_evidence, read_index, run_query,
+    EvidenceModel, IndexModel, Query, QueryKind, evidence_path, read_evidence, read_index,
+    run_query,
 };
 use ovp_intake::read_jsonl;
 use ovp_llm::ModelClient;
@@ -158,22 +159,50 @@ impl Drop for AskSlot {
     }
 }
 
-/// Evidence sidecar cache. `Unloaded` (never attempted) is distinct from
-/// `Loaded(None)` (attempted, legitimately absent — pre-M31 vaults): without
-/// the distinction an absent sidecar would re-stat/re-read on EVERY
-/// /api/source request. `/api/refresh` re-attempts by writing `Loaded(...)`.
-enum EvidenceCache {
-    Unloaded,
-    Loaded(Option<EvidenceModel>),
+/// mtime-keyed disk cache. `stamp` records the source file's modified-time
+/// AT LOAD TIME so an accessor can compare it against the file's current
+/// mtime and reload only when the file actually changed. A cache built from
+/// an ABSENT file stores `stamp: None` — so it never re-reads a
+/// legitimately-missing sidecar every request, yet reloads the moment one
+/// appears. `data` is `None` when the file was absent or failed to parse.
+///
+/// `Cached::default()` (`loaded=false`) is the "never attempted" state; once
+/// an accessor runs it is always `loaded=true`, distinguishing "no data
+/// because absent" from "not yet looked".
+struct Cached<T> {
+    loaded: bool,
+    stamp: Option<SystemTime>,
+    data: Option<T>,
+}
+
+impl<T> Default for Cached<T> {
+    fn default() -> Self {
+        Self {
+            loaded: false,
+            stamp: None,
+            data: None,
+        }
+    }
+}
+
+/// The source file's modified-time, or `None` when the file is absent /
+/// unstattable. A `stat` per request is negligible next to a reload.
+fn mtime_of(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
-    model: RwLock<Option<IndexModel>>,
-    /// Card/unit bodies for the /api/source/:sha memory layer — lazy-loaded
-    /// like the index model, refreshed together on /api/refresh.
-    evidence: RwLock<EvidenceCache>,
+    /// The index read-model, cached with the mtime of `index.json` it was
+    /// loaded from. `current_model` auto-reloads when the file is newer, so
+    /// the portal reflects the latest `daily`/`crystal-synth` run without a
+    /// manual `/api/refresh` (the separate serve process no longer serves a
+    /// frozen startup snapshot).
+    model: RwLock<Cached<IndexModel>>,
+    /// Card/unit bodies for the /api/source/:sha memory layer — same
+    /// mtime-keyed auto-reload as the model, keyed on `evidence.json`.
+    evidence: RwLock<Cached<EvidenceModel>>,
     viz_dir: Option<PathBuf>,
     ask_client: Option<AskClientFactory>,
     /// The /api/ask wall-clock guard — [`ask_guard_from_env`] unless
@@ -184,52 +213,97 @@ struct AppState {
 }
 
 impl AppState {
-    fn load_model(&self) -> Option<IndexModel> {
-        read_index(&self.vault_root).ok()
+    fn index_path(&self) -> PathBuf {
+        self.vault_root.join(self.layout.index_file())
     }
 
+    fn evidence_path(&self) -> PathBuf {
+        evidence_path(&self.vault_root)
+    }
+
+    /// The cached index read-model, auto-freshened against `index.json`'s
+    /// mtime. A `stat` per call is negligible; the parse only happens when
+    /// the file actually changed (or was never loaded), so a separate
+    /// `daily` process rebuilding the index is picked up on the next request
+    /// — the portal is never stuck on the startup snapshot.
     fn current_model(&self) -> Option<IndexModel> {
-        {
-            let guard = self.model.read().unwrap();
-            if guard.is_some() {
-                return guard.clone();
-            }
-        }
-        let fresh = self.load_model()?;
-        let mut guard = self.model.write().unwrap();
-        *guard = Some(fresh.clone());
-        Some(fresh)
+        let path = self.index_path();
+        freshen(&self.model, &path, || read_index(&self.vault_root).ok())
     }
 
+    /// The cached evidence sidecar, same mtime-keyed auto-reload as the model
+    /// (keyed on `evidence.json`). Legitimately absent on pre-M31 vaults; a
+    /// missing file caches `None` without re-reading every request, yet
+    /// reloads the instant one appears.
     fn current_evidence(&self) -> Option<EvidenceModel> {
-        {
-            let guard = self.evidence.read().unwrap();
-            if let EvidenceCache::Loaded(ev) = &*guard {
-                return ev.clone();
-            }
-        }
-        let fresh = read_evidence(&self.vault_root).ok();
-        let mut guard = self.evidence.write().unwrap();
-        *guard = EvidenceCache::Loaded(fresh.clone());
-        fresh
+        let path = self.evidence_path();
+        freshen(&self.evidence, &path, || read_evidence(&self.vault_root).ok())
     }
 
+    /// Force-reload both caches from disk regardless of mtime. `/api/refresh`
+    /// keeps this for scripts; with mtime auto-reload it is now optional
+    /// (every accessor already freshens on its own).
     fn refresh_model(&self) {
-        if let Ok(m) = read_index(&self.vault_root) {
-            let mut guard = self.model.write().unwrap();
-            *guard = Some(m);
-        }
-        // Reload the evidence sidecar too; it may legitimately be absent
-        // (pre-M31 vaults) — the source API then reports it as unavailable.
-        // Marking the load COMPLETED (even when absent) is what stops
-        // current_evidence from re-reading disk on every request.
-        *self.evidence.write().unwrap() =
-            EvidenceCache::Loaded(read_evidence(&self.vault_root).ok());
+        force_reload(
+            &self.model,
+            &self.index_path(),
+            read_index(&self.vault_root).ok(),
+        );
+        force_reload(
+            &self.evidence,
+            &self.evidence_path(),
+            read_evidence(&self.vault_root).ok(),
+        );
     }
 
     fn console_dir(&self) -> PathBuf {
         self.vault_root.join(self.layout.console_dir())
     }
+}
+
+/// Serve a cached value, reloading only when the source file's mtime advanced
+/// (or the cache was never loaded). Read-guard fast path first; on a miss,
+/// take the write guard and RE-CHECK the mtime under it (double-checked
+/// locking) so a burst of concurrent requests reloads once, not N times.
+/// `load` re-reads+parses the file and returns `None` if absent/invalid.
+fn freshen<T: Clone>(
+    cache: &RwLock<Cached<T>>,
+    path: &Path,
+    load: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    let disk = mtime_of(path);
+    {
+        let guard = cache.read().unwrap();
+        if guard.loaded && guard.stamp == disk {
+            return guard.data.clone();
+        }
+    }
+    let mut guard = cache.write().unwrap();
+    // Re-check under the write lock: another thread may have just reloaded.
+    // Re-stat too — the file could have changed again between the read
+    // guard's stat and acquiring the write lock.
+    let disk = mtime_of(path);
+    if guard.loaded && guard.stamp == disk {
+        return guard.data.clone();
+    }
+    let data = load();
+    *guard = Cached {
+        loaded: true,
+        stamp: disk,
+        data: data.clone(),
+    };
+    data
+}
+
+/// Force-store a freshly-read value with the file's current mtime, bypassing
+/// the freshness check. Used by `/api/refresh`.
+fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
+    let stamp = mtime_of(path);
+    *cache.write().unwrap() = Cached {
+        loaded: true,
+        stamp,
+        data,
+    };
 }
 
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
@@ -239,8 +313,8 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     let state = Arc::new(AppState {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
-        model: RwLock::new(None),
-        evidence: RwLock::new(EvidenceCache::Unloaded),
+        model: RwLock::new(Cached::default()),
+        evidence: RwLock::new(Cached::default()),
         viz_dir: config.viz_dir,
         ask_client: config.ask_client,
         ask_timeout: config.ask_timeout.unwrap_or_else(ask_guard_from_env),
@@ -257,7 +331,10 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     eprintln!("ovp-server listening on http://{bind}");
     eprintln!("  console: http://{bind}/");
     eprintln!("  API:     http://{bind}/api/find?term=...");
-    eprintln!("  reload:  http://{bind}/api/refresh");
+    eprintln!(
+        "  reload:  automatic — the portal reflects the latest completed run \
+         (index.json mtime); http://{bind}/api/refresh forces it (optional)"
+    );
     match &state.viz_dir {
         Some(dir) => eprintln!("  portal:  overlay from {}", dir.display()),
         None => {
@@ -1469,8 +1546,8 @@ mod tests {
         AppState {
             vault_root: vault,
             layout: VaultLayout::new(),
-            model: RwLock::new(None),
-            evidence: RwLock::new(EvidenceCache::Unloaded),
+            model: RwLock::new(Cached::default()),
+            evidence: RwLock::new(Cached::default()),
             viz_dir,
             ask_client: None,
             // Fixed (not env-derived) so tests stay deterministic on
@@ -2663,5 +2740,164 @@ mod tests {
         assert!(!is_plain_relative("C:/windows/system32"));
         assert!(!is_plain_relative("\\\\srv\\share"));
         assert!(!is_plain_relative("\\evil"));
+    }
+
+    // ---- mtime-based cache auto-reload (fix/serve-mtime-reload) ----
+
+    /// A minimal index whose `date` field labels the version, so tests can
+    /// assert WHICH on-disk model an accessor returned.
+    fn index_dated(date: &str) -> IndexModel {
+        use ovp_index::{OpsState, Totals};
+        IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: date.into(),
+            run_id: None,
+            totals: Totals::default(),
+            sources: vec![],
+            packs: vec![],
+            claims: vec![],
+            runs: vec![],
+            ops: OpsState::default(),
+        }
+    }
+
+    /// A minimal evidence sidecar whose `date` field labels the version.
+    fn evidence_dated(date: &str) -> EvidenceModel {
+        EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: date.into(),
+            cards: vec![],
+            units: vec![],
+            warnings: vec![],
+        }
+    }
+
+    /// Pin a file's mtime explicitly (std 1.75+ `File::set_modified`) — mtime
+    /// resolution is coarse, so tests advance/hold it deterministically
+    /// rather than sleeping.
+    fn set_mtime(path: &Path, t: SystemTime) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn current_model_reloads_after_index_mtime_advances() {
+        let root = temp_root("model-mtime-reload");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+        let index = st.index_path();
+
+        // v1 on disk, stamped at t0.
+        ovp_index::write_index(&vault, &index_dated("2026-01-01")).unwrap();
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        set_mtime(&index, t0);
+        assert_eq!(st.current_model().unwrap().date, "2026-01-01");
+
+        // A separate `daily` process rewrites the index with a NEWER model
+        // and a bumped mtime — the running server must pick it up.
+        ovp_index::write_index(&vault, &index_dated("2026-02-02")).unwrap();
+        set_mtime(&index, t0 + Duration::from_secs(60));
+        assert_eq!(st.current_model().unwrap().date, "2026-02-02");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn current_model_does_not_reload_when_mtime_unchanged() {
+        let root = temp_root("model-mtime-hold");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+        let index = st.index_path();
+
+        ovp_index::write_index(&vault, &index_dated("2026-01-01")).unwrap();
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000);
+        set_mtime(&index, t0);
+        assert_eq!(st.current_model().unwrap().date, "2026-01-01");
+
+        // Corrupt the bytes but KEEP the mtime equal: a freshness check that
+        // re-stat's (not re-parses) still serves the cached good model. If it
+        // re-read on every call this would panic/None on the garbage.
+        std::fs::write(&index, b"{ not json").unwrap();
+        set_mtime(&index, t0);
+        assert_eq!(st.current_model().unwrap().date, "2026-01-01");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn current_evidence_reloads_after_evidence_mtime_advances() {
+        let root = temp_root("evidence-mtime-reload");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+        let ev_path = st.evidence_path();
+
+        ovp_index::write_evidence(&vault, &evidence_dated("2026-01-01")).unwrap();
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(3_000_000);
+        set_mtime(&ev_path, t0);
+        assert_eq!(st.current_evidence().unwrap().date, "2026-01-01");
+
+        ovp_index::write_evidence(&vault, &evidence_dated("2026-02-02")).unwrap();
+        set_mtime(&ev_path, t0 + Duration::from_secs(60));
+        assert_eq!(st.current_evidence().unwrap().date, "2026-02-02");
+
+        // mtime held → cached (corrupt bytes, same mtime, still good).
+        let t1 = t0 + Duration::from_secs(60);
+        std::fs::write(&ev_path, b"{ not json").unwrap();
+        set_mtime(&ev_path, t1);
+        assert_eq!(st.current_evidence().unwrap().date, "2026-02-02");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn api_refresh_forces_reload_even_when_mtime_unchanged() {
+        let root = temp_root("refresh-forces-reload");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+        let index = st.index_path();
+
+        ovp_index::write_index(&vault, &index_dated("2026-01-01")).unwrap();
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(4_000_000);
+        set_mtime(&index, t0);
+        assert_eq!(st.current_model().unwrap().date, "2026-01-01");
+
+        // Rewrite the model but PIN the mtime unchanged — auto-reload would
+        // (correctly) not fire, but /api/refresh must still force it in.
+        ovp_index::write_index(&vault, &index_dated("2026-09-09")).unwrap();
+        set_mtime(&index, t0);
+        assert_eq!(
+            dispatch(&st, Method::Get, "/api/refresh", "").status_code(),
+            200
+        );
+        assert_eq!(st.current_model().unwrap().date, "2026-09-09");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absent_index_stays_none_without_rereading_until_it_appears() {
+        let root = temp_root("model-absent-then-appears");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+
+        // No index yet → None (as before), and the miss is cached.
+        assert!(st.current_model().is_none());
+        assert!(st.current_model().is_none());
+
+        // The first run writes the index — the next accessor picks it up
+        // (absent-file stamp was None; a present file's stamp differs).
+        ovp_index::write_index(&vault, &index_dated("2026-03-03")).unwrap();
+        assert_eq!(st.current_model().unwrap().date, "2026-03-03");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
