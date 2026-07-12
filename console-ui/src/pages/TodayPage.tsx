@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
-import { ClaimPill, EmptyState, ModelGate, PageHelp } from '../components/ui';
+import { AgeLabel, ClaimPill, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   attentionSources,
@@ -191,6 +191,10 @@ export default function TodayPage() {
             {stats.dogfoodDay > 0 && (
               <> · {t('common.day')} {stats.dogfoodDay}</>
             )}
+            {' · '}
+            {/* P1: the build INSTANT + age, so three runs one day differ and a
+                stale count never reads like a fresh one. */}
+            <AgeLabel builtAt={model.built_at} />
           </p>
           <PageHelp>{t('today.help')}</PageHelp>
           {stats.todayRuns.length === 0 && (

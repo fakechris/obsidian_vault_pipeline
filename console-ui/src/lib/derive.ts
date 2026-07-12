@@ -293,3 +293,50 @@ export function countBy<T, K>(items: T[], key: (item: T) => K): Map<K, number> {
   }
   return counts;
 }
+
+// ------------------------------------------------------------------ freshness
+
+/** The pieces a freshness label needs, derived client-side from a projection's
+ * `built_at` and the current wall clock. `unit`/`value` name a coarse bucket
+ * (seconds → just now, minutes, hours, days) so the i18n layer can render
+ * "N min ago" bilingually WITHOUT owning the arithmetic. `unknown` is true when
+ * `built_at` is absent (pre-P1 index) or unparseable — the label then reads
+ * "unknown age" rather than fabricating a 0. */
+export interface AgeParts {
+  unknown: boolean;
+  /** RFC3339 instant, echoed for the "as of <built_at>" prefix (null when unknown). */
+  builtAt: string | null;
+  /** Whole seconds since built_at, clamped at 0 (0 when unknown). */
+  seconds: number;
+  /** Coarse bucket for the relative phrase. */
+  unit: 'now' | 'minute' | 'hour' | 'day';
+  /** The count for `unit` (e.g. 5 for "5 min ago"); 0 for the 'now' bucket. */
+  value: number;
+}
+
+const MINUTE = 60;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** Derive the age of a projection built at `builtAt` as of `nowMs`. Pure: the
+ * ticking clock is injected so the helper is deterministic under test. */
+export function ageParts(
+  builtAt: string | null | undefined,
+  nowMs: number,
+): AgeParts {
+  if (!builtAt) {
+    return { unknown: true, builtAt: null, seconds: 0, unit: 'now', value: 0 };
+  }
+  const builtMs = Date.parse(builtAt);
+  if (Number.isNaN(builtMs)) {
+    return { unknown: true, builtAt: null, seconds: 0, unit: 'now', value: 0 };
+  }
+  // Clamp at 0 so a small clock skew never shows a negative age.
+  const seconds = Math.max(0, Math.floor((nowMs - builtMs) / 1000));
+  if (seconds < MINUTE) return { unknown: false, builtAt, seconds, unit: 'now', value: 0 };
+  if (seconds < HOUR)
+    return { unknown: false, builtAt, seconds, unit: 'minute', value: Math.floor(seconds / MINUTE) };
+  if (seconds < DAY)
+    return { unknown: false, builtAt, seconds, unit: 'hour', value: Math.floor(seconds / HOUR) };
+  return { unknown: false, builtAt, seconds, unit: 'day', value: Math.floor(seconds / DAY) };
+}

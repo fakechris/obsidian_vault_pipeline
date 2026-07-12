@@ -1701,6 +1701,7 @@ mod tests {
         IndexModel {
             schema: "ovp.index/v2".into(),
             date: "2026-07-09".into(),
+            built_at: None,
             run_id: None,
             totals: Totals::default(),
             sources: cases

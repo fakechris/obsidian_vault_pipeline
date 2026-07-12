@@ -310,6 +310,14 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     assert!(console.contains("Benchmark Maxxing"));
     assert!(console.contains("待补内容"), "needs-content surfaced bilingually");
 
+    // P1 provenance: the daily path stamps the wall-clock instant AND passes
+    // its own run id through — a stale projection can no longer render like a
+    // fresh one, and the number's producer is always named.
+    let idx = read_index(&vault).unwrap();
+    assert_eq!(idx.run_id.as_deref(), Some("daily-e2e"), "daily run id kept");
+    let built = idx.built_at.expect("daily path stamps built_at");
+    assert!(built.starts_with(|c: char| c.is_ascii_digit()) && built.contains('T'), "RFC3339: {built}");
+
     // === Run 2: idempotence. Same inputs → nothing new. ===
     let stdout = run_ok(bin().args([
         "daily",
@@ -380,6 +388,17 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     let console = std::fs::read_to_string(vault.join(".ovp/console/index.html")).unwrap();
     assert!(console.contains("e2e-1"), "durable claim on console");
     assert!(console.contains("持久化"), "bilingual durable pill");
+
+    // P1 provenance on the standalone console path: it rebuilds the index with
+    // a `console-<built_at>` producer marker (never a silently-None run_id) and
+    // stamps the wall-clock instant.
+    let console_idx = read_index(&vault).unwrap();
+    let console_built = console_idx.built_at.clone().expect("console path stamps built_at");
+    assert_eq!(
+        console_idx.run_id.as_deref(),
+        Some(format!("console-{console_built}").as_str()),
+        "console path synthesizes a console-<built_at> marker",
+    );
 
     let stdout = run_ok(bin().args([
         "find", "--vault-root", vault.to_str().unwrap(),
