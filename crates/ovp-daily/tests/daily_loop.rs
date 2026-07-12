@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use ovp_daily::{
-    plan_daily, read_daily_ledger, run_daily, DailyConfig, RunStatus,
+    plan_daily, read_daily_ledger, run_daily, run_daily_with_progress, DailyConfig, RunStatus,
 };
 use ovp_llm::{CallError, ModelClient, ModelReply, ModelRequest, StopReason, Usage};
 
@@ -218,6 +218,55 @@ fn max_sources_caps_a_run_loudly() {
     let report = run_daily(&c, &work, &mut factory).unwrap();
     assert_eq!(report.processed.len(), 1);
     assert_eq!(report.capped, 2);
+}
+
+#[test]
+fn progress_hook_fires_once_per_source_in_order_with_final_record() {
+    // The operator-visibility contract behind `ovp2 daily`'s live ok/FAIL
+    // lines: the hook fires exactly once per attempted source (succeeded AND
+    // failed), in processing order, with the finished record — lifecycle move
+    // already reflected — so the CLI can print each line as it happens instead
+    // of after an hours-long batch.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write_vault_with_inbox(root, &[("a", BODY), ("b", BODY2)]);
+
+    let work = plan_daily(&root.join("50-Inbox/01-Raw"), root, &[], false).unwrap();
+    assert_eq!(work.todo.len(), 2);
+
+    // a.md succeeds (canned trunk replies), b.md fails at the base stage.
+    let card_reply = format!(
+        r#"{{"cards":[{{"title":"t","content":"A chunk is structurally neutral.","cited_unit_ids":["{}"]}}]}}"#,
+        accepted_unit_id()
+    );
+    let mut factory = factory_for(vec![
+        units_reply(), "{}".into(), card_reply, // a: base, critic, cards
+        "not json".into(), "{}".into(), "{}".into(), // b: fails at base
+    ]);
+
+    let mut seen: Vec<(String, RunStatus, Option<String>)> = Vec::new();
+    let report = run_daily_with_progress(&cfg(root), &work, &mut factory, &mut |rec| {
+        seen.push((rec.source_path.clone(), rec.status, rec.moved_to.clone()));
+    })
+    .unwrap();
+
+    assert_eq!(seen.len(), report.processed.len(), "one hook call per attempted source");
+    assert_eq!(seen[0].0, "50-Inbox/01-Raw/a.md");
+    assert_eq!(seen[0].1, RunStatus::Succeeded);
+    assert_eq!(
+        seen[0].2.as_deref(),
+        Some("50-Inbox/03-Processed/2026-06/a.md"),
+        "lifecycle move already visible at hook time"
+    );
+    assert_eq!(seen[1].0, "50-Inbox/01-Raw/b.md");
+    assert_eq!(seen[1].1, RunStatus::Failed);
+    assert_eq!(seen[1].2, None);
+    // The hook sees the SAME records the report carries, in the same order.
+    for (call, rec) in seen.iter().zip(&report.processed) {
+        assert_eq!(call.0, rec.source_path);
+        assert_eq!(call.1, rec.status);
+        assert_eq!(call.2, rec.moved_to);
+    }
 }
 
 #[test]

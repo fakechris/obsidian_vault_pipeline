@@ -166,6 +166,9 @@ fn write_jsonl<T: Serialize>(report: &mut std::fs::File, line: &T) -> Result<(),
 
 fn write_seed_line(report: &mut std::fs::File, line: &SeedReport) -> Result<(), CliError> {
     println!("  l3[{}]: {}", line.seed, line.outcome);
+    // A sweep is long-running and usually watched through nohup/pipes, where
+    // stdout is block-buffered — flush so the per-seed line shows live.
+    let _ = std::io::stdout().flush();
     write_jsonl(report, line)
 }
 
@@ -408,6 +411,7 @@ fn flush_strength_wave(
         "  l3[wave {wave:03}]: {} claim(s) → {calls} strength call(s), {durable_routed} durable-routed",
         ids.len()
     );
+    let _ = std::io::stdout().flush(); // live under nohup/pipes (see write_seed_line)
     write_jsonl(
         report,
         &WaveReport {

@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
-    plan_daily, read_daily_ledger, run_daily, succeeded_hashes, DailyConfig, RunReport,
-    RunStatus,
+    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, DailyConfig,
+    DailyRunRecord, RunReport, RunStatus,
 };
 use ovp_domain::VaultLayout;
 use ovp_index::{build_evidence, build_index, write_evidence, write_index};
@@ -28,6 +28,18 @@ use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
+
+/// `println!` + explicit stdout flush. Daily runs are watched through nohup /
+/// pipes (block-buffered stdout) and the reader phase can run for hours; every
+/// phase header and per-source line must hit the log the moment it is printed —
+/// a healthy 46-minute run was once killed as "hung" because nothing showed.
+macro_rules! sayln {
+    ($($arg:tt)*) => {{
+        println!($($arg)*);
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+    }};
+}
 
 pub struct DailyArgs {
     pub vault_root: PathBuf,
@@ -83,7 +95,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     };
 
     let mut report = RunReport::new(&args.run_id, &args.date);
-    println!("daily [{}]: vault {}", args.date, args.vault_root.display());
+    sayln!("daily [{}]: vault {}", args.date, args.vault_root.display());
 
     // Phase 1 — pinboard capture (optional). Inherits the first-sync flood
     // guard: an unfiltered sync with >500 NEW bookmarks fails this phase
@@ -98,12 +110,12 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         };
         let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts)
             .map_err(CliError::Io)?;
-        println!(
+        sayln!(
             "  pinboard: {} fetched, {} new note(s), {} known ({})",
             outcome.fetched, outcome.new_notes.len(), outcome.skipped_known, outcome.origin
         );
         if outcome.guard_would_abort {
-            println!(
+            sayln!(
                 "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
                  exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
                  (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
@@ -120,7 +132,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     if !args.no_intake {
         let done = succeeded_hashes(&read_daily_ledger(&ledger_path).map_err(CliError::Io)?);
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
-        println!(
+        sayln!(
             "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}{}",
             sweep.ingested.len(), sweep.duplicates.len(), sweep.needs_content.len(),
             sweep.unparseable.len(),
@@ -156,14 +168,14 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
             );
             let enriched = results.iter().filter(|r| r.updated).count();
             let failed = results.iter().filter(|r| !r.updated).count();
-            println!(
+            sayln!(
                 "  enrich: {} needs-content URL(s), {} enriched, {} failed",
                 needs_content_items.len(), enriched, failed,
             );
             for r in &results {
                 if !r.updated
                     && let Some(err) = &r.fetch.error {
-                        println!("    skip {}: {err}", r.url);
+                        sayln!("    skip {}: {err}", r.url);
                     }
             }
         }
@@ -189,14 +201,14 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
             );
             let written = results.iter().filter(|r| r.written).count();
             let failed = results.iter().filter(|r| !r.written).count();
-            println!(
+            sayln!(
                 "  github: {} repo URL(s), {} enriched, {} failed",
                 github_items.len(), written, failed,
             );
             for r in &results {
                 if !r.written
                     && let Some(err) = &r.fetch.error {
-                        println!("    skip {}/{}: {err}", r.owner, r.repo);
+                        sayln!("    skip {}/{}: {err}", r.owner, r.repo);
                     }
             }
         }
@@ -206,25 +218,25 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     let ledger = read_daily_ledger(&ledger_path).map_err(CliError::Io)?;
     let work = plan_daily(&inbox, &args.vault_root, &ledger, args.retry_blocked)
         .map_err(CliError::Io)?;
-    println!(
+    sayln!(
         "  plan: {} new source(s), {} skipped, {} blocked",
         work.todo.len(), work.skipped.len(), work.blocked.len()
     );
     for item in &work.blocked {
-        println!("    blocked ({} failures): {} — rerun with --retry-blocked after review",
+        sayln!("    blocked ({} failures): {} — rerun with --retry-blocked after review",
             item.prior_failures, item.rel);
     }
     if args.dry_run {
         for item in &work.todo {
-            println!("  would process: {} ({})", item.rel, &item.sha256[..8]);
+            sayln!("  would process: {} ({})", item.rel, &item.sha256[..8]);
         }
         if dry_run_pending_ingest > 0 {
-            println!(
+            sayln!(
                 "  note: {dry_run_pending_ingest} capture(s) above would ALSO be ingested into \
                  01-Raw and then planned on a real run (dry-run intake moves nothing)"
             );
         }
-        println!("  dry-run: nothing written.");
+        sayln!("  dry-run: nothing written.");
         return Ok(());
     }
 
@@ -243,30 +255,32 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         retry_blocked: args.retry_blocked,
     };
     let planned = work.todo.len();
-    let daily = run_daily(&cfg, &work, &mut make_client).map_err(CliError::Io)?;
+    // Live per-source progress: the reader phase is the long one (up to hours
+    // at high --max-sources), so each ok/FAIL line prints — flushed — the
+    // moment its source finishes, not after run_daily returns.
+    let mut on_source = |rec: &DailyRunRecord| match rec.status {
+        RunStatus::Succeeded => sayln!(
+            "  ok   {} → {} (units={} cards={}){}",
+            rec.source_path,
+            rec.pack_dir.as_deref().unwrap_or("?"),
+            rec.units,
+            rec.cards,
+            rec.moved_to.as_deref().map(|m| format!(" moved→{m}")).unwrap_or_default(),
+        ),
+        RunStatus::Failed => sayln!(
+            "  FAIL {} — {}",
+            rec.source_path,
+            rec.reason.as_deref().unwrap_or("unknown")
+        ),
+    };
+    let daily = run_daily_with_progress(&cfg, &work, &mut make_client, &mut on_source)
+        .map_err(CliError::Io)?;
 
-    for rec in &daily.processed {
-        match rec.status {
-            RunStatus::Succeeded => println!(
-                "  ok   {} → {} (units={} cards={}){}",
-                rec.source_path,
-                rec.pack_dir.as_deref().unwrap_or("?"),
-                rec.units,
-                rec.cards,
-                rec.moved_to.as_deref().map(|m| format!(" moved→{m}")).unwrap_or_default(),
-            ),
-            RunStatus::Failed => println!(
-                "  FAIL {} — {}",
-                rec.source_path,
-                rec.reason.as_deref().unwrap_or("unknown")
-            ),
-        }
-    }
     for w in &daily.lifecycle_warnings {
-        println!("  warn {w}");
+        sayln!("  warn {w}");
     }
     if daily.capped > 0 {
-        println!(
+        sayln!(
             "  capped: {} source(s) left for the next run (--max-sources {})",
             daily.capped, cfg.max_sources
         );
@@ -305,7 +319,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
                     }
                 }
                 if total_images > 0 {
-                    println!(
+                    sayln!(
                         "  images: {} found, {} downloaded across {} pack(s)",
                         total_images, total_downloaded, succeeded_packs.len()
                     );
@@ -335,7 +349,7 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         let content = ovp_memory::digest::render_plain_digest(&data);
         if let Ok(dpath) = ovp_memory::digest::write_digest(&args.vault_root, &args.date, &content) {
             let drel = dpath.strip_prefix(&args.vault_root).unwrap_or(&dpath).display();
-            println!("  digest: {drel}");
+            sayln!("  digest: {drel}");
         }
     }
 
@@ -348,23 +362,23 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
         let wm_content = ovp_memory::working_memory::build_working_memory(&model, &wm_args);
         if let Ok(wm_path) = ovp_memory::working_memory::write_working_memory(&args.vault_root, &wm_content) {
             let wm_rel = wm_path.strip_prefix(&args.vault_root).unwrap_or(&wm_path).display();
-            println!("  working-memory: {wm_rel}");
+            sayln!("  working-memory: {wm_rel}");
         }
     }
 
     let failed = daily.failed();
-    println!(
+    sayln!(
         "  done: {} processed, {failed} failed, {} skipped (report: {report_rel})",
         daily.processed.len(), daily.skipped
     );
-    println!("  index: {index_rel} · evidence: {evidence_rel} · console: {console_rel}");
+    sayln!("  index: {index_rel} · evidence: {evidence_rel} · console: {console_rel}");
 
     // Semantic-theme staleness HINT (never an action): daily must not
     // auto-run crystal-themes — a cold model cache means a surprise ~450MB
     // download — but the operator should know when new packs are unthemed.
     if let Some(n) = stale_theme_packs(&args.vault_root, &model)
         && n > 0 {
-            println!(
+            sayln!(
                 "  themes: {n} pack(s) not in .ovp/crystal/themes.json — run `ovp2 crystal-themes` to re-theme"
             );
         }

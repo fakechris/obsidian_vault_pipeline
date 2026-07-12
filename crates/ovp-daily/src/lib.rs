@@ -183,6 +183,23 @@ pub fn run_daily<F>(
 where
     F: FnMut() -> Result<Box<dyn ModelClient>, String>,
 {
+    run_daily_with_progress(cfg, work, make_client, &mut |_| {})
+}
+
+/// [`run_daily`] with a live progress hook: `on_source` is invoked exactly once
+/// per attempted source — succeeded or failed — immediately after that source
+/// finishes (record durable, lifecycle move done) and BEFORE the next source
+/// starts. A reader batch can run for hours; without this hook the caller has
+/// nothing to show the operator until the whole run returns.
+pub fn run_daily_with_progress<F>(
+    cfg: &DailyConfig,
+    work: &DailyWork,
+    make_client: &mut F,
+    on_source: &mut dyn FnMut(&DailyRunRecord),
+) -> Result<DailyReport, String>
+where
+    F: FnMut() -> Result<Box<dyn ModelClient>, String>,
+{
     let layout = VaultLayout::new();
     let ledger_path = cfg.vault_root.join(layout.daily_ledger());
     let log_path = cfg.vault_root.join(layout.pipeline_log());
@@ -212,6 +229,7 @@ where
             record.moved_to = move_to_processed(cfg, &layout, item, &log_path,
                 &mut daily_report.lifecycle_warnings);
         }
+        on_source(&record);
         daily_report.processed.push(record);
     }
     Ok(daily_report)
