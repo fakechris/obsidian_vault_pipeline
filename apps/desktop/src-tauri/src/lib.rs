@@ -39,10 +39,9 @@ fn config_file(app: &AppHandle) -> Option<PathBuf> {
 fn load_config(app: &AppHandle) -> AppConfig {
     // Env override wins (dev / CI): OVP2_VAULT points the app at a vault
     // without going through onboarding.
-    if let Ok(v) = std::env::var("OVP2_VAULT")
-        && !v.trim().is_empty()
-    {
-        return AppConfig { vault: Some(v) };
+    match std::env::var("OVP2_VAULT") {
+        Ok(v) if !v.trim().is_empty() => return AppConfig { vault: Some(v) },
+        _ => {}
     }
     let Some(path) = config_file(app) else {
         return AppConfig::default();
@@ -122,23 +121,38 @@ fn resolve_viz_dir(app: &AppHandle) -> PathBuf {
 /// left unconfigured for now (POST /api/ask answers 503) — read/query/portal all
 /// work; live ask is wired in a later stage.
 fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
-    let port = free_port()?;
-    let config = ovp_server::ServeConfig {
-        vault_root: vault,
-        host: "127.0.0.1".to_string(),
-        port,
-        viz_dir: Some(viz_dir),
-        ask_client: None,
-        ask_timeout: None,
-        max_concurrent_asks: None,
-    };
-    std::thread::spawn(move || {
-        if let Err(e) = ovp_server::run_server(config) {
-            eprintln!("ovp2-desktop: portal server exited: {e}");
+    // Retry a few times: free_port has a tiny TOCTOU window (another process
+    // could grab the port between the probe and run_server binding it), so a
+    // lost race just picks a new port rather than failing the launch.
+    let mut last_err = "failed to start the portal server".to_string();
+    for _ in 0..3 {
+        let port = match free_port() {
+            Ok(p) => p,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        let config = ovp_server::ServeConfig {
+            vault_root: vault.clone(),
+            host: "127.0.0.1".to_string(),
+            port,
+            viz_dir: Some(viz_dir.clone()),
+            ask_client: None,
+            ask_timeout: None,
+            max_concurrent_asks: None,
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = ovp_server::run_server(config) {
+                eprintln!("ovp2-desktop: portal server exited: {e}");
+            }
+        });
+        match wait_until_up(port) {
+            Ok(()) => return Ok(format!("http://127.0.0.1:{port}/")),
+            Err(e) => last_err = e,
         }
-    });
-    wait_until_up(port)?;
-    Ok(format!("http://127.0.0.1:{port}/"))
+    }
+    Err(last_err)
 }
 
 fn ensure_server(app: &AppHandle, state: &AppState, vault: &Path) -> Result<String, String> {
@@ -163,13 +177,12 @@ fn resolve_ovp2_bin() -> Option<PathBuf> {
     }
     // Bundled sidecar: Tauri strips the target-triple suffix and places it next
     // to the app executable.
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+    if let Some(side) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("ovp2")))
+        .filter(|p| p.exists())
     {
-        let side = dir.join("ovp2");
-        if side.exists() {
-            return Some(side);
-        }
+        return Some(side);
     }
     // Dev fallback: the workspace release/debug build.
     for rel in ["../../../target/release/ovp2", "../../../target/debug/ovp2"] {
@@ -208,19 +221,30 @@ fn start_scheduler(state: &AppState, vault: &Path) {
             .arg("--client")
             .arg("live")
             .status();
-        if let Err(e) = init {
-            eprintln!("ovp2-desktop: schedule init failed to spawn: {e}");
+        // A failed init means the registry was never seeded and every tick
+        // would then silently no-op, so surface a non-zero exit, not just a
+        // spawn error (codex/bot review).
+        match init {
+            Ok(s) if !s.success() => {
+                eprintln!("ovp2-desktop: schedule init exited non-zero ({s}) — scheduler may not run")
+            }
+            Err(e) => eprintln!("ovp2-desktop: schedule init failed to spawn: {e}"),
+            _ => {}
         }
         loop {
             std::thread::sleep(SCHEDULER_INTERVAL);
-            let status = Command::new(&bin)
+            match Command::new(&bin)
                 .arg("schedule")
                 .arg("tick")
                 .arg("--vault-root")
                 .arg(&vault)
-                .status();
-            if let Err(e) = status {
-                eprintln!("ovp2-desktop: scheduler tick failed to spawn: {e}");
+                .status()
+            {
+                Ok(s) if !s.success() => {
+                    eprintln!("ovp2-desktop: scheduler tick exited non-zero ({s}) — a job failed")
+                }
+                Err(e) => eprintln!("ovp2-desktop: scheduler tick failed to spawn: {e}"),
+                _ => {}
             }
         }
     });

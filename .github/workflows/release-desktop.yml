@@ -18,8 +18,10 @@ on:
         description: "Tag to build (e.g. desktop-v2.1.0)"
         required: true
 
+# Least privilege: build only needs to read the repo; only `release` writes to
+# the GitHub Release (job-level override below).
 permissions:
-  contents: write
+  contents: read
 
 env:
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -41,6 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -97,10 +100,13 @@ jobs:
   release:
     needs: build
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
 
       - uses: actions/download-artifact@v4
         with:
