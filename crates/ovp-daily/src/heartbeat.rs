@@ -244,6 +244,10 @@ pub struct HeartbeatGuard {
     pid: u32,
     /// Set once finalize runs — suppresses the abort write in Drop.
     finalized: bool,
+    /// The last activity ring written by `progress`, carried into the terminal
+    /// record so a completed/failed/aborted run KEEPS its per-source feed for
+    /// post-run diagnosis (codex review P1) instead of blanking it.
+    last_recent: std::cell::RefCell<Vec<RecentSource>>,
 }
 
 impl HeartbeatGuard {
@@ -281,6 +285,7 @@ impl HeartbeatGuard {
                 started_at,
                 pid,
                 finalized: false,
+                last_recent: std::cell::RefCell::new(Vec::new()),
             },
             warn,
         )
@@ -304,11 +309,11 @@ impl HeartbeatGuard {
             processed_so_far: None,
             total_planned: None,
             current: None,
-            // The activity ring is a live surface; the terminal summary counts
-            // are authoritative. The last progress write's ring stays on disk
-            // until this terminal write replaces it, so a failed/aborted run's
-            // final feed remains readable up to the moment of finalize.
-            recent: Vec::new(),
+            // Carry the last progress ring into the terminal record so the
+            // per-source feed survives finalize — a completed run keeps its
+            // outcomes, and a failed/aborted run's last entries ARE the
+            // diagnosis (codex review P1).
+            recent: self.last_recent.borrow().clone(),
             error,
         }
     }
@@ -352,6 +357,7 @@ impl HeartbeatGuard {
             recent: recent.to_vec(),
             error: None,
         };
+        *self.last_recent.borrow_mut() = recent.to_vec();
         write_last_run(&self.vault_root, &record)
             .err()
             .map(|e| format!("heartbeat: could not update in-run progress: {e}"))
@@ -524,6 +530,23 @@ mod tests {
         assert_eq!(rec.recent[1].reason.as_deref(), Some("boom"));
 
         assert!(guard.finalize_completed(RunCounts::default()).is_none());
+    }
+
+    #[test]
+    fn terminal_record_retains_the_activity_ring_for_diagnosis() {
+        // Codex P1: the feed must survive finalize — a failed run's last
+        // per-source outcomes ARE the diagnosis, not blanked on the way out.
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+        let ring = vec![recent(1, "ok-one", "ok"), recent(2, "bad-two", "failed")];
+        assert!(guard.progress(2, 5, Some("bad-two"), &ring).is_none());
+        assert!(guard.finalize_failed("provider outage").is_none());
+
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.status, LastRunStatus::Failed);
+        assert_eq!(rec.error.as_deref(), Some("provider outage"));
+        assert_eq!(rec.recent.len(), 2, "the feed survives finalize");
+        assert_eq!(rec.recent[1].status, "failed");
     }
 
     #[test]

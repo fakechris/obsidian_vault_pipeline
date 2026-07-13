@@ -44,15 +44,13 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const months = [...byMonth.keys()].filter((m) => m !== '').sort().reverse();
   const byStatus = countBy(model.sources, (s: SourceRow) => s.status as string);
 
-  // The QUEUED facet shows the LIVE 01-Raw backlog (server-spliced
-  // `queued_live`) — the authoritative-now figure that ticks down during a run —
-  // matching Monitor/System. Every other status stays projection-derived; only
-  // the queued pill needs between-refresh precision. Falls back to the
-  // projection count on a pre-overlay server (queued_live absent).
-  const statusCount = (s: string): number =>
-    s === 'queued' && model.queued_live != null
-      ? model.queued_live
-      : (byStatus.get(s) ?? 0);
+  // Facet counts are projection-derived so a pill count ALWAYS equals the
+  // number of rows selecting it renders (codex review P2): showing a live
+  // queued number here would disagree with filterSources over the same
+  // projection rows mid-run. The live 01-Raw backlog is surfaced as a
+  // standalone stat on Monitor/System and the run banner; the periodic
+  // mid-run projection refresh keeps these facet counts from going stale.
+  const statusCount = (s: string): number => byStatus.get(s) ?? 0;
 
   const filtered = filterSources(model.sources, {
     collection: collection && COLLECTIONS.includes(collection) ? collection : null,

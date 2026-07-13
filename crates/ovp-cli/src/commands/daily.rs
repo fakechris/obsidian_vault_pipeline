@@ -414,15 +414,14 @@ fn run_inner(
                 REFRESH_DEBOUNCE_SECS
             ),
             RefreshDecision::Rebuild => {
+                // Stamp the attempt time BEFORE the rebuild so a persistently
+                // failing refresh (e.g. unwritable projection) still debounces
+                // — otherwise every eligible source retries a full ~1000-pack
+                // scan (codex review P2). Best-effort: log and keep running.
+                last_refresh = Some(std::time::Instant::now());
                 sayln!("  refresh: rebuilding projection at {processed_so_far} source(s)…");
                 match rebuild_projection(&refresh_vault, &refresh_date, &refresh_run_id) {
-                    Ok(()) => {
-                        last_refresh = Some(std::time::Instant::now());
-                        sayln!("  refresh: portal projection updated");
-                    }
-                    // A projection refresh is best-effort: log (flushed) and keep
-                    // running. The run's real work is done; a stale projection for
-                    // one more source is never worth aborting a multi-hour run.
+                    Ok(()) => sayln!("  refresh: portal projection updated"),
                     Err(e) => sayln!("  warn refresh failed (continuing): {e}"),
                 }
             }
