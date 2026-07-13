@@ -11,8 +11,8 @@ use ovp_scheduler::{plan_tick, run_now_with, JobConfig, JobRunner};
 // Re-export the engine items the sibling `schedule` module (installer) and the
 // CLI dispatch reference, so call sites keep using `commands::scheduler::…`.
 pub use ovp_scheduler::{
-    default_registry, is_due, job_shell_command, registry_path, resolve_vault, state_path, Cadence,
-    Registry, State, VAULT_PLACEHOLDER,
+    default_registry, is_due, job_shell_command, registry_path, resolve_vault, Cadence, Registry,
+    State, VAULT_PLACEHOLDER,
 };
 
 use crate::CliError;
@@ -105,24 +105,32 @@ fn missing_registry_err(vault_root: &Path) -> CliError {
     ))
 }
 
-/// Seed `schedule-state.json` so freshly installed jobs first run at their NEXT
-/// occurrence, not immediately on the first tick (an unseeded job has no
-/// last-run, so `is_due` treats every past occurrence as missed and fires it —
-/// including the expensive weekly crystallize). Only when no state exists —
-/// never clobbers recorded runs. Called at install time.
-pub fn seed_state_if_absent(vault_root: &Path) -> Result<(), CliError> {
-    if state_path(vault_root).exists() {
-        return Ok(());
-    }
+/// Give every registry job a state entry it lacks, so a job with no recorded
+/// run first fires at its NEXT occurrence, not immediately on the first tick (an
+/// unseeded job has no last-run, so `is_due` treats every past occurrence as
+/// missed and fires it — including the expensive weekly crystallize). This
+/// covers a fresh install (no state file) AND a re-install that restored a
+/// removed built-in into an existing state file (codex P2). Existing entries are
+/// never clobbered. Loading also validates the existing state, so a reinstall
+/// over a malformed state file fails loud rather than installing a timer whose
+/// every tick would then error (codex P2).
+pub fn seed_missing_state(vault_root: &Path) -> Result<(), CliError> {
     let Some(reg) = load_registry(vault_root)? else {
         return Ok(());
     };
+    let mut state = load_state(vault_root)?; // validates an existing file
     let now = local_now();
-    let mut state = State::default();
+    let mut changed = false;
     for job in &reg.jobs {
-        state.record(&job.id, now, "seeded");
+        if !state.runs.contains_key(&job.id) {
+            state.record(&job.id, now, "seeded");
+            changed = true;
+        }
     }
-    save_state(vault_root, &state)
+    if changed {
+        save_state(vault_root, &state)?;
+    }
+    Ok(())
 }
 
 /// Lenient registry load for interactive read-only commands (`list`): prints a
@@ -309,13 +317,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
         save_registry(vault, &two_job_registry()).unwrap();
-        seed_state_if_absent(vault).unwrap();
+        seed_missing_state(vault).unwrap();
         let state = load_state(vault).unwrap();
         assert!(state.runs.contains_key("daily"));
         assert!(state.runs.contains_key("crystallize"));
         let before = state.runs.get("daily").unwrap().last_run.clone();
         // Second call is a no-op (never clobbers recorded runs).
-        seed_state_if_absent(vault).unwrap();
+        seed_missing_state(vault).unwrap();
         assert_eq!(
             load_state(vault).unwrap().runs.get("daily").unwrap().last_run,
             before
