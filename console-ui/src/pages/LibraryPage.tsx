@@ -51,12 +51,12 @@ function LibraryBody({ model }: { model: IndexModel }) {
   // queued row count (mid-run, between refreshes), the pill shows both so
   // the number is live AND honest about the row list it filters:
   // "queued 53 · 175 snapshot".
-  const projectionQueued = byStatus.get('queued') ?? 0;
-  const liveQueued = model.queued_live ?? projectionQueued;
+  // The queued facet shows the LIVE 01-Raw backlog (ticks down per source);
+  // every other status is projection-derived. One number, like every other
+  // facet — the projection-vs-live nuance is an internal detail, not a second
+  // figure on the chip.
   const statusCount = (st: string): number =>
-    st === 'queued' ? liveQueued : (byStatus.get(st) ?? 0);
-  const queuedSnapshotNote =
-    liveQueued !== projectionQueued ? projectionQueued : null;
+    st === 'queued' ? (model.queued_live ?? (byStatus.get('queued') ?? 0)) : (byStatus.get(st) ?? 0);
 
   const filtered = filterSources(model.sources, {
     collection: collection && COLLECTIONS.includes(collection) ? collection : null,
@@ -133,12 +133,6 @@ function LibraryBody({ model }: { model: IndexModel }) {
               onClick={() => setParam('status', status === s ? null : s)}
             >
               {t(`sourceStatus.${s}` as MsgKey)} ({statusCount(s)})
-              {s === 'queued' && queuedSnapshotNote != null && (
-                <span className="facet-snapshot" title={t('library.queuedSnapshotHint')}>
-                  {' '}
-                  · {queuedSnapshotNote}
-                </span>
-              )}
             </button>
           ))}
         </div>
