@@ -243,16 +243,20 @@ fn count_non_queued_in_raw(model: &IndexModel, raw_dir: &str) -> usize {
     model
         .sources
         .iter()
-        .filter(|s| {
-            matches!(
-                s.status,
-                ovp_index::SourceStatus::Blocked
-                    | ovp_index::SourceStatus::Failed
-                    | ovp_index::SourceStatus::NeedsContent
-                    | ovp_index::SourceStatus::Unparseable
-                    | ovp_index::SourceStatus::Duplicate
-            )
-        })
+        // Any NON-queued source still physically in 01-Raw is subtracted,
+        // not just blocked/failed/dup: `--no-lifecycle` (or a failed
+        // lifecycle move) leaves a Processed file in 01-Raw too, and it must
+        // not inflate the live queue (codex review P1). At rest this makes
+        // queued_live == projection.queued in every lifecycle mode.
+        //
+        // KNOWN TRANSIENT (codex P2, accepted): a source that FAILS mid-run
+        // stays in 01-Raw while the cached projection still calls it Queued
+        // until the end-of-run rebuild, so queued_live can briefly overstate
+        // by up to (failures this run) — typically 0-1. It self-corrects the
+        // instant the index rebuilds; tracking it live would couple this to
+        // per-run failure state for a sub-1-count, seconds-long discrepancy,
+        // which isn't worth the complexity.
+        .filter(|s| !matches!(s.status, ovp_index::SourceStatus::Queued))
         .filter(|s| {
             s.rel_path
                 .as_deref()
@@ -2599,11 +2603,12 @@ mod tests {
         std::fs::create_dir_all(&vault).unwrap();
         let raw = vault.join("50-Inbox/01-Raw/2026-07");
         std::fs::create_dir_all(&raw).unwrap();
-        // 5 real files on disk in 01-Raw: 3 queued, 1 blocked, 1 parked dup copy.
-        for f in ["q0.md", "q1.md", "q2.md", "blocked.md", "dup.md"] {
+        // 6 real files in 01-Raw: 3 queued, 1 blocked, 1 parked dup, and 1
+        // Processed file that stayed (the --no-lifecycle / failed-move case).
+        for f in ["q0.md", "q1.md", "q2.md", "blocked.md", "dup.md", "proc.md"] {
             std::fs::write(raw.join(f), "body\n").unwrap();
         }
-        assert_eq!(count_markdown_files(&raw), 5, "5 files physically present");
+        assert_eq!(count_markdown_files(&raw), 6, "6 files physically present");
 
         // Projection mirroring what build_sources would classify for these
         // files: 3 Queued, 1 Blocked, 1 Duplicate — all rel_path under 01-Raw.
@@ -2613,6 +2618,8 @@ mod tests {
             raw_source("h2", SourceStatus::Queued, "q2.md"),
             raw_source("hb", SourceStatus::Blocked, "blocked.md"),
             raw_source("hd", SourceStatus::Duplicate, "dup.md"),
+            // Processed but still in 01-Raw (no-lifecycle) — must NOT count.
+            raw_source("hp", SourceStatus::Processed, "proc.md"),
         ];
         let queued = sources
             .iter()
@@ -2625,7 +2632,7 @@ mod tests {
 
         let st = state(vault.clone(), None);
         let live = st.live_queued_count(st.current_model().as_ref());
-        assert_eq!(live, 3, "5 files − (1 blocked + 1 duplicate) = 3 queued");
+        assert_eq!(live, 3, "6 files − (blocked + dup + processed-in-raw) = 3 queued");
         assert_eq!(
             live,
             st.current_model().unwrap().totals.queued,
