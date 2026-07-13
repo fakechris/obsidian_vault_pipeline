@@ -24,6 +24,7 @@ members = [
     "crates/ovp-mcp",
     "crates/ovp-evolve",
     "crates/ovp-embed",
+    "crates/ovp-scheduler",
 ]
 
 [workspace.package]

@@ -501,8 +501,18 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::Io(format!("creating {}: {e}", store.display())))?;
     let body = serde_json::to_string_pretty(&file)
         .map_err(|e| CliError::Io(format!("serializing themes.json: {e}")))?;
-    std::fs::write(&themes_path, format!("{body}\n"))
-        .map_err(|e| CliError::Io(format!("writing {}: {e}", themes_path.display())))?;
+    // Publish atomically (temp + rename): crystal-synth reads themes.json to
+    // group its batches, so a torn read of a direct write could feed it a
+    // truncated projection and fail the run (codex P2).
+    let tmp = themes_path.with_extension("json.tmp");
+    std::fs::write(&tmp, format!("{body}\n"))
+        .map_err(|e| CliError::Io(format!("writing {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, &themes_path).map_err(|e| {
+        CliError::Io(format!(
+            "publishing {}: {e}",
+            themes_path.display()
+        ))
+    })?;
 
     let noise = file.packs.values().filter(|&&v| v == UNCLASSIFIED_ID).count();
     println!(

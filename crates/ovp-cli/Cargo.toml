@@ -62,6 +62,7 @@ ovp-evolve = { path = "../ovp-evolve" }
 # Always linked for the pure clustering/cache layer; the heavy ONNX embedder
 # only compiles under the `embed` feature below.
 ovp-embed = { path = "../ovp-embed" }
+ovp-scheduler = { path = "../ovp-scheduler" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

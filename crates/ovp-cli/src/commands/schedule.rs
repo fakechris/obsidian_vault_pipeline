@@ -511,11 +511,19 @@ pub struct InstallReport {
     pub registry: RegistryOutcome,
 }
 
-/// Best-effort teardown of the pre-registry `com.ovp2.daily` unit so upgrading
-/// operators don't run two schedulers — from BOTH install and uninstall, since
-/// an upgraded vault may only have the old unit (codex P2). Never fails; returns
-/// the files it removed.
-fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) -> Vec<PathBuf> {
+/// Teardown of the pre-registry `com.ovp2.daily` unit so upgrading operators
+/// don't run two schedulers — from BOTH install and uninstall, since an upgraded
+/// vault may only have the old unit (codex P2). Returns the files it removed.
+///
+/// The unit file is removed ONLY after the OS confirms the job is no longer
+/// loaded/active: if the stop command fails AND the job is still running, we
+/// abort rather than orphan a live job whose file we deleted (codex P1) — a
+/// failed stop for an already-stopped job is benign.
+fn remove_legacy_unit(
+    flavor: Flavor,
+    home: &Path,
+    runner: &dyn CommandRunner,
+) -> Result<Vec<PathBuf>, CliError> {
     let mut removed = Vec::new();
     match flavor {
         Flavor::Launchd => {
@@ -523,7 +531,22 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) -
                 .join("Library/LaunchAgents")
                 .join(format!("{LEGACY_LAUNCHD_LABEL}.plist"));
             if plist.exists() {
-                let _ = runner.run("launchctl", &["unload", &plist.display().to_string()]);
+                let out = runner
+                    .run("launchctl", &["unload", &plist.display().to_string()])
+                    .map_err(CliError::Io)?;
+                if !out.success {
+                    // Distinguish a real stop failure from "wasn't loaded".
+                    let list = runner
+                        .run("launchctl", &["list", LEGACY_LAUNCHD_LABEL])
+                        .map_err(CliError::Io)?;
+                    if parse_launchctl_list(list.success, &list.stdout).loaded {
+                        return Err(CliError::Io(format!(
+                            "legacy job {LEGACY_LAUNCHD_LABEL} is still loaded and could not be \
+                             unloaded ({}); stop it by hand before installing the scheduler",
+                            out.stderr.trim()
+                        )));
+                    }
+                }
                 if std::fs::remove_file(&plist).is_ok() {
                     removed.push(plist);
                 }
@@ -535,7 +558,21 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) -
             let service = dir.join(format!("{LEGACY_SYSTEMD_UNIT}.service"));
             if timer.exists() || service.exists() {
                 let timer_unit = format!("{LEGACY_SYSTEMD_UNIT}.timer");
-                let _ = runner.run("systemctl", &["--user", "disable", "--now", &timer_unit]);
+                let out = runner
+                    .run("systemctl", &["--user", "disable", "--now", &timer_unit])
+                    .map_err(CliError::Io)?;
+                if !out.success {
+                    let active = runner
+                        .run("systemctl", &["--user", "is-active", &timer_unit])
+                        .map_err(CliError::Io)?;
+                    if first_word_or(&active.stdout, "") == "active" {
+                        return Err(CliError::Io(format!(
+                            "legacy timer {timer_unit} is still active and could not be disabled \
+                             ({}); stop it by hand before installing the scheduler",
+                            out.stderr.trim()
+                        )));
+                    }
+                }
                 for p in [timer, service] {
                     if p.exists() && std::fs::remove_file(&p).is_ok() {
                         removed.push(p);
@@ -544,7 +581,7 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) -
             }
         }
     }
-    removed
+    Ok(removed)
 }
 
 /// What `ensure_registry` did to `.ovp/schedule.json`.
@@ -605,12 +642,19 @@ pub fn install_with(
     home: &Path,
     runner: &dyn CommandRunner,
 ) -> Result<InstallReport, CliError> {
-    remove_legacy_unit(flavor, home, runner);
+    remove_legacy_unit(flavor, home, runner)?;
     let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
-    let registry = ensure_registry(cfg)?;
-    // Freshly installed jobs run at their NEXT occurrence, not on the first
-    // tick (codex P1) — seed state only when none exists yet.
-    super::scheduler::seed_state_if_absent(&cfg.vault_root)?;
+    // Hold the dispatch lock across the registry read-modify-write + state
+    // seeding so a concurrent enable/disable/desktop edit can't be lost or
+    // race the shared temp file (codex P2).
+    let registry = {
+        let _lock = super::scheduler::acquire_dispatch_lock(&cfg.vault_root)?;
+        let registry = ensure_registry(cfg)?;
+        // Freshly installed jobs run at their NEXT occurrence, not on the first
+        // tick (codex P1) — seed state only when none exists yet.
+        super::scheduler::seed_state_if_absent(&cfg.vault_root)?;
+        registry
+    };
     let logs_dir = cfg.vault_root.join(".ovp/logs");
     std::fs::create_dir_all(&logs_dir)
         .map_err(|e| CliError::Io(format!("mkdir {}: {e}", logs_dir.display())))?;
@@ -672,7 +716,7 @@ pub fn uninstall_with(
     // Tear down the pre-registry unit too — an operator who upgraded from main
     // and never re-installed only has `com.ovp2.daily`, and uninstall must not
     // leave it running (codex P2).
-    let mut removed = remove_legacy_unit(flavor, home, runner);
+    let mut removed = remove_legacy_unit(flavor, home, runner)?;
     let paths = unit_paths(home, flavor);
     let installed: Vec<&PathBuf> = paths.iter().filter(|p| p.exists()).collect();
     if installed.is_empty() {
