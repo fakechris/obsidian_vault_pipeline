@@ -153,7 +153,16 @@ pub struct RunLock {
 
 impl RunLock {
     pub fn acquire(vault_root: &Path) -> Result<Self, String> {
-        let path = vault_root.join(".ovp/run.lock");
+        Self::acquire_named(vault_root, "run.lock")
+    }
+
+    /// Acquire a named lock under `.ovp/<name>` (same stale-owner reclaim as
+    /// [`acquire`]). Lets a caller hold a lock DISTINCT from the pipeline's
+    /// `.ovp/run.lock` — e.g. the scheduler serializes its own dispatch with
+    /// `scheduler.lock` while the `daily` child it spawns still takes
+    /// `run.lock`, so the two never deadlock on the same file.
+    pub fn acquire_named(vault_root: &Path, name: &str) -> Result<Self, String> {
+        let path = vault_root.join(".ovp").join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;

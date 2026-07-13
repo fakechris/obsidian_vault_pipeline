@@ -207,6 +207,12 @@ impl JobConfig {
 pub struct Registry {
     #[serde(default = "registry_version")]
     pub version: u32,
+    /// Env file each job sources before running, as configured at install
+    /// (`schedule install --env-file`). May contain `{vault}`. `None` (or a
+    /// pre-env-field registry) → the dispatcher falls back to the default
+    /// `{vault}/.ovp/daily.env`. Honors a custom env file (codex P1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<String>,
     pub jobs: Vec<JobConfig>,
 }
 
@@ -238,20 +244,25 @@ impl Registry {
     }
 }
 
+/// The `{vault}` placeholder in a job's argv, substituted with the tick's
+/// current vault root at dispatch. Keeps the registry portable: the absolute
+/// vault path is never baked in, so a moved/copied vault dispatches correctly
+/// (codex P1) and vault-local scratch is always resolved under the live vault.
+pub const VAULT_PLACEHOLDER: &str = "{vault}";
+
 /// The built-in default registry seeded on install: a daily reader run and a
-/// weekly crystallize. `daily_time` is `(hour, minute)`.
+/// weekly crystallize. `daily_time` is `(hour, minute)`. The vault root is NOT
+/// embedded — argv carries `{vault}`, resolved at dispatch.
 pub fn default_registry(
-    vault_root: &Path,
     client: &str,
     daily_time: (u8, u8),
     enrich: bool,
     max_sources: Option<usize>,
 ) -> Registry {
-    let vault = vault_root.display().to_string();
     let mut daily_argv = vec![
         "daily".to_string(),
         "--vault-root".to_string(),
-        vault.clone(),
+        VAULT_PLACEHOLDER.to_string(),
         "--client".to_string(),
         client.to_string(),
     ];
@@ -266,13 +277,19 @@ pub fn default_registry(
     let crystallize_argv = vec![
         "crystal-synth".to_string(),
         "--vault-root".to_string(),
-        vault,
+        VAULT_PLACEHOLDER.to_string(),
         "--client".to_string(),
         client.to_string(),
         "--refresh".to_string(),
+        // Absolute, vault-local scratch — otherwise crystal-synth defaults to
+        // cwd-relative `.run/crystal-synth`, which launchd (cwd=/) can't create
+        // and which would write live scratch outside the vault (codex P1).
+        "--work-dir".to_string(),
+        format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth"),
     ];
     Registry {
         version: 1,
+        env_file: Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env")),
         jobs: vec![
             JobConfig {
                 id: "daily".to_string(),
@@ -382,22 +399,31 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), CliErro
 // Job execution (behind a trait so tests never spawn processes).
 // ---------------------------------------------------------------------------
 
+/// Resolve `{vault}` in a stored string against the live vault root.
+fn resolve_vault(s: &str, vault_root: &Path) -> String {
+    s.replace(VAULT_PLACEHOLDER, &vault_root.display().to_string())
+}
+
 /// The shell command a job runs: source the env file (credentials stay out of
-/// the registry), then exec the pinned binary with the job's argv.
+/// the registry), then exec the pinned binary with the job's argv. `{vault}` in
+/// the argv and env file is resolved against `vault_root` at dispatch, so the
+/// registry stays portable and vault-local paths always point at the live vault.
 pub fn job_shell_command(
     ovp2_path: &Path,
     env_file: Option<&Path>,
+    vault_root: &Path,
     job: &JobConfig,
 ) -> String {
     let mut cmd = String::new();
     if let Some(env) = env_file {
-        cmd.push_str(&format!("set -a; . {}; set +a; ", sh_quote(&env.display().to_string())));
+        let env = resolve_vault(&env.display().to_string(), vault_root);
+        cmd.push_str(&format!("set -a; . {}; set +a; ", sh_quote(&env)));
     }
     cmd.push_str("exec ");
     cmd.push_str(&sh_quote(&ovp2_path.display().to_string()));
     for arg in &job.argv {
         cmd.push(' ');
-        cmd.push_str(&sh_quote(arg));
+        cmd.push_str(&sh_quote(&resolve_vault(arg, vault_root)));
     }
     if job.stamp_date {
         // Local date via the shell — correct in every timezone.
@@ -416,11 +442,13 @@ pub trait JobRunner {
 pub struct ShellRunner {
     pub ovp2_path: PathBuf,
     pub env_file: Option<PathBuf>,
+    pub vault_root: PathBuf,
 }
 
 impl JobRunner for ShellRunner {
     fn run(&self, job: &JobConfig) -> bool {
-        let cmd = job_shell_command(&self.ovp2_path, self.env_file.as_deref(), job);
+        let cmd =
+            job_shell_command(&self.ovp2_path, self.env_file.as_deref(), &self.vault_root, job);
         match std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&cmd)
@@ -512,20 +540,36 @@ pub fn run_now_with(
 // CLI entry points
 // ---------------------------------------------------------------------------
 
-/// The env file the scheduled jobs source, if it exists (same default as
-/// `schedule install`). `None` means run without sourcing (replay/no-creds).
-fn default_env_file(vault_root: &Path) -> Option<PathBuf> {
-    let p = vault_root.join(".ovp/daily.env");
-    p.exists().then_some(p)
+/// The env file the scheduled jobs source. Prefer the registry's configured
+/// path (honors `schedule install --env-file <custom>`, codex P1); fall back to
+/// the default `{vault}/.ovp/daily.env` for a pre-env-field registry. `{vault}`
+/// is resolved and the file is only sourced when it exists.
+fn resolved_env_file(vault_root: &Path, reg: &Registry) -> Option<PathBuf> {
+    let raw = reg
+        .env_file
+        .clone()
+        .unwrap_or_else(|| format!("{VAULT_PLACEHOLDER}/.ovp/daily.env"));
+    let path = PathBuf::from(resolve_vault(&raw, vault_root));
+    path.exists().then_some(path)
 }
 
-fn shell_runner(vault_root: &Path) -> Result<ShellRunner, CliError> {
+fn shell_runner(vault_root: &Path, reg: &Registry) -> Result<ShellRunner, CliError> {
     let ovp2_path = std::env::current_exe()
         .map_err(|e| CliError::Io(format!("cannot resolve the ovp2 binary path: {e}")))?;
     Ok(ShellRunner {
         ovp2_path,
-        env_file: default_env_file(vault_root),
+        env_file: resolved_env_file(vault_root, reg),
+        vault_root: vault_root.to_path_buf(),
     })
+}
+
+/// Serialize scheduler dispatch (tick and run-now) against each other so two
+/// invocations can't spawn the same job concurrently — `crystal-synth` takes no
+/// `RunLock` of its own, so an overlapping tick + run-now would double the
+/// model calls and race the crystal store (codex P1). Distinct from the
+/// pipeline's `.ovp/run.lock`, so the `daily` child it spawns can still lock.
+fn acquire_dispatch_lock(vault_root: &Path) -> Result<ovp_intake::RunLock, CliError> {
+    ovp_intake::RunLock::acquire_named(vault_root, "scheduler.lock").map_err(CliError::Io)
 }
 
 fn local_now() -> NaiveDateTime {
@@ -551,25 +595,33 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     let Some(reg) = require_registry(vault_root)? else {
         return Ok(());
     };
+    // Held across the whole dispatch so a concurrent tick/run-now can't
+    // double-spawn a job (dropped at end of scope).
+    let _lock = acquire_dispatch_lock(vault_root)?;
     let state = load_state(vault_root)?;
-    let runner = shell_runner(vault_root)?;
+    let runner = shell_runner(vault_root, &reg)?;
     let now = local_now();
     let (new_state, report) = tick_with(&reg, &state, now, &runner);
+    let stamp = now.format("%Y-%m-%dT%H:%M:%S");
     if report.ran.is_empty() {
-        println!(
-            "scheduler tick {}: nothing due ({} job(s))",
-            now.format("%Y-%m-%dT%H:%M:%S"),
-            reg.jobs.len()
-        );
-    } else {
-        save_state(vault_root, &new_state)?;
-        for (id, ok) in &report.ran {
-            println!(
-                "scheduler tick {}: ran '{id}' -> {}",
-                now.format("%Y-%m-%dT%H:%M:%S"),
-                if *ok { "ok" } else { "ERROR" }
-            );
+        println!("scheduler tick {stamp}: nothing due ({} job(s))", reg.jobs.len());
+        return Ok(());
+    }
+    save_state(vault_root, &new_state)?;
+    let mut failed = Vec::new();
+    for (id, ok) in &report.ran {
+        println!("scheduler tick {stamp}: ran '{id}' -> {}", if *ok { "ok" } else { "ERROR" });
+        if !*ok {
+            failed.push(id.clone());
         }
+    }
+    // Exit non-zero when a child failed, so launchd/systemd (and `status`) can
+    // see the failure instead of a green tick that hid a broken run (codex P1).
+    if !failed.is_empty() {
+        return Err(CliError::Io(format!(
+            "scheduler tick: job(s) failed: {}",
+            failed.join(", ")
+        )));
     }
     Ok(())
 }
@@ -614,8 +666,9 @@ pub fn run_run_now(vault_root: &Path, id: &str) -> Result<(), CliError> {
     let Some(reg) = require_registry(vault_root)? else {
         return Ok(());
     };
+    let _lock = acquire_dispatch_lock(vault_root)?;
     let state = load_state(vault_root)?;
-    let runner = shell_runner(vault_root)?;
+    let runner = shell_runner(vault_root, &reg)?;
     let (new_state, ok) =
         run_now_with(&reg, &state, id, local_now(), &runner).map_err(CliError::Io)?;
     save_state(vault_root, &new_state)?;
@@ -769,16 +822,26 @@ mod tests {
 
     #[test]
     fn default_registry_has_daily_and_weekly_crystallize() {
-        let reg = default_registry(Path::new("/v"), "live", (9, 0), true, Some(40));
+        let reg = default_registry("live", (9, 0), true, Some(40));
         reg.validate().unwrap();
+        // Vault path is templated, never embedded (portable — codex P1).
         let daily = reg.get("daily").unwrap();
         assert_eq!(daily.cadence, "daily 09:00");
+        assert!(daily.argv.contains(&VAULT_PLACEHOLDER.to_string()));
         assert!(daily.argv.contains(&"--web-fetch-live".to_string()));
         assert!(daily.argv.contains(&"--max-sources".to_string()));
         assert!(daily.argv.contains(&"40".to_string()));
         let cry = reg.get("crystallize").unwrap();
         assert_eq!(cry.cadence, "weekly Sun 10:00");
         assert!(cry.argv.contains(&"--refresh".to_string()));
+        // Vault-local scratch, templated (codex P1).
+        assert!(cry
+            .argv
+            .contains(&format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth")));
+        assert_eq!(
+            reg.env_file.as_deref(),
+            Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env").as_str())
+        );
     }
 
     #[test]
@@ -801,6 +864,7 @@ mod tests {
     fn registry_validate_rejects_dupes_and_bad_cadence() {
         let dupe = Registry {
             version: 1,
+            env_file: None,
             jobs: vec![
                 JobConfig {
                     id: "a".into(),
@@ -823,6 +887,7 @@ mod tests {
         assert!(dupe.validate().unwrap_err().contains("duplicate"));
         let bad = Registry {
             version: 1,
+            env_file: None,
             jobs: vec![JobConfig {
                 id: "a".into(),
                 cadence: "hourly".into(),
@@ -838,24 +903,31 @@ mod tests {
     // -- shell command builder ----------------------------------------------
 
     #[test]
-    fn shell_command_sources_env_and_stamps_date() {
+    fn shell_command_resolves_vault_sources_env_and_stamps_date() {
+        // argv + env carry `{vault}`; both resolve to the live vault root.
         let job = JobConfig {
             id: "daily".into(),
             cadence: "daily 09:00".into(),
-            argv: vec!["daily".into(), "--vault-root".into(), "/v".into()],
+            argv: vec![
+                "daily".into(),
+                "--vault-root".into(),
+                VAULT_PLACEHOLDER.into(),
+            ],
             enabled: true,
             description: String::new(),
             stamp_date: true,
         };
         let cmd = job_shell_command(
             Path::new("/opt/homebrew/bin/ovp2"),
-            Some(Path::new("/v/.ovp/daily.env")),
+            Some(Path::new("{vault}/.ovp/daily.env")),
+            Path::new("/Users/op/ovp-vault"),
             &job,
         );
         assert_eq!(
             cmd,
-            "set -a; . '/v/.ovp/daily.env'; set +a; exec '/opt/homebrew/bin/ovp2' \
-             'daily' '--vault-root' '/v' --date \"$(date +%F)\""
+            "set -a; . '/Users/op/ovp-vault/.ovp/daily.env'; set +a; \
+             exec '/opt/homebrew/bin/ovp2' 'daily' '--vault-root' '/Users/op/ovp-vault' \
+             --date \"$(date +%F)\""
         );
     }
 
@@ -869,7 +941,7 @@ mod tests {
             description: String::new(),
             stamp_date: false,
         };
-        let cmd = job_shell_command(Path::new("/bin/ovp2"), None, &job);
+        let cmd = job_shell_command(Path::new("/bin/ovp2"), None, Path::new("/v"), &job);
         assert_eq!(cmd, "exec '/bin/ovp2' 'doctor'");
     }
 
@@ -888,7 +960,7 @@ mod tests {
     }
 
     fn two_job_registry() -> Registry {
-        default_registry(Path::new("/v"), "live", (9, 0), false, None)
+        default_registry("live", (9, 0), false, None)
     }
 
     #[test]
@@ -943,6 +1015,27 @@ mod tests {
         assert_eq!(*runner.ran.borrow(), vec!["crystallize".to_string()]);
         assert!(new_state.runs.contains_key("crystallize"));
         assert!(run_now_with(&reg, &State::default(), "nope", now, &runner).is_err());
+    }
+
+    #[test]
+    fn resolved_env_file_honors_registry_and_gates_on_existence() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let mut reg = two_job_registry();
+        // Custom, templated env path under the vault.
+        reg.env_file = Some(format!("{VAULT_PLACEHOLDER}/.ovp/creds.env"));
+        // Not created yet -> not sourced.
+        assert_eq!(resolved_env_file(vault, &reg), None);
+        // Create it -> resolved to the absolute vault path.
+        let creds = vault.join(".ovp/creds.env");
+        std::fs::create_dir_all(creds.parent().unwrap()).unwrap();
+        std::fs::write(&creds, "K=v\n").unwrap();
+        assert_eq!(resolved_env_file(vault, &reg), Some(creds));
+        // A pre-env-field registry falls back to the default daily.env.
+        reg.env_file = None;
+        let default_env = vault.join(".ovp/daily.env");
+        std::fs::write(&default_env, "K=v\n").unwrap();
+        assert_eq!(resolved_env_file(vault, &reg), Some(default_env));
     }
 
     #[test]

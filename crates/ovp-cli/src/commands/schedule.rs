@@ -549,12 +549,20 @@ fn seed_registry(cfg: &ScheduleConfig) -> Result<bool, CliError> {
         ScheduleClient::Live => "live",
         ScheduleClient::Replay => "replay",
     };
-    let reg = super::scheduler::default_registry(
-        &cfg.vault_root,
+    let mut reg = super::scheduler::default_registry(
         client,
         (cfg.hour, cfg.minute),
         cfg.enrich,
         cfg.max_sources,
+    );
+    // Record the CONFIGURED env file so the dispatcher sources it (honors a
+    // custom `--env-file`, codex P1). Store `{vault}`-relative when it lives
+    // under the vault so the registry stays portable; absolute otherwise.
+    reg.env_file = Some(
+        match cfg.env_file.strip_prefix(&cfg.vault_root) {
+            Ok(rel) => format!("{}/{}", super::scheduler::VAULT_PLACEHOLDER, rel.display()),
+            Err(_) => cfg.env_file.display().to_string(),
+        },
     );
     super::scheduler::save_registry(&cfg.vault_root, &reg)?;
     Ok(true)
