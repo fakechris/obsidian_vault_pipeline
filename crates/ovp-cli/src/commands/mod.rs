@@ -34,5 +34,6 @@ pub mod mcp;
 pub mod run;
 pub mod run_cycle;
 pub mod schedule;
+pub mod scheduler;
 pub mod serve;
 pub mod evolve;

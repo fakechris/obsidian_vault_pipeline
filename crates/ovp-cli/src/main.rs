@@ -1043,6 +1043,37 @@ enum ScheduleAction {
     /// Show whether the job is loaded/enabled, the schedule, the target
     /// vault + env file, the last log lines, and last-run staleness.
     Status,
+    /// List the registered jobs, their cadences, last run, and next due.
+    List {
+        /// The vault whose `.ovp/schedule.json` to read.
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
+    /// Run every enabled job that is due now. This is what the single OS
+    /// entry invokes on its interval — you rarely call it by hand.
+    Tick {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
+    /// Force one job to run immediately, ignoring its cadence.
+    RunNow {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Job id (see `schedule list`), e.g. `daily` or `crystallize`.
+        id: String,
+    },
+    /// Enable a job in the registry (it resumes running on its cadence).
+    Enable {
+        #[arg(long)]
+        vault_root: PathBuf,
+        id: String,
+    },
+    /// Disable a job in the registry (skipped by `tick` until re-enabled).
+    Disable {
+        #[arg(long)]
+        vault_root: PathBuf,
+        id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -1391,6 +1422,17 @@ fn main() -> ExitCode {
             }),
             ScheduleAction::Uninstall => commands::schedule::run_uninstall(),
             ScheduleAction::Status => commands::schedule::run_status(&today_iso()),
+            ScheduleAction::List { vault_root } => commands::scheduler::run_list(&vault_root),
+            ScheduleAction::Tick { vault_root } => commands::scheduler::run_tick(&vault_root),
+            ScheduleAction::RunNow { vault_root, id } => {
+                commands::scheduler::run_run_now(&vault_root, &id)
+            }
+            ScheduleAction::Enable { vault_root, id } => {
+                commands::scheduler::run_set_enabled(&vault_root, &id, true)
+            }
+            ScheduleAction::Disable { vault_root, id } => {
+                commands::scheduler::run_set_enabled(&vault_root, &id, false)
+            }
         },
         Cmd::CrystalLint {
             candidate,

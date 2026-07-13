@@ -1,3 +1,44 @@
+# 当前工作（post-merge）— Scheduler Registry 定时任务管理
+
+> M32 已 merge（GO 2026-07-10，main = OVP2 v2.0.x，Python 退役）。以下是 merge 后的新工作。
+
+**Why:** 现在 `ovp2 schedule` 把单个 `daily` 任务硬编码进一个 OS 单元
+（launchd plist / systemd timer）。要加第二个周期任务（crystallize）就得再硬编码
+第二个单元——没有中心管理、N 个 OS 入口，将来的 desktop app 还得重写调度。
+Operator（2026-07-12）要一个管理机制，同时回答"desktop app 怎么挂定时"。
+
+**Design（operator 2026-07-12 批准）：** 把「有哪些任务、什么时候跑」和「OS 怎么叫醒我们」解耦。
+- `.ovp/schedule.json` — 任务注册表，唯一事实源（可移植；desktop app 读写同一文件）。
+- OS 只挂 1 个入口跑 `ovp2 scheduler tick`（每 ~10 分钟）。tick 读注册表 +
+  `.ovp/schedule-state.json`（各任务上次运行），跑到点的任务，更新状态。子进程 RunLock 防撞车。
+- `ovp2 schedule list | enable <id> | disable <id> | run-now <id>` 管理。
+- Desktop app = 同一引擎；app 内定时器调 `scheduler tick`，或装同一个 OS 入口。不重写第二套。
+
+内置任务：`daily`（每日 HH:MM）+ `crystallize`（每周一次，operator 定；跨源合成昂贵）。
+
+## S-Stage 1: 调度引擎 + 子命令  ✅
+**Goal:** `ovp2 scheduler tick|list|run-now|enable|disable` 由 schedule.json +
+schedule-state.json 驱动；任务以子进程执行（复用 source-env → exec-binary 模式）。
+**Success Criteria:** cadence 解析/格式化 round-trip；`is_due` 单测覆盖日/周边界；
+tick 只跑到点且启用的任务并原子更新状态；`run-now` 强制单任务。纯逻辑全单测。
+**Status:** Complete
+
+## S-Stage 2: `schedule install` 改成单一 tick 入口
+**Goal:** `schedule install` 写 1 个单元（`com.ovp2.scheduler`）每 10 分钟跑
+`ovp2 scheduler tick`（launchd StartInterval / systemd `*:0/10`）；播种 daily +
+crystallize 默认任务；`status` 显示每任务注册表（上次跑/下次到点）。
+**Success Criteria:** install/uninstall/status 幂等；env-file 处理保留；旧
+`com.ovp2.daily` 单元迁移干净（install 时卸载旧 label）。
+**Status:** Complete
+
+## S-Stage 3: `doctor` 孤儿扫描 — 卡住的 inbox 文件
+**Goal:** 标出 `50-Inbox/**` 下不在已知生命周期位置（01-Raw / 03-Processed）的 md
+——比如用户丢进遗留的 02-Processing / 05-Manual-Review 的文件——附"移到 00-Capture 即可入库"提示。绝不自动移动。
+**Success Criteria:** doctor 列出孤儿 + 计数；空 vault = clean；已知生命周期目录从不误报。
+**Status:** Complete
+
+---
+
 # M32 Level-3 执行计划 — Python 退役 + merge 回 main
 
 > 依据 `docs/stage-m32-python-retirement-and-product-definition.md` §3 exit criteria + §10 execution order。
