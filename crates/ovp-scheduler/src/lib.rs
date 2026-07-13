@@ -337,6 +337,21 @@ impl State {
             .and_then(|r| NaiveDateTime::parse_from_str(&r.last_run, "%Y-%m-%dT%H:%M:%S").ok())
     }
 
+    /// Fail loud on a corrupt `last_run`: silently treating it as "never run"
+    /// would make `plan_tick` re-dispatch a job that already ran (possibly an
+    /// expensive/non-idempotent one), erasing authoritative history.
+    pub fn validate(&self) -> Result<(), String> {
+        for (id, run) in &self.runs {
+            if NaiveDateTime::parse_from_str(&run.last_run, "%Y-%m-%dT%H:%M:%S").is_err() {
+                return Err(format!(
+                    "job '{id}': invalid last_run '{}' (expected YYYY-MM-DDTHH:MM:SS)",
+                    run.last_run
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Record a job's terminal outcome at `now` (formatted local wall-clock).
     pub fn record(&mut self, id: &str, now: NaiveDateTime, status: &str) {
         self.runs.insert(
@@ -386,7 +401,12 @@ pub fn load_state(vault_root: &Path) -> Result<State, String> {
     }
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
+    let state: State =
+        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    state
+        .validate()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(state)
 }
 
 pub fn save_state(vault_root: &Path, state: &State) -> Result<(), String> {
@@ -834,6 +854,21 @@ mod tests {
         assert_eq!(*runner.ran.borrow(), vec!["crystallize".to_string()]);
         assert!(new_state.runs.contains_key("crystallize"));
         assert!(run_now_with(&reg, &State::default(), "nope", now, &runner).is_err());
+    }
+
+    #[test]
+    fn load_state_rejects_malformed_last_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path();
+        std::fs::create_dir_all(v.join(".ovp")).unwrap();
+        // Valid JSON, invalid timestamp — must fail loud, not silently reset.
+        std::fs::write(
+            state_path(v),
+            r#"{"runs":{"daily":{"last_run":"not-a-date","last_status":"ok"}}}"#,
+        )
+        .unwrap();
+        let err = load_state(v).unwrap_err();
+        assert!(err.contains("invalid last_run"), "got: {err}");
     }
 
     #[test]

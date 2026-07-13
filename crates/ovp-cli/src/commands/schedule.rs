@@ -594,8 +594,10 @@ fn remove_legacy_unit(
 pub enum RegistryOutcome {
     /// Written fresh with the default jobs.
     Seeded,
-    /// Existed; only the install-owned `env_file` was reconciled (jobs kept).
-    EnvUpdated,
+    /// Existed; the install-owned fields (env_file + built-in job config from
+    /// the flags) were reconciled, preserving operator edits (enabled state +
+    /// custom jobs).
+    Reconciled,
     /// Existed and already matched — left untouched.
     Unchanged,
 }
@@ -609,36 +611,50 @@ fn registry_env_value(cfg: &ScheduleConfig) -> String {
     }
 }
 
+/// The default registry the install flags describe (client/time/enrich/max).
+fn flags_registry(cfg: &ScheduleConfig) -> super::scheduler::Registry {
+    let client = match cfg.client {
+        ScheduleClient::Live => "live",
+        ScheduleClient::Replay => "replay",
+    };
+    let mut reg =
+        super::scheduler::default_registry(client, (cfg.hour, cfg.minute), cfg.enrich, cfg.max_sources);
+    reg.env_file = Some(registry_env_value(cfg));
+    reg
+}
+
 /// Ensure `.ovp/schedule.json` reflects this install. Seeds the default jobs if
-/// absent; otherwise preserves operator job edits but reconciles the
-/// install-owned `env_file` (a re-install with a new `--env-file` must not
-/// leave the dispatcher sourcing the old credentials — codex P1).
+/// absent; otherwise reconciles the install-owned fields — the env file AND the
+/// built-in job config (cadence/argv) from the flags, so `install --time 09:30`
+/// still reconfigures the daily job (codex P1) — while preserving operator edits
+/// (each job's `enabled` state and any custom jobs they added).
 fn ensure_registry(cfg: &ScheduleConfig) -> Result<RegistryOutcome, CliError> {
-    let env_value = registry_env_value(cfg);
+    let fresh = flags_registry(cfg);
     if !super::scheduler::registry_path(&cfg.vault_root).exists() {
-        let client = match cfg.client {
-            ScheduleClient::Live => "live",
-            ScheduleClient::Replay => "replay",
-        };
-        let mut reg = super::scheduler::default_registry(
-            client,
-            (cfg.hour, cfg.minute),
-            cfg.enrich,
-            cfg.max_sources,
-        );
-        reg.env_file = Some(env_value);
-        super::scheduler::save_registry(&cfg.vault_root, &reg)?;
+        super::scheduler::save_registry(&cfg.vault_root, &fresh)?;
         return Ok(RegistryOutcome::Seeded);
     }
-    // Existing registry: keep jobs, reconcile the install-owned env file.
     let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
         .expect("registry_path exists but load returned None");
-    if reg.env_file.as_deref() == Some(env_value.as_str()) {
+    let before = reg.clone();
+    reg.env_file = fresh.env_file.clone();
+    // Overwrite each built-in job's config from the flags, keeping the
+    // operator's enable/disable choice; leave custom jobs untouched.
+    for fresh_job in fresh.jobs {
+        match reg.get_mut(&fresh_job.id) {
+            Some(existing) => {
+                let enabled = existing.enabled;
+                *existing = fresh_job;
+                existing.enabled = enabled;
+            }
+            None => reg.jobs.push(fresh_job), // a built-in the operator removed — restore it
+        }
+    }
+    if reg == before {
         return Ok(RegistryOutcome::Unchanged);
     }
-    reg.env_file = Some(env_value);
     super::scheduler::save_registry(&cfg.vault_root, &reg)?;
-    Ok(RegistryOutcome::EnvUpdated)
+    Ok(RegistryOutcome::Reconciled)
 }
 
 pub fn install_with(
@@ -803,18 +819,20 @@ pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
         TICK_INTERVAL_SECS / 60
     );
     let reg_path = super::scheduler::registry_path(&cfg.vault_root).display().to_string();
+    let vault = cfg.vault_root.display();
     match report.registry {
         RegistryOutcome::Seeded => {
             println!("  registry:  {reg_path} (NEW — daily {} + weekly crystallize)", cfg.time_string());
-            println!("             edit it or use `ovp2 schedule enable/disable <id>`");
         }
-        RegistryOutcome::EnvUpdated => {
-            println!("  registry:  {reg_path} (existing jobs kept; env-file updated)");
+        RegistryOutcome::Reconciled => {
+            println!("  registry:  {reg_path} (built-in jobs + env-file reconciled; edits kept)");
         }
         RegistryOutcome::Unchanged => {
             println!("  registry:  {reg_path} (existing, left untouched)");
         }
     }
+    println!("  jobs:      ovp2 schedule list --vault-root {vault}");
+    println!("             ovp2 schedule disable --vault-root {vault} crystallize   (e.g.)");
     println!("  vault:     {}", cfg.vault_root.display());
     println!("  binary:    {}", cfg.ovp2_path.display());
     println!("  log:       {}", cfg.log_path(flavor).display());
@@ -837,7 +855,7 @@ pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
         "  note:      the job pins this binary path — re-run `ovp2 schedule install`\n\
          \x20            after moving the binary (brew upgrades keep the path stable)."
     );
-    println!("  check:     ovp2 schedule status  ·  jobs: ovp2 schedule list --vault-root <v>");
+    println!("  check:     ovp2 schedule status");
     Ok(())
 }
 
@@ -1369,16 +1387,18 @@ mod tests {
         let report = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap();
 
         assert!(!report.env_created);
-        // Same env file -> registry left untouched.
-        assert_eq!(report.registry, RegistryOutcome::Unchanged);
+        // New --time reconfigures the daily job (codex P1).
+        assert_eq!(report.registry, RegistryOutcome::Reconciled);
         assert_eq!(
             std::fs::read_to_string(&c.env_file).unwrap(),
             "ANTHROPIC_API_KEY=secret\n"
         );
-        // The operator's edit survives (re-install did NOT clobber the registry).
         let reg2 = super::super::scheduler::load_registry(vault.path())
             .unwrap()
             .unwrap();
+        // The daily cadence now reflects the new flag...
+        assert_eq!(reg2.get("daily").unwrap().cadence, "daily 21:00");
+        // ...but the operator's enable/disable edit survives.
         assert!(!reg2.get("crystallize").unwrap().enabled);
         assert!(reg_path.exists());
         // The unit is interval-based (no per-time integer to check).
@@ -1406,7 +1426,7 @@ mod tests {
         c.env_file = vault.path().join(".ovp/rotated.env");
         let report = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap();
 
-        assert_eq!(report.registry, RegistryOutcome::EnvUpdated);
+        assert_eq!(report.registry, RegistryOutcome::Reconciled);
         let reg2 = super::super::scheduler::load_registry(vault.path())
             .unwrap()
             .unwrap();
