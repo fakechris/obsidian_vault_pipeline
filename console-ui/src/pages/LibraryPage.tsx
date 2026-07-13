@@ -44,13 +44,19 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const months = [...byMonth.keys()].filter((m) => m !== '').sort().reverse();
   const byStatus = countBy(model.sources, (s: SourceRow) => s.status as string);
 
-  // Facet counts are projection-derived so a pill count ALWAYS equals the
-  // number of rows selecting it renders (codex review P2): showing a live
-  // queued number here would disagree with filterSources over the same
-  // projection rows mid-run. The live 01-Raw backlog is surfaced as a
-  // standalone stat on Monitor/System and the run banner; the periodic
-  // mid-run projection refresh keeps these facet counts from going stale.
-  const statusCount = (s: string): number => byStatus.get(s) ?? 0;
+  // The QUEUED facet shows the LIVE 01-Raw backlog (`queued_live`, ticks
+  // down per source during a run) — operators watch this number, and a
+  // frozen projection value here reads as "stuck". Every other status stays
+  // projection-derived. When the live count differs from the projection's
+  // queued row count (mid-run, between refreshes), the pill shows both so
+  // the number is live AND honest about the row list it filters:
+  // "queued 53 · 175 snapshot".
+  const projectionQueued = byStatus.get('queued') ?? 0;
+  const liveQueued = model.queued_live ?? projectionQueued;
+  const statusCount = (st: string): number =>
+    st === 'queued' ? liveQueued : (byStatus.get(st) ?? 0);
+  const queuedSnapshotNote =
+    liveQueued !== projectionQueued ? projectionQueued : null;
 
   const filtered = filterSources(model.sources, {
     collection: collection && COLLECTIONS.includes(collection) ? collection : null,
@@ -127,6 +133,12 @@ function LibraryBody({ model }: { model: IndexModel }) {
               onClick={() => setParam('status', status === s ? null : s)}
             >
               {t(`sourceStatus.${s}` as MsgKey)} ({statusCount(s)})
+              {s === 'queued' && queuedSnapshotNote != null && (
+                <span className="facet-snapshot" title={t('library.queuedSnapshotHint')}>
+                  {' '}
+                  · {queuedSnapshotNote}
+                </span>
+              )}
             </button>
           ))}
         </div>

@@ -129,6 +129,7 @@ export const en = {
   'library.byMonth': 'By month',
   'library.statusAll': 'All',
   'library.empty': 'No sources match the current filters.',
+  'library.queuedSnapshotHint': 'Live 01-Raw backlog; the number after · is the last projection snapshot (updates as the run refreshes it).',
   'library.noDate': 'no date',
 
   // source detail

@@ -1516,3 +1516,5 @@ body {
   color: var(--muted);
   font-size: var(--ovp-text-sm);
 }
+
+.facet-snapshot { color: var(--muted); font-size: 0.85em; }
