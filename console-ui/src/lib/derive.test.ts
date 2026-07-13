@@ -5,9 +5,10 @@ import {
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
+  runActivity,
   STALE_AFTER_MS,
 } from './derive';
-import type { IndexModel, LastRunModel } from './types';
+import type { IndexModel, LastRunModel, RecentSource } from './types';
 
 const NOW = Date.parse('2026-07-12T12:00:00Z');
 
@@ -216,5 +217,72 @@ describe('healthLevel reconciliation', () => {
       status: 'completed',
     });
     expect(healthLevel(m, NOW)).toBe('ok');
+  });
+});
+
+describe('runActivity (live per-source feed)', () => {
+  const rec = (seq: number, status: 'ok' | 'failed'): RecentSource => ({
+    seq,
+    title: `Source ${seq}`,
+    status,
+    units: status === 'ok' ? 10 + seq : 0,
+    cards: status === 'ok' ? seq : 0,
+    reason: status === 'failed' ? 'no cassette' : undefined,
+    at: '2026-07-12T11:59:00Z',
+  });
+
+  it('returns the empty idle shape for a null model — panel never crashes', () => {
+    const a = runActivity(null);
+    expect(a.status).toBeNull();
+    expect(a.running).toBe(false);
+    expect(a.recent).toEqual([]);
+  });
+
+  it('exposes the running fraction + percent and the feed NEWEST FIRST', () => {
+    const m = model({
+      run_id: 'r',
+      started_at: '2026-07-12T11:50:00Z',
+      status: 'running',
+      processed_so_far: 3,
+      total_planned: 4,
+      current: 'Source 3',
+      recent: [rec(1, 'ok'), rec(2, 'failed'), rec(3, 'ok')],
+    });
+    const a = runActivity(m);
+    expect(a.running).toBe(true);
+    expect(a.processedSoFar).toBe(3);
+    expect(a.totalPlanned).toBe(4);
+    expect(a.pct).toBe(75);
+    expect(a.current).toBe('Source 3');
+    // Newest first: seq 3 leads, seq 1 trails.
+    expect(a.recent.map((r) => r.seq)).toEqual([3, 2, 1]);
+    // Both success AND failure surface.
+    expect(a.recent.find((r) => r.status === 'failed')?.reason).toBe('no cassette');
+  });
+
+  it('keeps a finished run’s feed + terminal counts for post-run diagnosis', () => {
+    const m = model({
+      run_id: 'r',
+      started_at: '2026-07-12T11:50:00Z',
+      ended_at: '2026-07-12T11:58:00Z',
+      status: 'completed',
+      processed: 8,
+      failed: 1,
+      recent: [rec(1, 'ok')],
+    });
+    const a = runActivity(m);
+    expect(a.running).toBe(false);
+    expect(a.processed).toBe(8);
+    expect(a.failed).toBe(1);
+    expect(a.recent).toHaveLength(1);
+  });
+
+  it('null pct when the heartbeat carries no fraction yet', () => {
+    const m = model({
+      run_id: 'r',
+      started_at: '2026-07-12T11:50:00Z',
+      status: 'running',
+    });
+    expect(runActivity(m).pct).toBeNull();
   });
 });

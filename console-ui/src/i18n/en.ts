@@ -30,6 +30,18 @@ export const en = {
   'banner.agoHours': '{n}h ago',
   'banner.agoDays': '{n}d ago',
   'banner.viewSystem': 'View system status',
+  'banner.activityToggle': 'activity',
+
+  // live run activity feed (the portal's tail -f)
+  'activity.title': 'Run activity',
+  'activity.running': 'Run in progress · {done}/{total} · {pct}% · started {ago}',
+  'activity.current': 'Now: {current}',
+  'activity.idle': 'No run in progress. Showing the last run’s activity.',
+  'activity.empty': 'No per-source activity yet — the feed appears once the run starts processing sources.',
+  'activity.ok': '{title} — {units} units · {cards} cards',
+  'activity.failed': '{title} — {reason}',
+  'activity.failedNoReason': '{title} — failed',
+  'activity.finished': 'Finished: {ok} read · {failed} failed',
 
   // shared
   'common.loading': 'Loading…',

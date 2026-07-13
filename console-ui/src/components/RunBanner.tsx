@@ -12,8 +12,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { isRunningWithProgress, lastRunBanner, type BannerLevel } from '../lib/derive';
+import { isRunningWithProgress, lastRunBanner, runActivity, type BannerLevel } from '../lib/derive';
 import { useModel } from '../model';
+import RunActivity from './RunActivity';
 
 /** Re-render tick so the age string advances. A minute is granular enough for
  * a wall-clock banner; the interval is cleared on unmount. */
@@ -39,8 +40,12 @@ export default function RunBanner() {
   const { model } = useModel();
   const navigate = useNavigate();
   const now = useNowTick();
+  const [expanded, setExpanded] = useState(false);
 
   const banner = lastRunBanner(model, now);
+  // The activity feed is worth expanding when there IS a run to show (a live
+  // run, or a just-finished one whose feed is still on the heartbeat).
+  const hasActivity = runActivity(model).status !== null;
 
   const ago = (): string => {
     const m = banner.ageMinutes;
@@ -102,29 +107,51 @@ export default function RunBanner() {
   const level = LEVEL_CLASS[banner.level];
 
   return (
-    <button
-      type="button"
-      className={`run-banner ${level}`}
-      onClick={() => navigate('/system')}
-      title={t('banner.viewSystem')}
-      aria-label={text}
-    >
-      <span className="run-banner-dot" />
-      <span className="run-banner-text">{text}</span>
-      {withProgress && (
-        <span
-          className="run-banner-progress"
-          role="progressbar"
-          aria-valuenow={progressPct}
-          aria-valuemin={0}
-          aria-valuemax={100}
+    <div className={`run-banner-wrap ${level}`}>
+      <div className="run-banner-bar">
+        <button
+          type="button"
+          className={`run-banner ${level}`}
+          onClick={() => navigate('/system')}
+          title={t('banner.viewSystem')}
+          aria-label={text}
         >
-          <span
-            className="run-banner-progress-fill"
-            style={{ width: `${progressPct}%` }}
-          />
-        </span>
+          <span className="run-banner-dot" />
+          <span className="run-banner-text">{text}</span>
+          {withProgress && (
+            <span
+              className="run-banner-progress"
+              role="progressbar"
+              aria-valuenow={progressPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span
+                className="run-banner-progress-fill"
+                style={{ width: `${progressPct}%` }}
+              />
+            </span>
+          )}
+        </button>
+        {/* Expand the live per-source activity feed inline, without leaving the
+            current page — the operator's tail -f, one click away everywhere. */}
+        {hasActivity && (
+          <button
+            type="button"
+            className="run-banner-activity-toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+            title={t('banner.activityToggle')}
+          >
+            {t('banner.activityToggle')} {expanded ? '▾' : '▸'}
+          </button>
+        )}
+      </div>
+      {expanded && hasActivity && (
+        <div className="run-banner-activity">
+          <RunActivity />
+        </div>
       )}
-    </button>
+    </div>
   );
 }

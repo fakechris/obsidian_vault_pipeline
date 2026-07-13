@@ -16,10 +16,12 @@ use std::path::PathBuf;
 use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
     plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, DailyConfig,
-    DailyRunRecord, RunReport, RunStatus,
+    DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
 };
 use ovp_domain::VaultLayout;
-use ovp_index::{build_evidence, build_index, write_evidence, write_index};
+use ovp_index::{
+    build_evidence, build_index, build_index_with_progress, write_evidence, write_index,
+};
 use ovp_enrich::github::{
     enrich_github_repos, parse_github_repo_url, FixtureGitHubFetch, GitHubFetch,
 };
@@ -47,6 +49,11 @@ pub struct DailyArgs {
     pub run_id: String,
     pub dry_run: bool,
     pub max_sources: usize,
+    /// Rebuild the read-model projection (index/evidence/console) every N
+    /// processed sources DURING the run so the portal refreshes mid-run.
+    /// 0 = rebuild only at the end (old behavior). Debounced so a burst of
+    /// fast sources cannot thrash the rebuild.
+    pub refresh_every: usize,
     pub no_intake: bool,
     pub pinboard_fixture: Option<PathBuf>,
     pub pinboard_live: bool,
@@ -332,6 +339,21 @@ fn run_inner(
     // rewrites the heartbeat sidecar (`processed_so_far / total_planned ·
     // current`) so the portal banner ticks live instead of freezing at start.
     let mut processed_so_far = 0usize;
+    // Periodic mid-run projection refresh state. `refresh_every == 0` disables
+    // it entirely (rebuild only at the end — the old behavior). `last_refresh`
+    // debounces: the first eligible tick always fires; later ticks within
+    // `REFRESH_DEBOUNCE_SECS` of the previous rebuild are skipped so a burst of
+    // fast sources cannot thrash the ~10-30s rebuild.
+    let refresh_every = args.refresh_every;
+    let refresh_vault = args.vault_root.clone();
+    let refresh_date = args.date.clone();
+    let refresh_run_id = args.run_id.clone();
+    let mut last_refresh: Option<std::time::Instant> = None;
+    // The PORTAL'S TAIL -F: a bounded ring of the last `RECENT_RING_CAP` source
+    // outcomes, rewritten into the heartbeat sidecar per source. The operator
+    // watches this in the portal (seconds-latency) instead of `tail -f`-ing the
+    // log — success AND failure per source, with units/cards or the reason.
+    let mut recent_ring: Vec<RecentSource> = Vec::with_capacity(RECENT_RING_CAP);
     let mut on_source = |rec: &DailyRunRecord| {
         match rec.status {
             RunStatus::Succeeded => sayln!(
@@ -352,10 +374,58 @@ fn run_inner(
         // the run), naming the source just finished. A write failure is a warn,
         // never a run-abort — the reader work already succeeded.
         processed_so_far += 1;
+        // Push this source's outcome onto the live ring (bounded to the last
+        // RECENT_RING_CAP, oldest dropped) so the portal feed shows recent
+        // movement. Failures carry their reason; both statuses appear.
+        recent_ring.push(RecentSource {
+            seq: processed_so_far,
+            title: rec.source_path.clone(),
+            status: match rec.status {
+                RunStatus::Succeeded => "ok".into(),
+                RunStatus::Failed => "failed".into(),
+            },
+            units: rec.units,
+            cards: rec.cards,
+            reason: rec.reason.clone(),
+            at: ovp_daily::heartbeat::now_rfc3339_utc(),
+        });
+        if recent_ring.len() > RECENT_RING_CAP {
+            let overflow = recent_ring.len() - RECENT_RING_CAP;
+            recent_ring.drain(0..overflow);
+        }
         if let Some(hb) = heartbeat
-            && let Some(w) = hb.progress(processed_so_far, total_planned, Some(&rec.source_path))
+            && let Some(w) =
+                hb.progress(processed_so_far, total_planned, Some(&rec.source_path), &recent_ring)
         {
             sayln!("  warn {w}");
+        }
+        // Periodic projection refresh (SECONDARY — keeps the portal COUNTS
+        // fresh; the live per-source feed above is the real-time surface). Every
+        // Nth source, rebuild index/evidence/console from the ledgers-so-far so
+        // the Library facets, counts, and "as of" age go fresh MID-run instead
+        // of showing the pre-run projection for the whole run. Debounced so a
+        // burst of fast sources cannot thrash the ~10-30s rebuild. The
+        // end-of-run full rebuild below stays the final authoritative one.
+        let elapsed = last_refresh.map(|t| t.elapsed().as_secs());
+        match refresh_decision(refresh_every, processed_so_far, elapsed) {
+            RefreshDecision::Skip => {}
+            RefreshDecision::Debounced => sayln!(
+                "  refresh: skipped (debounced, <{}s since last)",
+                REFRESH_DEBOUNCE_SECS
+            ),
+            RefreshDecision::Rebuild => {
+                sayln!("  refresh: rebuilding projection at {processed_so_far} source(s)…");
+                match rebuild_projection(&refresh_vault, &refresh_date, &refresh_run_id) {
+                    Ok(()) => {
+                        last_refresh = Some(std::time::Instant::now());
+                        sayln!("  refresh: portal projection updated");
+                    }
+                    // A projection refresh is best-effort: log (flushed) and keep
+                    // running. The run's real work is done; a stale projection for
+                    // one more source is never worth aborting a multi-hour run.
+                    Err(e) => sayln!("  warn refresh failed (continuing): {e}"),
+                }
+            }
         }
     };
     let daily = run_daily_with_progress(&cfg, &work, &mut make_client, &mut on_source)
@@ -511,6 +581,70 @@ fn run_inner(
         msg.push(')');
         return Err(CliError::Gate(msg));
     }
+    Ok(())
+}
+
+/// Debounce window for the periodic mid-run projection refresh. A rebuild that
+/// would fire less than this many seconds after the previous one is skipped, so
+/// a burst of fast/small sources (each tripping the every-N counter) cannot
+/// thrash the ~10-30s rebuild. Chosen at 20s: comfortably shorter than a single
+/// reader source (minutes) so a normal cadence is never suppressed, long enough
+/// that a flurry of trivially-cheap sources collapses to one rebuild.
+const REFRESH_DEBOUNCE_SECS: u64 = 20;
+
+/// What to do with the periodic projection refresh after a source finishes.
+#[derive(Debug, PartialEq, Eq)]
+enum RefreshDecision {
+    /// Not an Nth source (or refreshing is disabled) — do nothing.
+    Skip,
+    /// An Nth source, but the previous rebuild was too recent — skip (debounce).
+    Debounced,
+    /// Rebuild the projection now.
+    Rebuild,
+}
+
+/// Decide whether the periodic projection refresh fires after `processed`
+/// sources. Pure/testable: `every == 0` disables it (rebuild only at the end —
+/// the old behavior); otherwise every Nth source is a candidate, and
+/// `elapsed_since_last` (seconds since the previous rebuild, `None` = never)
+/// debounces a candidate that would fire within [`REFRESH_DEBOUNCE_SECS`].
+fn refresh_decision(every: usize, processed: usize, elapsed_since_last: Option<u64>) -> RefreshDecision {
+    if every == 0 || processed == 0 || !processed.is_multiple_of(every) {
+        return RefreshDecision::Skip;
+    }
+    match elapsed_since_last {
+        Some(secs) if secs < REFRESH_DEBOUNCE_SECS => RefreshDecision::Debounced,
+        _ => RefreshDecision::Rebuild,
+    }
+}
+
+/// Rebuild ONLY the read-model projection artifacts (index.json, evidence.json,
+/// console, ops pages) from the ledgers-so-far and write them atomically. This
+/// is the exact write triple the end-of-run path uses, factored out so the
+/// PERIODIC mid-run refresh reuses it verbatim — no duplicated build logic.
+///
+/// It is a pure projection write: every artifact is fully rebuildable from the
+/// durable ledgers, and each writer already renames a temp over its target, so a
+/// crash mid-rebuild leaves the previous complete projection in place. Callers
+/// treat a failure as non-fatal (a warning), because a stale projection for one
+/// more source is never worth aborting a multi-hour run over.
+///
+/// Uses the progress variant of `build_index` so a mid-run rebuild is not silent
+/// on a large vault (it walks ~1000+ packs); the phase lines are prefixed so they
+/// are visibly the periodic refresh, not the terminal one.
+fn rebuild_projection(
+    vault_root: &std::path::Path,
+    date: &str,
+    run_id: &str,
+) -> Result<(), CliError> {
+    let mut on_phase = |line: &str| sayln!("    refresh: {line}");
+    let model = build_index_with_progress(vault_root, date, Some(run_id), &mut on_phase)
+        .map_err(CliError::Io)?;
+    write_index(vault_root, &model).map_err(CliError::Io)?;
+    let evidence = build_evidence(vault_root, date, &model).map_err(CliError::Io)?;
+    write_evidence(vault_root, &evidence).map_err(CliError::Io)?;
+    write_console(vault_root, &model).map_err(CliError::Io)?;
+    write_ops_pages(vault_root, &model).map_err(CliError::Io)?;
     Ok(())
 }
 
@@ -670,8 +804,65 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
 
 #[cfg(test)]
 mod tests {
-    use super::{drain_runs, run, stale_theme_packs, DailyArgs};
+    use super::{
+        drain_runs, rebuild_projection, refresh_decision, run, stale_theme_packs, DailyArgs,
+        RefreshDecision, REFRESH_DEBOUNCE_SECS,
+    };
     use crate::commands::client::ClientKind;
+
+    /// A mid-run refresh that fails MUST surface an `Err` the caller can catch
+    /// and log — the run loop turns it into a `warn` and keeps going, never a
+    /// `?` that aborts the run. Here the projection write target is squatted by
+    /// a DIRECTORY, so `write_index`'s atomic rename fails: `rebuild_projection`
+    /// returns `Err` rather than panicking, proving the non-fatal branch has a
+    /// real error to log. (The run loop consumes this Err in a `sayln!` warn.)
+    #[test]
+    fn rebuild_projection_failure_is_a_returned_error_not_a_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        // Squat the index.json path with a directory so the write cannot rename
+        // a file over it.
+        std::fs::create_dir_all(vault.join(".ovp/index/index.json")).unwrap();
+        let res = rebuild_projection(vault, "2026-07-12", "daily-test");
+        assert!(res.is_err(), "a failed projection write must be a catchable Err");
+    }
+
+    #[test]
+    fn refresh_fires_every_nth_source() {
+        // N=2: sources 2, 4, 6 are candidates; 1, 3, 5 are not.
+        assert_eq!(refresh_decision(2, 1, None), RefreshDecision::Skip);
+        assert_eq!(refresh_decision(2, 2, None), RefreshDecision::Rebuild);
+        assert_eq!(refresh_decision(2, 3, None), RefreshDecision::Skip);
+        assert_eq!(refresh_decision(2, 4, None), RefreshDecision::Rebuild);
+    }
+
+    #[test]
+    fn refresh_every_zero_never_fires_mid_run() {
+        // N=0 preserves the OLD behavior: rebuild only at the end, never mid-run.
+        for n in 0..50 {
+            assert_eq!(
+                refresh_decision(0, n, None),
+                RefreshDecision::Skip,
+                "N=0 must never trigger a mid-run rebuild (source {n})"
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_debounce_skips_a_too_soon_rebuild() {
+        // An Nth source whose previous rebuild was <debounce ago is skipped…
+        assert_eq!(
+            refresh_decision(2, 4, Some(REFRESH_DEBOUNCE_SECS - 1)),
+            RefreshDecision::Debounced
+        );
+        // …but once the debounce window has passed it rebuilds again.
+        assert_eq!(
+            refresh_decision(2, 4, Some(REFRESH_DEBOUNCE_SECS)),
+            RefreshDecision::Rebuild
+        );
+        // The very first eligible tick (no prior rebuild) always fires.
+        assert_eq!(refresh_decision(2, 2, None), RefreshDecision::Rebuild);
+    }
 
     #[test]
     fn drain_runs_is_ceiling_division() {
@@ -703,6 +894,7 @@ mod tests {
             run_id: "daily-2026-07-12".into(),
             dry_run: false,
             max_sources: 0,
+            refresh_every: 0,
             no_intake: true,
             pinboard_fixture: None,
             pinboard_live: false,

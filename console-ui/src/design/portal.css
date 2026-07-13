@@ -165,27 +165,64 @@ body {
 }
 
 /* ---------- run-liveness banner: fixed top strip, every page ---------- */
-.run-banner {
+/* The sticky wrapper carries the top strip; the bar row holds the main
+   navigate-button plus the activity expand toggle, and the expandable feed
+   drops below it. */
+.run-banner-wrap {
   position: sticky;
   top: 0;
   z-index: 50;
   width: 100%;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.run-banner-bar {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.run-banner {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.55rem;
   padding: 0.4rem 1.5rem;
   border: 0;
-  border-bottom: 1px solid var(--border);
   font-family: var(--ovp-font-mono);
   font-size: var(--ovp-text-xs);
   font-weight: 600;
   cursor: pointer;
   text-align: left;
-  background: var(--surface);
+  background: transparent;
   color: var(--muted);
   transition:
     background 200ms,
     color 200ms;
+}
+.run-banner-activity-toggle {
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.run-banner-activity-toggle:hover {
+  filter: brightness(0.98);
+  color: var(--fg);
+}
+.run-banner-activity {
+  max-height: 42vh;
+  overflow-y: auto;
+  padding: 0.5rem 1.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 .run-banner:hover {
   filter: brightness(0.98);
@@ -239,6 +276,71 @@ body {
   border-radius: var(--ovp-radius-pill);
   background: currentColor;
   transition: width 0.4s ease;
+}
+
+/* ---------- run activity feed (the portal's tail -f) ---------- */
+.run-activity-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-sm);
+  font-weight: 600;
+}
+.run-activity-bar {
+  margin: 0.4rem 0;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--ovp-radius-pill);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  overflow: hidden;
+}
+.run-activity-bar-fill {
+  height: 100%;
+  border-radius: var(--ovp-radius-pill);
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.run-activity-current {
+  margin: 0.15rem 0 0.4rem;
+}
+.run-activity-idle {
+  margin: 0 0 0.4rem;
+}
+.run-activity-feed {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.run-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  border-radius: var(--ovp-radius-sm, 4px);
+}
+.run-activity-row.failed {
+  background: color-mix(in srgb, var(--c-1, crimson) 8%, transparent);
+}
+.run-activity-mark {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+.run-activity-row.ok .run-activity-mark {
+  color: var(--c-3, green);
+}
+.run-activity-row.failed .run-activity-mark {
+  color: var(--c-1, crimson);
+}
+.run-activity-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- toggles (theme + language): text buttons in a pill ---------- */

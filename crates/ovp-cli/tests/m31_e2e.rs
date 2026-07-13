@@ -515,3 +515,76 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     ]));
     assert!(stdout.contains("No Cassette") && stdout.contains("fails=3"), "{stdout}");
 }
+
+/// Periodic mid-run projection refresh (the stale-during-run fix). Two clippings
+/// with `--refresh-every 1` must rebuild the read-model projection MID-run
+/// (before the final end-of-run rebuild), so the portal's counts/facets go fresh
+/// during a long run instead of showing the pre-run projection for its whole
+/// duration. `--refresh-every 0` preserves the old behavior: no mid-run rebuild.
+#[test]
+fn daily_periodic_refresh_rebuilds_projection_mid_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join("cassettes");
+
+    // Two distinct clippings so a run processes >1 source; seed cassettes for
+    // each from the exact SourceDoc the binary will read.
+    let seed_two = |vault: &Path| {
+        std::fs::create_dir_all(vault.join("Clippings")).unwrap();
+        let a = vault.join("Clippings/Alpha.md");
+        let b = vault.join("Clippings/Beta.md");
+        std::fs::write(&a, clip_note("Alpha", "https://e.x/alpha", CLIP_BODY)).unwrap();
+        std::fs::write(&b, clip_note("Beta", "https://e.x/beta", PIN_BODY)).unwrap();
+        seed_cassettes(&cache_dir, &read_source_from_path(&a).unwrap(), CLIP_QUOTE, "Alpha unit.");
+        seed_cassettes(&cache_dir, &read_source_from_path(&b).unwrap(), PIN_QUOTE, "Beta unit.");
+    };
+
+    // --- refresh-every 1: a rebuild fires after EACH of the two sources. ---
+    let vault = tmp.path().join("vault-every1");
+    seed_two(&vault);
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-refresh-1",
+        "--refresh-every", "1",
+        "--cache-dir", cache_dir.to_str().unwrap(),
+    ]));
+    // The mid-run rebuild log line proves the projection was refreshed DURING
+    // the run, not just at the end. With --refresh-every 1 the FIRST source
+    // rebuilds; the second source is a candidate too but finishes within the
+    // debounce window (two trivial cassette sources complete in well under 20s),
+    // so the debounce SKIPS it — exactly the anti-thrash behavior. So: at least
+    // one mid-run rebuild AND the debounce line for the suppressed candidate.
+    let mid_run_rebuilds = stdout.matches("refresh: portal projection updated").count();
+    assert!(
+        mid_run_rebuilds >= 1,
+        "expected >=1 mid-run projection rebuild with --refresh-every 1, got {mid_run_rebuilds}\n{stdout}"
+    );
+    assert!(
+        stdout.contains("refresh: skipped (debounced"),
+        "the second fast source must be debounced, not thrash a rebuild\n{stdout}"
+    );
+    // The end-of-run authoritative rebuild still wrote the projection.
+    assert!(vault.join(".ovp/index/index.json").exists(), "final index written");
+    assert!(vault.join(".ovp/evidence.json").exists() || vault.join(".ovp/index/evidence.json").exists(),
+        "evidence written");
+    assert!(vault.join(".ovp/console/index.html").exists(), "console written");
+
+    // --- refresh-every 0: OLD behavior — no mid-run rebuild, only the end. ---
+    let vault0 = tmp.path().join("vault-every0");
+    seed_two(&vault0);
+    let stdout0 = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault0.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-refresh-0",
+        "--refresh-every", "0",
+        "--cache-dir", cache_dir.to_str().unwrap(),
+    ]));
+    assert!(
+        !stdout0.contains("refresh: portal projection updated"),
+        "N=0 must NOT rebuild mid-run (old behavior)\n{stdout0}"
+    );
+    // …but the end-of-run projection is still built.
+    assert!(vault0.join(".ovp/index/index.json").exists(), "final index still written at N=0");
+}

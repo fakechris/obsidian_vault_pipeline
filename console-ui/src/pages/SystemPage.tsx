@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
+import { RunActivitySection } from '../components/RunActivity';
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchSettings } from '../lib/api';
@@ -281,6 +282,10 @@ export default function SystemPage() {
       <ModelGate loading={loading} error={error}>
         {model && (
           <>
+            {/* Live per-source activity feed (the portal's tail -f) sits at the
+                TOP of System: it's what the operator opens the page for while a
+                run is in flight. */}
+            <RunActivitySection />
             <RunsSection model={model} />
             <AttentionSection model={model} />
           </>

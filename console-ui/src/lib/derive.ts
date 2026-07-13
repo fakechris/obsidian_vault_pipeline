@@ -6,6 +6,7 @@ import type {
   IndexModel,
   LastRunModel,
   PackRow,
+  RecentSource,
   RunRow,
   SourceRow,
 } from './types';
@@ -111,6 +112,69 @@ export function isRunningWithProgress(banner: LastRunBanner): boolean {
     banner.totalPlanned != null &&
     banner.totalPlanned > 0
   );
+}
+
+/** The live per-source activity feed — the portal's tail -f. Derived from the
+ * heartbeat `recent[]` ring plus the running fraction, so the "Run activity"
+ * panel (System page + expandable from the banner) can render:
+ *   - a fraction + percent bar while running,
+ *   - the current source,
+ *   - the last ~20 ✓/✗ per-source outcomes, NEWEST FIRST (so the freshest line
+ *     is at the top of the feed).
+ * Tolerates a null model / absent heartbeat (returns the empty idle shape) so
+ * the panel never crashes on a fresh vault. */
+export interface RunActivity {
+  status: LastRunModel['status'] | null;
+  running: boolean;
+  processedSoFar: number | null;
+  totalPlanned: number | null;
+  /** 0-100, null when there is no fraction to compute. */
+  pct: number | null;
+  current: string | null;
+  /** Terminal counts (present once the run finished). */
+  processed: number | null;
+  failed: number | null;
+  error: string | null;
+  /** Last ~20 outcomes, NEWEST FIRST. */
+  recent: RecentSource[];
+}
+
+export function runActivity(model: IndexModel | null): RunActivity {
+  const lr = model?.ops?.last_run ?? null;
+  if (!lr) {
+    return {
+      status: null,
+      running: false,
+      processedSoFar: null,
+      totalPlanned: null,
+      pct: null,
+      current: null,
+      processed: null,
+      failed: null,
+      error: null,
+      recent: [],
+    };
+  }
+  const processedSoFar = lr.processed_so_far ?? null;
+  const totalPlanned = lr.total_planned ?? null;
+  const pct =
+    processedSoFar != null && totalPlanned != null && totalPlanned > 0
+      ? Math.min(100, Math.round((processedSoFar / totalPlanned) * 100))
+      : null;
+  // Newest first for the feed; the ring is stored oldest→newest.
+  const recent = lr.recent ? [...lr.recent].reverse() : [];
+  return {
+    status: lr.status,
+    running: lr.status === 'running',
+    processedSoFar,
+    totalPlanned,
+    pct,
+    current: lr.current ?? null,
+    processed: lr.processed ?? null,
+    failed: lr.failed ?? null,
+    error: lr.error ?? null,
+    recent,
+  };
 }
 
 // ---------------------------------------------------------------- status dot

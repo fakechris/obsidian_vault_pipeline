@@ -222,8 +222,31 @@ pub struct LastRunModel {
     /// LIVE in-run progress: the source just finished (title or rel path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<String>,
+    /// LIVE per-source activity ring (the portal's tail -f): the last ~20 source
+    /// outcomes, oldest→newest, while `running`. Empty on terminal records.
+    /// Mirrors the heartbeat `recent[]`; the SPA renders the ✓/✗ feed from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<RecentSourceModel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One per-source outcome surfaced into the read model — the SPA's live feed
+/// entry. Mirrors the heartbeat `RecentSource`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecentSourceModel {
+    pub seq: usize,
+    pub title: String,
+    /// `"ok"` | `"failed"`.
+    pub status: String,
+    #[serde(default)]
+    pub units: usize,
+    #[serde(default)]
+    pub cards: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Wall-clock instant the source finished (UTC, RFC3339).
+    pub at: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

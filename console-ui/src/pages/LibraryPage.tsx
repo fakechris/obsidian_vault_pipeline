@@ -44,6 +44,16 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const months = [...byMonth.keys()].filter((m) => m !== '').sort().reverse();
   const byStatus = countBy(model.sources, (s: SourceRow) => s.status as string);
 
+  // The QUEUED facet shows the LIVE 01-Raw backlog (server-spliced
+  // `queued_live`) — the authoritative-now figure that ticks down during a run —
+  // matching Monitor/System. Every other status stays projection-derived; only
+  // the queued pill needs between-refresh precision. Falls back to the
+  // projection count on a pre-overlay server (queued_live absent).
+  const statusCount = (s: string): number =>
+    s === 'queued' && model.queued_live != null
+      ? model.queued_live
+      : (byStatus.get(s) ?? 0);
+
   const filtered = filterSources(model.sources, {
     collection: collection && COLLECTIONS.includes(collection) ? collection : null,
     month,
@@ -118,7 +128,7 @@ function LibraryBody({ model }: { model: IndexModel }) {
               className={status === s ? 'active' : ''}
               onClick={() => setParam('status', status === s ? null : s)}
             >
-              {t(`sourceStatus.${s}` as MsgKey)} ({byStatus.get(s) ?? 0})
+              {t(`sourceStatus.${s}` as MsgKey)} ({statusCount(s)})
             </button>
           ))}
         </div>
