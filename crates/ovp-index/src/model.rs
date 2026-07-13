@@ -210,6 +210,18 @@ pub struct LastRunModel {
     pub capped: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_after: Option<usize>,
+    /// LIVE in-run progress (only while `running`): sources finished so far this
+    /// run. The portal renders `processed_so_far / total_planned` so a long run
+    /// shows movement instead of a frozen banner. Absent on terminal records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_so_far: Option<usize>,
+    /// LIVE in-run progress: total sources planned this run (post `--max-sources`
+    /// cap). Pairs with `processed_so_far`. Absent on terminal records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_planned: Option<usize>,
+    /// LIVE in-run progress: the source just finished (title or rel path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

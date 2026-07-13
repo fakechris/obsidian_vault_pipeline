@@ -229,6 +229,19 @@ function SettingsSection() {
                 })
               : t('system.noIndex')}
           </dd>
+          {/* LIVE queued is authoritative-now (01-Raw walk); the projection's
+              frozen end-of-run value is shown only when it differs. */}
+          <dt>{t('system.queued')}</dt>
+          <dd className="tiny">
+            {settings.queued_at_build != null &&
+            settings.queued_at_build !== settings.queued_live
+              ? t('system.queuedLiveVsBuild', {
+                  live: settings.queued_live,
+                  build: settings.queued_at_build,
+                  date: settings.index_date ?? '—',
+                })
+              : t('system.queuedLiveOnly', { live: settings.queued_live })}
+          </dd>
           <dt>{t('system.llm')}</dt>
           <dd className="tiny">
             {settings.llm_configured

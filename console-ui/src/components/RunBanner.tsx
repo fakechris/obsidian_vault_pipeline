@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { lastRunBanner, type BannerLevel } from '../lib/derive';
+import { isRunningWithProgress, lastRunBanner, type BannerLevel } from '../lib/derive';
 import { useModel } from '../model';
 
 /** Re-render tick so the age string advances. A minute is granular enough for
@@ -59,6 +59,16 @@ export default function RunBanner() {
     return ` — ${e}`;
   };
 
+  // A live run WITH a progress fraction (heartbeat wrote at least one
+  // per-source update): show "18/90 (current…)" and a subtle bar instead of the
+  // frozen "started 12m ago". A stale "running" (long past the interval) still
+  // takes the stale branch above — a stuck run must not masquerade as progress.
+  const withProgress = isRunningWithProgress(banner) && banner.level !== 'stale';
+  const progressPct =
+    withProgress && banner.totalPlanned! > 0
+      ? Math.min(100, Math.round((banner.processedSoFar! / banner.totalPlanned!) * 100))
+      : 0;
+
   let text: string;
   if (banner.level === 'none') {
     text = t('banner.none');
@@ -68,6 +78,15 @@ export default function RunBanner() {
     text = t('banner.aborted', { ago: ago(), error: shortError() });
   } else if (banner.level === 'stale') {
     text = t('banner.stale', { ago: ago() });
+  } else if (withProgress) {
+    const params = {
+      done: banner.processedSoFar!,
+      total: banner.totalPlanned!,
+      ago: ago(),
+    };
+    text = banner.current
+      ? t('banner.runningProgress', { ...params, current: banner.current })
+      : t('banner.runningProgressNoCurrent', params);
   } else if (banner.status === 'running') {
     text = t('banner.running', { ago: ago() });
   } else if (banner.processed != null && banner.queuedAfter != null) {
@@ -92,6 +111,20 @@ export default function RunBanner() {
     >
       <span className="run-banner-dot" />
       <span className="run-banner-text">{text}</span>
+      {withProgress && (
+        <span
+          className="run-banner-progress"
+          role="progressbar"
+          aria-valuenow={progressPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <span
+            className="run-banner-progress-fill"
+            style={{ width: `${progressPct}%` }}
+          />
+        </span>
+      )}
     </button>
   );
 }

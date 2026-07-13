@@ -33,6 +33,13 @@ export interface LastRunBanner {
   error: string | null;
   processed: number | null;
   queuedAfter: number | null;
+  /** LIVE in-run progress (running only): sources finished so far. null unless
+   * the heartbeat carries it. */
+  processedSoFar: number | null;
+  /** LIVE in-run progress: total sources this run plans to process. */
+  totalPlanned: number | null;
+  /** LIVE in-run progress: the source being/just processed. */
+  current: string | null;
 }
 
 /** The instant the banner ages from: the terminal time if the run ended, else
@@ -57,6 +64,9 @@ export function lastRunBanner(
       error: null,
       processed: null,
       queuedAfter: null,
+      processedSoFar: null,
+      totalPlanned: null,
+      current: null,
     };
   }
   const instant = lastRunInstantMs(lr);
@@ -84,7 +94,23 @@ export function lastRunBanner(
     error: lr.error ?? null,
     processed: lr.processed ?? null,
     queuedAfter: lr.queued_after ?? null,
+    processedSoFar: lr.processed_so_far ?? null,
+    totalPlanned: lr.total_planned ?? null,
+    current: lr.current ?? null,
   };
+}
+
+/** True when the heartbeat is a live in-progress run WITH a progress fraction —
+ * the banner shows "18/90 · <current>" and polls faster. A run that hasn't
+ * written its first per-source progress yet (or an older server) has no
+ * fraction and falls back to the plain "running" banner. */
+export function isRunningWithProgress(banner: LastRunBanner): boolean {
+  return (
+    banner.status === 'running' &&
+    banner.processedSoFar != null &&
+    banner.totalPlanned != null &&
+    banner.totalPlanned > 0
+  );
 }
 
 // ---------------------------------------------------------------- status dot

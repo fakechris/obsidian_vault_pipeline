@@ -85,14 +85,21 @@ export default function MonitorPage() {
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
           {(
             [
-              ['Sources 来源', totals.sources],
-              ['Processed 已处理', totals.processed],
-              ['Queued 待处理', totals.queued],
-              ['Blocked 阻塞', totals.blocked],
-              ['Durable claims 可靠', totals.claims_durable],
-              ['Caveated 存疑', totals.claims_caveated],
+              ['Sources 来源', totals.sources, null],
+              ['Processed 已处理', totals.processed, null],
+              // LIVE queued is the primary "Queued" figure — the 01-Raw backlog
+              // right now, ticking down during a run. The projection's frozen
+              // end-of-run `totals.queued` is shown secondary for provenance.
+              [
+                'Queued 待处理',
+                model?.queued_live ?? totals.queued,
+                'live · 实时',
+              ],
+              ['Blocked 阻塞', totals.blocked, null],
+              ['Durable claims 可靠', totals.claims_durable, null],
+              ['Caveated 存疑', totals.claims_caveated, null],
             ] as const
-          ).map(([label, value]) => (
+          ).map(([label, value, sub]) => (
             <div
               key={label}
               className="rounded-lg border border-border-soft bg-surface p-3"
@@ -101,6 +108,14 @@ export default function MonitorPage() {
                 {value}
               </div>
               <div className="mt-1 text-xs text-slate-500">{label}</div>
+              {sub && (
+                <div className="mt-0.5 text-[10px] text-slate-600">
+                  {sub}
+                  {model?.queued_at_build != null &&
+                    model.queued_at_build !== (model.queued_live ?? totals.queued) &&
+                    ` · ${model.queued_at_build} @ ${model.date}`}
+                </div>
+              )}
             </div>
           ))}
         </div>

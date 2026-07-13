@@ -963,6 +963,9 @@ pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
         blocked: hb.blocked,
         capped: hb.capped,
         queued_after: hb.queued_after,
+        processed_so_far: hb.processed_so_far,
+        total_planned: hb.total_planned,
+        current: hb.current,
         error: hb.error,
     }
 }

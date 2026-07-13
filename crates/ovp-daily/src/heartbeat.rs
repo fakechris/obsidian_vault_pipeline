@@ -70,6 +70,21 @@ pub struct LastRun {
     /// Sources still queued after this run (backlog gauge).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_after: Option<usize>,
+    /// LIVE in-run progress (only while `running`): sources finished so far in
+    /// THIS run. Rewritten atomically after each source completes so the portal
+    /// can show "18/90" instead of a frozen banner. Absent on terminal records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_so_far: Option<usize>,
+    /// LIVE in-run progress: total sources this run intends to process (the
+    /// planned batch size after the `--max-sources` cap). Pairs with
+    /// `processed_so_far` to render the fraction. Absent on terminal records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_planned: Option<usize>,
+    /// LIVE in-run progress: the source just finished (its title or rel path),
+    /// so the portal can name what the run is chewing on. Absent on terminal
+    /// records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
     /// Populated on `failed`; a short note on `aborted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -207,6 +222,9 @@ impl HeartbeatGuard {
             blocked: None,
             capped: None,
             queued_after: None,
+            processed_so_far: None,
+            total_planned: None,
+            current: None,
             error: None,
         };
         let warn = write_last_run(vault_root, &record)
@@ -237,8 +255,53 @@ impl HeartbeatGuard {
             blocked: counts.map(|c| c.blocked),
             capped: counts.map(|c| c.capped),
             queued_after: counts.map(|c| c.queued_after),
+            // Terminal records carry final counts, not live progress: the
+            // fraction only means something while `running`.
+            processed_so_far: None,
+            total_planned: None,
+            current: None,
             error,
         }
+    }
+
+    /// Rewrite the heartbeat as a LIVE `running` progress snapshot — called once
+    /// per source as the run advances, so the portal shows "18/90 · <current>"
+    /// instead of a banner frozen at the start instant. Takes `&self` (does NOT
+    /// consume the guard): the terminal finalize still fires later. The write is
+    /// atomic (temp+rename) like every other heartbeat write. A write failure is
+    /// a returned warning, never a run-abort — the operator's day is not blocked
+    /// by an observability side-channel.
+    ///
+    /// `current` is the source just finished (title or rel path); `None` clears
+    /// it. Reusing `started_at`/`pid`/`run_id` keeps this the SAME run record,
+    /// only fresher — an older reader that ignores the new fields still sees a
+    /// valid `running` heartbeat that ages in real time.
+    pub fn progress(
+        &self,
+        processed_so_far: usize,
+        total_planned: usize,
+        current: Option<&str>,
+    ) -> Option<String> {
+        let record = LastRun {
+            schema: LAST_RUN_SCHEMA.into(),
+            run_id: self.run_id.clone(),
+            started_at: self.started_at.clone(),
+            status: LastRunStatus::Running,
+            ended_at: None,
+            pid: self.pid,
+            processed: None,
+            failed: None,
+            blocked: None,
+            capped: None,
+            queued_after: None,
+            processed_so_far: Some(processed_so_far),
+            total_planned: Some(total_planned),
+            current: current.map(str::to_string),
+            error: None,
+        };
+        write_last_run(&self.vault_root, &record)
+            .err()
+            .map(|e| format!("heartbeat: could not update in-run progress: {e}"))
     }
 
     /// Overwrite the heartbeat with `completed` + counts. Consumes the guard so
@@ -352,5 +415,64 @@ mod tests {
     fn read_absent_is_none_not_error() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_last_run(dir.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn progress_updates_fraction_and_current_incrementally() {
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+
+        assert!(guard.progress(1, 3, Some("first source")).is_none());
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.status, LastRunStatus::Running);
+        assert_eq!(rec.processed_so_far, Some(1));
+        assert_eq!(rec.total_planned, Some(3));
+        assert_eq!(rec.current.as_deref(), Some("first source"));
+        // Still a live record: ages in real time, no terminal time yet.
+        assert!(rec.ended_at.is_none());
+        assert_eq!(rec.run_id, "r");
+
+        // A later source advances the fraction and renames current.
+        assert!(guard.progress(2, 3, Some("second source")).is_none());
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.processed_so_far, Some(2));
+        assert_eq!(rec.current.as_deref(), Some("second source"));
+
+        // Do not let it drop as aborted.
+        assert!(guard.finalize_completed(RunCounts::default()).is_none());
+    }
+
+    #[test]
+    fn terminal_finalize_after_progress_drops_progress_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+        assert!(guard.progress(2, 5, Some("mid source")).is_none());
+        let counts = RunCounts { processed: 5, queued_after: 40, ..Default::default() };
+        assert!(guard.finalize_completed(counts).is_none());
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        // Terminal record is authoritative: final counts, NOT the live fraction.
+        assert_eq!(rec.status, LastRunStatus::Completed);
+        assert_eq!(rec.processed, Some(5));
+        assert_eq!(rec.queued_after, Some(40));
+        assert!(rec.processed_so_far.is_none());
+        assert!(rec.total_planned.is_none());
+        assert!(rec.current.is_none());
+    }
+
+    #[test]
+    fn drop_after_progress_still_writes_aborted() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+            assert!(guard.progress(3, 9, Some("chewing on this")).is_none());
+            // Guard drops here WITHOUT finalize — the abort drop-guard must fire
+            // even after live progress writes.
+        }
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.status, LastRunStatus::Aborted);
+        assert!(rec.error.is_some());
+        assert!(rec.ended_at.is_some());
+        // Progress fields are not carried onto the terminal abort record.
+        assert!(rec.processed_so_far.is_none());
     }
 }

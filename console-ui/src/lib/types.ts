@@ -245,6 +245,13 @@ export interface SettingsPayload {
   run_id: string | null;
   age_seconds: number | null;
   counts: SettingsCounts | null;
+  /** LIVE queued backlog (01-Raw walk at serve time) — the authoritative-now
+   * figure. Always present (0 on an empty vault), unlike the index-derived
+   * fields. */
+  queued_live: number;
+  /** The projection's frozen end-of-run `totals.queued`; null when no index is
+   * built yet. Shown as the secondary provenance number. */
+  queued_at_build: number | null;
   llm_configured: boolean;
   ask_limits: AskLimits;
   /** Run-liveness heartbeat block (OVP2 observability P0); null on a fresh
@@ -287,6 +294,14 @@ export interface LastRunModel {
   blocked?: number;
   capped?: number;
   queued_after?: number;
+  /** LIVE in-run progress (only while `running`): sources finished so far this
+   * run. Pairs with `total_planned` to render "18/90". Absent on terminal
+   * records. */
+  processed_so_far?: number;
+  /** LIVE in-run progress: total sources this run intends to process. */
+  total_planned?: number;
+  /** LIVE in-run progress: the source just finished (title or rel path). */
+  current?: string;
   error?: string;
 }
 
@@ -337,6 +352,14 @@ export interface IndexModel {
    * client ticks its own age from `built_at`; this is the server's reading at
    * fetch time. */
   age_seconds?: number | null;
+  /** LIVE queued backlog computed at serve time (01-Raw walk), spliced into
+   * /api/model. This is the authoritative-now "Queued" figure the SPA renders
+   * as primary; it ticks down during a run while `totals.queued` (the frozen
+   * end-of-run projection) does not. */
+  queued_live?: number;
+  /** The projection's `totals.queued` mirrored for a symmetric label; equals
+   * `totals.queued`. Absent on pre-overlay servers. */
+  queued_at_build?: number;
   totals: Totals;
   sources: SourceRow[];
   packs: PackRow[];
