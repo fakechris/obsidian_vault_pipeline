@@ -511,14 +511,68 @@ pub struct InstallReport {
     pub registry: RegistryOutcome,
 }
 
+/// Stop a launchd job by `label` and VERIFY it is no longer loaded. Queries by
+/// label (independent of the file — a job can outlive its plist, codex P2);
+/// unloads by `plist` path when present, else removes by label; rechecks and
+/// errors if still loaded (codex P1). A job that wasn't loaded is a no-op.
+fn stop_launchd(label: &str, plist: &Path, runner: &dyn CommandRunner) -> Result<(), CliError> {
+    let list = runner.run("launchctl", &["list", label]).map_err(CliError::Io)?;
+    if !parse_launchctl_list(list.success, &list.stdout).loaded {
+        return Ok(());
+    }
+    let stop = if plist.exists() {
+        runner.run("launchctl", &["unload", &plist.display().to_string()])
+    } else {
+        runner.run("launchctl", &["remove", label])
+    }
+    .map_err(CliError::Io)?;
+    let recheck = runner.run("launchctl", &["list", label]).map_err(CliError::Io)?;
+    if parse_launchctl_list(recheck.success, &recheck.stdout).loaded {
+        return Err(CliError::Io(format!(
+            "launchd job {label} is still loaded and could not be stopped ({})",
+            stop.stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Stop a systemd user scheduler (`<stem>.timer` AND `<stem>.service`) and
+/// VERIFY each is inactive. Disabling the timer does NOT stop an already-running
+/// oneshot service, so the service is stopped explicitly (codex P2); each stop
+/// is rechecked and errors if still active (codex P1).
+fn stop_systemd(stem: &str, runner: &dyn CommandRunner) -> Result<(), CliError> {
+    for (unit, stop_args) in [
+        (format!("{stem}.timer"), ["disable", "--now"].as_slice()),
+        (format!("{stem}.service"), ["stop"].as_slice()),
+    ] {
+        let active = runner
+            .run("systemctl", &["--user", "is-active", &unit])
+            .map_err(CliError::Io)?;
+        if first_word_or(&active.stdout, "") != "active" {
+            continue;
+        }
+        let mut args = vec!["--user"];
+        args.extend_from_slice(stop_args);
+        args.push(&unit);
+        let stop = runner.run("systemctl", &args).map_err(CliError::Io)?;
+        let recheck = runner
+            .run("systemctl", &["--user", "is-active", &unit])
+            .map_err(CliError::Io)?;
+        if first_word_or(&recheck.stdout, "") == "active" {
+            return Err(CliError::Io(format!(
+                "systemd unit {unit} is still active and could not be stopped ({})",
+                stop.stderr.trim()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Teardown of the pre-registry `com.ovp2.daily` unit so upgrading operators
 /// don't run two schedulers — from BOTH install and uninstall, since an upgraded
-/// vault may only have the old unit (codex P2). Returns the files it removed.
-///
-/// The unit file is removed ONLY after the OS confirms the job is no longer
-/// loaded/active: if the stop command fails AND the job is still running, we
-/// abort rather than orphan a live job whose file we deleted (codex P1) — a
-/// failed stop for an already-stopped job is benign.
+/// vault may only have the old unit (codex P2). Stops+verifies the job is gone
+/// BEFORE removing any file (a leftover plist auto-loads at next login, and a
+/// deleted file for a still-loaded job orphans it), then returns removed files.
 fn remove_legacy_unit(
     flavor: Flavor,
     home: &Path,
@@ -530,66 +584,20 @@ fn remove_legacy_unit(
             let plist = home
                 .join("Library/LaunchAgents")
                 .join(format!("{LEGACY_LAUNCHD_LABEL}.plist"));
-            // Query loaded state by LABEL, independent of the file: a launchd job
-            // can stay loaded after its plist is deleted, and gating on file
-            // existence would then miss it (codex P2).
-            let list = runner
-                .run("launchctl", &["list", LEGACY_LAUNCHD_LABEL])
-                .map_err(CliError::Io)?;
-            if parse_launchctl_list(list.success, &list.stdout).loaded {
-                // Stop it: unload-by-path when the file is present, else
-                // remove-by-label (which needs no file).
-                let stop = if plist.exists() {
-                    runner.run("launchctl", &["unload", &plist.display().to_string()])
-                } else {
-                    runner.run("launchctl", &["remove", LEGACY_LAUNCHD_LABEL])
-                }
-                .map_err(CliError::Io)?;
-                // Confirm it actually stopped — still loaded is a real failure.
-                let recheck = runner
-                    .run("launchctl", &["list", LEGACY_LAUNCHD_LABEL])
-                    .map_err(CliError::Io)?;
-                if parse_launchctl_list(recheck.success, &recheck.stdout).loaded {
-                    return Err(CliError::Io(format!(
-                        "legacy job {LEGACY_LAUNCHD_LABEL} is still loaded and could not be \
-                         stopped ({}); stop it by hand before installing the scheduler",
-                        stop.stderr.trim()
-                    )));
-                }
-            }
+            stop_launchd(LEGACY_LAUNCHD_LABEL, &plist, runner)?;
             if plist.exists() {
-                // A leftover plist auto-loads at next login alongside the new
-                // scheduler → duplicate runs, so a failed delete must fail loud.
                 std::fs::remove_file(&plist)
                     .map_err(|e| CliError::Io(format!("remove legacy {}: {e}", plist.display())))?;
                 removed.push(plist);
             }
         }
         Flavor::Systemd => {
+            stop_systemd(LEGACY_SYSTEMD_UNIT, runner)?;
             let dir = home.join(".config/systemd/user");
-            let timer = dir.join(format!("{LEGACY_SYSTEMD_UNIT}.timer"));
-            let service = dir.join(format!("{LEGACY_SYSTEMD_UNIT}.service"));
-            let timer_unit = format!("{LEGACY_SYSTEMD_UNIT}.timer");
-            // Query active state by unit name, independent of the file.
-            let active = runner
-                .run("systemctl", &["--user", "is-active", &timer_unit])
-                .map_err(CliError::Io)?;
-            if first_word_or(&active.stdout, "") == "active" {
-                let stop = runner
-                    .run("systemctl", &["--user", "disable", "--now", &timer_unit])
-                    .map_err(CliError::Io)?;
-                let recheck = runner
-                    .run("systemctl", &["--user", "is-active", &timer_unit])
-                    .map_err(CliError::Io)?;
-                if first_word_or(&recheck.stdout, "") == "active" {
-                    return Err(CliError::Io(format!(
-                        "legacy timer {timer_unit} is still active and could not be disabled \
-                         ({}); stop it by hand before installing the scheduler",
-                        stop.stderr.trim()
-                    )));
-                }
-            }
-            for p in [timer, service] {
+            for p in [
+                dir.join(format!("{LEGACY_SYSTEMD_UNIT}.timer")),
+                dir.join(format!("{LEGACY_SYSTEMD_UNIT}.service")),
+            ] {
                 if p.exists() {
                     std::fs::remove_file(&p)
                         .map_err(|e| CliError::Io(format!("remove legacy {}: {e}", p.display())))?;
@@ -601,22 +609,35 @@ fn remove_legacy_unit(
     Ok(removed)
 }
 
-/// Best-effort teardown of the JUST-installed unit, used to roll back when
-/// retiring the legacy unit fails after the new one loaded — so a failed
-/// migration leaves ONE scheduler (the pre-install state), never two (codex P1).
-fn rollback_new_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
+/// Roll back the JUST-installed unit when retiring the legacy one fails after the
+/// new one activated — so a failed migration leaves ONE scheduler, never two
+/// (codex P1). The new job is stopped AND VERIFIED gone before its files are
+/// deleted; if the stop fails, the files are LEFT (so the label→file mapping
+/// stays intact for a manual stop) and the error propagates (codex P1).
+fn rollback_new_unit(
+    flavor: Flavor,
+    home: &Path,
+    runner: &dyn CommandRunner,
+) -> Result<(), CliError> {
     let paths = unit_paths(home, flavor);
     match flavor {
-        Flavor::Launchd => {
-            let _ = runner.run("launchctl", &["unload", &paths[0].display().to_string()]);
-        }
-        Flavor::Systemd => {
-            let timer = format!("{SYSTEMD_UNIT}.timer");
-            let _ = runner.run("systemctl", &["--user", "disable", "--now", &timer]);
-        }
+        Flavor::Launchd => stop_launchd(LAUNCHD_LABEL, &paths[0], runner)?,
+        Flavor::Systemd => stop_systemd(SYSTEMD_UNIT, runner)?,
     }
     for p in &paths {
-        let _ = std::fs::remove_file(p);
+        std::fs::remove_file(p)
+            .map_err(|e| CliError::Io(format!("remove {}: {e}", p.display())))?;
+    }
+    Ok(())
+}
+
+/// Remove the new unit files after a failed activation, so a failed install
+/// never leaves a valid plist/unit that the OS auto-loads at next login
+/// alongside the untouched legacy unit (codex P1). Best-effort — the caller is
+/// already returning the activation error.
+fn cleanup_failed_activation(flavor: Flavor, home: &Path) {
+    for p in unit_paths(home, flavor) {
+        let _ = std::fs::remove_file(&p);
     }
 }
 
@@ -725,6 +746,9 @@ pub fn install_with(
                 .run("launchctl", &["load", &plist_str])
                 .map_err(CliError::Io)?;
             if !out.success {
+                // Don't leave a valid plist that auto-loads at next login after
+                // a failed install (codex P1).
+                cleanup_failed_activation(flavor, home);
                 return Err(CliError::Io(format!(
                     "launchctl load {} failed: {}",
                     plist_str,
@@ -742,6 +766,7 @@ pub fn install_with(
             ] {
                 let out = runner.run("systemctl", &args).map_err(CliError::Io)?;
                 if !out.success {
+                    cleanup_failed_activation(flavor, home);
                     return Err(CliError::Io(format!(
                         "systemctl {} failed: {}",
                         args.join(" "),
@@ -755,9 +780,16 @@ pub fn install_with(
     // and loaded — an earlier failure (bad registry, unwritable state, failed
     // load) must not leave the operator with no scheduler at all (codex P2). If
     // teardown fails HERE (legacy still active / undeletable), roll back the new
-    // unit so a failed migration leaves one scheduler, not two (codex P1).
+    // unit so a failed migration leaves one scheduler, not two (codex P1). If the
+    // rollback ALSO can't stop the new unit, surface both — the operator must
+    // know two schedulers may be live.
     if let Err(e) = remove_legacy_unit(flavor, home, runner) {
-        rollback_new_unit(flavor, home, runner);
+        if let Err(re) = rollback_new_unit(flavor, home, runner) {
+            return Err(CliError::Io(format!(
+                "{e}; AND rolling back the new scheduler failed ({re}) — both schedulers may be \
+                 active, stop them by hand"
+            )));
+        }
         return Err(e);
     }
     Ok(InstallReport {
@@ -1118,13 +1150,14 @@ mod tests {
     #[derive(Default)]
     struct FakeRunner {
         calls: RefCell<Vec<String>>,
+        /// Every action command (load/enable/etc.) fails — models a broken host.
         fail_all: bool,
         /// launchd labels / systemd units modeled as currently loaded/active.
-        /// `list`/`is-active` report these; a successful stop removes them.
+        /// `list`/`is-active` report these; `load`/`enable` add; stops remove.
         loaded: RefCell<Vec<String>>,
-        /// Stop commands (unload/remove/disable) report failure (and leave the
-        /// job loaded), to model a job that won't die.
-        stop_fails: bool,
+        /// labels/units whose STOP command fails (and leaves them loaded), to
+        /// model a job that won't die.
+        wont_stop: Vec<String>,
     }
 
     impl CommandRunner for FakeRunner {
@@ -1132,54 +1165,75 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(format!("{program} {}", args.join(" ")));
-            // Model launchd/systemd load-state queries + stop commands so the
-            // legacy-migration path is testable without a real OS scheduler.
-            let ok = |stdout: &str| Ok(RunOutput { success: true, stdout: stdout.into(), stderr: String::new() });
-            let is_loaded = |label: &str| self.loaded.borrow().iter().any(|l| l == label);
-            let drop_loaded = |label: &str| self.loaded.borrow_mut().retain(|l| l != label);
+            // Model launchd/systemd load-state so the migration path is testable
+            // without a real OS scheduler.
+            let out = |success: bool, stdout: &str| {
+                Ok(RunOutput {
+                    success,
+                    stdout: stdout.into(),
+                    stderr: if success { String::new() } else { "boom".into() },
+                })
+            };
+            let is_loaded = |l: &str| self.loaded.borrow().iter().any(|x| x == l);
+            let drop_loaded = |l: &str| self.loaded.borrow_mut().retain(|x| x != l);
+            let resists = |l: &str| self.wont_stop.iter().any(|x| x == l);
+            let stem = |path: &str| {
+                std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
             match (program, args) {
+                // -- state queries (always answerable) --
                 ("launchctl", ["list", label]) => {
-                    return if is_loaded(label) { ok("{ };") } else {
-                        Ok(RunOutput { success: false, stdout: String::new(), stderr: String::new() })
-                    };
-                }
-                ("launchctl", ["unload", path]) => {
-                    // Stop the job whose plist this is (file stem = label), so an
-                    // unrelated unload (e.g. the new unit's idempotency unload)
-                    // doesn't clear the legacy label.
-                    if let (false, Some(label)) = (
-                        self.stop_fails,
-                        std::path::Path::new(path).file_stem().and_then(|s| s.to_str()),
-                    ) {
-                        drop_loaded(label);
-                    }
-                }
-                ("launchctl", ["remove", label]) => {
-                    if !self.stop_fails {
-                        drop_loaded(label);
-                    }
+                    out(is_loaded(label), if is_loaded(label) { "{ };" } else { "" })
                 }
                 ("systemctl", ["--user", "is-active", unit]) => {
-                    return ok(if is_loaded(unit) { "active" } else { "inactive" });
+                    out(true, if is_loaded(unit) { "active" } else { "inactive" })
                 }
-                ("systemctl", ["--user", "disable", "--now", unit]) => {
-                    if !self.stop_fails {
-                        drop_loaded(unit);
+                // -- activation (loads the job) --
+                ("launchctl", ["load", path]) => {
+                    if self.fail_all {
+                        return out(false, "");
                     }
+                    self.loaded.borrow_mut().push(stem(path));
+                    out(true, "")
                 }
-                _ => {}
+                ("systemctl", ["--user", "enable", "--now", unit]) => {
+                    if self.fail_all {
+                        return out(false, "");
+                    }
+                    self.loaded.borrow_mut().push(unit.to_string());
+                    out(true, "")
+                }
+                // -- stops (remove the job unless it resists) --
+                ("launchctl", ["unload", path]) => {
+                    let label = stem(path);
+                    if resists(&label) {
+                        return out(false, "");
+                    }
+                    drop_loaded(&label);
+                    out(true, "")
+                }
+                ("launchctl", ["remove", label]) => {
+                    if resists(label) {
+                        return out(false, "");
+                    }
+                    drop_loaded(label);
+                    out(true, "")
+                }
+                ("systemctl", ["--user", "disable", "--now", unit])
+                | ("systemctl", ["--user", "stop", unit]) => {
+                    if resists(unit) {
+                        return out(false, "");
+                    }
+                    drop_loaded(unit);
+                    out(true, "")
+                }
+                // -- everything else (e.g. daemon-reload) --
+                _ => out(!self.fail_all, ""),
             }
-            let stop = matches!(
-                (program, args.first().copied(), args.get(1).copied()),
-                ("launchctl", Some("unload"), _)
-                    | ("launchctl", Some("remove"), _)
-                    | ("systemctl", Some("--user"), Some("disable"))
-            );
-            Ok(RunOutput {
-                success: !(self.fail_all || (stop && self.stop_fails)),
-                stdout: String::new(),
-                stderr: "boom".into(),
-            })
         }
     }
 
@@ -1554,8 +1608,9 @@ mod tests {
             vec![
                 "systemctl --user daemon-reload".to_string(),
                 "systemctl --user enable --now ovp2-scheduler.timer".to_string(),
-                // Legacy teardown checks the old timer (inactive here).
+                // Legacy teardown checks the old timer AND service (inactive here).
                 "systemctl --user is-active ovp2-daily.timer".to_string(),
+                "systemctl --user is-active ovp2-daily.service".to_string(),
             ]
         );
     }
@@ -1637,22 +1692,69 @@ mod tests {
     }
 
     #[test]
-    fn install_rolls_back_when_legacy_wont_stop() {
+    fn install_rolls_back_new_unit_when_legacy_wont_stop() {
         let home = tempfile::tempdir().unwrap();
         let vault = tempfile::tempdir().unwrap();
         let mut c = cfg();
         c.vault_root = vault.path().to_path_buf();
         c.env_file = vault.path().join(".ovp/daily.env");
-        // Legacy loaded AND every stop fails → migration must abort + roll back.
+        // Legacy is loaded and refuses to stop; the new unit CAN be stopped.
         let runner = FakeRunner {
             loaded: RefCell::new(vec![LEGACY_LAUNCHD_LABEL.to_string()]),
-            stop_fails: true,
+            wont_stop: vec![LEGACY_LAUNCHD_LABEL.to_string()],
             ..Default::default()
         };
         let err = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap_err();
         assert!(format!("{err}").contains("still loaded"), "got: {err}");
-        // The just-installed unit was rolled back — not left running alongside.
+        // Rollback succeeded (new unit stops cleanly), so its file is gone and
+        // the legacy job is left for the operator — one scheduler, not two.
         let new_plist = home.path().join("Library/LaunchAgents/com.ovp2.scheduler.plist");
-        assert!(!new_plist.exists(), "new unit must be rolled back on failed migration");
+        assert!(!new_plist.exists(), "new unit rolled back on failed migration");
+        assert!(runner.loaded.borrow().contains(&LEGACY_LAUNCHD_LABEL.to_string()));
+    }
+
+    #[test]
+    fn install_reports_both_when_rollback_also_fails() {
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        // Neither the legacy nor the new unit will stop → both may be live, and
+        // the new unit's file is LEFT (its label→file mapping intact for a
+        // manual stop) rather than orphaning a still-loaded job.
+        let runner = FakeRunner {
+            loaded: RefCell::new(vec![LEGACY_LAUNCHD_LABEL.to_string()]),
+            wont_stop: vec![
+                LEGACY_LAUNCHD_LABEL.to_string(),
+                LAUNCHD_LABEL.to_string(),
+            ],
+            ..Default::default()
+        };
+        let err = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap_err();
+        assert!(
+            format!("{err}").contains("both schedulers may be active"),
+            "got: {err}"
+        );
+        let new_plist = home.path().join("Library/LaunchAgents/com.ovp2.scheduler.plist");
+        assert!(new_plist.exists(), "unstoppable new unit's file is kept for manual removal");
+    }
+
+    #[test]
+    fn failed_activation_removes_the_new_unit_file() {
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner {
+            fail_all: true, // launchctl load fails
+            ..Default::default()
+        };
+        let err = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap_err();
+        assert!(format!("{err}").contains("launchctl load"), "got: {err}");
+        // No stray plist left to auto-load at next login (codex P1).
+        let new_plist = home.path().join("Library/LaunchAgents/com.ovp2.scheduler.plist");
+        assert!(!new_plist.exists(), "failed activation must not leave a loadable plist");
     }
 }
