@@ -541,26 +541,45 @@ fn stop_launchd(label: &str, plist: &Path, runner: &dyn CommandRunner) -> Result
 /// oneshot service, so the service is stopped explicitly (codex P2); each stop
 /// is rechecked and errors if still active (codex P1).
 fn stop_systemd(stem: &str, runner: &dyn CommandRunner) -> Result<(), CliError> {
-    for (unit, stop_args) in [
-        (format!("{stem}.timer"), ["disable", "--now"].as_slice()),
-        (format!("{stem}.service"), ["stop"].as_slice()),
-    ] {
-        let active = runner
-            .run("systemctl", &["--user", "is-active", &unit])
+    // A unit that isn't cleanly stopped: `active`, `activating`, `reloading`,
+    // `deactivating` all mean it's still running; only `inactive`/`failed` are
+    // terminal. Treating non-terminal states as running avoids deleting files
+    // out from under a mid-transition unit (codex P2).
+    let still_running = |stdout: &str| {
+        !matches!(first_word_or(stdout, "inactive"), "inactive" | "failed")
+    };
+    let timer = format!("{stem}.timer");
+    let service = format!("{stem}.service");
+    // The timer is disabled UNCONDITIONALLY: an enabled-but-inactive timer still
+    // has an enablement symlink that would re-arm it at next login, and
+    // is-active wouldn't report that (codex P2).
+    let disable = runner
+        .run("systemctl", &["--user", "disable", "--now", &timer])
+        .map_err(CliError::Io)?;
+    let timer_state = runner
+        .run("systemctl", &["--user", "is-active", &timer])
+        .map_err(CliError::Io)?;
+    if still_running(&timer_state.stdout) {
+        return Err(CliError::Io(format!(
+            "systemd timer {timer} is still active and could not be disabled ({})",
+            disable.stderr.trim()
+        )));
+    }
+    // The oneshot service: disabling the timer does NOT stop an already-running
+    // service, so stop it when it isn't terminally inactive.
+    let svc_state = runner
+        .run("systemctl", &["--user", "is-active", &service])
+        .map_err(CliError::Io)?;
+    if still_running(&svc_state.stdout) {
+        let stop = runner
+            .run("systemctl", &["--user", "stop", &service])
             .map_err(CliError::Io)?;
-        if first_word_or(&active.stdout, "") != "active" {
-            continue;
-        }
-        let mut args = vec!["--user"];
-        args.extend_from_slice(stop_args);
-        args.push(&unit);
-        let stop = runner.run("systemctl", &args).map_err(CliError::Io)?;
         let recheck = runner
-            .run("systemctl", &["--user", "is-active", &unit])
+            .run("systemctl", &["--user", "is-active", &service])
             .map_err(CliError::Io)?;
-        if first_word_or(&recheck.stdout, "") == "active" {
+        if still_running(&recheck.stdout) {
             return Err(CliError::Io(format!(
-                "systemd unit {unit} is still active and could not be stopped ({})",
+                "systemd service {service} is still running and could not be stopped ({})",
                 stop.stderr.trim()
             )));
         }
@@ -633,23 +652,13 @@ fn rollback_new_unit(
 
 /// Tear down a partially-activated new unit after a failed activation, so a
 /// failed install never leaves scheduler state behind: a valid plist that
-/// auto-loads at next login, or a systemd enablement symlink / running timer
-/// that a later uninstall skips because the files were deleted (codex P1/P2).
-/// Best-effort (disable/stop THEN remove files) — the caller already returns the
-/// activation error.
+/// auto-loads at next login, or a systemd enablement symlink / running timer a
+/// later uninstall skips because the files were deleted (codex P1/P2). Delegates
+/// to [`rollback_new_unit`], which stops+verifies BEFORE removing files and
+/// RETAINS the files if the unit can't be stopped (so a still-loaded job is
+/// never orphaned) — the caller already returns the activation error.
 fn cleanup_failed_activation(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
-    let paths = unit_paths(home, flavor);
-    match flavor {
-        Flavor::Launchd => {
-            let _ = stop_launchd(LAUNCHD_LABEL, &paths[0], runner);
-        }
-        Flavor::Systemd => {
-            let _ = stop_systemd(SYSTEMD_UNIT, runner);
-        }
-    }
-    for p in &paths {
-        let _ = std::fs::remove_file(p);
-    }
+    let _ = rollback_new_unit(flavor, home, runner);
 }
 
 /// What `ensure_registry` did to `.ovp/schedule.json`.
@@ -762,12 +771,14 @@ pub fn install_with(
             // same label). Failure just means nothing was loaded.
             let _ = runner.run("launchctl", &["unload", &plist_str]);
             write_file_600(plist, &render_launchd_plist(cfg)).map_err(CliError::Io)?;
-            let out = runner
-                .run("launchctl", &["load", &plist_str])
-                .map_err(CliError::Io)?;
+            // Any activation failure — nonzero exit OR a spawn error — must clean
+            // up the just-written plist so it can't auto-load at next login
+            // (codex P1/P2).
+            let out = runner.run("launchctl", &["load", &plist_str]).map_err(|e| {
+                cleanup_failed_activation(flavor, home, runner);
+                CliError::Io(e)
+            })?;
             if !out.success {
-                // Don't leave a valid plist that auto-loads at next login after
-                // a failed install (codex P1).
                 cleanup_failed_activation(flavor, home, runner);
                 return Err(CliError::Io(format!(
                     "launchctl load {} failed: {}",
@@ -784,7 +795,13 @@ pub fn install_with(
                 vec!["--user", "daemon-reload"],
                 vec!["--user", "enable", "--now", timer.as_str()],
             ] {
-                let out = runner.run("systemctl", &args).map_err(CliError::Io)?;
+                // Clean up the written unit files on a spawn error too, not just
+                // a nonzero exit — otherwise a host without systemctl leaves a
+                // partial install a later uninstall can't reach (codex P2).
+                let out = runner.run("systemctl", &args).map_err(|e| {
+                    cleanup_failed_activation(flavor, home, runner);
+                    CliError::Io(e)
+                })?;
                 if !out.success {
                     cleanup_failed_activation(flavor, home, runner);
                     return Err(CliError::Io(format!(
@@ -1051,11 +1068,18 @@ fn status_with(
     // env-file: prefer the registry's configured path (what ticks actually
     // source), resolving `{vault}`; else the install-time metadata (codex P2).
     let env_file = match &registry {
-        Ok(Some(reg)) => reg
-            .env_file
-            .as_deref()
-            .map(|e| PathBuf::from(super::scheduler::resolve_vault(e, &meta.vault_root)))
-            .unwrap_or_else(|| meta.env_file.clone()),
+        // The registry is loadable: mirror the dispatcher (`resolved_env_file`)
+        // exactly — its configured path, or the default `{vault}/.ovp/daily.env`
+        // when omitted — so status never reports a file the ticks don't source
+        // (codex P2). Only fall back to the install-time metadata when the
+        // registry itself can't be read.
+        Ok(Some(reg)) => {
+            let raw = reg
+                .env_file
+                .clone()
+                .unwrap_or_else(|| format!("{}/.ovp/daily.env", super::scheduler::VAULT_PLACEHOLDER));
+            PathBuf::from(super::scheduler::resolve_vault(&raw, &meta.vault_root))
+        }
         _ => meta.env_file.clone(),
     };
     let env_state = if env_file.exists() { "present" } else { "MISSING" };
@@ -1642,7 +1666,9 @@ mod tests {
             vec![
                 "systemctl --user daemon-reload".to_string(),
                 "systemctl --user enable --now ovp2-scheduler.timer".to_string(),
-                // Legacy teardown checks the old timer AND service (inactive here).
+                // Legacy teardown disables the old timer unconditionally, then
+                // checks the timer + service state (both inactive here).
+                "systemctl --user disable --now ovp2-daily.timer".to_string(),
                 "systemctl --user is-active ovp2-daily.timer".to_string(),
                 "systemctl --user is-active ovp2-daily.service".to_string(),
             ]
