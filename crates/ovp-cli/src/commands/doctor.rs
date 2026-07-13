@@ -694,12 +694,19 @@ fn is_structural_md(path: &Path) -> bool {
 }
 
 /// Count ingestable `*.md` files recursively under `dir` (skips READMEs).
+/// Uses the entry's own file type (never follows symlinks), so a link to an
+/// ancestor or an external directory can't cause a cycle or scan outside the
+/// vault (codex P2).
 fn count_md_recursive(dir: &Path) -> usize {
     let mut n = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
             let path = entry.path();
-            if path.is_dir() {
+            if ft.is_dir() {
                 n += count_md_recursive(&path);
             } else if path.extension().and_then(|e| e.to_str()) == Some("md")
                 && !is_structural_md(&path)
@@ -753,9 +760,13 @@ fn check_inbox_orphans(vault_root: &Path, layout: &VaultLayout, findings: &mut V
     let mut orphans: std::collections::BTreeMap<String, usize> = Default::default();
     let mut root_md = 0usize;
     for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue; // never follow links out of / around the inbox (codex P2)
+        }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if path.is_dir() {
+        if ft.is_dir() {
             if !managed.contains(&name) {
                 let n = count_md_recursive(&path);
                 if n > 0 {

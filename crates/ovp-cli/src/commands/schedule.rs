@@ -547,9 +547,11 @@ fn remove_legacy_unit(
                         )));
                     }
                 }
-                if std::fs::remove_file(&plist).is_ok() {
-                    removed.push(plist);
-                }
+                // A leftover plist auto-loads at next login alongside the new
+                // scheduler → duplicate runs, so a failed delete must fail loud.
+                std::fs::remove_file(&plist)
+                    .map_err(|e| CliError::Io(format!("remove legacy {}: {e}", plist.display())))?;
+                removed.push(plist);
             }
         }
         Flavor::Systemd => {
@@ -574,7 +576,10 @@ fn remove_legacy_unit(
                     }
                 }
                 for p in [timer, service] {
-                    if p.exists() && std::fs::remove_file(&p).is_ok() {
+                    if p.exists() {
+                        std::fs::remove_file(&p).map_err(|e| {
+                            CliError::Io(format!("remove legacy {}: {e}", p.display()))
+                        })?;
                         removed.push(p);
                     }
                 }
@@ -642,7 +647,6 @@ pub fn install_with(
     home: &Path,
     runner: &dyn CommandRunner,
 ) -> Result<InstallReport, CliError> {
-    remove_legacy_unit(flavor, home, runner)?;
     let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
     // Hold the dispatch lock across the registry read-modify-write + state
     // seeding so a concurrent enable/disable/desktop edit can't be lost or
@@ -699,6 +703,10 @@ pub fn install_with(
             }
         }
     }
+    // Retire the pre-registry unit ONLY now that the new scheduler is written
+    // and loaded — an earlier failure (bad registry, unwritable state, failed
+    // load) must not leave the operator with no scheduler at all (codex P2).
+    remove_legacy_unit(flavor, home, runner)?;
     Ok(InstallReport {
         unit_files: paths,
         env_created,
@@ -941,10 +949,14 @@ fn status_with(
     let reg_path = super::scheduler::registry_path(&meta.vault_root);
     println!("  registry:  {}", reg_path.display());
     match super::scheduler::load_registry(&meta.vault_root) {
-        Ok(Some(reg)) => {
-            let state = super::scheduler::load_state(&meta.vault_root).unwrap_or_default();
-            super::scheduler::print_jobs(&reg, &state, super::scheduler::local_now(), "  ");
-        }
+        Ok(Some(reg)) => match super::scheduler::load_state(&meta.vault_root) {
+            Ok(state) => {
+                super::scheduler::print_jobs(&reg, &state, super::scheduler::local_now(), "  ")
+            }
+            // A malformed state file blocks `tick`, so surface it rather than
+            // silently showing every job as never-run/due-now (codex P2).
+            Err(e) => println!("             WARN: cannot read schedule state: {e}"),
+        },
         Ok(None) => println!("             MISSING — re-run `ovp2 schedule install`"),
         Err(e) => println!("             WARN: cannot read registry: {e}"),
     }

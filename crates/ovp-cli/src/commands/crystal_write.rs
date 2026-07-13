@@ -167,7 +167,7 @@ pub(crate) fn write_review_queue_with_collapsed(
 /// When `store` is a real vault crystal store (`<vault>/.ovp/crystal`), return
 /// the vault root so the write can take the shared single-writer lock. A
 /// diagnostic store elsewhere (e.g. `<work-dir>/store`) returns `None`.
-fn vault_of_crystal_store(store: &std::path::Path) -> Option<PathBuf> {
+pub(crate) fn vault_of_crystal_store(store: &std::path::Path) -> Option<PathBuf> {
     let suffix = std::path::Path::new(ovp_domain::VaultLayout::new().crystal_store_dir());
     let mut vault = store.to_path_buf();
     for _ in suffix.components() {
