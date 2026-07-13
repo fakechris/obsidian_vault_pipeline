@@ -631,13 +631,24 @@ fn rollback_new_unit(
     Ok(())
 }
 
-/// Remove the new unit files after a failed activation, so a failed install
-/// never leaves a valid plist/unit that the OS auto-loads at next login
-/// alongside the untouched legacy unit (codex P1). Best-effort — the caller is
-/// already returning the activation error.
-fn cleanup_failed_activation(flavor: Flavor, home: &Path) {
-    for p in unit_paths(home, flavor) {
-        let _ = std::fs::remove_file(&p);
+/// Tear down a partially-activated new unit after a failed activation, so a
+/// failed install never leaves scheduler state behind: a valid plist that
+/// auto-loads at next login, or a systemd enablement symlink / running timer
+/// that a later uninstall skips because the files were deleted (codex P1/P2).
+/// Best-effort (disable/stop THEN remove files) — the caller already returns the
+/// activation error.
+fn cleanup_failed_activation(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
+    let paths = unit_paths(home, flavor);
+    match flavor {
+        Flavor::Launchd => {
+            let _ = stop_launchd(LAUNCHD_LABEL, &paths[0], runner);
+        }
+        Flavor::Systemd => {
+            let _ = stop_systemd(SYSTEMD_UNIT, runner);
+        }
+    }
+    for p in &paths {
+        let _ = std::fs::remove_file(p);
     }
 }
 
@@ -690,14 +701,23 @@ fn ensure_registry(cfg: &ScheduleConfig) -> Result<RegistryOutcome, CliError> {
         .expect("registry_path exists but load returned None");
     let before = reg.clone();
     reg.env_file = fresh.env_file.clone();
-    // Overwrite each built-in job's config from the flags, keeping the
-    // operator's enable/disable choice; leave custom jobs untouched.
+    // Overwrite each built-in job's config from the flags, but preserve the
+    // operator-owned fields: `enabled` for all, and the CADENCE for every
+    // built-in except `daily` — only `--time` owns a cadence, so a reinstall
+    // must not reset the operator's crystallize slot to the hard-coded default
+    // (codex P2). Custom jobs are left untouched.
     for fresh_job in fresh.jobs {
         match reg.get_mut(&fresh_job.id) {
             Some(existing) => {
                 let enabled = existing.enabled;
+                let cadence = if fresh_job.id == "daily" {
+                    fresh_job.cadence.clone()
+                } else {
+                    existing.cadence.clone()
+                };
                 *existing = fresh_job;
                 existing.enabled = enabled;
+                existing.cadence = cadence;
             }
             None => reg.jobs.push(fresh_job), // a built-in the operator removed — restore it
         }
@@ -748,7 +768,7 @@ pub fn install_with(
             if !out.success {
                 // Don't leave a valid plist that auto-loads at next login after
                 // a failed install (codex P1).
-                cleanup_failed_activation(flavor, home);
+                cleanup_failed_activation(flavor, home, runner);
                 return Err(CliError::Io(format!(
                     "launchctl load {} failed: {}",
                     plist_str,
@@ -766,7 +786,7 @@ pub fn install_with(
             ] {
                 let out = runner.run("systemctl", &args).map_err(CliError::Io)?;
                 if !out.success {
-                    cleanup_failed_activation(flavor, home);
+                    cleanup_failed_activation(flavor, home, runner);
                     return Err(CliError::Io(format!(
                         "systemctl {} failed: {}",
                         args.join(" "),
@@ -1024,18 +1044,28 @@ fn status_with(
         TICK_INTERVAL_SECS / 60
     );
     println!("  vault:     {}", meta.vault_root.display());
-    let env_state = if meta.env_file.exists() {
-        "present"
-    } else {
-        "MISSING"
+    // The registry is the runtime source of truth for both the jobs AND the env
+    // file the ticks source. Load it once and report from it; fall back to the
+    // install-time metadata only when the registry is unreadable.
+    let registry = super::scheduler::load_registry(&meta.vault_root);
+    // env-file: prefer the registry's configured path (what ticks actually
+    // source), resolving `{vault}`; else the install-time metadata (codex P2).
+    let env_file = match &registry {
+        Ok(Some(reg)) => reg
+            .env_file
+            .as_deref()
+            .map(|e| PathBuf::from(super::scheduler::resolve_vault(e, &meta.vault_root)))
+            .unwrap_or_else(|| meta.env_file.clone()),
+        _ => meta.env_file.clone(),
     };
-    println!("  env-file:  {} ({env_state})", meta.env_file.display());
+    let env_state = if env_file.exists() { "present" } else { "MISSING" };
+    println!("  env-file:  {} ({env_state})", env_file.display());
     // The per-job schedule (cadences, last run, next due, "due now") lives in
     // the registry — render it here so `status` reflects failed/overdue jobs a
     // no-op tick's exit code would otherwise have masked (codex P2).
     let reg_path = super::scheduler::registry_path(&meta.vault_root);
     println!("  registry:  {}", reg_path.display());
-    match super::scheduler::load_registry(&meta.vault_root) {
+    match registry {
         Ok(Some(reg)) => match super::scheduler::load_state(&meta.vault_root) {
             Ok(state) => {
                 super::scheduler::print_jobs(&reg, &state, super::scheduler::local_now(), "  ")
@@ -1523,6 +1553,8 @@ mod tests {
             .unwrap()
             .unwrap();
         reg.get_mut("crystallize").unwrap().enabled = false;
+        // Operator also moved crystallize to a different weekly slot.
+        reg.get_mut("crystallize").unwrap().cadence = "weekly Wed 03:00".into();
         super::super::scheduler::save_registry(vault.path(), &reg).unwrap();
 
         c.hour = 21; // re-install with a new time
@@ -1538,10 +1570,12 @@ mod tests {
         let reg2 = super::super::scheduler::load_registry(vault.path())
             .unwrap()
             .unwrap();
-        // The daily cadence now reflects the new flag...
+        // The daily cadence now reflects the new --time flag...
         assert_eq!(reg2.get("daily").unwrap().cadence, "daily 21:00");
-        // ...but the operator's enable/disable edit survives.
+        // ...but operator-owned fields survive: crystallize's enable state AND
+        // its hand-edited cadence (no flag owns it — codex P2).
         assert!(!reg2.get("crystallize").unwrap().enabled);
+        assert_eq!(reg2.get("crystallize").unwrap().cadence, "weekly Wed 03:00");
         assert!(reg_path.exists());
         // The unit is interval-based (no per-time integer to check).
         let plist = std::fs::read_to_string(&report.unit_files[0]).unwrap();
