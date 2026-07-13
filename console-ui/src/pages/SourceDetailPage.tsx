@@ -149,6 +149,26 @@ export default function SourceDetailPage() {
         <StatusPill status={source.status} />
       </div>
 
+      {(source.status === 'failed' || source.status === 'blocked') && (
+        <div className="card warn source-failed">
+          <p className="sm">
+            <strong>{t('source.failedTitle')}</strong>{' '}
+            {t(
+              source.status === 'blocked'
+                ? 'source.failedBlockedBody'
+                : 'source.failedBody',
+              { attempts: source.fail_count },
+            )}
+          </p>
+          {source.last_reason && (
+            <p className="tiny muted" style={{ marginBottom: 0 }}>
+              {t('source.failedReason')}{' '}
+              <span className="mono">{source.last_reason}</span>
+            </p>
+          )}
+        </div>
+      )}
+
       <dl className="meta-rows">
         {source.url && (
           <>
@@ -184,12 +204,6 @@ export default function SourceDetailPage() {
           <>
             <dt>{t('source.failCount')}</dt>
             <dd className="mono tiny">{source.fail_count}</dd>
-          </>
-        )}
-        {source.last_reason && (
-          <>
-            <dt>{t('source.lastReason')}</dt>
-            <dd className="mono tiny">{source.last_reason}</dd>
           </>
         )}
       </dl>
