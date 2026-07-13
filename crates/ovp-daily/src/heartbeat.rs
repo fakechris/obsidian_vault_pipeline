@@ -219,6 +219,55 @@ pub fn write_last_run(vault_root: &Path, record: &LastRun) -> Result<(), String>
         .map_err(|e| format!("renaming {} → {}: {e}", tmp.display(), target.display()))
 }
 
+/// Is `pid` a live process? Probes with `kill -0` (no signal sent; exit 0 =
+/// alive). Conservative: if the probe itself can't run, assume ALIVE so a real
+/// run is never falsely reported dead. `pid == 0` (unset) is treated as not a
+/// real owner. Same primitive `RunLock` uses to reclaim stale locks.
+pub fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(true)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+impl LastRun {
+    /// The status ACCOUNTING FOR LIVENESS. A record still stamped `running`
+    /// whose process is gone was killed hard enough that no destructor ran
+    /// (SIGKILL / power loss / OOM), so the drop-guard never wrote a terminal
+    /// status — it is really `aborted`. Every LIVE surface (portal run-activity,
+    /// `schedule status`, `doctor`) must display THIS, not the raw field, or a
+    /// dead run shows as "in progress" forever (the pid was stored for exactly
+    /// this check).
+    pub fn effective_status(&self) -> LastRunStatus {
+        if self.status == LastRunStatus::Running && !pid_alive(self.pid) {
+            LastRunStatus::Aborted
+        } else {
+            self.status
+        }
+    }
+
+    /// True when [`effective_status`](Self::effective_status) downgraded a
+    /// `running` record to `aborted` because its process is gone.
+    pub fn is_stalled(&self) -> bool {
+        self.status == LastRunStatus::Running
+            && self.effective_status() == LastRunStatus::Aborted
+    }
+}
+
 /// Read the heartbeat if present. `Ok(None)` on a fresh vault (no file yet);
 /// `Err` only on a present-but-unparseable file (corruption should be loud).
 pub fn read_last_run(vault_root: &Path) -> Result<Option<LastRun>, String> {
@@ -405,6 +454,52 @@ impl Drop for HeartbeatGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn running_record(pid: u32) -> LastRun {
+        LastRun {
+            schema: "ovp.daily.last-run/v1".into(),
+            run_id: "daily-x".into(),
+            started_at: "2026-07-13T03:40:55Z".into(),
+            status: LastRunStatus::Running,
+            ended_at: None,
+            pid,
+            processed: None,
+            failed: None,
+            blocked: None,
+            capped: None,
+            queued_after: None,
+            processed_so_far: Some(65),
+            total_planned: Some(80),
+            current: None,
+            recent: vec![],
+            error: None,
+        }
+    }
+
+    #[test]
+    fn effective_status_downgrades_dead_running_to_aborted() {
+        // Our own pid is alive -> stays running.
+        let live = running_record(std::process::id());
+        assert_eq!(live.effective_status(), LastRunStatus::Running);
+        assert!(!live.is_stalled());
+
+        // pid 0 (unset) is treated as not a real owner -> stalled -> aborted.
+        let dead = running_record(0);
+        assert_eq!(dead.effective_status(), LastRunStatus::Aborted);
+        assert!(dead.is_stalled());
+
+        // A terminal record's liveness is irrelevant — never downgraded.
+        let mut done = running_record(0);
+        done.status = LastRunStatus::Completed;
+        assert_eq!(done.effective_status(), LastRunStatus::Completed);
+        assert!(!done.is_stalled());
+    }
+
+    #[test]
+    fn pid_alive_true_for_self_false_for_zero() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(0));
+    }
 
     #[test]
     fn rfc3339_formats_epoch_and_a_known_instant() {
