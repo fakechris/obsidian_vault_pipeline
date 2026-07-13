@@ -1,6 +1,23 @@
-# 当前工作（post-merge）— Scheduler Registry 定时任务管理
+# 当前工作 — Desktop GUI (Tauri) + DMG 发布
 
-> M32 已 merge（GO 2026-07-10，main = OVP2 v2.0.x，Python 退役）。以下是 merge 后的新工作。
+> **完整设计见 `docs/design/desktop-gui-plan.md`**（operator 2026-07-13 拍板：ad-hoc 签名 + 内嵌 ovp-server + ovp2 sidecar）。
+> 参考 `~/source/lumen-asr` 的 apps/desktop Tauri 壳 + release-macos.yml。
+> 核心思路：Tauri 后端 ~200 行胶水，进程内跑 ovp-server（复用整个 portal+API，前端零改），
+> 调度器在应用内定时器上 exec ovp2 sidecar 跑 daily/crystallize —— **彻底不用 launchd/systemd**。
+
+- **G0 Spike**：✅ `apps/desktop` Tauri 壳，进程内起 ovp-server，boot 命令返回 loopback URL，splash 导航到现有 portal。crate 编译、workspace check 通过。
+- **G1 应用内调度**：✅ 核心完成——lib.rs 的 `start_scheduler` 每 10 分钟 exec `ovp2 sidecar schedule tick`(复用全部已测调度逻辑),**无 launchd/systemd**。剩余(可选增强):`/api/schedule` 控制端点 + System 页面板(现在用注册表默认值跑)。
+- **G2 Onboarding+原生**：✅ 首次 vault 文件夹选择器(splash + `set_vault_and_start`)、config.json 持久化(app-config dir)、`open_path`(Finder)。剩余(可选):菜单/托盘。
+- **G3 DMG 发布**：✅ `.github/workflows/release-desktop.yml`(tag **`desktop-v*`** 独立命名空间,不与 cargo-dist `v*` 抢 release)→ arm64(macos-15)/x64(macos-15-intel)矩阵 → set-desktop-version.mjs 戳版本 → 构建 sidecar+console-ui → `tauri build --bundles dmg`(ad-hoc)→ gh release create/upload。**本地已验证产出 15M DMG,含 sidecar + 内嵌 portal,可挂载**。
+- **G4 Polish**（可选）：semantic themes(embed 懒下载)、自动更新、Win/Linux、Developer-ID 公证。
+
+**发布方式**：merge 后 `git tag desktop-v2.1.0 && git push origin desktop-v2.1.0` → CI 构建两个 arch 的 DMG 并发布到 GitHub Releases。
+
+---
+
+# 已完成（merged）— Scheduler Registry 定时任务管理
+
+> **PR #332 已 merge 到 main（2026-07-13）**。M32 已 merge（GO 2026-07-10，main = OVP2 v2.0.x，Python 退役）。
 
 **Why:** 现在 `ovp2 schedule` 把单个 `daily` 任务硬编码进一个 OS 单元
 （launchd plist / systemd timer）。要加第二个周期任务（crystallize）就得再硬编码

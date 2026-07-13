@@ -1,0 +1,129 @@
+# Build + publish the OVP2 desktop DMGs on a `desktop-v*` tag.
+#
+# Separate tag namespace from the CLI release (`release.yml`, cargo-dist, on
+# `v*`) so the two never race on creating/announcing the same GitHub Release.
+# Cut a desktop release with:  git tag desktop-v2.1.0 && git push origin desktop-v2.1.0
+#
+# Ad-hoc signed (signingIdentity "-" in tauri.conf.json); NOT notarized — the
+# release notes carry the first-run "right-click → Open" caveat.
+name: release-desktop
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. desktop-v2.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Stamp version from tag
+        run: node scripts/release/set-desktop-version.mjs "$TAG"
+
+      # The sidecar the in-app scheduler exec's. Live enrichment features on;
+      # `embed` (ONNX semantic themes) is OFF — its `ort` tree has no clean
+      # x86_64-apple-darwin build (why dist dropped that target) and it bloats
+      # the DMG. Themes stay a follow-up (lazy model download). Keeps both
+      # arches identical and small.
+      - name: Build ovp2 sidecar
+        run: |
+          cargo build --release -p ovp-cli --target ${{ matrix.target }} \
+            --features anthropic,pinboard-live,web-fetch-live,github-live
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp "target/${{ matrix.target }}/release/ovp2" \
+             "apps/desktop/src-tauri/binaries/ovp2-${{ matrix.target }}"
+
+      - name: Build the portal (embedded by ovp-server)
+        working-directory: console-ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the DMG (ad-hoc signed)
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run tauri -- build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Collect + checksum
+        run: |
+          set -euo pipefail
+          # The workspace shares the ROOT target/ dir; with --target the bundle
+          # is under target/<triple>/release/bundle/dmg/.
+          dmg=$(ls target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          mkdir -p release-assets
+          out="OVP2-${TAG}-${{ matrix.arch }}.dmg"
+          cp "$dmg" "release-assets/$out"
+          ( cd release-assets && shasum -a 256 "$out" > "$out.sha256" )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: release-assets/*
+
+  release:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          pattern: dmg-*
+          merge-multiple: true
+
+      - name: Assemble release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp downloaded/*.dmg release-assets/
+          cat downloaded/*.sha256 > release-assets/SHA256SUMS.txt
+          ls -la release-assets
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${TAG#desktop-v}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --verify-tag \
+              --draft \
+              --title "OVP2 Desktop $version" \
+              --notes-file docs/desktop-release-notes.md
+          fi
+          gh release upload "$TAG" release-assets/*.dmg release-assets/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" --draft=false
