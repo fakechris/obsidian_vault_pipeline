@@ -512,8 +512,11 @@ pub struct InstallReport {
 }
 
 /// Best-effort teardown of the pre-registry `com.ovp2.daily` unit so upgrading
-/// operators don't run two schedulers. Never fails the install.
-fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
+/// operators don't run two schedulers — from BOTH install and uninstall, since
+/// an upgraded vault may only have the old unit (codex P2). Never fails; returns
+/// the files it removed.
+fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
     match flavor {
         Flavor::Launchd => {
             let plist = home
@@ -521,7 +524,9 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
                 .join(format!("{LEGACY_LAUNCHD_LABEL}.plist"));
             if plist.exists() {
                 let _ = runner.run("launchctl", &["unload", &plist.display().to_string()]);
-                let _ = std::fs::remove_file(&plist);
+                if std::fs::remove_file(&plist).is_ok() {
+                    removed.push(plist);
+                }
             }
         }
         Flavor::Systemd => {
@@ -531,11 +536,15 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
             if timer.exists() || service.exists() {
                 let timer_unit = format!("{LEGACY_SYSTEMD_UNIT}.timer");
                 let _ = runner.run("systemctl", &["--user", "disable", "--now", &timer_unit]);
-                let _ = std::fs::remove_file(&timer);
-                let _ = std::fs::remove_file(&service);
+                for p in [timer, service] {
+                    if p.exists() && std::fs::remove_file(&p).is_ok() {
+                        removed.push(p);
+                    }
+                }
             }
         }
     }
+    removed
 }
 
 /// What `ensure_registry` did to `.ovp/schedule.json`.
@@ -599,6 +608,9 @@ pub fn install_with(
     remove_legacy_unit(flavor, home, runner);
     let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
     let registry = ensure_registry(cfg)?;
+    // Freshly installed jobs run at their NEXT occurrence, not on the first
+    // tick (codex P1) — seed state only when none exists yet.
+    super::scheduler::seed_state_if_absent(&cfg.vault_root)?;
     let logs_dir = cfg.vault_root.join(".ovp/logs");
     std::fs::create_dir_all(&logs_dir)
         .map_err(|e| CliError::Io(format!("mkdir {}: {e}", logs_dir.display())))?;
@@ -657,10 +669,14 @@ pub fn uninstall_with(
     home: &Path,
     runner: &dyn CommandRunner,
 ) -> Result<Vec<PathBuf>, CliError> {
+    // Tear down the pre-registry unit too — an operator who upgraded from main
+    // and never re-installed only has `com.ovp2.daily`, and uninstall must not
+    // leave it running (codex P2).
+    let mut removed = remove_legacy_unit(flavor, home, runner);
     let paths = unit_paths(home, flavor);
     let installed: Vec<&PathBuf> = paths.iter().filter(|p| p.exists()).collect();
     if installed.is_empty() {
-        return Ok(vec![]);
+        return Ok(removed);
     }
     match flavor {
         Flavor::Launchd => {
@@ -672,7 +688,6 @@ pub fn uninstall_with(
             let _ = runner.run("systemctl", &["--user", "disable", "--now", &timer]);
         }
     }
-    let mut removed = Vec::new();
     for p in installed {
         std::fs::remove_file(p)
             .map_err(|e| CliError::Io(format!("remove {}: {e}", p.display())))?;

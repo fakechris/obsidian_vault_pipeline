@@ -576,6 +576,40 @@ pub fn local_now() -> NaiveDateTime {
     chrono::Local::now().naive_local()
 }
 
+fn missing_registry_err(vault_root: &Path) -> CliError {
+    CliError::Io(format!(
+        "no registry at {} — run `ovp2 schedule install --vault-root {}`",
+        registry_path(vault_root).display(),
+        vault_root.display()
+    ))
+}
+
+/// Seed `schedule-state.json` so freshly installed jobs first run at their NEXT
+/// occurrence, not immediately on the first tick (an unseeded job has no
+/// last-run, so `is_due` treats every past occurrence as missed and fires it —
+/// including the expensive weekly crystallize; codex P1). Only when no state
+/// exists — never clobber recorded runs. Called at install time.
+pub fn seed_state_if_absent(vault_root: &Path) -> Result<(), CliError> {
+    if state_path(vault_root).exists() {
+        return Ok(());
+    }
+    let Some(reg) = load_registry(vault_root)? else {
+        return Ok(());
+    };
+    let now = local_now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let mut state = State::default();
+    for job in &reg.jobs {
+        state.runs.insert(
+            job.id.clone(),
+            JobRun {
+                last_run: now.clone(),
+                last_status: "seeded".into(),
+            },
+        );
+    }
+    save_state(vault_root, &state)
+}
+
 fn require_registry(vault_root: &Path) -> Result<Option<Registry>, CliError> {
     match load_registry(vault_root)? {
         Some(reg) => Ok(Some(reg)),
@@ -595,15 +629,16 @@ fn require_registry(vault_root: &Path) -> Result<Option<Registry>, CliError> {
 /// unit would exit 0 forever while nothing runs, and launchd/systemd would
 /// report a healthy scheduler that is silently dead (codex P1).
 pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
+    // Lock BEFORE the registry/state snapshot so a concurrent enable/disable
+    // can't slip an edit between the read and the launch (codex P2). Held across
+    // the whole dispatch so a concurrent tick/run-now can't double-spawn a job.
+    let _lock = acquire_dispatch_lock(vault_root)?;
     let Some(reg) = load_registry(vault_root)? else {
         return Err(CliError::Io(format!(
             "scheduler tick: no registry at {} — run `ovp2 schedule install`",
             registry_path(vault_root).display()
         )));
     };
-    // Held across the whole dispatch so a concurrent tick/run-now can't
-    // double-spawn a job (dropped at end of scope).
-    let _lock = acquire_dispatch_lock(vault_root)?;
     let state = load_state(vault_root)?;
     let runner = shell_runner(vault_root, &reg)?;
     let now = local_now();
@@ -682,10 +717,10 @@ pub fn run_list(vault_root: &Path) -> Result<(), CliError> {
 
 /// `schedule run-now <id>` — force one job immediately.
 pub fn run_run_now(vault_root: &Path, id: &str) -> Result<(), CliError> {
-    let Some(reg) = require_registry(vault_root)? else {
-        return Ok(());
-    };
+    // A mutating command must FAIL on a missing registry, not exit 0, so a
+    // script/desktop client can't record false success (codex P2).
     let _lock = acquire_dispatch_lock(vault_root)?;
+    let reg = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
     let state = load_state(vault_root)?;
     let runner = shell_runner(vault_root, &reg)?;
     let (new_state, ok) =
@@ -700,9 +735,11 @@ pub fn run_run_now(vault_root: &Path, id: &str) -> Result<(), CliError> {
 
 /// `schedule enable|disable <id>` — flip a job's enabled flag in the registry.
 pub fn run_set_enabled(vault_root: &Path, id: &str, enabled: bool) -> Result<(), CliError> {
-    let Some(mut reg) = require_registry(vault_root)? else {
-        return Ok(());
-    };
+    // Hold the dispatch lock across the read-modify-write so a concurrent tick
+    // can't act on a stale snapshot and two enable/disable calls can't lose an
+    // update (codex P2). Missing registry is an error for this mutator (P2).
+    let _lock = acquire_dispatch_lock(vault_root)?;
+    let mut reg = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
     let job = reg
         .get_mut(id)
         .ok_or_else(|| CliError::Io(format!("no job '{id}' in the registry")))?;
@@ -1055,6 +1092,36 @@ mod tests {
         let default_env = vault.join(".ovp/daily.env");
         std::fs::write(&default_env, "K=v\n").unwrap();
         assert_eq!(resolved_env_file(vault, &reg), Some(default_env));
+    }
+
+    #[test]
+    fn seed_state_stamps_all_jobs_and_never_clobbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        save_registry(vault, &two_job_registry()).unwrap();
+        // No state yet -> seeds every job so none fires immediately on install.
+        seed_state_if_absent(vault).unwrap();
+        let state = load_state(vault).unwrap();
+        assert!(state.runs.contains_key("daily"));
+        assert!(state.runs.contains_key("crystallize"));
+        let before = state.runs.get("daily").unwrap().last_run.clone();
+        // Second call is a no-op (never clobbers recorded runs).
+        seed_state_if_absent(vault).unwrap();
+        assert_eq!(
+            load_state(vault).unwrap().runs.get("daily").unwrap().last_run,
+            before
+        );
+    }
+
+    #[test]
+    fn mutating_commands_error_on_missing_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        // No registry -> enable/disable/run-now must FAIL, not exit 0.
+        assert!(run_set_enabled(vault, "daily", false).is_err());
+        assert!(run_run_now(vault, "daily").is_err());
+        // list stays lenient (prints a hint, returns Ok).
+        assert!(run_list(vault).is_ok());
     }
 
     #[test]
