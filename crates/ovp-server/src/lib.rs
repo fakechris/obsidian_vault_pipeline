@@ -3529,6 +3529,7 @@ mod tests {
             processed_so_far: None,
             total_planned: None,
             current: None,
+            recent: vec![],
             error: None,
         });
         ovp_index::write_index(&vault, &baked).unwrap();
@@ -3579,6 +3580,7 @@ mod tests {
             processed_so_far: None,
             total_planned: None,
             current: None,
+            recent: vec![],
             error: None,
         });
         ovp_index::write_index(&vault, &baked).unwrap();

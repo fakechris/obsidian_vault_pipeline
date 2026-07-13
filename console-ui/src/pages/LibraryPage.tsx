@@ -44,6 +44,14 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const months = [...byMonth.keys()].filter((m) => m !== '').sort().reverse();
   const byStatus = countBy(model.sources, (s: SourceRow) => s.status as string);
 
+  // Facet counts are projection-derived so a pill count ALWAYS equals the
+  // number of rows selecting it renders (codex review P2): showing a live
+  // queued number here would disagree with filterSources over the same
+  // projection rows mid-run. The live 01-Raw backlog is surfaced as a
+  // standalone stat on Monitor/System and the run banner; the periodic
+  // mid-run projection refresh keeps these facet counts from going stale.
+  const statusCount = (s: string): number => byStatus.get(s) ?? 0;
+
   const filtered = filterSources(model.sources, {
     collection: collection && COLLECTIONS.includes(collection) ? collection : null,
     month,
@@ -118,7 +126,7 @@ function LibraryBody({ model }: { model: IndexModel }) {
               className={status === s ? 'active' : ''}
               onClick={() => setParam('status', status === s ? null : s)}
             >
-              {t(`sourceStatus.${s}` as MsgKey)} ({byStatus.get(s) ?? 0})
+              {t(`sourceStatus.${s}` as MsgKey)} ({statusCount(s)})
             </button>
           ))}
         </div>

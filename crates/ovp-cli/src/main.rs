@@ -170,6 +170,14 @@ enum Cmd {
         /// OVP_RULES). 0 = unlimited.
         #[arg(long, default_value_t = 10)]
         max_sources: usize,
+        /// Rebuild the read-model projection (index/evidence/console) every N
+        /// processed sources DURING the run, so the portal's Library facets,
+        /// counts, and "as of" age refresh mid-run instead of showing the
+        /// pre-run projection for the whole (multi-hour) run. 0 = rebuild only
+        /// at the end (the old behavior). A debounce skips a rebuild that would
+        /// fire too soon after the previous one.
+        #[arg(long, default_value_t = 10)]
+        refresh_every: usize,
         /// Skip the capture/intake sweep phase.
         #[arg(long)]
         no_intake: bool,
@@ -1166,6 +1174,7 @@ fn main() -> ExitCode {
             run_id,
             dry_run,
             max_sources,
+            refresh_every,
             no_intake,
             pinboard_fixture,
             pinboard_live,
@@ -1199,6 +1208,7 @@ fn main() -> ExitCode {
                 run_id,
                 dry_run,
                 max_sources,
+                refresh_every,
                 no_intake,
                 pinboard_fixture,
                 pinboard_live,

@@ -302,7 +302,28 @@ export interface LastRunModel {
   total_planned?: number;
   /** LIVE in-run progress: the source just finished (title or rel path). */
   current?: string;
+  /** LIVE per-source activity ring (the portal's tail -f): the last ~20 source
+   * outcomes, oldest→newest, while `running`. Empty on terminal records. The
+   * "Run activity" panel renders the ✓/✗ feed from it. */
+  recent?: RecentSource[];
   error?: string;
+}
+
+/** One per-source outcome in the live activity feed — mirrors the heartbeat
+ * `recent[]`. Both success and failure appear so a run that starts failing is
+ * diagnosable from the portal without SSHing in to tail the log. */
+export interface RecentSource {
+  /** Monotonic 1-based sequence within the run. */
+  seq: number;
+  /** The source that finished (its vault-relative path / title). */
+  title: string;
+  status: 'ok' | 'failed';
+  units: number;
+  cards: number;
+  /** Failure reason (present only on `failed`). */
+  reason?: string;
+  /** UTC RFC3339 instant the source finished. */
+  at: string;
 }
 
 export interface OpsState {

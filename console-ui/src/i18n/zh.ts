@@ -30,6 +30,18 @@ export const zh: Record<keyof typeof en, string> = {
   'banner.agoHours': '{n} 小时前',
   'banner.agoDays': '{n} 天前',
   'banner.viewSystem': '查看系统状态',
+  'banner.activityToggle': '活动',
+
+  // live run activity feed (the portal's tail -f)
+  'activity.title': '运行活动',
+  'activity.running': '运行中 · {done}/{total} · {pct}% · {ago}开始',
+  'activity.current': '当前：{current}',
+  'activity.idle': '当前没有运行。显示上一次运行的活动。',
+  'activity.empty': '暂无逐条活动 — 运行开始处理来源后即会显示。',
+  'activity.ok': '{title} — {units} 单元 · {cards} 卡片',
+  'activity.failed': '{title} — {reason}',
+  'activity.failedNoReason': '{title} — 失败',
+  'activity.finished': '已完成：{ok} 已读 · {failed} 失败',
 
   // shared
   'common.loading': '加载中…',

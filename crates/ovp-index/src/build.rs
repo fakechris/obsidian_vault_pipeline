@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::model::{
     BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState,
-    PackRow, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
+    PackRow, RecentSourceModel, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
 };
 
 /// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
@@ -966,6 +966,19 @@ pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
         processed_so_far: hb.processed_so_far,
         total_planned: hb.total_planned,
         current: hb.current,
+        recent: hb
+            .recent
+            .into_iter()
+            .map(|r| RecentSourceModel {
+                seq: r.seq,
+                title: r.title,
+                status: r.status,
+                units: r.units,
+                cards: r.cards,
+                reason: r.reason,
+                at: r.at,
+            })
+            .collect(),
         error: hb.error,
     }
 }

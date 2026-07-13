@@ -37,8 +37,8 @@ pub mod ledger;
 pub mod report;
 
 pub use heartbeat::{
-    read_last_run, write_last_run, HeartbeatGuard, LastRun, LastRunStatus, RunCounts,
-    LAST_RUN_SCHEMA,
+    read_last_run, write_last_run, HeartbeatGuard, LastRun, LastRunStatus, RecentSource, RunCounts,
+    LAST_RUN_SCHEMA, RECENT_RING_CAP,
 };
 pub use ledger::{
     append_daily_record, append_pipeline_event, failed_counts, read_daily_ledger,

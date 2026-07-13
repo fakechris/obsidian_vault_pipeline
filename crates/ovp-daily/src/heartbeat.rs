@@ -29,6 +29,40 @@ use ovp_domain::VaultLayout;
 
 pub const LAST_RUN_SCHEMA: &str = "ovp.daily.last-run/v1";
 
+/// How many recent per-source outcomes the heartbeat ring keeps. This is the
+/// portal's live "tail -f": the operator watching the run sees the last N
+/// sources succeed/fail with their unit/card counts (or failure reason), at the
+/// per-source write cadence (seconds), NOT gated on the coarse projection
+/// rebuild. 20 is enough to see recent movement without bloating the sidecar (a
+/// bounded ring — oldest entries drop off as new ones arrive).
+pub const RECENT_RING_CAP: usize = 20;
+
+/// One per-source outcome in the live activity ring. Populated from the
+/// `DailyRunRecord` the reader phase produces per source; both success AND
+/// failure appear so a run that starts failing is diagnosable from the portal
+/// (the last entries + the terminal `failed`/`aborted` error) without SSHing in
+/// to `tail -f` the log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecentSource {
+    /// Monotonic 1-based sequence within the run (== processed_so_far at write).
+    pub seq: usize,
+    /// The source just finished (its vault-relative path / title).
+    pub title: String,
+    /// `"ok"` | `"failed"` — matches the two `RunStatus` variants.
+    pub status: String,
+    /// Units extracted (0 on failure).
+    #[serde(default)]
+    pub units: usize,
+    /// Cards produced (0 on failure).
+    #[serde(default)]
+    pub cards: usize,
+    /// Failure reason (present only on `failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Wall-clock instant the source finished (UTC, RFC3339).
+    pub at: String,
+}
+
 /// Terminal (and in-flight) run status surfaced by the heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +119,15 @@ pub struct LastRun {
     /// records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<String>,
+    /// LIVE per-source activity ring (the portal's tail -f): the last
+    /// [`RECENT_RING_CAP`] source outcomes, oldest→newest, rewritten per source
+    /// while `running`. Empty (skipped in JSON) on the initial `running` stamp
+    /// and on terminal records — the terminal summary is the authoritative
+    /// counts, but the LAST progress write's ring stays readable until then so a
+    /// failed/aborted run's final feed is the diagnosis. Serde-additive: an
+    /// older reader ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<RecentSource>,
     /// Populated on `failed`; a short note on `aborted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -201,6 +244,10 @@ pub struct HeartbeatGuard {
     pid: u32,
     /// Set once finalize runs — suppresses the abort write in Drop.
     finalized: bool,
+    /// The last activity ring written by `progress`, carried into the terminal
+    /// record so a completed/failed/aborted run KEEPS its per-source feed for
+    /// post-run diagnosis (codex review P1) instead of blanking it.
+    last_recent: std::cell::RefCell<Vec<RecentSource>>,
 }
 
 impl HeartbeatGuard {
@@ -225,6 +272,7 @@ impl HeartbeatGuard {
             processed_so_far: None,
             total_planned: None,
             current: None,
+            recent: Vec::new(),
             error: None,
         };
         let warn = write_last_run(vault_root, &record)
@@ -237,6 +285,7 @@ impl HeartbeatGuard {
                 started_at,
                 pid,
                 finalized: false,
+                last_recent: std::cell::RefCell::new(Vec::new()),
             },
             warn,
         )
@@ -260,6 +309,11 @@ impl HeartbeatGuard {
             processed_so_far: None,
             total_planned: None,
             current: None,
+            // Carry the last progress ring into the terminal record so the
+            // per-source feed survives finalize — a completed run keeps its
+            // outcomes, and a failed/aborted run's last entries ARE the
+            // diagnosis (codex review P1).
+            recent: self.last_recent.borrow().clone(),
             error,
         }
     }
@@ -273,14 +327,17 @@ impl HeartbeatGuard {
     /// by an observability side-channel.
     ///
     /// `current` is the source just finished (title or rel path); `None` clears
-    /// it. Reusing `started_at`/`pid`/`run_id` keeps this the SAME run record,
-    /// only fresher — an older reader that ignores the new fields still sees a
-    /// valid `running` heartbeat that ages in real time.
+    /// it. `recent` is the caller's live activity ring (last [`RECENT_RING_CAP`]
+    /// outcomes, oldest→newest) — the portal's tail -f. Reusing
+    /// `started_at`/`pid`/`run_id` keeps this the SAME run record, only fresher —
+    /// an older reader that ignores the new fields still sees a valid `running`
+    /// heartbeat that ages in real time.
     pub fn progress(
         &self,
         processed_so_far: usize,
         total_planned: usize,
         current: Option<&str>,
+        recent: &[RecentSource],
     ) -> Option<String> {
         let record = LastRun {
             schema: LAST_RUN_SCHEMA.into(),
@@ -297,8 +354,10 @@ impl HeartbeatGuard {
             processed_so_far: Some(processed_so_far),
             total_planned: Some(total_planned),
             current: current.map(str::to_string),
+            recent: recent.to_vec(),
             error: None,
         };
+        *self.last_recent.borrow_mut() = recent.to_vec();
         write_last_run(&self.vault_root, &record)
             .err()
             .map(|e| format!("heartbeat: could not update in-run progress: {e}"))
@@ -422,7 +481,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
 
-        assert!(guard.progress(1, 3, Some("first source")).is_none());
+        assert!(guard.progress(1, 3, Some("first source"), &[]).is_none());
         let rec = read_last_run(dir.path()).unwrap().unwrap();
         assert_eq!(rec.status, LastRunStatus::Running);
         assert_eq!(rec.processed_so_far, Some(1));
@@ -433,7 +492,7 @@ mod tests {
         assert_eq!(rec.run_id, "r");
 
         // A later source advances the fraction and renames current.
-        assert!(guard.progress(2, 3, Some("second source")).is_none());
+        assert!(guard.progress(2, 3, Some("second source"), &[]).is_none());
         let rec = read_last_run(dir.path()).unwrap().unwrap();
         assert_eq!(rec.processed_so_far, Some(2));
         assert_eq!(rec.current.as_deref(), Some("second source"));
@@ -442,11 +501,59 @@ mod tests {
         assert!(guard.finalize_completed(RunCounts::default()).is_none());
     }
 
+    fn recent(seq: usize, title: &str, status: &str) -> RecentSource {
+        RecentSource {
+            seq,
+            title: title.into(),
+            status: status.into(),
+            units: if status == "ok" { 12 } else { 0 },
+            cards: if status == "ok" { 8 } else { 0 },
+            reason: (status == "failed").then(|| "boom".to_string()),
+            at: now_rfc3339_utc(),
+        }
+    }
+
+    #[test]
+    fn progress_carries_recent_activity_ring() {
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+
+        // Two sources: one ok, one failed — both must appear in the ring.
+        let ring = vec![recent(1, "first", "ok"), recent(2, "second", "failed")];
+        assert!(guard.progress(2, 5, Some("second"), &ring).is_none());
+
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.recent.len(), 2, "both outcomes surfaced live");
+        assert_eq!(rec.recent[0].status, "ok");
+        assert_eq!(rec.recent[0].units, 12);
+        assert_eq!(rec.recent[1].status, "failed");
+        assert_eq!(rec.recent[1].reason.as_deref(), Some("boom"));
+
+        assert!(guard.finalize_completed(RunCounts::default()).is_none());
+    }
+
+    #[test]
+    fn terminal_record_retains_the_activity_ring_for_diagnosis() {
+        // Codex P1: the feed must survive finalize — a failed run's last
+        // per-source outcomes ARE the diagnosis, not blanked on the way out.
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
+        let ring = vec![recent(1, "ok-one", "ok"), recent(2, "bad-two", "failed")];
+        assert!(guard.progress(2, 5, Some("bad-two"), &ring).is_none());
+        assert!(guard.finalize_failed("provider outage").is_none());
+
+        let rec = read_last_run(dir.path()).unwrap().unwrap();
+        assert_eq!(rec.status, LastRunStatus::Failed);
+        assert_eq!(rec.error.as_deref(), Some("provider outage"));
+        assert_eq!(rec.recent.len(), 2, "the feed survives finalize");
+        assert_eq!(rec.recent[1].status, "failed");
+    }
+
     #[test]
     fn terminal_finalize_after_progress_drops_progress_fields() {
         let dir = tempfile::tempdir().unwrap();
         let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
-        assert!(guard.progress(2, 5, Some("mid source")).is_none());
+        assert!(guard.progress(2, 5, Some("mid source"), &[]).is_none());
         let counts = RunCounts { processed: 5, queued_after: 40, ..Default::default() };
         assert!(guard.finalize_completed(counts).is_none());
         let rec = read_last_run(dir.path()).unwrap().unwrap();
@@ -464,7 +571,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let (guard, _) = HeartbeatGuard::start(dir.path(), "r");
-            assert!(guard.progress(3, 9, Some("chewing on this")).is_none());
+            assert!(guard.progress(3, 9, Some("chewing on this"), &[]).is_none());
             // Guard drops here WITHOUT finalize — the abort drop-guard must fire
             // even after live progress writes.
         }
