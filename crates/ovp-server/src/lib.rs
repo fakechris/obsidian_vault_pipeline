@@ -199,71 +199,36 @@ fn mtime_of(path: &Path) -> Option<SystemTime> {
 /// `SourceStatus::Queued`. An absent dir → 0 (a fresh vault has no backlog).
 /// I/O errors degrade to the partial count already walked — the server keeps
 /// serving; the number is a gauge, not a gate.
-fn count_markdown_files(dir: &Path) -> usize {
-    fn walk(dir: &Path, count: &mut usize) {
+/// The set of `.md` file basenames physically present under `dir` (recursive,
+/// dotfiles skipped). Basename, not full path, because the live-queued count
+/// intersects this with projection sources whose `rel_path` may point at the
+/// PRE-lifecycle intake location (rel_path is not rewritten when a source is
+/// moved to 03-Processed) — the basename is the only stable identity across
+/// the move.
+fn markdown_basenames(dir: &Path) -> std::collections::HashSet<String> {
+    fn walk(dir: &Path, out: &mut std::collections::HashSet<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with('.') {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
                 continue;
             }
             let path = entry.path();
             if path.is_dir() {
-                walk(&path, count);
+                walk(&path, out);
             } else if path.extension().is_some_and(|e| e == "md") {
-                *count += 1;
+                out.insert(name);
             }
         }
     }
-    let mut count = 0;
-    walk(dir, &mut count);
-    count
+    let mut out = std::collections::HashSet::new();
+    walk(dir, &mut out);
+    out
 }
 
-/// Count projection sources that occupy a file under 01-Raw but are NOT queued
-/// — the stable subtrahend that corrects the raw walk to the projection's
-/// `SourceStatus::Queued` semantics (see [`AppState::live_queued_count`]).
-///
-/// Non-queued raw-inbox classifications, straight from `build_sources`:
-///
-/// - Blocked / Failed: a failed attempt keeps the source in 01-Raw with
-///   `rel_path = source_path` (under 01-Raw).
-/// - NeedsContent / Unparseable: intake parked them in place, still in 01-Raw
-///   awaiting operator enrichment/repair.
-/// - Duplicate: a parked duplicate COPY; the intake sweep moves it to
-///   `03-Processed/duplicates/`, so its `rel_path` is normally NOT under 01-Raw
-///   and it is not subtracted — the rel_path filter subtracts one only in the
-///   rare case a duplicate copy still physically sits in 01-Raw.
-///
-/// Queued rows ARE the files being counted, and Processed rows already left
-/// 01-Raw — neither is subtracted.
-fn count_non_queued_in_raw(model: &IndexModel, raw_dir: &str) -> usize {
-    let raw_prefix = format!("{raw_dir}/");
-    model
-        .sources
-        .iter()
-        // Any NON-queued source still physically in 01-Raw is subtracted,
-        // not just blocked/failed/dup: `--no-lifecycle` (or a failed
-        // lifecycle move) leaves a Processed file in 01-Raw too, and it must
-        // not inflate the live queue (codex review P1). At rest this makes
-        // queued_live == projection.queued in every lifecycle mode.
-        //
-        // KNOWN TRANSIENT (codex P2, accepted): a source that FAILS mid-run
-        // stays in 01-Raw while the cached projection still calls it Queued
-        // until the end-of-run rebuild, so queued_live can briefly overstate
-        // by up to (failures this run) — typically 0-1. It self-corrects the
-        // instant the index rebuilds; tracking it live would couple this to
-        // per-run failure state for a sub-1-count, seconds-long discrepancy,
-        // which isn't worth the complexity.
-        .filter(|s| !matches!(s.status, ovp_index::SourceStatus::Queued))
-        .filter(|s| {
-            s.rel_path
-                .as_deref()
-                .is_some_and(|p| p.starts_with(&raw_prefix) || p == raw_dir)
-        })
-        .count()
-}
+
 
 struct AppState {
     vault_root: PathBuf,
@@ -369,14 +334,32 @@ impl AppState {
             return guard.count;
         }
         let raw_dir = self.vault_root.join(self.layout.inbox_raw_dir());
-        let raw_files = count_markdown_files(&raw_dir);
-        let non_queued_in_raw = model
-            .map(|m| count_non_queued_in_raw(m, self.layout.inbox_raw_dir()))
+        // Physical .md files actually in 01-Raw right now (basenames).
+        let present = markdown_basenames(&raw_dir);
+        // Of those, drop the ones the projection classifies as NON-queued
+        // (blocked/failed/needs-content/dup/processed). Matching by basename —
+        // NOT rel_path prefix — because a processed source's rel_path still
+        // points at 01-Raw after the lifecycle move to 03-Processed, so a
+        // prefix filter over-counts departed files and can drive the result
+        // negative. A file that physically LEFT 01-Raw simply isn't in
+        // `present`, so the intersection excludes it automatically; a
+        // non-queued file that STAYED (blocked/failed/needs-content, or any
+        // status under --no-lifecycle) is in both sets and is subtracted.
+        let non_queued_present = model
+            .map(|m| {
+                m.sources
+                    .iter()
+                    .filter(|src| src.status != ovp_index::SourceStatus::Queued)
+                    .filter_map(|src| {
+                        std::path::Path::new(src.rel_path.as_deref()?)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                    })
+                    .filter(|name| present.contains(name))
+                    .count()
+            })
             .unwrap_or(0);
-        // Saturating: a stale projection could momentarily know MORE non-queued
-        // raw rows than files currently on disk (e.g. a blocked file was just
-        // fixed in place); never report a negative backlog.
-        let count = raw_files.saturating_sub(non_queued_in_raw);
+        let count = present.len().saturating_sub(non_queued_present);
         *guard = LiveQueued {
             count,
             computed_at: Some(std::time::Instant::now()),
@@ -2620,6 +2603,42 @@ mod tests {
     /// (5 files) → the projection's queued is 3, and `queued_live` must be 3,
     /// NOT 5.
     #[test]
+    fn processed_source_with_stale_raw_rel_path_is_not_double_subtracted() {
+        // The real bug: a Processed source's rel_path still points at
+        // 50-Inbox/01-Raw after the lifecycle move to 03-Processed, but its
+        // FILE is gone from 01-Raw. A rel_path-prefix subtrahend counted it
+        // and drove queued_live to 0 with 100+ real queued files present.
+        // Basename-intersection must ignore it (not in 01-Raw physically).
+        use ovp_index::{SourceStatus, Totals};
+        let root = temp_root("live-queued-stale-relpath");
+        let vault = root.join("vault");
+        let raw = vault.join("50-Inbox/01-Raw/2026-07");
+        std::fs::create_dir_all(&raw).unwrap();
+        // 2 real queued files physically in 01-Raw. NO processed file here.
+        for f in ["q0.md", "q1.md"] {
+            std::fs::write(raw.join(f), "body\n").unwrap();
+        }
+        // Projection: 2 queued (present) + 3 Processed whose rel_path STILL
+        // says 01-Raw but whose files already moved to 03-Processed (absent
+        // from 01-Raw on disk).
+        let mut sources = vec![
+            raw_source("h0", SourceStatus::Queued, "q0.md"),
+            raw_source("h1", SourceStatus::Queued, "q1.md"),
+        ];
+        for name in ["gone0.md", "gone1.md", "gone2.md"] {
+            sources.push(raw_source("x", SourceStatus::Processed, name));
+        }
+        let mut baked = index_dated("2026-07-12");
+        baked.sources = sources;
+        baked.totals = Totals { queued: 2, ..Default::default() };
+        ovp_index::write_index(&vault, &baked).unwrap();
+
+        let st = state(vault, None);
+        let live = st.live_queued_count(st.current_model().as_ref());
+        assert_eq!(live, 2, "the 3 departed Processed rows must NOT be subtracted");
+    }
+
+    #[test]
     fn live_queued_equals_projection_queued_at_rest() {
         use ovp_index::{SourceStatus, Totals};
         let root = temp_root("live-queued-at-rest");
@@ -2632,7 +2651,7 @@ mod tests {
         for f in ["q0.md", "q1.md", "q2.md", "blocked.md", "dup.md", "proc.md"] {
             std::fs::write(raw.join(f), "body\n").unwrap();
         }
-        assert_eq!(count_markdown_files(&raw), 6, "6 files physically present");
+        assert_eq!(markdown_basenames(&raw).len(), 6, "6 files physically present");
 
         // Projection mirroring what build_sources would classify for these
         // files: 3 Queued, 1 Blocked, 1 Duplicate — all rel_path under 01-Raw.
