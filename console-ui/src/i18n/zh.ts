@@ -120,6 +120,7 @@ export const zh: Record<keyof typeof en, string> = {
   'library.byMonth': '按月',
   'library.statusAll': '全部',
   'library.empty': '当前筛选下没有匹配的源。',
+  'library.queuedSnapshotHint': '实时 01-Raw 待处理数；· 后是上次投影快照(随运行刷新更新)。',
   'library.noDate': '无日期',
 
   // source detail
