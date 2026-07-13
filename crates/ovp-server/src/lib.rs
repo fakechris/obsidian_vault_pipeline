@@ -1563,9 +1563,21 @@ enum Resolved {
 fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     match resolve_static(state, url_path) {
         Resolved::File { body, content_type } => {
-            let header = Header::from_bytes("Content-Type", content_type).unwrap();
+            // HTML (the SPA shell + legacy console pages) must NEVER be cached:
+            // the browser has to re-fetch index.html on every load so it picks
+            // up the new content-hashed asset URLs after a rebuild/deploy —
+            // otherwise a stale cached shell keeps pointing at old JS and the
+            // portal "won't update" until a manual hard reload. Content-hashed
+            // assets (assets/index-<hash>.js|css, fonts) are immutable: their
+            // URL changes when content changes, so cache them for a year.
+            let cache_control = if content_type.starts_with("text/html") {
+                "no-cache, must-revalidate"
+            } else {
+                "public, max-age=31536000, immutable"
+            };
             Response::from_data(body)
-                .with_header(header)
+                .with_header(Header::from_bytes("Content-Type", content_type).unwrap())
+                .with_header(Header::from_bytes("Cache-Control", cache_control).unwrap())
                 .with_status_code(200)
         }
         Resolved::BadRequest => text_response(400, "Bad Request"),
@@ -1849,7 +1861,19 @@ mod tests {
         }
     }
 
-    /// A ModelClient that replies with a fixed answer (or blocks) — the
+    /// Read a response header value (test helper).
+    fn header_value(
+        resp: &Response<std::io::Cursor<Vec<u8>>>,
+        name: &str,
+    ) -> String {
+        resp.headers()
+            .iter()
+            .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+            .map(|h| h.value.as_str().to_string())
+            .unwrap_or_default()
+    }
+
+        /// A ModelClient that replies with a fixed answer (or blocks) — the
     /// /api/ask tests never touch a real transport.
     struct ScriptedClient {
         text: String,
@@ -2738,6 +2762,28 @@ mod tests {
         assert_eq!(cit["source_url"], "https://example.com/good");
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn html_is_no_cache_hashed_assets_are_immutable() {
+        // Regression: serve sent no Cache-Control, so browsers cached the SPA
+        // shell and kept loading stale JS after a rebuild ("portal won't
+        // update"). index.html must revalidate; hashed assets stay immutable.
+        let root = temp_root("cache-headers");
+        let vault = root.join("vault");
+        let app = vault.join(".ovp/console/app/assets");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(vault.join(".ovp/console/app/index.html"), "<!doctype html>").unwrap();
+        std::fs::write(app.join("index-abc123.js"), "console.log(1)").unwrap();
+        let st = state(vault, None);
+
+        let html = dispatch(&st, Method::Get, "/", "");
+        let hv = header_value(&html, "Cache-Control");
+        assert!(hv.contains("no-cache"), "index.html must not be cached, got {hv:?}");
+
+        let js = dispatch(&st, Method::Get, "/assets/index-abc123.js", "");
+        let jv = header_value(&js, "Cache-Control");
+        assert!(jv.contains("immutable"), "hashed asset should be immutable, got {jv:?}");
     }
 
     #[test]
