@@ -303,6 +303,17 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
             ));
         }
     }
+    // Single-writer guard: when writing to a real vault, crystal-synth mutates
+    // shared state (.ovp/crystal, index, console), so it must hold the same
+    // `.ovp/run.lock` as daily/intake — otherwise a scheduled crystallize could
+    // race a manual `daily` and corrupt that state (codex P1). Diagnostic runs
+    // (no --vault-root) write only under --work-dir and take no lock. Held to
+    // the end of the run via the binding.
+    let _vault_lock = match &args.vault_root {
+        Some(v) => Some(ovp_intake::RunLock::acquire(v).map_err(CliError::Io)?),
+        None => None,
+    };
+
     let paths = resolve_paths(&args);
     std::fs::create_dir_all(&args.work_dir).map_err(|e| {
         CliError::Io(format!(

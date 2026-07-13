@@ -507,9 +507,8 @@ pub fn ensure_env_file(path: &Path) -> Result<bool, String> {
 pub struct InstallReport {
     pub unit_files: Vec<PathBuf>,
     pub env_created: bool,
-    /// The registry was seeded with defaults (false = an existing registry was
-    /// left untouched, preserving operator edits to cadences/jobs).
-    pub registry_seeded: bool,
+    /// What install did to the registry (seed vs reconcile env vs untouched).
+    pub registry: RegistryOutcome,
 }
 
 /// Best-effort teardown of the pre-registry `com.ovp2.daily` unit so upgrading
@@ -539,33 +538,56 @@ fn remove_legacy_unit(flavor: Flavor, home: &Path, runner: &dyn CommandRunner) {
     }
 }
 
-/// Seed `.ovp/schedule.json` with the default jobs (daily + weekly
-/// crystallize) unless it already exists. Returns whether it was written.
-fn seed_registry(cfg: &ScheduleConfig) -> Result<bool, CliError> {
-    if super::scheduler::registry_path(&cfg.vault_root).exists() {
-        return Ok(false);
+/// What `ensure_registry` did to `.ovp/schedule.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistryOutcome {
+    /// Written fresh with the default jobs.
+    Seeded,
+    /// Existed; only the install-owned `env_file` was reconciled (jobs kept).
+    EnvUpdated,
+    /// Existed and already matched — left untouched.
+    Unchanged,
+}
+
+/// The configured env file as a registry value: `{vault}`-relative when it
+/// lives under the vault (portable), absolute otherwise.
+fn registry_env_value(cfg: &ScheduleConfig) -> String {
+    match cfg.env_file.strip_prefix(&cfg.vault_root) {
+        Ok(rel) => format!("{}/{}", super::scheduler::VAULT_PLACEHOLDER, rel.display()),
+        Err(_) => cfg.env_file.display().to_string(),
     }
-    let client = match cfg.client {
-        ScheduleClient::Live => "live",
-        ScheduleClient::Replay => "replay",
-    };
-    let mut reg = super::scheduler::default_registry(
-        client,
-        (cfg.hour, cfg.minute),
-        cfg.enrich,
-        cfg.max_sources,
-    );
-    // Record the CONFIGURED env file so the dispatcher sources it (honors a
-    // custom `--env-file`, codex P1). Store `{vault}`-relative when it lives
-    // under the vault so the registry stays portable; absolute otherwise.
-    reg.env_file = Some(
-        match cfg.env_file.strip_prefix(&cfg.vault_root) {
-            Ok(rel) => format!("{}/{}", super::scheduler::VAULT_PLACEHOLDER, rel.display()),
-            Err(_) => cfg.env_file.display().to_string(),
-        },
-    );
+}
+
+/// Ensure `.ovp/schedule.json` reflects this install. Seeds the default jobs if
+/// absent; otherwise preserves operator job edits but reconciles the
+/// install-owned `env_file` (a re-install with a new `--env-file` must not
+/// leave the dispatcher sourcing the old credentials — codex P1).
+fn ensure_registry(cfg: &ScheduleConfig) -> Result<RegistryOutcome, CliError> {
+    let env_value = registry_env_value(cfg);
+    if !super::scheduler::registry_path(&cfg.vault_root).exists() {
+        let client = match cfg.client {
+            ScheduleClient::Live => "live",
+            ScheduleClient::Replay => "replay",
+        };
+        let mut reg = super::scheduler::default_registry(
+            client,
+            (cfg.hour, cfg.minute),
+            cfg.enrich,
+            cfg.max_sources,
+        );
+        reg.env_file = Some(env_value);
+        super::scheduler::save_registry(&cfg.vault_root, &reg)?;
+        return Ok(RegistryOutcome::Seeded);
+    }
+    // Existing registry: keep jobs, reconcile the install-owned env file.
+    let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
+        .expect("registry_path exists but load returned None");
+    if reg.env_file.as_deref() == Some(env_value.as_str()) {
+        return Ok(RegistryOutcome::Unchanged);
+    }
+    reg.env_file = Some(env_value);
     super::scheduler::save_registry(&cfg.vault_root, &reg)?;
-    Ok(true)
+    Ok(RegistryOutcome::EnvUpdated)
 }
 
 pub fn install_with(
@@ -576,7 +598,7 @@ pub fn install_with(
 ) -> Result<InstallReport, CliError> {
     remove_legacy_unit(flavor, home, runner);
     let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
-    let registry_seeded = seed_registry(cfg)?;
+    let registry = ensure_registry(cfg)?;
     let logs_dir = cfg.vault_root.join(".ovp/logs");
     std::fs::create_dir_all(&logs_dir)
         .map_err(|e| CliError::Io(format!("mkdir {}: {e}", logs_dir.display())))?;
@@ -624,7 +646,7 @@ pub fn install_with(
     Ok(InstallReport {
         unit_files: paths,
         env_created,
-        registry_seeded,
+        registry,
     })
 }
 
@@ -713,18 +735,18 @@ pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
         "  runs:      scheduler tick every {} min (dispatches due jobs)",
         TICK_INTERVAL_SECS / 60
     );
-    if report.registry_seeded {
-        println!(
-            "  registry:  {} (NEW — daily {} + weekly crystallize)",
-            super::scheduler::registry_path(&cfg.vault_root).display(),
-            cfg.time_string()
-        );
-        println!("             edit it or use `ovp2 schedule enable/disable <id>`");
-    } else {
-        println!(
-            "  registry:  {} (existing, left untouched)",
-            super::scheduler::registry_path(&cfg.vault_root).display()
-        );
+    let reg_path = super::scheduler::registry_path(&cfg.vault_root).display().to_string();
+    match report.registry {
+        RegistryOutcome::Seeded => {
+            println!("  registry:  {reg_path} (NEW — daily {} + weekly crystallize)", cfg.time_string());
+            println!("             edit it or use `ovp2 schedule enable/disable <id>`");
+        }
+        RegistryOutcome::EnvUpdated => {
+            println!("  registry:  {reg_path} (existing jobs kept; env-file updated)");
+        }
+        RegistryOutcome::Unchanged => {
+            println!("  registry:  {reg_path} (existing, left untouched)");
+        }
     }
     println!("  vault:     {}", cfg.vault_root.display());
     println!("  binary:    {}", cfg.ovp2_path.display());
@@ -854,16 +876,19 @@ fn status_with(
         "MISSING"
     };
     println!("  env-file:  {} ({env_state})", meta.env_file.display());
-    // The per-job schedule (cadences, last run, next due) lives in the registry.
-    let reg_state = if super::scheduler::registry_path(&meta.vault_root).exists() {
-        "present — `ovp2 schedule list --vault-root <v>` for jobs"
-    } else {
-        "MISSING — re-run `ovp2 schedule install`"
-    };
-    println!(
-        "  registry:  {} ({reg_state})",
-        super::scheduler::registry_path(&meta.vault_root).display()
-    );
+    // The per-job schedule (cadences, last run, next due, "due now") lives in
+    // the registry — render it here so `status` reflects failed/overdue jobs a
+    // no-op tick's exit code would otherwise have masked (codex P2).
+    let reg_path = super::scheduler::registry_path(&meta.vault_root);
+    println!("  registry:  {}", reg_path.display());
+    match super::scheduler::load_registry(&meta.vault_root) {
+        Ok(Some(reg)) => {
+            let state = super::scheduler::load_state(&meta.vault_root).unwrap_or_default();
+            super::scheduler::print_jobs(&reg, &state, super::scheduler::local_now(), "  ");
+        }
+        Ok(None) => println!("             MISSING — re-run `ovp2 schedule install`"),
+        Err(e) => println!("             WARN: cannot read registry: {e}"),
+    }
 
     // Last log lines.
     let log = meta
@@ -1227,7 +1252,7 @@ mod tests {
             .join("Library/LaunchAgents/com.ovp2.scheduler.plist");
         assert_eq!(report.unit_files, vec![plist.clone()]);
         assert!(report.env_created);
-        assert!(report.registry_seeded, "install seeds the registry");
+        assert_eq!(report.registry, RegistryOutcome::Seeded, "install seeds the registry");
         assert!(
             super::super::scheduler::registry_path(vault.path()).exists(),
             "schedule.json written"
@@ -1273,7 +1298,8 @@ mod tests {
         let report = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap();
 
         assert!(!report.env_created);
-        assert!(!report.registry_seeded, "existing registry left untouched");
+        // Same env file -> registry left untouched.
+        assert_eq!(report.registry, RegistryOutcome::Unchanged);
         assert_eq!(
             std::fs::read_to_string(&c.env_file).unwrap(),
             "ANTHROPIC_API_KEY=secret\n"
@@ -1287,6 +1313,39 @@ mod tests {
         // The unit is interval-based (no per-time integer to check).
         let plist = std::fs::read_to_string(&report.unit_files[0]).unwrap();
         assert!(plist.contains("StartInterval"));
+    }
+
+    #[test]
+    fn reinstall_with_new_env_file_reconciles_registry_but_keeps_jobs() {
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner::default();
+        install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap();
+        // Operator disables a job.
+        let mut reg = super::super::scheduler::load_registry(vault.path())
+            .unwrap()
+            .unwrap();
+        reg.get_mut("crystallize").unwrap().enabled = false;
+        super::super::scheduler::save_registry(vault.path(), &reg).unwrap();
+
+        // Re-install pointing at a NEW env file (credential rotation).
+        c.env_file = vault.path().join(".ovp/rotated.env");
+        let report = install_with(&c, Flavor::Launchd, home.path(), &runner).unwrap();
+
+        assert_eq!(report.registry, RegistryOutcome::EnvUpdated);
+        let reg2 = super::super::scheduler::load_registry(vault.path())
+            .unwrap()
+            .unwrap();
+        // env file reconciled...
+        assert_eq!(
+            reg2.env_file.as_deref(),
+            Some("{vault}/.ovp/rotated.env")
+        );
+        // ...but the operator's job edit is preserved.
+        assert!(!reg2.get("crystallize").unwrap().enabled);
     }
 
     #[test]

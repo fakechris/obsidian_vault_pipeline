@@ -572,7 +572,7 @@ fn acquire_dispatch_lock(vault_root: &Path) -> Result<ovp_intake::RunLock, CliEr
     ovp_intake::RunLock::acquire_named(vault_root, "scheduler.lock").map_err(CliError::Io)
 }
 
-fn local_now() -> NaiveDateTime {
+pub fn local_now() -> NaiveDateTime {
     chrono::Local::now().naive_local()
 }
 
@@ -590,10 +590,16 @@ fn require_registry(vault_root: &Path) -> Result<Option<Registry>, CliError> {
     }
 }
 
-/// The OS unit calls this every ~10 min: run every enabled+due job.
+/// The OS unit calls this every ~10 min: run every enabled+due job. Unlike the
+/// interactive commands, a MISSING registry is an ERROR here: otherwise the OS
+/// unit would exit 0 forever while nothing runs, and launchd/systemd would
+/// report a healthy scheduler that is silently dead (codex P1).
 pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
-    let Some(reg) = require_registry(vault_root)? else {
-        return Ok(());
+    let Some(reg) = load_registry(vault_root)? else {
+        return Err(CliError::Io(format!(
+            "scheduler tick: no registry at {} — run `ovp2 schedule install`",
+            registry_path(vault_root).display()
+        )));
     };
     // Held across the whole dispatch so a concurrent tick/run-now can't
     // double-spawn a job (dropped at end of scope).
@@ -626,14 +632,11 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `schedule list` — the registry as an operator sees it.
-pub fn run_list(vault_root: &Path) -> Result<(), CliError> {
-    let Some(reg) = require_registry(vault_root)? else {
-        return Ok(());
-    };
-    let state = load_state(vault_root)?;
-    let now = local_now();
-    println!("schedule jobs ({}):", reg.jobs.len());
+/// Render the per-job registry + state (last run / next due, or "due now" for
+/// an overdue job). Shared by `schedule list` and `schedule status` so both
+/// honor the same per-job contract. `indent` prefixes every line.
+pub fn print_jobs(reg: &Registry, state: &State, now: NaiveDateTime, indent: &str) {
+    println!("{indent}jobs ({}):", reg.jobs.len());
     for job in &reg.jobs {
         let flag = if job.enabled { "on " } else { "OFF" };
         // Show the normalized cadence when it parses (so a hand-typed
@@ -643,21 +646,37 @@ pub fn run_list(vault_root: &Path) -> Result<(), CliError> {
             .parsed_cadence()
             .map(Cadence::to_display)
             .unwrap_or_else(|_| format!("{} (INVALID)", job.cadence));
-        println!("  [{flag}] {:<12} {}", job.id, cadence_display);
+        println!("{indent}  [{flag}] {:<12} {}", job.id, cadence_display);
         if !job.description.is_empty() {
-            println!("        {}", job.description);
+            println!("{indent}      {}", job.description);
         }
         match state.runs.get(&job.id) {
-            Some(run) => println!("        last: {} ({})", run.last_run, run.last_status),
-            None => println!("        last: never"),
+            Some(run) => println!("{indent}      last: {} ({})", run.last_run, run.last_status),
+            None => println!("{indent}      last: never"),
         }
         if let (true, Ok(cadence)) = (job.enabled, job.parsed_cadence()) {
-            println!(
-                "        next: {}",
-                cadence.next_occurrence(now).format("%Y-%m-%dT%H:%M")
-            );
+            // An overdue job (asleep/disabled past its slot) runs on the NEXT
+            // tick, so say "due now" rather than a misleading future time
+            // (codex P2).
+            if is_due(cadence, state.last_run_of(&job.id), now) {
+                println!("{indent}      next: due now");
+            } else {
+                println!(
+                    "{indent}      next: {}",
+                    cadence.next_occurrence(now).format("%Y-%m-%dT%H:%M")
+                );
+            }
         }
     }
+}
+
+/// `schedule list` — the registry as an operator sees it.
+pub fn run_list(vault_root: &Path) -> Result<(), CliError> {
+    let Some(reg) = require_registry(vault_root)? else {
+        return Ok(());
+    };
+    let state = load_state(vault_root)?;
+    print_jobs(&reg, &state, local_now(), "");
     Ok(())
 }
 
