@@ -196,16 +196,32 @@ fn start_scheduler(state: &AppState, vault: &Path) {
     };
     *started = true;
     let vault = vault.to_path_buf();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(SCHEDULER_INTERVAL);
-        let status = Command::new(&bin)
+    std::thread::spawn(move || {
+        // Seed the registry + state WITHOUT an OS unit — a fresh vault has no
+        // schedule.json and `tick` errors on a missing registry, so the timer
+        // would otherwise never run anything (codex P1). Idempotent.
+        let init = Command::new(&bin)
             .arg("schedule")
-            .arg("tick")
+            .arg("init")
             .arg("--vault-root")
             .arg(&vault)
+            .arg("--client")
+            .arg("live")
             .status();
-        if let Err(e) = status {
-            eprintln!("ovp2-desktop: scheduler tick failed to spawn: {e}");
+        if let Err(e) = init {
+            eprintln!("ovp2-desktop: schedule init failed to spawn: {e}");
+        }
+        loop {
+            std::thread::sleep(SCHEDULER_INTERVAL);
+            let status = Command::new(&bin)
+                .arg("schedule")
+                .arg("tick")
+                .arg("--vault-root")
+                .arg(&vault)
+                .status();
+            if let Err(e) = status {
+                eprintln!("ovp2-desktop: scheduler tick failed to spawn: {e}");
+            }
         }
     });
 }
@@ -248,15 +264,6 @@ fn set_vault_and_start(app: AppHandle, state: State<AppState>, vault: String) ->
     Ok(url)
 }
 
-/// `open <path>` in the OS file manager (used by the portal's "reveal in Finder").
-#[tauri::command]
-fn open_path(app: AppHandle, path: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_path(path, None::<&str>)
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,9 +300,8 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![boot, set_vault_and_start, open_path])
+        .invoke_handler(tauri::generate_handler![boot, set_vault_and_start])
         .run(tauri::generate_context!())
         .expect("error while running the OVP2 desktop app");
 }
