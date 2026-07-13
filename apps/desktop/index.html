@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OVP2</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #0e1014; color: #e9e6e0;
+        font: 15px/1.5 -apple-system, "SF Pro Text", system-ui, sans-serif; }
+      #boot { height: 100%; display: grid; place-items: center; text-align: center; }
+      .mark { font-size: 42px; font-weight: 700; letter-spacing: -0.02em; }
+      .mark b { color: #38bdcc; }
+      .msg { margin-top: 14px; color: #9aa0a6; font-size: 13px; min-height: 20px; }
+      button { margin-top: 22px; padding: 10px 20px; border-radius: 10px; border: 1px solid #38bdcc55;
+        background: #38bdcc; color: #06222a; font-weight: 600; font-size: 14px; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      .sub { margin-top: 10px; color: #6b7178; font-size: 12px; max-width: 380px; }
+      .spinner { margin-top: 20px; width: 22px; height: 22px; border-radius: 50%;
+        border: 2px solid #2a2e35; border-top-color: #38bdcc; animation: spin 0.8s linear infinite; display: inline-block; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="boot">
+      <div>
+        <div class="mark">OVP<b>2</b></div>
+        <div id="spinner" class="spinner"></div>
+        <div id="msg" class="msg">Starting…</div>
+        <div id="onboard" class="hidden">
+          <button id="pick">Choose your vault folder…</button>
+          <div class="sub">Pick the Obsidian vault OVP2 should read and organize. You can change it later in Settings.</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

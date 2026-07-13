@@ -887,32 +887,85 @@ fn absolutize(p: PathBuf) -> Result<PathBuf, CliError> {
     }
 }
 
-pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
-    let flavor = detect_flavor()?;
-    let home = home_dir()?;
-    let (hour, minute) = parse_time(&args.time).map_err(CliError::Io)?;
-    let vault_root = args.vault_root.canonicalize().map_err(|e| {
-        CliError::Io(format!(
-            "vault root {} is not usable: {e}",
-            args.vault_root.display()
-        ))
+/// Resolve an [`InstallArgs`]-shaped request into a fully-resolved
+/// [`ScheduleConfig`] (canonical vault, absolute env file, pinned binary).
+/// Shared by `install` and `init`.
+fn resolve_config(
+    vault_root: PathBuf,
+    time: &str,
+    max_sources: Option<usize>,
+    client: ScheduleClient,
+    env_file: Option<PathBuf>,
+    enrich: bool,
+) -> Result<ScheduleConfig, CliError> {
+    let (hour, minute) = parse_time(time).map_err(CliError::Io)?;
+    let vault_root = vault_root.canonicalize().map_err(|e| {
+        CliError::Io(format!("vault root is not usable: {e}"))
     })?;
-    let env_file = match args.env_file {
+    let env_file = match env_file {
         Some(p) => absolutize(p)?,
         None => vault_root.join(".ovp/daily.env"),
     };
     let ovp2_path = std::env::current_exe()
         .map_err(|e| CliError::Io(format!("cannot resolve the ovp2 binary path: {e}")))?;
-    let cfg = ScheduleConfig {
+    Ok(ScheduleConfig {
         vault_root,
         hour,
         minute,
-        max_sources: args.max_sources,
-        client: args.client,
+        max_sources,
+        client,
         env_file,
-        enrich: args.enrich,
+        enrich,
         ovp2_path,
+    })
+}
+
+/// `schedule init` — seed the registry + state (and the env-file template)
+/// WITHOUT installing any OS unit. This is how a host that owns its own clock
+/// (the desktop app's in-app timer) prepares a vault: `schedule tick` errors on
+/// a missing registry, so a fresh vault must be initialized first (codex P1).
+/// Idempotent: reconciles an existing registry, seeds only missing state.
+pub fn run_init(args: InstallArgs) -> Result<(), CliError> {
+    let cfg = resolve_config(
+        args.vault_root,
+        &args.time,
+        args.max_sources,
+        args.client,
+        args.env_file,
+        args.enrich,
+    )?;
+    let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
+    let outcome = {
+        let _lock = super::scheduler::acquire_dispatch_lock(&cfg.vault_root)?;
+        let outcome = ensure_registry(&cfg)?;
+        super::scheduler::seed_missing_state(&cfg.vault_root)?;
+        outcome
     };
+    let reg_path = super::scheduler::registry_path(&cfg.vault_root);
+    let state = match outcome {
+        RegistryOutcome::Seeded => "seeded (daily + weekly crystallize)",
+        RegistryOutcome::Reconciled => "reconciled (built-in jobs + env-file; edits kept)",
+        RegistryOutcome::Unchanged => "already up to date",
+    };
+    println!("schedule init: {} — registry {}", state, reg_path.display());
+    if env_created {
+        println!("  env-file:  {} (NEW template — fill in credentials)", cfg.env_file.display());
+    }
+    println!("  no OS unit installed — the host's own timer runs `schedule tick`.");
+    Ok(())
+}
+
+pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
+    let flavor = detect_flavor()?;
+    let home = home_dir()?;
+    let cfg = resolve_config(
+        args.vault_root,
+        &args.time,
+        args.max_sources,
+        args.client,
+        args.env_file,
+        args.enrich,
+    )?;
 
     let report = install_with(&cfg, flavor, &home, &SystemRunner)?;
 

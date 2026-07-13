@@ -46,6 +46,11 @@ on:
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
+    # The tag glob above ('**[0-9]+.[0-9]+.[0-9]+*') also matches the desktop
+    # DMG tags ('desktop-v*'), which cargo-dist can't parse and would race the
+    # desktop release for the same GitHub Release. Skip the whole cargo-dist run
+    # on desktop tags (codex P1). MANUAL EDIT — re-apply after `dist generate`.
+    if: ${{ !startsWith(github.ref_name, 'desktop-') }}
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}

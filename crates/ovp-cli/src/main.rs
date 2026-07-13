@@ -1037,6 +1037,33 @@ enum ScheduleAction {
         #[arg(long, overrides_with = "enrich")]
         no_enrich: bool,
     },
+    /// Seed the registry + state (and env-file template) WITHOUT installing an
+    /// OS unit — for a host that runs its own clock (the desktop app's in-app
+    /// timer). `tick` errors on a missing registry, so a fresh vault must be
+    /// `init`ialized first. Idempotent.
+    Init {
+        /// The real vault root (e.g. ~/Documents/ovp-vault).
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Local time of day for the daily job, HH:MM (24h).
+        #[arg(long, default_value = "09:00")]
+        time: String,
+        /// Passed through to `daily --max-sources`.
+        #[arg(long)]
+        max_sources: Option<usize>,
+        /// Client for the seeded jobs (live needs credentials in the env file).
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Live)]
+        client: ClientKindArg,
+        /// Env file the jobs source. Default: `<vault>/.ovp/daily.env`.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
+        /// Live enrichment for the seeded daily job. Default: on.
+        #[arg(long, overrides_with = "no_enrich")]
+        enrich: bool,
+        /// Disable live enrichment for the seeded daily job.
+        #[arg(long, overrides_with = "enrich")]
+        no_enrich: bool,
+    },
     /// Unload/disable the job and remove the unit file(s). Logs and the env
     /// file are left untouched.
     Uninstall,
@@ -1418,6 +1445,25 @@ fn main() -> ExitCode {
                 env_file,
                 // Default on; `--no-enrich` turns it off, `--enrich` turns it
                 // back on (clap `overrides_with` keeps only the last flag).
+                enrich: enrich || !no_enrich,
+            }),
+            ScheduleAction::Init {
+                vault_root,
+                time,
+                max_sources,
+                client,
+                env_file,
+                enrich,
+                no_enrich,
+            } => commands::schedule::run_init(commands::schedule::InstallArgs {
+                vault_root,
+                time,
+                max_sources,
+                client: match client {
+                    ClientKindArg::Live => commands::schedule::ScheduleClient::Live,
+                    ClientKindArg::Replay => commands::schedule::ScheduleClient::Replay,
+                },
+                env_file,
                 enrich: enrich || !no_enrich,
             }),
             ScheduleAction::Uninstall => commands::schedule::run_uninstall(),

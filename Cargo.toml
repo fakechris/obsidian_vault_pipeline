@@ -25,6 +25,7 @@ members = [
     "crates/ovp-evolve",
     "crates/ovp-embed",
     "crates/ovp-scheduler",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]

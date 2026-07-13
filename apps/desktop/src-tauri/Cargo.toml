@@ -1,0 +1,35 @@
+[package]
+name = "ovp2-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "OVP2 desktop app (Tauri): in-process portal server + in-app scheduler, no launchd/systemd"
+# Not a distributable CLI — cargo-dist ships only ovp2 (see dist-workspace.toml).
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[[bin]]
+name = "ovp2-desktop"
+path = "src/main.rs"
+
+[lib]
+name = "ovp2_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# In-process portal server (reused verbatim) + the vault layout for defaults.
+ovp-server = { path = "../../../crates/ovp-server" }
+ovp-domain = { path = "../../../crates/ovp-domain" }
