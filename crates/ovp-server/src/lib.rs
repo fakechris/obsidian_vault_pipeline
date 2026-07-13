@@ -191,6 +191,80 @@ fn mtime_of(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Count `.md` files under `dir` recursively, skipping dotfiles/dot-dirs.
+/// Mirrors `ovp_index::build`'s `walk` (the same rule that feeds the
+/// projection's raw-inbox scan) so the two see the SAME set of files. This is
+/// the RAW walk — the gross 01-Raw backlog; [`AppState::live_queued_count`]
+/// then subtracts the non-queued rows the projection knows about to match
+/// `SourceStatus::Queued`. An absent dir → 0 (a fresh vault has no backlog).
+/// I/O errors degrade to the partial count already walked — the server keeps
+/// serving; the number is a gauge, not a gate.
+fn count_markdown_files(dir: &Path) -> usize {
+    fn walk(dir: &Path, count: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, count);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                *count += 1;
+            }
+        }
+    }
+    let mut count = 0;
+    walk(dir, &mut count);
+    count
+}
+
+/// Count projection sources that occupy a file under 01-Raw but are NOT queued
+/// — the stable subtrahend that corrects the raw walk to the projection's
+/// `SourceStatus::Queued` semantics (see [`AppState::live_queued_count`]).
+///
+/// Non-queued raw-inbox classifications, straight from `build_sources`:
+///
+/// - Blocked / Failed: a failed attempt keeps the source in 01-Raw with
+///   `rel_path = source_path` (under 01-Raw).
+/// - NeedsContent / Unparseable: intake parked them in place, still in 01-Raw
+///   awaiting operator enrichment/repair.
+/// - Duplicate: a parked duplicate COPY; the intake sweep moves it to
+///   `03-Processed/duplicates/`, so its `rel_path` is normally NOT under 01-Raw
+///   and it is not subtracted — the rel_path filter subtracts one only in the
+///   rare case a duplicate copy still physically sits in 01-Raw.
+///
+/// Queued rows ARE the files being counted, and Processed rows already left
+/// 01-Raw — neither is subtracted.
+fn count_non_queued_in_raw(model: &IndexModel, raw_dir: &str) -> usize {
+    let raw_prefix = format!("{raw_dir}/");
+    model
+        .sources
+        .iter()
+        // Any NON-queued source still physically in 01-Raw is subtracted,
+        // not just blocked/failed/dup: `--no-lifecycle` (or a failed
+        // lifecycle move) leaves a Processed file in 01-Raw too, and it must
+        // not inflate the live queue (codex review P1). At rest this makes
+        // queued_live == projection.queued in every lifecycle mode.
+        //
+        // KNOWN TRANSIENT (codex P2, accepted): a source that FAILS mid-run
+        // stays in 01-Raw while the cached projection still calls it Queued
+        // until the end-of-run rebuild, so queued_live can briefly overstate
+        // by up to (failures this run) — typically 0-1. It self-corrects the
+        // instant the index rebuilds; tracking it live would couple this to
+        // per-run failure state for a sub-1-count, seconds-long discrepancy,
+        // which isn't worth the complexity.
+        .filter(|s| !matches!(s.status, ovp_index::SourceStatus::Queued))
+        .filter(|s| {
+            s.rel_path
+                .as_deref()
+                .is_some_and(|p| p.starts_with(&raw_prefix) || p == raw_dir)
+        })
+        .count()
+}
+
 struct AppState {
     vault_root: PathBuf,
     layout: VaultLayout,
@@ -216,7 +290,31 @@ struct AppState {
     ask_timeout: Duration,
     /// In-flight ask cap — see [`AskSlots`].
     ask_slots: Arc<AskSlots>,
+    /// Serve-time LIVE queued backlog — the count of pending-source `.md` files
+    /// under `50-Inbox/01-Raw/**` RIGHT NOW, TTL-cached (see [`LiveQueued`]).
+    /// This is ground truth, not the `index.json` projection's `totals.queued`,
+    /// which is only rebuilt at the END of a `daily` run: during a 1-2h run the
+    /// projection is frozen even as sources drain out of 01-Raw. Overlaying this
+    /// live number is the whole point — it may differ from the projection
+    /// mid-run, and it is the authoritative-now figure.
+    live_queued: RwLock<LiveQueued>,
 }
+
+/// TTL cache for the live 01-Raw backlog count. A recursive walk of ~200 files
+/// is cheap, but under request load (portal poll + monitor tab) an unbounded
+/// per-request walk is wasteful, so a recount happens at most once per
+/// [`LIVE_QUEUED_TTL`]. Never negative-cached forever: the TTL is short enough
+/// that the count tracks a draining run within seconds.
+#[derive(Default)]
+struct LiveQueued {
+    count: usize,
+    /// When `count` was computed; `None` = never (forces a first walk).
+    computed_at: Option<std::time::Instant>,
+}
+
+/// How long a live queued count is served before a fresh 01-Raw walk. Short by
+/// design: the whole feature exists so the number ticks down DURING a run.
+const LIVE_QUEUED_TTL: Duration = Duration::from_secs(5);
 
 impl AppState {
     fn index_path(&self) -> PathBuf {
@@ -229,6 +327,61 @@ impl AppState {
 
     fn last_run_path(&self) -> PathBuf {
         self.vault_root.join(self.layout.last_run_file())
+    }
+
+    /// The LIVE queued backlog, TTL-cached (see [`LiveQueued`]) — the number the
+    /// portal shows as "Queued" so it ticks DOWN as a run drains 01-Raw, while
+    /// the projection's `totals.queued` only refreshes at end-of-run.
+    ///
+    /// It must match the projection's `SourceStatus::Queued` semantics, NOT a
+    /// naive raw-file walk: blocked / failed / needs-content / unparseable
+    /// sources and parked duplicate COPIES all keep files in 01-Raw yet are NOT
+    /// queued, so a bare walk over-counts and stays inflated after a run. The
+    /// formula (verified against `ovp-index::build_sources`):
+    ///
+    /// ```text
+    /// queued_live = (current .md under 01-Raw)
+    ///             − (projection sources classified non-queued whose rel_path
+    ///                is under 01-Raw)
+    /// ```
+    ///
+    /// The subtrahend is STABLE during a run: a source classified blocked /
+    /// failed / needs_content / unparseable / duplicate does not change class as
+    /// OTHER (queued) sources get processed and leave 01-Raw. So the raw walk
+    /// ticks down live as processed sources move to 03-Processed, while the
+    /// stable subtrahend keeps the number equal to the projection's queued at
+    /// rest. `queued` and `processed` rows are NOT subtracted (a queued row IS
+    /// the file we're counting; a processed row's file already left 01-Raw).
+    fn live_queued_count(&self, model: Option<&IndexModel>) -> usize {
+        {
+            let guard = self.live_queued.read().unwrap();
+            if let Some(at) = guard.computed_at
+                && at.elapsed() < LIVE_QUEUED_TTL
+            {
+                return guard.count;
+            }
+        }
+        let mut guard = self.live_queued.write().unwrap();
+        // Re-check under the write lock: a burst of requests recounts once.
+        if let Some(at) = guard.computed_at
+            && at.elapsed() < LIVE_QUEUED_TTL
+        {
+            return guard.count;
+        }
+        let raw_dir = self.vault_root.join(self.layout.inbox_raw_dir());
+        let raw_files = count_markdown_files(&raw_dir);
+        let non_queued_in_raw = model
+            .map(|m| count_non_queued_in_raw(m, self.layout.inbox_raw_dir()))
+            .unwrap_or(0);
+        // Saturating: a stale projection could momentarily know MORE non-queued
+        // raw rows than files currently on disk (e.g. a blocked file was just
+        // fixed in place); never report a negative backlog.
+        let count = raw_files.saturating_sub(non_queued_in_raw);
+        *guard = LiveQueued {
+            count,
+            computed_at: Some(std::time::Instant::now()),
+        };
+        count
     }
 
     /// The LIVE run-liveness heartbeat, mtime-freshened against
@@ -362,6 +515,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
                 .max_concurrent_asks
                 .unwrap_or(DEFAULT_MAX_CONCURRENT_ASKS),
         ),
+        live_queued: RwLock::new(LiveQueued::default()),
     });
 
     // Pre-load model
@@ -576,6 +730,19 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         obj.insert(
             "age_seconds".into(),
             serde_json::json!(age_seconds(model.built_at.as_deref())),
+        );
+        // LIVE queued overlay: `totals.queued` stays the projection value (other
+        // readers depend on it and it's the end-of-run provenance figure);
+        // `queued_live` is the serve-time 01-Raw count the SPA renders as the
+        // primary "Queued", so it ticks down during a run instead of freezing.
+        // Also mirrored as `queued_at_build` for a symmetric label with settings.
+        obj.insert(
+            "queued_live".into(),
+            serde_json::json!(state.live_queued_count(Some(&model))),
+        );
+        obj.insert(
+            "queued_at_build".into(),
+            serde_json::json!(model.totals.queued),
         );
     }
     let body = serde_json::to_string(&value).unwrap_or_else(|_| "{}".into());
@@ -1006,6 +1173,13 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             "packs": m.totals.packs,
             "claims": m.totals.claims_durable + m.totals.claims_caveated,
         })),
+        // LIVE queued backlog (01-Raw walk, TTL-cached) — the authoritative-now
+        // figure the portal shows as "Queued", ticking down as a run drains the
+        // inbox. `queued_at_build` is the projection's frozen end-of-run value,
+        // kept for provenance ("live 159 · projection 175 as of <date>"); the
+        // two legitimately differ mid-run. `queued_at_build` is null pre-index.
+        "queued_live": state.live_queued_count(model.as_ref()),
+        "queued_at_build": model.as_ref().map(|m| m.totals.queued),
         "llm_configured": state.ask_client.is_some(),
         "ask_limits": {
             "timeout_secs": state.ask_timeout.as_secs(),
@@ -1671,6 +1845,7 @@ mod tests {
             // machines that export OVP_LLM_TIMEOUT_SECS.
             ask_timeout: Duration::from_secs(60),
             ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
+            live_queued: RwLock::new(LiveQueued::default()),
         }
     }
 
@@ -2310,6 +2485,201 @@ mod tests {
         assert!(v["age_seconds"].is_null());
         assert!(v["counts"].is_null());
         assert_eq!(v["llm_configured"], false);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Write `n` markdown source files under `01-Raw/<month>/` (plus a dotfile
+    /// and a non-md file that must NOT be counted). Returns the raw dir.
+    fn seed_raw_inbox(vault: &Path, n: usize) -> PathBuf {
+        let raw = vault.join("50-Inbox/01-Raw/2026-07");
+        std::fs::create_dir_all(&raw).unwrap();
+        for i in 0..n {
+            std::fs::write(raw.join(format!("src-{i}.md")), format!("body {i}\n")).unwrap();
+        }
+        // Noise that the queued walk must ignore (mirrors ovp-index::walk).
+        std::fs::write(raw.join(".hidden.md"), "x").unwrap();
+        std::fs::write(raw.join("notes.txt"), "x").unwrap();
+        raw
+    }
+
+    #[test]
+    fn live_queued_matches_raw_inbox_file_count() {
+        let root = temp_root("live-queued-count");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        seed_raw_inbox(&vault, 3);
+        let st = state(vault.clone(), None);
+
+        // Direct accessor (no projection → nothing to subtract): 3 md files →
+        // 3, ignoring the dotfile and .txt.
+        assert_eq!(st.live_queued_count(None), 3);
+
+        // Surfaced on /api/settings as the authoritative-now figure.
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(v["queued_live"], 3);
+        // No index built → the projection value is null, but live still answers.
+        assert!(v["queued_at_build"].is_null());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn live_queued_reflects_a_drain_without_a_projection_rebuild() {
+        let root = temp_root("live-queued-drain");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let raw = seed_raw_inbox(&vault, 4);
+
+        // Bake a STALE projection: totals.queued frozen at 4 (end of last run).
+        let mut baked = index_dated("2026-07-12");
+        baked.totals.queued = 4;
+        ovp_index::write_index(&vault, &baked).unwrap();
+        let st = state(vault.clone(), None);
+
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(v["queued_live"], 4);
+        assert_eq!(v["queued_at_build"], 4, "projection and live agree at rest");
+
+        // A run drains two sources out of 01-Raw. The projection is NOT rebuilt.
+        std::fs::remove_file(raw.join("src-0.md")).unwrap();
+        std::fs::remove_file(raw.join("src-1.md")).unwrap();
+        // Bust the TTL cache the way real elapsed time would.
+        st.live_queued.write().unwrap().computed_at = None;
+
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(v["queued_live"], 2, "live count ticked down as 01-Raw drained");
+        assert_eq!(
+            v["queued_at_build"], 4,
+            "projection stays frozen — the whole point of the live overlay"
+        );
+
+        // /api/model carries the same live overlay while totals.queued stays 4.
+        let m = body_json(dispatch(&st, Method::Get, "/api/model", ""));
+        assert_eq!(m["queued_live"], 2);
+        assert_eq!(m["totals"]["queued"], 4, "projection value untouched for other readers");
+        assert_eq!(m["queued_at_build"], 4);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn live_queued_is_zero_on_a_vault_with_no_raw_inbox() {
+        let root = temp_root("live-queued-empty");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault, None);
+        assert_eq!(st.live_queued_count(None), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A raw-inbox SourceRow with the given status, rel_path under 01-Raw.
+    fn raw_source(sha: &str, status: ovp_index::SourceStatus, file: &str) -> ovp_index::SourceRow {
+        ovp_index::SourceRow {
+            sha256: sha.into(),
+            status,
+            title: None,
+            url: None,
+            rel_path: Some(format!("50-Inbox/01-Raw/2026-07/{file}")),
+            date: None,
+            last_run_id: None,
+            pack_dir: None,
+            fail_count: 0,
+            last_reason: None,
+        }
+    }
+
+    /// The P2 fix: at a quiescent vault, `queued_live` MUST equal the
+    /// projection's `totals.queued` — a naive raw-file walk over-counts because
+    /// blocked / duplicate sources keep files in 01-Raw yet are NOT queued.
+    /// Fixture: 3 queued + 1 blocked + 1 duplicate ALL physically in 01-Raw
+    /// (5 files) → the projection's queued is 3, and `queued_live` must be 3,
+    /// NOT 5.
+    #[test]
+    fn live_queued_equals_projection_queued_at_rest() {
+        use ovp_index::{SourceStatus, Totals};
+        let root = temp_root("live-queued-at-rest");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let raw = vault.join("50-Inbox/01-Raw/2026-07");
+        std::fs::create_dir_all(&raw).unwrap();
+        // 6 real files in 01-Raw: 3 queued, 1 blocked, 1 parked dup, and 1
+        // Processed file that stayed (the --no-lifecycle / failed-move case).
+        for f in ["q0.md", "q1.md", "q2.md", "blocked.md", "dup.md", "proc.md"] {
+            std::fs::write(raw.join(f), "body\n").unwrap();
+        }
+        assert_eq!(count_markdown_files(&raw), 6, "6 files physically present");
+
+        // Projection mirroring what build_sources would classify for these
+        // files: 3 Queued, 1 Blocked, 1 Duplicate — all rel_path under 01-Raw.
+        let sources = vec![
+            raw_source("h0", SourceStatus::Queued, "q0.md"),
+            raw_source("h1", SourceStatus::Queued, "q1.md"),
+            raw_source("h2", SourceStatus::Queued, "q2.md"),
+            raw_source("hb", SourceStatus::Blocked, "blocked.md"),
+            raw_source("hd", SourceStatus::Duplicate, "dup.md"),
+            // Processed but still in 01-Raw (no-lifecycle) — must NOT count.
+            raw_source("hp", SourceStatus::Processed, "proc.md"),
+        ];
+        let queued = sources
+            .iter()
+            .filter(|s| s.status == SourceStatus::Queued)
+            .count();
+        let mut baked = index_dated("2026-07-12");
+        baked.sources = sources;
+        baked.totals = Totals { queued, ..Default::default() };
+        ovp_index::write_index(&vault, &baked).unwrap();
+
+        let st = state(vault.clone(), None);
+        let live = st.live_queued_count(st.current_model().as_ref());
+        assert_eq!(live, 3, "6 files − (blocked + dup + processed-in-raw) = 3 queued");
+        assert_eq!(
+            live,
+            st.current_model().unwrap().totals.queued,
+            "at rest, queued_live MUST equal the projection's totals.queued"
+        );
+
+        // And through the API surface.
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(v["queued_live"], 3);
+        assert_eq!(v["queued_at_build"], 3);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The live count ticks down as QUEUED sources drain, while the stable
+    /// non-queued subtrahend (blocked/dup lingering in 01-Raw) keeps the number
+    /// honest — it does not double-drop when a queued file leaves.
+    #[test]
+    fn live_queued_subtracts_non_queued_while_draining() {
+        use ovp_index::{SourceStatus, Totals};
+        let root = temp_root("live-queued-drain-nonqueued");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let raw = vault.join("50-Inbox/01-Raw/2026-07");
+        std::fs::create_dir_all(&raw).unwrap();
+        for f in ["q0.md", "q1.md", "blocked.md"] {
+            std::fs::write(raw.join(f), "body\n").unwrap();
+        }
+        let mut baked = index_dated("2026-07-12");
+        baked.sources = vec![
+            raw_source("h0", SourceStatus::Queued, "q0.md"),
+            raw_source("h1", SourceStatus::Queued, "q1.md"),
+            raw_source("hb", SourceStatus::Blocked, "blocked.md"),
+        ];
+        baked.totals = Totals { queued: 2, ..Default::default() };
+        ovp_index::write_index(&vault, &baked).unwrap();
+        let st = state(vault.clone(), None);
+
+        // At rest: 3 files − 1 blocked = 2 queued.
+        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 2);
+
+        // A run processes one queued source: its file leaves 01-Raw. The
+        // projection is NOT rebuilt (blocked row still known).
+        std::fs::remove_file(raw.join("q0.md")).unwrap();
+        st.live_queued.write().unwrap().computed_at = None;
+        // 2 files (q1 + blocked) − 1 blocked = 1 queued. Not 2, not 0.
+        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 1);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3110,6 +3480,9 @@ mod tests {
             blocked: None,
             capped: None,
             queued_after: None,
+            processed_so_far: None,
+            total_planned: None,
+            current: None,
             error: None,
         });
         ovp_index::write_index(&vault, &baked).unwrap();
@@ -3157,6 +3530,9 @@ mod tests {
             blocked: None,
             capped: None,
             queued_after: None,
+            processed_so_far: None,
+            total_planned: None,
+            current: None,
             error: None,
         });
         ovp_index::write_index(&vault, &baked).unwrap();

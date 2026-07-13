@@ -86,7 +86,7 @@ pub struct DailyArgs {
 /// A dry run does no mutating work, takes no lock, and writes no heartbeat.
 pub fn run(args: DailyArgs) -> Result<(), CliError> {
     if args.dry_run {
-        return run_inner(args, None, None);
+        return run_inner(args, None, None, None);
     }
 
     // Acquire the run lock BEFORE arming the heartbeat. One mutating run at a
@@ -106,7 +106,10 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     // real numbers. `finalize` is threaded through the Ok path; the Err path
     // and any panic fall to `finalize_failed` / the Drop-guard's abort write.
     let mut counts = ovp_daily::RunCounts::default();
-    match run_inner(args, Some(lock), Some(&mut counts)) {
+    // Pass the guard IN so the reader phase can write live per-source progress
+    // to the same heartbeat (`18/90 · <current>`); the terminal finalize below
+    // still fires on the guard here.
+    match run_inner(args, Some(lock), Some(&mut counts), Some(&guard)) {
         Ok(()) => {
             if let Some(w) = guard.finalize_completed(counts) {
                 sayln!("  warn {w}");
@@ -129,6 +132,10 @@ fn run_inner(
     // None only for dry runs, which take no lock.
     _lock: Option<ovp_intake::RunLock>,
     mut counts: Option<&mut ovp_daily::RunCounts>,
+    // The armed heartbeat guard (None for dry runs). While the reader phase
+    // runs, `on_source` calls `guard.progress(..)` after each source so the
+    // portal banner ticks `processed_so_far / total_planned` live.
+    heartbeat: Option<&ovp_daily::HeartbeatGuard>,
 ) -> Result<(), CliError> {
     let layout = VaultLayout::new();
     let inbox = args.inbox.clone().unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
@@ -310,23 +317,46 @@ fn run_inner(
         retry_blocked: args.retry_blocked,
     };
     let planned = work.todo.len();
+    // The batch run_daily will actually attempt this run — `--max-sources`
+    // caps it (0 = uncapped). This is the denominator the portal shows, so
+    // "18/90" means 18 of the 90 THIS run intends to process, not 18 of a
+    // backlog it can only chip at.
+    let total_planned = if cfg.max_sources > 0 {
+        planned.min(cfg.max_sources)
+    } else {
+        planned
+    };
     // Live per-source progress: the reader phase is the long one (up to hours
     // at high --max-sources), so each ok/FAIL line prints — flushed — the
-    // moment its source finishes, not after run_daily returns.
-    let mut on_source = |rec: &DailyRunRecord| match rec.status {
-        RunStatus::Succeeded => sayln!(
-            "  ok   {} → {} (units={} cards={}){}",
-            rec.source_path,
-            rec.pack_dir.as_deref().unwrap_or("?"),
-            rec.units,
-            rec.cards,
-            rec.moved_to.as_deref().map(|m| format!(" moved→{m}")).unwrap_or_default(),
-        ),
-        RunStatus::Failed => sayln!(
-            "  FAIL {} — {}",
-            rec.source_path,
-            rec.reason.as_deref().unwrap_or("unknown")
-        ),
+    // moment its source finishes, not after run_daily returns. The SAME hook
+    // rewrites the heartbeat sidecar (`processed_so_far / total_planned ·
+    // current`) so the portal banner ticks live instead of freezing at start.
+    let mut processed_so_far = 0usize;
+    let mut on_source = |rec: &DailyRunRecord| {
+        match rec.status {
+            RunStatus::Succeeded => sayln!(
+                "  ok   {} → {} (units={} cards={}){}",
+                rec.source_path,
+                rec.pack_dir.as_deref().unwrap_or("?"),
+                rec.units,
+                rec.cards,
+                rec.moved_to.as_deref().map(|m| format!(" moved→{m}")).unwrap_or_default(),
+            ),
+            RunStatus::Failed => sayln!(
+                "  FAIL {} — {}",
+                rec.source_path,
+                rec.reason.as_deref().unwrap_or("unknown")
+            ),
+        }
+        // Heartbeat progress: attempted-count (succeeded OR failed both advance
+        // the run), naming the source just finished. A write failure is a warn,
+        // never a run-abort — the reader work already succeeded.
+        processed_so_far += 1;
+        if let Some(hb) = heartbeat
+            && let Some(w) = hb.progress(processed_so_far, total_planned, Some(&rec.source_path))
+        {
+            sayln!("  warn {w}");
+        }
     };
     let daily = run_daily_with_progress(&cfg, &work, &mut make_client, &mut on_source)
         .map_err(CliError::Io)?;

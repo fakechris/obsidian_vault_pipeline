@@ -223,6 +223,23 @@ body {
 .run-banner.failed .run-banner-dot {
   background: var(--c-6);
 }
+/* In-run progress bar — subtle track + fill, sized by the processed fraction.
+   Only rendered while a run is actively progressing (RunBanner gates it). */
+.run-banner-progress {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 4px;
+  border-radius: var(--ovp-radius-pill);
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  overflow: hidden;
+}
+.run-banner-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--ovp-radius-pill);
+  background: currentColor;
+  transition: width 0.4s ease;
+}
 
 /* ---------- toggles (theme + language): text buttons in a pill ---------- */
 .seg-toggle {

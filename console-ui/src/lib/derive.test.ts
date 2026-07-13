@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   healthLevel,
+  isRunningWithProgress,
   lastRunBanner,
   STALE_AFTER_MS,
 } from './derive';
@@ -114,6 +115,78 @@ describe('lastRunBanner', () => {
       NOW,
     );
     expect(b.level).toBe('stale');
+  });
+
+  it('carries live in-run progress fields off a running heartbeat', () => {
+    const b = lastRunBanner(
+      model({
+        run_id: 'r',
+        started_at: '2026-07-12T11:48:00Z',
+        status: 'running',
+        processed_so_far: 18,
+        total_planned: 90,
+        current: 'Some Article Title',
+      }),
+      NOW,
+    );
+    expect(b.status).toBe('running');
+    expect(b.processedSoFar).toBe(18);
+    expect(b.totalPlanned).toBe(90);
+    expect(b.current).toBe('Some Article Title');
+  });
+});
+
+describe('isRunningWithProgress', () => {
+  it('is true for a running heartbeat that has written a progress fraction', () => {
+    const b = lastRunBanner(
+      model({
+        run_id: 'r',
+        started_at: '2026-07-12T11:50:00Z',
+        status: 'running',
+        processed_so_far: 3,
+        total_planned: 12,
+        current: 'x',
+      }),
+      NOW,
+    );
+    expect(isRunningWithProgress(b)).toBe(true);
+  });
+
+  it('is false for a running run that has no progress yet (older server / pre-first-source)', () => {
+    const b = lastRunBanner(
+      model({ run_id: 'r', started_at: '2026-07-12T11:59:00Z', status: 'running' }),
+      NOW,
+    );
+    expect(isRunningWithProgress(b)).toBe(false);
+  });
+
+  it('is false when the run is not running even if fields are present', () => {
+    const b = lastRunBanner(
+      model({
+        run_id: 'r',
+        started_at: '2026-07-12T09:00:00Z',
+        ended_at: '2026-07-12T10:00:00Z',
+        status: 'completed',
+        processed_so_far: 90,
+        total_planned: 90,
+      }),
+      NOW,
+    );
+    expect(isRunningWithProgress(b)).toBe(false);
+  });
+
+  it('is false when total_planned is 0 (no divide-by-zero fraction)', () => {
+    const b = lastRunBanner(
+      model({
+        run_id: 'r',
+        started_at: '2026-07-12T11:59:00Z',
+        status: 'running',
+        processed_so_far: 0,
+        total_planned: 0,
+      }),
+      NOW,
+    );
+    expect(isRunningWithProgress(b)).toBe(false);
   });
 });
 
