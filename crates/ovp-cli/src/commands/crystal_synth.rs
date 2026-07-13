@@ -304,6 +304,20 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
         }
     }
     let paths = resolve_paths(&args);
+
+    // Single-writer guard: when the resolved store is a real vault crystal store
+    // (`<vault>/.ovp/crystal`), crystal-synth mutates shared state (durable
+    // ledger, index, console), so it must hold that vault's `.ovp/run.lock` —
+    // otherwise a scheduled crystallize could race a manual daily/crystal write
+    // and corrupt it (codex P1/P2). Derive the lock from the STORE, not
+    // --vault-root, so an explicit `--store <other-vault>/.ovp/crystal` locks the
+    // vault it actually writes. A diagnostic store elsewhere takes no lock. Held
+    // to the end of the run via the binding.
+    let _vault_lock = match crate::commands::crystal_write::vault_of_crystal_store(&paths.store) {
+        Some(v) => Some(ovp_intake::RunLock::acquire(&v).map_err(CliError::Io)?),
+        None => None,
+    };
+
     std::fs::create_dir_all(&args.work_dir).map_err(|e| {
         CliError::Io(format!(
             "creating work dir {}: {e}",

@@ -164,7 +164,28 @@ pub(crate) fn write_review_queue_with_collapsed(
         .map_err(|e| CliError::Io(format!("writing review.json: {e}")))
 }
 
+/// When `store` is a real vault crystal store (`<vault>/.ovp/crystal`), return
+/// the vault root so the write can take the shared single-writer lock. A
+/// diagnostic store elsewhere (e.g. `<work-dir>/store`) returns `None`.
+pub(crate) fn vault_of_crystal_store(store: &std::path::Path) -> Option<PathBuf> {
+    let suffix = std::path::Path::new(ovp_domain::VaultLayout::new().crystal_store_dir());
+    let mut vault = store.to_path_buf();
+    for _ in suffix.components() {
+        vault = vault.parent()?.to_path_buf();
+    }
+    (vault.join(suffix) == store).then_some(vault)
+}
+
 pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
+    // Single-writer guard: crystal-write appends to the durable ledger and
+    // rewrites the review queue + views, so it must hold the same `.ovp/run.lock`
+    // as crystal-synth/daily — otherwise an overlapping scheduled crystallize
+    // could duplicate claims or overwrite views from a stale snapshot (codex P1).
+    // Only for a real vault store; diagnostic stores take no lock.
+    let _vault_lock = match vault_of_crystal_store(&args.store) {
+        Some(v) => Some(ovp_intake::RunLock::acquire(&v).map_err(CliError::Io)?),
+        None => None,
+    };
     let candidate: CrystalCandidate = serde_json::from_str(
         &std::fs::read_to_string(&args.candidate)
             .map_err(|e| CliError::Io(format!("reading {}: {e}", args.candidate.display())))?,

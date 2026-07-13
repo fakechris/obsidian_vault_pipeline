@@ -1379,6 +1379,7 @@ dependencies = [
 name = "ovp-cli"
 version = "2.0.1"
 dependencies = [
+ "chrono",
  "clap",
  "ovp-app",
  "ovp-auto",
@@ -1400,6 +1401,7 @@ dependencies = [
  "ovp-rag",
  "ovp-review",
  "ovp-run",
+ "ovp-scheduler",
  "ovp-server",
  "ovp-stores",
  "serde",
@@ -1632,6 +1634,16 @@ dependencies = [
  "ovp-domain",
  "ovp-llm",
  "ovp-stores",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-scheduler"
+version = "2.0.1"
+dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tempfile",

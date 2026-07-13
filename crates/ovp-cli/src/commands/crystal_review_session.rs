@@ -285,6 +285,11 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
             "crystal-review-session-apply: --refresh requires --date <YYYY-MM-DD>".into(),
         ));
     }
+    // Single-writer guard: this mutates the durable ledger, review queue, and
+    // views, so it must hold the same `.ovp/run.lock` as crystal-synth/daily —
+    // otherwise an overlapping scheduled crystallize could append duplicates or
+    // overwrite review.json/crystal.md from a stale snapshot (codex P1).
+    let _vault_lock = ovp_intake::RunLock::acquire(&args.vault_root).map_err(CliError::Io)?;
     let layout = VaultLayout::new();
     let store = args.vault_root.join(layout.crystal_store_dir());
     let review_path = store.join("review.json");

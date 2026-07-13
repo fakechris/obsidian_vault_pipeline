@@ -67,6 +67,13 @@
       "surface": "parser",
       "file": "crates/ovp-domain/src/units/parser.rs",
       "quality_buckets": ["operational_reliability", "extraction_fidelity"]
+    },
+    {
+      "id": "runtime.scheduler",
+      "surface": "runtime",
+      "current_version": "v1",
+      "file": "crates/ovp-scheduler/src/lib.rs",
+      "quality_buckets": ["operational_reliability"]
     }
   ]
 }

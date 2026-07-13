@@ -69,6 +69,7 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
     check_run_recency(&args.vault_root, &layout, now_unix_secs(), threshold_hours, &mut findings);
     check_disk_usage(&args.vault_root, &layout, &mut findings);
     check_legacy_artifacts(&args.vault_root, &mut findings);
+    check_inbox_orphans(&args.vault_root, &layout, &mut findings);
 
     if args.json {
         let json_out: Vec<_> = findings
@@ -683,6 +684,134 @@ fn check_legacy_artifacts(vault_root: &Path, findings: &mut Vec<Finding>) {
     }
 }
 
+/// True for `*.md` files that are never captured sources (folder READMEs), so
+/// the orphan scan doesn't nag about documentation.
+fn is_structural_md(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case("README.md"))
+        .unwrap_or(false)
+}
+
+/// Count ingestable `*.md` files recursively under `dir` (skips READMEs).
+/// Uses the entry's own file type (never follows symlinks), so a link to an
+/// ancestor or an external directory can't cause a cycle or scan outside the
+/// vault (codex P2).
+fn count_md_recursive(dir: &Path) -> usize {
+    let mut n = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if ft.is_dir() {
+                n += count_md_recursive(&path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md")
+                && !is_structural_md(&path)
+            {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// The top-level `50-Inbox` subdirectory names ovp2's intake actually manages
+/// (relative to the inbox root), derived from the layout so this can't drift.
+fn managed_inbox_dirs(layout: &VaultLayout, inbox_rel: &Path) -> std::collections::BTreeSet<String> {
+    [
+        layout.inbox_raw_dir().to_string(),
+        layout.processed_root().to_string(),
+    ]
+    .into_iter()
+    .chain(layout.capture_dirs().iter().map(|s| s.to_string()))
+    .filter_map(|full| {
+        Path::new(&full)
+            .strip_prefix(inbox_rel)
+            .ok()
+            .and_then(|p| p.components().next())
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+    })
+    .collect()
+}
+
+/// Files under `50-Inbox/` that sit in a directory ovp2's intake never sweeps
+/// (e.g. legacy `02-Processing` / `05-Manual-Review`). ovp2 only reads
+/// `01-Raw`, `03-Processed`, and the capture dirs — anything else is stranded
+/// and will never be ingested. Surface it with a hint; never auto-move.
+fn check_inbox_orphans(vault_root: &Path, layout: &VaultLayout, findings: &mut Vec<Finding>) {
+    let check = "inbox-orphans".to_string();
+    // Inbox root = the parent of the raw dir ("50-Inbox/01-Raw" -> "50-Inbox").
+    let Some(inbox_rel) = Path::new(layout.inbox_raw_dir()).parent() else {
+        return;
+    };
+    let inbox_root = vault_root.join(inbox_rel);
+    if !inbox_root.is_dir() {
+        return; // no inbox tree — nothing to check
+    }
+    let managed = managed_inbox_dirs(layout, inbox_rel);
+
+    let entries = match std::fs::read_dir(&inbox_root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut orphans: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut root_md = 0usize;
+    for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue; // never follow links out of / around the inbox (codex P2)
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ft.is_dir() {
+            if !managed.contains(&name) {
+                let n = count_md_recursive(&path);
+                if n > 0 {
+                    orphans.insert(name, n);
+                }
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && !is_structural_md(&path)
+        {
+            root_md += 1;
+        }
+    }
+
+    if orphans.is_empty() && root_md == 0 {
+        findings.push(Finding {
+            check,
+            severity: Severity::Pass,
+            message: "no stranded inbox files".into(),
+            fixed: false,
+        });
+        return;
+    }
+
+    let total: usize = orphans.values().sum::<usize>() + root_md;
+    let mut locations: Vec<String> = orphans.iter().map(|(d, n)| format!("{d} ({n})")).collect();
+    if root_md > 0 {
+        locations.push(format!("50-Inbox/ root ({root_md})"));
+    }
+    // Advisory (INFO, like legacy-artifacts): stray inbox md is often a
+    // captured source that got misfiled, but it can also be a Python-era note
+    // or report — so don't assume, and never affect the exit code.
+    findings.push(Finding {
+        check,
+        severity: Severity::Info,
+        message: format!(
+            "{total} md file(s) in 50-Inbox locations ovp2 never ingests: {}. \
+             If any are captured sources, move them into 50-Inbox/00-Capture to ingest; \
+             otherwise they're notes/legacy files you can leave or archive. \
+             ovp2 never auto-moves them.",
+            locations.join(", ")
+        ),
+        fixed: false,
+    });
+}
+
 fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     if let Ok(entries) = std::fs::read_dir(path) {
@@ -749,6 +878,65 @@ mod tests {
         let p = root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, b"x").unwrap();
+    }
+
+    #[test]
+    fn inbox_orphans_flags_unmanaged_dirs_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = VaultLayout::new();
+        // Managed locations — must NOT be flagged.
+        touch(tmp.path(), "50-Inbox/01-Raw/2026-07/a.md");
+        touch(tmp.path(), "50-Inbox/03-Processed/2026-07/b.md");
+        touch(tmp.path(), "50-Inbox/02-Pinboard/c.md");
+        touch(tmp.path(), "Clippings/d.md"); // capture dir outside 50-Inbox
+        // Stranded — must be flagged.
+        touch(tmp.path(), "50-Inbox/02-Processing/stuck1.md");
+        touch(tmp.path(), "50-Inbox/05-Manual-Review/wave/stuck2.md");
+        touch(tmp.path(), "50-Inbox/loose.md"); // directly in inbox root
+        // A folder README is documentation, not a source — must be ignored.
+        touch(tmp.path(), "50-Inbox/README.md");
+        touch(tmp.path(), "50-Inbox/02-Processing/README.md");
+
+        let mut findings = Vec::new();
+        check_inbox_orphans(tmp.path(), &layout, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        let f = &findings[0];
+        assert_eq!(f.check, "inbox-orphans");
+        assert_eq!(f.severity, Severity::Info, "{}", f.message);
+        assert!(f.message.contains("3 md file(s)"), "READMEs excluded: {}", f.message);
+        assert!(f.message.contains("02-Processing (1)"), "{}", f.message);
+        assert!(f.message.contains("05-Manual-Review (1)"), "{}", f.message);
+        assert!(f.message.contains("50-Inbox/ root (1)"), "{}", f.message);
+        assert!(f.message.contains("00-Capture"), "hint present: {}", f.message);
+        // Managed dirs never appear.
+        assert!(!f.message.contains("01-Raw"), "{}", f.message);
+        assert!(!f.message.contains("03-Processed"), "{}", f.message);
+    }
+
+    #[test]
+    fn inbox_orphans_clean_when_only_managed_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = VaultLayout::new();
+        touch(tmp.path(), "50-Inbox/01-Raw/2026-07/a.md");
+        touch(tmp.path(), "50-Inbox/03-Processed/2026-07/b.md");
+        // An empty unmanaged dir (no md) must not trip the check.
+        std::fs::create_dir_all(tmp.path().join("50-Inbox/05-Manual-Review")).unwrap();
+
+        let mut findings = Vec::new();
+        check_inbox_orphans(tmp.path(), &layout, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Pass, "{}", findings[0].message);
+    }
+
+    #[test]
+    fn inbox_orphans_no_inbox_is_silent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = VaultLayout::new();
+        let mut findings = Vec::new();
+        check_inbox_orphans(tmp.path(), &layout, &mut findings);
+        assert!(findings.is_empty(), "no inbox tree -> no finding");
     }
 
     #[test]

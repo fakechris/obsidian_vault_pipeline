@@ -62,9 +62,14 @@ ovp-evolve = { path = "../ovp-evolve" }
 # Always linked for the pure clustering/cache layer; the heavy ONNX embedder
 # only compiles under the `embed` feature below.
 ovp-embed = { path = "../ovp-embed" }
+ovp-scheduler = { path = "../ovp-scheduler" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Scheduler needs LOCAL civil time (cadences are local wall-clock, e.g. 09:00).
+# today_iso() deliberately stays UTC/dep-free; the scheduler is the one place
+# that must resolve the operator's local time, so it uses chrono here.
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
