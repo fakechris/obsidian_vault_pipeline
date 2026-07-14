@@ -1,22 +1,18 @@
 [package]
-name = "ovp-server"
+name = "ovp-api-projection"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Shared, drift-proof builders for the read-only /api/* response bodies: one source of truth for both ovp-server (live) and ovp-publish (static snapshot)."
 
 [dependencies]
-ovp-api-projection = { path = "../ovp-api-projection" }
-ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
+ovp-index = { path = "../ovp-index" }
 ovp-intake = { path = "../ovp-intake" }
-ovp-memory = { path = "../ovp-memory" }
-ovp-llm = { path = "../ovp-llm" }
 serde.workspace = true
 serde_json.workspace = true
-chrono = { workspace = true }
-tiny_http = "0.12"
 
 [dev-dependencies]
-ovp-daily = { path = "../ovp-daily" }
+tempfile = { workspace = true }

@@ -8,7 +8,11 @@
 //! `/api/source/:sha`, `/api/flow`, `/api/settings`, `POST /api/ask`,
 //! `/api/chats`). Uses `tiny_http` to avoid any async runtime dependency.
 
-mod graph;
+// Read-only `/api/*` body builders + graph assembly + fs readers live in the
+// shared `ovp-api-projection` crate so the live server and the static publisher
+// can never drift. `graph` is re-exported under its old path so the many
+// `graph::…` call sites in this file are unchanged.
+use ovp_api_projection::{bodies, graph, readers};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,14 +20,11 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::time::{Duration, SystemTime};
 
 use ovp_domain::VaultLayout;
-use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
-use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
-use ovp_domain::units::Unit;
+use ovp_domain::crystal::DurableRecord;
 use ovp_index::{
     EvidenceModel, IndexModel, LastRunModel, Query, QueryKind, evidence_path, read_evidence,
-    read_index, read_last_run_model, run_query,
+    read_index, read_last_run_model,
 };
-use ovp_intake::read_jsonl;
 use ovp_llm::ModelClient;
 use ovp_memory::ask::{AskArgs, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence};
 use ovp_memory::verify::{citation_key, citations_in_order};
@@ -645,8 +646,7 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
         term: params.get("term").cloned(),
     };
 
-    let hits = run_query(&model, &query);
-    let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+    let body = bodies::find_body(&model, &query).to_string();
     json_stamped(200, &body, Some(&model))
 }
 
@@ -680,8 +680,7 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         date: None,
         term,
     };
-    let hits = run_query(&model, &query);
-    let body = serde_json::to_string(&hits).unwrap_or_else(|_| "[]".into());
+    let body = bodies::find_body(&model, &query).to_string();
     json_stamped(200, &body, Some(&model))
 }
 
@@ -691,11 +690,7 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     // see both halves came from the same freshness.
     let model = state.current_model();
     let records = load_active_records(state);
-    let themes: Vec<serde_json::Value> = graph::theme_counts(&records)
-        .into_iter()
-        .map(|(theme, count)| serde_json::json!({ "theme": theme, "count": count }))
-        .collect();
-    let body = serde_json::to_string(&themes).unwrap_or_else(|_| "[]".into());
+    let body = bodies::themes_body(&records).to_string();
     json_stamped(200, &body, model.as_ref())
 }
 
@@ -787,32 +782,7 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
-    let store = state.vault_root.join(state.layout.crystal_store_dir());
-    let events: Vec<StoreEvent> = match read_jsonl(&store.join("ledger.jsonl")) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-    let mut records: Vec<DurableRecord> = fold_ledger(&events)
-        .into_iter()
-        .filter(|r| r.status == CrystalStatus::Active)
-        .collect();
-    // Semantic theme PROJECTION: mirror `ovp-index::build_claims` so every
-    // server surface (/api/themes, graph scopes, claim pages) shows the same
-    // display themes as the read model. The ledger stays untouched. A corrupt
-    // themes.json degrades to passthrough here (the server must keep serving);
-    // `ovp2 index` is where corruption fails loud.
-    match ThemesFile::load(&store.join("themes.json")) {
-        Ok(Some(themes)) => {
-            for r in records.iter_mut() {
-                r.theme = themes
-                    .majority_label(&r.source_cases)
-                    .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string());
-            }
-        }
-        Ok(None) => {}
-        Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
-    }
-    records
+    readers::load_active_records(&state.vault_root, &state.layout)
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -924,81 +894,11 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     // response lets the client see the pairing.
     let model = state.current_model();
     let records = load_active_records(state);
-    let rec = records
-        .iter()
-        .find(|r| r.claim_key == id || r.claim_id == id);
-    let rec = match rec {
-        Some(r) => r,
-        None => return json_response(404, r#"{"error":"claim not found"}"#),
-    };
-
-    let source_lookup: HashMap<String, &ovp_index::SourceRow> = model
-        .as_ref()
-        .map(|m| m.sources.iter().map(|s| (s.sha256.clone(), s)).collect())
-        .unwrap_or_default();
-    let pack_lookup: HashMap<String, &ovp_index::PackRow> = model
-        .as_ref()
-        .map(|m| {
-            m.packs
-                .iter()
-                .filter_map(|p| {
-                    let case = graph::last_path_segment(&p.pack_dir)?;
-                    Some((case.to_string(), p))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
     let reader_root = state.vault_root.join(state.layout.reader_root());
-    let mut citations = Vec::new();
-
-    for cit in &rec.citations {
-        let units_path = reader_root.join(&cit.case_id).join("units.accepted.json");
-        let unit_text = std::fs::read_to_string(&units_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<Unit>>(&raw).ok())
-            .and_then(|units| {
-                units
-                    .into_iter()
-                    .find(|u| u.id == cit.unit_id)
-                    .map(|u| u.text)
-            })
-            .unwrap_or_default();
-
-        let (source_title, source_url, source_sha) =
-            if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
-                let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
-                let src = source_lookup.get(&sha);
-                (
-                    src.and_then(|s| s.title.clone())
-                        .unwrap_or_else(|| pack.title.clone()),
-                    src.and_then(|s| s.url.clone()).unwrap_or_default(),
-                    sha,
-                )
-            } else {
-                (cit.case_id.clone(), String::new(), String::new())
-            };
-
-        citations.push(serde_json::json!({
-            "unit_id": cit.unit_id,
-            "unit_text": unit_text,
-            "quote": cit.quote,
-            "resolved_line": cit.resolved_line,
-            "case_id": cit.case_id,
-            "source_title": source_title,
-            "source_url": source_url,
-            "source_sha256": source_sha,
-        }));
+    match bodies::claim_body(&records, model.as_ref(), &reader_root, &id) {
+        Some(v) => json_stamped(200, &v.to_string(), model.as_ref()),
+        None => json_response(404, r#"{"error":"claim not found"}"#),
     }
-
-    let body = serde_json::json!({
-        "claim_id": rec.claim_key,
-        "claim": rec.claim,
-        "theme": rec.theme,
-        "strength": format!("{:?}", rec.strength).to_lowercase(),
-        "citations": citations,
-    });
-    json_stamped(200, &body.to_string(), model.as_ref())
 }
 
 /// GET /api/source/<sha256> — JSON for the portal's three-layer source
@@ -1023,144 +923,27 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
         return json_response(400, r#"{"error":"missing source sha"}"#);
     }
 
-    let Some(source) = model.sources.iter().find(|s| s.sha256 == sha) else {
-        let body = serde_json::json!({ "error": format!("source not found: {sha}") });
-        return json_response(404, &body.to_string());
-    };
-
-    // Memory layer: evidence rows keyed by the source sha or its pack dir.
-    let evidence = state.current_evidence();
-    let evidence_available = evidence.is_some();
-    let pack_dir = source.pack_dir.as_deref();
-    let belongs = |row_sha: Option<&str>, row_pack: &str| {
-        row_sha == Some(sha.as_str()) || pack_dir == Some(row_pack)
-    };
-    let cards: Vec<serde_json::Value> = evidence
-        .as_ref()
-        .map(|ev| {
-            ev.cards
-                .iter()
-                .filter(|c| belongs(c.source_sha256.as_deref(), &c.pack_dir))
-                .map(|c| serde_json::json!({ "title": c.title, "content": c.content }))
-                .collect()
-        })
-        .unwrap_or_default();
-    let units: Vec<serde_json::Value> = evidence
-        .as_ref()
-        .map(|ev| {
-            ev.units
-                .iter()
-                .filter(|u| belongs(u.source_sha256.as_deref(), &u.pack_dir))
-                .map(|u| {
-                    serde_json::json!({
-                        "unit_id": u.unit_id,
-                        "text": u.text,
-                        "quote": u.quote,
-                        "line": u.line,
-                        "attribution": u.attribution,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Crystal layer: ClaimRow.sources holds case ids (last pack_dir segment).
-    let case_id = pack_dir.and_then(graph::last_path_segment);
-    let mut citing: Vec<&ovp_index::ClaimRow> = match case_id {
-        Some(case) => model
-            .claims
-            .iter()
-            .filter(|c| c.sources.iter().any(|s| s == case))
-            .collect(),
-        None => Vec::new(),
-    };
-    citing.sort_by_key(|c| {
-        (
-            match c.status {
-                ovp_index::ClaimStatus::Durable => 0u8,
-                ovp_index::ClaimStatus::Caveated => 1,
-                _ => 2,
-            },
-            c.claim_id.clone(),
-        )
-    });
-
-    let (markdown, truncated, doc_error) = read_source_doc(state, source.rel_path.as_deref());
-
-    let body = serde_json::json!({
-        "source": source,
-        "memory": {
-            "evidence_available": evidence_available,
-            "cards": cards,
-            "units": units,
-        },
-        "citing_claims": citing,
-        "doc": {
-            "markdown": markdown,
-            "truncated": truncated,
-            "error": doc_error,
-        },
-    });
-    json_response(200, &body.to_string())
-}
-
-/// Read the source markdown from the vault, capped at MAX_SOURCE_DOC_BYTES.
-/// All failure modes become an explicit error string — the endpoint always
-/// answers.
-fn read_source_doc(
-    state: &AppState,
-    rel_path: Option<&str>,
-) -> (Option<String>, bool, Option<String>) {
-    let Some(rel) = rel_path else {
-        return (None, false, None);
-    };
-    // rel_path comes from our own index, but never trust it anyway: reject
-    // parent components and absolute roots — including Windows prefixes
-    // (`C:\…`, `\\srv\share`) that `is_absolute()` misses on Unix and that
-    // would make `Path::join` discard the vault root entirely.
-    if !is_plain_relative(rel) {
-        return (None, false, Some("source path rejected".into()));
-    }
-    let recorded = state.vault_root.join(rel);
-    let path = if recorded.is_file() {
-        recorded
-    } else if let Some(moved) = lifecycle_moved_path(state, rel) {
-        moved
-    } else {
-        recorded
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(mut text) => {
-            let truncated = text.len() > MAX_SOURCE_DOC_BYTES;
-            if truncated {
-                let mut cut = MAX_SOURCE_DOC_BYTES;
-                while cut > 0 && !text.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                text.truncate(cut);
-            }
-            (Some(text), truncated, None)
+    // Read the doc via the shared reader (needs the source's rel_path). The
+    // live server ships the full markdown; the publisher passes `None` for a
+    // lite page. Missing sha → None doc → 404 from the builder below.
+    let doc = model.sources.iter().find(|s| s.sha256 == sha).map(|source| {
+        let (markdown, truncated, error) =
+            readers::read_source_doc(&state.vault_root, &state.layout, source.rel_path.as_deref());
+        bodies::SourceDoc {
+            markdown,
+            truncated,
+            error,
         }
-        Err(e) => (None, false, Some(format!("{rel}: {e}"))),
-    }
-}
+    });
 
-/// Lifecycle-move fallback: `SourceRow.rel_path` records the INTAKE location
-/// (`50-Inbox/01-Raw/<month>/…`), but the daily lifecycle step moves
-/// processed sources to `50-Inbox/03-Processed/<month>/…` keeping the same
-/// trailing subpath. When the recorded path misses and sits under the raw
-/// inbox dir, retry the processed dir — both directory names come from
-/// `VaultLayout`, never hardcoded here. `rel` is already traversal-checked
-/// by the caller. Returns the candidate only when it actually exists.
-fn lifecycle_moved_path(state: &AppState, rel: &str) -> Option<PathBuf> {
-    let raw_prefix = format!("{}/", state.layout.inbox_raw_dir());
-    let rest = rel.strip_prefix(&raw_prefix)?;
-    let (month, file) = rest.split_once('/')?;
-    let candidate = state
-        .vault_root
-        .join(state.layout.processed_dir(month))
-        .join(file);
-    candidate.is_file().then_some(candidate)
+    let evidence = state.current_evidence();
+    match bodies::source_body(&model, evidence.as_ref(), &sha, doc) {
+        Some(v) => json_response(200, &v.to_string()),
+        None => {
+            let body = serde_json::json!({ "error": format!("source not found: {sha}") });
+            json_response(404, &body.to_string())
+        }
+    }
 }
 
 fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1169,22 +952,7 @@ fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
 
-    let t = &model.totals;
-    let total_units: usize = model.packs.iter().map(|p| p.units).sum();
-    let total_cards: usize = model.packs.iter().map(|p| p.cards).sum();
-
-    let body = serde_json::json!({
-        "stages": ["intake", "reader", "units", "cards", "crystal", "blocked", "needs_content"],
-        "flows": [
-            { "from": "intake", "to": "reader", "value": t.processed, "label": "processed" },
-            { "from": "intake", "to": "blocked", "value": t.blocked, "label": "blocked" },
-            { "from": "intake", "to": "needs_content", "value": t.needs_content, "label": "needs content" },
-            { "from": "reader", "to": "units", "value": total_units, "label": "accepted units" },
-            { "from": "units", "to": "cards", "value": total_cards, "label": "cards kept" },
-            { "from": "cards", "to": "crystal", "value": t.claims_durable, "label": "durable claims" },
-        ],
-    });
-    json_response(200, &body.to_string())
+    json_response(200, &bodies::flow_body(&model).to_string())
 }
 
 /// GET /api/settings — read-only server/vault configuration for the System
@@ -2285,7 +2053,8 @@ mod tests {
     /// /api/graph endpoints have real records to shape.
     fn write_ledger(vault: &std::path::Path) {
         use ovp_domain::crystal::{
-            DurableCitation, FinalClass, ProvenanceClass, StoreOp, StrengthClass,
+            CrystalStatus, DurableCitation, FinalClass, ProvenanceClass, StoreEvent, StoreOp,
+            StrengthClass,
         };
         let rec = |key: &str, theme: &str, case: &str, unit: &str| DurableRecord {
             claim_key: key.into(),
