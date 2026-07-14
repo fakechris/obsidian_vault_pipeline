@@ -587,8 +587,10 @@ enum Cmd {
         experiment_seed: u64,
     },
     /// PRODUCT — build the knowledge-terrain projection (`.ovp/crystal/terrain.json`):
-    /// a 2D force layout of the themed packs over the kNN graph, for the portal's
-    /// terrain view. Reuses crystal-themes' embeddings + labels; warm cache only.
+    /// a 2D layout that places theme islands by a semantic force layout over
+    /// community centroids, then scatters each pack within its island by
+    /// theme-fit, for the portal's terrain view. Reuses crystal-themes'
+    /// embeddings + labels; warm cache only.
     CrystalTerrain {
         #[arg(long)]
         vault_root: PathBuf,

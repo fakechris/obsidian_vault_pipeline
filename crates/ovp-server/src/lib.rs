@@ -705,12 +705,22 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = state.vault_root.join(".ovp/crystal/terrain.json");
     match std::fs::read_to_string(&path) {
-        Ok(body) => json_stamped(200, &body, state.current_model().as_ref()),
-        Err(_) => json_stamped(
+        // Terrain is generated independently of the index — do NOT stamp it with
+        // the index's built_at/run_id, or a lone `index build` would advertise
+        // false freshness for a stale terrain body.
+        Ok(body) => json_stamped(200, &body, None),
+        // Only a genuinely-absent file is "not built yet". Permission errors,
+        // invalid UTF-8, or a dir at the path are real faults — surface them as
+        // 500 (and log) rather than telling the operator to rebuild.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json_stamped(
             404,
             "{\"error\":\"no terrain.json — run `ovp2 crystal-terrain --vault-root <v>`\"}",
             None,
         ),
+        Err(e) => {
+            eprintln!("handle_terrain: reading {}: {e}", path.display());
+            json_stamped(500, "{\"error\":\"terrain read failed\"}", None)
+        }
     }
 }
 

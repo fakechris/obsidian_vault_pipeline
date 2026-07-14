@@ -377,18 +377,18 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     let tweening = false;
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      // Re-sync every frame the requested mode differs from the applied one, so
-      // a mid-tween reversal (3D→2D→3D) redirects `want` AND refreshes the polar
-      // limit. Guarding on `!tweening` would leave maxPolarAngle at the old
-      // value, clamping the camera short of its target and never re-enabling
-      // controls.
-      if (modeRef.current !== appliedMode) {
-        tweening = true;
-        controls.enabled = false;
-        controls.maxPolarAngle = modeRef.current === '2d' ? 0.35 : Math.PI * 0.49;
-      }
+      // A change from the applied mode STARTS a tween; once tweening we drive it
+      // to completion off the CURRENTLY requested mode. Reversing 3D→2D→3D mid-
+      // tween returns to appliedMode, so the start test is false — but tweening
+      // is already true, and re-syncing the limit + target every frame from
+      // modeRef inside the block below still lands the camera correctly. Setting
+      // the limit only on the start test would strand it at the 2D clamp.
+      if (modeRef.current !== appliedMode) tweening = true;
       if (tweening) {
-        const want = modeRef.current === '2d' ? t2d : t3d;
+        const want3d = modeRef.current === '3d';
+        controls.enabled = false;
+        controls.maxPolarAngle = want3d ? Math.PI * 0.49 : 0.35;
+        const want = want3d ? t3d : t2d;
         camera.position.lerp(want, 0.12);
         camera.lookAt(controls.target);
         if (camera.position.distanceTo(want) < 1.5) {

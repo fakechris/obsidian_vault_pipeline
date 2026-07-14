@@ -1,12 +1,18 @@
 //! `crystal-terrain` — a "knowledge terrain" projection (themescape).
 //!
 //! Reuses the SAME semantic layer as `crystal-themes` (cached multilingual
-//! embeddings + the kNN graph + the community→label assignment in themes.json)
-//! and adds ONE thing that view lacks: a 2D position per pack. A deterministic
-//! force layout over the kNN graph pulls semantically-similar packs together, so
-//! communities fall out as spatial islands. The frontend renders density
-//! contours over these points (à la flomo's map) — peaks = dense clusters,
-//! labelled by the existing theme names.
+//! embeddings + the kNN-graph Louvain communities + the community→label
+//! assignment in themes.json) and adds ONE thing that view lacks: a 2D position
+//! per pack. Layout is TWO-LEVEL and only the coarse level is semantic. First,
+//! community centroids are placed by a deterministic force layout that attracts
+//! by cosine similarity, so related THEMES form adjacent islands (between-island
+//! distance is meaningful). Then, within an island, each pack sits at a radius
+//! set by how tightly it fits the theme centroid (tight → the peak, loose → the
+//! rim) at a fixed pseudo-random ANGLE. That angle is NOT a pairwise-kNN
+//! embedding, so within-island neighbor distance is not semantic — the islands
+//! and their density peaks are the signal, not fine pack-to-pack placement.
+//! The frontend renders density contours over these points (à la flomo's map) —
+//! peaks = dense theme clusters, labelled by the existing theme names.
 //!
 //! Output: `.ovp/crystal/terrain.json`, a rebuildable PROJECTION (never a
 //! ledger). Needs a WARM embedding cache; packs without a cached vector are
@@ -322,10 +328,19 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         "crystal-terrain: placing {} pack(s) across their theme islands …",
         vectors.len()
     );
-    // Group member indices by community; compute per-community centroid.
+    // Group member indices by REAL community (id ≥ 0). Negative ids are the
+    // themes contract's noise/singleton bucket — NOT one community. Clustering
+    // them would build a synthetic "Unclassified" centroid that, on a sparse
+    // corpus, becomes the tallest peak. Collect them separately and scatter them
+    // as low-density background so they never form an island.
     let mut by_comm: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    let mut noise: Vec<usize> = Vec::new();
     for (i, (_, _, _, _, c)) in meta.iter().enumerate() {
-        by_comm.entry(*c).or_default().push(i);
+        if *c < 0 {
+            noise.push(i);
+        } else {
+            by_comm.entry(*c).or_default().push(i);
+        }
     }
     let comm_ids: Vec<i64> = by_comm.keys().copied().collect();
     let centroids: Vec<Vec<f32>> = comm_ids
@@ -360,6 +375,28 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             let r = radius * (1.0 - tight).sqrt(); // peak-concentrated
             let theta = std::f64::consts::TAU * rng.next_f64();
             pos[m] = (cx + r * theta.cos(), cy + r * theta.sin());
+        }
+    }
+    // Scatter noise packs uniformly across the islands' bounding box (a unit box
+    // if there are no real communities). Uniform spread = flat KDE = no peak.
+    if !noise.is_empty() {
+        let real: Vec<usize> = by_comm.values().flatten().copied().collect();
+        let (mut nx0, mut ny0, mut nx1, mut ny1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &m in &real {
+            nx0 = nx0.min(pos[m].0);
+            ny0 = ny0.min(pos[m].1);
+            nx1 = nx1.max(pos[m].0);
+            ny1 = ny1.max(pos[m].1);
+        }
+        if real.is_empty() {
+            (nx0, ny0, nx1, ny1) = (-1.0, -1.0, 1.0, 1.0);
+        }
+        let mut rng = Rng(SEED ^ 0x5EED_1FED_C0FF_EE00);
+        for &m in &noise {
+            pos[m] = (
+                nx0 + rng.next_f64() * (nx1 - nx0),
+                ny0 + rng.next_f64() * (ny1 - ny0),
+            );
         }
     }
     let bounds = normalize(&mut pos);
