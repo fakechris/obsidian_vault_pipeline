@@ -35,3 +35,4 @@ Cargo.lock.bak
 **/cassettes/live/
 .gstack/
 console-ui/dist/
+console-ui/dist-static/
