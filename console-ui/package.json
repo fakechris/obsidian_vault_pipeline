@@ -11,15 +11,19 @@
   },
   "dependencies": {
     "@antv/g6": "^5.0.49",
+    "@types/d3-contour": "^3.0.6",
+    "@types/three": "^0.185.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "d3-contour": "^4.0.2",
     "d3-sankey": "^0.12.3",
     "d3-shape": "^3.2.0",
     "lucide-react": "^0.525.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0",
-    "tailwind-merge": "^3.3.0"
+    "tailwind-merge": "^3.3.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",

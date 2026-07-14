@@ -591,6 +591,13 @@ enum Cmd {
     /// communities → c-TF-IDF keywords → bilingual labels. Rebuildable
     /// projection; never touches the crystal ledger. Offline/no-model runs
     /// skip gracefully (everything stays Unclassified).
+    /// PRODUCT — build the knowledge-terrain projection (`.ovp/crystal/terrain.json`):
+    /// a 2D force layout of the themed packs over the kNN graph, for the portal's
+    /// terrain view. Reuses crystal-themes' embeddings + labels; warm cache only.
+    CrystalTerrain {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
     CrystalThemes {
         #[arg(long)]
         vault_root: PathBuf,
@@ -1615,6 +1622,9 @@ fn main() -> ExitCode {
                     embed_cache_dir,
                 })
             }
+        }
+        Cmd::CrystalTerrain { vault_root } => {
+            commands::crystal_terrain::run(commands::crystal_terrain::TerrainArgs { vault_root })
         }
         Cmd::CrystalThemes {
             vault_root,

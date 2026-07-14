@@ -200,6 +200,9 @@ export const en = {
     'The ladder in plain language: source text → unit (a verifiable excerpt) → card (a readable understanding) → claim (a cross-source conclusion, always either durable or caveated).',
   'knowledge.viewList': 'List',
   'knowledge.viewGraph': 'Graph',
+  'knowledge.viewTerrain': 'Terrain',
+  'knowledge.terrainCaption':
+    'A themescape of the corpus: peaks are dense clusters (labelled by theme), each point a source. Hover a point to see the note. Built from the same embeddings as the themes.',
   'knowledge.empty':
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',

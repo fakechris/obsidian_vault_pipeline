@@ -186,6 +186,9 @@ export const zh: Record<keyof typeof en, string> = {
     '一句话的阶梯：原文 → unit（可验证摘录）→ card（可读理解）→ claim（跨源结论，durable/caveated 二态）。',
   'knowledge.viewList': '列表',
   'knowledge.viewGraph': '图谱',
+  'knowledge.viewTerrain': '地形',
+  'knowledge.terrainCaption':
+    '语料的"知识地形":山峰是密集的聚类(按主题命名),每个点是一个源。悬停某点看那条笔记。与主题同源,基于同一套 embedding。',
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',

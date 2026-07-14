@@ -614,6 +614,7 @@ fn dispatch(
         (Method::Get, "/api/flow") => handle_flow(state),
         (Method::Get, "/api/settings") => handle_settings(state),
         (Method::Get, "/api/themes") => handle_themes(state),
+        (Method::Get, "/api/terrain") => handle_terrain(state),
         (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
         (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
         (Method::Get, p) if p == "/api" || p.starts_with("/api/") => {
@@ -696,6 +697,21 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         .collect();
     let body = serde_json::to_string(&themes).unwrap_or_else(|_| "[]".into());
     json_stamped(200, &body, model.as_ref())
+}
+
+/// `GET /api/terrain` — the knowledge-terrain projection built by
+/// `ovp2 crystal-terrain` (`.ovp/crystal/terrain.json`), served raw. 404 with a
+/// hint when it hasn't been built yet.
+fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = state.vault_root.join(".ovp/crystal/terrain.json");
+    match std::fs::read_to_string(&path) {
+        Ok(body) => json_stamped(200, &body, state.current_model().as_ref()),
+        Err(_) => json_stamped(
+            404,
+            "{\"error\":\"no terrain.json — run `ovp2 crystal-terrain --vault-root <v>`\"}",
+            None,
+        ),
+    }
 }
 
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {

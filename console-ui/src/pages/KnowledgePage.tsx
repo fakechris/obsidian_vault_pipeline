@@ -13,6 +13,7 @@
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
+import KnowledgeTerrain from '../components/KnowledgeTerrain';
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
@@ -20,7 +21,7 @@ import { isMiscTheme, themeWall, type ThemeGroup } from '../lib/derive';
 import type { IndexModel, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
 
-type View = 'list' | 'graph';
+type View = 'list' | 'graph' | 'terrain';
 
 function themePath(theme: string): string {
   return `/knowledge/theme/${encodeURIComponent(theme)}`;
@@ -76,13 +77,14 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
 function KnowledgeBody({ model }: { model: IndexModel }) {
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
-  const view: View = params.get('view') === 'graph' ? 'graph' : 'list';
+  const rawView = params.get('view');
+  const view: View = rawView === 'graph' ? 'graph' : rawView === 'terrain' ? 'terrain' : 'list';
   const setView = (next: View) => {
     setParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (next === 'graph') p.set('view', 'graph');
-        else p.delete('view');
+        if (next === 'list') p.delete('view');
+        else p.set('view', next);
         return p;
       },
       { replace: true },
@@ -124,6 +126,13 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         >
           {t('knowledge.viewGraph')}
         </button>
+        <button
+          type="button"
+          className={view === 'terrain' ? 'active' : ''}
+          onClick={() => setView('terrain')}
+        >
+          {t('knowledge.viewTerrain')}
+        </button>
       </div>
 
       {view === 'list' && (
@@ -145,6 +154,13 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         <>
           <KnowledgeGraph scope="global" height={560} />
           <div className="graph-caption">{t('knowledge.graphCaption')}</div>
+        </>
+      )}
+
+      {view === 'terrain' && (
+        <>
+          <KnowledgeTerrain height={560} />
+          <div className="graph-caption">{t('knowledge.terrainCaption')}</div>
         </>
       )}
     </>
