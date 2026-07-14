@@ -57,7 +57,9 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   // their text without rebuilding the WebGL scene.
   const labelHandlesRef = useRef<{ el: HTMLDivElement; th: TTheme }[]>([]);
   const [data, setData] = useState<Terrain | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Flag, not a message — translate at render so a locale toggle doesn't retrigger
+  // the fetch effect (which would replace `data` and rebuild the whole scene).
+  const [failed, setFailed] = useState(false);
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -78,11 +80,11 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     fetch('/api/terrain')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not built'))))
       .then((d: Terrain) => !off && setData(d))
-      .catch(() => !off && setErr(t('knowledge.terrainNotBuilt')));
+      .catch(() => !off && setFailed(true));
     return () => {
       off = true;
     };
-  }, [t]);
+  }, []);
 
   // Default the scrubber to "all" once months are known.
   useEffect(() => {
@@ -298,17 +300,19 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const ray = new THREE.Raycaster();
     ray.params.Points = { threshold: 2.4 };
     const ndc = new THREE.Vector2();
-    const pick = (ev: PointerEvent) => {
-      // offsetX/Y are canvas-relative and reflow-free — avoids the layout
-      // thrash of getBoundingClientRect() on every pointermove. W/H track the
-      // canvas size via the ResizeObserver below.
-      ndc.x = (ev.offsetX / W) * 2 - 1;
-      ndc.y = -(ev.offsetY / H) * 2 + 1;
+    // Raycast a visible-point slot from canvas-relative coords (offsetX/Y are
+    // reflow-free — no getBoundingClientRect layout thrash). Returns -1 on miss.
+    const slotAt = (offX: number, offY: number): number => {
+      ndc.x = (offX / W) * 2 - 1;
+      ndc.y = -(offY / H) * 2 + 1;
       ray.setFromCamera(ndc, camera);
       const hits = ray.intersectObject(points, false);
       const hit = hits.find((h) => (h.index ?? -1) < visibleIdx.length);
-      if (hit) {
-        hoverSlot = hit.index ?? -1;
+      return hit ? hit.index ?? -1 : -1;
+    };
+    const pick = (ev: PointerEvent) => {
+      hoverSlot = slotAt(ev.offsetX, ev.offsetY);
+      if (hoverSlot >= 0) {
         const p = data.points[visibleIdx[hoverSlot]];
         mark.visible = true;
         (mark.geometry.attributes.position as THREE.BufferAttribute).copyArray([
@@ -318,7 +322,6 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
         setHover({ mx: ev.offsetX, my: ev.offsetY, p });
         renderer.domElement.style.cursor = 'pointer';
       } else {
-        hoverSlot = -1;
         mark.visible = false;
         setHover(null);
         renderer.domElement.style.cursor = 'grab';
@@ -329,9 +332,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       downY = e.clientY;
     };
     const onClick = (e: MouseEvent) => {
-      if (hoverSlot < 0 || hoverSlot >= visibleIdx.length) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // a drag, not a click
-      const p = data.points[visibleIdx[hoverSlot]];
+      // Raycast AT the click/tap point — a touch tap (or a click after wheel
+      // zoom) never fires pointermove, so hoverSlot would be stale or unset.
+      const slot = slotAt(e.offsetX, e.offsetY);
+      if (slot < 0 || slot >= visibleIdx.length) return;
+      const p = data.points[visibleIdx[slot]];
       if (!p?.sha) return; // pack not in the index → no /library page to open
       navigate(`/library/${encodeURIComponent(p.sha)}`);
     };
@@ -347,7 +353,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     let tweening = false;
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      if (modeRef.current !== appliedMode && !tweening) {
+      // Re-sync every frame the requested mode differs from the applied one, so
+      // a mid-tween reversal (3D→2D→3D) redirects `want` AND refreshes the polar
+      // limit. Guarding on `!tweening` would leave maxPolarAngle at the old
+      // value, clamping the camera short of its target and never re-enabling
+      // controls.
+      if (modeRef.current !== appliedMode) {
         tweening = true;
         controls.enabled = false;
         controls.maxPolarAngle = modeRef.current === '2d' ? 0.35 : Math.PI * 0.49;
@@ -441,7 +452,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     [data],
   );
 
-  if (err) return <div className="graph-caption" style={{ padding: '2rem 0' }}>{err}</div>;
+  if (failed)
+    return (
+      <div className="graph-caption" style={{ padding: '2rem 0' }}>
+        {t('knowledge.terrainNotBuilt')}
+      </div>
+    );
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', width: '100%', height }}>
