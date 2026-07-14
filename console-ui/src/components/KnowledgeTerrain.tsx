@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
+import { terrainUrl } from '../lib/api';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -78,7 +79,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
   useEffect(() => {
     let off = false;
-    fetch('/api/terrain')
+    fetch(terrainUrl)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not built'))))
       .then((d: Terrain) => !off && setData(d))
       .catch(() => !off && setFailed(true));

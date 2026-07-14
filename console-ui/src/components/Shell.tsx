@@ -13,17 +13,26 @@ import { healthLevel } from '../lib/derive';
 import { useNowTick } from './RunBanner';
 import { useModel } from '../model';
 import { useTheme } from '../theme';
+import { STATIC_MODE } from '../lib/api';
 import RunBanner from './RunBanner';
 import SearchOmnibox from './SearchOmnibox';
 
-const NAV = [
-  { to: '/', key: 'nav.today', end: true },
-  { to: '/library', key: 'nav.library', end: false },
-  { to: '/search', key: 'nav.search', end: false },
-  { to: '/knowledge', key: 'nav.knowledge', end: false },
-  { to: '/ask', key: 'nav.ask', end: false },
-  { to: '/system', key: 'nav.system', end: false },
-] as const;
+// The published site is knowledge-only: Knowledge (home), Library, Search. The
+// live portal adds Today/Ask/System (ops + LLM surfaces that need a server).
+const NAV = STATIC_MODE
+  ? ([
+      { to: '/knowledge', key: 'nav.knowledge', end: false },
+      { to: '/library', key: 'nav.library', end: false },
+      { to: '/search', key: 'nav.search', end: false },
+    ] as const)
+  : ([
+      { to: '/', key: 'nav.today', end: true },
+      { to: '/library', key: 'nav.library', end: false },
+      { to: '/search', key: 'nav.search', end: false },
+      { to: '/knowledge', key: 'nav.knowledge', end: false },
+      { to: '/ask', key: 'nav.ask', end: false },
+      { to: '/system', key: 'nav.system', end: false },
+    ] as const);
 
 function StatusLight() {
   const { t } = useI18n();
@@ -126,7 +135,9 @@ export default function Shell() {
 
   return (
     <div className="portal">
-      <RunBanner />
+      {/* Run heartbeat + health dot are live-ops chrome — hidden on the
+          published static site (no server, no run state). */}
+      {!STATIC_MODE && <RunBanner />}
       <div className="page">
         <div className="shell">
           <div className="shell-head">
@@ -158,7 +169,7 @@ export default function Shell() {
                 >
                   ⌕ <span className="mono tiny">⌘K</span>
                 </button>
-                <StatusLight />
+                {!STATIC_MODE && <StatusLight />}
                 <ThemeToggle />
                 <LangToggle />
               </span>
