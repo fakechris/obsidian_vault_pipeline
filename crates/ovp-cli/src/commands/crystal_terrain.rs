@@ -18,6 +18,7 @@ use std::path::Path;
 use ovp_domain::VaultLayout;
 use ovp_embed::cache as embed_cache;
 use ovp_embed::{EMBED_DIM, EMBED_MODEL_ID};
+use ovp_index::PackRow;
 use serde::Serialize;
 
 use crate::commands::crystal_themes::collect_docs;
@@ -107,54 +108,28 @@ fn is_iso_date(b: &[u8]) -> bool {
         && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
-/// The 8-hex content-sha prefix baked into a reader-pack case_id. Legacy ids are
-/// `<sha8>-<date>_<title>` (leading token); modern ones are
-/// `<date>_<title>-<sha8>` (trailing token). Either way it's an 8-char hex token
-/// at one end, so we test both ends and skip the date/title in between.
-fn sha8_from_case_id(case_id: &str) -> Option<&str> {
-    let leading = case_id.split(['-', '_']).next();
-    let trailing = case_id.rsplit(['-', '_']).next();
-    [leading, trailing]
-        .into_iter()
-        .flatten()
-        .find(|tok| is_hex8(tok))
-}
-
-fn is_hex8(s: &str) -> bool {
-    s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Map each 8-hex prefix → the one full source sha256 it identifies, from the
-/// index's source list (the exact set that has `/library/:sha` pages). A prefix
-/// shared by two distinct sources maps to `None` so a point never links to the
-/// wrong source. This is the sha `/library` expects — NOT the embedding-cache
-/// key `collect_docs` uses to load vectors.
-fn sha8_index(shas: &[String]) -> BTreeMap<String, Option<String>> {
-    let mut map: BTreeMap<String, Option<String>> = BTreeMap::new();
-    for full in shas {
-        if full.len() < 8 {
-            continue;
+/// Map each reader-pack `case_id` (the `pack_dir` basename) → its SOURCE content
+/// sha256, from the index's pack list — the SAME join the portal's
+/// `sourcesByCase` uses. This is the sha `/library/:sha` serves; the
+/// embedding-cache key `collect_docs` uses to load vectors is a different hash.
+/// Packs the index has not recorded, and legacy packs with no source sha, are
+/// simply absent → the client renders an unlinked point (never a 404).
+fn source_shas_by_case(packs: &[PackRow]) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for p in packs {
+        let Some(sha) = &p.source_sha256 else { continue };
+        if let Some(case_id) = Path::new(&p.pack_dir).file_name() {
+            map.insert(case_id.to_string_lossy().into_owned(), sha.clone());
         }
-        let key = full[..8].to_string();
-        map.entry(key)
-            .and_modify(|v| {
-                if v.as_deref() != Some(full.as_str()) {
-                    *v = None; // prefix collision → ambiguous, drop the link
-                }
-            })
-            .or_insert_with(|| Some(full.clone()));
     }
     map
 }
 
-/// Load the sha8 → full-sha map from the vault's index. A missing or unreadable
-/// index yields an empty map (all points render unlinked, no 404s).
-fn load_sha8_index(vault_root: &Path) -> BTreeMap<String, Option<String>> {
+/// Load the case_id → source-sha map from the vault's index. A missing or
+/// unreadable index yields an empty map (all points render unlinked, no 404s).
+fn load_source_shas(vault_root: &Path) -> BTreeMap<String, String> {
     ovp_index::read_index(vault_root)
-        .map(|idx| {
-            let shas: Vec<String> = idx.sources.into_iter().map(|s| s.sha256).collect();
-            sha8_index(&shas)
-        })
+        .map(|idx| source_shas_by_case(&idx.packs))
         .unwrap_or_default()
 }
 
@@ -284,15 +259,10 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         .map(|c| (c.id, c.label.clone()))
         .collect();
 
-    // Link sha (for /library/:sha) is the source CONTENT sha, recovered from the
-    // 8-hex prefix in the case_id via the index — NOT `d.sha`, which is the
-    // embedding-cache key used to load the vector.
-    let sha8_map = load_sha8_index(&args.vault_root);
-    let link_sha = |case_id: &str| -> String {
-        sha8_from_case_id(case_id)
-            .and_then(|h| sha8_map.get(h).cloned().flatten())
-            .unwrap_or_default()
-    };
+    // Link sha (for /library/:sha) is the source CONTENT sha, joined from the
+    // index by case_id — NOT `d.sha`, which is the embedding-cache key used to
+    // load the vector.
+    let source_shas = load_source_shas(&args.vault_root);
 
     // Keep only packs that are themed AND have a cached vector (no model here).
     let docs = collect_docs(&reader_root)?;
@@ -308,7 +278,7 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         vectors.push(vec);
         meta.push((
             d.case_id.clone(),
-            link_sha(&d.case_id),
+            source_shas.get(&d.case_id).cloned().unwrap_or_default(),
             d.title.clone(),
             date_from_case_id(&d.case_id),
             community,
@@ -460,35 +430,34 @@ mod tests {
         assert_eq!(date_from_case_id("short"), "");
     }
 
-    #[test]
-    fn sha8_extracted_from_both_pack_formats() {
-        // Legacy: sha8 leads.
-        assert_eq!(
-            sha8_from_case_id("00044cfd-2026-05-07_Claude_Code"),
-            Some("00044cfd")
-        );
-        // Modern: sha8 trails, even when the title contains '-'.
-        assert_eq!(
-            sha8_from_case_id("2026-05-07_Claude-Code-00044cfd"),
-            Some("00044cfd")
-        );
-        // No hex8 token → no link.
-        assert_eq!(sha8_from_case_id("2026-05-07_notes"), None);
-        // A date-looking leading token is not mistaken for a sha8.
-        assert_eq!(sha8_from_case_id("2026-05-07_x-deadbeef"), Some("deadbeef"));
+    fn pack(pack_dir: &str, sha: Option<&str>) -> PackRow {
+        PackRow {
+            pack_dir: pack_dir.into(),
+            title: "t".into(),
+            date: None,
+            units: 0,
+            cards: 0,
+            json_repaired: false,
+            card_titles: vec![],
+            source_sha256: sha.map(String::from),
+        }
     }
 
     #[test]
-    fn sha8_index_resolves_unique_and_drops_collisions() {
-        let a = "00044cfdf9e5000000000000000000000000000000000000000000000000aaaa";
-        let b = "84fbf6dc918ead0000000000000000000000000000000000000000000000bbbb";
-        // Two distinct sources sharing the same 8-hex prefix → ambiguous.
-        let c1 = "deadbeef1111000000000000000000000000000000000000000000000000cccc";
-        let c2 = "deadbeef2222000000000000000000000000000000000000000000000000dddd";
-        let map = sha8_index(&[a.into(), b.into(), c1.into(), c2.into()]);
-        assert_eq!(map.get("00044cfd"), Some(&Some(a.to_string())));
-        assert_eq!(map.get("84fbf6dc"), Some(&Some(b.to_string())));
-        assert_eq!(map.get("deadbeef"), Some(&None)); // collision → no link
+    fn source_shas_keyed_by_case_id_basename() {
+        let packs = vec![
+            // Nested pack_dir → key is the basename (the case_id).
+            pack("40-Resources/Reader/2026-05-07_a-1111", Some("sha_a")),
+            // Bare case_id also works.
+            pack("2026-05-08_b-2222", Some("sha_b")),
+            // Legacy pack with no source sha → absent (renders unlinked).
+            pack("40-Resources/Reader/2026-05-09_c-3333", None),
+        ];
+        let map = source_shas_by_case(&packs);
+        assert_eq!(map.get("2026-05-07_a-1111").map(String::as_str), Some("sha_a"));
+        assert_eq!(map.get("2026-05-08_b-2222").map(String::as_str), Some("sha_b"));
+        assert!(!map.contains_key("2026-05-09_c-3333"));
+        assert_eq!(map.len(), 2);
     }
 
     #[test]
