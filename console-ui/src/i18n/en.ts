@@ -203,6 +203,13 @@ export const en = {
   'knowledge.viewTerrain': 'Terrain',
   'knowledge.terrainCaption':
     'A themescape of the corpus: peaks are dense clusters (labelled by theme), each point a source. Hover a point to see the note. Built from the same embeddings as the themes.',
+  'knowledge.terrainHud': '{notes} notes · {themes} themes · drag to orbit, scroll to zoom',
+  'knowledge.terrainLoading': 'loading…',
+  'knowledge.terrainAllTime': 'all time',
+  'knowledge.terrainPlay': 'play',
+  'knowledge.terrainPause': 'pause',
+  'knowledge.terrainNotBuilt':
+    'Terrain not built yet — run `ovp2 crystal-terrain --vault-root <vault>`.',
   'knowledge.empty':
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',

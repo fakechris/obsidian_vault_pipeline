@@ -10,6 +10,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useI18n } from '../i18n';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -47,6 +48,7 @@ function glowTexture(): THREE.Texture {
 export default function KnowledgeTerrain({ height = 600 }: { height?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [data, setData] = useState<Terrain | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
@@ -69,11 +71,11 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     fetch('/api/terrain')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not built'))))
       .then((d: Terrain) => !off && setData(d))
-      .catch(() => !off && setErr('Terrain not built yet — run `ovp2 crystal-terrain --vault-root <vault>`.'));
+      .catch(() => !off && setErr(t('knowledge.terrainNotBuilt')));
     return () => {
       off = true;
     };
-  }, []);
+  }, [t]);
 
   // Default the scrubber to "all" once months are known.
   useEffect(() => {
@@ -308,6 +310,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       if (hoverSlot < 0) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // a drag, not a click
       const p = data.points[visibleIdx[hoverSlot]];
+      if (!p.sha) return; // pack not ledger-tracked → no source page to open
       navigate(`/library/${encodeURIComponent(p.sha)}`);
     };
     renderer.domElement.addEventListener('pointermove', pick);
@@ -399,7 +402,9 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   return (
     <div ref={wrapRef} style={{ position: 'relative', width: '100%', height }}>
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
-        {data ? `${data.point_count} notes · ${data.themes.length} themes · drag to orbit, scroll to zoom` : 'loading…'}
+        {data
+          ? t('knowledge.terrainHud', { notes: data.point_count, themes: data.themes.length })
+          : t('knowledge.terrainLoading')}
       </div>
       <button
         type="button"
@@ -425,7 +430,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
               setPlaying((p) => !p);
             }}
             style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#7fd6e6', font: '13px system-ui' }}
-            aria-label={playing ? 'pause' : 'play'}
+            aria-label={playing ? t('knowledge.terrainPause') : t('knowledge.terrainPlay')}
           >
             {playing ? '⏸' : '▶'}
           </button>
@@ -441,7 +446,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
             style={{ flex: 1, accentColor: '#7fd6e6' }}
           />
           <span style={{ color: 'rgba(233,230,224,0.85)', font: '12px system-ui', minWidth: 92, textAlign: 'right' }}>
-            {atLatest ? 'all time' : months[monthIdx]}
+            {atLatest ? t('knowledge.terrainAllTime') : months[monthIdx]}
           </span>
         </div>
       )}

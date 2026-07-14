@@ -11,9 +11,11 @@
  * so the hash resolves through the model and forwards to
  * /knowledge/theme/:t#<claim_id> where the card scrolls into view. */
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
-import KnowledgeTerrain from '../components/KnowledgeTerrain';
+// Terrain pulls in three.js (~500KB) — load it only when the Terrain tab is
+// selected so it stays out of the initial portal bundle.
+const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
@@ -159,7 +161,9 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
 
       {view === 'terrain' && (
         <>
-          <KnowledgeTerrain height={560} />
+          <Suspense fallback={<div className="legacy-loading">{t('common.loading')}</div>}>
+            <KnowledgeTerrain height={560} />
+          </Suspense>
           <div className="graph-caption">{t('knowledge.terrainCaption')}</div>
         </>
       )}

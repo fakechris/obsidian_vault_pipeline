@@ -33,7 +33,10 @@ pub struct TerrainArgs {
 #[derive(Serialize)]
 struct TerrainPoint {
     id: String,
-    /// Content sha of the source — links the point to its `/library/:sha` page.
+    /// Content sha256 of the SOURCE file — links the point to its
+    /// `/library/:sha` page. Read from the daily ledger (not the embedding
+    /// cache key); empty when the pack isn't ledger-tracked, so the client
+    /// renders an unlinked point instead of a 404.
     sha: String,
     title: String,
     /// `YYYY-MM-DD` parsed from the pack case_id, else "".
@@ -75,17 +78,84 @@ struct Terrain {
     points: Vec<TerrainPoint>,
 }
 
-/// case_id looks like `<sha8>-<YYYY-MM-DD>_<title…>`; pull the date.
+/// Pull the `YYYY-MM-DD` out of a reader-pack case_id, wherever it sits: modern
+/// ids are `<YYYY-MM-DD>_<title>-<sha8>` (date first) and legacy ones are
+/// `<sha8>-<YYYY-MM-DD>_<title>` (date after the hash). Scanning byte windows
+/// handles both and is safe against multibyte title characters.
 fn date_from_case_id(case_id: &str) -> String {
-    // after the first '-': "YYYY-MM-DD_..."
-    let after = case_id.split_once('-').map(|(_, a)| a).unwrap_or("");
-    let date = after.split('_').next().unwrap_or("");
-    // must look like a date
-    if date.len() == 10 && date.as_bytes().get(4) == Some(&b'-') {
-        date.to_string()
-    } else {
-        String::new()
+    let b = case_id.as_bytes();
+    if b.len() < 10 {
+        return String::new();
     }
+    for i in 0..=b.len() - 10 {
+        let w = &b[i..i + 10];
+        if is_iso_date(w) {
+            // The window is all-ASCII by construction → direct String.
+            return String::from_utf8_lossy(w).into_owned();
+        }
+    }
+    String::new()
+}
+
+/// `YYYY-MM-DD` shape check on a 10-byte window (digits + `-` separators).
+fn is_iso_date(b: &[u8]) -> bool {
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
+}
+
+/// The 8-hex content-sha prefix baked into a reader-pack case_id. Legacy ids are
+/// `<sha8>-<date>_<title>` (leading token); modern ones are
+/// `<date>_<title>-<sha8>` (trailing token). Either way it's an 8-char hex token
+/// at one end, so we test both ends and skip the date/title in between.
+fn sha8_from_case_id(case_id: &str) -> Option<&str> {
+    let leading = case_id.split(['-', '_']).next();
+    let trailing = case_id.rsplit(['-', '_']).next();
+    [leading, trailing]
+        .into_iter()
+        .flatten()
+        .find(|tok| is_hex8(tok))
+}
+
+fn is_hex8(s: &str) -> bool {
+    s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Map each 8-hex prefix → the one full source sha256 it identifies, from the
+/// index's source list (the exact set that has `/library/:sha` pages). A prefix
+/// shared by two distinct sources maps to `None` so a point never links to the
+/// wrong source. This is the sha `/library` expects — NOT the embedding-cache
+/// key `collect_docs` uses to load vectors.
+fn sha8_index(shas: &[String]) -> BTreeMap<String, Option<String>> {
+    let mut map: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for full in shas {
+        if full.len() < 8 {
+            continue;
+        }
+        let key = full[..8].to_string();
+        map.entry(key)
+            .and_modify(|v| {
+                if v.as_deref() != Some(full.as_str()) {
+                    *v = None; // prefix collision → ambiguous, drop the link
+                }
+            })
+            .or_insert_with(|| Some(full.clone()));
+    }
+    map
+}
+
+/// Load the sha8 → full-sha map from the vault's index. A missing or unreadable
+/// index yields an empty map (all points render unlinked, no 404s).
+fn load_sha8_index(vault_root: &Path) -> BTreeMap<String, Option<String>> {
+    ovp_index::read_index(vault_root)
+        .map(|idx| {
+            let shas: Vec<String> = idx.sources.into_iter().map(|s| s.sha256).collect();
+            sha8_index(&shas)
+        })
+        .unwrap_or_default()
 }
 
 /// Tiny deterministic PRNG (splitmix64) so the layout is reproducible without a
@@ -214,10 +284,20 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         .map(|c| (c.id, c.label.clone()))
         .collect();
 
+    // Link sha (for /library/:sha) is the source CONTENT sha, recovered from the
+    // 8-hex prefix in the case_id via the index — NOT `d.sha`, which is the
+    // embedding-cache key used to load the vector.
+    let sha8_map = load_sha8_index(&args.vault_root);
+    let link_sha = |case_id: &str| -> String {
+        sha8_from_case_id(case_id)
+            .and_then(|h| sha8_map.get(h).cloned().flatten())
+            .unwrap_or_default()
+    };
+
     // Keep only packs that are themed AND have a cached vector (no model here).
     let docs = collect_docs(&reader_root)?;
     let mut vectors: Vec<Vec<f32>> = Vec::new();
-    let mut meta: Vec<(String, String, String, String, i64)> = Vec::new(); // id,sha,title,date,community
+    let mut meta: Vec<(String, String, String, String, i64)> = Vec::new(); // id,link_sha,title,date,community
     for d in &docs {
         let Some(&community) = themes.packs.get(&d.case_id) else {
             continue;
@@ -228,7 +308,7 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         vectors.push(vec);
         meta.push((
             d.case_id.clone(),
-            d.sha.clone(),
+            link_sha(&d.case_id),
             d.title.clone(),
             date_from_case_id(&d.case_id),
             community,
@@ -361,11 +441,54 @@ mod tests {
 
     #[test]
     fn date_parse() {
+        // Legacy: <sha8>-<date>_<title>
         assert_eq!(
             date_from_case_id("00044cfd-2026-05-07_Claude_Code_x"),
             "2026-05-07"
         );
+        // Modern (VaultLayout::reader_pack_dir): <date>_<title>-<sha8>
+        assert_eq!(
+            date_from_case_id("2026-05-07_Claude_Code_x-00044cfd"),
+            "2026-05-07"
+        );
+        // Multibyte title must not panic and still finds the date.
+        assert_eq!(
+            date_from_case_id("2026-05-07_知识地图-00044cfd"),
+            "2026-05-07"
+        );
         assert_eq!(date_from_case_id("nodate_title"), "");
+        assert_eq!(date_from_case_id("short"), "");
+    }
+
+    #[test]
+    fn sha8_extracted_from_both_pack_formats() {
+        // Legacy: sha8 leads.
+        assert_eq!(
+            sha8_from_case_id("00044cfd-2026-05-07_Claude_Code"),
+            Some("00044cfd")
+        );
+        // Modern: sha8 trails, even when the title contains '-'.
+        assert_eq!(
+            sha8_from_case_id("2026-05-07_Claude-Code-00044cfd"),
+            Some("00044cfd")
+        );
+        // No hex8 token → no link.
+        assert_eq!(sha8_from_case_id("2026-05-07_notes"), None);
+        // A date-looking leading token is not mistaken for a sha8.
+        assert_eq!(sha8_from_case_id("2026-05-07_x-deadbeef"), Some("deadbeef"));
+    }
+
+    #[test]
+    fn sha8_index_resolves_unique_and_drops_collisions() {
+        let a = "00044cfdf9e5000000000000000000000000000000000000000000000000aaaa";
+        let b = "84fbf6dc918ead0000000000000000000000000000000000000000000000bbbb";
+        // Two distinct sources sharing the same 8-hex prefix → ambiguous.
+        let c1 = "deadbeef1111000000000000000000000000000000000000000000000000cccc";
+        let c2 = "deadbeef2222000000000000000000000000000000000000000000000000dddd";
+        let map = sha8_index(&[a.into(), b.into(), c1.into(), c2.into()]);
+        assert_eq!(map.get("00044cfd"), Some(&Some(a.to_string())));
+        assert_eq!(map.get("84fbf6dc"), Some(&Some(b.to_string())));
+        assert_eq!(map.get("deadbeef"), Some(&None)); // collision → no link
     }
 
     #[test]
