@@ -366,13 +366,23 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             lo = lo.min(s);
             hi = hi.max(s);
         }
-        let span = (hi - lo).max(1e-6);
+        let range = hi - lo;
+        // Every member equally fits the centroid (any 2-member island, or ties):
+        // range is 0, so a normalized `tight` would be 0 for all and fling every
+        // point to the max radius — a ring with the label between two hills, not
+        // one peak. Treat them as equally tight (near the peak) with slight
+        // jitter instead.
+        let degenerate = range < 1e-6;
         // Island radius grows with member count (bigger themes = bigger hills).
         let radius = 0.28 * (members.len() as f64).sqrt();
         let mut rng = Rng(SEED ^ (cid as u64).wrapping_mul(0x9E3779B97F4A7C15));
         for (mi, &m) in members.iter().enumerate() {
-            let tight = (sims[mi] - lo) / span; // 1 = closest to centroid
-            let r = radius * (1.0 - tight).sqrt(); // peak-concentrated
+            let r = if degenerate {
+                radius * 0.15 * rng.next_f64() // clustered at the peak, lightly spread
+            } else {
+                let tight = (sims[mi] - lo) / range; // 1 = closest to centroid
+                radius * (1.0 - tight).sqrt() // peak-concentrated
+            };
             let theta = std::f64::consts::TAU * rng.next_f64();
             pos[m] = (cx + r * theta.cos(), cy + r * theta.sin());
         }

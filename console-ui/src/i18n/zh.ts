@@ -197,6 +197,7 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.terrainNotBuilt':
     '地形尚未生成——运行 `ovp2 crystal-terrain --vault-root <vault>`。',
   'knowledge.terrainNoWebgl': '该 3D 视图需要 WebGL，当前浏览器不可用。请改用列表或图谱视图。',
+  'knowledge.terrainUnclassified': '未分类',
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',

@@ -555,7 +555,11 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           <div style={{ color: '#7fd6e6', fontSize: 11, marginBottom: 3 }}>
             {(() => {
               const th = themeById.get(hover.p.theme_id);
-              const name = th ? (lang === 'zh' ? th.label_zh : th.label) : hover.p.theme;
+              // Noise packs (theme_id < 0) are omitted from `themes`, so localize
+              // the unclassified label rather than falling back to English.
+              const name = th
+                ? (lang === 'zh' ? th.label_zh : th.label)
+                : t('knowledge.terrainUnclassified');
               return `${name}${hover.p.date ? ` · ${hover.p.date}` : ''}`;
             })()}
           </div>

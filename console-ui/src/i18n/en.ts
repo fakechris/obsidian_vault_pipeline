@@ -212,6 +212,7 @@ export const en = {
     'Terrain not built yet — run `ovp2 crystal-terrain --vault-root <vault>`.',
   'knowledge.terrainNoWebgl':
     'This 3D view needs WebGL, which is unavailable in this browser. Try the List or Graph view.',
+  'knowledge.terrainUnclassified': 'Unclassified',
   'knowledge.empty':
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',

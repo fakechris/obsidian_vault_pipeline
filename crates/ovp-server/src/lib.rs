@@ -702,13 +702,41 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 /// `GET /api/terrain` — the knowledge-terrain projection built by
 /// `ovp2 crystal-terrain` (`.ovp/crystal/terrain.json`), served raw. 404 with a
 /// hint when it hasn't been built yet.
+/// Cheap contract check for `terrain.json`: parseable, `schema` is an
+/// `ovp.crystal.terrain*` string, and `points` is an array. Guards the client
+/// from a truncated/wrong-shaped projection that would crash the Terrain view.
+fn terrain_shape_ok(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .filter(|v| {
+            v.get("schema")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s.starts_with("ovp.crystal.terrain"))
+                && v.get("points").is_some_and(|p| p.is_array())
+        })
+        .is_some()
+}
+
 fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = state.vault_root.join(".ovp/crystal/terrain.json");
     match std::fs::read_to_string(&path) {
-        // Terrain is generated independently of the index — do NOT stamp it with
-        // the index's built_at/run_id, or a lone `index build` would advertise
-        // false freshness for a stale terrain body.
-        Ok(body) => json_stamped(200, &body, None),
+        // Validate the v1 shape before claiming 200: a truncated or wrong-shaped
+        // file (e.g. `{}`) would otherwise reach the client and crash the view on
+        // `data.points`. Terrain is generated independently of the index — do NOT
+        // stamp it with the index's built_at/run_id, or a lone `index build`
+        // would advertise false freshness for a stale terrain body.
+        Ok(body) if terrain_shape_ok(&body) => json_stamped(200, &body, None),
+        Ok(_) => {
+            eprintln!(
+                "handle_terrain: corrupt/incompatible terrain.json at {}",
+                path.display()
+            );
+            json_stamped(
+                500,
+                "{\"error\":\"terrain.json is corrupt — rebuild with `ovp2 crystal-terrain`\"}",
+                None,
+            )
+        }
         // Only a genuinely-absent file is "not built yet". Permission errors,
         // invalid UTF-8, or a dir at the path are real faults — surface them as
         // 500 (and log) rather than telling the operator to rebuild.
@@ -1844,6 +1872,19 @@ fn hex_val(b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terrain_shape_ok_gates_corrupt_projections() {
+        assert!(terrain_shape_ok(
+            r#"{"schema":"ovp.crystal.terrain/v1","points":[]}"#
+        ));
+        assert!(!terrain_shape_ok("{}")); // wrong shape
+        assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1"}"#)); // no points
+        assert!(!terrain_shape_ok(r#"{"points":[]}"#)); // no schema
+        assert!(!terrain_shape_ok(r#"{"schema":"other","points":[]}"#)); // wrong schema
+        assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1","points":{}}"#)); // points not array
+        assert!(!terrain_shape_ok("{truncated")); // unparseable
+    }
 
     fn temp_root(name: &str) -> PathBuf {
         let dir =
