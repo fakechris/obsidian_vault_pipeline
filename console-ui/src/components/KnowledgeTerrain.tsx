@@ -234,6 +234,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
         return { th, el, obj };
       });
 
+    // Interaction state, hoisted so `applyCutoff` can reset a stale hover when
+    // the visible set shrinks under it.
+    let hoverSlot = -1;
+    let downX = 0;
+    let downY = 0;
+
     // ---- rebuild terrain/points/labels for a date cutoff ----
     const applyCutoff = (cutoff: string) => {
       const vis = data.points.filter((p) => !p.date || p.date <= cutoff);
@@ -256,6 +262,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       pgeo.setDrawRange(0, vis.length);
       pgeo.attributes.position.needsUpdate = true;
 
+      // The hovered/marked point may have just dropped out of the visible set;
+      // clear it so `onClick` can't read a now-out-of-range `visibleIdx` slot.
+      hoverSlot = -1;
+      mark.visible = false;
+      setHover(null);
+
       const seen = new Set(vis.map((p) => p.theme));
       for (const l of labelObjs) {
         if (seen.has(l.th.label)) {
@@ -275,13 +287,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const ray = new THREE.Raycaster();
     ray.params.Points = { threshold: 2.4 };
     const ndc = new THREE.Vector2();
-    let hoverSlot = -1;
-    let downX = 0;
-    let downY = 0;
     const pick = (ev: PointerEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      // offsetX/Y are canvas-relative and reflow-free — avoids the layout
+      // thrash of getBoundingClientRect() on every pointermove. W/H track the
+      // canvas size via the ResizeObserver below.
+      ndc.x = (ev.offsetX / W) * 2 - 1;
+      ndc.y = -(ev.offsetY / H) * 2 + 1;
       ray.setFromCamera(ndc, camera);
       const hits = ray.intersectObject(points, false);
       const hit = hits.find((h) => (h.index ?? -1) < visibleIdx.length);
@@ -293,7 +304,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           parr[hoverSlot * 3], parr[hoverSlot * 3 + 1], parr[hoverSlot * 3 + 2],
         ]);
         mark.geometry.attributes.position.needsUpdate = true;
-        setHover({ mx: ev.clientX - rect.left, my: ev.clientY - rect.top, p });
+        setHover({ mx: ev.offsetX, my: ev.offsetY, p });
         renderer.domElement.style.cursor = 'pointer';
       } else {
         hoverSlot = -1;
@@ -307,10 +318,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       downY = e.clientY;
     };
     const onClick = (e: MouseEvent) => {
-      if (hoverSlot < 0) return;
+      if (hoverSlot < 0 || hoverSlot >= visibleIdx.length) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // a drag, not a click
       const p = data.points[visibleIdx[hoverSlot]];
-      if (!p.sha) return; // pack not ledger-tracked → no source page to open
+      if (!p?.sha) return; // pack not in the index → no /library page to open
       navigate(`/library/${encodeURIComponent(p.sha)}`);
     };
     renderer.domElement.addEventListener('pointermove', pick);
@@ -367,7 +378,15 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       geo.dispose();
       terrainMat.dispose();
       pgeo.dispose();
+      // material.dispose() does NOT release its texture map — each glowTexture()
+      // is a separate GPU resource. Dispose points + mark geometry/material/map
+      // so remounts (List/Graph/Terrain tab switches) don't leak.
+      pmat.map?.dispose();
       pmat.dispose();
+      mark.geometry.dispose();
+      const markMat = mark.material as THREE.PointsMaterial;
+      markMat.map?.dispose();
+      markMat.dispose();
       renderer.dispose();
       wrap.removeChild(renderer.domElement);
       wrap.removeChild(labelRenderer.domElement);
