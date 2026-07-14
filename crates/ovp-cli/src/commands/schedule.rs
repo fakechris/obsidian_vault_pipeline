@@ -1178,18 +1178,35 @@ fn status_with(
     match ovp_daily::read_last_run(&meta.vault_root) {
         Ok(Some(hb)) => {
             let when = hb.ended_at.as_deref().unwrap_or(hb.started_at.as_str());
-            let status = match hb.status {
+            // Liveness-adjusted: a `running` record whose process is gone is
+            // reported as STALLED, not "running" (it never finalized). Compute
+            // it ONCE — effective_status() probes the pid (spawns `kill`).
+            let effective = hb.effective_status();
+            let stalled =
+                hb.status == ovp_daily::LastRunStatus::Running && effective == ovp_daily::LastRunStatus::Aborted;
+            let status = match effective {
                 ovp_daily::LastRunStatus::Completed => "completed",
                 ovp_daily::LastRunStatus::Failed => "FAILED",
+                ovp_daily::LastRunStatus::Aborted if stalled => "STALLED (process gone)",
                 ovp_daily::LastRunStatus::Aborted => "ABORTED",
                 ovp_daily::LastRunStatus::Running => "running",
             };
             println!("  last run:  {status} at {when} ({})", hb.run_id);
-            match hb.status {
+            match effective {
                 ovp_daily::LastRunStatus::Failed | ovp_daily::LastRunStatus::Aborted => {
+                    let reason = if stalled {
+                        Some(format!(
+                            "process (pid {}) is gone; stalled at {}/{}",
+                            hb.pid,
+                            hb.processed_so_far.unwrap_or(0),
+                            hb.total_planned.unwrap_or(0)
+                        ))
+                    } else {
+                        hb.error.clone()
+                    };
                     println!(
-                        "  WARN: the last run did not complete ({status}){} — check the schedule log and rerun `ovp2 daily`",
-                        hb.error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()
+                        "  WARN: the last run did not complete ({status}){} — rerun `ovp2 daily`",
+                        reason.map(|e| format!(": {e}")).unwrap_or_default()
                     );
                 }
                 _ => {}

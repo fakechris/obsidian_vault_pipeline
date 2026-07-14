@@ -947,11 +947,30 @@ fn days_between(from: &str, to: &str) -> Option<usize> {
 /// status keeps the model self-describing for the static console pages and the
 /// SPA alike.
 pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
-    let status = match hb.status {
+    // Use the LIVENESS-adjusted status: a `running` record whose process is
+    // gone (SIGKILL/power-loss/OOM — no finalize ran) is really aborted, so the
+    // portal shows "stalled" instead of "in progress" forever. Compute it ONCE —
+    // effective_status() probes the pid (spawns `kill`).
+    let effective = hb.effective_status();
+    let stalled =
+        hb.status == ovp_daily::LastRunStatus::Running && effective == ovp_daily::LastRunStatus::Aborted;
+    let status = match effective {
         ovp_daily::LastRunStatus::Running => "running",
         ovp_daily::LastRunStatus::Completed => "completed",
         ovp_daily::LastRunStatus::Failed => "failed",
         ovp_daily::LastRunStatus::Aborted => "aborted",
+    };
+    // Explain the downgrade so the UI/operator sees WHY a run at 65/80 stopped.
+    let error = if stalled {
+        Some(format!(
+            "run stopped without finishing — its process (pid {}) is gone (killed/crashed/slept); \
+             it stalled at {}/{}",
+            hb.pid,
+            hb.processed_so_far.unwrap_or(0),
+            hb.total_planned.unwrap_or(0)
+        ))
+    } else {
+        hb.error
     };
     LastRunModel {
         run_id: hb.run_id,
@@ -979,7 +998,7 @@ pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
                 at: r.at,
             })
             .collect(),
-        error: hb.error,
+        error,
     }
 }
 
