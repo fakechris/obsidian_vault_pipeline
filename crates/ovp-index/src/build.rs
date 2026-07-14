@@ -949,9 +949,12 @@ fn days_between(from: &str, to: &str) -> Option<usize> {
 pub fn last_run_to_model(hb: ovp_daily::LastRun) -> LastRunModel {
     // Use the LIVENESS-adjusted status: a `running` record whose process is
     // gone (SIGKILL/power-loss/OOM — no finalize ran) is really aborted, so the
-    // portal shows "stalled" instead of "in progress" forever.
-    let stalled = hb.is_stalled();
-    let status = match hb.effective_status() {
+    // portal shows "stalled" instead of "in progress" forever. Compute it ONCE —
+    // effective_status() probes the pid (spawns `kill`).
+    let effective = hb.effective_status();
+    let stalled =
+        hb.status == ovp_daily::LastRunStatus::Running && effective == ovp_daily::LastRunStatus::Aborted;
+    let status = match effective {
         ovp_daily::LastRunStatus::Running => "running",
         ovp_daily::LastRunStatus::Completed => "completed",
         ovp_daily::LastRunStatus::Failed => "failed",

@@ -1179,9 +1179,12 @@ fn status_with(
         Ok(Some(hb)) => {
             let when = hb.ended_at.as_deref().unwrap_or(hb.started_at.as_str());
             // Liveness-adjusted: a `running` record whose process is gone is
-            // reported as STALLED, not "running" (it never finalized).
-            let stalled = hb.is_stalled();
-            let status = match hb.effective_status() {
+            // reported as STALLED, not "running" (it never finalized). Compute
+            // it ONCE — effective_status() probes the pid (spawns `kill`).
+            let effective = hb.effective_status();
+            let stalled =
+                hb.status == ovp_daily::LastRunStatus::Running && effective == ovp_daily::LastRunStatus::Aborted;
+            let status = match effective {
                 ovp_daily::LastRunStatus::Completed => "completed",
                 ovp_daily::LastRunStatus::Failed => "FAILED",
                 ovp_daily::LastRunStatus::Aborted if stalled => "STALLED (process gone)",
@@ -1189,7 +1192,7 @@ fn status_with(
                 ovp_daily::LastRunStatus::Running => "running",
             };
             println!("  last run:  {status} at {when} ({})", hb.run_id);
-            match hb.effective_status() {
+            match effective {
                 ovp_daily::LastRunStatus::Failed | ovp_daily::LastRunStatus::Aborted => {
                     let reason = if stalled {
                         Some(format!(
