@@ -60,6 +60,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   // Flag, not a message — translate at render so a locale toggle doesn't retrigger
   // the fetch effect (which would replace `data` and rebuild the whole scene).
   const [failed, setFailed] = useState(false);
+  const [webglFailed, setWebglFailed] = useState(false);
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -99,27 +100,41 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const H = height;
 
     const [minx, miny, maxx, maxy] = data.bounds;
-    const sx = (v: number) => ((v - minx) / Math.max(maxx - minx, 1e-6) - 0.5) * SIZE;
-    const sy = (v: number) => ((v - miny) / Math.max(maxy - miny, 1e-6) - 0.5) * SIZE;
+    // One uniform scale (max span) keeps the backend's aspect ratio — scaling
+    // each axis to SIZE independently would stretch a 100×50 layout to 220×220,
+    // distorting semantic angles/distances. Center the shorter axis.
+    const spanMax = Math.max(maxx - minx, maxy - miny, 1e-6);
+    const sx = (v: number) => ((v - minx) - (maxx - minx) / 2) / spanMax * SIZE;
+    const sy = (v: number) => ((v - miny) - (maxy - miny) / 2) / spanMax * SIZE;
 
     // Separable Gaussian kernel for the KDE.
     const kern: number[] = [];
     const R = Math.ceil(SIGMA * 3);
     for (let i = -R; i <= R; i++) kern.push(Math.exp(-(i * i) / (2 * SIGMA * SIGMA)));
     const ksum = kern.reduce((a, b) => a + b, 0);
+    // Zero-pad the separable Gaussian: SKIP out-of-range taps rather than
+    // clamping to the border cell. Clamping re-samples an edge point once per
+    // out-of-range tap (~22× inflation for a corner point), so it — not a real
+    // cluster — would set fullMax and flatten every genuine peak.
     const blur = (src: Float32Array) => {
       const h = new Float32Array(GRID * GRID);
       for (let y = 0; y < GRID; y++)
         for (let x = 0; x < GRID; x++) {
           let s = 0;
-          for (let k = -R; k <= R; k++) s += src[y * GRID + Math.min(GRID - 1, Math.max(0, x + k))] * kern[k + R];
+          for (let k = -R; k <= R; k++) {
+            const xx = x + k;
+            if (xx >= 0 && xx < GRID) s += src[y * GRID + xx] * kern[k + R];
+          }
           h[y * GRID + x] = s / ksum;
         }
       const o = new Float32Array(GRID * GRID);
       for (let y = 0; y < GRID; y++)
         for (let x = 0; x < GRID; x++) {
           let s = 0;
-          for (let k = -R; k <= R; k++) s += h[Math.min(GRID - 1, Math.max(0, y + k)) * GRID + x] * kern[k + R];
+          for (let k = -R; k <= R; k++) {
+            const yy = y + k;
+            if (yy >= 0 && yy < GRID) s += h[yy * GRID + x] * kern[k + R];
+          }
           o[y * GRID + x] = s / ksum;
         }
       return o;
@@ -162,7 +177,16 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const camera = new THREE.PerspectiveCamera(45, W / H, 1, SIZE * 6);
     camera.position.set(0, HEIGHT * 3.2, SIZE * 0.82);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // WebGLRenderer throws on clients where WebGL is unavailable/disabled
+    // (GPU-off browsers, locked-down webviews). Catch it so selecting Terrain
+    // shows a fallback message instead of unmounting the whole app.
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch {
+      setWebglFailed(true);
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(W, H);
     renderer.domElement.style.borderRadius = '12px';
@@ -456,6 +480,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     return (
       <div className="graph-caption" style={{ padding: '2rem 0' }}>
         {t('knowledge.terrainNotBuilt')}
+      </div>
+    );
+  if (webglFailed)
+    return (
+      <div className="graph-caption" style={{ padding: '2rem 0' }}>
+        {t('knowledge.terrainNoWebgl')}
       </div>
     );
 
