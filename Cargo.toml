@@ -18,6 +18,7 @@ members = [
     "crates/ovp-intake",
     "crates/ovp-index",
     "crates/ovp-api-projection",
+    "crates/ovp-publish",
     "crates/ovp-console",
     "crates/ovp-enrich",
     "crates/ovp-memory",

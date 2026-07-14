@@ -15,6 +15,7 @@ pub mod crystal_themes;
 pub mod crystal_write;
 pub mod console_cmd;
 pub mod daily;
+pub mod publish;
 pub mod defaults;
 pub mod doctor;
 pub mod digest;

@@ -159,6 +159,13 @@ impl VaultLayout {
         ".ovp/daily-runs.jsonl"
     }
 
+    /// Append-only record of each `ovp2 publish` run (content hash, index
+    /// provenance, published_at) — the change-detection authority that lets a
+    /// scheduled publish skip a no-op push.
+    pub fn publish_ledger(&self) -> &'static str {
+        ".ovp/publish.jsonl"
+    }
+
     /// The vault's write-operation log mandated by `OVP_RULES.md` ("Always log
     /// every write operation to 60-Logs/pipeline.jsonl").
     pub fn pipeline_log(&self) -> &'static str {

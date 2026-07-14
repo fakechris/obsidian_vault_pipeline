@@ -2721,6 +2721,7 @@ dependencies = [
  "ovp-llm",
  "ovp-mcp",
  "ovp-memory",
+ "ovp-publish",
  "ovp-query",
  "ovp-rag",
  "ovp-review",
@@ -2900,6 +2901,19 @@ dependencies = [
  "ovp-llm",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ovp-publish"
+version = "2.0.1"
+dependencies = [
+ "ovp-api-projection",
+ "ovp-domain",
+ "ovp-index",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
