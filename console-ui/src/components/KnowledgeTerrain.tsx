@@ -15,8 +15,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
-type TPoint = { id: string; sha: string; title: string; date: string; theme: string; x: number; y: number };
-type TTheme = { id: number; label: string; cx: number; cy: number; count: number };
+type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number };
+type TTheme = { id: number; label: string; label_zh: string; cx: number; cy: number; count: number };
 type Terrain = {
   points: TPoint[];
   themes: TTheme[];
@@ -48,7 +48,14 @@ function glowTexture(): THREE.Texture {
 export default function KnowledgeTerrain({ height = 600 }: { height?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  // Read inside the imperative three.js effect without making `lang` a build
+  // dep (a scene rebuild on every locale toggle would reset the camera).
+  const langRef = useRef(lang);
+  langRef.current = lang;
+  // Live handles to the floating theme labels so a locale toggle can rewrite
+  // their text without rebuilding the WebGL scene.
+  const labelHandlesRef = useRef<{ el: HTMLDivElement; th: TTheme }[]>([]);
   const [data, setData] = useState<Terrain | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
@@ -226,13 +233,14 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       .slice(0, 16)
       .map((th) => {
         const el = document.createElement('div');
-        el.textContent = th.label;
+        el.textContent = langRef.current === 'zh' ? th.label_zh : th.label;
         el.style.cssText =
           'color:rgba(233,230,224,0.94);font:600 12px system-ui;text-shadow:0 1px 3px rgba(0,0,0,0.85);white-space:nowrap;';
         const obj = new CSS2DObject(el);
         scene.add(obj);
         return { th, el, obj };
       });
+    labelHandlesRef.current = labelObjs.map((l) => ({ el: l.el, th: l.th }));
 
     // Interaction state, hoisted so `applyCutoff` can reset a stale hover when
     // the visible set shrinks under it.
@@ -268,9 +276,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       mark.visible = false;
       setHover(null);
 
-      const seen = new Set(vis.map((p) => p.theme));
+      // Key on community id, not the display label — two communities may share
+      // a label, and keying on the string would light both anchors when only
+      // one has visible points.
+      const seen = new Set(vis.map((p) => p.theme_id));
       for (const l of labelObjs) {
-        if (seen.has(l.th.label)) {
+        if (seen.has(l.th.id)) {
           l.el.style.display = '';
           const wx = sx(l.th.cx);
           const wz = sy(l.th.cy);
@@ -391,6 +402,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       wrap.removeChild(renderer.domElement);
       wrap.removeChild(labelRenderer.domElement);
       labelObjs.forEach((l) => l.obj.removeFromParent());
+      labelHandlesRef.current = [];
     };
   }, [data, height, navigate]);
 
@@ -415,6 +427,19 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     }, 700);
     return () => window.clearInterval(id);
   }, [playing, months]);
+
+  // ---- relabel the floating theme labels when the locale changes ----
+  useEffect(() => {
+    for (const l of labelHandlesRef.current) {
+      l.el.textContent = lang === 'zh' ? l.th.label_zh : l.th.label;
+    }
+  }, [lang, data]);
+
+  // Theme lookup for the localized tooltip (point carries only its community id).
+  const themeById = useMemo(
+    () => new Map((data?.themes ?? []).map((th) => [th.id, th] as const)),
+    [data],
+  );
 
   if (err) return <div className="graph-caption" style={{ padding: '2rem 0' }}>{err}</div>;
 
@@ -482,7 +507,11 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           }}
         >
           <div style={{ color: '#7fd6e6', fontSize: 11, marginBottom: 3 }}>
-            {hover.p.theme}{hover.p.date ? ` · ${hover.p.date}` : ''}
+            {(() => {
+              const th = themeById.get(hover.p.theme_id);
+              const name = th ? (lang === 'zh' ? th.label_zh : th.label) : hover.p.theme;
+              return `${name}${hover.p.date ? ` · ${hover.p.date}` : ''}`;
+            })()}
           </div>
           <div style={{ lineHeight: 1.35 }}>{hover.p.title}</div>
         </div>

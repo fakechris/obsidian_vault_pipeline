@@ -586,11 +586,6 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         experiment_seed: u64,
     },
-    /// Build the semantic display-theme projection (.ovp/crystal/themes.json)
-    /// over all reader packs: multilingual embeddings (cached) → Louvain
-    /// communities → c-TF-IDF keywords → bilingual labels. Rebuildable
-    /// projection; never touches the crystal ledger. Offline/no-model runs
-    /// skip gracefully (everything stays Unclassified).
     /// PRODUCT — build the knowledge-terrain projection (`.ovp/crystal/terrain.json`):
     /// a 2D force layout of the themed packs over the kNN graph, for the portal's
     /// terrain view. Reuses crystal-themes' embeddings + labels; warm cache only.
@@ -598,6 +593,11 @@ enum Cmd {
         #[arg(long)]
         vault_root: PathBuf,
     },
+    /// Build the semantic display-theme projection (.ovp/crystal/themes.json)
+    /// over all reader packs: multilingual embeddings (cached) → Louvain
+    /// communities → c-TF-IDF keywords → bilingual labels. Rebuildable
+    /// projection; never touches the crystal ledger. Offline/no-model runs
+    /// skip gracefully (everything stays Unclassified).
     CrystalThemes {
         #[arg(long)]
         vault_root: PathBuf,

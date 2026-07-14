@@ -42,17 +42,22 @@ struct TerrainPoint {
     title: String,
     /// `YYYY-MM-DD` parsed from the pack case_id, else "".
     date: String,
+    /// English theme label (fallback); the client localizes via `theme_id`.
     theme: String,
+    /// Community id — the STABLE key. Two communities may share a display label,
+    /// so the client keys visible-theme identity on this, not the label string.
+    theme_id: i64,
     x: f64,
     y: f64,
 }
 
-/// A community label, treating the unclassified bucket (negative id) as
-/// "Unclassified" rather than a raw "Cluster -1".
-fn theme_label(id: i64, labels: &BTreeMap<i64, String>) -> String {
+/// A community label, treating the unclassified bucket (negative id) as the
+/// caller-supplied localized "unclassified" string rather than a raw
+/// "Cluster -1". `labels` is the locale-specific community→label map.
+fn theme_label(id: i64, labels: &BTreeMap<i64, String>, unclassified: &str) -> String {
     labels.get(&id).cloned().unwrap_or_else(|| {
         if id < 0 {
-            "Unclassified".to_string()
+            unclassified.to_string()
         } else {
             format!("Cluster {id}")
         }
@@ -63,6 +68,9 @@ fn theme_label(id: i64, labels: &BTreeMap<i64, String>) -> String {
 struct TerrainTheme {
     id: i64,
     label: String,
+    /// Chinese label — the portal picks `label`/`label_zh` by active locale so
+    /// terrain labels + tooltips follow the rest of the UI.
+    label_zh: String,
     /// Centroid of the theme's points (peak/label anchor).
     cx: f64,
     cy: f64,
@@ -228,14 +236,27 @@ fn normalize(pos: &mut [(f64, f64)]) -> [f64; 4] {
         maxx = maxx.max(x);
         maxy = maxy.max(y);
     }
-    let sx = if maxx > minx { 100.0 / (maxx - minx) } else { 1.0 };
-    let sy = if maxy > miny { 100.0 / (maxy - miny) } else { 1.0 };
-    let s = sx.min(sy);
-    for p in pos.iter_mut() {
-        p.0 = (p.0 - minx) * s;
-        p.1 = (p.1 - miny) * s;
+    let spanx = maxx - minx;
+    let spany = maxy - miny;
+    // Single pack (or a collinear layout) has zero span on an axis. Scaling by
+    // that would pin every coordinate to 0, which the frontend maps to the map
+    // EDGE (-SIZE/2). Center degenerate axes at 50 and report a nonzero bound so
+    // the lone hill sits in the middle, not the corner.
+    let span = spanx.max(spany);
+    if span <= 1e-9 {
+        for p in pos.iter_mut() {
+            *p = (50.0, 50.0);
+        }
+        return [0.0, 0.0, 100.0, 100.0];
     }
-    [0.0, 0.0, (maxx - minx) * s, (maxy - miny) * s]
+    let s = 100.0 / span;
+    for p in pos.iter_mut() {
+        p.0 = if spanx > 1e-9 { (p.0 - minx) * s } else { 50.0 };
+        p.1 = if spany > 1e-9 { (p.1 - miny) * s } else { 50.0 };
+    }
+    let w = if spanx > 1e-9 { spanx * s } else { 100.0 };
+    let h = if spany > 1e-9 { spany * s } else { 100.0 };
+    [0.0, 0.0, w, h]
 }
 
 pub fn run(args: TerrainArgs) -> Result<(), CliError> {
@@ -257,6 +278,11 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         .communities
         .iter()
         .map(|c| (c.id, c.label.clone()))
+        .collect();
+    let community_label_zh: BTreeMap<i64, String> = themes
+        .communities
+        .iter()
+        .map(|c| (c.id, c.label_zh.clone()))
         .collect();
 
     // Link sha (for /library/:sha) is the source CONTENT sha, joined from the
@@ -346,7 +372,8 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             sha: sha.clone(),
             title: title.clone(),
             date: date.clone(),
-            theme: theme_label(*community, &community_label),
+            theme: theme_label(*community, &community_label, "Unclassified"),
+            theme_id: *community,
             x: *x,
             y: *y,
         })
@@ -365,7 +392,8 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             let _ = ci;
             TerrainTheme {
                 id,
-                label: theme_label(id, &community_label),
+                label: theme_label(id, &community_label, "Unclassified"),
+                label_zh: theme_label(id, &community_label_zh, "未分类"),
                 cx: sx / n,
                 cy: sy / n,
                 count: members.len(),
@@ -475,6 +503,22 @@ mod tests {
                 assert!(d > 0.5, "islands {i},{j} too close: {d}");
             }
         }
+    }
+
+    #[test]
+    fn normalize_centers_degenerate_layouts() {
+        // Single point → centered, nonzero bound (not pinned to the edge).
+        let mut one = [(7.0, 7.0)];
+        let b = normalize(&mut one);
+        assert_eq!(one[0], (50.0, 50.0));
+        assert!(b[2] > 0.0 && b[3] > 0.0, "bound must be nonzero: {b:?}");
+        // Collinear on x (zero y-span) → y centered, x spread across the box.
+        let mut row = [(0.0, 5.0), (10.0, 5.0)];
+        let bb = normalize(&mut row);
+        assert_eq!(row[0].1, 50.0);
+        assert_eq!(row[1].1, 50.0);
+        assert!((row[0].0 - 0.0).abs() < 1e-9 && (row[1].0 - 100.0).abs() < 1e-9);
+        assert!(bb[3] > 0.0, "degenerate y-bound must be nonzero: {bb:?}");
     }
 
     #[test]
