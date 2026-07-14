@@ -200,6 +200,19 @@ export const en = {
     'The ladder in plain language: source text → unit (a verifiable excerpt) → card (a readable understanding) → claim (a cross-source conclusion, always either durable or caveated).',
   'knowledge.viewList': 'List',
   'knowledge.viewGraph': 'Graph',
+  'knowledge.viewTerrain': 'Terrain',
+  'knowledge.terrainCaption':
+    'A themescape of the corpus: peaks are dense clusters (labelled by theme), each point a source. Hover a point to see the note. Built from the same embeddings as the themes.',
+  'knowledge.terrainHud': '{notes} notes · {themes} themes · drag to orbit, scroll to zoom',
+  'knowledge.terrainLoading': 'loading…',
+  'knowledge.terrainAllTime': 'all time',
+  'knowledge.terrainPlay': 'play',
+  'knowledge.terrainPause': 'pause',
+  'knowledge.terrainNotBuilt':
+    'Terrain not built yet — run `ovp2 crystal-terrain --vault-root <vault>`.',
+  'knowledge.terrainNoWebgl':
+    'This 3D view needs WebGL, which is unavailable in this browser. Try the List or Graph view.',
+  'knowledge.terrainUnclassified': 'Unclassified',
   'knowledge.empty':
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',

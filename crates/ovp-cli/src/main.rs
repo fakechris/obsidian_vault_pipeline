@@ -586,6 +586,15 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         experiment_seed: u64,
     },
+    /// PRODUCT — build the knowledge-terrain projection (`.ovp/crystal/terrain.json`):
+    /// a 2D layout that places theme islands by a semantic force layout over
+    /// community centroids, then scatters each pack within its island by
+    /// theme-fit, for the portal's terrain view. Reuses crystal-themes'
+    /// embeddings + labels; warm cache only.
+    CrystalTerrain {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
     /// Build the semantic display-theme projection (.ovp/crystal/themes.json)
     /// over all reader packs: multilingual embeddings (cached) → Louvain
     /// communities → c-TF-IDF keywords → bilingual labels. Rebuildable
@@ -1615,6 +1624,9 @@ fn main() -> ExitCode {
                     embed_cache_dir,
                 })
             }
+        }
+        Cmd::CrystalTerrain { vault_root } => {
+            commands::crystal_terrain::run(commands::crystal_terrain::TerrainArgs { vault_root })
         }
         Cmd::CrystalThemes {
             vault_root,

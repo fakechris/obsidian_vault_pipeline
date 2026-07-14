@@ -614,6 +614,7 @@ fn dispatch(
         (Method::Get, "/api/flow") => handle_flow(state),
         (Method::Get, "/api/settings") => handle_settings(state),
         (Method::Get, "/api/themes") => handle_themes(state),
+        (Method::Get, "/api/terrain") => handle_terrain(state),
         (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
         (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
         (Method::Get, p) if p == "/api" || p.starts_with("/api/") => {
@@ -696,6 +697,59 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         .collect();
     let body = serde_json::to_string(&themes).unwrap_or_else(|_| "[]".into());
     json_stamped(200, &body, model.as_ref())
+}
+
+/// `GET /api/terrain` — the knowledge-terrain projection built by
+/// `ovp2 crystal-terrain` (`.ovp/crystal/terrain.json`), served raw. 404 with a
+/// hint when it hasn't been built yet.
+/// Cheap contract check for `terrain.json`: parseable, `schema` is an
+/// `ovp.crystal.terrain*` string, and `points` is an array. Guards the client
+/// from a truncated/wrong-shaped projection that would crash the Terrain view.
+fn terrain_shape_ok(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .filter(|v| {
+            v.get("schema")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s.starts_with("ovp.crystal.terrain"))
+                && v.get("points").is_some_and(|p| p.is_array())
+        })
+        .is_some()
+}
+
+fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = state.vault_root.join(".ovp/crystal/terrain.json");
+    match std::fs::read_to_string(&path) {
+        // Validate the v1 shape before claiming 200: a truncated or wrong-shaped
+        // file (e.g. `{}`) would otherwise reach the client and crash the view on
+        // `data.points`. Terrain is generated independently of the index — do NOT
+        // stamp it with the index's built_at/run_id, or a lone `index build`
+        // would advertise false freshness for a stale terrain body.
+        Ok(body) if terrain_shape_ok(&body) => json_stamped(200, &body, None),
+        Ok(_) => {
+            eprintln!(
+                "handle_terrain: corrupt/incompatible terrain.json at {}",
+                path.display()
+            );
+            json_stamped(
+                500,
+                "{\"error\":\"terrain.json is corrupt — rebuild with `ovp2 crystal-terrain`\"}",
+                None,
+            )
+        }
+        // Only a genuinely-absent file is "not built yet". Permission errors,
+        // invalid UTF-8, or a dir at the path are real faults — surface them as
+        // 500 (and log) rather than telling the operator to rebuild.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json_stamped(
+            404,
+            "{\"error\":\"no terrain.json — run `ovp2 crystal-terrain --vault-root <v>`\"}",
+            None,
+        ),
+        Err(e) => {
+            eprintln!("handle_terrain: reading {}: {e}", path.display());
+            json_stamped(500, "{\"error\":\"terrain read failed\"}", None)
+        }
+    }
 }
 
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1818,6 +1872,19 @@ fn hex_val(b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terrain_shape_ok_gates_corrupt_projections() {
+        assert!(terrain_shape_ok(
+            r#"{"schema":"ovp.crystal.terrain/v1","points":[]}"#
+        ));
+        assert!(!terrain_shape_ok("{}")); // wrong shape
+        assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1"}"#)); // no points
+        assert!(!terrain_shape_ok(r#"{"points":[]}"#)); // no schema
+        assert!(!terrain_shape_ok(r#"{"schema":"other","points":[]}"#)); // wrong schema
+        assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1","points":{}}"#)); // points not array
+        assert!(!terrain_shape_ok("{truncated")); // unparseable
+    }
 
     fn temp_root(name: &str) -> PathBuf {
         let dir =

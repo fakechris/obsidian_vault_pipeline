@@ -83,11 +83,11 @@ pub struct CrystalThemesArgs {
 }
 
 /// One themable reader pack.
-struct ThemeDoc {
-    case_id: String,
-    title: String,
-    text: String,
-    sha: String,
+pub(crate) struct ThemeDoc {
+    pub(crate) case_id: String,
+    pub(crate) title: String,
+    pub(crate) text: String,
+    pub(crate) sha: String,
 }
 
 /// Strip reader.md presentation boilerplate before embedding — mirrors the
@@ -143,7 +143,7 @@ fn strip_trailing_em_tag(s: &str) -> &str {
 /// run-status.json / units.accepted.json, minus failed attempts), sorted by
 /// case_id. A missing reader root is an empty corpus (fresh vault), not an
 /// error — the degradation contract says never block.
-fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
+pub(crate) fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError> {
     let entries = match std::fs::read_dir(reader_root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
