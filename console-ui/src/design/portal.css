@@ -927,6 +927,17 @@ body {
   position: absolute;
   inset: 0;
 }
+.graph-controls {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+}
+.graph-controls .graph-expand {
+  position: static;
+}
 .graph-expand {
   position: absolute;
   top: 0.5rem;

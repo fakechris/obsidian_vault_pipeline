@@ -28,8 +28,10 @@ import type { GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 const ForceGraph2D = lazy(() => import('react-force-graph-2d')) as any;
+const ForceGraph3D = lazy(() => import('react-force-graph-3d')) as any;
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export type KnowledgeGraphScope = 'neighborhood' | 'global' | 'theme';
 
@@ -54,6 +56,7 @@ interface DsTokens {
   muted: string;
   surface: string;
   accent: string;
+  bg: string;
   community: string[];
 }
 
@@ -67,6 +70,7 @@ function readTokens(): DsTokens {
     muted: v('--muted'),
     surface: v('--surface'),
     accent: v('--accent'),
+    bg: v('--graph-bg') || '#0d0f13',
     community: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => v(`--c-${n}`)),
   };
 }
@@ -125,6 +129,7 @@ export default function KnowledgeGraph({
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [mode, setMode] = useState<'2d' | '3d'>('2d');
   const [dims, setDims] = useState({ w: 0, h: height });
   const [themeVersion, setThemeVersion] = useState(0);
 
@@ -301,6 +306,16 @@ export default function KnowledgeGraph({
     }
   };
 
+  // 3D: select + fly the camera to look at the node from a fixed distance.
+  const onNodeClick3D = (node: FGNode & { z?: number }) => {
+    setSelected(nodeById.get(node.id) ?? node);
+    const fg = fgRef.current;
+    const { x = 0, y = 0, z = 0 } = node;
+    const dist = 120;
+    const ratio = 1 + dist / (Math.hypot(x, y, z) || 1);
+    fg?.cameraPosition({ x: x * ratio, y: y * ratio, z: z * ratio }, node, 600);
+  };
+
   const empty = !error && data && data.nodes.length === 0;
   const communitiesForLegend =
     scope === 'global' ? (data?.communities ?? []).slice(0, 8) : [];
@@ -331,44 +346,72 @@ export default function KnowledgeGraph({
       {!error && data && data.nodes.length > 0 && (
         <>
           <Suspense fallback={<div className="graph-note">{t('graph.loading')}</div>}>
-            <ForceGraph2D
-              ref={fgRef}
-              width={dims.w || undefined}
-              height={dims.h || height}
-              graphData={graphData}
-              backgroundColor="transparent"
-              cooldownTicks={140}
-              onEngineStop={() => fgRef.current?.zoomToFit(400, 36)}
-              nodeRelSize={4}
-              nodeCanvasObjectMode={() => 'replace'}
-              nodeCanvasObject={drawNode}
-              nodePointerAreaPaint={paintPointerArea}
-              linkColor={(l: { source: FGNode; target: FGNode }) => {
-                const active =
+            {mode === '2d' ? (
+              <ForceGraph2D
+                ref={fgRef}
+                width={dims.w || undefined}
+                height={dims.h || height}
+                graphData={graphData}
+                backgroundColor="transparent"
+                cooldownTicks={140}
+                onEngineStop={() => fgRef.current?.zoomToFit(400, 36)}
+                nodeRelSize={4}
+                nodeCanvasObjectMode={() => 'replace'}
+                nodeCanvasObject={drawNode}
+                nodePointerAreaPaint={paintPointerArea}
+                linkColor={(l: { source: FGNode; target: FGNode }) => {
+                  const active =
+                    hoverId != null &&
+                    ((l.source as FGNode).id === hoverId ||
+                      (l.target as FGNode).id === hoverId);
+                  return active ? tokens.linkHi : tokens.link;
+                }}
+                linkWidth={(l: { source: FGNode; target: FGNode }) =>
                   hoverId != null &&
                   ((l.source as FGNode).id === hoverId ||
-                    (l.target as FGNode).id === hoverId);
-                return active ? tokens.linkHi : tokens.link;
-              }}
-              linkWidth={(l: { source: FGNode; target: FGNode }) =>
-                hoverId != null &&
-                ((l.source as FGNode).id === hoverId ||
-                  (l.target as FGNode).id === hoverId)
-                  ? 1.5
-                  : 0.6
-              }
-              onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
-              onNodeClick={onNodeClick}
-              onBackgroundClick={() => setSelected(null)}
-            />
+                    (l.target as FGNode).id === hoverId)
+                    ? 1.5
+                    : 0.6
+                }
+                onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
+                onNodeClick={onNodeClick}
+                onBackgroundClick={() => setSelected(null)}
+              />
+            ) : (
+              <ForceGraph3D
+                ref={fgRef}
+                width={dims.w || undefined}
+                height={dims.h || height}
+                graphData={graphData}
+                backgroundColor={tokens.bg}
+                nodeRelSize={4}
+                nodeColor={(n: FGNode) => scopedFill(scope, n, tokens)}
+                nodeVal={(n: FGNode) => 1 + 7 * (n.importance ?? 0)}
+                nodeLabel={(n: FGNode) => n.label}
+                nodeOpacity={0.95}
+                linkColor={() => tokens.link}
+                linkOpacity={0.35}
+                linkWidth={0.5}
+                onNodeClick={onNodeClick3D}
+              />
+            )}
           </Suspense>
-          <button
-            type="button"
-            className="graph-expand"
-            onClick={() => setFullscreen((f) => !f)}
-          >
-            {fullscreen ? t('graph.exitFullscreen') : t('graph.fullscreen')}
-          </button>
+          <div className="graph-controls">
+            <button
+              type="button"
+              className="graph-expand"
+              onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
+            >
+              {mode === '2d' ? '3D' : '2D'}
+            </button>
+            <button
+              type="button"
+              className="graph-expand"
+              onClick={() => setFullscreen((f) => !f)}
+            >
+              {fullscreen ? t('graph.exitFullscreen') : t('graph.fullscreen')}
+            </button>
+          </div>
           {data.truncated && (
             <div className="graph-note graph-truncated">{t('graph.truncated')}</div>
           )}
