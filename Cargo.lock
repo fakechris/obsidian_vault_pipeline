@@ -2910,6 +2910,7 @@ dependencies = [
  "ovp-api-projection",
  "ovp-domain",
  "ovp-index",
+ "ovp-intake",
  "serde",
  "serde_json",
  "sha2",
