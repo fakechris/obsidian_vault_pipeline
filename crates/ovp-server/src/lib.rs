@@ -823,12 +823,17 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     .and_then(|v| v.parse::<usize>().ok())
                     .unwrap_or(graph::DEFAULT_OVERVIEW_LIMIT)
                     .max(1);
+                let persp = match query.get("persp").map(String::as_str) {
+                    Some("source") => graph::Perspective::Source,
+                    _ => graph::Perspective::Claim,
+                };
                 let params = graph::GraphParams {
                     mode: graph::GraphMode::Overview,
                     limit,
                     theme: None,
                     focus: None,
                     hops: graph::MAX_HOPS,
+                    persp,
                 };
                 let records = load_active_records(state);
                 graph::build_graph(&records, model.as_ref(), &params)

@@ -379,7 +379,27 @@ export interface ThemeGroup {
  * portal displays it honestly as "Unclassified" — DISPLAY LAYER ONLY: keys,
  * URLs and index data keep the literal value. */
 export function isMiscTheme(theme: string | null | undefined): boolean {
-  return theme === 'misc' || theme === 'Miscellaneous';
+  // '' / nullish is the "no theme" bucket — display it as Unclassified too,
+  // so graph clicks and the wall card on unthemed claims read honestly.
+  return theme == null || theme === '' || theme === 'misc' || theme === 'Miscellaneous';
+}
+
+/** Route segment for the "no theme" bucket ('' theme key). A real theme is
+ * never this literal, so it round-trips without colliding — and unthemed
+ * claims/cards get a routable landing page instead of dead-ending on an empty
+ * `/knowledge/theme/` segment (which falls through to the catch-all redirect). */
+export const UNTHEMED_SEGMENT = '~none';
+
+/** Theme key → `/knowledge/theme/...` route, encoding the empty bucket as the
+ * routable sentinel above. */
+export function themeRoute(theme: string | null | undefined): string {
+  const key = theme ?? '';
+  return `/knowledge/theme/${key === '' ? UNTHEMED_SEGMENT : encodeURIComponent(key)}`;
+}
+
+/** Inverse of {@link themeRoute} for a decoded `:theme` route param. */
+export function themeFromRoute(param: string | null | undefined): string {
+  return param == null || param === UNTHEMED_SEGMENT ? '' : param;
 }
 
 /** Active claims only — the knowledge surface never lists superseded or

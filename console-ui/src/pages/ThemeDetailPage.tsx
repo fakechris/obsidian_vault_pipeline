@@ -11,7 +11,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
 import { useI18n } from '../i18n';
-import { isMiscTheme, sourcesByCase, themeClaims } from '../lib/derive';
+import { isMiscTheme, sourcesByCase, themeClaims, themeFromRoute } from '../lib/derive';
 import type { ClaimRow, IndexModel, SourceRow } from '../lib/types';
 import { useModel } from '../model';
 
@@ -167,7 +167,9 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
 export default function ThemeDetailPage() {
   const { t } = useI18n();
   const { theme: rawTheme } = useParams<{ theme: string }>();
-  const theme = rawTheme ?? '';
+  // The '' (no-theme) bucket travels as a sentinel segment — decode it back so
+  // themeClaims filters the unthemed claims and the page renders as Unclassified.
+  const theme = themeFromRoute(rawTheme);
   const { model, error, loading } = useModel();
 
   // 'misc' displays honestly as "Unclassified"; the route param and all

@@ -19,15 +19,12 @@ const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
-import { isMiscTheme, themeWall, type ThemeGroup } from '../lib/derive';
+import { isMiscTheme, themeRoute, themeWall, type ThemeGroup } from '../lib/derive';
 import type { IndexModel, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
 
 type View = 'list' | 'graph' | 'terrain';
-
-function themePath(theme: string): string {
-  return `/knowledge/theme/${encodeURIComponent(theme)}`;
-}
+type Persp = 'claim' | 'source';
 
 function ThemeCard({ group }: { group: ThemeGroup }) {
   const { t } = useI18n();
@@ -37,7 +34,7 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
   // link target keeps the literal theme key (display layer only).
   const misc = isMiscTheme(group.theme);
   return (
-    <Link className="theme-card" to={themePath(group.theme)}>
+    <Link className="theme-card" to={themeRoute(group.theme)}>
       <div className="theme-card-head">
         <span className="theme-card-name">
           {misc
@@ -93,6 +90,21 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     );
   };
 
+  // Perspective (?persp=) is shared by BOTH the Graph and Terrain views: claim-
+  // vs source-centric. Default 'source' (documents — the more intuitive entry).
+  const persp: Persp = params.get('persp') === 'claim' ? 'claim' : 'source';
+  const setPersp = (next: Persp) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'source') p.delete('persp');
+        else p.set('persp', next);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
   const [themes, setThemes] = useState<ThemeCount[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +125,8 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
 
   return (
     <>
-      <div className="tab-row">
+      <div className="knowledge-viewbar">
+        <div className="tab-row">
         <button
           type="button"
           className={view === 'list' ? 'active' : ''}
@@ -135,6 +148,29 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         >
           {t('knowledge.viewTerrain')}
         </button>
+        </div>
+
+        {/* Perspective switch — a SIBLING of .tab-row (not nested), so the
+            .tab-row button rules don't clobber the .seg-toggle contrast. Shares
+            the row; the "what is a point" hint lives in the caption below. */}
+        {(view === 'graph' || view === 'terrain') && (
+          <div className="seg-toggle persp-toggle" role="group">
+            <button
+              type="button"
+              className={persp === 'source' ? 'active' : ''}
+              onClick={() => setPersp('source')}
+            >
+              {t('knowledge.perspSource')}
+            </button>
+            <button
+              type="button"
+              className={persp === 'claim' ? 'active' : ''}
+              onClick={() => setPersp('claim')}
+            >
+              {t('knowledge.perspClaim')}
+            </button>
+          </div>
+        )}
       </div>
 
       {view === 'list' && (
@@ -154,17 +190,23 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
 
       {view === 'graph' && (
         <>
-          <KnowledgeGraph scope="global" height={560} />
-          <div className="graph-caption">{t('knowledge.graphCaption')}</div>
+          <KnowledgeGraph scope="global" height={560} persp={persp} />
+          <div className="graph-caption">
+            {t(persp === 'claim' ? 'knowledge.perspNodeClaim' : 'knowledge.perspNodeSource')}{' '}
+            {t('knowledge.graphCaption')}
+          </div>
         </>
       )}
 
       {view === 'terrain' && (
         <>
           <Suspense fallback={<div className="legacy-loading">{t('common.loading')}</div>}>
-            <KnowledgeTerrain height={560} />
+            <KnowledgeTerrain height={560} persp={persp} />
           </Suspense>
-          <div className="graph-caption">{t('knowledge.terrainCaption')}</div>
+          <div className="graph-caption">
+            {t(persp === 'claim' ? 'knowledge.perspNodeClaim' : 'knowledge.perspNodeSource')}{' '}
+            {t('knowledge.terrainCaption')}
+          </div>
         </>
       )}
     </>
@@ -176,13 +218,15 @@ export default function KnowledgePage() {
   const { model, error, loading } = useModel();
   const location = useLocation();
 
-  // /knowledge#<claim_id> → the claim's theme page, anchor preserved.
+  // /knowledge#<claim_id> → the claim's theme page, anchor preserved. Forward
+  // whenever the claim resolves — an unthemed claim ('' theme) still lands on
+  // its (Unclassified) theme page via themeRoute rather than dead-ending here.
   const anchor = decodeURIComponent(location.hash.replace(/^#/, ''));
   if (anchor && model) {
     const claim = model.claims.find((c) => c.claim_id === anchor);
-    if (claim?.theme) {
+    if (claim) {
       return (
-        <Navigate to={`${themePath(claim.theme)}#${anchor}`} replace />
+        <Navigate to={`${themeRoute(claim.theme)}#${anchor}`} replace />
       );
     }
   }

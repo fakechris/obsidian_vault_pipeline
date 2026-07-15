@@ -25,7 +25,7 @@ import {
   fetchSourceNeighborhood,
   fetchThemeGraph,
 } from '../lib/api';
-import { isMiscTheme } from '../lib/derive';
+import { isMiscTheme, themeRoute } from '../lib/derive';
 import type { GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
@@ -43,6 +43,9 @@ export interface KnowledgeGraphProps {
   id?: string;
   /** Embedded height in px (default 360). */
   height?: number;
+  /** Global scope only: claim- vs source-centric overview (the portal's shared
+   * perspective toggle). Ignored by neighborhood/theme scopes. */
+  persp?: 'claim' | 'source';
 }
 
 const DEFAULT_HEIGHT = 360;
@@ -171,6 +174,7 @@ export default function KnowledgeGraph({
   scope,
   id,
   height = DEFAULT_HEIGHT,
+  persp = 'claim',
 }: KnowledgeGraphProps) {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -238,7 +242,7 @@ export default function KnowledgeGraph({
   useEffect(() => {
     const request =
       scope === 'global'
-        ? fetchGlobalGraph()
+        ? fetchGlobalGraph(400, persp)
         : id
           ? scope === 'neighborhood'
             ? fetchSourceNeighborhood(id)
@@ -259,7 +263,7 @@ export default function KnowledgeGraph({
     return () => {
       cancelled = true;
     };
-  }, [scope, id]);
+  }, [scope, id, persp]);
 
   // Fresh node/link objects per dataset (react-force-graph owns their physics).
   const graphData = useMemo(() => {
@@ -324,7 +328,11 @@ export default function KnowledgeGraph({
       const sha = n.id.slice('source:'.length);
       if (knownShas.has(sha)) navigate(`/library/${sha}`);
     } else if (n.type === 'claim') {
-      navigate(`/knowledge#${n.claim_id ?? n.id.slice('claim:'.length)}`);
+      // Straight to the claim's theme page, anchored to the claim card. Using
+      // the node's own `theme` skips the /knowledge# bounce (and its
+      // dead-end when a claim has no theme — themeRoute routes '' too).
+      const claimId = n.claim_id ?? n.id.slice('claim:'.length);
+      navigate(`${themeRoute(n.theme)}#${claimId}`);
     }
   };
 
@@ -518,6 +526,12 @@ export default function KnowledgeGraph({
 
   const onNodeClick = (node: FGNode) => {
     const n = nodeById.get(node.id) ?? node;
+    // Single click opens (matches the Terrain view's one-click-to-source). Only
+    // non-openable nodes (e.g. focus-tier units) fall back to select + zoom.
+    if (canOpen(n)) {
+      openNode(n);
+      return;
+    }
     setSelected(n);
     const fg = fgRef.current;
     if (fg && node.x != null && node.y != null) {
@@ -526,9 +540,14 @@ export default function KnowledgeGraph({
     }
   };
 
-  // 3D: select + fly the camera to look at the node from a fixed distance.
+  // 3D: single click opens too; non-openable nodes select + fly the camera.
   const onNodeClick3D = (node: FGNode) => {
-    setSelected(nodeById.get(node.id) ?? node);
+    const n = nodeById.get(node.id) ?? node;
+    if (canOpen(n)) {
+      openNode(n);
+      return;
+    }
+    setSelected(n);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fg = fgRef.current as any;
     const { x = 0, y = 0, z = 0 } = node;

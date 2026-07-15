@@ -762,6 +762,28 @@ body {
   text-underline-offset: 6px;
 }
 
+/* View bar: the tab-row (left) and the claim/source perspective switch (right)
+   share one line. The switch is a SIBLING of .tab-row — nesting it inside would
+   let `.tab-row button.active` (accent text + underline) clobber the seg-toggle
+   pill, painting accent text on the accent fill (invisible). The bar owns the
+   underline so it still spans the full width. */
+.knowledge-viewbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.knowledge-viewbar .tab-row {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+.knowledge-viewbar .persp-toggle {
+  align-self: center;
+}
+
 /* memory cards */
 .mem-card .mem-title {
   font-weight: 600;
