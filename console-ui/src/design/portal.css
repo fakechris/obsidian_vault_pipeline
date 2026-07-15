@@ -927,6 +927,17 @@ body {
   position: absolute;
   inset: 0;
 }
+.graph-controls {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+}
+.graph-controls .graph-expand {
+  position: static;
+}
 .graph-expand {
   position: absolute;
   top: 0.5rem;
@@ -958,6 +969,18 @@ body {
   font-size: var(--ovp-text-xs);
   padding: 0.35rem 0.6rem;
 }
+/* WebGL-unavailable note: bottom-CENTER so it never overlaps the bottom-left
+   truncation notice or the bottom-right 3D controls hint. */
+.graph-webgl-note {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  font-size: var(--ovp-text-xs);
+  padding: 0.35rem 0.6rem;
+  text-align: center;
+}
 .graph-info {
   position: absolute;
   left: 0.5rem;
@@ -980,6 +1003,70 @@ body {
 }
 .graph-embed .empty-state {
   padding: 0.9rem;
+}
+/* react-force-graph renders its own <canvas>; keep it inside the rounded frame. */
+.graph-embed canvas {
+  display: block;
+}
+.graph-info-open {
+  margin-top: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--ovp-text-xs);
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+.graph-info-open:hover {
+  border-color: var(--accent);
+}
+.graph-controls-hint {
+  position: absolute;
+  bottom: 0.35rem;
+  right: 0.6rem;
+  z-index: 2;
+  font-size: var(--ovp-text-xs);
+  color: rgba(233, 230, 224, 0.6);
+  pointer-events: none;
+  padding: 0;
+}
+.graph-legend {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  max-width: 45%;
+}
+.graph-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* clickable → fly to the community */
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  text-align: left;
+  max-width: 100%;
+}
+.graph-legend-item:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.graph-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .graph-caption {
   font-size: var(--ovp-text-xs);
@@ -1518,3 +1605,9 @@ body {
 }
 
 .facet-snapshot { color: var(--muted); font-size: 0.85em; }
+
+/* Terrain theme legend: click a theme to fly the camera to its cluster. */
+.terrain-legend button:hover {
+  background: rgba(120, 180, 205, 0.2);
+  color: #fff;
+}

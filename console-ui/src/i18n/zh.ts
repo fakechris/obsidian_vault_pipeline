@@ -158,7 +158,7 @@ export const zh: Record<keyof typeof en, string> = {
   'source.docTruncated': '预览在 200 KB 处截断——完整内容请在 vault 中打开原文件。',
   'source.neighborhood': '关联图谱 · 邻域',
   'source.neighborhoodCaption':
-    '本源 → 它的记忆卡片 → 引用它的主张 → 兄弟源。单击节点看摘要，双击打开详情。',
+    '本源 → 它的记忆卡片 → 引用它的主张 → 兄弟源。单击节点看摘要并打开；悬停高亮其邻域。',
   'source.citingClaims': '结晶引用',
   'source.citingEmpty': '暂无结晶主张引用本源。',
   'source.citingEmptyHint': '→ 知识：了解结晶如何产生',
@@ -176,7 +176,11 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.kindSource': '源',
   'graph.kindUnit': '单元',
   'graph.kindCard': '卡片',
-  'graph.openHint': '双击打开详情。',
+  'graph.openHint': '单击看摘要，再点“打开”。',
+  'graph.no3d': '3D 需要 WebGL，当前浏览器不可用。',
+  'graph.controls3d': '拖拽旋转 · 滚轮缩放 · 右键平移',
+  'graph.focusCommunity': '聚焦这个社区',
+  'graph.open': '打开',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
 
@@ -202,11 +206,12 @@ export const zh: Record<keyof typeof en, string> = {
     '地形尚未生成——运行 `ovp2 crystal-terrain --vault-root <vault>`。',
   'knowledge.terrainNoWebgl': '该 3D 视图需要 WebGL，当前浏览器不可用。请改用列表或图谱视图。',
   'knowledge.terrainUnclassified': '未分类',
+  'knowledge.terrainFocusTheme': '飞到这个聚类',
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',
   'knowledge.ratioLine': '持久 {durable} · 存疑 {caveated}',
-  'knowledge.graphCaption': '全部主张，按社区着色。单击节点看摘要，双击进入其主题。',
+  'knowledge.graphCaption': '全部主张，按社区着色。放大显更多标签、悬停高亮邻域、单击看摘要，右上角可切 3D 旋转。',
   'knowledge.unknownClaim': '没有活跃主张 "{id}"——它可能已被取代或撤回。',
 
   // theme naming
@@ -222,7 +227,7 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.empty': '没有活跃主张属于这个主题。',
   'theme.backToKnowledge': '全部主题',
   'theme.graph': '主题图谱',
-  'theme.graphCaption': '本主题的主张与其引用的源。单击节点看摘要，双击打开详情。',
+  'theme.graphCaption': '本主题的主张与其引用的源。单击节点看摘要并打开；悬停高亮其邻域。',
 
   // search page + ⌘K overlay
   'search.title': '搜索',

@@ -9,9 +9,8 @@
  * "night map" regardless of app theme.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { terrainUrl } from '../lib/api';
+import { STATIC_MODE, terrainUrl } from '../lib/api';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -32,15 +31,20 @@ const SIGMA = 3.4;
 const FULL = '9999-99-99'; // cutoff meaning "everything"
 
 function glowTexture(): THREE.Texture {
+  // 128px (was 64 → the points looked pixelated/mosaic when magnified) with a
+  // BRIGHT SHARP core and a quick soft falloff, so each source reads as a crisp
+  // bright dot rather than a fuzzy blob.
+  const S = 128;
   const c = document.createElement('canvas');
-  c.width = c.height = 64;
+  c.width = c.height = S;
   const g = c.getContext('2d')!;
-  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grd.addColorStop(0, 'rgba(180,225,245,1)');
-  grd.addColorStop(0.25, 'rgba(130,200,230,0.85)');
-  grd.addColorStop(1, 'rgba(130,200,230,0)');
+  const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.14, 'rgba(215,238,252,0.98)');
+  grd.addColorStop(0.4, 'rgba(150,205,238,0.4)');
+  grd.addColorStop(1, 'rgba(150,205,238,0)');
   g.fillStyle = grd;
-  g.fillRect(0, 0, 64, 64);
+  g.fillRect(0, 0, S, S);
   const t = new THREE.CanvasTexture(c);
   t.needsUpdate = true;
   return t;
@@ -48,7 +52,6 @@ function glowTexture(): THREE.Texture {
 
 export default function KnowledgeTerrain({ height = 600 }: { height?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
   const { t, lang } = useI18n();
   // Read inside the imperative three.js effect without making `lang` a build
   // dep (a scene rebuild on every locale toggle would reset the camera).
@@ -76,6 +79,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   const [monthIdx, setMonthIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const applyCutoffRef = useRef<((cutoff: string) => void) | null>(null);
+  // Imperative "fly the camera to this theme's cluster" — set by the three.js
+  // effect, called from the legend so you don't have to orbit around to find a
+  // cluster.
+  const focusThemeRef = useRef<((cx: number, cy: number) => void) | null>(null);
 
   useEffect(() => {
     let off = false;
@@ -198,7 +205,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(W, H);
-    labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+    // overflow:hidden clips the floating theme labels to the terrain box (some
+    // project outside it behind the camera) WITHOUT clipping the React tooltip.
+    labelRenderer.domElement.style.cssText =
+      'position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;';
     wrap.appendChild(labelRenderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -216,19 +226,23 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const terrainMat = new THREE.ShaderMaterial({
       uniforms: {
         uMaxH: { value: HEIGHT },
-        uLine: { value: new THREE.Color('#7fd6e6') },
-        uBase: { value: new THREE.Color('#0f151c') },
-        uPeak: { value: new THREE.Color('#183245') },
+        // Muted slate contour line (was loud cyan #7fd6e6 → looked busy/cheap)
+        // and a deeper, more neutral terrain gradient.
+        uLine: { value: new THREE.Color('#3d6076') },
+        uBase: { value: new THREE.Color('#0a0e13') },
+        uPeak: { value: new THREE.Color('#16232f') },
       },
       vertexShader: `varying float vH; void main(){ vH=position.y; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
       fragmentShader: `
         uniform float uMaxH; uniform vec3 uLine; uniform vec3 uBase; uniform vec3 uPeak; varying float vH;
         void main(){
           float h=clamp(vH/uMaxH,0.0,1.0);
-          float g=h*26.0; float fp=fract(g); float dist=min(fp,1.0-fp);
+          // Fewer levels (16, was 26) and a MUCH subtler line so the terrain is a
+          // quiet backdrop and the glowing source points read as the foreground.
+          float g=h*16.0; float fp=fract(g); float dist=min(fp,1.0-fp);
           float aa=fwidth(g)*1.3+1e-4; float edge=1.0-smoothstep(0.0,aa,dist);
           vec3 terrain=mix(uBase,uPeak,h);
-          gl_FragColor=vec4(mix(terrain,uLine,edge*(0.3+0.7*h)),1.0);
+          gl_FragColor=vec4(mix(terrain,uLine,edge*(0.18+0.42*h)),1.0);
         }`,
     });
     scene.add(new THREE.Mesh(geo, terrainMat));
@@ -238,8 +252,8 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const parr = new Float32Array(data.points.length * 3);
     pgeo.setAttribute('position', new THREE.BufferAttribute(parr, 3));
     const pmat = new THREE.PointsMaterial({
-      size: 4.5, map: glowTexture(), transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color: 0x9fd6ea, sizeAttenuation: true,
+      size: 3.8, map: glowTexture(), transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: 0xffffff, sizeAttenuation: true,
     });
     const points = new THREE.Points(pgeo, pmat);
     points.frustumCulled = false;
@@ -364,13 +378,27 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       if (slot < 0 || slot >= visibleIdx.length) return;
       const p = data.points[visibleIdx[slot]];
       if (!p?.sha) return; // pack not in the index → no /library page to open
-      navigate(`/library/${encodeURIComponent(p.sha)}`);
+      // Open in a NEW tab so the operator's tuned camera/timeline state survives
+      // (in-app navigation would unmount the terrain and reset it).
+      const path = `/library/${encodeURIComponent(p.sha)}`;
+      window.open(STATIC_MODE ? `#${path}` : path, '_blank', 'noopener');
     };
     renderer.domElement.addEventListener('pointermove', pick);
     renderer.domElement.addEventListener('pointerdown', onDown);
     renderer.domElement.addEventListener('click', onClick);
 
-    // ---- loop (tween camera only on 2D/3D switch) ----
+    // ---- legend-driven camera focus: fly to a theme's cluster centroid ----
+    let focusCam: THREE.Vector3 | null = null;
+    let focusTarget: THREE.Vector3 | null = null;
+    const focusTheme = (cx: number, cy: number) => {
+      const wx = sx(cx);
+      const wz = sy(cy);
+      focusTarget = new THREE.Vector3(wx, HEIGHT * 0.3, wz);
+      focusCam = new THREE.Vector3(wx, HEIGHT * 1.7, wz + SIZE * 0.3);
+    };
+    focusThemeRef.current = focusTheme;
+
+    // ---- loop (tween camera on 2D/3D switch or a legend focus) ----
     let raf = 0;
     const t3d = new THREE.Vector3(0, HEIGHT * 3.2, SIZE * 0.82);
     const t2d = new THREE.Vector3(0, SIZE * 1.15, 0.001);
@@ -398,6 +426,17 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           appliedMode = modeRef.current;
           controls.enabled = true;
         }
+      } else if (focusCam && focusTarget) {
+        // Fly to the picked cluster; re-enable orbit once we arrive so you can
+        // look around it.
+        controls.enabled = false;
+        camera.position.lerp(focusCam, 0.12);
+        controls.target.lerp(focusTarget, 0.12);
+        if (camera.position.distanceTo(focusCam) < 1.5) {
+          focusCam = null;
+          focusTarget = null;
+          controls.enabled = true;
+        }
       }
       controls.update();
       renderer.render(scene, camera);
@@ -416,6 +455,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
     return () => {
       applyCutoffRef.current = null;
+      focusThemeRef.current = null;
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener('pointermove', pick);
@@ -440,10 +480,21 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       labelObjs.forEach((l) => l.obj.removeFromParent());
       labelHandlesRef.current = [];
     };
-  }, [data, height, navigate]);
+  }, [data, height]);
 
   // ---- drive the terrain from the scrubber ----
   const atLatest = monthIdx >= months.length - 1;
+  const cutoff = atLatest || !months.length ? FULL : `${months[monthIdx]}-31`;
+  // Theme ids with at least one point visible at the current timeline cutoff —
+  // so the legend doesn't offer a future-only theme that would fly the camera
+  // to an empty spot.
+  const activeThemeIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const p of data?.points ?? []) {
+      if (!p.date || p.date <= cutoff) s.add(p.theme_id);
+    }
+    return s;
+  }, [data, cutoff]);
   useEffect(() => {
     if (!applyCutoffRef.current || !months.length) return;
     applyCutoffRef.current(atLatest ? FULL : `${months[monthIdx]}-31`);
@@ -491,12 +542,52 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     );
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', width: '100%', height }}>
+    <div
+      ref={wrapRef}
+      style={{ position: 'relative', width: '100%', height }}
+    >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
         {data
           ? t('knowledge.terrainHud', { notes: data.point_count, themes: data.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
+      {/* Clickable theme list — pick a cluster and the camera flies to it, so you
+          don't have to orbit around hunting for it. */}
+      {data && data.themes.length > 0 && (
+        <div
+          className="terrain-legend"
+          style={{
+            position: 'absolute', top: 34, left: 12, zIndex: 2,
+            maxHeight: Math.max(120, height - 96), overflowY: 'auto',
+            display: 'flex', flexDirection: 'column', gap: 1, maxWidth: '44%',
+            background: 'rgba(14,18,24,0.5)', borderRadius: 8, padding: '5px 6px',
+          }}
+        >
+          {[...data.themes]
+            .filter((th) => activeThemeIds.has(th.id))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 16)
+            .map((th) => (
+              <button
+                key={th.id}
+                type="button"
+                title={t('knowledge.terrainFocusTheme')}
+                onClick={() => {
+                  if (mode === '2d') setMode('3d');
+                  focusThemeRef.current?.(th.cx, th.cy);
+                }}
+                style={{
+                  cursor: 'pointer', textAlign: 'left', background: 'none', border: 'none',
+                  color: 'rgba(233,230,224,0.82)', font: '11px system-ui', padding: '2px 5px',
+                  borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {(lang === 'zh' ? th.label_zh : th.label) || th.label}
+                <span style={{ opacity: 0.45 }}> · {th.count}</span>
+              </button>
+            ))}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
