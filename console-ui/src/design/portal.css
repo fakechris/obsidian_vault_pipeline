@@ -762,6 +762,14 @@ body {
   text-underline-offset: 6px;
 }
 
+/* Perspective switch (claim/source) — a .seg-toggle pill pushed to the right
+   end of the view-tab row, vertically centered against the baseline-aligned
+   tab buttons so it costs no extra vertical space. */
+.tab-row .persp-toggle {
+  margin-left: auto;
+  align-self: center;
+}
+
 /* memory cards */
 .mem-card .mem-title {
   font-weight: 600;

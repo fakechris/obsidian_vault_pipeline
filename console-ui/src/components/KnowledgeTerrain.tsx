@@ -11,11 +11,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { STATIC_MODE, terrainUrl } from '../lib/api';
+import { activeClaims, sourcesByCase, themeRoute } from '../lib/derive';
+import { useModel } from '../model';
+import type { IndexModel } from '../lib/types';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
-type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number };
+// A rendered point is either a source (has `sha`, opens /library) or — in the
+// claim perspective — a claim (has `claim_id`, opens its theme page). The two
+// share the same buffer/hover/label machinery; only the click target differs.
+type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; claim_id?: string };
 type TTheme = { id: number; label: string; label_zh: string; cx: number; cy: number; count: number };
 type Terrain = {
   points: TPoint[];
@@ -23,6 +29,45 @@ type Terrain = {
   bounds: [number, number, number, number];
   point_count: number;
 };
+
+/** Claim perspective of the terrain: each active claim placed at the centroid
+ * of its cited sources' positions, with a small deterministic golden-angle
+ * nudge so co-located claims don't fully overlap. The land + theme labels stay
+ * source-derived — claims simply scatter on the same corpus landscape. Returns
+ * null until the model loads; claims with no positioned source are dropped. */
+function buildClaimTerrain(data: Terrain | null, model: IndexModel | null): Terrain | null {
+  if (!data || !model) return null;
+  const byCase = sourcesByCase(model);
+  const posBySha = new Map(data.points.map((p) => [p.sha, p]));
+  const themeIdByLabel = new Map(data.themes.map((th) => [th.label, th.id]));
+  const [minx, miny, maxx, maxy] = data.bounds;
+  const jitter = Math.max(maxx - minx, maxy - miny, 1e-6) * 0.008;
+  const GOLDEN = 2.399963229728653; // radians — spreads indices around a ring
+
+  const points: TPoint[] = [];
+  activeClaims(model.claims).forEach((c, i) => {
+    const srcPts = c.sources
+      .map((caseId) => byCase.get(caseId)?.sha256)
+      .map((sha) => (sha ? posBySha.get(sha) : undefined))
+      .filter((p): p is TPoint => !!p);
+    if (srcPts.length === 0) return;
+    const cx = srcPts.reduce((s, p) => s + p.x, 0) / srcPts.length;
+    const cy = srcPts.reduce((s, p) => s + p.y, 0) / srcPts.length;
+    const theme = c.theme ?? '';
+    points.push({
+      id: `claim:${c.claim_id}`,
+      sha: '',
+      claim_id: c.claim_id,
+      title: c.claim,
+      date: '',
+      theme,
+      theme_id: themeIdByLabel.get(theme) ?? -1,
+      x: cx + Math.cos(i * GOLDEN) * jitter,
+      y: cy + Math.sin(i * GOLDEN) * jitter,
+    });
+  });
+  return { points, themes: data.themes, bounds: data.bounds, point_count: points.length };
+}
 
 const SIZE = 220;
 const GRID = 150;
@@ -50,9 +95,16 @@ function glowTexture(): THREE.Texture {
   return t;
 }
 
-export default function KnowledgeTerrain({ height = 600 }: { height?: number }) {
+export default function KnowledgeTerrain({
+  height = 600,
+  persp = 'source',
+}: {
+  height?: number;
+  persp?: 'claim' | 'source';
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const { t, lang } = useI18n();
+  const { model } = useModel();
   // Read inside the imperative three.js effect without making `lang` a build
   // dep (a scene rebuild on every locale toggle would reset the camera).
   const langRef = useRef(lang);
@@ -70,12 +122,18 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   modeRef.current = mode;
   const [hover, setHover] = useState<{ mx: number; my: number; p: TPoint } | null>(null);
 
+  // The rendered dataset: source points as fetched, or claims placed on the same
+  // landscape. Everything below (scene, HUD, legend, timeline) reads `render`;
+  // `data` stays the source terrain that both modes are derived from.
+  const claimData = useMemo(() => buildClaimTerrain(data, model), [data, model]);
+  const render = persp === 'claim' ? claimData : data;
+
   const months = useMemo(() => {
-    if (!data) return [] as string[];
+    if (!render) return [] as string[];
     const set = new Set<string>();
-    for (const p of data.points) if (p.date) set.add(p.date.slice(0, 7));
+    for (const p of render.points) if (p.date) set.add(p.date.slice(0, 7));
     return [...set].sort();
-  }, [data]);
+  }, [render]);
   const [monthIdx, setMonthIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const applyCutoffRef = useRef<((cutoff: string) => void) | null>(null);
@@ -102,7 +160,9 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
   // ---- three.js scene (built once per dataset) ----
   useEffect(() => {
-    if (!data || !wrapRef.current) return;
+    if (!render || !wrapRef.current) return;
+    // Alias so the source/claim datasets share one imperative body verbatim.
+    const data = render;
     const wrap = wrapRef.current;
     let W = wrap.clientWidth;
     const H = height;
@@ -377,10 +437,15 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       const slot = slotAt(e.offsetX, e.offsetY);
       if (slot < 0 || slot >= visibleIdx.length) return;
       const p = data.points[visibleIdx[slot]];
-      if (!p?.sha) return; // pack not in the index → no /library page to open
-      // Open in a NEW tab so the operator's tuned camera/timeline state survives
-      // (in-app navigation would unmount the terrain and reset it).
-      const path = `/library/${encodeURIComponent(p.sha)}`;
+      // Claim points open their theme page; source points open /library. Both in
+      // a NEW tab so the operator's tuned camera/timeline state survives (in-app
+      // navigation would unmount the terrain and reset it).
+      const path = p.claim_id
+        ? themeRoute(p.theme)
+        : p.sha
+          ? `/library/${encodeURIComponent(p.sha)}`
+          : null;
+      if (!path) return;
       window.open(STATIC_MODE ? `#${path}` : path, '_blank', 'noopener');
     };
     renderer.domElement.addEventListener('pointermove', pick);
@@ -480,7 +545,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       labelObjs.forEach((l) => l.obj.removeFromParent());
       labelHandlesRef.current = [];
     };
-  }, [data, height]);
+  }, [render, height]);
 
   // ---- drive the terrain from the scrubber ----
   const atLatest = monthIdx >= months.length - 1;
@@ -490,11 +555,11 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   // to an empty spot.
   const activeThemeIds = useMemo(() => {
     const s = new Set<number>();
-    for (const p of data?.points ?? []) {
+    for (const p of render?.points ?? []) {
       if (!p.date || p.date <= cutoff) s.add(p.theme_id);
     }
     return s;
-  }, [data, cutoff]);
+  }, [render, cutoff]);
   useEffect(() => {
     if (!applyCutoffRef.current || !months.length) return;
     applyCutoffRef.current(atLatest ? FULL : `${months[monthIdx]}-31`);
@@ -520,12 +585,12 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     for (const l of labelHandlesRef.current) {
       l.el.textContent = lang === 'zh' ? l.th.label_zh : l.th.label;
     }
-  }, [lang, data]);
+  }, [lang, render]);
 
   // Theme lookup for the localized tooltip (point carries only its community id).
   const themeById = useMemo(
-    () => new Map((data?.themes ?? []).map((th) => [th.id, th] as const)),
-    [data],
+    () => new Map((render?.themes ?? []).map((th) => [th.id, th] as const)),
+    [render],
   );
 
   if (failed)
@@ -547,13 +612,13 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       style={{ position: 'relative', width: '100%', height }}
     >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
-        {data
-          ? t('knowledge.terrainHud', { notes: data.point_count, themes: data.themes.length })
+        {render
+          ? t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
       {/* Clickable theme list — pick a cluster and the camera flies to it, so you
           don't have to orbit around hunting for it. */}
-      {data && data.themes.length > 0 && (
+      {render && render.themes.length > 0 && (
         <div
           className="terrain-legend"
           style={{
@@ -563,7 +628,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
             background: 'rgba(14,18,24,0.5)', borderRadius: 8, padding: '5px 6px',
           }}
         >
-          {[...data.themes]
+          {[...render.themes]
             .filter((th) => activeThemeIds.has(th.id))
             .sort((a, b) => b.count - a.count)
             .slice(0, 16)

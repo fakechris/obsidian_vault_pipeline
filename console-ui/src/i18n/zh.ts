@@ -195,6 +195,10 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.viewList': '列表',
   'knowledge.viewGraph': '图谱',
   'knowledge.viewTerrain': '地形',
+  'knowledge.perspClaim': '主张',
+  'knowledge.perspSource': '原文',
+  'knowledge.perspNodeClaim': '每个点是一条主张(跨来源结论)。单击打开它所属主题。',
+  'knowledge.perspNodeSource': '每个点是一篇原文(原始文档)。单击打开它。',
   'knowledge.terrainCaption':
     '语料的"知识地形":山峰是密集的聚类(按主题命名),每个点是一个源。悬停某点看那条笔记。与主题同源,基于同一套 embedding。',
   'knowledge.terrainHud': '{notes} 条笔记 · {themes} 个主题 · 拖拽旋转,滚轮缩放',

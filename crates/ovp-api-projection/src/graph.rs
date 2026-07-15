@@ -48,6 +48,18 @@ impl GraphMode {
     }
 }
 
+/// Which entity the overview graph is built around. The two views over the same
+/// crystal (`?persp=`): `claim` (the default — the knowledge-statement network)
+/// and `source` (documents, linked when they are co-cited by a claim). The
+/// portal's Knowledge page toggles between them; both share one URL param with
+/// the Terrain view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Perspective {
+    #[default]
+    Claim,
+    Source,
+}
+
 #[derive(Debug, Clone)]
 pub struct GraphParams {
     pub mode: GraphMode,
@@ -55,6 +67,9 @@ pub struct GraphParams {
     pub theme: Option<String>,
     pub focus: Option<String>,
     pub hops: usize,
+    /// Overview only: claim- vs source-centric layout. Ignored by
+    /// `neighborhood` (which always spans all three node types).
+    pub persp: Perspective,
 }
 
 impl GraphParams {
@@ -82,12 +97,20 @@ impl GraphParams {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(MAX_HOPS)
             .clamp(1, MAX_HOPS);
+        let persp = match params.get("persp").map(String::as_str) {
+            None | Some("claim") => Perspective::Claim,
+            Some("source") => Perspective::Source,
+            Some(other) => {
+                return Err(GraphError::bad_request(&format!("unknown persp: {other}")))
+            }
+        };
         Ok(GraphParams {
             mode,
             limit,
             theme: params.get("theme").cloned(),
             focus,
             hops,
+            persp,
         })
     }
 }
@@ -197,7 +220,10 @@ pub fn build_graph(
     compute_importance(&mut base, records);
 
     match params.mode {
-        GraphMode::Overview => Ok(overview_response(base, params)),
+        GraphMode::Overview => Ok(match params.persp {
+            Perspective::Claim => overview_response(base, params),
+            Perspective::Source => source_overview_response(base, params),
+        }),
         GraphMode::Neighborhood => neighborhood_response(base, params),
     }
 }
@@ -718,6 +744,158 @@ fn overview_response(base: BaseGraph, params: &GraphParams) -> GraphResponse {
         total_nodes,
         truncated: matching > params.limit,
     }
+}
+
+/// Source perspective of the overview: nodes are the cited SOURCES (ranked by
+/// citing-claim count via `importance`, capped by `limit`), linked when two
+/// sources are co-cited by the same claim (weight = shared-claim count). The
+/// same crystal, seen document-first instead of statement-first — the portal's
+/// `?persp=source` toggle. Communities reuse the propagated cluster ids, labeled
+/// by the dominant theme among each cluster's citing claims.
+fn source_overview_response(base: BaseGraph, params: &GraphParams) -> GraphResponse {
+    let total_nodes = base.nodes.len();
+    let source_claims = source_claims_index(&base);
+
+    // Optional theme filter: keep a source only if some claim of that theme
+    // cites it (mirrors the claim overview's `theme` filter).
+    let theme_ok = |sid: &str| -> bool {
+        match &params.theme {
+            None => true,
+            Some(t) => source_claims
+                .get(sid)
+                .map(|claims| {
+                    claims.iter().any(|c| {
+                        base.nodes.get(c).and_then(|n| n.theme.as_deref()) == Some(t.as_str())
+                    })
+                })
+                .unwrap_or(false),
+        }
+    };
+
+    let mut sources: Vec<GNode> = base
+        .nodes
+        .values()
+        .filter(|n| n.node_type == "source")
+        .filter(|n| theme_ok(&n.id))
+        .cloned()
+        .collect();
+    sort_by_importance(&mut sources);
+    let matching = sources.len();
+    sources.truncate(params.limit);
+    let kept: HashSet<&str> = sources.iter().map(|n| n.id.as_str()).collect();
+
+    let edges = shared_claim_edges(&base.claim_sources, &kept);
+    let source_refs: Vec<&GNode> = sources.iter().collect();
+    let communities = build_source_communities(&source_refs, &source_claims, &base);
+
+    GraphResponse {
+        mode: GraphMode::Overview.as_str().into(),
+        nodes: sources,
+        edges,
+        communities,
+        total_nodes,
+        truncated: matching > params.limit,
+    }
+}
+
+/// Source↔source edges for the source perspective: two sources are linked when
+/// the same claim cites both; weight = number of such shared claims. Only edges
+/// among `kept` sources are emitted. Deterministic (sorted pair keys). A claim's
+/// cited-source set is small in practice, so per-claim pairwise is cheap.
+fn shared_claim_edges(
+    claim_sources: &BTreeMap<String, BTreeSet<String>>,
+    kept: &HashSet<&str>,
+) -> Vec<GEdge> {
+    let mut pair_weight: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for srcs in claim_sources.values() {
+        // BTreeSet iterates sorted, so (i < j) already yields (a <= b).
+        let members: Vec<&String> = srcs.iter().filter(|s| kept.contains(s.as_str())).collect();
+        for i in 0..members.len() {
+            for j in (i + 1)..members.len() {
+                *pair_weight
+                    .entry((members[i].clone(), members[j].clone()))
+                    .or_default() += 1;
+            }
+        }
+    }
+    pair_weight
+        .into_iter()
+        .map(|((a, b), w)| GEdge {
+            source: a,
+            target: b,
+            edge_type: "related".into(),
+            weight: Some(w),
+        })
+        .collect()
+}
+
+/// Communities for the source perspective: group kept sources by their
+/// propagated cluster id (≥2 members), labeled by the dominant theme among the
+/// claims that cite them (same coverage rule as claim communities). `top_claims`
+/// carries the top source ids by importance — the field is a generic hull
+/// anchor, not claim-specific.
+fn build_source_communities(
+    sources: &[&GNode],
+    source_claims: &BTreeMap<String, Vec<String>>,
+    base: &BaseGraph,
+) -> Vec<Community> {
+    let mut by_cluster: BTreeMap<usize, Vec<&GNode>> = BTreeMap::new();
+    for n in sources {
+        if n.cluster > 0 {
+            by_cluster.entry(n.cluster).or_default().push(n);
+        }
+    }
+
+    let mut communities: Vec<Community> = Vec::new();
+    for (cluster, mut members) in by_cluster {
+        if members.len() < 2 {
+            continue;
+        }
+        members.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        // Tally themes over the citing claims of every member source.
+        let mut theme_counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for m in &members {
+            if let Some(claims) = source_claims.get(&m.id) {
+                for c in claims {
+                    if let Some(t) = base.nodes.get(c).and_then(|n| n.theme.as_deref()) {
+                        *theme_counts.entry(t).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let total: usize = theme_counts.values().sum();
+        let mut themes: Vec<(&str, usize)> = theme_counts.into_iter().collect();
+        themes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+        let label = match themes.as_slice() {
+            [] => format!("community {cluster}"),
+            [(t, _)] => (*t).to_string(),
+            [(t1, c1), (t2, _), ..] => {
+                if total == 0 || (*c1 as f64) / (total as f64) < DOMINANT_THEME_COVERAGE {
+                    format!("{t1} / {t2}")
+                } else {
+                    (*t1).to_string()
+                }
+            }
+        };
+
+        communities.push(Community {
+            id: cluster,
+            label,
+            size: members.len(),
+            top_claims: members.iter().take(3).map(|m| m.id.clone()).collect(),
+        });
+    }
+
+    communities.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.id.cmp(&b.id)));
+    communities.truncate(MAX_COMMUNITIES);
+    communities
 }
 
 fn neighborhood_response(
@@ -1469,6 +1647,7 @@ mod tests {
             theme: None,
             focus: None,
             hops: MAX_HOPS,
+            persp: Perspective::Claim,
         }
     }
 
@@ -1536,6 +1715,63 @@ mod tests {
             assert!(kept.contains(&e.source.as_str()));
             assert!(kept.contains(&e.target.as_str()));
         }
+    }
+
+    #[test]
+    fn from_query_parses_persp() {
+        let empty = std::collections::HashMap::new();
+        assert_eq!(GraphParams::from_query(&empty).unwrap().persp, Perspective::Claim);
+        let mut q = std::collections::HashMap::new();
+        q.insert("persp".to_string(), "source".to_string());
+        assert_eq!(GraphParams::from_query(&q).unwrap().persp, Perspective::Source);
+        q.insert("persp".to_string(), "bogus".to_string());
+        assert!(GraphParams::from_query(&q).is_err());
+    }
+
+    #[test]
+    fn source_overview_returns_sources_linked_by_shared_claims() {
+        let records = sample_records();
+        let mut p = params(GraphMode::Overview);
+        p.persp = Perspective::Source;
+        let resp = build_graph(&records, None, &p).unwrap();
+
+        // Nodes are all cited sources, ranked by citing-claim count.
+        assert!(resp.nodes.iter().all(|n| n.node_type == "source"));
+        assert_eq!(resp.nodes.len(), 3);
+        assert_eq!(resp.nodes[0].id, "source:case1", "case1 (cited by a,b,c) ranks first");
+        for w in resp.nodes.windows(2) {
+            assert!(w[0].importance >= w[1].importance);
+        }
+        assert_eq!(resp.total_nodes, 12, "total counts the full tri-partite graph");
+        assert!(!resp.truncated);
+
+        // Only claim `a` cites two sources → exactly one shared-claim edge.
+        assert_eq!(resp.edges.len(), 1);
+        let e = &resp.edges[0];
+        assert_eq!(e.edge_type, "related");
+        assert_eq!(e.weight, Some(1));
+        let mut pair = [e.source.as_str(), e.target.as_str()];
+        pair.sort();
+        assert_eq!(pair, ["source:case1", "source:case2"]);
+
+        // One community (case1 + case2 share a cluster), labeled by the dominant
+        // theme among their citing claims (alpha 3 : beta 1).
+        assert_eq!(resp.communities.len(), 1);
+        assert_eq!(resp.communities[0].size, 2);
+        assert_eq!(resp.communities[0].label, "alpha");
+    }
+
+    #[test]
+    fn source_overview_limit_truncates_and_drops_now_dangling_edges() {
+        let records = sample_records();
+        let mut p = params(GraphMode::Overview);
+        p.persp = Perspective::Source;
+        p.limit = 1;
+        let resp = build_graph(&records, None, &p).unwrap();
+        assert_eq!(resp.nodes.len(), 1);
+        assert!(resp.truncated);
+        // One kept source can't co-occur with another → no edges survive.
+        assert!(resp.edges.is_empty());
     }
 
     #[test]

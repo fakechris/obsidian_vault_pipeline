@@ -134,9 +134,16 @@ export function fetchSourceNeighborhood(sha: string): Promise<GraphResponse> {
 /** Global scope for the KnowledgeGraph component: the overview/density graph
  * (claims + community metadata). Capped so the embedded view stays snappy —
  * the response flags truncation. */
-export function fetchGlobalGraph(limit = 400): Promise<GraphResponse> {
-  if (STATIC_MODE) return fetchJson<GraphResponse>(`${API}/graph/global.json`);
-  return fetchJson<GraphResponse>(`/api/graph?scope=global&limit=${limit}`);
+export function fetchGlobalGraph(
+  limit = 400,
+  persp: 'claim' | 'source' = 'claim',
+): Promise<GraphResponse> {
+  if (STATIC_MODE) {
+    const file = persp === 'source' ? 'global-source' : 'global';
+    return fetchJson<GraphResponse>(`${API}/graph/${file}.json`);
+  }
+  const p = persp === 'source' ? '&persp=source' : '';
+  return fetchJson<GraphResponse>(`/api/graph?scope=global&limit=${limit}${p}`);
 }
 
 /** Theme scope for the KnowledgeGraph component: the theme's claims + the

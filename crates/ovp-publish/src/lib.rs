@@ -182,9 +182,23 @@ fn write_api_tree(
         theme: None,
         focus: None,
         hops: graph::MAX_HOPS,
+        persp: graph::Perspective::Claim,
     };
     if let Ok(g) = graph::build_graph(records, Some(public), &params) {
         write_json(&api.join("graph").join("global.json"), &serde_json::to_value(&g).unwrap_or_default())?;
+        files += 1;
+    }
+    // Source perspective of the same overview (the portal's ?persp=source
+    // toggle) — a second static file the SPA loads client-side.
+    let source_params = graph::GraphParams {
+        persp: graph::Perspective::Source,
+        ..params.clone()
+    };
+    if let Ok(g) = graph::build_graph(records, Some(public), &source_params) {
+        write_json(
+            &api.join("graph").join("global-source.json"),
+            &serde_json::to_value(&g).unwrap_or_default(),
+        )?;
         files += 1;
     }
     let mut themes_map = serde_json::Map::new();

@@ -209,6 +209,12 @@ export const en = {
   'knowledge.viewList': 'List',
   'knowledge.viewGraph': 'Graph',
   'knowledge.viewTerrain': 'Terrain',
+  'knowledge.perspClaim': 'Claims',
+  'knowledge.perspSource': 'Sources',
+  'knowledge.perspNodeClaim':
+    'Each point is a claim — a cross-source conclusion. Click to open its theme.',
+  'knowledge.perspNodeSource':
+    'Each point is a source — an original document. Click to open it.',
   'knowledge.terrainCaption':
     'A themescape of the corpus: peaks are dense clusters (labelled by theme), each point a source. Hover a point to see the note. Built from the same embeddings as the themes.',
   'knowledge.terrainHud': '{notes} notes · {themes} themes · drag to orbit, scroll to zoom',
