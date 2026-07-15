@@ -528,7 +528,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     );
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', width: '100%', height }}>
+    <div
+      ref={wrapRef}
+      style={{ position: 'relative', width: '100%', height, overflow: 'hidden' }}
+    >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
         {data
           ? t('knowledge.terrainHud', { notes: data.point_count, themes: data.themes.length })

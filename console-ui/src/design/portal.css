@@ -1026,9 +1026,8 @@ body {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.05rem;
   max-width: 45%;
-  pointer-events: none;
 }
 .graph-legend-item {
   display: flex;
@@ -1038,6 +1037,18 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* clickable → fly to the community */
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  text-align: left;
+  max-width: 100%;
+}
+.graph-legend-item:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
 }
 .graph-legend-dot {
   width: 8px;

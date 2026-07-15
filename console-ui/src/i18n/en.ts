@@ -193,6 +193,7 @@ export const en = {
   'graph.open': 'Open',
   'graph.no3d': '3D needs WebGL, which is unavailable in this browser.',
   'graph.controls3d': 'Drag to rotate · scroll to zoom · right-drag to pan',
+  'graph.focusCommunity': 'Focus this community',
   'graph.noPage': 'Legacy source — no detail page in this vault.',
   'graph.cardHint':
     "This source's memory — the full card is in the Memory tab.",

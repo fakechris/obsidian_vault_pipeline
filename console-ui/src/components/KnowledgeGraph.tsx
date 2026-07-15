@@ -543,6 +543,31 @@ export default function KnowledgeGraph({
     fg?.cameraPosition(to, node, 600);
   };
 
+  // Legend click → fly to that community's centroid so you don't have to hunt
+  // for it (2D: center + zoom; 3D: pull the camera in on the cluster).
+  const focusCommunity = (cluster: number) => {
+    const pts = (graphData.nodes as FGNode[]).filter(
+      (n) => n.cluster === cluster && n.x != null,
+    );
+    if (!pts.length) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fg = fgRef.current as any;
+    if (!fg) return;
+    const cx = pts.reduce((s, n) => s + (n.x ?? 0), 0) / pts.length;
+    const cy = pts.reduce((s, n) => s + (n.y ?? 0), 0) / pts.length;
+    setHoverId(null);
+    if (mode === '3d') {
+      const cz = pts.reduce((s, n) => s + (n.z ?? 0), 0) / pts.length;
+      const d = Math.hypot(cx, cy, cz) || 1;
+      const dist = 110;
+      const r = 1 + dist / d;
+      fg.cameraPosition({ x: cx * r, y: cy * r, z: cz * r }, { x: cx, y: cy, z: cz }, 700);
+    } else {
+      fg.centerAt(cx, cy, 600);
+      fg.zoom(Math.max(2.6, fg.zoom?.() ?? 2.6), 600);
+    }
+  };
+
   const empty = !error && data && data.nodes.length === 0;
   const communitiesForLegend =
     scope === 'global' ? (data?.communities ?? []).slice(0, 8) : [];
@@ -678,7 +703,13 @@ export default function KnowledgeGraph({
           {communitiesForLegend.length > 0 && (
             <div className="graph-legend">
               {communitiesForLegend.map((c) => (
-                <span key={c.id} className="graph-legend-item">
+                <button
+                  key={c.id}
+                  type="button"
+                  className="graph-legend-item"
+                  title={t('graph.focusCommunity')}
+                  onClick={() => focusCommunity(c.id)}
+                >
                   <span
                     className="graph-legend-dot"
                     style={{
@@ -689,7 +720,7 @@ export default function KnowledgeGraph({
                   <span className="tiny">
                     {isMiscTheme(c.label) ? t('theme.unclassified') : c.label}
                   </span>
-                </span>
+                </button>
               ))}
             </div>
           )}

@@ -179,6 +179,7 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.openHint': '单击看摘要，再点“打开”。',
   'graph.no3d': '3D 需要 WebGL，当前浏览器不可用。',
   'graph.controls3d': '拖拽旋转 · 滚轮缩放 · 右键平移',
+  'graph.focusCommunity': '聚焦这个社区',
   'graph.open': '打开',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
