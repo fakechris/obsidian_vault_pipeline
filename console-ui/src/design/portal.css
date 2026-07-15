@@ -1582,3 +1582,9 @@ body {
 }
 
 .facet-snapshot { color: var(--muted); font-size: 0.85em; }
+
+/* Terrain theme legend: click a theme to fly the camera to its cluster. */
+.terrain-legend button:hover {
+  background: rgba(120, 180, 205, 0.2);
+  color: #fff;
+}

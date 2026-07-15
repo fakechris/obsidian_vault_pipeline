@@ -9,9 +9,8 @@
  * "night map" regardless of app theme.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { terrainUrl } from '../lib/api';
+import { STATIC_MODE, terrainUrl } from '../lib/api';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -53,7 +52,6 @@ function glowTexture(): THREE.Texture {
 
 export default function KnowledgeTerrain({ height = 600 }: { height?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
   const { t, lang } = useI18n();
   // Read inside the imperative three.js effect without making `lang` a build
   // dep (a scene rebuild on every locale toggle would reset the camera).
@@ -81,6 +79,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   const [monthIdx, setMonthIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const applyCutoffRef = useRef<((cutoff: string) => void) | null>(null);
+  // Imperative "fly the camera to this theme's cluster" — set by the three.js
+  // effect, called from the legend so you don't have to orbit around to find a
+  // cluster.
+  const focusThemeRef = useRef<((cx: number, cy: number) => void) | null>(null);
 
   useEffect(() => {
     let off = false;
@@ -373,13 +375,27 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       if (slot < 0 || slot >= visibleIdx.length) return;
       const p = data.points[visibleIdx[slot]];
       if (!p?.sha) return; // pack not in the index → no /library page to open
-      navigate(`/library/${encodeURIComponent(p.sha)}`);
+      // Open in a NEW tab so the operator's tuned camera/timeline state survives
+      // (in-app navigation would unmount the terrain and reset it).
+      const path = `/library/${encodeURIComponent(p.sha)}`;
+      window.open(STATIC_MODE ? `#${path}` : path, '_blank', 'noopener');
     };
     renderer.domElement.addEventListener('pointermove', pick);
     renderer.domElement.addEventListener('pointerdown', onDown);
     renderer.domElement.addEventListener('click', onClick);
 
-    // ---- loop (tween camera only on 2D/3D switch) ----
+    // ---- legend-driven camera focus: fly to a theme's cluster centroid ----
+    let focusCam: THREE.Vector3 | null = null;
+    let focusTarget: THREE.Vector3 | null = null;
+    const focusTheme = (cx: number, cy: number) => {
+      const wx = sx(cx);
+      const wz = sy(cy);
+      focusTarget = new THREE.Vector3(wx, HEIGHT * 0.3, wz);
+      focusCam = new THREE.Vector3(wx, HEIGHT * 1.7, wz + SIZE * 0.3);
+    };
+    focusThemeRef.current = focusTheme;
+
+    // ---- loop (tween camera on 2D/3D switch or a legend focus) ----
     let raf = 0;
     const t3d = new THREE.Vector3(0, HEIGHT * 3.2, SIZE * 0.82);
     const t2d = new THREE.Vector3(0, SIZE * 1.15, 0.001);
@@ -407,6 +423,17 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           appliedMode = modeRef.current;
           controls.enabled = true;
         }
+      } else if (focusCam && focusTarget) {
+        // Fly to the picked cluster; re-enable orbit once we arrive so you can
+        // look around it.
+        controls.enabled = false;
+        camera.position.lerp(focusCam, 0.12);
+        controls.target.lerp(focusTarget, 0.12);
+        if (camera.position.distanceTo(focusCam) < 1.5) {
+          focusCam = null;
+          focusTarget = null;
+          controls.enabled = true;
+        }
       }
       controls.update();
       renderer.render(scene, camera);
@@ -425,6 +452,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
     return () => {
       applyCutoffRef.current = null;
+      focusThemeRef.current = null;
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener('pointermove', pick);
@@ -449,7 +477,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
       labelObjs.forEach((l) => l.obj.removeFromParent());
       labelHandlesRef.current = [];
     };
-  }, [data, height, navigate]);
+  }, [data, height]);
 
   // ---- drive the terrain from the scrubber ----
   const atLatest = monthIdx >= months.length - 1;
@@ -506,6 +534,42 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           ? t('knowledge.terrainHud', { notes: data.point_count, themes: data.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
+      {/* Clickable theme list — pick a cluster and the camera flies to it, so you
+          don't have to orbit around hunting for it. */}
+      {data && data.themes.length > 0 && (
+        <div
+          className="terrain-legend"
+          style={{
+            position: 'absolute', top: 34, left: 12, zIndex: 2,
+            maxHeight: Math.max(120, height - 96), overflowY: 'auto',
+            display: 'flex', flexDirection: 'column', gap: 1, maxWidth: '44%',
+            background: 'rgba(14,18,24,0.5)', borderRadius: 8, padding: '5px 6px',
+          }}
+        >
+          {[...data.themes]
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 16)
+            .map((th) => (
+              <button
+                key={th.id}
+                type="button"
+                title={t('knowledge.terrainFocusTheme')}
+                onClick={() => {
+                  if (mode === '2d') setMode('3d');
+                  focusThemeRef.current?.(th.cx, th.cy);
+                }}
+                style={{
+                  cursor: 'pointer', textAlign: 'left', background: 'none', border: 'none',
+                  color: 'rgba(233,230,224,0.82)', font: '11px system-ui', padding: '2px 5px',
+                  borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {(lang === 'zh' ? th.label_zh : th.label) || th.label}
+                <span style={{ opacity: 0.45 }}> · {th.count}</span>
+              </button>
+            ))}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
