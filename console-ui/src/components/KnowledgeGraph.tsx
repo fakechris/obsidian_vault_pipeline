@@ -119,12 +119,12 @@ function escapeHtml(s: string): string {
   );
 }
 
-/** WebGL capability probe — gate the 3D toggle so a GPU-less browser doesn't
- * throw while constructing the ForceGraph3D renderer and unmount the app. */
+/** WebGL2 capability probe — gate the 3D toggle so a browser without it doesn't
+ * throw while constructing the ForceGraph3D renderer and unmount the app.
+ * three@0.185 dropped WebGL1, so a webgl1-only context must NOT pass. */
 function webglAvailable(): boolean {
   try {
-    const c = document.createElement('canvas');
-    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+    return !!document.createElement('canvas').getContext('webgl2');
   } catch {
     return false;
   }
@@ -447,6 +447,7 @@ export default function KnowledgeGraph({
                 nodeLabel={(n: FGNode) => escapeHtml(n.label)}
                 nodeOpacity={1}
                 nodeResolution={12}
+                showNavInfo={false}
                 linkColor={(l: { source: FGNode; target: FGNode }) =>
                   hoverId != null &&
                   ((l.source as FGNode).id === hoverId ||
@@ -492,6 +493,9 @@ export default function KnowledgeGraph({
           )}
           {no3d && (
             <div className="graph-note graph-truncated">{t('graph.no3d')}</div>
+          )}
+          {mode === '3d' && !no3d && (
+            <div className="graph-note graph-controls-hint">{t('graph.controls3d')}</div>
           )}
           {communitiesForLegend.length > 0 && (
             <div className="graph-legend">

@@ -1009,6 +1009,16 @@ body {
 .graph-info-open:hover {
   border-color: var(--accent);
 }
+.graph-controls-hint {
+  position: absolute;
+  bottom: 0.35rem;
+  right: 0.6rem;
+  z-index: 2;
+  font-size: var(--ovp-text-xs);
+  color: rgba(233, 230, 224, 0.6);
+  pointer-events: none;
+  padding: 0;
+}
 .graph-legend {
   position: absolute;
   top: 0.5rem;
