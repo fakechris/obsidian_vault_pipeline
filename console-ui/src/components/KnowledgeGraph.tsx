@@ -662,6 +662,7 @@ export default function KnowledgeGraph({
                 linkWidth={0.6}
                 onNodeHover={handleHover}
                 onNodeClick={onNodeClick3D}
+                onBackgroundClick={() => setSelected(null)}
               />
             )}
           </Suspense>
@@ -695,7 +696,7 @@ export default function KnowledgeGraph({
             <div className="graph-note graph-truncated">{t('graph.truncated')}</div>
           )}
           {no3d && (
-            <div className="graph-note graph-truncated">{t('graph.no3d')}</div>
+            <div className="graph-note graph-webgl-note">{t('graph.no3d')}</div>
           )}
           {mode === '3d' && !no3d && (
             <div className="graph-note graph-controls-hint">{t('graph.controls3d')}</div>

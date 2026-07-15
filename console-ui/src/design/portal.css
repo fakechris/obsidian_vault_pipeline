@@ -969,6 +969,18 @@ body {
   font-size: var(--ovp-text-xs);
   padding: 0.35rem 0.6rem;
 }
+/* WebGL-unavailable note: bottom-CENTER so it never overlaps the bottom-left
+   truncation notice or the bottom-right 3D controls hint. */
+.graph-webgl-note {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  font-size: var(--ovp-text-xs);
+  padding: 0.35rem 0.6rem;
+  text-align: center;
+}
 .graph-info {
   position: absolute;
   left: 0.5rem;

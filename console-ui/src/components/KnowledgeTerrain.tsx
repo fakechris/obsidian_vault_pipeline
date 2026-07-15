@@ -205,7 +205,10 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(W, H);
-    labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+    // overflow:hidden clips the floating theme labels to the terrain box (some
+    // project outside it behind the camera) WITHOUT clipping the React tooltip.
+    labelRenderer.domElement.style.cssText =
+      'position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;';
     wrap.appendChild(labelRenderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -481,6 +484,17 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
 
   // ---- drive the terrain from the scrubber ----
   const atLatest = monthIdx >= months.length - 1;
+  const cutoff = atLatest || !months.length ? FULL : `${months[monthIdx]}-31`;
+  // Theme ids with at least one point visible at the current timeline cutoff —
+  // so the legend doesn't offer a future-only theme that would fly the camera
+  // to an empty spot.
+  const activeThemeIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const p of data?.points ?? []) {
+      if (!p.date || p.date <= cutoff) s.add(p.theme_id);
+    }
+    return s;
+  }, [data, cutoff]);
   useEffect(() => {
     if (!applyCutoffRef.current || !months.length) return;
     applyCutoffRef.current(atLatest ? FULL : `${months[monthIdx]}-31`);
@@ -530,7 +544,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
   return (
     <div
       ref={wrapRef}
-      style={{ position: 'relative', width: '100%', height, overflow: 'hidden' }}
+      style={{ position: 'relative', width: '100%', height }}
     >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
         {data
@@ -550,6 +564,7 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
           }}
         >
           {[...data.themes]
+            .filter((th) => activeThemeIds.has(th.id))
             .sort((a, b) => b.count - a.count)
             .slice(0, 16)
             .map((th) => (
