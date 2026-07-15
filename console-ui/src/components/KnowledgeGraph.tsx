@@ -158,6 +158,23 @@ export default function KnowledgeGraph({
   // One-shot auto-fit per dataset, so a click-focus or a user pan isn't yanked
   // back by a later engine-stop.
   const fittedRef = useRef(false);
+  const hoverTimer = useRef<number | undefined>(undefined);
+
+  // Debounced hover: set immediately on a node (deduped), but delay CLEARING so
+  // the brief "null" as the cursor crosses the gap between two adjacent nodes is
+  // skipped — that null-flash made the highlight flip on/off (flicker).
+  const handleHover = useCallback((n: { id: string } | null) => {
+    if (n) {
+      if (hoverTimer.current) {
+        clearTimeout(hoverTimer.current);
+        hoverTimer.current = undefined;
+      }
+      setHoverId((prev) => (prev === n.id ? prev : n.id));
+    } else {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      hoverTimer.current = window.setTimeout(() => setHoverId(null), 90);
+    }
+  }, []);
 
   const tokens = useMemo(() => readTokens(), [themeVersion]);
   const focusId = scope === 'neighborhood' && id ? `source:${id}` : null;
@@ -291,25 +308,24 @@ export default function KnowledgeGraph({
     const isFocus = node.id === focusId;
     const isSel = selected?.id === node.id;
     const isHover = hoverId === node.id;
-    const dim =
-      hoverId != null &&
-      !isHover &&
-      !(adjacency.get(hoverId)?.has(node.id) ?? false);
+    const isNeighbor =
+      hoverId != null && (adjacency.get(hoverId)?.has(node.id) ?? false);
     const r = nodeRadius(node, isFocus);
     const x = node.x ?? 0;
     const y = node.y ?? 0;
 
-    ctx.globalAlpha = dim ? 0.12 : 1;
+    // No global dimming: hover ADDS a ring on the node + its neighbors (and the
+    // linkColor pass brightens incident edges). Toggling every other node's
+    // opacity as the mouse moved was the flicker source.
     ctx.beginPath();
     ctx.arc(x, y, r, 0, 2 * Math.PI);
     ctx.fillStyle = scopedFill(scope, node, tokens);
     ctx.fill();
-    if (isFocus || isSel || isHover) {
-      ctx.lineWidth = 1.5 / zoom;
-      ctx.strokeStyle = isSel || isHover ? tokens.linkHi : tokens.accent;
+    if (isFocus || isSel || isHover || isNeighbor) {
+      ctx.lineWidth = (isHover || isSel ? 1.6 : 1) / zoom;
+      ctx.strokeStyle = isSel || isHover || isNeighbor ? tokens.linkHi : tokens.accent;
       ctx.stroke();
     }
-    ctx.globalAlpha = 1;
     // Labels are drawn in a SEPARATE post pass (drawLabels) with a budget +
     // collision so they never overlap into spaghetti at any zoom.
   };
@@ -318,8 +334,14 @@ export default function KnowledgeGraph({
   // ranked (forced first, then importance), so zooming in never floods the
   // canvas with overlapping text. Runs each frame with the live zoom.
   const drawLabels = (ctx: CanvasRenderingContext2D, zoom: number) => {
+    // Hover LABELS the node + its neighbors (on top of the normal budget)
+    // rather than hiding everything else — hiding/showing the whole label set
+    // as the mouse moved was a flicker source.
     const forced = (n: FGNode) =>
-      n.id === focusId || n.id === selected?.id || n.id === hoverId;
+      n.id === focusId ||
+      n.id === selected?.id ||
+      n.id === hoverId ||
+      (hoverId != null && (adjacency.get(hoverId)?.has(n.id) ?? false));
     const ranked = [...graphData.nodes].sort((a, b) => {
       const fa = forced(a) ? 1 : 0;
       const fb = forced(b) ? 1 : 0;
@@ -351,12 +373,6 @@ export default function KnowledgeGraph({
         if (budget <= 0) break;
         if (!onScreen(n.x ?? 0, n.y ?? 0)) continue;
         if (!shouldLabel(n, zoom, false)) continue;
-        // On hover, only the hovered node's neighborhood keeps its labels.
-        if (
-          hoverId != null &&
-          !(adjacency.get(hoverId)?.has(n.id) ?? false)
-        )
-          continue;
       }
       const x = n.x ?? 0;
       const y = n.y ?? 0;
@@ -490,7 +506,7 @@ export default function KnowledgeGraph({
                     ? 1.5
                     : 0.6
                 }
-                onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
+                onNodeHover={handleHover}
                 onNodeClick={onNodeClick}
                 onBackgroundClick={() => setSelected(null)}
               />
@@ -519,7 +535,7 @@ export default function KnowledgeGraph({
                 }
                 linkOpacity={0.5}
                 linkWidth={0.6}
-                onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
+                onNodeHover={handleHover}
                 onNodeClick={onNodeClick3D}
               />
             )}
