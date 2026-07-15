@@ -344,7 +344,9 @@ enum Cmd {
         out: PathBuf,
         #[arg(long)]
         date: Option<String>,
-        /// Read the existing index.json instead of rebuilding it.
+        /// Build the model in memory WITHOUT persisting index.json/evidence.json
+        /// back to the vault (a read-only publish). The model is still freshly
+        /// built so it matches the ledger.
         #[arg(long)]
         no_rebuild: bool,
         /// A pre-built static SPA bundle to copy into `<out>/` (from

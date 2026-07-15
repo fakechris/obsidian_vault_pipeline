@@ -60,6 +60,19 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
     // hashed SPA chunks / withdrawn files behind, which then deploy. Guard the
     // recursive delete HARD — `--out .` / the vault / a parent must never be
     // nuked by a typo.
+    // Reject `..` outright: a path like `<vault>/new/..` doesn't `exists()` yet,
+    // so it would skip every guard below, then `create_dir_all` resolves it back
+    // to the vault and the clean/copy would hit real data.
+    if cmd
+        .out
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(CliError::Io(format!(
+            "--out {} must not contain `..`",
+            cmd.out.display()
+        )));
+    }
     let site_marker = cmd.out.join(".ovp-site");
     if cmd.out.exists() {
         let out_c = std::fs::canonicalize(&cmd.out)

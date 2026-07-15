@@ -52,14 +52,22 @@ impl PublicView {
             p.pack_dir = case_id(&p.pack_dir).to_string();
             p.card_titles.clear();
         }
+        // The public case_id universe: the retained packs' basenames. A claim
+        // citing anything outside this is citing an orphan/private pack.
+        let public_cases: std::collections::HashSet<String> =
+            m.packs.iter().map(|p| p.pack_dir.clone()).collect();
 
         // Claims: durable only. Caveated/superseded/retracted never ship, and
         // the review lane (`review.json`) is simply never read. Drop the run id
-        // (a pipeline internal).
+        // (a pipeline internal), and scrub citations to PUBLIC cases only — a
+        // raw orphan case id carries a date/title/hash. A claim left with no
+        // public source can't show provenance, so it's dropped entirely.
         m.claims.retain(|c| c.status == ClaimStatus::Durable);
         for c in m.claims.iter_mut() {
             c.run_id = None;
+            c.sources.retain(|s| public_cases.contains(s));
         }
+        m.claims.retain(|c| !c.sources.is_empty());
 
         // Runs + ops are pipeline internals (report paths, blocked backlog,
         // liveness heartbeat) — drop them entirely.
@@ -93,7 +101,20 @@ impl PublicView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ovp_index::{ClaimRow, SourceRow, Totals};
+    use ovp_index::{ClaimRow, PackRow, SourceRow, Totals};
+
+    fn pack(case: &str, sha: &str) -> PackRow {
+        PackRow {
+            pack_dir: format!("40-Resources/Reader/{case}"),
+            title: "t".into(),
+            date: None,
+            units: 1,
+            cards: 1,
+            json_repaired: false,
+            card_titles: vec!["secret card title".into()],
+            source_sha256: Some(sha.into()),
+        }
+    }
 
     fn src(sha: &str, status: SourceStatus, reason: Option<&str>) -> SourceRow {
         SourceRow {
@@ -135,7 +156,9 @@ mod tests {
                 src("bbb", SourceStatus::Blocked, Some("3 strikes: llm 500")),
                 src("ccc", SourceStatus::NeedsContent, None),
             ],
-            packs: vec![],
+            // "case" joins to processed "aaa" (public); "orphan" joins to blocked
+            // "bbb" (dropped) so a claim citing it is scrubbed.
+            packs: vec![pack("case", "aaa"), pack("orphan", "bbb")],
             claims: vec![
                 claim("d1", ClaimStatus::Durable),
                 claim("c1", ClaimStatus::Caveated),
@@ -158,9 +181,17 @@ mod tests {
         assert!(m.sources[0].last_reason.is_none());
         assert!(m.sources[0].last_run_id.is_none());
         assert_eq!(m.sources[0].fail_count, 0);
-        // Only the durable claim survives.
+        // Only the durable claim survives, citing only the public case.
         assert_eq!(m.claims.len(), 1);
         assert_eq!(m.claims[0].claim_id, "d1");
+        assert_eq!(m.claims[0].sources, vec!["case".to_string()]);
+        assert!(m.claims[0].run_id.is_none());
+        // Packs: orphan (blocked-source) pack dropped; path reduced to case_id;
+        // card_titles scrubbed.
+        assert_eq!(m.packs.len(), 1);
+        assert_eq!(m.packs[0].pack_dir, "case");
+        assert!(m.packs[0].card_titles.is_empty());
+        assert_eq!(m.sources[0].pack_dir.as_deref(), Some("case"));
         // Totals recomputed — no backlog/failure leakage.
         assert_eq!(m.totals.sources, 1);
         assert_eq!(m.totals.blocked, 0);

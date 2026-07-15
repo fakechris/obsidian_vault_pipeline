@@ -13,8 +13,7 @@ use std::path::{Path, PathBuf};
 use ovp_api_projection::{PublicView, bodies, graph, readers};
 use ovp_domain::VaultLayout;
 use ovp_index::{
-    IndexModel, Query, build_evidence, build_index_at, now_rfc3339, read_index, write_evidence,
-    write_index,
+    IndexModel, Query, build_evidence, build_index_at, now_rfc3339, write_evidence, write_index,
 };
 use sha2::{Digest, Sha256};
 
@@ -52,20 +51,20 @@ pub struct PublishReport {
 pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     let layout = VaultLayout::new();
 
-    // 1. Fresh, self-consistent model (or read the existing one). A rebuild also
-    // refreshes the vault's evidence.json side-car (parity with `console`); the
-    // published pages themselves are lite and carry no evidence layer.
-    let model: IndexModel = if args.no_rebuild {
-        read_index(&args.vault_root)?
-    } else {
-        let built_at = now_rfc3339();
-        let run_id = format!("publish-{built_at}");
-        let m = build_index_at(&args.vault_root, &args.date, Some(&run_id), &built_at)?;
-        write_index(&args.vault_root, &m)?;
-        let e = build_evidence(&args.vault_root, &args.date, &m)?;
+    // 1. ALWAYS build a fresh model, so it and the ledger records folded below
+    // reflect the SAME revision (a stale index.json + current ledger would
+    // publish retracted claims in model.json while dropping them from claim
+    // files). `--no-rebuild` only skips PERSISTING index.json/evidence.json back
+    // to the vault (a read-only publish); the in-memory build is cheap.
+    let built_at = now_rfc3339();
+    let run_id = format!("publish-{built_at}");
+    let model: IndexModel =
+        build_index_at(&args.vault_root, &args.date, Some(&run_id), &built_at)?;
+    if !args.no_rebuild {
+        write_index(&args.vault_root, &model)?;
+        let e = build_evidence(&args.vault_root, &args.date, &model)?;
         write_evidence(&args.vault_root, &e)?;
-        m
-    };
+    }
 
     // 2. Redact to public-safe. 3. Durable/active records (durable-only by
     // construction — caveated live in review.json and never in the ledger).
@@ -74,6 +73,19 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     // Strict read: a corrupt ledger must FAIL the publish, never silently
     // deploy a site with every claim removed.
     let records = readers::load_active_records_strict(&args.vault_root, &layout)?;
+    // Scrub each record's citations to PUBLIC cases (matching PublicView's claim
+    // filtering), so claim pages / graph / themes never surface an orphan case
+    // id, and drop records left with no public citation.
+    let public_cases: std::collections::HashSet<&str> =
+        public.packs.iter().map(|p| p.pack_dir.as_str()).collect();
+    let records: Vec<ovp_domain::crystal::DurableRecord> = records
+        .into_iter()
+        .filter_map(|mut r| {
+            r.citations.retain(|c| public_cases.contains(c.case_id.as_str()));
+            r.source_cases.retain(|s| public_cases.contains(s.as_str()));
+            (!r.citations.is_empty()).then_some(r)
+        })
+        .collect();
     let terrain_src = args
         .vault_root
         .join(layout.crystal_store_dir())
@@ -151,24 +163,29 @@ fn write_api_tree(
 
     // Per-claim pages (durable records). `include_unit_text=false` → only the
     // short verbatim quote ships, not the fuller grounded-unit sentence. Alias
-    // under BOTH claim_key and claim_id, since the model/graph link by claim_id
-    // while `claim_body` keys the file name on claim_key.
+    // under BOTH claim_key and claim_id (the model/graph link by claim_id while
+    // `claim_body` keys on claim_key). `safe_component` neutralizes any `..`/`/`
+    // in an id so a filename can't escape the output tree.
     for r in records {
         if let Some(v) = bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false) {
-            write_json(&api.join("claim").join(format!("{}.json", r.claim_key)), &v)?;
+            write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_key))), &v)?;
             files += 1;
             if r.claim_id != r.claim_key {
-                write_json(&api.join("claim").join(format!("{}.json", r.claim_id)), &v)?;
+                write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
                 files += 1;
             }
         }
     }
 
     // Per-source LITE pages: no evidence layer, no markdown body — link out to
-    // the original via `source.url`.
+    // the original via `source.url`. The `lite` flag tells the SPA to show the
+    // link-out presentation instead of "run `ovp2 index`" remediation.
     for s in &public.sources {
-        if let Some(v) = bodies::source_body(public, None, &s.sha256, None) {
-            write_json(&api.join("source").join(format!("{}.json", s.sha256)), &v)?;
+        if let Some(mut v) = bodies::source_body(public, None, &s.sha256, None) {
+            if let Some(o) = v.as_object_mut() {
+                o.insert("lite".into(), serde_json::json!(true));
+            }
+            write_json(&api.join("source").join(format!("{}.json", safe_component(&s.sha256))), &v)?;
             files += 1;
         }
     }
@@ -282,6 +299,23 @@ fn filter_terrain(
         obj.insert("themes".into(), serde_json::Value::Array(themes));
     }
     Some(v)
+}
+
+/// Collapse an id (claim key/id, sha) to ONE safe path component: keep
+/// `[A-Za-z0-9._-]`, map everything else (incl. `/` and `..`) to `_`, so a
+/// hostile or malformed id can never escape the output directory.
+fn safe_component(id: &str) -> String {
+    let s: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .collect();
+    // A leading-dots-only name (`.`, `..`) would still be unsafe after mapping;
+    // `..` maps to `..` (dots are kept) → force a prefix.
+    if s.is_empty() || s.chars().all(|c| c == '.') {
+        format!("_{s}")
+    } else {
+        s
+    }
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {

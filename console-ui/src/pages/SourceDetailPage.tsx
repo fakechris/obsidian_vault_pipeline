@@ -9,7 +9,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchSourceDetail } from '../lib/api';
+import { fetchSourceDetail, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { MarkdownView } from '../lib/markdown';
 import type { ClaimRow, SourceDetail } from '../lib/types';
@@ -209,7 +209,16 @@ export default function SourceDetailPage() {
       </dl>
 
       <div className="grid two-col">
-        {/* main column: Memory | Source tabs */}
+        {/* main column: Memory | Source tabs. On the published static site the
+            evidence layer + full markdown aren't shipped (copyright), so show a
+            read-the-original note instead of the tabs' empty/remediation UI. */}
+        {STATIC_MODE ? (
+          <div>
+            <EmptyState>
+              <p>{t('source.staticLite')}</p>
+            </EmptyState>
+          </div>
+        ) : (
         <div>
           <div className="tab-row">
             <button
@@ -315,14 +324,18 @@ export default function SourceDetailPage() {
             </>
           )}
         </div>
+        )}
 
-        {/* right rail: neighborhood graph + citing claims */}
+        {/* right rail: neighborhood graph + citing claims. The neighborhood
+            subgraph isn't pre-baked for the static site — hide it there. */}
         <div>
-          <div className="card">
-            <h3 style={{ marginBottom: '0.6rem' }}>{t('source.neighborhood')}</h3>
-            <KnowledgeGraph scope="neighborhood" id={source.sha256} height={360} />
-            <div className="graph-caption">{t('source.neighborhoodCaption')}</div>
-          </div>
+          {!STATIC_MODE && (
+            <div className="card">
+              <h3 style={{ marginBottom: '0.6rem' }}>{t('source.neighborhood')}</h3>
+              <KnowledgeGraph scope="neighborhood" id={source.sha256} height={360} />
+              <div className="graph-caption">{t('source.neighborhoodCaption')}</div>
+            </div>
+          )}
           <div className="card">
             <h3 style={{ marginBottom: '0.6rem' }}>{t('source.citingClaims')}</h3>
             <CitingClaims claims={citing} />

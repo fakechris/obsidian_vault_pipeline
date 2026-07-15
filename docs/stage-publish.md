@@ -70,6 +70,10 @@ build with `VITE_OVP_BASE=/<repo>/` and the API resolves relative to it. The
 `--out` directory must be empty or a prior publish output (a `.ovp-site` marker
 guards against a mistyped path deleting real data).
 
+Known limitation: static search matches the display line, case-id path, and
+entity id — searching by a source URL/domain or a raw theme string (which the
+live server's `run_query` also scans) is not supported on the published site.
+
 The static build uses **HashRouter** (`/#/knowledge`) so deep links work on any
 static host with zero rewrite rules, and is **knowledge-only**: home =
 Knowledge, nav = Knowledge / Library / Search (Today / Ask / System and the run

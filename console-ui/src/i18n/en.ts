@@ -134,6 +134,8 @@ export const en = {
   // source detail
   'source.title': 'Source',
   'source.url': 'url',
+  'source.staticLite':
+    'The full text and evidence layer are not published here. Follow the url above to read the original; the durable claims this source supports are listed on the right.',
   'source.date': 'date',
   'source.origin': 'origin',
   'source.location': 'location',

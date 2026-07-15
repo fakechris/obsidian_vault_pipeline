@@ -125,6 +125,8 @@ export const zh: Record<keyof typeof en, string> = {
   // source detail
   'source.title': '资料',
   'source.url': '链接',
+  'source.staticLite':
+    '此处不发布全文与证据层。点击上方链接阅读原文;该来源支持的持久主张列在右侧。',
   'source.date': '日期',
   'source.origin': '来源',
   'source.location': '位置',
