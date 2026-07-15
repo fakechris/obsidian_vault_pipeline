@@ -69,23 +69,59 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     let public = view.model();
     let records = readers::load_active_records(&args.vault_root, &layout);
     let reader_root = args.vault_root.join(layout.reader_root());
+    let terrain_src = args
+        .vault_root
+        .join(layout.crystal_store_dir())
+        .join("terrain.json");
 
-    let api = args.out_dir.join("api");
-    fs_reset_dir(&api)?;
+    let files = write_api_tree(
+        &args.out_dir.join("api"),
+        public,
+        &records,
+        evidence.as_ref(),
+        &reader_root,
+        &terrain_src,
+        args.published_at.as_deref(),
+    )?;
+
+    Ok(PublishReport {
+        file_count: files,
+        content_hash: content_hash(public, &records),
+        index_run_id: model.run_id.clone(),
+        index_built_at: model.built_at.clone(),
+        sources: public.sources.len(),
+        claims: records.len(),
+    })
+}
+
+/// Write the full public API tree under `api_dir` from an ALREADY-redacted
+/// model + its durable records. Split out from `publish` so it's testable
+/// without a full vault rebuild. Returns the file count.
+#[allow(clippy::too_many_arguments)]
+fn write_api_tree(
+    api: &Path,
+    public: &IndexModel,
+    records: &[ovp_domain::crystal::DurableRecord],
+    evidence: Option<&EvidenceModel>,
+    reader_root: &Path,
+    terrain_src: &Path,
+    published_at: Option<&str>,
+) -> Result<usize, String> {
+    fs_reset_dir(api)?;
     let mut files = 0usize;
 
-    // 4a. Top-level projections.
+    // Top-level projections.
     write_json(&api.join("model.json"), &serde_json::to_value(public).unwrap_or_default())?;
-    write_json(&api.join("themes.json"), &bodies::themes_body(&records))?;
+    write_json(&api.join("themes.json"), &bodies::themes_body(records))?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
     let empty = Query { kind: None, status: None, date: None, term: None };
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 5;
 
-    // 4b. Graph: the global overview + one keyed file of per-theme subgraphs
-    // (a handful of themes; keyed by label so the SPA looks up client-side, no
-    // slug-matching). Neighborhood subgraphs are omitted in static mode.
+    // Graph: the global overview + one keyed file of per-theme subgraphs (keyed
+    // by label so the SPA looks up client-side, no slug-matching). Neighborhood
+    // subgraphs are omitted in static mode.
     let params = graph::GraphParams {
         mode: graph::GraphMode::Overview,
         limit: graph::DEFAULT_OVERVIEW_LIMIT,
@@ -93,66 +129,54 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         focus: None,
         hops: graph::MAX_HOPS,
     };
-    if let Ok(g) = graph::build_graph(&records, Some(public), &params) {
+    if let Ok(g) = graph::build_graph(records, Some(public), &params) {
         write_json(&api.join("graph").join("global.json"), &serde_json::to_value(&g).unwrap_or_default())?;
         files += 1;
     }
     let mut themes_map = serde_json::Map::new();
-    for (theme, _) in graph::theme_counts(&records) {
-        if let Ok(g) = graph::theme_subgraph(&records, Some(public), &theme) {
+    for (theme, _) in graph::theme_counts(records) {
+        if let Ok(g) = graph::theme_subgraph(records, Some(public), &theme) {
             themes_map.insert(theme, serde_json::to_value(&g).unwrap_or_default());
         }
     }
     write_json(&api.join("graph").join("themes.json"), &serde_json::Value::Object(themes_map))?;
     files += 1;
 
-    // 4c. Per-claim pages (durable records).
-    for r in &records {
-        if let Some(v) = bodies::claim_body(&records, Some(public), &reader_root, &r.claim_key) {
+    // Per-claim pages (durable records).
+    for r in records {
+        if let Some(v) = bodies::claim_body(records, Some(public), reader_root, &r.claim_key) {
             write_json(&api.join("claim").join(format!("{}.json", r.claim_key)), &v)?;
             files += 1;
         }
     }
 
-    // 4d. Per-source LITE pages (no markdown body — link out to the original).
+    // Per-source LITE pages (no markdown body — link out to the original).
     for s in &public.sources {
-        if let Some(v) = bodies::source_body(public, evidence.as_ref(), &s.sha256, None) {
+        if let Some(v) = bodies::source_body(public, evidence, &s.sha256, None) {
             write_json(&api.join("source").join(format!("{}.json", s.sha256)), &v)?;
             files += 1;
         }
     }
 
-    // 4e. Terrain viz — already public-safe (points carry source sha + title +
+    // Terrain viz — already public-safe (points carry source sha + title +
     // theme, no third-party body). Copy through if built.
-    let terrain = args
-        .vault_root
-        .join(layout.crystal_store_dir())
-        .join("terrain.json");
-    if let Ok(body) = std::fs::read_to_string(&terrain) {
+    if let Ok(body) = std::fs::read_to_string(terrain_src) {
         std::fs::write(api.join("terrain.json"), &body)
             .map_err(|e| format!("write terrain.json: {e}"))?;
         files += 1;
     }
 
-    // 4f. Volatile stamps isolated in meta.json so content files stay stable.
+    // Volatile stamps isolated in meta.json so content files stay stable.
     let meta = serde_json::json!({
         "built_at": public.built_at,
         "run_id": public.run_id,
-        "published_at": args.published_at,
+        "published_at": published_at,
         "static": true,
     });
     write_json(&api.join("meta.json"), &meta)?;
     files += 1;
 
-    let content_hash = content_hash(public, &records);
-    Ok(PublishReport {
-        file_count: files,
-        content_hash,
-        index_run_id: model.run_id.clone(),
-        index_built_at: model.built_at.clone(),
-        sources: public.sources.len(),
-        claims: records.len(),
-    })
+    Ok(files)
 }
 
 /// sha256 over the durable content only (sources, packs, claims, records, and
@@ -185,4 +209,152 @@ fn fs_reset_dir(dir: &Path) -> Result<(), String> {
         std::fs::remove_dir_all(dir).map_err(|e| format!("clean {}: {e}", dir.display()))?;
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_domain::crystal::{
+        CrystalStatus, DurableCitation, DurableRecord, FinalClass, ProvenanceClass, StrengthClass,
+    };
+    use ovp_index::{ClaimRow, ClaimStatus, PackRow, SourceRow, SourceStatus, Totals};
+
+    fn record() -> DurableRecord {
+        DurableRecord {
+            claim_key: "ck-abc123".into(),
+            claim_id: "id-1".into(),
+            claim: "A durable claim.".into(),
+            theme: "Theme A".into(),
+            source_cases: vec!["case1".into()],
+            citations: vec![DurableCitation {
+                case_id: "case1".into(),
+                unit_id: "u-001".into(),
+                quote: "q".into(),
+                resolved_line: None,
+            }],
+            provenance_score: 0.9,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "ok".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        }
+    }
+
+    fn src(sha: &str, status: SourceStatus) -> SourceRow {
+        SourceRow {
+            sha256: sha.into(),
+            status,
+            title: Some(format!("Src {sha}")),
+            url: Some(format!("https://ex.com/{sha}")),
+            rel_path: Some("50-Inbox/01-Raw/x.md".into()),
+            date: Some("2026-07-01".into()),
+            last_run_id: Some("r1".into()),
+            pack_dir: Some("40-Resources/Reader/case1".into()),
+            fail_count: 0,
+            last_reason: None,
+        }
+    }
+
+    fn model() -> IndexModel {
+        IndexModel {
+            schema: "ovp.index/v2".into(),
+            date: "2026-07-01".into(),
+            built_at: Some("2026-07-01T00:00:00Z".into()),
+            run_id: Some("r1".into()),
+            totals: Totals::default(),
+            sources: vec![src("aaa", SourceStatus::Processed), src("bbb", SourceStatus::Blocked)],
+            packs: vec![PackRow {
+                pack_dir: "40-Resources/Reader/case1".into(),
+                title: "Src aaa".into(),
+                date: Some("2026-07-01".into()),
+                units: 3,
+                cards: 2,
+                json_repaired: false,
+                card_titles: vec![],
+                source_sha256: Some("aaa".into()),
+            }],
+            claims: vec![
+                ClaimRow {
+                    claim_id: "id-1".into(),
+                    claim: "A durable claim.".into(),
+                    theme: Some("Theme A".into()),
+                    status: ClaimStatus::Durable,
+                    sources: vec!["case1".into()],
+                    strength: Some("supported".into()),
+                    run_id: Some("r1".into()),
+                    lane: None,
+                },
+                ClaimRow {
+                    claim_id: "id-2".into(),
+                    claim: "caveated".into(),
+                    theme: Some("Theme A".into()),
+                    status: ClaimStatus::Caveated,
+                    sources: vec!["case1".into()],
+                    strength: None,
+                    run_id: None,
+                    lane: Some("review".into()),
+                },
+            ],
+            runs: vec![],
+            ops: Default::default(),
+        }
+    }
+
+    fn read(p: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn write_api_tree_emits_public_files_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let api = tmp.path().join("api");
+        let pv = PublicView::from_model(&model());
+        let recs = vec![record()];
+        let n = write_api_tree(
+            &api,
+            pv.model(),
+            &recs,
+            None,
+            tmp.path(),
+            &tmp.path().join("no-terrain.json"),
+            Some("2026-07-01T12:00:00Z"),
+        )
+        .unwrap();
+        assert!(n >= 8, "expected the full tree, got {n} files");
+
+        // model.json: processed source only, durable claim only.
+        let m = read(&api.join("model.json"));
+        assert_eq!(m["sources"].as_array().unwrap().len(), 1);
+        assert_eq!(m["claims"].as_array().unwrap().len(), 1);
+
+        // Source-lite page for the processed source, NO markdown body; the
+        // blocked source has no page.
+        let s = read(&api.join("source/aaa.json"));
+        assert!(s["doc"]["markdown"].is_null(), "lite page must omit markdown");
+        assert!(!api.join("source/bbb.json").exists(), "blocked source must not publish");
+
+        // Per-claim page exists.
+        assert!(api.join("claim/ck-abc123.json").exists());
+
+        // meta carries published_at; terrain absent (source file missing).
+        let meta = read(&api.join("meta.json"));
+        assert_eq!(meta["published_at"], "2026-07-01T12:00:00Z");
+        assert!(!api.join("terrain.json").exists());
+
+        // settings scrubbed.
+        assert!(read(&api.join("settings.json")).get("vault_root").is_none());
+    }
+
+    #[test]
+    fn content_hash_ignores_volatile_stamps() {
+        let mut a = model();
+        let h1 = content_hash(PublicView::from_model(&a).model(), &[record()]);
+        // Only the stamps change → identical content hash (no-op publish skips).
+        a.built_at = Some("2099-01-01T00:00:00Z".into());
+        a.run_id = Some("rZ".into());
+        let h2 = content_hash(PublicView::from_model(&a).model(), &[record()]);
+        assert_eq!(h1, h2);
+    }
 }
