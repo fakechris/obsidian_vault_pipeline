@@ -190,6 +190,7 @@ export const en = {
   'graph.kindUnit': 'unit',
   'graph.kindCard': 'card',
   'graph.openHint': 'Double-click to open.',
+  'graph.open': 'Open',
   'graph.noPage': 'Legacy source — no detail page in this vault.',
   'graph.cardHint':
     "This source's memory — the full card is in the Memory tab.",

@@ -1,27 +1,21 @@
-/** KnowledgeGraph — the scoped graph component (design §4, KMEM pattern).
- * One component, three scopes, one rendering engine:
+/** KnowledgeGraph — the scoped force-directed graph (design §4, KMEM pattern).
+ * One component, three scopes:
  *
- *   scope='neighborhood' id=<source sha>  → this source, its memory cards,
- *                                           citing claims, sibling sources
- *                                           (B2; cards added in B5)
- *   scope='global'                        → the overview/density graph —
- *                                           the Knowledge page graph view (B3)
- *   scope='theme'        id=<theme>       → the theme's claims + their
- *                                           sources — theme detail rail (B3)
+ *   scope='neighborhood' id=<source sha>  → this source + its citing claims +
+ *                                           sibling sources + memory cards
+ *   scope='global'                        → the overview graph, claims colored
+ *                                           by community
+ *   scope='theme'        id=<theme>       → the theme's claims + their sources
  *
- * All colors are read from the DS custom properties (--graph-*, --c-*,
- * --accent, --text…) at render time, and the graph re-renders when
- * `data-theme` flips (MutationObserver on <html>). Interactions: click →
- * in-component info card; double-click → navigate (source → /library/:sha,
- * claim → /knowledge#<claim_id> anchor). Sha-less legacy sources
- * (`source:<case_id>` nodes without an index page) never navigate — the
- * info card says so instead of routing to a 404 — and card nodes never
- * navigate either: they are the focus source's own memory, explained in
- * the info card (the Memory tab beside the graph has the full body).
- * Embedded height defaults to ~360px with an expand-to-fullscreen toggle.
+ * Rendered with react-force-graph-2d (canvas + d3-force). Over the old G6 view
+ * this adds: zoom-based LEVEL-OF-DETAIL (labels declutter as you zoom out and
+ * reveal as you zoom in, gated per-node by importance so hubs label first),
+ * hover-to-highlight-neighborhood, click-to-focus with an animated re-center,
+ * community coloring + legend, and an info card with an explicit open action.
+ * Colors come from the DS custom properties, re-read when `data-theme` flips.
  *
- * @antv/g6 (~1MB min) loads via dynamic import so portal pages stay light. */
-import { useEffect, useMemo, useRef, useState } from 'react';
+ * react-force-graph-2d loads lazily so portal pages stay light. */
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
@@ -34,6 +28,9 @@ import type { GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ForceGraph2D = lazy(() => import('react-force-graph-2d')) as any;
+
 export type KnowledgeGraphScope = 'neighborhood' | 'global' | 'theme';
 
 export interface KnowledgeGraphProps {
@@ -45,9 +42,11 @@ export interface KnowledgeGraphProps {
 }
 
 const DEFAULT_HEIGHT = 360;
+/** Base zoom at which a MAX-importance node reveals its label; leaves need to
+ * be zoomed in further. Below this the graph reads as a labelled constellation
+ * of only its most important nodes — the level-of-detail the old view lacked. */
+const LABEL_BASE_ZOOM = 1.9;
 
-/** DS tokens resolved from the live theme — read at render time so the
- * graph always matches `data-theme`. */
 interface DsTokens {
   link: string;
   linkHi: string;
@@ -72,17 +71,13 @@ function readTokens(): DsTokens {
   };
 }
 
-/** Node fill by entity kind (mockup: sources --c-1, claims --c-3, cards and
- * units --c-2 — the community palette read for the ACTIVE theme). */
 function nodeFill(type: string, t: DsTokens): string {
   if (type === 'source') return t.community[0];
   if (type === 'claim') return t.community[2];
-  // 'card' and 'unit' share the memory-layer color (--c-2).
-  return t.community[1];
+  return t.community[1]; // card + unit share the memory-layer color
 }
 
-/** Global scope colors claims by community (that's what the view is FOR);
- * the focused scopes color by entity kind. */
+/** Global scope colors claims by community; focused scopes color by kind. */
 function scopedFill(scope: KnowledgeGraphScope, n: GraphNode, t: DsTokens): string {
   if (scope === 'global' && n.cluster > 0) {
     return t.community[(n.cluster - 1) % t.community.length];
@@ -90,11 +85,24 @@ function scopedFill(scope: KnowledgeGraphScope, n: GraphNode, t: DsTokens): stri
   return nodeFill(n.type, t);
 }
 
-function nodeSize(n: GraphNode, isFocus: boolean): number {
-  if (isFocus) return 22;
-  if (n.type === 'source') return 12 + 8 * (n.importance ?? 0);
-  return 10 + 12 * (n.importance ?? 0);
+/** Node radius in graph units, driven by importance (focus node is largest). */
+function nodeRadius(n: GraphNode, isFocus: boolean): number {
+  if (isFocus) return 9;
+  const imp = n.importance ?? 0;
+  return n.type === 'source' ? 4 + 4 * imp : 3 + 6 * imp;
 }
+
+/** Per-node label LOD: an important (hub) node reveals its label at a lower
+ * zoom than a leaf, so zooming out declutters to just the backbone. `forced`
+ * (focus/selected/hovered) always labels. */
+function shouldLabel(n: GraphNode, zoom: number, forced: boolean): boolean {
+  if (forced) return true;
+  const imp = n.importance ?? 0;
+  return zoom >= LABEL_BASE_ZOOM * (1 - 0.7 * imp);
+}
+
+// react-force-graph mutates node objects with x/y at runtime.
+type FGNode = GraphNode & { x?: number; y?: number };
 
 export default function KnowledgeGraph({
   scope,
@@ -104,27 +112,26 @@ export default function KnowledgeGraph({
   const { t } = useI18n();
   const navigate = useNavigate();
   const { model } = useModel();
-  // Shas that actually have a /library/:sha page (handoff note 5): while
-  // the model is loading — or in a crystal-only vault — nothing navigates.
-  // The dblclick handler reads it through a ref so a model refresh does
-  // NOT destroy and rebuild the whole graph just to update navigability;
-  // the memoized set stays for render-time use (info-panel hint).
   const knownShas = useMemo(
     () => new Set((model?.sources ?? []).map((s) => s.sha256)),
     [model],
   );
-  const knownShasRef = useRef(knownShas);
-  useEffect(() => {
-    knownShasRef.current = knownShas;
-  }, [knownShas]);
-  const containerRef = useRef<HTMLDivElement>(null);
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null);
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  // Bumped when <html data-theme> mutates → graph rebuilds with new tokens.
+  const [dims, setDims] = useState({ w: 0, h: height });
   const [themeVersion, setThemeVersion] = useState(0);
 
+  const tokens = useMemo(() => readTokens(), [themeVersion]);
+  const focusId = scope === 'neighborhood' && id ? `source:${id}` : null;
+
+  // Rebuild with new tokens when the theme flips.
   useEffect(() => {
     const observer = new MutationObserver(() => setThemeVersion((v) => v + 1));
     observer.observe(document.documentElement, {
@@ -134,9 +141,19 @@ export default function KnowledgeGraph({
     return () => observer.disconnect();
   }, []);
 
+  // Track the container size so the canvas fills it (and refits on fullscreen).
   useEffect(() => {
-    // Scope → endpoint switch. neighborhood/theme without an id is a
-    // caller bug — surface it, don't fetch garbage.
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setDims({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Scope → endpoint.
+  useEffect(() => {
     const request =
       scope === 'global'
         ? fetchGlobalGraph()
@@ -149,160 +166,68 @@ export default function KnowledgeGraph({
     setData(null);
     setError(null);
     setSelected(null);
+    setHoverId(null);
     if (!request) {
       setError(`KnowledgeGraph scope=${scope} requires id`);
       return;
     }
     request
-      .then((resp) => {
-        if (!cancelled) setData(resp);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(String(err));
-      });
+      .then((resp) => !cancelled && setData(resp))
+      .catch((err: unknown) => !cancelled && setError(String(err)));
     return () => {
       cancelled = true;
     };
   }, [scope, id]);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !data || data.nodes.length === 0) return;
-
-    let destroyed = false;
-    let cleanup: (() => void) | undefined;
-
-    void import('@antv/g6').then(({ Graph, NodeEvent, CanvasEvent }) => {
-      if (destroyed || !containerRef.current) return;
-      const tokens = readTokens();
-      const focusId =
-        scope === 'neighborhood' && id ? `source:${id}` : null;
-      const nodeById = new Map(data.nodes.map((n) => [n.id, n]));
-
-      const graph = new Graph({
-        container,
-        animation: false,
-        autoResize: true,
-        padding: 16,
-        autoFit: 'view',
-        data: {
-          nodes: data.nodes.map((n) => ({
-            id: n.id,
-            data: n as unknown as Record<string, unknown>,
-          })),
-          edges: data.edges.map((e, i) => ({
-            id: `e${i}`,
-            source: e.source,
-            target: e.target,
-            data: { type: e.type },
-          })),
-        },
-        node: {
-          style: {
-            size: (d: { id?: string }) => {
-              const n = nodeById.get(d.id ?? '');
-              return n ? nodeSize(n, n.id === focusId) : 10;
-            },
-            fill: (d: { id?: string }) => {
-              const n = nodeById.get(d.id ?? '');
-              return n ? scopedFill(scope, n, tokens) : tokens.muted;
-            },
-            fillOpacity: 0.92,
-            lineWidth: (d: { id?: string }) => (d.id === focusId ? 1.5 : 0),
-            stroke: tokens.accent,
-            labelText: (d: { id?: string }) =>
-              nodeById.get(d.id ?? '')?.label ?? '',
-            labelFill: tokens.text,
-            labelFontSize: 10,
-            labelFontFamily:
-              "'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, sans-serif",
-            labelBackground: true,
-            labelBackgroundFill: tokens.surface,
-            labelBackgroundOpacity: 0.85,
-            labelBackgroundRadius: 4,
-            labelPadding: [1, 4],
-            labelPlacement: 'bottom',
-            labelMaxWidth: 130,
-            labelWordWrap: true,
-            labelMaxLines: 2,
-          },
-          state: {
-            selected: {
-              stroke: tokens.linkHi,
-              lineWidth: 2,
-            },
-          },
-        },
-        edge: {
-          style: {
-            stroke: tokens.link,
-            lineWidth: 1,
-            strokeOpacity: 0.9,
-          },
-        },
-        layout: {
-          type: 'd3-force',
-          link: { distance: 110, strength: 0.7 },
-          collide: { radius: 48, strength: 1.1 },
-          manyBody: { strength: -300 },
-          velocityDecay: 0.68,
-          alphaDecay: 0.04,
-        },
-        behaviors: ['zoom-canvas', 'drag-canvas', 'drag-element'],
-      });
-
-      let lastSelected: string | null = null;
-      const targetId = (evt: unknown): string =>
-        (evt as { target: { id: string } }).target.id;
-
-      graph.on(NodeEvent.CLICK, (evt: unknown) => {
-        const nodeId = targetId(evt);
-        if (lastSelected && lastSelected !== nodeId) {
-          graph.setElementState(lastSelected, []).catch(() => {});
-        }
-        graph.setElementState(nodeId, ['selected']).catch(() => {});
-        lastSelected = nodeId;
-        setSelected(nodeById.get(nodeId) ?? null);
-      });
-      graph.on(CanvasEvent.CLICK, () => {
-        if (lastSelected) {
-          graph.setElementState(lastSelected, []).catch(() => {});
-          lastSelected = null;
-        }
-        setSelected(null);
-      });
-      graph.on(NodeEvent.DBLCLICK, (evt: unknown) => {
-        const nodeId = targetId(evt);
-        if (nodeId.startsWith('source:')) {
-          // Sha-less legacy sources (`source:<case_id>`) have no
-          // /library/:sha page — never navigate to a 404.
-          const sha = nodeId.slice('source:'.length);
-          if (knownShasRef.current.has(sha)) navigate(`/library/${sha}`);
-        } else if (nodeId.startsWith('claim:')) {
-          // Node ids carry the ledger claim_key; portal anchors resolve the
-          // index claim_id — use the payload field, not the id suffix.
-          const claimId = nodeById.get(nodeId)?.claim_id ?? nodeId.slice('claim:'.length);
-          navigate(`/knowledge#${claimId}`);
-        }
-      });
-
-      graph.render().catch((err: unknown) => {
-        // Destroyed mid-render (StrictMode double-mount) is expected noise.
-        if (!graph.destroyed) console.error('knowledge graph render failed', err);
-      });
-
-      cleanup = () => graph.destroy();
-    });
-
-    return () => {
-      destroyed = true;
-      cleanup?.();
+  // Fresh node/link objects per dataset (react-force-graph owns their physics).
+  const graphData = useMemo(() => {
+    if (!data) return { nodes: [] as FGNode[], links: [] };
+    return {
+      nodes: data.nodes.map((n) => ({ ...n })) as FGNode[],
+      links: data.edges.map((e) => ({
+        source: e.source,
+        target: e.target,
+        type: e.type,
+        weight: e.weight,
+      })),
     };
-    // themeVersion intentionally re-runs this effect: same data, new tokens.
-    // scope must be a dep: switching scopes swaps the dataset, and only a
-    // re-run destroys the old graph instance. knownShas is read through a
-    // ref so a model refresh does NOT tear the graph down.
-  }, [data, id, scope, navigate, themeVersion]);
+  }, [data]);
+
+  // id → neighbor ids, for hover dimming.
+  const adjacency = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const e of data?.edges ?? []) {
+      (m.get(e.source) ?? m.set(e.source, new Set()).get(e.source)!).add(e.target);
+      (m.get(e.target) ?? m.set(e.target, new Set()).get(e.target)!).add(e.source);
+    }
+    return m;
+  }, [data]);
+
+  const nodeById = useMemo(
+    () => new Map((data?.nodes ?? []).map((n) => [n.id, n])),
+    [data],
+  );
+
+  // Loosen the default forces a touch so clusters breathe.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !data) return;
+    fg.d3Force('charge')?.strength(-140);
+    fg.d3Force('link')?.distance(38).strength(0.5);
+  }, [data]);
+
+  const openNode = (n: GraphNode) => {
+    if (n.type === 'source') {
+      const sha = n.id.slice('source:'.length);
+      if (knownShas.has(sha)) navigate(`/library/${sha}`);
+    } else if (n.type === 'claim') {
+      navigate(`/knowledge#${n.claim_id ?? n.id.slice('claim:'.length)}`);
+    }
+  };
+
+  const canOpen = (n: GraphNode) =>
+    n.type === 'claim' ||
+    (n.type === 'source' && knownShas.has(n.id.slice('source:'.length)));
 
   const kindLabel = (type: string) =>
     type === 'claim'
@@ -313,8 +238,76 @@ export default function KnowledgeGraph({
           ? t('graph.kindCard')
           : t('graph.kindUnit');
 
+  const drawNode = (node: FGNode, ctx: CanvasRenderingContext2D, zoom: number) => {
+    const isFocus = node.id === focusId;
+    const isSel = selected?.id === node.id;
+    const isHover = hoverId === node.id;
+    const dim =
+      hoverId != null &&
+      !isHover &&
+      !(adjacency.get(hoverId)?.has(node.id) ?? false);
+    const r = nodeRadius(node, isFocus);
+    const x = node.x ?? 0;
+    const y = node.y ?? 0;
+
+    ctx.globalAlpha = dim ? 0.12 : 1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    ctx.fillStyle = scopedFill(scope, node, tokens);
+    ctx.fill();
+    if (isFocus || isSel || isHover) {
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.strokeStyle = isSel || isHover ? tokens.linkHi : tokens.accent;
+      ctx.stroke();
+    }
+
+    if (!dim && shouldLabel(node, zoom, isFocus || isSel || isHover)) {
+      const fontSize = Math.min(14 / zoom, r * 1.6 + 4 / zoom);
+      ctx.font = `${fontSize}px 'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, sans-serif`;
+      const label =
+        node.label.length > 42 ? `${node.label.slice(0, 41)}…` : node.label;
+      const tw = ctx.measureText(label).width;
+      const ly = y + r + fontSize * 0.9;
+      ctx.fillStyle = tokens.surface;
+      ctx.globalAlpha = dim ? 0.12 : 0.82;
+      ctx.fillRect(x - tw / 2 - 2 / zoom, ly - fontSize, tw + 4 / zoom, fontSize + 2 / zoom);
+      ctx.globalAlpha = dim ? 0.12 : 1;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = tokens.text;
+      ctx.fillText(label, x, ly - fontSize * 0.2);
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  const paintPointerArea = (
+    node: FGNode,
+    color: string,
+    ctx: CanvasRenderingContext2D,
+  ) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x ?? 0, node.y ?? 0, nodeRadius(node, node.id === focusId) + 2, 0, 2 * Math.PI);
+    ctx.fill();
+  };
+
+  const onNodeClick = (node: FGNode) => {
+    const n = nodeById.get(node.id) ?? node;
+    setSelected(n);
+    const fg = fgRef.current;
+    if (fg && node.x != null && node.y != null) {
+      fg.centerAt(node.x, node.y, 500);
+      fg.zoom(Math.max(2.4, fg.zoom()), 500);
+    }
+  };
+
+  const empty = !error && data && data.nodes.length === 0;
+  const communitiesForLegend =
+    scope === 'global' ? (data?.communities ?? []).slice(0, 8) : [];
+
   return (
     <div
+      ref={wrapRef}
       className={`graph-embed${fullscreen ? ' fullscreen' : ''}`}
       style={fullscreen ? undefined : { height }}
     >
@@ -323,7 +316,7 @@ export default function KnowledgeGraph({
           <p>{t('graph.error')}</p>
         </EmptyState>
       )}
-      {!error && data && data.nodes.length === 0 && (
+      {empty && (
         <EmptyState>
           <p>
             {scope === 'neighborhood'
@@ -337,7 +330,38 @@ export default function KnowledgeGraph({
       {!error && !data && <div className="graph-note">{t('graph.loading')}</div>}
       {!error && data && data.nodes.length > 0 && (
         <>
-          <div ref={containerRef} className="graph-canvas" />
+          <Suspense fallback={<div className="graph-note">{t('graph.loading')}</div>}>
+            <ForceGraph2D
+              ref={fgRef}
+              width={dims.w || undefined}
+              height={dims.h || height}
+              graphData={graphData}
+              backgroundColor="transparent"
+              cooldownTicks={140}
+              onEngineStop={() => fgRef.current?.zoomToFit(400, 36)}
+              nodeRelSize={4}
+              nodeCanvasObjectMode={() => 'replace'}
+              nodeCanvasObject={drawNode}
+              nodePointerAreaPaint={paintPointerArea}
+              linkColor={(l: { source: FGNode; target: FGNode }) => {
+                const active =
+                  hoverId != null &&
+                  ((l.source as FGNode).id === hoverId ||
+                    (l.target as FGNode).id === hoverId);
+                return active ? tokens.linkHi : tokens.link;
+              }}
+              linkWidth={(l: { source: FGNode; target: FGNode }) =>
+                hoverId != null &&
+                ((l.source as FGNode).id === hoverId ||
+                  (l.target as FGNode).id === hoverId)
+                  ? 1.5
+                  : 0.6
+              }
+              onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
+              onNodeClick={onNodeClick}
+              onBackgroundClick={() => setSelected(null)}
+            />
+          </Suspense>
           <button
             type="button"
             className="graph-expand"
@@ -346,8 +370,24 @@ export default function KnowledgeGraph({
             {fullscreen ? t('graph.exitFullscreen') : t('graph.fullscreen')}
           </button>
           {data.truncated && (
-            <div className="graph-note graph-truncated">
-              {t('graph.truncated')}
+            <div className="graph-note graph-truncated">{t('graph.truncated')}</div>
+          )}
+          {communitiesForLegend.length > 0 && (
+            <div className="graph-legend">
+              {communitiesForLegend.map((c) => (
+                <span key={c.id} className="graph-legend-item">
+                  <span
+                    className="graph-legend-dot"
+                    style={{
+                      background:
+                        tokens.community[(c.id - 1) % tokens.community.length],
+                    }}
+                  />
+                  <span className="tiny">
+                    {isMiscTheme(c.label) ? t('theme.unclassified') : c.label}
+                  </span>
+                </span>
+              ))}
             </div>
           )}
           {selected && (
@@ -366,17 +406,19 @@ export default function KnowledgeGraph({
                     : selected.theme}
                 </div>
               )}
-              <div className="tiny muted">
-                {selected.type === 'card'
-                  ? // Cards never navigate: they ARE this source's memory —
-                    // the full card body lives in the Memory tab beside the
-                    // graph.
-                    t('graph.cardHint')
-                  : selected.type === 'source' &&
-                      !knownShas.has(selected.id.slice('source:'.length))
-                    ? t('graph.noPage')
-                    : t('graph.openHint')}
-              </div>
+              {canOpen(selected) ? (
+                <button
+                  type="button"
+                  className="graph-info-open"
+                  onClick={() => openNode(selected)}
+                >
+                  {t('graph.open')}
+                </button>
+              ) : (
+                <div className="tiny muted">
+                  {selected.type === 'card' ? t('graph.cardHint') : t('graph.noPage')}
+                </div>
+              )}
             </div>
           )}
         </>

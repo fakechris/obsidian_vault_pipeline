@@ -177,6 +177,7 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.kindUnit': '单元',
   'graph.kindCard': '卡片',
   'graph.openHint': '双击打开详情。',
+  'graph.open': '打开',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
 
