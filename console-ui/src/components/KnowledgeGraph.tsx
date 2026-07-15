@@ -309,24 +309,85 @@ export default function KnowledgeGraph({
       ctx.strokeStyle = isSel || isHover ? tokens.linkHi : tokens.accent;
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
+    // Labels are drawn in a SEPARATE post pass (drawLabels) with a budget +
+    // collision so they never overlap into spaghetti at any zoom.
+  };
 
-    if (!dim && shouldLabel(node, zoom, isFocus || isSel || isHover)) {
-      const fontSize = Math.min(14 / zoom, r * 1.6 + 4 / zoom);
-      ctx.font = `${fontSize}px 'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, sans-serif`;
-      const label =
-        node.label.length > 42 ? `${node.label.slice(0, 41)}…` : node.label;
+  // Second pass over ALL nodes: pick a bounded set of non-overlapping labels,
+  // ranked (forced first, then importance), so zooming in never floods the
+  // canvas with overlapping text. Runs each frame with the live zoom.
+  const drawLabels = (ctx: CanvasRenderingContext2D, zoom: number) => {
+    const forced = (n: FGNode) =>
+      n.id === focusId || n.id === selected?.id || n.id === hoverId;
+    const ranked = [...graphData.nodes].sort((a, b) => {
+      const fa = forced(a) ? 1 : 0;
+      const fb = forced(b) ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return (b.importance ?? 0) - (a.importance ?? 0);
+    });
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    let budget = fullscreen ? 40 : 22;
+    const fontSize = 12 / zoom; // constant on-screen size
+    ctx.font = `${fontSize}px 'IBM Plex Sans', 'IBM Plex Sans SC', system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const pad = 2 / zoom;
+    // Spend the budget on VISIBLE nodes: map each node to screen space via the
+    // current transform and skip off-canvas ones, so zooming into a region
+    // labels that region (not off-screen global hubs).
+    const m = ctx.getTransform();
+    const W = dims.w || m.a; // fallback if width unknown
+    const H = dims.h || m.d;
+    const onScreen = (x: number, y: number) => {
+      const sx = m.a * x + m.c * y + m.e;
+      const sy = m.b * x + m.d * y + m.f;
+      return sx >= -20 && sx <= W + 20 && sy >= -20 && sy <= H + 20;
+    };
+
+    for (const n of ranked) {
+      const isForced = forced(n);
+      if (!isForced) {
+        if (budget <= 0) break;
+        if (!onScreen(n.x ?? 0, n.y ?? 0)) continue;
+        if (!shouldLabel(n, zoom, false)) continue;
+        // On hover, only the hovered node's neighborhood keeps its labels.
+        if (
+          hoverId != null &&
+          !(adjacency.get(hoverId)?.has(n.id) ?? false)
+        )
+          continue;
+      }
+      const x = n.x ?? 0;
+      const y = n.y ?? 0;
+      const r = nodeRadius(n, n.id === focusId);
+      const label = n.label.length > 42 ? `${n.label.slice(0, 41)}…` : n.label;
       const tw = ctx.measureText(label).width;
-      const ly = y + r + fontSize * 0.9;
+      const ly = y + r + fontSize;
+      const box = {
+        x0: x - tw / 2 - pad,
+        y0: ly - fontSize - pad,
+        x1: x + tw / 2 + pad,
+        y1: ly + pad,
+      };
+      // Collision: skip a non-forced label that overlaps a placed one.
+      if (
+        !isForced &&
+        placed.some(
+          (p) => box.x0 < p.x1 && box.x1 > p.x0 && box.y0 < p.y1 && box.y1 > p.y0,
+        )
+      )
+        continue;
+      placed.push(box);
+      if (!isForced) budget -= 1;
+
       ctx.fillStyle = tokens.surface;
-      ctx.globalAlpha = dim ? 0.12 : 0.82;
-      ctx.fillRect(x - tw / 2 - 2 / zoom, ly - fontSize, tw + 4 / zoom, fontSize + 2 / zoom);
-      ctx.globalAlpha = dim ? 0.12 : 1;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'alphabetic';
+      ctx.globalAlpha = 0.82;
+      ctx.fillRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+      ctx.globalAlpha = 1;
       ctx.fillStyle = tokens.text;
       ctx.fillText(label, x, ly - fontSize * 0.2);
     }
-    ctx.globalAlpha = 1;
   };
 
   const paintPointerArea = (
@@ -413,6 +474,7 @@ export default function KnowledgeGraph({
                 nodeRelSize={4}
                 nodeCanvasObjectMode={() => 'replace'}
                 nodeCanvasObject={drawNode}
+                onRenderFramePost={drawLabels}
                 nodePointerAreaPaint={paintPointerArea}
                 linkColor={(l: { source: FGNode; target: FGNode }) => {
                   const active =
