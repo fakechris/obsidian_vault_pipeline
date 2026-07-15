@@ -16,6 +16,7 @@
  *
  * react-force-graph-2d loads lazily so portal pages stay light. */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forceCollide } from 'd3-force';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
@@ -246,9 +247,18 @@ export default function KnowledgeGraph({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = fg as any;
     if (!g?.d3Force) return;
-    g.d3Force('charge')?.strength(-140);
-    g.d3Force('link')?.distance(38).strength(0.5);
-  }, []);
+    // Tight, well-spaced clusters: GENTLE repulsion (the old -140 blew clusters
+    // apart AND stretched each one), SHORT STRONG links so connected/related
+    // claims pull together, and a COLLIDE force so nodes sit close without
+    // overlapping. The default center force keeps the whole thing compact.
+    g.d3Force('charge')?.strength(-34).distanceMax(240);
+    g.d3Force('link')?.distance(16).strength(1);
+    g.d3Force(
+      'collide',
+      forceCollide((n: FGNode) => nodeRadius(n, n.id === focusId) + 2).strength(0.9),
+    );
+    g.d3ReheatSimulation?.();
+  }, [focusId]);
 
   // New dataset → allow one auto-fit again.
   useEffect(() => {
@@ -428,15 +438,25 @@ export default function KnowledgeGraph({
                 width={dims.w || undefined}
                 height={dims.h || height}
                 graphData={graphData}
-                backgroundColor={tokens.bg}
-                nodeRelSize={4}
-                nodeColor={(n: FGNode) => scopedFill(scope, n, tokens)}
-                nodeVal={(n: FGNode) => 1 + 7 * (n.importance ?? 0)}
+                backgroundColor="#0b0e15"
+                nodeRelSize={5}
+                nodeColor={(n: FGNode) =>
+                  n.id === hoverId ? tokens.linkHi : scopedFill(scope, n, tokens)
+                }
+                nodeVal={(n: FGNode) => 3 + 14 * (n.importance ?? 0)}
                 nodeLabel={(n: FGNode) => escapeHtml(n.label)}
-                nodeOpacity={0.95}
-                linkColor={() => tokens.link}
-                linkOpacity={0.35}
-                linkWidth={0.5}
+                nodeOpacity={1}
+                nodeResolution={12}
+                linkColor={(l: { source: FGNode; target: FGNode }) =>
+                  hoverId != null &&
+                  ((l.source as FGNode).id === hoverId ||
+                    (l.target as FGNode).id === hoverId)
+                    ? tokens.linkHi
+                    : '#5a6270'
+                }
+                linkOpacity={0.5}
+                linkWidth={0.6}
+                onNodeHover={(n: FGNode | null) => setHoverId(n?.id ?? null)}
                 onNodeClick={onNodeClick3D}
               />
             )}

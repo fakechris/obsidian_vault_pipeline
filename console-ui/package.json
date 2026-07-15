@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@types/d3-contour": "^3.0.6",
+    "@types/d3-force": "^3.0.10",
     "@types/three": "^0.185.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "d3-contour": "^4.0.2",
+    "d3-force": "^3.0.0",
     "d3-sankey": "^0.12.3",
     "d3-shape": "^3.2.0",
     "lucide-react": "^0.525.0",
