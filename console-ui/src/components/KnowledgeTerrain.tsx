@@ -32,15 +32,20 @@ const SIGMA = 3.4;
 const FULL = '9999-99-99'; // cutoff meaning "everything"
 
 function glowTexture(): THREE.Texture {
+  // 128px (was 64 → the points looked pixelated/mosaic when magnified) with a
+  // BRIGHT SHARP core and a quick soft falloff, so each source reads as a crisp
+  // bright dot rather than a fuzzy blob.
+  const S = 128;
   const c = document.createElement('canvas');
-  c.width = c.height = 64;
+  c.width = c.height = S;
   const g = c.getContext('2d')!;
-  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grd.addColorStop(0, 'rgba(180,225,245,1)');
-  grd.addColorStop(0.25, 'rgba(130,200,230,0.85)');
-  grd.addColorStop(1, 'rgba(130,200,230,0)');
+  const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.14, 'rgba(215,238,252,0.98)');
+  grd.addColorStop(0.4, 'rgba(150,205,238,0.4)');
+  grd.addColorStop(1, 'rgba(150,205,238,0)');
   g.fillStyle = grd;
-  g.fillRect(0, 0, 64, 64);
+  g.fillRect(0, 0, S, S);
   const t = new THREE.CanvasTexture(c);
   t.needsUpdate = true;
   return t;
@@ -216,19 +221,23 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const terrainMat = new THREE.ShaderMaterial({
       uniforms: {
         uMaxH: { value: HEIGHT },
-        uLine: { value: new THREE.Color('#7fd6e6') },
-        uBase: { value: new THREE.Color('#0f151c') },
-        uPeak: { value: new THREE.Color('#183245') },
+        // Muted slate contour line (was loud cyan #7fd6e6 → looked busy/cheap)
+        // and a deeper, more neutral terrain gradient.
+        uLine: { value: new THREE.Color('#3d6076') },
+        uBase: { value: new THREE.Color('#0a0e13') },
+        uPeak: { value: new THREE.Color('#16232f') },
       },
       vertexShader: `varying float vH; void main(){ vH=position.y; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
       fragmentShader: `
         uniform float uMaxH; uniform vec3 uLine; uniform vec3 uBase; uniform vec3 uPeak; varying float vH;
         void main(){
           float h=clamp(vH/uMaxH,0.0,1.0);
-          float g=h*26.0; float fp=fract(g); float dist=min(fp,1.0-fp);
+          // Fewer levels (16, was 26) and a MUCH subtler line so the terrain is a
+          // quiet backdrop and the glowing source points read as the foreground.
+          float g=h*16.0; float fp=fract(g); float dist=min(fp,1.0-fp);
           float aa=fwidth(g)*1.3+1e-4; float edge=1.0-smoothstep(0.0,aa,dist);
           vec3 terrain=mix(uBase,uPeak,h);
-          gl_FragColor=vec4(mix(terrain,uLine,edge*(0.3+0.7*h)),1.0);
+          gl_FragColor=vec4(mix(terrain,uLine,edge*(0.18+0.42*h)),1.0);
         }`,
     });
     scene.add(new THREE.Mesh(geo, terrainMat));
@@ -238,8 +247,8 @@ export default function KnowledgeTerrain({ height = 600 }: { height?: number }) 
     const parr = new Float32Array(data.points.length * 3);
     pgeo.setAttribute('position', new THREE.BufferAttribute(parr, 3));
     const pmat = new THREE.PointsMaterial({
-      size: 4.5, map: glowTexture(), transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color: 0x9fd6ea, sizeAttenuation: true,
+      size: 3.8, map: glowTexture(), transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: 0xffffff, sizeAttenuation: true,
     });
     const points = new THREE.Points(pgeo, pmat);
     points.frustumCulled = false;
