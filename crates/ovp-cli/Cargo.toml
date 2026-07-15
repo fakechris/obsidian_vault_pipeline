@@ -54,6 +54,7 @@ ovp-daily = { path = "../ovp-daily" }
 ovp-intake = { path = "../ovp-intake" }
 ovp-index = { path = "../ovp-index" }
 ovp-console = { path = "../ovp-console" }
+ovp-publish = { path = "../ovp-publish" }
 ovp-enrich = { path = "../ovp-enrich" }
 ovp-memory = { path = "../ovp-memory" }
 ovp-server = { path = "../ovp-server" }

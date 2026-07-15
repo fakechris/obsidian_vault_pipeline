@@ -331,6 +331,38 @@ enum Cmd {
         #[arg(long)]
         date: Option<String>,
     },
+    /// PRODUCT — publish durable knowledge + visualizations to a static site.
+    /// Snapshots the public-safe /api/* surface (durable claims, themes, terrain,
+    /// lite source pages) to `<out>/api/*.json`, copies the static SPA bundle,
+    /// and (optionally) pushes to a public GitHub Pages repo. Rebuilds the index
+    /// first unless `--no-rebuild`; skips a no-op publish via `.ovp/publish.jsonl`.
+    Publish {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Output site directory (the API tree lands under `<out>/api/`).
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        date: Option<String>,
+        /// Build the model in memory WITHOUT persisting index.json/evidence.json
+        /// back to the vault (a read-only publish). The model is still freshly
+        /// built so it matches the ledger.
+        #[arg(long)]
+        no_rebuild: bool,
+        /// A pre-built static SPA bundle to copy into `<out>/` (from
+        /// `VITE_OVP_STATIC=1 npm run build`). Omit to snapshot API JSON only.
+        #[arg(long)]
+        spa_dir: Option<PathBuf>,
+        /// Publish even when the content hash is unchanged since the last run.
+        #[arg(long)]
+        force: bool,
+        /// Public git repo URL to push the built site to (GitHub Pages).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Branch on `--repo` to publish (default `gh-pages`).
+        #[arg(long, default_value = "gh-pages")]
+        branch: String,
+    },
     /// PRODUCT — Projection Lanes: view claims by routing lane (durable/review),
     /// or write durable claims as vault notes (`--write` / `--rebuild`).
     Project {
@@ -1355,6 +1387,28 @@ fn main() -> ExitCode {
         Cmd::Console { vault_root, date } => {
             let date = date.unwrap_or_else(today_iso);
             commands::console_cmd::run(commands::console_cmd::ConsoleArgs { vault_root, date })
+        }
+        Cmd::Publish {
+            vault_root,
+            out,
+            date,
+            no_rebuild,
+            spa_dir,
+            force,
+            repo,
+            branch,
+        } => {
+            let date = date.unwrap_or_else(today_iso);
+            commands::publish::run(commands::publish::PublishCmd {
+                vault_root,
+                out,
+                date,
+                no_rebuild,
+                spa_dir,
+                force,
+                repo,
+                branch,
+            })
         }
         Cmd::Project {
             vault_root,

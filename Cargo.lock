@@ -2659,6 +2659,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ovp-api-projection"
+version = "2.0.1"
+dependencies = [
+ "ovp-domain",
+ "ovp-index",
+ "ovp-intake",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ovp-app"
 version = "2.0.1"
 dependencies = [
@@ -2709,6 +2721,7 @@ dependencies = [
  "ovp-llm",
  "ovp-mcp",
  "ovp-memory",
+ "ovp-publish",
  "ovp-query",
  "ovp-rag",
  "ovp-review",
@@ -2891,6 +2904,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ovp-publish"
+version = "2.0.1"
+dependencies = [
+ "ovp-api-projection",
+ "ovp-domain",
+ "ovp-index",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "ovp-query"
 version = "2.0.1"
 dependencies = [
@@ -2966,6 +2992,7 @@ name = "ovp-server"
 version = "2.0.1"
 dependencies = [
  "chrono",
+ "ovp-api-projection",
  "ovp-daily",
  "ovp-domain",
  "ovp-index",

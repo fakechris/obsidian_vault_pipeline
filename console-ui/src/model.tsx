@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { fetchModel } from './lib/api';
+import { fetchModel, STATIC_MODE } from './lib/api';
 import type { IndexModel } from './lib/types';
 
 interface ModelState {
@@ -53,6 +53,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     // failed refetch keeps the last good model rather than blanking the page.
     const schedule = (model: IndexModel | null) => {
       if (cancelled) return;
+      // A published static site is a frozen snapshot — model.json never changes
+      // mid-session, so skip polling entirely (one load, no timers/refetch).
+      if (STATIC_MODE) return;
       // Clear any pending timer first so a focus-triggered load can't leave a
       // second timer running alongside the scheduled one.
       if (timer !== undefined) window.clearTimeout(timer);
@@ -79,9 +82,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     load(true);
 
     // Refetch on tab focus too — an operator flipping back should see fresh
-    // state immediately, not wait out the interval.
+    // state immediately, not wait out the interval. (Not on the static site.)
     const onFocus = () => load(false);
-    window.addEventListener('focus', onFocus);
+    if (!STATIC_MODE) window.addEventListener('focus', onFocus);
 
     return () => {
       cancelled = true;

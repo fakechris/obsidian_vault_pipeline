@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Shell from './components/Shell';
 import { ModelProvider } from './model';
+import { STATIC_MODE } from './lib/api';
 import { useI18n, type MsgKey } from './i18n';
 import AskPage from './pages/AskPage';
 import KnowledgePage from './pages/KnowledgePage';
@@ -73,30 +74,39 @@ export default function App() {
     <ModelProvider>
       <Routes>
         <Route element={<Shell />}>
-          <Route path="/" element={<TodayPage />} />
+          {/* Published site is knowledge-only: home = Knowledge, no ops/ask
+              surfaces (they need a live server + are pipeline-internal). */}
+          <Route
+            path="/"
+            element={STATIC_MODE ? <Navigate to="/knowledge" replace /> : <TodayPage />}
+          />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/library/:sha" element={<SourceDetailPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
-          <Route path="/ask" element={<AskPage />} />
-          <Route path="/system" element={<SystemPage />} />
-          <Route
-            path="/flow"
-            element={
-              <LegacyPanel titleKey="system.flowLink">
-                <FlowPage />
-              </LegacyPanel>
-            }
-          />
-          <Route
-            path="/monitor"
-            element={
-              <LegacyPanel titleKey="system.monitorLink">
-                <MonitorPage />
-              </LegacyPanel>
-            }
-          />
+          {!STATIC_MODE && <Route path="/ask" element={<AskPage />} />}
+          {!STATIC_MODE && <Route path="/system" element={<SystemPage />} />}
+          {!STATIC_MODE && (
+            <Route
+              path="/flow"
+              element={
+                <LegacyPanel titleKey="system.flowLink">
+                  <FlowPage />
+                </LegacyPanel>
+              }
+            />
+          )}
+          {!STATIC_MODE && (
+            <Route
+              path="/monitor"
+              element={
+                <LegacyPanel titleKey="system.monitorLink">
+                  <MonitorPage />
+                </LegacyPanel>
+              }
+            />
+          )}
         </Route>
         {/* Retired standalone viz routes → their portal homes (design §2). */}
         <Route

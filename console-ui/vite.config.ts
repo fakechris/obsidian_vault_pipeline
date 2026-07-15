@@ -8,8 +8,11 @@ import tailwindcss from '@tailwindcss/vite';
 // route (/library, /search, …); legacy generated pages stay reachable by
 // exact filename. Deploy = `ovp2 serve --viz-dir console-ui/dist` (overlay)
 // or copy dist/ to <vault>/.ovp/console/app/.
+// Live build keeps base '/'. The static publish build passes VITE_OVP_BASE
+// (e.g. '/blog/') so the SPA and its `<base>/api/*.json` fetches resolve under
+// a GitHub-Pages sub-path.
 export default defineConfig({
-  base: '/',
+  base: process.env.VITE_OVP_BASE ?? '/',
   plugins: [react(), tailwindcss()],
   build: {
     outDir: resolve(__dirname, 'dist'),

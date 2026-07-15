@@ -2,6 +2,7 @@
  * navigation over three dimensions (collection × month × status), month-
  * grouped rows, all state URL-parameterized: /library?c=&m=&status=. */
 import { Link, useSearchParams } from 'react-router-dom';
+import { STATIC_MODE } from '../lib/api';
 import { AgeLabel, EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -59,7 +60,10 @@ function LibraryBody({ model }: { model: IndexModel }) {
     st === 'queued' ? (model.queued_live ?? (byStatus.get('queued') ?? 0)) : (byStatus.get(st) ?? 0);
 
   const filtered = filterSources(model.sources, {
-    collection: collection && COLLECTIONS.includes(collection) ? collection : null,
+    // Collection is path-derived, redacted on the static site — never filter by
+    // it there (a manual ?c= would match the false default for every source).
+    collection:
+      !STATIC_MODE && collection && COLLECTIONS.includes(collection) ? collection : null,
     month,
     status,
   });
@@ -69,33 +73,38 @@ function LibraryBody({ model }: { model: IndexModel }) {
     <div className="grid library">
       {/* facet rail */}
       <div>
-        <div className="facet-group">
-          <h3>{t('library.collections')}</h3>
-          <ul className="facet-list">
-            <li>
-              <button
-                type="button"
-                className={collection === null ? 'active' : ''}
-                onClick={() => setParam('c', null)}
-              >
-                <span>{t('library.all')}</span>
-                <span className="count">{model.sources.length}</span>
-              </button>
-            </li>
-            {COLLECTIONS.map((c) => (
-              <li key={c}>
+        {/* Collection (clippings/pinboard/capture) is derived from the intake
+            path, which is redacted on the published static site — hide the
+            facet there rather than mislabel every source as clippings. */}
+        {!STATIC_MODE && (
+          <div className="facet-group">
+            <h3>{t('library.collections')}</h3>
+            <ul className="facet-list">
+              <li>
                 <button
                   type="button"
-                  className={collection === c ? 'active' : ''}
-                  onClick={() => setParam('c', collection === c ? null : c)}
+                  className={collection === null ? 'active' : ''}
+                  onClick={() => setParam('c', null)}
                 >
-                  <span>{t(collectionLabel(c))}</span>
-                  <span className="count">{byCollection.get(c) ?? 0}</span>
+                  <span>{t('library.all')}</span>
+                  <span className="count">{model.sources.length}</span>
                 </button>
               </li>
-            ))}
-          </ul>
-        </div>
+              {COLLECTIONS.map((c) => (
+                <li key={c}>
+                  <button
+                    type="button"
+                    className={collection === c ? 'active' : ''}
+                    onClick={() => setParam('c', collection === c ? null : c)}
+                  >
+                    <span>{t(collectionLabel(c))}</span>
+                    <span className="count">{byCollection.get(c) ?? 0}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="facet-group">
           <h3>{t('library.byMonth')}</h3>
           <ul className="facet-list">
