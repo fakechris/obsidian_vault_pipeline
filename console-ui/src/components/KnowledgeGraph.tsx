@@ -15,7 +15,7 @@
  * Colors come from the DS custom properties, re-read when `data-theme` flips.
  *
  * react-force-graph-2d loads lazily so portal pages stay light. */
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
@@ -105,8 +105,29 @@ function shouldLabel(n: GraphNode, zoom: number, forced: boolean): boolean {
   return zoom >= LABEL_BASE_ZOOM * (1 - 0.7 * imp);
 }
 
-// react-force-graph mutates node objects with x/y at runtime.
-type FGNode = GraphNode & { x?: number; y?: number };
+// react-force-graph mutates node objects with x/y/z at runtime.
+type FGNode = GraphNode & { x?: number; y?: number; z?: number };
+
+/** react-force-graph-3d injects `nodeLabel` as tooltip innerHTML — escape it so
+ * a source title / claim containing markup can't run in the console origin. */
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
+  );
+}
+
+/** WebGL capability probe — gate the 3D toggle so a GPU-less browser doesn't
+ * throw while constructing the ForceGraph3D renderer and unmount the app. */
+function webglAvailable(): boolean {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
 
 export default function KnowledgeGraph({
   scope,
@@ -130,8 +151,12 @@ export default function KnowledgeGraph({
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
+  const [no3d, setNo3d] = useState(false);
   const [dims, setDims] = useState({ w: 0, h: height });
   const [themeVersion, setThemeVersion] = useState(0);
+  // One-shot auto-fit per dataset, so a click-focus or a user pan isn't yanked
+  // back by a later engine-stop.
+  const fittedRef = useRef(false);
 
   const tokens = useMemo(() => readTokens(), [themeVersion]);
   const focusId = scope === 'neighborhood' && id ? `source:${id}` : null;
@@ -213,13 +238,22 @@ export default function KnowledgeGraph({
     [data],
   );
 
-  // Loosen the default forces a touch so clusters breathe.
+  // Configure forces the moment the (lazy) graph instance mounts — a
+  // data-effect would run while the graph is still suspended (ref null) and
+  // never apply. Also fires when 2D/3D swaps to a fresh instance.
+  const setFg = useCallback((fg: unknown) => {
+    fgRef.current = fg;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = fg as any;
+    if (!g?.d3Force) return;
+    g.d3Force('charge')?.strength(-140);
+    g.d3Force('link')?.distance(38).strength(0.5);
+  }, []);
+
+  // New dataset → allow one auto-fit again.
   useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || !data) return;
-    fg.d3Force('charge')?.strength(-140);
-    fg.d3Force('link')?.distance(38).strength(0.5);
-  }, [data]);
+    fittedRef.current = false;
+  }, [data, mode]);
 
   const openNode = (n: GraphNode) => {
     if (n.type === 'source') {
@@ -307,13 +341,20 @@ export default function KnowledgeGraph({
   };
 
   // 3D: select + fly the camera to look at the node from a fixed distance.
-  const onNodeClick3D = (node: FGNode & { z?: number }) => {
+  const onNodeClick3D = (node: FGNode) => {
     setSelected(nodeById.get(node.id) ?? node);
-    const fg = fgRef.current;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fg = fgRef.current as any;
     const { x = 0, y = 0, z = 0 } = node;
     const dist = 120;
-    const ratio = 1 + dist / (Math.hypot(x, y, z) || 1);
-    fg?.cameraPosition({ x: x * ratio, y: y * ratio, z: z * ratio }, node, 600);
+    const d = Math.hypot(x, y, z);
+    // A node at (or near) the origin can't be offset by scaling — the camera
+    // would land ON its look-at target. Pull back along +z instead.
+    const to =
+      d < 1e-3
+        ? { x: 0, y: 0, z: dist }
+        : { x: x * (1 + dist / d), y: y * (1 + dist / d), z: z * (1 + dist / d) };
+    fg?.cameraPosition(to, node, 600);
   };
 
   const empty = !error && data && data.nodes.length === 0;
@@ -348,13 +389,17 @@ export default function KnowledgeGraph({
           <Suspense fallback={<div className="graph-note">{t('graph.loading')}</div>}>
             {mode === '2d' ? (
               <ForceGraph2D
-                ref={fgRef}
+                ref={setFg}
                 width={dims.w || undefined}
                 height={dims.h || height}
                 graphData={graphData}
                 backgroundColor="transparent"
                 cooldownTicks={140}
-                onEngineStop={() => fgRef.current?.zoomToFit(400, 36)}
+                onEngineStop={() => {
+                  if (fittedRef.current) return;
+                  fittedRef.current = true;
+                  fgRef.current?.zoomToFit(400, 36);
+                }}
                 nodeRelSize={4}
                 nodeCanvasObjectMode={() => 'replace'}
                 nodeCanvasObject={drawNode}
@@ -379,7 +424,7 @@ export default function KnowledgeGraph({
               />
             ) : (
               <ForceGraph3D
-                ref={fgRef}
+                ref={setFg}
                 width={dims.w || undefined}
                 height={dims.h || height}
                 graphData={graphData}
@@ -387,7 +432,7 @@ export default function KnowledgeGraph({
                 nodeRelSize={4}
                 nodeColor={(n: FGNode) => scopedFill(scope, n, tokens)}
                 nodeVal={(n: FGNode) => 1 + 7 * (n.importance ?? 0)}
-                nodeLabel={(n: FGNode) => n.label}
+                nodeLabel={(n: FGNode) => escapeHtml(n.label)}
                 nodeOpacity={0.95}
                 linkColor={() => tokens.link}
                 linkOpacity={0.35}
@@ -400,7 +445,17 @@ export default function KnowledgeGraph({
             <button
               type="button"
               className="graph-expand"
-              onClick={() => setMode((m) => (m === '2d' ? '3d' : '2d'))}
+              onClick={() => {
+                setMode((m) => {
+                  // Probe WebGL before mounting ForceGraph3D — a GPU-less
+                  // browser would otherwise throw and unmount the app.
+                  if (m === '2d' && !webglAvailable()) {
+                    setNo3d(true);
+                    return '2d';
+                  }
+                  return m === '2d' ? '3d' : '2d';
+                });
+              }}
             >
               {mode === '2d' ? '3D' : '2D'}
             </button>
@@ -414,6 +469,9 @@ export default function KnowledgeGraph({
           </div>
           {data.truncated && (
             <div className="graph-note graph-truncated">{t('graph.truncated')}</div>
+          )}
+          {no3d && (
+            <div className="graph-note graph-truncated">{t('graph.no3d')}</div>
           )}
           {communitiesForLegend.length > 0 && (
             <div className="graph-legend">

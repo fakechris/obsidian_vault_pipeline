@@ -171,7 +171,7 @@ export const en = {
     'Preview truncated at 200 KB — open the file in the vault for the full text.',
   'source.neighborhood': 'Neighborhood',
   'source.neighborhoodCaption':
-    'This source → its memory cards → citing claims → sibling sources. Click a node for a summary, double-click to open it.',
+    'This source → its memory cards → citing claims → sibling sources. Click a node for a summary and an open link; hover to highlight its neighborhood.',
   'source.citingClaims': 'Citing claims',
   'source.citingEmpty': 'No crystal claims cite this source yet.',
   'source.citingEmptyHint': '→ Knowledge: how claims crystallize',
@@ -189,8 +189,9 @@ export const en = {
   'graph.kindSource': 'source',
   'graph.kindUnit': 'unit',
   'graph.kindCard': 'card',
-  'graph.openHint': 'Double-click to open.',
+  'graph.openHint': 'Click for a summary, then Open.',
   'graph.open': 'Open',
+  'graph.no3d': '3D needs WebGL, which is unavailable in this browser.',
   'graph.noPage': 'Legacy source — no detail page in this vault.',
   'graph.cardHint':
     "This source's memory — the full card is in the Memory tab.",
@@ -224,7 +225,7 @@ export const en = {
   'knowledge.claimCount': '{n} claims',
   'knowledge.ratioLine': 'durable {durable} · caveated {caveated}',
   'knowledge.graphCaption':
-    'All claims, colored by community. Click a node for a summary, double-click to open its theme.',
+    'All claims, colored by community. Zoom in to reveal labels, hover to highlight a neighborhood, click for a summary. Toggle 3D to rotate.',
   'knowledge.unknownClaim':
     'No active claim "{id}" — it may have been superseded or retracted.',
 
@@ -243,7 +244,7 @@ export const en = {
   'theme.backToKnowledge': 'All themes',
   'theme.graph': 'Theme graph',
   'theme.graphCaption':
-    'This theme’s claims and the sources they cite. Click a node for a summary, double-click to open.',
+    'This theme’s claims and the sources they cite. Click a node for a summary and an open link; hover to highlight its neighborhood.',
 
   // search page + ⌘K overlay
   'search.title': 'Search',
