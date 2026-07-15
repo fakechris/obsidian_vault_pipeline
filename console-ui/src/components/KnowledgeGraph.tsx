@@ -160,20 +160,17 @@ export default function KnowledgeGraph({
   const fittedRef = useRef(false);
   const hoverTimer = useRef<number | undefined>(undefined);
 
-  // Debounced hover: set immediately on a node (deduped), but delay CLEARING so
-  // the brief "null" as the cursor crosses the gap between two adjacent nodes is
-  // skipped — that null-flash made the highlight flip on/off (flicker).
+  // Hover-INTENT: apply the hover highlight only once the cursor SETTLES. Every
+  // node-enter/leave resets the timer, so sweeping the mouse fast across many
+  // nodes changes nothing — the highlight (and its dimming) only kicks in when
+  // you pause on a node (or in empty space), which is exactly when a focus
+  // effect is wanted. This is what kills the flicker, not removing the dim.
   const handleHover = useCallback((n: { id: string } | null) => {
-    if (n) {
-      if (hoverTimer.current) {
-        clearTimeout(hoverTimer.current);
-        hoverTimer.current = undefined;
-      }
-      setHoverId((prev) => (prev === n.id ? prev : n.id));
-    } else {
-      if (hoverTimer.current) clearTimeout(hoverTimer.current);
-      hoverTimer.current = window.setTimeout(() => setHoverId(null), 90);
-    }
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    const next = n?.id ?? null;
+    hoverTimer.current = window.setTimeout(() => {
+      setHoverId((prev) => (prev === next ? prev : next));
+    }, 120);
   }, []);
 
   const tokens = useMemo(() => readTokens(), [themeVersion]);
@@ -310,13 +307,15 @@ export default function KnowledgeGraph({
     const isHover = hoverId === node.id;
     const isNeighbor =
       hoverId != null && (adjacency.get(hoverId)?.has(node.id) ?? false);
+    // Dim the rest to focus the hovered neighborhood. Safe now that hover only
+    // engages after the cursor settles (handleHover) — it no longer flips as
+    // the mouse sweeps across.
+    const dim = hoverId != null && !isHover && !isNeighbor;
     const r = nodeRadius(node, isFocus);
     const x = node.x ?? 0;
     const y = node.y ?? 0;
 
-    // No global dimming: hover ADDS a ring on the node + its neighbors (and the
-    // linkColor pass brightens incident edges). Toggling every other node's
-    // opacity as the mouse moved was the flicker source.
+    ctx.globalAlpha = dim ? 0.15 : 1;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, 2 * Math.PI);
     ctx.fillStyle = scopedFill(scope, node, tokens);
@@ -326,6 +325,7 @@ export default function KnowledgeGraph({
       ctx.strokeStyle = isSel || isHover || isNeighbor ? tokens.linkHi : tokens.accent;
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
     // Labels are drawn in a SEPARATE post pass (drawLabels) with a budget +
     // collision so they never overlap into spaghetti at any zoom.
   };
@@ -370,6 +370,8 @@ export default function KnowledgeGraph({
     for (const n of ranked) {
       const isForced = forced(n);
       if (!isForced) {
+        // While settled on a node, only the neighborhood (forced) is labelled.
+        if (hoverId != null) continue;
         if (budget <= 0) break;
         if (!onScreen(n.x ?? 0, n.y ?? 0)) continue;
         if (!shouldLabel(n, zoom, false)) continue;
