@@ -212,22 +212,74 @@ fn content_hash(public: &IndexModel, records: &[ovp_domain::crystal::DurableReco
 }
 
 /// Keep only terrain points whose source sha is public; drop orphan/
-/// non-processed points that would leak private titles + case ids. Returns
-/// `None` when the file isn't the expected shape (skip writing it).
+/// non-processed points that would leak private titles + case ids. The `themes`
+/// array (labels, counts, centroids) is REBUILT from the retained points so it
+/// carries no full-corpus metadata and its counts/positions match what ships.
+/// Returns `None` when the file isn't the expected shape (skip writing it).
 fn filter_terrain(
     body: &str,
     public_shas: &std::collections::HashSet<&str>,
 ) -> Option<serde_json::Value> {
+    use std::collections::BTreeMap;
     let mut v: serde_json::Value = serde_json::from_str(body).ok()?;
+
+    // Preserve each theme id's display labels before we drop the private array.
+    let labels: BTreeMap<i64, (serde_json::Value, serde_json::Value)> = v
+        .get("themes")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let id = t.get("id")?.as_i64()?;
+                    Some((id, (t.get("label")?.clone(), t.get("label_zh")?.clone())))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let points = v.get_mut("points")?.as_array_mut()?;
     points.retain(|p| {
         p.get("sha")
             .and_then(|s| s.as_str())
             .is_some_and(|s| public_shas.contains(s))
     });
+
+    // Recompute per-theme count + centroid from the retained points only.
+    let mut agg: BTreeMap<i64, (usize, f64, f64)> = BTreeMap::new();
+    for p in points.iter() {
+        let Some(id) = p.get("theme_id").and_then(|t| t.as_i64()) else {
+            continue;
+        };
+        let x = p.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        let y = p.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        let e = agg.entry(id).or_insert((0, 0.0, 0.0));
+        e.0 += 1;
+        e.1 += x;
+        e.2 += y;
+    }
     let n = points.len();
+    let themes: Vec<serde_json::Value> = agg
+        .iter()
+        .filter(|(id, _)| **id >= 0) // the noise bucket has no island label
+        .map(|(id, (count, sx, sy))| {
+            let (label, label_zh) = labels
+                .get(id)
+                .cloned()
+                .unwrap_or((serde_json::json!(""), serde_json::json!("")));
+            serde_json::json!({
+                "id": id,
+                "label": label,
+                "label_zh": label_zh,
+                "cx": sx / *count as f64,
+                "cy": sy / *count as f64,
+                "count": count,
+            })
+        })
+        .collect();
+
     if let Some(obj) = v.as_object_mut() {
         obj.insert("point_count".into(), serde_json::json!(n));
+        obj.insert("themes".into(), serde_json::Value::Array(themes));
     }
     Some(v)
 }
@@ -392,6 +444,40 @@ mod tests {
 
         // settings scrubbed.
         assert!(read(&api.join("settings.json")).get("vault_root").is_none());
+    }
+
+    #[test]
+    fn filter_terrain_drops_orphans_and_rebuilds_themes() {
+        let body = serde_json::json!({
+            "schema": "ovp.crystal.terrain/v1",
+            "point_count": 3,
+            "bounds": [0.0, 0.0, 100.0, 100.0],
+            "themes": [
+                { "id": 1, "label": "Public", "label_zh": "公开", "cx": 9.9, "cy": 9.9, "count": 99 },
+                { "id": 5, "label": "PrivateOnly", "label_zh": "私有", "cx": 1.0, "cy": 1.0, "count": 7 }
+            ],
+            "points": [
+                { "sha": "aaa", "theme_id": 1, "x": 10.0, "y": 20.0, "title": "A" },
+                { "sha": "bbb", "theme_id": 1, "x": 30.0, "y": 40.0, "title": "B" },
+                { "sha": "zzz", "theme_id": 5, "x": 1.0, "y": 1.0, "title": "orphan-private" }
+            ]
+        })
+        .to_string();
+        let public: std::collections::HashSet<&str> = ["aaa", "bbb"].into_iter().collect();
+        let v = filter_terrain(&body, &public).unwrap();
+
+        // Orphan point (private theme 5) dropped; count updated.
+        assert_eq!(v["points"].as_array().unwrap().len(), 2);
+        assert_eq!(v["point_count"], 2);
+        // Themes rebuilt from retained points: only theme 1, centroid recomputed
+        // ((10+30)/2, (20+40)/2) = (20, 30), NOT the full-corpus (9.9, 9.9)/99.
+        let themes = v["themes"].as_array().unwrap();
+        assert_eq!(themes.len(), 1);
+        assert_eq!(themes[0]["id"], 1);
+        assert_eq!(themes[0]["count"], 2);
+        assert_eq!(themes[0]["cx"], 20.0);
+        assert_eq!(themes[0]["cy"], 30.0);
+        assert_eq!(themes[0]["label"], "Public");
     }
 
     #[test]

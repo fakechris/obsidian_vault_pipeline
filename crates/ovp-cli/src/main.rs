@@ -344,9 +344,6 @@ enum Cmd {
         out: PathBuf,
         #[arg(long)]
         date: Option<String>,
-        /// Base URL path the SPA is served under (e.g. `/` or `/blog/`).
-        #[arg(long, default_value = "/")]
-        base_url: String,
         /// Read the existing index.json instead of rebuilding it.
         #[arg(long)]
         no_rebuild: bool,
@@ -1393,7 +1390,6 @@ fn main() -> ExitCode {
             vault_root,
             out,
             date,
-            base_url,
             no_rebuild,
             spa_dir,
             force,
@@ -1405,7 +1401,6 @@ fn main() -> ExitCode {
                 vault_root,
                 out,
                 date,
-                base_url,
                 no_rebuild,
                 spa_dir,
                 force,

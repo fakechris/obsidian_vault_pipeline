@@ -50,7 +50,12 @@ async function filterHits(term: string): Promise<FindHit[]> {
   const needle = term.trim().toLowerCase();
   const all = await searchIndex();
   if (!needle) return all;
-  return all.filter((h) => h.line.toLowerCase().includes(needle));
+  // Match the display line AND the non-display fields the live run_query also
+  // searches (case-id path, entity id), so static search doesn't silently miss
+  // hits the server would return.
+  return all.filter((h) =>
+    `${h.line} ${h.path ?? ''} ${h.id ?? ''}`.toLowerCase().includes(needle),
+  );
 }
 
 export interface GraphQuery {

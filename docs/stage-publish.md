@@ -49,23 +49,26 @@ orchestrates the SPA copy, ledger, and deploy.
 cd console-ui
 VITE_OVP_STATIC=1 VITE_OVP_BASE=/ npx vite build --outDir dist-static
 
-# 2. Snapshot + assemble the site (rebuilds the index first unless --no-rebuild)
+# 2. Snapshot + assemble the site (rebuilds the index first unless --no-rebuild).
+#    Use a gitignored .run/ path, never /tmp (data-hygiene rule).
 ovp2 publish --vault-root ~/Documents/ovp-vault \
-  --out /tmp/ovp-site --spa-dir console-ui/dist-static
+  --out .run/publish/site --spa-dir console-ui/dist-static
 
 # 3. Preview locally
-cd /tmp/ovp-site && python3 -m http.server 8899   # → http://127.0.0.1:8899/
+cd .run/publish/site && python3 -m http.server 8899   # → http://127.0.0.1:8899/
 
 # 4. Deploy to a SEPARATE public repo (the vault repo is private)
 ovp2 publish --vault-root ~/Documents/ovp-vault \
-  --out /tmp/ovp-site --spa-dir console-ui/dist-static \
+  --out .run/publish/site --spa-dir console-ui/dist-static \
   --repo git@github.com:<you>/<vault>-site.git --branch gh-pages
 ```
 
-Flags: `--base-url` (default `/`), `--no-rebuild`, `--force` (publish even when
-content is unchanged), `--repo`/`--branch` (git deploy). Serving under a
-sub-path (`https://<you>.github.io/<repo>/`) → build with
-`VITE_OVP_BASE=/<repo>/` and pass `--base-url /<repo>/`.
+Flags: `--no-rebuild`, `--force` (redeploy even when nothing changed),
+`--repo`/`--branch` (git deploy). Serving under a sub-path
+(`https://<you>.github.io/<repo>/`) is controlled entirely by the SPA build —
+build with `VITE_OVP_BASE=/<repo>/` and the API resolves relative to it. The
+`--out` directory must be empty or a prior publish output (a `.ovp-site` marker
+guards against a mistyped path deleting real data).
 
 The static build uses **HashRouter** (`/#/knowledge`) so deep links work on any
 static host with zero rewrite rules, and is **knowledge-only**: home =

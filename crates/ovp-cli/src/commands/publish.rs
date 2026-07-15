@@ -20,7 +20,6 @@ pub struct PublishCmd {
     pub vault_root: PathBuf,
     pub out: PathBuf,
     pub date: String,
-    pub base_url: String,
     pub no_rebuild: bool,
     pub spa_dir: Option<PathBuf>,
     pub force: bool,
@@ -43,7 +42,6 @@ struct PublishRecord {
     sources: usize,
     claims: usize,
     out_dir: String,
-    base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     deployed_to: Option<String>,
 }
@@ -59,10 +57,35 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
         .map(|r| r.content_hash);
 
     // Assemble the site in a CLEAN directory: reusing --out would leave stale
-    // hashed SPA chunks / withdrawn files behind, which then deploy.
+    // hashed SPA chunks / withdrawn files behind, which then deploy. Guard the
+    // recursive delete HARD — `--out .` / the vault / a parent must never be
+    // nuked by a typo.
+    let site_marker = cmd.out.join(".ovp-site");
     if cmd.out.exists() {
-        std::fs::remove_dir_all(&cmd.out)
-            .map_err(|e| CliError::Io(format!("clean {}: {e}", cmd.out.display())))?;
+        let out_c = std::fs::canonicalize(&cmd.out)
+            .map_err(|e| CliError::Io(format!("resolve --out {}: {e}", cmd.out.display())))?;
+        let vault_c =
+            std::fs::canonicalize(&cmd.vault_root).unwrap_or_else(|_| cmd.vault_root.clone());
+        if out_c.parent().is_none() || vault_c == out_c || vault_c.starts_with(&out_c) {
+            return Err(CliError::Io(format!(
+                "refusing to publish into {} — it is the vault, an ancestor, or a filesystem root",
+                out_c.display()
+            )));
+        }
+        // Only clean an EMPTY dir or a prior publish site (our marker present);
+        // never blow away an arbitrary existing directory.
+        let is_prior_site = out_c.join(".ovp-site").is_file();
+        let is_empty = std::fs::read_dir(&out_c)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !is_prior_site && !is_empty {
+            return Err(CliError::Io(format!(
+                "refusing to overwrite {} — not empty and not a prior publish output; remove it or choose an empty --out",
+                out_c.display()
+            )));
+        }
+        std::fs::remove_dir_all(&out_c)
+            .map_err(|e| CliError::Io(format!("clean {}: {e}", out_c.display())))?;
     }
 
     let published_at = now_rfc3339();
@@ -89,7 +112,13 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
         println!("publish: durable content unchanged since last publish");
     }
 
-    // Copy the pre-built static SPA bundle over the site root (if given).
+    // Marker so a re-publish knows this dir is a publish output it may clean.
+    std::fs::write(&site_marker, "ovp.publish/v1\n")
+        .map_err(|e| CliError::Io(format!("write {}: {e}", site_marker.display())))?;
+
+    // Copy the pre-built static SPA bundle over the site root (if given). The
+    // bundle already bakes its base path (VITE_OVP_BASE at build time) and its
+    // API base is relative to it — nothing to rewrite here.
     if let Some(spa) = &cmd.spa_dir {
         copy_dir(spa, &cmd.out).map_err(CliError::Io)?;
         println!("publish: copied SPA bundle from {}", spa.display());
@@ -125,7 +154,6 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
         sources: report.sources,
         claims: report.claims,
         out_dir: cmd.out.display().to_string(),
-        base_url: cmd.base_url.clone(),
         deployed_to,
     };
     append_jsonl(&ledger_path, &record).map_err(CliError::Io)?;
@@ -196,11 +224,27 @@ fn deploy_git(
     std::fs::write(work.join(".nojekyll"), "").ok();
 
     run_git(&work, &["add", "-A"]).map_err(|e| format!("git add: {e}"))?;
-    // Nothing staged → the COMPLETE site (API + SPA + terrain) is unchanged, so
-    // there's nothing to push unless the operator forces a redeploy. This is the
-    // real no-op gate.
+    // No-op gate over the COMPLETE site, EXCLUDING the volatile-stamp files
+    // (published_at/built_at/run_id change every run). Without the excludes a
+    // scheduled publish would push every time even when nothing durable, SPA,
+    // or terrain changed; the deployed "as of" stamps then only advance when
+    // real content does — which is the correct semantics for a published site.
     let msg = format!("publish {}", &hash[..12.min(hash.len())]);
-    if run_git(&work, &["diff", "--cached", "--quiet"]).is_ok() {
+    let unchanged = run_git(
+        &work,
+        &[
+            "diff",
+            "--cached",
+            "--quiet",
+            "--",
+            ".",
+            ":(exclude)api/meta.json",
+            ":(exclude)api/model.json",
+            ":(exclude)api/settings.json",
+        ],
+    )
+    .is_ok();
+    if unchanged {
         if !force {
             return Ok(false);
         }
