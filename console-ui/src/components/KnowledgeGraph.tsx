@@ -17,6 +17,7 @@
  * react-force-graph-2d loads lazily so portal pages stay light. */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { forceCollide } from 'd3-force';
+import { polygonCentroid, polygonHull } from 'd3-polygon';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
@@ -107,7 +108,43 @@ function shouldLabel(n: GraphNode, zoom: number, forced: boolean): boolean {
 }
 
 // react-force-graph mutates node objects with x/y/z at runtime.
-type FGNode = GraphNode & { x?: number; y?: number; z?: number };
+type FGNode = GraphNode & { x?: number; y?: number; z?: number; vx?: number; vy?: number };
+
+/** A custom d3 force that pulls every node toward its community's live centroid,
+ * so communities settle into DISTINCT spatial regions (clean, separated hulls)
+ * instead of intermixing. Weak enough that links still shape the within-cluster
+ * structure. */
+function clusterForce(strength: number) {
+  let nodes: FGNode[] = [];
+  const force = (alpha: number) => {
+    const cen = new Map<number, { x: number; y: number; n: number }>();
+    for (const nd of nodes) {
+      if (nd.cluster > 0) {
+        const c = cen.get(nd.cluster) ?? { x: 0, y: 0, n: 0 };
+        c.x += nd.x ?? 0;
+        c.y += nd.y ?? 0;
+        c.n += 1;
+        cen.set(nd.cluster, c);
+      }
+    }
+    for (const c of cen.values()) {
+      c.x /= c.n;
+      c.y /= c.n;
+    }
+    const k = strength * alpha;
+    for (const nd of nodes) {
+      const c = cen.get(nd.cluster);
+      if (c) {
+        nd.vx = (nd.vx ?? 0) + (c.x - (nd.x ?? 0)) * k;
+        nd.vy = (nd.vy ?? 0) + (c.y - (nd.y ?? 0)) * k;
+      }
+    }
+  };
+  force.initialize = (n: FGNode[]) => {
+    nodes = n;
+  };
+  return force;
+}
 
 /** react-force-graph-3d injects `nodeLabel` as tooltip innerHTML — escape it so
  * a source title / claim containing markup can't run in the console origin. */
@@ -271,8 +308,11 @@ export default function KnowledgeGraph({
       'collide',
       forceCollide((n: FGNode) => nodeRadius(n, n.id === focusId) + 2).strength(0.9),
     );
+    // Global scope colors by community — pull each community together so the
+    // hull blobs are compact + separated. Focused scopes have no communities.
+    g.d3Force('cluster', scope === 'global' ? clusterForce(0.22) : null);
     g.d3ReheatSimulation?.();
-  }, [focusId]);
+  }, [focusId, scope]);
 
   // New dataset → allow one auto-fit again.
   useEffect(() => {
@@ -300,6 +340,63 @@ export default function KnowledgeGraph({
         : type === 'card'
           ? t('graph.kindCard')
           : t('graph.kindUnit');
+
+  // Soft translucent community "blobs" behind the graph (global scope only), so
+  // same-cluster claims read as one group at a glance. A convex hull per
+  // community, expanded and smoothed, filled + stroked with the community color
+  // at low alpha. Drawn in the PRE pass so it sits behind edges + nodes.
+  const drawHulls = (ctx: CanvasRenderingContext2D, zoom: number) => {
+    if (scope !== 'global') return;
+    const byCluster = new Map<number, [number, number][]>();
+    for (const n of graphData.nodes) {
+      if (n.cluster > 0 && n.x != null && n.y != null) {
+        let arr = byCluster.get(n.cluster);
+        if (!arr) {
+          arr = [];
+          byCluster.set(n.cluster, arr);
+        }
+        arr.push([n.x, n.y]);
+      }
+    }
+    const pad = 16;
+    const mid = (a: [number, number], b: [number, number]): [number, number] => [
+      (a[0] + b[0]) / 2,
+      (a[1] + b[1]) / 2,
+    ];
+    ctx.lineJoin = 'round';
+    for (const [cluster, pts] of byCluster) {
+      if (pts.length < 3) continue;
+      const hull = polygonHull(pts);
+      if (!hull || hull.length < 3) continue;
+      const [cx, cy] = polygonCentroid(hull);
+      // Expand each vertex outward from the centroid so the blob wraps the
+      // nodes with breathing room.
+      const exp = hull.map(([x, y]) => {
+        const dx = x - cx;
+        const dy = y - cy;
+        const d = Math.hypot(dx, dy) || 1;
+        return [x + (dx / d) * pad, y + (dy / d) * pad] as [number, number];
+      });
+      const color = tokens.community[(cluster - 1) % tokens.community.length];
+      const nn = exp.length;
+      ctx.beginPath();
+      const start = mid(exp[nn - 1], exp[0]);
+      ctx.moveTo(start[0], start[1]);
+      for (let i = 0; i < nn; i++) {
+        const m = mid(exp[i], exp[(i + 1) % nn]);
+        ctx.quadraticCurveTo(exp[i][0], exp[i][1], m[0], m[1]);
+      }
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.1;
+      ctx.fill();
+      ctx.globalAlpha = 0.22;
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.strokeStyle = color;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  };
 
   const drawNode = (node: FGNode, ctx: CanvasRenderingContext2D, zoom: number) => {
     const isFocus = node.id === focusId;
@@ -492,6 +589,7 @@ export default function KnowledgeGraph({
                 nodeRelSize={4}
                 nodeCanvasObjectMode={() => 'replace'}
                 nodeCanvasObject={drawNode}
+                onRenderFramePre={drawHulls}
                 onRenderFramePost={drawLabels}
                 nodePointerAreaPaint={paintPointerArea}
                 linkColor={(l: { source: FGNode; target: FGNode }) => {
@@ -519,11 +617,11 @@ export default function KnowledgeGraph({
                 height={dims.h || height}
                 graphData={graphData}
                 backgroundColor="#0b0e15"
-                nodeRelSize={5}
+                nodeRelSize={4}
                 nodeColor={(n: FGNode) =>
                   n.id === hoverId ? tokens.linkHi : scopedFill(scope, n, tokens)
                 }
-                nodeVal={(n: FGNode) => 3 + 14 * (n.importance ?? 0)}
+                nodeVal={(n: FGNode) => 1.5 + 6 * (n.importance ?? 0)}
                 nodeLabel={(n: FGNode) => escapeHtml(n.label)}
                 nodeOpacity={1}
                 nodeResolution={12}
