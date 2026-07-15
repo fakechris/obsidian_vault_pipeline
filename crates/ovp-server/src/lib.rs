@@ -895,7 +895,7 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     let model = state.current_model();
     let records = load_active_records(state);
     let reader_root = state.vault_root.join(state.layout.reader_root());
-    match bodies::claim_body(&records, model.as_ref(), &reader_root, &id) {
+    match bodies::claim_body(&records, model.as_ref(), &reader_root, &id, true) {
         Some(v) => json_stamped(200, &v.to_string(), model.as_ref()),
         None => json_response(404, r#"{"error":"claim not found"}"#),
     }

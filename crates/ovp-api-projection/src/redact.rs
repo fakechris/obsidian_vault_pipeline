@@ -7,6 +7,12 @@
 
 use ovp_index::{ClaimStatus, IndexModel, OpsState, SourceStatus};
 
+/// Last path segment of a `pack_dir` — the case_id, which claim↔source linking
+/// keys on. Publishing this instead of the full path drops the vault layout.
+fn case_id(pack_dir: &str) -> &str {
+    pack_dir.rsplit(['/', '\\']).next().unwrap_or(pack_dir)
+}
+
 /// A public-safe projection of the read model. Hold onto `.model()` and feed it
 /// to the same body builders the live server uses.
 pub struct PublicView {
@@ -19,18 +25,41 @@ impl PublicView {
         let mut m = model.clone();
 
         // Sources: only the happy-path Processed rows appear publicly; strip
-        // internal vault paths, failure diagnostics, and run internals.
+        // internal vault paths, failure diagnostics, and run internals. Reduce
+        // `pack_dir` to its case_id basename so the vault folder layout
+        // (`40-Resources/Reader/…`) doesn't leak while claim↔source linking
+        // (which keys on the last path segment) still works.
         m.sources.retain(|s| s.status == SourceStatus::Processed);
         for s in m.sources.iter_mut() {
             s.rel_path = None;
             s.last_reason = None;
             s.last_run_id = None;
             s.fail_count = 0;
+            s.pack_dir = s.pack_dir.as_deref().map(case_id).map(str::to_string);
+        }
+        let public_shas: std::collections::HashSet<&str> =
+            m.sources.iter().map(|s| s.sha256.as_str()).collect();
+
+        // Packs: keep only those joined to a retained (processed) source — drop
+        // orphan packs. Strip the folder path (→ case_id) and the card titles
+        // (synthesis internals that also feed search).
+        m.packs.retain(|p| {
+            p.source_sha256
+                .as_deref()
+                .is_some_and(|sha| public_shas.contains(sha))
+        });
+        for p in m.packs.iter_mut() {
+            p.pack_dir = case_id(&p.pack_dir).to_string();
+            p.card_titles.clear();
         }
 
         // Claims: durable only. Caveated/superseded/retracted never ship, and
-        // the review lane (`review.json`) is simply never read.
+        // the review lane (`review.json`) is simply never read. Drop the run id
+        // (a pipeline internal).
         m.claims.retain(|c| c.status == ClaimStatus::Durable);
+        for c in m.claims.iter_mut() {
+            c.run_id = None;
+        }
 
         // Runs + ops are pipeline internals (report paths, blocked backlog,
         // liveness heartbeat) — drop them entirely.

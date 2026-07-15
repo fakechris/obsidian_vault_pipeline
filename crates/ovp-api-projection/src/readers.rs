@@ -20,11 +20,24 @@ use crate::{MAX_SOURCE_DOC_BYTES, is_plain_relative};
 /// passthrough (the reader must keep working; `ovp2 index` is where corruption
 /// fails loud).
 pub fn load_active_records(vault_root: &Path, layout: &VaultLayout) -> Vec<DurableRecord> {
+    load_active_records_strict(vault_root, layout).unwrap_or_default()
+}
+
+/// Fallible variant for the PUBLISHER: an unreadable/malformed crystal ledger
+/// is an ERROR, not an empty list. `load_active_records`'s "graceful degrade to
+/// empty" is right for a live server (keep serving) but wrong for publishing —
+/// it would deploy a site that silently removes every claim. A genuinely
+/// MISSING ledger (fresh vault) is still `Ok(empty)`.
+pub fn load_active_records_strict(
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<Vec<DurableRecord>, String> {
     let store = vault_root.join(layout.crystal_store_dir());
-    let events: Vec<StoreEvent> = match read_jsonl(&store.join("ledger.jsonl")) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
+    let ledger = store.join("ledger.jsonl");
+    // `read_jsonl` returns Ok(empty) for a missing file (fresh vault) and Err
+    // for a present-but-corrupt one — propagate the latter.
+    let events: Vec<StoreEvent> =
+        read_jsonl(&ledger).map_err(|e| format!("crystal ledger {}: {e}", ledger.display()))?;
     let mut records: Vec<DurableRecord> = fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)
@@ -40,7 +53,7 @@ pub fn load_active_records(vault_root: &Path, layout: &VaultLayout) -> Vec<Durab
         Ok(None) => {}
         Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
     }
-    records
+    Ok(records)
 }
 
 /// Read a source's markdown from the vault, capped at `MAX_SOURCE_DOC_BYTES`.

@@ -13,10 +13,14 @@ use std::path::{Path, PathBuf};
 use ovp_api_projection::{PublicView, bodies, graph, readers};
 use ovp_domain::VaultLayout;
 use ovp_index::{
-    EvidenceModel, IndexModel, Query, build_evidence, build_index_at, now_rfc3339, read_evidence,
-    read_index, write_evidence, write_index,
+    IndexModel, Query, build_evidence, build_index_at, now_rfc3339, read_index, write_evidence,
+    write_index,
 };
 use sha2::{Digest, Sha256};
+
+/// Node cap for the published global graph — matches the live embedded view's
+/// `fetchGlobalGraph(400)` so a published site doesn't ship the full overview.
+const PUBLIC_GRAPH_LIMIT: usize = 400;
 
 pub struct PublishArgs {
     pub vault_root: PathBuf,
@@ -48,11 +52,11 @@ pub struct PublishReport {
 pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     let layout = VaultLayout::new();
 
-    // 1. Fresh, self-consistent model + evidence (or read the existing ones).
-    let (model, evidence): (IndexModel, Option<EvidenceModel>) = if args.no_rebuild {
-        let m = read_index(&args.vault_root)?;
-        let e = read_evidence(&args.vault_root).ok();
-        (m, e)
+    // 1. Fresh, self-consistent model (or read the existing one). A rebuild also
+    // refreshes the vault's evidence.json side-car (parity with `console`); the
+    // published pages themselves are lite and carry no evidence layer.
+    let model: IndexModel = if args.no_rebuild {
+        read_index(&args.vault_root)?
     } else {
         let built_at = now_rfc3339();
         let run_id = format!("publish-{built_at}");
@@ -60,15 +64,16 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         write_index(&args.vault_root, &m)?;
         let e = build_evidence(&args.vault_root, &args.date, &m)?;
         write_evidence(&args.vault_root, &e)?;
-        (m, Some(e))
+        m
     };
 
     // 2. Redact to public-safe. 3. Durable/active records (durable-only by
     // construction — caveated live in review.json and never in the ledger).
     let view = PublicView::from_model(&model);
     let public = view.model();
-    let records = readers::load_active_records(&args.vault_root, &layout);
-    let reader_root = args.vault_root.join(layout.reader_root());
+    // Strict read: a corrupt ledger must FAIL the publish, never silently
+    // deploy a site with every claim removed.
+    let records = readers::load_active_records_strict(&args.vault_root, &layout)?;
     let terrain_src = args
         .vault_root
         .join(layout.crystal_store_dir())
@@ -78,8 +83,6 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         &args.out_dir.join("api"),
         public,
         &records,
-        evidence.as_ref(),
-        &reader_root,
         &terrain_src,
         args.published_at.as_deref(),
     )?;
@@ -96,19 +99,21 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
 
 /// Write the full public API tree under `api_dir` from an ALREADY-redacted
 /// model + its durable records. Split out from `publish` so it's testable
-/// without a full vault rebuild. Returns the file count.
-#[allow(clippy::too_many_arguments)]
+/// without a full vault rebuild. Returns the file count. Everything is
+/// public-lite: source pages carry no evidence layer, claim pages carry only
+/// the short verbatim quote (no full unit text), terrain is filtered to public
+/// sources.
 fn write_api_tree(
     api: &Path,
     public: &IndexModel,
     records: &[ovp_domain::crystal::DurableRecord],
-    evidence: Option<&EvidenceModel>,
-    reader_root: &Path,
     terrain_src: &Path,
     published_at: Option<&str>,
 ) -> Result<usize, String> {
     fs_reset_dir(api)?;
     let mut files = 0usize;
+    let public_shas: std::collections::HashSet<&str> =
+        public.sources.iter().map(|s| s.sha256.as_str()).collect();
 
     // Top-level projections.
     write_json(&api.join("model.json"), &serde_json::to_value(public).unwrap_or_default())?;
@@ -122,9 +127,11 @@ fn write_api_tree(
     // Graph: the global overview + one keyed file of per-theme subgraphs (keyed
     // by label so the SPA looks up client-side, no slug-matching). Neighborhood
     // subgraphs are omitted in static mode.
+    // Match the embedded live view's cap (`fetchGlobalGraph(400)`) so the
+    // published graph isn't the full 2000-node overview.
     let params = graph::GraphParams {
         mode: graph::GraphMode::Overview,
-        limit: graph::DEFAULT_OVERVIEW_LIMIT,
+        limit: PUBLIC_GRAPH_LIMIT,
         theme: None,
         focus: None,
         hops: graph::MAX_HOPS,
@@ -142,27 +149,37 @@ fn write_api_tree(
     write_json(&api.join("graph").join("themes.json"), &serde_json::Value::Object(themes_map))?;
     files += 1;
 
-    // Per-claim pages (durable records).
+    // Per-claim pages (durable records). `include_unit_text=false` → only the
+    // short verbatim quote ships, not the fuller grounded-unit sentence. Alias
+    // under BOTH claim_key and claim_id, since the model/graph link by claim_id
+    // while `claim_body` keys the file name on claim_key.
     for r in records {
-        if let Some(v) = bodies::claim_body(records, Some(public), reader_root, &r.claim_key) {
+        if let Some(v) = bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false) {
             write_json(&api.join("claim").join(format!("{}.json", r.claim_key)), &v)?;
             files += 1;
+            if r.claim_id != r.claim_key {
+                write_json(&api.join("claim").join(format!("{}.json", r.claim_id)), &v)?;
+                files += 1;
+            }
         }
     }
 
-    // Per-source LITE pages (no markdown body — link out to the original).
+    // Per-source LITE pages: no evidence layer, no markdown body — link out to
+    // the original via `source.url`.
     for s in &public.sources {
-        if let Some(v) = bodies::source_body(public, evidence, &s.sha256, None) {
+        if let Some(v) = bodies::source_body(public, None, &s.sha256, None) {
             write_json(&api.join("source").join(format!("{}.json", s.sha256)), &v)?;
             files += 1;
         }
     }
 
-    // Terrain viz — already public-safe (points carry source sha + title +
-    // theme, no third-party body). Copy through if built.
-    if let Ok(body) = std::fs::read_to_string(terrain_src) {
-        std::fs::write(api.join("terrain.json"), &body)
-            .map_err(|e| format!("write terrain.json: {e}"))?;
+    // Terrain viz — filter points to PUBLIC sources (crystal-terrain builds a
+    // point per reader pack, including orphan/non-processed ones whose title +
+    // case id would otherwise leak). Copy through filtered if built.
+    if let Ok(body) = std::fs::read_to_string(terrain_src)
+        && let Some(filtered) = filter_terrain(&body, &public_shas)
+    {
+        write_json(&api.join("terrain.json"), &filtered)?;
         files += 1;
     }
 
@@ -192,6 +209,27 @@ fn content_hash(public: &IndexModel, records: &[ovp_domain::crystal::DurableReco
     });
     h.update(serde_json::to_string(&payload).unwrap_or_default().as_bytes());
     format!("{:x}", h.finalize())
+}
+
+/// Keep only terrain points whose source sha is public; drop orphan/
+/// non-processed points that would leak private titles + case ids. Returns
+/// `None` when the file isn't the expected shape (skip writing it).
+fn filter_terrain(
+    body: &str,
+    public_shas: &std::collections::HashSet<&str>,
+) -> Option<serde_json::Value> {
+    let mut v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let points = v.get_mut("points")?.as_array_mut()?;
+    points.retain(|p| {
+        p.get("sha")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| public_shas.contains(s))
+    });
+    let n = points.len();
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("point_count".into(), serde_json::json!(n));
+    }
+    Some(v)
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
@@ -316,8 +354,6 @@ mod tests {
             &api,
             pv.model(),
             &recs,
-            None,
-            tmp.path(),
             &tmp.path().join("no-terrain.json"),
             Some("2026-07-01T12:00:00Z"),
         )
@@ -335,8 +371,19 @@ mod tests {
         assert!(s["doc"]["markdown"].is_null(), "lite page must omit markdown");
         assert!(!api.join("source/bbb.json").exists(), "blocked source must not publish");
 
-        // Per-claim page exists.
+        // Per-claim page exists under BOTH claim_key and claim_id; ships the
+        // short quote but not the fuller unit text.
         assert!(api.join("claim/ck-abc123.json").exists());
+        assert!(api.join("claim/id-1.json").exists(), "claim_id alias missing");
+        let c = read(&api.join("claim/id-1.json"));
+        assert_eq!(c["citations"][0]["quote"], "q");
+        assert_eq!(c["citations"][0]["unit_text"], "", "unit_text must be redacted");
+
+        // Source-lite page carries no evidence layer.
+        assert!(s["memory"]["cards"].as_array().unwrap().is_empty());
+        assert!(s["memory"]["units"].as_array().unwrap().is_empty());
+        // pack_dir reduced to the case_id basename (no vault folder path).
+        assert_eq!(s["source"]["pack_dir"], "case1");
 
         // meta carries published_at; terrain absent (source file missing).
         let meta = read(&api.join("meta.json"));

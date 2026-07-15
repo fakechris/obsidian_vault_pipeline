@@ -68,14 +68,19 @@ pub fn settings_public_body(model: Option<&IndexModel>) -> Value {
     })
 }
 
-/// `/api/claim/:id` — one durable claim with its citations resolved to unit
-/// text and source metadata. Reads each pack's `units.accepted.json` under
-/// `reader_root`. Returns `None` when no active record matches `id` (→ 404).
+/// `/api/claim/:id` — one durable claim with its citations resolved to source
+/// metadata. Returns `None` when no active record matches `id` (→ 404).
+///
+/// `include_unit_text` gates the FULL grounded-unit sentence (read from each
+/// pack's `units.accepted.json`): the live server includes it (the app's
+/// evidence layer), the publisher sets it `false` so a public claim ships only
+/// the short verbatim `quote` for provenance, never the fuller source text.
 pub fn claim_body(
     records: &[DurableRecord],
     model: Option<&IndexModel>,
     reader_root: &Path,
     id: &str,
+    include_unit_text: bool,
 ) -> Option<Value> {
     let rec = records
         .iter()
@@ -95,12 +100,16 @@ pub fn claim_body(
 
     let mut citations = Vec::new();
     for cit in &rec.citations {
-        let units_path = reader_root.join(&cit.case_id).join("units.accepted.json");
-        let unit_text = std::fs::read_to_string(&units_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<Unit>>(&raw).ok())
-            .and_then(|units| units.into_iter().find(|u| u.id == cit.unit_id).map(|u| u.text))
-            .unwrap_or_default();
+        let unit_text = if include_unit_text {
+            let units_path = reader_root.join(&cit.case_id).join("units.accepted.json");
+            std::fs::read_to_string(&units_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Vec<Unit>>(&raw).ok())
+                .and_then(|units| units.into_iter().find(|u| u.id == cit.unit_id).map(|u| u.text))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         let (source_title, source_url, source_sha) =
             if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {

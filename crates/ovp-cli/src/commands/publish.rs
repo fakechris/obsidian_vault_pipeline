@@ -51,9 +51,19 @@ struct PublishRecord {
 pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
     let layout = VaultLayout::new();
     let ledger_path = cmd.vault_root.join(layout.publish_ledger());
+    // Propagate a CORRUPT publish ledger (a missing one is an empty first run) —
+    // silently forgetting the prior state would republish and re-corrupt it.
     let last_hash = read_jsonl::<PublishRecord>(&ledger_path)
-        .ok()
-        .and_then(|recs| recs.last().map(|r| r.content_hash.clone()));
+        .map_err(CliError::Io)?
+        .pop()
+        .map(|r| r.content_hash);
+
+    // Assemble the site in a CLEAN directory: reusing --out would leave stale
+    // hashed SPA chunks / withdrawn files behind, which then deploy.
+    if cmd.out.exists() {
+        std::fs::remove_dir_all(&cmd.out)
+            .map_err(|e| CliError::Io(format!("clean {}: {e}", cmd.out.display())))?;
+    }
 
     let published_at = now_rfc3339();
     let report = publish(&PublishArgs {
@@ -72,14 +82,11 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
         report.sources,
         report.claims
     );
-
-    // Change detection: identical content since last publish → skip the push.
-    if !cmd.force && last_hash.as_deref() == Some(report.content_hash.as_str()) {
-        println!(
-            "publish: content unchanged (hash {}) — nothing to publish. Use --force to override.",
-            &report.content_hash[..12.min(report.content_hash.len())]
-        );
-        return Ok(());
+    // Informational only — the no-op decision is made by git over the COMPLETE
+    // assembled site (below), not this content hash, so an SPA/terrain-only
+    // change (or a newly-added --repo) still deploys.
+    if last_hash.as_deref() == Some(report.content_hash.as_str()) {
+        println!("publish: durable content unchanged since last publish");
     }
 
     // Copy the pre-built static SPA bundle over the site root (if given).
@@ -90,10 +97,17 @@ pub fn run(cmd: PublishCmd) -> Result<(), CliError> {
         println!("publish: no --spa-dir given; wrote API JSON only (build the SPA with VITE_OVP_STATIC=1 and re-run with --spa-dir)");
     }
 
-    // Optional deploy to a public repo.
+    // Optional deploy to a public repo. `deploy_git` diffs the WHOLE assembled
+    // site against the branch and no-ops the push when nothing changed — the
+    // real change-detection, covering API + SPA + terrain.
     let deployed_to = if let Some(repo) = &cmd.repo {
-        deploy_git(&cmd.out, repo, &cmd.branch, &report.content_hash).map_err(CliError::Io)?;
-        println!("publish: pushed to {repo} ({})", cmd.branch);
+        let pushed = deploy_git(&cmd.out, repo, &cmd.branch, &report.content_hash, cmd.force)
+            .map_err(CliError::Io)?;
+        println!(
+            "publish: {} {repo} ({})",
+            if pushed { "pushed to" } else { "no change to deploy for" },
+            cmd.branch
+        );
         Some(repo.clone())
     } else {
         None
@@ -139,7 +153,13 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
 /// branch (or start an orphan branch if it doesn't exist), replace its tracked
 /// content with `site`, commit, and push. Uses the ambient git credentials /
 /// token (e.g. sourced from `.ovp/daily.env` by the scheduler).
-fn deploy_git(site: &Path, repo: &str, branch: &str, hash: &str) -> Result<(), String> {
+fn deploy_git(
+    site: &Path,
+    repo: &str,
+    branch: &str,
+    hash: &str,
+    force: bool,
+) -> Result<bool, String> {
     let work = site
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -176,14 +196,22 @@ fn deploy_git(site: &Path, repo: &str, branch: &str, hash: &str) -> Result<(), S
     std::fs::write(work.join(".nojekyll"), "").ok();
 
     run_git(&work, &["add", "-A"]).map_err(|e| format!("git add: {e}"))?;
-    // Nothing staged → nothing to push (belt-and-suspenders with change detection).
+    // Nothing staged → the COMPLETE site (API + SPA + terrain) is unchanged, so
+    // there's nothing to push unless the operator forces a redeploy. This is the
+    // real no-op gate.
+    let msg = format!("publish {}", &hash[..12.min(hash.len())]);
     if run_git(&work, &["diff", "--cached", "--quiet"]).is_ok() {
-        return Ok(());
+        if !force {
+            return Ok(false);
+        }
+        run_git(&work, &["commit", "--allow-empty", "-m", &msg])
+            .map_err(|e| format!("git commit: {e}"))?;
+        run_git(&work, &["push", "origin", branch]).map_err(|e| format!("git push: {e}"))?;
+        return Ok(true);
     }
-    run_git(&work, &["commit", "-m", &format!("publish {}", &hash[..12.min(hash.len())])])
-        .map_err(|e| format!("git commit: {e}"))?;
+    run_git(&work, &["commit", "-m", &msg]).map_err(|e| format!("git commit: {e}"))?;
     run_git(&work, &["push", "origin", branch]).map_err(|e| format!("git push: {e}"))?;
-    Ok(())
+    Ok(true)
 }
 
 /// Run a git command in `dir`; error carries stderr on non-zero exit.
