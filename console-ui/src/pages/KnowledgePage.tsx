@@ -125,7 +125,8 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
 
   return (
     <>
-      <div className="tab-row">
+      <div className="knowledge-viewbar">
+        <div className="tab-row">
         <button
           type="button"
           className={view === 'list' ? 'active' : ''}
@@ -147,10 +148,11 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         >
           {t('knowledge.viewTerrain')}
         </button>
+        </div>
 
-        {/* Perspective switch — shared by Graph + Terrain, right-aligned on the
-            view-tab row. The "what is a point" hint moves into each view's
-            caption below, so the switch itself costs no vertical space. */}
+        {/* Perspective switch — a SIBLING of .tab-row (not nested), so the
+            .tab-row button rules don't clobber the .seg-toggle contrast. Shares
+            the row; the "what is a point" hint lives in the caption below. */}
         {(view === 'graph' || view === 'terrain') && (
           <div className="seg-toggle persp-toggle" role="group">
             <button
