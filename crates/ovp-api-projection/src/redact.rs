@@ -96,6 +96,12 @@ impl PublicView {
     pub fn model(&self) -> &IndexModel {
         &self.model
     }
+
+    /// Take ownership of the filtered model (for callers that need to further
+    /// adjust it, e.g. recompute claim themes from the surviving public cases).
+    pub fn into_model(self) -> IndexModel {
+        self.model
+    }
 }
 
 #[cfg(test)]

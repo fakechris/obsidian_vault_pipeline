@@ -70,9 +70,20 @@ function ClaimCard({
             {t('theme.strength')} {claim.strength}
           </span>
         )}
-        <a className="claim-anchor mono tiny" href={`#${claim.claim_id}`}>
+        {/* Scroll via onClick rather than a native `#id` href: under the
+            static site's HashRouter an `#id` href would replace the route hash
+            and navigate away instead of scrolling. Works in both router modes. */}
+        <button
+          type="button"
+          className="claim-anchor mono tiny"
+          onClick={() =>
+            document
+              .getElementById(claim.claim_id)
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+        >
           #{claim.claim_id}
-        </a>
+        </button>
       </div>
       <div className="claim-text">{claim.claim}</div>
       <ClaimSources claim={claim} byCase={byCase} />

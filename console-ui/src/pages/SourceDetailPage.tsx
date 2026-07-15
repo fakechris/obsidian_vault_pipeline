@@ -186,8 +186,14 @@ export default function SourceDetailPage() {
             <dd className="mono tiny">{source.date}</dd>
           </>
         )}
-        <dt>{t('source.origin')}</dt>
-        <dd className="tiny">{t(`library.${collectionOf(source)}`)}</dd>
+        {/* Origin (collection) is derived from the intake path, which is
+            redacted on the static site — hide it rather than mislabel. */}
+        {!STATIC_MODE && (
+          <>
+            <dt>{t('source.origin')}</dt>
+            <dd className="tiny">{t(`library.${collectionOf(source)}`)}</dd>
+          </>
+        )}
         {source.rel_path && (
           <>
             <dt>{t('source.location')}</dt>
@@ -215,7 +221,7 @@ export default function SourceDetailPage() {
         {STATIC_MODE ? (
           <div>
             <EmptyState>
-              <p>{t('source.staticLite')}</p>
+              <p>{source.url ? t('source.staticLite') : t('source.staticLiteNoUrl')}</p>
             </EmptyState>
           </div>
         ) : (

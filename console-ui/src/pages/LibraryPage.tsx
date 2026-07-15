@@ -60,7 +60,10 @@ function LibraryBody({ model }: { model: IndexModel }) {
     st === 'queued' ? (model.queued_live ?? (byStatus.get('queued') ?? 0)) : (byStatus.get(st) ?? 0);
 
   const filtered = filterSources(model.sources, {
-    collection: collection && COLLECTIONS.includes(collection) ? collection : null,
+    // Collection is path-derived, redacted on the static site — never filter by
+    // it there (a manual ?c= would match the false default for every source).
+    collection:
+      !STATIC_MODE && collection && COLLECTIONS.includes(collection) ? collection : null,
     month,
     status,
   });

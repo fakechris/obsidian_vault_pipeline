@@ -51,6 +51,13 @@ pub struct PublishReport {
 pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     let layout = VaultLayout::new();
 
+    // 0. Hold the vault's shared run lock for the WHOLE snapshot so a concurrent
+    // `daily`/`crystal` write can't make the freshly-built model and the
+    // separately-folded ledger observe different revisions (which would leak a
+    // retracted claim or drop a new one). Released on drop at function end.
+    let _lock = ovp_intake::RunLock::acquire(&args.vault_root)
+        .map_err(|e| format!("publish: vault is busy (another run holds the lock): {e}"))?;
+
     // 1. ALWAYS build a fresh model, so it and the ledger records folded below
     // reflect the SAME revision (a stale index.json + current ledger would
     // publish retracted claims in model.json while dropping them from claim
@@ -66,26 +73,54 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         write_evidence(&args.vault_root, &e)?;
     }
 
-    // 2. Redact to public-safe. 3. Durable/active records (durable-only by
-    // construction — caveated live in review.json and never in the ledger).
-    let view = PublicView::from_model(&model);
-    let public = view.model();
-    // Strict read: a corrupt ledger must FAIL the publish, never silently
-    // deploy a site with every claim removed.
+    // 2. Redact to a public-safe OWNED model.
+    let mut public = PublicView::from_model(&model).into_model();
+    let public_cases: std::collections::HashSet<String> =
+        public.packs.iter().map(|p| p.pack_dir.clone()).collect();
+
+    // Themes are a majority label over a claim's cited packs. After dropping
+    // private cases the original label may reflect a removed pack, so recompute
+    // it from the surviving PUBLIC cases (both the model's claims and the
+    // records fed to claim/graph/theme projections).
+    let themes_file = ovp_domain::crystal::themes::ThemesFile::load(
+        &args
+            .vault_root
+            .join(layout.crystal_store_dir())
+            .join("themes.json"),
+    )
+    .ok()
+    .flatten();
+    if let Some(tf) = &themes_file {
+        for c in public.claims.iter_mut() {
+            c.theme = tf.majority_label(&c.sources).or_else(|| c.theme.clone());
+        }
+    }
+
+    // 3. Durable/active records (durable-only by construction — caveated live in
+    // review.json and never in the ledger). Strict read: a corrupt ledger must
+    // FAIL the publish, never silently deploy a site with every claim removed.
     let records = readers::load_active_records_strict(&args.vault_root, &layout)?;
-    // Scrub each record's citations to PUBLIC cases (matching PublicView's claim
-    // filtering), so claim pages / graph / themes never surface an orphan case
-    // id, and drop records left with no public citation.
-    let public_cases: std::collections::HashSet<&str> =
-        public.packs.iter().map(|p| p.pack_dir.as_str()).collect();
+    // Scrub each record's citations to PUBLIC cases (matching the claim
+    // filtering) and recompute the theme, so claim pages / graph / themes never
+    // surface an orphan case id or a removed pack's label; drop records left
+    // with no public citation.
     let records: Vec<ovp_domain::crystal::DurableRecord> = records
         .into_iter()
         .filter_map(|mut r| {
-            r.citations.retain(|c| public_cases.contains(c.case_id.as_str()));
-            r.source_cases.retain(|s| public_cases.contains(s.as_str()));
-            (!r.citations.is_empty()).then_some(r)
+            r.citations.retain(|c| public_cases.contains(&c.case_id));
+            r.source_cases.retain(|s| public_cases.contains(s));
+            if r.citations.is_empty() {
+                return None;
+            }
+            if let Some(tf) = &themes_file {
+                r.theme = tf.majority_label(&r.source_cases).unwrap_or_else(|| {
+                    ovp_domain::crystal::themes::UNCLASSIFIED_THEME.to_string()
+                });
+            }
+            Some(r)
         })
         .collect();
+    let public = &public;
     let terrain_src = args
         .vault_root
         .join(layout.crystal_store_dir())
@@ -161,16 +196,24 @@ fn write_api_tree(
     write_json(&api.join("graph").join("themes.json"), &serde_json::Value::Object(themes_map))?;
     files += 1;
 
+    // `claim_id` is cluster/run-local and can repeat across records, while
+    // `claim_key` is the unique ledger identity — only alias by claim_id when
+    // it's globally unique, else the alias would silently serve the wrong record.
+    let mut id_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for r in records {
+        *id_counts.entry(r.claim_id.as_str()).or_default() += 1;
+    }
+
     // Per-claim pages (durable records). `include_unit_text=false` → only the
     // short verbatim quote ships, not the fuller grounded-unit sentence. Alias
-    // under BOTH claim_key and claim_id (the model/graph link by claim_id while
-    // `claim_body` keys on claim_key). `safe_component` neutralizes any `..`/`/`
-    // in an id so a filename can't escape the output tree.
+    // under claim_key (unique) plus claim_id when unambiguous (the model/graph
+    // link by claim_id while `claim_body` keys on claim_key). `safe_component`
+    // neutralizes any `..`/`/` so a filename can't escape the output tree.
     for r in records {
         if let Some(v) = bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false) {
             write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_key))), &v)?;
             files += 1;
-            if r.claim_id != r.claim_key {
+            if r.claim_id != r.claim_key && id_counts.get(r.claim_id.as_str()) == Some(&1) {
                 write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
                 files += 1;
             }
@@ -294,9 +337,27 @@ fn filter_terrain(
         })
         .collect();
 
+    // Recompute bounds from the retained points so excluded (private) points no
+    // longer stretch the map and compress the public ones into a corner.
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in points.iter() {
+        let x = p.get("x").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        let y = p.get("y").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        minx = minx.min(x);
+        miny = miny.min(y);
+        maxx = maxx.max(x);
+        maxy = maxy.max(y);
+    }
+    let bounds = if n == 0 {
+        [0.0, 0.0, 0.0, 0.0]
+    } else {
+        [minx, miny, maxx, maxy]
+    };
+
     if let Some(obj) = v.as_object_mut() {
         obj.insert("point_count".into(), serde_json::json!(n));
         obj.insert("themes".into(), serde_json::Value::Array(themes));
+        obj.insert("bounds".into(), serde_json::json!(bounds));
     }
     Some(v)
 }
