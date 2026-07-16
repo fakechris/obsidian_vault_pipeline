@@ -1788,6 +1788,7 @@ fn main() -> ExitCode {
                 max_new_per_batch,
                 refresh,
             })
+            .map(|_| ())
         }
         Cmd::TagsSuggest {
             vault_root,
