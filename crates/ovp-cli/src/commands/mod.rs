@@ -12,6 +12,7 @@ pub mod crystal_synth_ab;
 pub mod crystal_synth_llm;
 pub mod crystal_terrain;
 pub mod crystal_themes;
+pub mod tags_suggest;
 pub mod crystal_write;
 pub mod console_cmd;
 pub mod daily;

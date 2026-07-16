@@ -609,6 +609,11 @@ body {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* Machine-inferred tags: same affordance, visibly weaker claim. */
+.tag-chip.inferred {
+  border-style: dashed;
+  opacity: 0.75;
+}
 
 /* ---------- sections / footer timeline ---------- */
 .section {

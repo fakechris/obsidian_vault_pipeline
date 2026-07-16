@@ -1954,6 +1954,7 @@ mod tests {
                     fail_count: 0,
                     last_reason: None,
                     tags: Vec::new(),
+                    tags_inferred: Vec::new(),
                 })
                 .collect(),
             packs: cases
@@ -2035,6 +2036,7 @@ mod tests {
             fail_count: 0,
             last_reason: None,
             tags: Vec::new(),
+            tags_inferred: Vec::new(),
         });
         let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
         assert_eq!(resp.nodes.len(), 1);
@@ -2085,6 +2087,7 @@ mod tests {
             fail_count: 0,
             last_reason: None,
             tags: Vec::new(),
+            tags_inferred: Vec::new(),
         });
         let evidence = evidence_for("fresh", "freshsha", 2);
         let resp =

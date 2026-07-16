@@ -228,6 +228,18 @@ impl VaultLayout {
     pub fn tag_aliases_file(&self) -> &'static str {
         ".ovp/tags/aliases.toml"
     }
+
+    /// Machine-inferred tags for untagged sources (`tags-suggest` output) —
+    /// a rebuildable projection, kept strictly apart from operator tags.
+    pub fn tags_inferred_file(&self) -> &'static str {
+        ".ovp/tags/inferred.json"
+    }
+
+    /// The human-review report `tags-suggest` writes: merge candidates with
+    /// evidence + a paste-ready `[aliases]` block. Never read by the pipeline.
+    pub fn tags_proposals_file(&self) -> &'static str {
+        ".ovp/tags/proposals.md"
+    }
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be
