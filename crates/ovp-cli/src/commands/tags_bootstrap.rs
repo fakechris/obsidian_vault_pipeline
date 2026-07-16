@@ -312,7 +312,30 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
         );
         floored += 1;
     }
+    let unthemed = targets.iter().filter(|t| t.community.is_none()).count();
     println!("  floor: {floored}/{} target(s) inherit community keywords", targets.len());
+    if unthemed > 0 {
+        // No silent caps: noise/unthemed packs have no community keywords, and
+        // a wrong tag is worse than no tag — only the LLM pass covers them.
+        println!(
+            "  floor: {unthemed} target(s) in noise/unthemed packs get no deterministic \
+             floor (covered by `--client live` classification only)"
+        );
+    }
+
+    // A ban must also RETIRE what was inferred before it existed — scrub
+    // banned names out of every existing entry so `vocabulary.toml` curation
+    // takes effect on the next index build, not just on future runs. (Tags
+    // added below are vocabulary-validated, so they can never be banned.)
+    {
+        let banned: std::collections::BTreeSet<&str> = vocabulary.banned().collect();
+        if !banned.is_empty() {
+            for tags in inferred.entries.values_mut() {
+                tags.retain(|t| !banned.contains(t.tag.as_str()));
+            }
+            inferred.entries.retain(|_, v| !v.is_empty());
+        }
+    }
 
     // Checkpoint the deterministic result BEFORE any fallible LLM work: a
     // failed live pass must degrade to the zero-token floor, never to

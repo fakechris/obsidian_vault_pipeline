@@ -52,8 +52,10 @@ the theme communities already exist for any vault (`crystal-themes`:
 embeddings → Louvain → c-TF-IDF). Their per-community keywords ARE a
 candidate vocabulary: ~17 communities × top keywords ≈ 60–120 candidate tags,
 bilingual, corpus-derived, no LLM. Floor behavior with no LLM configured:
-every source inherits its community's top keyword(s) as `tags_inferred` —
-coarse but honest, and strictly better than nothing.
+every THEMED source inherits its community's top keyword(s) as
+`tags_inferred` — coarse but honest. Noise/unclassified packs (<5% on the
+validated recipe) deliberately get no floor (a wrong tag is worse than no
+tag; the run logs their count) and are covered by the LLM pass only.
 
 **LLM classification pass (optional, `--client live`, cassette-cached):**
 batched (~20 sources/call, same batching discipline as crystal-synth):
