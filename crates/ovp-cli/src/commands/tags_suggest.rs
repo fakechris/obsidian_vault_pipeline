@@ -75,7 +75,9 @@ pub(crate) fn toml_basic_string(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -155,6 +157,11 @@ pub(crate) fn merge_proposals(
     vectors: &[Vec<f32>],
     threshold: f64,
 ) -> (Vec<MergeProposal>, usize) {
+    assert_eq!(
+        tags.len(),
+        vectors.len(),
+        "merge_proposals: one vector per tag"
+    );
     let sets: Vec<std::collections::BTreeSet<usize>> = tags
         .iter()
         .map(|(_, srcs)| srcs.iter().copied().collect())
@@ -270,11 +277,14 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
 
     // ---- Backfill: kNN vote for every untagged source ----
     let mut entries: BTreeMap<String, Vec<InferredTag>> = BTreeMap::new();
+    let mut sims: Vec<(f64, &[String])> = Vec::with_capacity(tagged.len());
     for (idx, sha) in &untagged {
-        let mut sims: Vec<(f64, &[String])> = tagged
-            .iter()
-            .map(|(t_idx, _, tags)| (cosine(&vectors[*idx], &vectors[*t_idx]), *tags))
-            .collect();
+        sims.clear();
+        sims.extend(
+            tagged
+                .iter()
+                .map(|(t_idx, _, tags)| (cosine(&vectors[*idx], &vectors[*t_idx]), *tags)),
+        );
         sims.sort_by(|(sa, _), (sb, _)| sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal));
         sims.truncate(args.knn);
         let voted = vote_tags(&sims, args.vote_threshold, args.min_support, args.max_tags);

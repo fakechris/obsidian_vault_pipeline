@@ -347,7 +347,10 @@ export function filterSources(
 export function countTags(sources: SourceRow[]): [string, number][] {
   const counts = new Map<string, number>();
   for (const s of sources) {
-    for (const t of [...(s.tags ?? []), ...(s.tags_inferred ?? [])]) {
+    for (const t of s.tags ?? []) {
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    for (const t of s.tags_inferred ?? []) {
       counts.set(t, (counts.get(t) ?? 0) + 1);
     }
   }
