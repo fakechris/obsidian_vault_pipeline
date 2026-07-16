@@ -266,18 +266,35 @@ pub enum TagOrigin {
 /// `.ovp/tags/vocabulary.toml` — the CLOSED list the tag classifier may pick
 /// from: user tags ∪ community keywords ∪ surviving LLM proposals. A
 /// projection: `tags-bootstrap` rebuilds the user/community entries each run
-/// and carries the llm entries forward. The operator curates it in place
-/// (delete a line to ban a tag from future classification).
+/// and carries the llm entries forward. Curation: deleting an `llm` line
+/// removes it permanently (not re-derivable); user/community entries would
+/// be re-derived on the next run, so banning those goes through the
+/// persistent `banned` list, which every insert respects.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TagVocabulary {
     entries: BTreeMap<String, TagOrigin>,
+    banned: std::collections::BTreeSet<String>,
 }
 
 impl TagVocabulary {
     /// Insert a normalized name; an existing entry keeps its origin (user
     /// beats community beats llm because bootstrap inserts in that order).
+    /// Banned names never enter.
     pub fn insert(&mut self, name: String, origin: TagOrigin) {
+        if self.banned.contains(&name) {
+            return;
+        }
         self.entries.entry(name).or_insert(origin);
+    }
+
+    /// Ban a name from the vocabulary (persists across bootstrap runs).
+    pub fn ban(&mut self, name: String) {
+        self.entries.remove(&name);
+        self.banned.insert(name);
+    }
+
+    pub fn banned(&self) -> impl Iterator<Item = &str> {
+        self.banned.iter().map(String::as_str)
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -306,6 +323,8 @@ impl TagVocabulary {
         struct File {
             schema: String,
             #[serde(default)]
+            banned: Vec<String>,
+            #[serde(default)]
             tags: BTreeMap<String, TagOrigin>,
         }
         let file: File =
@@ -316,13 +335,21 @@ impl TagVocabulary {
                 file.schema
             ));
         }
+        let mut banned = std::collections::BTreeSet::new();
+        for name in file.banned {
+            let n = normalize_tag(&name)
+                .ok_or_else(|| format!("tag vocabulary: banned {name:?} normalizes to nothing"))?;
+            banned.insert(n);
+        }
         let mut entries = BTreeMap::new();
         for (name, origin) in file.tags {
             let n = normalize_tag(&name)
                 .ok_or_else(|| format!("tag vocabulary: {name:?} normalizes to nothing"))?;
-            entries.insert(n, origin);
+            if !banned.contains(&n) {
+                entries.insert(n, origin);
+            }
         }
-        Ok(Self { entries })
+        Ok(Self { entries, banned })
     }
 
     /// Missing file → empty (bootstrap seeds it); broken file → error.
@@ -343,10 +370,23 @@ impl TagVocabulary {
         }
         let mut body = String::from(
             "# Closed tag vocabulary — the classifier may only pick from this list.\n\
-             # Rebuilt by `ovp2 tags-bootstrap` (user/community entries re-derived,\n\
-             # llm entries carried forward). Delete a line to ban a tag.\n\
-             schema = \"ovp.tags-vocabulary/v1\"\n\n[tags]\n",
+             # Rebuilt by `ovp2 tags-bootstrap`: user/community entries are re-derived\n\
+             # each run (deleting them does NOT stick — add the name to `banned`);\n\
+             # llm entries persist, so deleting an llm line removes it for good.\n\
+             schema = \"ovp.tags-vocabulary/v1\"\n",
         );
+        if self.banned.is_empty() {
+            body.push_str("banned = []\n\n[tags]\n");
+        } else {
+            body.push_str("banned = [\n");
+            for name in &self.banned {
+                body.push_str(&format!(
+                    "  \"{}\",\n",
+                    name.replace('\\', "\\\\").replace('"', "\\\"")
+                ));
+            }
+            body.push_str("]\n\n[tags]\n");
+        }
         for (name, origin) in &self.entries {
             let origin = match origin {
                 TagOrigin::User => "user",
@@ -416,8 +456,11 @@ pub struct ClassifyReply {
     pub new_tags: Vec<String>,
 }
 
-/// Parse `{"sources":[{"id":0,"tags":[...]},…],"new_tags":[...]}`.
-pub fn parse_tag_classify(reply_text: &str) -> Result<ClassifyReply, String> {
+/// Parse `{"sources":[{"id":0,"tags":[...]},…],"new_tags":[...]}` for a
+/// batch of ids `0..expected`. A missing, duplicate, or out-of-range id is a
+/// parse ERROR (not a silent gap) so `call_and_parse` invalidates the
+/// cassette entry and the retry re-asks the model.
+pub fn parse_tag_classify(reply_text: &str, expected: usize) -> Result<ClassifyReply, String> {
     let (value, _note) =
         crate::model_reply::parse_reply_value(reply_text).map_err(|d| d.to_string())?;
     let sources = value
@@ -430,6 +473,9 @@ pub fn parse_tag_classify(reply_text: &str) -> Result<ClassifyReply, String> {
             .get("id")
             .and_then(|v| v.as_u64())
             .ok_or("source missing numeric `id`")? as usize;
+        if id >= expected {
+            return Err(format!("source id {id} out of range (batch of {expected})"));
+        }
         let tags: Vec<String> = s
             .get("tags")
             .and_then(|v| v.as_array())
@@ -442,6 +488,12 @@ pub fn parse_tag_classify(reply_text: &str) -> Result<ClassifyReply, String> {
         if picks.insert(id, tags).is_some() {
             return Err(format!("duplicate source id {id}"));
         }
+    }
+    if picks.len() != expected {
+        return Err(format!(
+            "reply covers {}/{expected} batch ids — every input id must appear exactly once",
+            picks.len()
+        ));
     }
     let new_tags: Vec<String> = value
         .get("new_tags")
@@ -552,16 +604,37 @@ mod tests {
     }
 
     #[test]
-    fn classify_reply_parses_and_rejects_duplicates() {
+    fn classify_reply_parses_and_rejects_duplicates_gaps_and_strays() {
         let ok = parse_tag_classify(
             r#"{"sources":[{"id":0,"tags":["agent"," memory "]},{"id":1,"tags":[]}],"new_tags":["kv-cache"]}"#,
+            2,
         )
         .unwrap();
         assert_eq!(ok.picks[&0], vec!["agent", "memory"]);
         assert!(ok.picks[&1].is_empty());
         assert_eq!(ok.new_tags, vec!["kv-cache"]);
-        assert!(parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]},{"id":0,"tags":[]}]}"#).is_err());
-        assert!(parse_tag_classify(r#"{"new_tags":[]}"#).is_err());
+        // Duplicate id, missing id, and out-of-range id are all parse errors.
+        assert!(
+            parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]},{"id":0,"tags":[]}]}"#, 2)
+                .is_err()
+        );
+        assert!(parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]}]}"#, 2).is_err());
+        assert!(parse_tag_classify(r#"{"sources":[{"id":5,"tags":[]}]}"#, 1).is_err());
+        assert!(parse_tag_classify(r#"{"new_tags":[]}"#, 0).is_err());
+    }
+
+    #[test]
+    fn vocabulary_bans_persist_and_block_reinsertion() {
+        let mut v = TagVocabulary::default();
+        v.insert("twitter".into(), TagOrigin::User);
+        v.ban("twitter".into());
+        v.insert("twitter".into(), TagOrigin::Community); // blocked
+        assert!(!v.contains("twitter"));
+        let dir = tempfile::tempdir().unwrap();
+        v.save(dir.path()).unwrap();
+        let loaded = TagVocabulary::load(dir.path()).unwrap();
+        assert!(loaded.banned().any(|b| b == "twitter"));
+        assert!(!loaded.contains("twitter"));
     }
 
     #[test]

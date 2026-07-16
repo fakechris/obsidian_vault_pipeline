@@ -294,6 +294,21 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         }
     }
     let covered = entries.len();
+    // Merge, don't clobber: bootstrap-method entries (community/llm) survive
+    // for sources where kNN produced no vote — otherwise a P1 vault's first
+    // `tags-suggest` run (once a few operator tags exist) would erase every
+    // bootstrap tag that fails the vote thresholds. A fresh kNN vote for a
+    // sha replaces its old entry of any method.
+    if let Some(existing) = TagsInferredFile::load(&args.vault_root).map_err(CliError::Io)? {
+        for (sha, tags) in existing.entries {
+            let bootstrap = tags
+                .iter()
+                .any(|t| !t.method.is_empty() && t.method != "knn");
+            if bootstrap {
+                entries.entry(sha).or_insert(tags);
+            }
+        }
+    }
     let inferred = TagsInferredFile {
         schema: TAGS_INFERRED_SCHEMA.into(),
         model: EMBED_MODEL_ID.into(),

@@ -25,14 +25,18 @@ use std::path::PathBuf;
 
 use ovp_domain::tags::{
     ClassifyInput, InferredTag, TAGS_INFERRED_SCHEMA, TagAliases, TagOrigin, TagVocabulary,
-    TagsInferredFile, canonical_tags, normalize_tag, parse_tag_classify, tag_classify_request,
+    TagsInferredFile, canonical_tags, parse_tag_classify, tag_classify_request,
 };
 use ovp_domain::vault_layout::VaultLayout;
 use ovp_index::read_index;
 
+use ovp_embed::document_text;
+use ovp_embed::knn::cosine;
+
 use crate::CliError;
 use crate::commands::client::{ClientKind, build_client};
 use crate::commands::crystal_synth::call_and_parse;
+use crate::commands::crystal_themes::{ThemeDoc, resolve_vectors};
 
 /// Fixed confidence bands (see `InferredTag.score` docs).
 const LLM_SCORE: f64 = 0.8;
@@ -97,11 +101,69 @@ pub(crate) fn validate_batch(
     (out, admitted)
 }
 
-pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
+/// Cosine at or above which a proposed new name is a respelling of an
+/// existing vocabulary entry (design §2: generate-free → embed-map).
+const NEW_NAME_DEDUP_COSINE: f64 = 0.9;
+
+/// Drop proposed names that embed within [`NEW_NAME_DEDUP_COSINE`] of any
+/// existing vocabulary name. Embeddings are name-only texts through the
+/// shared cache; unavailable embedder + cold cache → ALL proposals dropped
+/// (with a printed reason) — the closed vocabulary never grows unverified.
+fn embed_dedup_new_names(
+    candidates: Vec<String>,
+    vocabulary: &TagVocabulary,
+    embed_cache_dir: &std::path::Path,
+) -> Result<Vec<String>, CliError> {
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+    let docs: Vec<ThemeDoc> = vocabulary
+        .names()
+        .map(str::to_string)
+        .chain(candidates.iter().cloned())
+        .map(|name| {
+            let text = document_text(&name, "", 0);
+            let sha = ovp_embed::cache::text_sha256(&text);
+            ThemeDoc {
+                case_id: format!("tagname:{name}"),
+                title: name,
+                text,
+                sha,
+            }
+        })
+        .collect();
+    let Some(vectors) = resolve_vectors(&docs, embed_cache_dir)? else {
+        println!(
+            "  classify: {} new-name proposal(s) DISCARDED — embeddings unavailable, \
+             semantic dedup against the vocabulary is mandatory before admission",
+            candidates.len()
+        );
+        return Ok(Vec::new());
+    };
+    let n_vocab = vocabulary.len();
+    let mut kept = Vec::new();
+    for (i, name) in candidates.into_iter().enumerate() {
+        let v = &vectors[n_vocab + i];
+        let dup = vectors[..n_vocab]
+            .iter()
+            .any(|u| cosine(u, v) >= NEW_NAME_DEDUP_COSINE);
+        if dup {
+            println!("  classify: proposal {name:?} maps to an existing vocabulary tag — skipped");
+        } else {
+            kept.push(name);
+        }
+    }
+    Ok(kept)
+}
+
+/// Returns the number of sources whose inferred entries this run wrote —
+/// `daily` uses it to decide whether the projection needs a second rebuild.
+pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
     let layout = VaultLayout::new();
     let model = read_index(&args.vault_root).map_err(|e| {
         CliError::Io(format!("tags-bootstrap: {e} — run `ovp2 index` first"))
     })?;
+    let embed_cache_dir = args.vault_root.join(".ovp/cache/embeddings");
     let themes_path = args
         .vault_root
         .join(layout.crystal_store_dir())
@@ -115,7 +177,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
                 "tags-bootstrap: no themes.json — run `ovp2 crystal-themes` first \
                  (the theme communities are the deterministic vocabulary seed)."
             );
-            return Ok(());
+            return Ok(0);
         }
     };
     let aliases = TagAliases::load(&args.vault_root).map_err(CliError::Io)?;
@@ -201,7 +263,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
     if targets.is_empty() {
         vocabulary.save(&args.vault_root).map_err(CliError::Io)?;
         println!("tags-bootstrap: nothing to do (vocabulary refreshed).");
-        return Ok(());
+        return Ok(0);
     }
 
     // ---- Layer 1: deterministic community-keyword floor ----
@@ -272,8 +334,10 @@ pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
                 let vocab_names: Vec<&str> = vocabulary.names().collect();
                 tag_classify_request(&vocab_names, &inputs, args.max_new_per_batch)
             };
-            let (reply, _repair) =
-                call_and_parse(client.as_mut(), &req, "tag-classify", parse_tag_classify)?;
+            let batch_len = inputs.len();
+            let (reply, _repair) = call_and_parse(client.as_mut(), &req, "tag-classify", |t| {
+                parse_tag_classify(t, batch_len)
+            })?;
             let (picks, admitted) = validate_batch(
                 &reply.picks,
                 &reply.new_tags,
@@ -281,6 +345,13 @@ pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
                 &aliases,
                 args.max_new_per_batch,
             );
+            // Semantic dedup: a proposal whose embedding sits within
+            // NEW_NAME_DEDUP_COSINE of an existing vocabulary name is a
+            // respelling, not a new tag (`agentic-systems` vs `ai-agents`).
+            // No embedder + cold cache → proposals are DISCARDED (conservative:
+            // the closed vocabulary must not grow unverified).
+            let admitted =
+                embed_dedup_new_names(admitted, &vocabulary, &embed_cache_dir)?;
             for name in admitted {
                 vocabulary.insert(name, TagOrigin::Llm);
                 admitted_total += 1;
@@ -327,7 +398,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<(), CliError> {
     println!("  vocabulary: {} tag(s) → {vocab_path}", vocabulary.len());
     println!("  inferred: → {inferred_path}");
     println!("tags-bootstrap: done. Rebuild the index (`ovp2 index`) to surface inferred tags.");
-    Ok(())
+    Ok(floored.max(classified))
 }
 
 #[cfg(test)]
