@@ -380,10 +380,7 @@ impl TagVocabulary {
         } else {
             body.push_str("banned = [\n");
             for name in &self.banned {
-                body.push_str(&format!(
-                    "  \"{}\",\n",
-                    name.replace('\\', "\\\\").replace('"', "\\\"")
-                ));
+                body.push_str(&format!("  {},\n", toml_basic_string(name)));
             }
             body.push_str("]\n\n[tags]\n");
         }
@@ -393,7 +390,7 @@ impl TagVocabulary {
                 TagOrigin::Community => "community",
                 TagOrigin::Llm => "llm",
             };
-            body.push_str(&format!("\"{}\" = \"{origin}\"\n", name.replace('\\', "\\\\").replace('"', "\\\"")));
+            body.push_str(&format!("{} = \"{origin}\"\n", toml_basic_string(name)));
         }
         std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
         Ok(path.display().to_string())
@@ -507,6 +504,27 @@ pub fn parse_tag_classify(reply_text: &str, expected: usize) -> Result<ClassifyR
         })
         .unwrap_or_default();
     Ok(ClassifyReply { picks, new_tags })
+}
+
+/// A tag name as a valid TOML basic string — normalized tags can still carry
+/// quotes/backslashes/control characters, which unescaped would break the
+/// vocabulary file and the paste-ready proposals block. One implementation
+/// for every writer.
+pub fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop

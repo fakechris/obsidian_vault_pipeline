@@ -66,24 +66,7 @@ impl Default for TagsSuggestArgs {
     }
 }
 
-/// A tag name as a valid TOML basic string — `normalize_tag` preserves
-/// quotes/backslashes, which would break the paste-ready block unescaped.
-pub(crate) fn toml_basic_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' => {
-                out.push_str(&format!("\\u{:04X}", c as u32))
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
+pub(crate) use ovp_domain::tags::toml_basic_string;
 
 /// One tag's neighbor vote on one source (pure, unit-tested): neighbors are
 /// `(similarity, tags)` pairs, already the k nearest. A tag wins when its
@@ -230,13 +213,7 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
 
     // ---- Join sources ↔ pack docs (case_id = pack_dir basename) ----
     let docs = collect_docs(&reader_root)?;
-    let case_of = |pack_dir: &str| -> String {
-        pack_dir
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(pack_dir)
-            .to_string()
-    };
+    let case_of = |pack_dir: &str| ovp_domain::vault_layout::pack_case_id(pack_dir).to_string();
     let mut doc_idx: BTreeMap<String, usize> = BTreeMap::new();
     for (i, d) in docs.iter().enumerate() {
         doc_idx.insert(d.case_id.clone(), i);

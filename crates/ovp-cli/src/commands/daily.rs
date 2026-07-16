@@ -693,7 +693,7 @@ fn stale_theme_packs(
             .packs
             .iter()
             .filter(|p| {
-                let case_id = p.pack_dir.rsplit('/').next().unwrap_or(&p.pack_dir);
+                let case_id = ovp_domain::vault_layout::pack_case_id(&p.pack_dir);
                 !t.packs.contains_key(case_id)
             })
             .count(),

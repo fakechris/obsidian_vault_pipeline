@@ -88,13 +88,11 @@ pub(crate) fn validate_batch(
     }
     let mut out = BTreeMap::new();
     for (id, tags) in picks {
-        let mut kept: Vec<String> = tags
-            .iter()
-            .filter_map(|t| canonical_tags(&[t.as_str()], aliases).pop())
+        // One batched canonicalization per source (it sorts + dedups).
+        let mut kept: Vec<String> = canonical_tags(tags, aliases)
+            .into_iter()
             .filter(|t| vocabulary.contains(t))
             .collect();
-        kept.sort();
-        kept.dedup();
         kept.truncate(5);
         out.insert(*id, kept);
     }
@@ -109,43 +107,55 @@ const NEW_NAME_DEDUP_COSINE: f64 = 0.9;
 /// existing vocabulary name. Embeddings are name-only texts through the
 /// shared cache; unavailable embedder + cold cache → ALL proposals dropped
 /// (with a printed reason) — the closed vocabulary never grows unverified.
+/// `memo` carries name→vector across batches so the (large, mostly static)
+/// vocabulary is resolved once per run, not once per proposal-bearing batch.
 fn embed_dedup_new_names(
     candidates: Vec<String>,
     vocabulary: &TagVocabulary,
     embed_cache_dir: &std::path::Path,
+    memo: &mut BTreeMap<String, Vec<f32>>,
 ) -> Result<Vec<String>, CliError> {
     if candidates.is_empty() {
         return Ok(candidates);
     }
-    let docs: Vec<ThemeDoc> = vocabulary
+    let missing: Vec<String> = vocabulary
         .names()
         .map(str::to_string)
         .chain(candidates.iter().cloned())
-        .map(|name| {
-            let text = document_text(&name, "", 0);
-            let sha = ovp_embed::cache::text_sha256(&text);
-            ThemeDoc {
-                case_id: format!("tagname:{name}"),
-                title: name,
-                text,
-                sha,
-            }
-        })
+        .filter(|n| !memo.contains_key(n))
         .collect();
-    let Some(vectors) = resolve_vectors(&docs, embed_cache_dir)? else {
-        println!(
-            "  classify: {} new-name proposal(s) DISCARDED — embeddings unavailable, \
-             semantic dedup against the vocabulary is mandatory before admission",
-            candidates.len()
-        );
-        return Ok(Vec::new());
-    };
-    let n_vocab = vocabulary.len();
-    let mut kept = Vec::new();
-    for (i, name) in candidates.into_iter().enumerate() {
-        let v = &vectors[n_vocab + i];
-        let dup = vectors[..n_vocab]
+    if !missing.is_empty() {
+        let docs: Vec<ThemeDoc> = missing
             .iter()
+            .map(|name| {
+                let text = document_text(name, "", 0);
+                let sha = ovp_embed::cache::text_sha256(&text);
+                ThemeDoc {
+                    case_id: format!("tagname:{name}"),
+                    title: name.clone(),
+                    text,
+                    sha,
+                }
+            })
+            .collect();
+        let Some(vectors) = resolve_vectors(&docs, embed_cache_dir)? else {
+            println!(
+                "  classify: {} new-name proposal(s) DISCARDED — embeddings unavailable, \
+                 semantic dedup against the vocabulary is mandatory before admission",
+                candidates.len()
+            );
+            return Ok(Vec::new());
+        };
+        for (name, v) in missing.into_iter().zip(vectors) {
+            memo.insert(name, v);
+        }
+    }
+    let mut kept = Vec::new();
+    for name in candidates {
+        let Some(v) = memo.get(&name) else { continue };
+        let dup = vocabulary
+            .names()
+            .filter_map(|u| memo.get(u))
             .any(|u| cosine(u, v) >= NEW_NAME_DEDUP_COSINE);
         if dup {
             println!("  classify: proposal {name:?} maps to an existing vocabulary tag — skipped");
@@ -194,12 +204,15 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             vocabulary.insert(t.clone(), TagOrigin::User);
         }
     }
-    for c in &themes.communities {
-        for kw in c.keywords.iter().take(VOCAB_KEYWORDS) {
-            for canon in canonical_tags(&[kw.as_str()], &aliases) {
-                vocabulary.insert(canon, TagOrigin::Community);
-            }
-        }
+    // Set-shaped, so one batched canonicalization over all keywords is fine
+    // (unlike the floor below, which must preserve c-TF-IDF rank order).
+    let community_kws: Vec<&str> = themes
+        .communities
+        .iter()
+        .flat_map(|c| c.keywords.iter().take(VOCAB_KEYWORDS).map(String::as_str))
+        .collect();
+    for canon in canonical_tags(&community_kws, &aliases) {
+        vocabulary.insert(canon, TagOrigin::Community);
     }
     for (name, origin) in persisted.iter() {
         if origin == TagOrigin::Llm {
@@ -216,9 +229,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             params: BTreeMap::new(),
             entries: BTreeMap::new(),
         });
-    fn case_of(pack_dir: &str) -> &str {
-        pack_dir.rsplit(['/', '\\']).next().unwrap_or(pack_dir)
-    }
+    use ovp_domain::vault_layout::pack_case_id as case_of;
     let card_titles: BTreeMap<&str, &[String]> = model
         .packs
         .iter()
@@ -355,6 +366,8 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             .clone()
             .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/tags"));
         let mut client = build_client(ClientKind::Live, &cassette_dir)?;
+        // name→vector memo shared across batches (vocabulary resolved once).
+        let mut name_vectors: BTreeMap<String, Vec<f32>> = BTreeMap::new();
         for chunk in targets.chunks(args.batch_size.max(1)) {
             let inputs: Vec<ClassifyInput> = chunk
                 .iter()
@@ -397,7 +410,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             // No embedder + cold cache → proposals are DISCARDED (conservative:
             // the closed vocabulary must not grow unverified).
             let admitted =
-                embed_dedup_new_names(admitted, &vocabulary, &embed_cache_dir)?;
+                embed_dedup_new_names(admitted, &vocabulary, &embed_cache_dir, &mut name_vectors)?;
             for name in admitted {
                 vocabulary.insert(name, TagOrigin::Llm);
                 admitted_total += 1;
