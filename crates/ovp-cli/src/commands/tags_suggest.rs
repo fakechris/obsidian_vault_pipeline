@@ -113,6 +113,7 @@ pub(crate) fn vote_tags(
                 tag: tag.to_string(),
                 score: (score * 1000.0).round() / 1000.0,
                 support,
+                method: "knn".into(),
             })
         })
         .collect();

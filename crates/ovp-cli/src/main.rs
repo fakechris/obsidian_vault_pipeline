@@ -664,6 +664,33 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         seed: u64,
     },
+    /// Cold-start tagging for vaults without a curated vocabulary: theme
+    /// communities seed a closed vocabulary (.ovp/tags/vocabulary.toml) and a
+    /// deterministic keyword floor; `--client live` adds batched LLM
+    /// classification INTO that vocabulary (capped new-name proposals).
+    /// Output lands in tags_inferred, never frontmatter. Run `index` and
+    /// `crystal-themes` first.
+    TagsBootstrap {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// `replay` (default) = deterministic floor only; `live` adds the
+        /// cassette-cached classification pass.
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Cassette root for tag_classify/v1. Default:
+        /// `<vault-root>/.ovp/cassettes/tags`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Sources per classification call.
+        #[arg(long, default_value_t = 20)]
+        batch_size: usize,
+        /// New-name proposals admitted per batch.
+        #[arg(long, default_value_t = 2)]
+        max_new_per_batch: usize,
+        /// Redo bootstrap-method entries (kNN entries are never touched).
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Propose tag curation over the embedding layer: merge candidates for
     /// near-duplicate tags (→ .ovp/tags/proposals.md, paste into aliases.toml
     /// after review) and kNN-voted backfill tags for untagged sources
@@ -1738,6 +1765,28 @@ fn main() -> ExitCode {
                 cosine_threshold,
                 resolution,
                 seed,
+            })
+        }
+        Cmd::TagsBootstrap {
+            vault_root,
+            client,
+            cache_dir,
+            batch_size,
+            max_new_per_batch,
+            refresh,
+        } => {
+            use commands::client::ClientKind;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::tags_bootstrap::run(commands::tags_bootstrap::TagsBootstrapArgs {
+                vault_root,
+                client_kind,
+                cache_dir,
+                batch_size,
+                max_new_per_batch,
+                refresh,
             })
         }
         Cmd::TagsSuggest {
