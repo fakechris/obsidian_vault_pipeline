@@ -221,3 +221,68 @@ export async function fetchChatMarkdown(name: string): Promise<string> {
   }
   return res.text();
 }
+
+// ---- Tag curation (T2, live server only — docs/stage-tags-product.md §3) ----
+
+export interface TagRow {
+  tag: string;
+  user: number;
+  inferred: number;
+  origin?: 'user' | 'community' | 'llm' | null;
+}
+
+export interface TagProposal {
+  alias: string;
+  alias_count: number;
+  canonical: string;
+  canonical_count: number;
+  cosine: number;
+}
+
+export interface TagsPayload {
+  tags: TagRow[];
+  banned: string[];
+  proposals: TagProposal[];
+}
+
+/** GET /api/tags — vocabulary counts + pending merge proposals. */
+export function fetchTags(): Promise<TagsPayload> {
+  if (STATIC_MODE) {
+    return Promise.resolve({ tags: [], banned: [], proposals: [] });
+  }
+  return fetchJson<TagsPayload>('/api/tags');
+}
+
+async function postJson(path: string, payload: unknown): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const data = (await res.json()) as { error?: unknown };
+      if (data && typeof data.error === 'string') message = data.error;
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(message);
+  }
+}
+
+/** POST /api/tags/decision — record accept/reject; the server rebuilds the
+ * projection so the merge is visible on the next fetch. */
+export function postTagDecision(
+  action: 'accept' | 'reject',
+  alias: string,
+  canonical: string,
+): Promise<void> {
+  return postJson('/api/tags/decision', { action, alias, canonical });
+}
+
+/** POST /api/source/:sha/tags — the one sanctioned frontmatter write
+ * (accepting an inferred tag / adding a tag is a user edit via the product). */
+export function postSourceTags(sha: string, tags: string[]): Promise<void> {
+  return postJson(`/api/source/${encodeURIComponent(sha)}/tags`, { tags });
+}

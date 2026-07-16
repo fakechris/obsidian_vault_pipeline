@@ -246,6 +246,21 @@ impl VaultLayout {
     pub fn tags_vocabulary_file(&self) -> &'static str {
         ".ovp/tags/vocabulary.toml"
     }
+
+    /// UI-recorded curation decisions (accepted merges + rejected pairs).
+    /// MACHINE-owned — the curation endpoints rewrite it freely — and merged
+    /// with the operator-owned `aliases.toml` at load time, so accepting a
+    /// proposal in the portal never rewrites (or eats the comments of) the
+    /// hand-edited file.
+    pub fn tags_decisions_file(&self) -> &'static str {
+        ".ovp/tags/decisions.toml"
+    }
+
+    /// Machine-readable twin of `proposals.md` (same merge candidates) — the
+    /// curation inbox reads this; the md stays the human-review artifact.
+    pub fn tags_proposals_json_file(&self) -> &'static str {
+        ".ovp/tags/proposals.json"
+    }
 }
 
 /// Last path segment of a pack dir — the case_id that claim↔source↔theme

@@ -163,6 +163,11 @@ function LibraryBody({ model }: { model: IndexModel }) {
                 +{hiddenTagCount} {t('library.moreTags')}
               </p>
             )}
+            {!STATIC_MODE && (
+              <p className="sm">
+                <Link to="/tags">{t('library.manageTags')}</Link>
+              </p>
+            )}
           </div>
         )}
       </div>

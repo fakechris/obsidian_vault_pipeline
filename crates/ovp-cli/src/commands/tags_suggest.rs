@@ -112,8 +112,9 @@ pub(crate) fn vote_tags(
     out
 }
 
-/// One proposed merge, evidence attached.
-#[derive(Debug, PartialEq)]
+/// One proposed merge, evidence attached. Serialized as-is into
+/// `proposals.json` (the curation inbox's input).
+#[derive(Debug, PartialEq, serde::Serialize)]
 pub(crate) struct MergeProposal {
     /// Lower-count member — the proposed alias.
     pub(crate) alias: String,
@@ -346,8 +347,30 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         .collect();
     let (mut proposals, suppressed) =
         merge_proposals(&counts, &tag_vectors, args.merge_threshold);
+    // Rejected-in-the-UI pairs never resurface (decisions.toml `ignore`).
+    let decisions = ovp_domain::tags::TagDecisions::load(&args.vault_root).map_err(CliError::Io)?;
+    proposals.retain(|p| !decisions.is_ignored(&p.alias, &p.canonical));
     let dropped = proposals.len().saturating_sub(MAX_MERGE_PROPOSALS);
     proposals.truncate(MAX_MERGE_PROPOSALS);
+
+    // Machine-readable twin for the curation inbox.
+    let proposals_json = serde_json::json!({
+        "schema": "ovp.tags-proposals/v1",
+        "date": model.date,
+        "merge_threshold": args.merge_threshold,
+        "suppressed_co_occurrence": suppressed,
+        "proposals": proposals,
+    });
+    let json_path = args.vault_root.join(layout.tags_proposals_json_file());
+    if let Some(parent) = json_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliError::Io(format!("creating {}: {e}", parent.display())))?;
+    }
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&proposals_json).unwrap_or_default() + "\n",
+    )
+    .map_err(|e| CliError::Io(format!("writing {}: {e}", json_path.display())))?;
 
     // ---- Human-review report ----
     let mut report = String::new();

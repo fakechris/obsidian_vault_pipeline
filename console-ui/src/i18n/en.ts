@@ -128,7 +128,21 @@ export const en = {
   'library.capture': 'Capture',
   'library.byMonth': 'By month',
   'library.byTag': 'By tag',
+  'library.manageTags': 'Manage tags →',
   'library.moreTags': 'more tags',
+
+  // tags curation page
+  'tags.title': 'Tags',
+  'tags.help':
+    'Your tag vocabulary and its curation inbox. Accepting a merge records it in the decisions file (your hand-edited aliases.toml is never touched) and rebuilds the index; rejecting remembers the pair so it never resurfaces.',
+  'tags.inbox': 'Merge proposals',
+  'tags.accept': 'Accept',
+  'tags.reject': 'Reject',
+  'tags.vocabulary': 'Vocabulary',
+  'tags.filter': 'Filter tags…',
+  'tags.empty': 'No tags match.',
+  'tags.addPlaceholder': 'Add tag…',
+  'tags.acceptInferred': 'accept',
   'library.statusAll': 'All',
   'library.empty': 'No sources match the current filters.',
   'library.noDate': 'no date',

@@ -119,7 +119,21 @@ export const zh: Record<keyof typeof en, string> = {
   'library.capture': '捕获',
   'library.byMonth': '按月',
   'library.byTag': '按标签',
+  'library.manageTags': '管理标签 →',
   'library.moreTags': '更多标签',
+
+  // tags curation page
+  'tags.title': '标签',
+  'tags.help':
+    '标签词表与治理收件箱。接受合并会写入决策文件（你手工编辑的 aliases.toml 永不改动）并重建索引；拒绝会被记住，该组合不再出现。',
+  'tags.inbox': '合并提案',
+  'tags.accept': '接受',
+  'tags.reject': '拒绝',
+  'tags.vocabulary': '词表',
+  'tags.filter': '筛选标签…',
+  'tags.empty': '没有匹配的标签。',
+  'tags.addPlaceholder': '添加标签…',
+  'tags.acceptInferred': '接受',
   'library.statusAll': '全部',
   'library.empty': '当前筛选下没有匹配的源。',
   'library.noDate': '无日期',

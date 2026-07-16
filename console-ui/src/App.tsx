@@ -9,6 +9,7 @@ import KnowledgePage from './pages/KnowledgePage';
 import LibraryPage from './pages/LibraryPage';
 import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
+import TagsPage from './pages/TagsPage';
 import SystemPage from './pages/SystemPage';
 import ThemeDetailPage from './pages/ThemeDetailPage';
 import TodayPage from './pages/TodayPage';
@@ -82,6 +83,7 @@ export default function App() {
           />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/library/:sha" element={<SourceDetailPage />} />
+          {!STATIC_MODE && <Route path="/tags" element={<TagsPage />} />}
           <Route path="/search" element={<SearchPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />

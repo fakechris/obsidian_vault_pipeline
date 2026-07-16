@@ -9,10 +9,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchSourceDetail, STATIC_MODE } from '../lib/api';
+import { fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { MarkdownView } from '../lib/markdown';
-import type { ClaimRow, SourceDetail } from '../lib/types';
+import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
 
 type Tab = 'memory' | 'source';
 
@@ -21,7 +21,7 @@ interface DetailState {
   status: 'loading' | 'ready' | 'notFound' | 'error';
 }
 
-function useSourceDetail(sha: string | undefined): DetailState {
+function useSourceDetail(sha: string | undefined, version: number): DetailState {
   const [state, setState] = useState<DetailState>({
     detail: null,
     status: 'loading',
@@ -49,9 +49,96 @@ function useSourceDetail(sha: string | undefined): DetailState {
     return () => {
       cancelled = true;
     };
-  }, [sha]);
+  }, [sha, version]);
 
   return state;
+}
+
+/** Tag chips + the sanctioned edit affordances (live portal only): accept an
+ * inferred tag (writes it into the note's frontmatter — the user editing
+ * their vault through the product) or add a tag with vocabulary
+ * autocomplete, reuse-first. */
+function SourceTags({
+  source,
+  onChanged,
+}: {
+  source: SourceRow;
+  onChanged: () => void;
+}) {
+  const { t } = useI18n();
+  const [vocab, setVocab] = useState<string[]>([]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!STATIC_MODE) {
+      fetchTags()
+        .then((d) => setVocab(d.tags.map((r) => r.tag)))
+        .catch(() => setVocab([]));
+    }
+  }, []);
+
+  const write = async (tags: string[]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postSourceTags(source.sha256, tags);
+      setDraft('');
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <dd>
+      {(source.tags ?? []).map((tg) => (
+        <Link key={tg} className="tag-chip" to={`/library?tag=${encodeURIComponent(tg)}`}>
+          #{tg}
+        </Link>
+      ))}
+      {(source.tags_inferred ?? []).map((tg) => (
+        <span key={`~${tg}`} className="tag-chip inferred" title="inferred (tags-suggest)">
+          ~#{tg}
+          {!STATIC_MODE && (
+            <button
+              type="button"
+              className="tag-chip-accept"
+              disabled={busy}
+              title={t('tags.acceptInferred')}
+              onClick={() => write([tg])}
+            >
+              ✓
+            </button>
+          )}
+        </span>
+      ))}
+      {!STATIC_MODE && (
+        <>
+          <input
+            className="tag-add"
+            list="tag-vocabulary"
+            value={draft}
+            disabled={busy}
+            placeholder={t('tags.addPlaceholder')}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && draft.trim()) write([draft.trim()]);
+            }}
+          />
+          <datalist id="tag-vocabulary">
+            {vocab.map((v) => (
+              <option key={v} value={v} />
+            ))}
+          </datalist>
+        </>
+      )}
+      {error && <span className="fail-note">{error}</span>}
+    </dd>
+  );
 }
 
 function CitingClaims({ claims }: { claims: ClaimRow[] }) {
@@ -83,7 +170,9 @@ function CitingClaims({ claims }: { claims: ClaimRow[] }) {
 export default function SourceDetailPage() {
   const { t } = useI18n();
   const { sha } = useParams<{ sha: string }>();
-  const { detail, status } = useSourceDetail(sha);
+  // Bumped after a tag write so the detail (and its rebuilt tags) reloads.
+  const [version, setVersion] = useState(0);
+  const { detail, status } = useSourceDetail(sha, version);
   // Tab is URL-parameterized (?tab=source) — shareable deep links, same
   // rule as the Library facets (design §5).
   const [searchParams, setSearchParams] = useSearchParams();
@@ -198,6 +287,13 @@ export default function SourceDetailPage() {
           <>
             <dt>{t('source.location')}</dt>
             <dd className="mono tiny">{source.rel_path}</dd>
+          </>
+        )}
+        {(!STATIC_MODE ||
+          (source.tags ?? []).length + (source.tags_inferred ?? []).length > 0) && (
+          <>
+            <dt>{t('tags.title')}</dt>
+            <SourceTags source={source} onChanged={() => setVersion((v) => v + 1)} />
           </>
         )}
         {source.last_run_id && (
