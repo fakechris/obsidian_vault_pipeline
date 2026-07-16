@@ -563,6 +563,19 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             });
             continue;
         }
+        // Tag mutation routes get the same JSON/same-origin gate as ask
+        // BEFORE any body is read (dispatch never sees request headers).
+        if method == Method::Post {
+            let p = path.split('?').next().unwrap_or(&path);
+            if p == "/api/tags/decision" || (p.starts_with("/api/source/") && p.ends_with("/tags"))
+            {
+                let headers = AskHeaders::of(&request);
+                if let Some(resp) = guard_json_same_origin(&headers) {
+                    let _ = request.respond(resp);
+                    continue;
+                }
+            }
+        }
         let body = if method == Method::Post {
             read_post_body(&mut request)
         } else {
@@ -820,7 +833,13 @@ fn handle_source_tags_post(
     };
     match ovp_domain::tags::add_tags_to_frontmatter(&text, &tags) {
         Ok(Some(updated)) => {
-            if let Err(e) = std::fs::write(&note_path, updated) {
+            // Atomic replace: this is canonical USER data, not a rebuildable
+            // projection — a crash mid-write must never truncate the note.
+            let tmp = note_path.with_extension("md.tags-tmp");
+            if let Err(e) = std::fs::write(&tmp, updated)
+                .and_then(|()| std::fs::rename(&tmp, &note_path))
+            {
+                let _ = std::fs::remove_file(&tmp);
                 return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("writing {rel}: {e}"))));
             }
             // Editing a QUEUED note changes its content hash → the rebuilt
@@ -1322,12 +1341,11 @@ fn admit_ask_slot(state: &AppState) -> Result<AskSlot, Response<std::io::Cursor<
 /// POST is refused with 415, and a real JSON POST from a foreign origin
 /// needs a CORS preflight this server never grants. Belt-and-braces, any
 /// attached `Origin` must additionally be loopback (403 otherwise).
-fn handle_ask(
-    state: &AppState,
-    headers: &AskHeaders,
-    body: &str,
-    slot: AskSlot,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+/// The mutation-route guard: JSON content type + same-machine origin. A
+/// browser will happily SEND a cross-site `text/plain` simple POST to
+/// loopback even though it can't read the response — every state-changing
+/// route (ask, tag decisions, source tag writes) must pass this first.
+fn guard_json_same_origin(headers: &AskHeaders) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
     let is_json = headers
         .content_type
         .as_deref()
@@ -1335,12 +1353,28 @@ fn handle_ask(
         .map(|v| v.trim().eq_ignore_ascii_case("application/json"))
         .unwrap_or(false);
     if !is_json {
-        return json_response(415, r#"{"error":"content-type must be application/json"}"#);
+        return Some(json_response(
+            415,
+            r#"{"error":"content-type must be application/json"}"#,
+        ));
     }
     if let Some(origin) = headers.origin.as_deref()
-        && !is_loopback_origin(origin) {
-            return json_response(403, r#"{"error":"cross-origin ask rejected"}"#);
-        }
+        && !is_loopback_origin(origin)
+    {
+        return Some(json_response(403, r#"{"error":"cross-origin write rejected"}"#));
+    }
+    None
+}
+
+fn handle_ask(
+    state: &AppState,
+    headers: &AskHeaders,
+    body: &str,
+    slot: AskSlot,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if let Some(resp) = guard_json_same_origin(headers) {
+        return resp;
+    }
     if body.len() > MAX_POST_BODY_BYTES {
         return json_response(400, r#"{"error":"request body too large"}"#);
     }

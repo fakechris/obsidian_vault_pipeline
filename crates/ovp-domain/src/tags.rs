@@ -699,6 +699,17 @@ pub fn toml_basic_string(s: &str) -> String {
 /// appends to an existing block list, extends an inline `tags: [...]`, or
 /// creates the block before the closing `---`. Tags already present (after
 /// normalization) are skipped; returns `None` when nothing changed.
+/// Split an inline `[...]` list value into (inner items, trailing suffix —
+/// typically a comment). Keyed on the LAST `]` so `tags: [a, b] # curated`
+/// keeps its comment; a missing bracket degrades to (whole value, "").
+fn split_inline_list(value: &str) -> (&str, &str) {
+    let value = value.strip_prefix('[').unwrap_or(value);
+    match value.rfind(']') {
+        Some(i) => (&value[..i], &value[i + 1..]),
+        None => (value, ""),
+    }
+}
+
 /// A tag as a YAML double-quoted scalar: escape `\` and `"`, strip control
 /// characters (a tag carrying one is junk that would corrupt the note).
 fn yaml_quote(s: &str) -> String {
@@ -725,34 +736,35 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
         .ok_or("note frontmatter is unterminated (no closing ---)")?;
     let fm = &rest[..close];
 
-    // What's already there, normalized (either list form).
+    // What's already there, normalized (either list form). `block_ended`
+    // stops item collection at the next top-level key so a later list
+    // (`authors:` etc.) is never mistaken for more tags.
     let mut existing: Vec<String> = Vec::new();
     let mut tags_line: Option<usize> = None; // line index of `tags:` in fm
     let mut inline: Option<String> = None;
+    let mut block_ended = false;
     for (i, line) in fm.lines().enumerate() {
         if let Some(after) = line.strip_prefix("tags:") {
             tags_line = Some(i);
             let after = after.trim();
             if after.starts_with('[') {
                 inline = Some(after.to_string());
+                let (inner, _suffix) = split_inline_list(after);
                 existing.extend(
-                    after
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
+                    inner
                         .split(',')
                         .filter_map(|t| normalize_tag(t.trim().trim_matches(['"', '\'']))),
                 );
             }
-        } else if tags_line.is_some() && inline.is_none() {
+        } else if tags_line.is_some() && inline.is_none() && !block_ended {
             if let Some(item) = line.trim_start().strip_prefix("- ") {
                 if let Some(n) = normalize_tag(item.trim().trim_matches(['"', '\''])) {
                     existing.push(n);
                 }
                 continue;
             }
-            if !line.trim().is_empty() && !line.starts_with([' ', '\t']) {
-                // Next top-level key: the tags block ended; stop collecting
-                // but keep the recorded position.
+            if !line.trim().is_empty() {
+                block_ended = true;
             }
         }
     }
@@ -770,23 +782,20 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
     let mut out_fm: Vec<String> = Vec::with_capacity(lines.len() + additions.len() + 1);
     match tags_line {
         Some(idx) if inline.is_some() => {
-            // Rewrite the inline list in place.
+            // Extend the inline list by APPENDING inside the brackets — the
+            // existing item text (quoted commas and all) and any trailing
+            // comment survive byte-for-byte.
             for (i, line) in lines.iter().enumerate() {
                 if i == idx {
-                    let inner = inline
-                        .as_deref()
-                        .unwrap_or("[]")
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .trim()
-                        .to_string();
-                    let mut items: Vec<String> = if inner.is_empty() {
-                        Vec::new()
+                    let (inner, suffix) = split_inline_list(inline.as_deref().unwrap_or("[]"));
+                    let added: Vec<String> =
+                        additions.iter().map(|t| yaml_quote(t)).collect();
+                    let joined = if inner.trim().is_empty() {
+                        added.join(", ")
                     } else {
-                        inner.split(',').map(|s| s.trim().to_string()).collect()
+                        format!("{}, {}", inner.trim(), added.join(", "))
                     };
-                    items.extend(additions.iter().map(|t| yaml_quote(t)));
-                    out_fm.push(format!("tags: [{}]", items.join(", ")));
+                    out_fm.push(format!("tags: [{joined}]{suffix}"));
                 } else {
                     out_fm.push((*line).to_string());
                 }
@@ -972,10 +981,24 @@ mod tests {
         // "Agent" normalizes to an existing tag → skipped; only memory added.
         assert_eq!(got.matches("memory").count(), 1);
 
-        // Inline list.
-        let inline = "---\ntitle: T\ntags: [a, b]\n---\nbody\n";
+        // Inline list — trailing comments and quoted commas survive.
+        let inline = "---\ntitle: T\ntags: [a, b] # curated\n---\nbody\n";
         let got = add_tags_to_frontmatter(inline, &["c".into()]).unwrap().unwrap();
-        assert!(got.contains("tags: [a, b, \"c\"]"), "{got}");
+        assert!(got.contains("tags: [a, b, \"c\"] # curated"), "{got}");
+        let quoted = "---\ntags: [\"x, y\"]\n---\nbody\n";
+        let got = add_tags_to_frontmatter(quoted, &["z".into()]).unwrap().unwrap();
+        assert!(got.contains("tags: [\"x, y\", \"z\"]"), "{got}");
+
+        // A list under a LATER key is never mistaken for tags: `bob` is not
+        // an existing tag, so adding it must change the note.
+        let two_lists = "---\ntags:\n  - a\nauthors:\n  - bob\n---\nbody\n";
+        let got = add_tags_to_frontmatter(two_lists, &["bob".into()]).unwrap().unwrap();
+        assert!(got.contains("  - a\n  - \"bob\"\nauthors:"), "{got}");
+
+        // YAML-significant characters are escaped, not interpolated.
+        let base = "---\ntitle: T\ntags:\n  - a\n---\nbody\n";
+        let got = add_tags_to_frontmatter(base, &["foo\"bar".into()]).unwrap().unwrap();
+        assert!(got.contains("  - \"foo\\\"bar\""), "{got}");
 
         // No tags key → created before the closing fence.
         let none = "---\ntitle: T\n---\nbody\n";
