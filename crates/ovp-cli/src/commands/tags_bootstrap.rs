@@ -183,7 +183,12 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
     let aliases = TagAliases::load(&args.vault_root).map_err(CliError::Io)?;
 
     // ---- Vocabulary: user tags ∪ community keywords ∪ persisted llm ----
+    // Bans FIRST (they gate every insert), then user > community > llm.
+    let persisted = TagVocabulary::load(&args.vault_root).map_err(CliError::Io)?;
     let mut vocabulary = TagVocabulary::default();
+    for name in persisted.banned() {
+        vocabulary.ban(name.to_string());
+    }
     for s in &model.sources {
         for t in &s.tags {
             vocabulary.insert(t.clone(), TagOrigin::User);
@@ -196,10 +201,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             }
         }
     }
-    for (name, origin) in TagVocabulary::load(&args.vault_root)
-        .map_err(CliError::Io)?
-        .iter()
-    {
+    for (name, origin) in persisted.iter() {
         if origin == TagOrigin::Llm {
             vocabulary.insert(name.to_string(), TagOrigin::Llm);
         }
@@ -267,6 +269,8 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
     }
 
     // ---- Layer 1: deterministic community-keyword floor ----
+    // Floor tags must be vocabulary members — a banned community keyword
+    // never reaches inferred.json.
     let community_keywords: BTreeMap<i64, Vec<String>> = themes
         .communities
         .iter()
@@ -275,6 +279,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
                 .keywords
                 .iter()
                 .flat_map(|kw| canonical_tags(&[kw.as_str()], &aliases))
+                .filter(|kw| vocabulary.contains(kw))
                 .take(FLOOR_KEYWORDS)
                 .collect();
             (c.id, kws)
@@ -309,6 +314,15 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
     }
     println!("  floor: {floored}/{} target(s) inherit community keywords", targets.len());
 
+    // Checkpoint the deterministic result BEFORE any fallible LLM work: a
+    // failed live pass must degrade to the zero-token floor, never to
+    // nothing (the floor is the whole point of the fallback contract).
+    vocabulary.save(&args.vault_root).map_err(CliError::Io)?;
+    if inferred.model.is_empty() {
+        inferred.model = "tags-bootstrap".into();
+    }
+    inferred.save(&args.vault_root).map_err(CliError::Io)?;
+
     // ---- Layer 2: LLM classification into the closed vocabulary ----
     let mut classified = 0usize;
     let mut admitted_total = 0usize;
@@ -335,9 +349,18 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
                 tag_classify_request(&vocab_names, &inputs, args.max_new_per_batch)
             };
             let batch_len = inputs.len();
-            let (reply, _repair) = call_and_parse(client.as_mut(), &req, "tag-classify", |t| {
+            // A failed batch (API/parse/cassette) downgrades THIS run to
+            // whatever already landed — earlier batches + the persisted
+            // floor — instead of aborting with nothing saved.
+            let reply = match call_and_parse(client.as_mut(), &req, "tag-classify", |t| {
                 parse_tag_classify(t, batch_len)
-            })?;
+            }) {
+                Ok((reply, _repair)) => reply,
+                Err(e) => {
+                    sayln!("  classify: batch failed ({e}) — keeping the floor for its sources");
+                    continue;
+                }
+            };
             let (picks, admitted) = validate_batch(
                 &reply.picks,
                 &reply.new_tags,
