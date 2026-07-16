@@ -49,6 +49,12 @@ pub struct SourceRow {
     pub fail_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reason: Option<String>,
+    /// Canonical content tags: the note's CURRENT frontmatter tags (vault
+    /// frontmatter is the per-source truth, re-read at build) normalized +
+    /// alias-resolved via `.ovp/tags/aliases.toml`, boilerplate dropped.
+    /// Serde-additive: pre-tag indexes deserialize to empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -586,6 +586,29 @@ body {
   color: var(--warn-text);
   overflow-wrap: anywhere;
 }
+/* Clickable per-row tag chips (library facet shortcut). Muted until active
+   so a heavily tagged row doesn't out-shout the title. */
+.tag-chip {
+  display: inline-block;
+  margin-right: 0.35rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--ovp-text-xs);
+  font-family: var(--ovp-font-mono);
+  cursor: pointer;
+}
+.tag-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tag-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
 
 /* ---------- sections / footer timeline ---------- */
 .section {

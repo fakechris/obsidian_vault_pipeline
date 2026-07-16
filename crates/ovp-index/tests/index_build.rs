@@ -817,3 +817,88 @@ fn empty_vault_builds_an_empty_model() {
     assert_eq!(model.totals.claims_durable, 0);
     assert_eq!(model.totals.runs, 0);
 }
+
+#[test]
+fn tags_are_read_from_current_frontmatter_normalized_and_alias_resolved() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Vault frontmatter is the per-source tag truth: raw variants + intake
+    // boilerplate in the note; the alias table merges `ai-agents` → `agent`.
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/tagged.md",
+        "---\ntitle: Tagged Note\nsource: https://e.x/t\ntags:\n  - clippings\n  - pinboard\n  - AI Agents\n  - Claude_Code\n  - 大模型\n---\nbody\n",
+    );
+    place(
+        root,
+        ".ovp/tags/aliases.toml",
+        "[aliases]\n\"ai-agents\" = \"agent\"\n",
+    );
+    // A note with only boilerplate tags surfaces none.
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/plain.md",
+        "---\ntitle: Plain Note\nsource: https://e.x/p\ntags:\n  - clippings\n---\nbody\n",
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+
+    let tagged = model
+        .sources
+        .iter()
+        .find(|s| s.title.as_deref() == Some("Tagged Note"))
+        .unwrap();
+    assert_eq!(tagged.tags, vec!["agent", "claude-code", "大模型"]);
+    let plain = model
+        .sources
+        .iter()
+        .find(|s| s.title.as_deref() == Some("Plain Note"))
+        .unwrap();
+    assert!(plain.tags.is_empty());
+
+    // Rebuild determinism holds with tags attached.
+    let again = build_index_at(root, "2026-06-09", None, "2026-06-09T00:00:00Z").unwrap();
+    let twice = build_index_at(root, "2026-06-09", None, "2026-06-09T00:00:00Z").unwrap();
+    assert_eq!(again, twice);
+
+    // A tag filter restricts sources (variant spelling normalizes before
+    // matching) and excludes tagless kinds instead of leaking them.
+    let hits = run_query(
+        &model,
+        &Query {
+            tag: Some("Claude_Code".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].kind, "source");
+    assert!(hits[0].line.contains("#agent #claude-code"), "{}", hits[0].line);
+
+    // `--kind tags` lists the canonical vocabulary with counts, never the
+    // boilerplate capture tags.
+    let vocab = run_query(
+        &model,
+        &Query {
+            kind: Some(QueryKind::Tags),
+            ..Default::default()
+        },
+    );
+    let lines: Vec<&str> = vocab.iter().map(|h| h.line.as_str()).collect();
+    assert_eq!(lines, vec!["agent (1)", "claude-code (1)", "大模型 (1)"]);
+}
+
+#[test]
+fn broken_alias_table_fails_the_build_loudly() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/x.md",
+        "---\ntitle: X\nsource: https://e.x/x\n---\nbody\n",
+    );
+    place(root, ".ovp/tags/aliases.toml", "[aliases]\n\"a\" = \"b\"\n\"b\" = \"c\"\n");
+
+    let err = build_index(root, "2026-06-09", None).unwrap_err();
+    assert!(err.contains("chain"), "{err}");
+}

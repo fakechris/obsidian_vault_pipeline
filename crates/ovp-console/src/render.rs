@@ -348,6 +348,7 @@ mod tests {
                     pack_dir: Some("40-Resources/Reader/2026-06-09_Good Article-aaaa1111".into()),
                     fail_count: 0,
                     last_reason: None,
+                    tags: Vec::new(),
                 },
                 SourceRow {
                     sha256: "cccc".into(),
@@ -360,6 +361,7 @@ mod tests {
                     pack_dir: None,
                     fail_count: 3,
                     last_reason: Some("card synthesis did not parse".into()),
+                    tags: Vec::new(),
                 },
             ],
             packs: vec![PackRow {

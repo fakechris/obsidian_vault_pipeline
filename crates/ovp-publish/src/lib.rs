@@ -167,7 +167,7 @@ fn write_api_tree(
     write_json(&api.join("themes.json"), &bodies::themes_body(records))?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
-    let empty = Query { kind: None, status: None, date: None, term: None };
+    let empty = Query { kind: None, status: None, date: None, term: None, tag: None };
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 5;
 
@@ -453,6 +453,7 @@ mod tests {
             pack_dir: Some("40-Resources/Reader/case1".into()),
             fail_count: 0,
             last_reason: None,
+            tags: Vec::new(),
         }
     }
 

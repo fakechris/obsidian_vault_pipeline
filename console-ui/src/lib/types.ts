@@ -115,6 +115,9 @@ export interface SourceRow {
   pack_dir?: string;
   fail_count: number;
   last_reason?: string;
+  /** Canonical content tags (normalized + alias-resolved at index build).
+   * Absent on pre-tag indexes and on the redacted public model. */
+  tags?: string[];
 }
 
 export interface PackRow {

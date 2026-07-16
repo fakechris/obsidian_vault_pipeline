@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use ovp_domain::tags::{TagAliases, normalize_tag};
 use ovp_index::{
     build_evidence, build_index_with_progress, read_evidence, read_index, run_evidence_query,
     run_query, write_evidence, write_index, Query, QueryKind,
@@ -51,6 +52,7 @@ pub struct FindArgs {
     pub kind: Option<String>,
     pub status: Option<String>,
     pub date: Option<String>,
+    pub tag: Option<String>,
     pub json: bool,
 }
 
@@ -64,10 +66,22 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         Some("runs") => Some(QueryKind::Runs),
         Some("cards") => Some(QueryKind::Cards),
         Some("units") => Some(QueryKind::Units),
+        Some("tags") => Some(QueryKind::Tags),
         Some(other) => {
             return Err(CliError::Io(format!(
-                "unknown --kind `{other}` (sources|packs|claims|runs|cards|units)"
+                "unknown --kind `{other}` (sources|packs|claims|runs|cards|units|tags)"
             )))
+        }
+    };
+    // A queried alias must find its canonical tag's sources, so the query
+    // tag runs through the same normalize+alias pipe the index rows did.
+    let tag = match args.tag.as_deref() {
+        None => None,
+        Some(raw) => {
+            let aliases = TagAliases::load(&args.vault_root).map_err(CliError::Io)?;
+            let normalized = normalize_tag(raw)
+                .ok_or_else(|| CliError::Io(format!("--tag {raw:?} normalizes to nothing")))?;
+            Some(aliases.resolve(&normalized).to_string())
         }
     };
     let query = Query {
@@ -75,6 +89,7 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         status: args.status,
         date: args.date,
         term: args.term,
+        tag,
     };
     let hits = match kind {
         Some(QueryKind::Cards | QueryKind::Units) => {

@@ -222,6 +222,12 @@ impl VaultLayout {
     pub fn crystal_store_dir(&self) -> &'static str {
         ".ovp/crystal"
     }
+
+    /// The operator-owned tag alias table (alias → canonical), applied at
+    /// projection build time only — raw frontmatter tags are never rewritten.
+    pub fn tag_aliases_file(&self) -> &'static str {
+        ".ovp/tags/aliases.toml"
+    }
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be
