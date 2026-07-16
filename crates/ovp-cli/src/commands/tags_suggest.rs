@@ -66,6 +66,23 @@ impl Default for TagsSuggestArgs {
     }
 }
 
+/// A tag name as a valid TOML basic string — `normalize_tag` preserves
+/// quotes/backslashes, which would break the paste-ready block unescaped.
+pub(crate) fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// One tag's neighbor vote on one source (pure, unit-tested): neighbors are
 /// `(similarity, tags)` pairs, already the k nearest. A tag wins when its
 /// similarity-weighted share ≥ `vote_threshold` AND ≥ `min_support` distinct
@@ -181,10 +198,17 @@ pub(crate) fn merge_proposals(
 }
 
 pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
-    if !args.merge_threshold.is_finite() || !args.vote_threshold.is_finite() {
-        return Err(CliError::Io(
-            "tags-suggest: thresholds must be finite numbers".into(),
-        ));
+    if !(-1.0..=1.0).contains(&args.merge_threshold) {
+        return Err(CliError::Io(format!(
+            "tags-suggest: --merge-threshold is a cosine, must be in [-1, 1] (got {})",
+            args.merge_threshold
+        )));
+    }
+    if !(0.0..=1.0).contains(&args.vote_threshold) {
+        return Err(CliError::Io(format!(
+            "tags-suggest: --vote-threshold is a share, must be in [0, 1] (got {})",
+            args.vote_threshold
+        )));
     }
     let layout = VaultLayout::new();
     let model = read_index(&args.vault_root).map_err(|e| {
@@ -270,11 +294,9 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         ]),
         entries,
     };
-    let inferred_path = inferred.save(&args.vault_root).map_err(CliError::Io)?;
-    println!(
-        "  backfill: {covered}/{} untagged source(s) received inferred tags → {inferred_path}",
-        untagged.len()
-    );
+    // NOT saved yet — both projections persist together at the end, so a
+    // graceful embedding skip below can never leave inferred.json from this
+    // run beside a proposals.md from an older one.
 
     // ---- Merge candidates over the tag vocabulary ----
     // Vocabulary + carrying-source indices + up-to-3 sample titles per tag.
@@ -304,8 +326,17 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         })
         .collect();
     let Some(tag_vectors) = resolve_vectors(&tag_docs, &embed_cache_dir)? else {
+        println!(
+            "tags-suggest: nothing written — tag-vocabulary embeddings unavailable \
+             (both projections persist together or not at all)."
+        );
         return Ok(());
     };
+    let inferred_path = inferred.save(&args.vault_root).map_err(CliError::Io)?;
+    println!(
+        "  backfill: {covered}/{} untagged source(s) received inferred tags → {inferred_path}",
+        untagged.len()
+    );
     let counts: Vec<(String, Vec<usize>)> = vocab
         .iter()
         .map(|(tag, (srcs, _))| ((*tag).to_string(), srcs.clone()))
@@ -348,7 +379,12 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     }
     report.push_str("\n### Paste-ready block (edit before use)\n\n```toml\n[aliases]\n");
     for p in &proposals {
-        report.push_str(&format!("# cosine {:.3}\n\"{}\" = \"{}\"\n", p.cosine, p.alias, p.canonical));
+        report.push_str(&format!(
+            "# cosine {:.3}\n{} = {}\n",
+            p.cosine,
+            toml_basic_string(&p.alias),
+            toml_basic_string(&p.canonical)
+        ));
     }
     report.push_str("```\n");
     report.push_str(&format!(
@@ -418,6 +454,16 @@ mod tests {
         assert_eq!(got[0].alias, "agents");
         assert_eq!(got[0].canonical, "agent");
         assert!(got[0].cosine >= 0.98);
+    }
+
+    #[test]
+    fn toml_basic_string_escapes_quotes_and_backslashes() {
+        assert_eq!(toml_basic_string("agent"), "\"agent\"");
+        assert_eq!(toml_basic_string("foo\"bar"), "\"foo\\\"bar\"");
+        assert_eq!(toml_basic_string("a\\b"), "\"a\\\\b\"");
+        // Round-trips through the real parser.
+        let line = format!("[aliases]\n{} = \"ok\"\n", toml_basic_string("foo\"bar"));
+        assert!(ovp_domain::tags::TagAliases::parse(&line).is_ok());
     }
 
     #[test]
