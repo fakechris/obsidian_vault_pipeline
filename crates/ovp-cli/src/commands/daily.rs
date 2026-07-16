@@ -552,6 +552,31 @@ fn run_inner(
             );
         }
 
+    // Tag-bootstrap increment (T1, docs/stage-tags-product.md §2): classify
+    // sources that arrived untagged into the closed vocabulary. Best-effort —
+    // an error warns and never aborts the run; no themes.json → the call
+    // explains and exits 0 (bootstrap embeds nothing, so no surprise
+    // downloads). Uses daily's client kind: replay = deterministic floor
+    // only, live = cassette-cached classification. A second (cheap)
+    // projection rebuild surfaces fresh inferred tags this run instead of
+    // tomorrow.
+    match crate::commands::tags_bootstrap::run(crate::commands::tags_bootstrap::TagsBootstrapArgs {
+        vault_root: args.vault_root.clone(),
+        client_kind: args.client_kind,
+        cache_dir: None,
+        batch_size: 20,
+        max_new_per_batch: 2,
+        refresh: false,
+    }) {
+        Ok(n) if n > 0 => {
+            if let Err(e) = rebuild_projection(&args.vault_root, &args.date, &args.run_id) {
+                sayln!("  tags: projection refresh after bootstrap failed ({e}) — next rebuild will surface them");
+            }
+        }
+        Ok(_) => {}
+        Err(e) => sayln!("  tags: bootstrap skipped ({e})"),
+    }
+
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now
         // BLOCKED, not silently retried.
@@ -668,7 +693,7 @@ fn stale_theme_packs(
             .packs
             .iter()
             .filter(|p| {
-                let case_id = p.pack_dir.rsplit('/').next().unwrap_or(&p.pack_dir);
+                let case_id = ovp_domain::vault_layout::pack_case_id(&p.pack_dir);
                 !t.packs.contains_key(case_id)
             })
             .count(),

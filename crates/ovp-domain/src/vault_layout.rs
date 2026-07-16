@@ -240,6 +240,20 @@ impl VaultLayout {
     pub fn tags_proposals_file(&self) -> &'static str {
         ".ovp/tags/proposals.md"
     }
+
+    /// The closed tag vocabulary the classifier picks from (`tags-bootstrap`
+    /// rebuilds user/community entries; llm entries persist; operator-curable).
+    pub fn tags_vocabulary_file(&self) -> &'static str {
+        ".ovp/tags/vocabulary.toml"
+    }
+}
+
+/// Last path segment of a pack dir — the case_id that claim↔source↔theme
+/// joins key on. One shared implementation (both separators) so every
+/// consumer agrees; an inline `rsplit('/')` would silently miss Windows
+/// paths and break the join.
+pub fn pack_case_id(pack_dir: &str) -> &str {
+    pack_dir.rsplit(['/', '\\']).next().unwrap_or(pack_dir)
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be

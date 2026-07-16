@@ -180,10 +180,16 @@ pub const TAGS_INFERRED_SCHEMA: &str = "ovp.tags-inferred/v1";
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InferredTag {
     pub tag: String,
-    /// Share of neighbor similarity weight that voted for this tag (0..1).
+    /// Coarse confidence: kNN = neighbor-weight share (0..1); bootstrap
+    /// methods use fixed bands (llm 0.8, community floor 0.4).
     pub score: f64,
-    /// Number of neighbors carrying the tag.
+    /// kNN: number of neighbors carrying the tag; community floor: the
+    /// community size; llm: 0 (a judgment, not a vote).
     pub support: usize,
+    /// How this tag was inferred: `knn` | `community` | `llm`.
+    /// Serde-additive: pre-bootstrap files deserialize to `""` (= knn era).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub method: String,
 }
 
 /// `.ovp/tags/inferred.json` — kNN-voted tags for sources that had NO
@@ -239,6 +245,286 @@ impl TagsInferredFile {
             .map_err(|e| format!("writing {}: {e}", path.display()))?;
         Ok(path.display().to_string())
     }
+}
+
+pub const TAGS_VOCABULARY_SCHEMA: &str = "ovp.tags-vocabulary/v1";
+
+/// Where a vocabulary entry came from. `User` and `Community` entries are
+/// re-derived on every bootstrap run; `Llm` entries are the one thing worth
+/// persisting (a reviewed-and-survived model proposal is not re-derivable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagOrigin {
+    /// Observed as an operator tag in the index.
+    User,
+    /// A theme community's c-TF-IDF keyword (the deterministic seed).
+    Community,
+    /// Survived the classifier's capped new-name budget + embedding dedup.
+    Llm,
+}
+
+/// `.ovp/tags/vocabulary.toml` — the CLOSED list the tag classifier may pick
+/// from: user tags ∪ community keywords ∪ surviving LLM proposals. A
+/// projection: `tags-bootstrap` rebuilds the user/community entries each run
+/// and carries the llm entries forward. Curation: deleting an `llm` line
+/// removes it permanently (not re-derivable); user/community entries would
+/// be re-derived on the next run, so banning those goes through the
+/// persistent `banned` list, which every insert respects.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TagVocabulary {
+    entries: BTreeMap<String, TagOrigin>,
+    banned: std::collections::BTreeSet<String>,
+}
+
+impl TagVocabulary {
+    /// Insert a normalized name; an existing entry keeps its origin (user
+    /// beats community beats llm because bootstrap inserts in that order).
+    /// Banned names never enter.
+    pub fn insert(&mut self, name: String, origin: TagOrigin) {
+        if self.banned.contains(&name) {
+            return;
+        }
+        self.entries.entry(name).or_insert(origin);
+    }
+
+    /// Ban a name from the vocabulary (persists across bootstrap runs).
+    pub fn ban(&mut self, name: String) {
+        self.entries.remove(&name);
+        self.banned.insert(name);
+    }
+
+    pub fn banned(&self) -> impl Iterator<Item = &str> {
+        self.banned.iter().map(String::as_str)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, TagOrigin)> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), *v))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn parse(text: &str) -> Result<Self, String> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct File {
+            schema: String,
+            #[serde(default)]
+            banned: Vec<String>,
+            #[serde(default)]
+            tags: BTreeMap<String, TagOrigin>,
+        }
+        let file: File =
+            toml::from_str(text).map_err(|e| format!("tag vocabulary: invalid TOML: {e}"))?;
+        if file.schema != TAGS_VOCABULARY_SCHEMA {
+            return Err(format!(
+                "tag vocabulary: unknown schema {:?} (expected {TAGS_VOCABULARY_SCHEMA:?})",
+                file.schema
+            ));
+        }
+        let mut banned = std::collections::BTreeSet::new();
+        for name in file.banned {
+            let n = normalize_tag(&name)
+                .ok_or_else(|| format!("tag vocabulary: banned {name:?} normalizes to nothing"))?;
+            banned.insert(n);
+        }
+        let mut entries = BTreeMap::new();
+        for (name, origin) in file.tags {
+            let n = normalize_tag(&name)
+                .ok_or_else(|| format!("tag vocabulary: {name:?} normalizes to nothing"))?;
+            if !banned.contains(&n) {
+                entries.insert(n, origin);
+            }
+        }
+        Ok(Self { entries, banned })
+    }
+
+    /// Missing file → empty (bootstrap seeds it); broken file → error.
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_vocabulary_file());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::parse(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("reading {}: {e}", path.display())),
+        }
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<String, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_vocabulary_file());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let mut body = String::from(
+            "# Closed tag vocabulary — the classifier may only pick from this list.\n\
+             # Rebuilt by `ovp2 tags-bootstrap`: user/community entries are re-derived\n\
+             # each run (deleting them does NOT stick — add the name to `banned`);\n\
+             # llm entries persist, so deleting an llm line removes it for good.\n\
+             schema = \"ovp.tags-vocabulary/v1\"\n",
+        );
+        if self.banned.is_empty() {
+            body.push_str("banned = []\n\n[tags]\n");
+        } else {
+            body.push_str("banned = [\n");
+            for name in &self.banned {
+                body.push_str(&format!("  {},\n", toml_basic_string(name)));
+            }
+            body.push_str("]\n\n[tags]\n");
+        }
+        for (name, origin) in &self.entries {
+            let origin = match origin {
+                TagOrigin::User => "user",
+                TagOrigin::Community => "community",
+                TagOrigin::Llm => "llm",
+            };
+            body.push_str(&format!("{} = \"{origin}\"\n", toml_basic_string(name)));
+        }
+        std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        Ok(path.display().to_string())
+    }
+}
+
+// ---- Classification model stage (`tag_classify/v1`) ----
+
+const TAG_CLASSIFY_TEMPLATE: &str = include_str!("../prompts/tag_classify.md");
+pub const TAG_CLASSIFY_PROMPT_ID: &str = "tag_classify/v1";
+const TAG_CLASSIFY_MODEL: &str = "claude-sonnet-4-6";
+const TAG_CLASSIFY_MAX_TOKENS: u32 = 2000;
+
+/// One source in a classification batch.
+pub struct ClassifyInput {
+    /// Batch-local id echoed back by the model.
+    pub id: usize,
+    pub title: String,
+    /// Card titles (the pack's synthesized surface) — the content signal.
+    pub card_titles: Vec<String>,
+}
+
+/// Build the batched classification request: the closed vocabulary + the
+/// batch's sources. Deterministic text → stable cassette keys.
+pub fn tag_classify_request(
+    vocabulary: &[&str],
+    sources: &[ClassifyInput],
+    max_new: usize,
+) -> ovp_llm::ModelRequest {
+    let marker = "## Batch";
+    let (system, _) = TAG_CLASSIFY_TEMPLATE
+        .split_once(marker)
+        .unwrap_or((TAG_CLASSIFY_TEMPLATE, ""));
+    let mut user = format!(
+        "{marker}\n\nAt most {max_new} `new_tags` for this whole batch.\n\nVocabulary: {}\n\nSources:\n",
+        vocabulary.join(", ")
+    );
+    for s in sources {
+        user.push_str(&format!("{}. {}", s.id, s.title));
+        if !s.card_titles.is_empty() {
+            user.push_str(&format!(" — {}", s.card_titles.join(" | ")));
+        }
+        user.push('\n');
+    }
+    ovp_llm::ModelRequest {
+        model: TAG_CLASSIFY_MODEL.to_string(),
+        system: Some(system.trim_end().to_string()),
+        messages: vec![ovp_llm::ModelMessage::User { content: user }],
+        max_tokens: TAG_CLASSIFY_MAX_TOKENS,
+        temperature: None,
+        cache_namespace: Some(TAG_CLASSIFY_PROMPT_ID.to_string()),
+    }
+}
+
+/// Parsed classification reply.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClassifyReply {
+    /// Batch-local id → picked tag names (raw; caller validates vs vocab).
+    pub picks: BTreeMap<usize, Vec<String>>,
+    pub new_tags: Vec<String>,
+}
+
+/// Parse `{"sources":[{"id":0,"tags":[...]},…],"new_tags":[...]}` for a
+/// batch of ids `0..expected`. A missing, duplicate, or out-of-range id is a
+/// parse ERROR (not a silent gap) so `call_and_parse` invalidates the
+/// cassette entry and the retry re-asks the model.
+pub fn parse_tag_classify(reply_text: &str, expected: usize) -> Result<ClassifyReply, String> {
+    let (value, _note) =
+        crate::model_reply::parse_reply_value(reply_text).map_err(|d| d.to_string())?;
+    let sources = value
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .ok_or("missing `sources` array")?;
+    let mut picks = BTreeMap::new();
+    for s in sources {
+        let id = s
+            .get("id")
+            .and_then(|v| v.as_u64())
+            .ok_or("source missing numeric `id`")? as usize;
+        if id >= expected {
+            return Err(format!("source id {id} out of range (batch of {expected})"));
+        }
+        let tags: Vec<String> = s
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .ok_or("source missing `tags` array")?
+            .iter()
+            .filter_map(|t| t.as_str())
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if picks.insert(id, tags).is_some() {
+            return Err(format!("duplicate source id {id}"));
+        }
+    }
+    if picks.len() != expected {
+        return Err(format!(
+            "reply covers {}/{expected} batch ids — every input id must appear exactly once",
+            picks.len()
+        ));
+    }
+    let new_tags: Vec<String> = value
+        .get("new_tags")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str())
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ClassifyReply { picks, new_tags })
+}
+
+/// A tag name as a valid TOML basic string — normalized tags can still carry
+/// quotes/backslashes/control characters, which unescaped would break the
+/// vocabulary file and the paste-ready proposals block. One implementation
+/// for every writer.
+pub fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop
@@ -317,6 +603,73 @@ mod tests {
         let chain = "[aliases]\n\"a\" = \"b\"\n\"b\" = \"c\"\n";
         let err = TagAliases::parse(chain).unwrap_err();
         assert!(err.contains("chain"), "{err}");
+    }
+
+    #[test]
+    fn vocabulary_round_trips_and_first_origin_wins() {
+        let mut v = TagVocabulary::default();
+        v.insert("agent".into(), TagOrigin::User);
+        v.insert("agent".into(), TagOrigin::Llm); // ignored — user wins
+        v.insert("向量检索".into(), TagOrigin::Community);
+        let dir = tempfile::tempdir().unwrap();
+        v.save(dir.path()).unwrap();
+        let loaded = TagVocabulary::load(dir.path()).unwrap();
+        assert_eq!(loaded, v);
+        assert_eq!(loaded.iter().next(), Some(("agent", TagOrigin::User)));
+        // Missing file → empty; typo section → error.
+        assert!(TagVocabulary::load(tempfile::tempdir().unwrap().path()).unwrap().is_empty());
+        assert!(TagVocabulary::parse("schema = \"ovp.tags-vocabulary/v1\"\n[tag]\n").is_err());
+    }
+
+    #[test]
+    fn classify_reply_parses_and_rejects_duplicates_gaps_and_strays() {
+        let ok = parse_tag_classify(
+            r#"{"sources":[{"id":0,"tags":["agent"," memory "]},{"id":1,"tags":[]}],"new_tags":["kv-cache"]}"#,
+            2,
+        )
+        .unwrap();
+        assert_eq!(ok.picks[&0], vec!["agent", "memory"]);
+        assert!(ok.picks[&1].is_empty());
+        assert_eq!(ok.new_tags, vec!["kv-cache"]);
+        // Duplicate id, missing id, and out-of-range id are all parse errors.
+        assert!(
+            parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]},{"id":0,"tags":[]}]}"#, 2)
+                .is_err()
+        );
+        assert!(parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]}]}"#, 2).is_err());
+        assert!(parse_tag_classify(r#"{"sources":[{"id":5,"tags":[]}]}"#, 1).is_err());
+        assert!(parse_tag_classify(r#"{"new_tags":[]}"#, 0).is_err());
+    }
+
+    #[test]
+    fn vocabulary_bans_persist_and_block_reinsertion() {
+        let mut v = TagVocabulary::default();
+        v.insert("twitter".into(), TagOrigin::User);
+        v.ban("twitter".into());
+        v.insert("twitter".into(), TagOrigin::Community); // blocked
+        assert!(!v.contains("twitter"));
+        let dir = tempfile::tempdir().unwrap();
+        v.save(dir.path()).unwrap();
+        let loaded = TagVocabulary::load(dir.path()).unwrap();
+        assert!(loaded.banned().any(|b| b == "twitter"));
+        assert!(!loaded.contains("twitter"));
+    }
+
+    #[test]
+    fn classify_request_is_deterministic_and_carries_the_cap() {
+        let sources = vec![ClassifyInput {
+            id: 0,
+            title: "T".into(),
+            card_titles: vec!["c1".into(), "c2".into()],
+        }];
+        let a = tag_classify_request(&["agent", "memory"], &sources, 2);
+        let b = tag_classify_request(&["agent", "memory"], &sources, 2);
+        assert_eq!(a.messages, b.messages);
+        let ovp_llm::ModelMessage::User { content } = &a.messages[0] else {
+            panic!("expected a user message");
+        };
+        assert!(content.contains("At most 2 `new_tags`"), "{content}");
+        assert!(content.contains("0. T — c1 | c2"), "{content}");
     }
 
     #[test]
