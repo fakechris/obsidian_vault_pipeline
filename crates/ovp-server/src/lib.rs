@@ -563,10 +563,12 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             });
             continue;
         }
-        // Tag mutation routes get the same JSON/same-origin gate as ask
-        // BEFORE any body is read (dispatch never sees request headers).
+        // Tag mutation routes: same JSON/same-origin gate as ask BEFORE any
+        // body is read, and the body read + handler run on a detached worker
+        // — a client that stalls mid-body must never pin the accept loop
+        // (the same slow-body failure mode /api/ask already avoids).
         if method == Method::Post {
-            let p = path.split('?').next().unwrap_or(&path);
+            let p = path.split('?').next().unwrap_or(&path).to_string();
             if p == "/api/tags/decision" || (p.starts_with("/api/source/") && p.ends_with("/tags"))
             {
                 let headers = AskHeaders::of(&request);
@@ -574,6 +576,13 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                     let _ = request.respond(resp);
                     continue;
                 }
+                let state = Arc::clone(state);
+                std::thread::spawn(move || {
+                    let body = read_post_body(&mut request);
+                    let resp = dispatch(&state, Method::Post, &path, &body);
+                    let _ = request.respond(resp);
+                });
+                continue;
             }
         }
         let body = if method == Method::Post {

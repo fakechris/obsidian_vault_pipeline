@@ -353,13 +353,32 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     let dropped = proposals.len().saturating_sub(MAX_MERGE_PROPOSALS);
     proposals.truncate(MAX_MERGE_PROPOSALS);
 
-    // Machine-readable twin for the curation inbox.
+    // Machine-readable twin for the curation inbox, with per-side sample
+    // titles — a high-cosine pair can be related-topics rather than
+    // variants, and names+cosine alone don't let the operator tell.
+    let titles_of = |tag: &str| -> Vec<&str> {
+        vocab.get(tag).map(|(_, t)| t.clone()).unwrap_or_default()
+    };
+    let proposals_with_titles: Vec<serde_json::Value> = proposals
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "alias": p.alias,
+                "alias_count": p.alias_count,
+                "alias_titles": titles_of(&p.alias),
+                "canonical": p.canonical,
+                "canonical_count": p.canonical_count,
+                "canonical_titles": titles_of(&p.canonical),
+                "cosine": p.cosine,
+            })
+        })
+        .collect();
     let proposals_json = serde_json::json!({
         "schema": "ovp.tags-proposals/v1",
         "date": model.date,
         "merge_threshold": args.merge_threshold,
         "suppressed_co_occurrence": suppressed,
-        "proposals": proposals,
+        "proposals": proposals_with_titles,
     });
     let json_path = args.vault_root.join(layout.tags_proposals_json_file());
     if let Some(parent) = json_path.parent() {

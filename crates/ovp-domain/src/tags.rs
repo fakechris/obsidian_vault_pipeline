@@ -772,6 +772,9 @@ fn yaml_quote(s: &str) -> String {
 }
 
 pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option<String>, String> {
+    // The intake parser strips a UTF-8 BOM before recognizing frontmatter —
+    // this write path must accept the same notes it indexes.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let rest = text
         .strip_prefix("---\n")
         .ok_or("note has no YAML frontmatter (leading ---)")?;
@@ -807,7 +810,8 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
                 }
                 continue;
             }
-            if !line.trim().is_empty() {
+            // YAML comments inside the list are not data and do not end it.
+            if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
                 block_ended = true;
             }
         }
@@ -852,7 +856,7 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
             for (i, line) in lines.iter().enumerate().skip(idx + 1) {
                 if line.trim_start().starts_with("- ") {
                     insert_after = i;
-                } else if !line.trim().is_empty() {
+                } else if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
                     break;
                 }
             }

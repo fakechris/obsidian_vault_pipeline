@@ -234,8 +234,10 @@ export interface TagRow {
 export interface TagProposal {
   alias: string;
   alias_count: number;
+  alias_titles?: string[];
   canonical: string;
   canonical_count: number;
+  canonical_titles?: string[];
   cosine: number;
 }
 
