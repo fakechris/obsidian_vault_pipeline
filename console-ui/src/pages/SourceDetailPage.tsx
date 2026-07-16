@@ -5,7 +5,7 @@
  * /api/source/:sha; the markdown is rendered client-side by the escape-first
  * renderer in lib/markdown.tsx (raw text never becomes HTML). */
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -63,7 +63,7 @@ function SourceTags({
   onChanged,
 }: {
   source: SourceRow;
-  onChanged: () => void;
+  onChanged: (newSha?: string) => void;
 }) {
   const { t } = useI18n();
   const [vocab, setVocab] = useState<string[]>([]);
@@ -83,9 +83,9 @@ function SourceTags({
     setBusy(true);
     setError(null);
     try {
-      await postSourceTags(source.sha256, tags);
+      const res = await postSourceTags(source.sha256, tags);
       setDraft('');
-      onChanged();
+      onChanged(res.sha);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -170,6 +170,7 @@ function CitingClaims({ claims }: { claims: ClaimRow[] }) {
 export default function SourceDetailPage() {
   const { t } = useI18n();
   const { sha } = useParams<{ sha: string }>();
+  const navigate = useNavigate();
   // Bumped after a tag write so the detail (and its rebuilt tags) reloads.
   const [version, setVersion] = useState(0);
   const { detail, status } = useSourceDetail(sha, version);
@@ -293,7 +294,18 @@ export default function SourceDetailPage() {
           (source.tags ?? []).length + (source.tags_inferred ?? []).length > 0) && (
           <>
             <dt>{t('tags.title')}</dt>
-            <SourceTags source={source} onChanged={() => setVersion((v) => v + 1)} />
+            <SourceTags
+              source={source}
+              onChanged={(newSha) => {
+                // A queued note's content hash changes on edit — follow the
+                // row to its new sha instead of 404ing on the old route.
+                if (newSha && newSha !== sha) {
+                  navigate(`/library/${newSha}`, { replace: true });
+                } else {
+                  setVersion((v) => v + 1);
+                }
+              }}
+            />
           </>
         )}
         {source.last_run_id && (

@@ -640,8 +640,15 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
+    let vocabulary =
+        ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
     let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
         std::collections::BTreeMap::new();
+    // Seed from the vocabulary so zero-count community/llm entries still
+    // appear (browser completeness + Source Detail autocomplete).
+    for (name, _) in vocabulary.iter() {
+        counts.entry(name).or_default();
+    }
     for s in &model.sources {
         for t in &s.tags {
             counts.entry(t.as_str()).or_default().0 += 1;
@@ -650,8 +657,6 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             counts.entry(t.as_str()).or_default().1 += 1;
         }
     }
-    let vocabulary =
-        ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
     let origins: std::collections::BTreeMap<&str, &str> = vocabulary
         .iter()
         .map(|(name, origin)| {
@@ -677,9 +682,11 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         })
         .collect();
     // Proposals still awaiting a decision: drop pairs the (operator +
-    // decisions) alias table already merges — accepting via UI or hand-edit
-    // both retire a card on the next fetch.
+    // decisions) alias table already merges AND pairs rejected in the UI —
+    // proposals.json only refreshes on the next tags-suggest run, so both
+    // decision kinds must retire cards here, immediately.
     let aliases = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+    let decisions = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
     let proposals: Vec<serde_json::Value> = std::fs::read_to_string(
         state
             .vault_root
@@ -694,7 +701,10 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     .filter(|p| {
         let alias = p.get("alias").and_then(|v| v.as_str()).unwrap_or("");
         let canonical = p.get("canonical").and_then(|v| v.as_str()).unwrap_or("");
-        !alias.is_empty() && aliases.resolve(alias) == alias && aliases.resolve(canonical) == canonical
+        !alias.is_empty()
+            && aliases.resolve(alias) == alias
+            && aliases.resolve(canonical) == canonical
+            && !decisions.is_ignored(alias, canonical)
     })
     .collect();
     let banned: Vec<&str> = vocabulary.banned().collect();
@@ -737,7 +747,10 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     if let Err(e) = decisions.save(&state.vault_root) {
         return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e)));
     }
-    rebuild_and_refresh(state)
+    match rebuild_index_now(state) {
+        Ok(_) => json_response(200, r#"{"ok":true,"changed":true}"#),
+        Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+    }
 }
 
 /// `POST /api/source/:sha/tags` `{tags: ["..."]}` — the ONE sanctioned
@@ -782,7 +795,23 @@ fn handle_source_tags_post(
     else {
         return json_response(404, r#"{"error":"unknown source or no file path"}"#);
     };
-    let note_path = state.vault_root.join(&rel);
+    // Same traversal guard as the read path: a poisoned index must never
+    // direct a WRITE outside the vault.
+    if !ovp_api_projection::is_plain_relative(&rel) {
+        return json_response(400, r#"{"error":"source path rejected"}"#);
+    }
+    // Same lifecycle-move fallback as the read path: a processed source's
+    // recorded raw-inbox path may have moved to 03-Processed.
+    let recorded = state.vault_root.join(&rel);
+    let note_path = if recorded.is_file() {
+        recorded
+    } else if let Some(moved) =
+        ovp_api_projection::readers::lifecycle_moved_path(&state.vault_root, &state.layout, &rel)
+    {
+        moved
+    } else {
+        recorded
+    };
     let text = match std::fs::read_to_string(&note_path) {
         Ok(t) => t,
         Err(e) => {
@@ -794,7 +823,24 @@ fn handle_source_tags_post(
             if let Err(e) = std::fs::write(&note_path, updated) {
                 return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("writing {rel}: {e}"))));
             }
-            rebuild_and_refresh(state)
+            // Editing a QUEUED note changes its content hash → the rebuilt
+            // index keys it under a NEW sha. Report the row now living at
+            // this rel_path so the client can re-route instead of 404ing.
+            match rebuild_index_now(state) {
+                Ok(rebuilt) => {
+                    let new_sha = rebuilt
+                        .sources
+                        .iter()
+                        .find(|s| s.rel_path.as_deref() == Some(rel.as_str()))
+                        .map(|s| s.sha256.clone())
+                        .unwrap_or_else(|| sha.to_string());
+                    json_response(
+                        200,
+                        &format!(r#"{{"ok":true,"changed":true,"sha":{}}}"#, json_str(&new_sha)),
+                    )
+                }
+                Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+            }
         }
         Ok(None) => json_response(200, r#"{"ok":true,"changed":false}"#),
         Err(e) => json_response(400, &format!(r#"{{"error":{}}}"#, json_str(&e))),
@@ -802,20 +848,16 @@ fn handle_source_tags_post(
 }
 
 /// Rebuild the read model (the tag changes live in files the projection
-/// derives from) and refresh the served snapshot. Synchronous — vault-scale
-/// rebuilds are ~2s and curation is a one-operator surface.
-fn rebuild_and_refresh(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+/// derives from), persist it, refresh the served snapshot, and return it.
+/// Synchronous — vault-scale rebuilds are ~2s and curation is a
+/// one-operator surface.
+fn rebuild_index_now(state: &AppState) -> Result<ovp_index::IndexModel, String> {
     let built_at = ovp_index::now_rfc3339();
     let date = built_at.get(..10).unwrap_or("1970-01-01").to_string();
-    match ovp_index::build_index_at(&state.vault_root, &date, Some("tags-ui"), &built_at)
-        .and_then(|m| ovp_index::write_index(&state.vault_root, &m))
-    {
-        Ok(_) => {
-            state.refresh_model();
-            json_response(200, r#"{"ok":true,"changed":true}"#)
-        }
-        Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
-    }
+    let model = ovp_index::build_index_at(&state.vault_root, &date, Some("tags-ui"), &built_at)?;
+    ovp_index::write_index(&state.vault_root, &model)?;
+    state.refresh_model();
+    Ok(model)
 }
 
 /// A string as a JSON string literal (error payloads).
@@ -3708,16 +3750,41 @@ mod tests {
         assert_eq!(v["tags"][0]["tag"], "agent", "merge applied on rebuild");
         assert!(v["proposals"].as_array().unwrap().is_empty(), "decided card retired");
 
-        // POST source tags: the one sanctioned frontmatter write.
+        // POST reject: the card retires IMMEDIATELY (proposals.json is only
+        // regenerated by tags-suggest, so /api/tags must filter decisions).
+        std::fs::write(
+            vault.join(".ovp/tags/proposals.json"),
+            r#"{"schema":"ovp.tags-proposals/v1","proposals":[{"alias":"crypto","alias_count":4,"canonical":"benchmark","canonical_count":5,"cosine":0.79}]}"#,
+        )
+        .unwrap();
         let resp = dispatch(
             &st,
             Method::Post,
-            &format!("/api/source/{}/tags", model.sources[0].sha256),
+            "/api/tags/decision",
+            r#"{"action":"reject","alias":"crypto","canonical":"benchmark"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
+        assert!(v["proposals"].as_array().unwrap().is_empty(), "rejected card retired");
+
+        // POST source tags: the one sanctioned frontmatter write. Editing a
+        // QUEUED note changes its content hash — the response must carry the
+        // sha the source now lives under.
+        let old_sha = model.sources[0].sha256.clone();
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            &format!("/api/source/{old_sha}/tags"),
             r#"{"tags":["Memory Systems"]}"#,
         );
         assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        let new_sha = v["sha"].as_str().unwrap();
+        assert_ne!(new_sha, old_sha, "queued edit re-keys the row");
         let text = std::fs::read_to_string(&note).unwrap();
         assert!(text.contains("- \"memory-systems\""), "{text}");
+        let rebuilt = ovp_index::read_index(&vault).unwrap();
+        assert!(rebuilt.sources.iter().any(|s| s.sha256 == new_sha));
 
         // Bad requests fail loud, not silently.
         assert_eq!(

@@ -562,14 +562,28 @@ impl TagDecisions {
     }
 
     /// Record an accepted merge. Fails on names that normalize to nothing.
+    /// Chains collapse to their final canonical (accepting `a→b` then `b→c`
+    /// re-points `a` at `c`), keeping the map flat so every accepted merge
+    /// keeps applying.
     pub fn accept(&mut self, alias: &str, canonical: &str) -> Result<(), String> {
         let a = normalize_tag(alias).ok_or("alias normalizes to nothing")?;
         let c = normalize_tag(canonical).ok_or("canonical normalizes to nothing")?;
         if a == c {
             return Err("alias equals canonical".into());
         }
-        self.ignore.remove(&Self::pair(&a, &c));
-        self.aliases.insert(a, c);
+        // Final target: follow an existing mapping of the canonical.
+        let target = self.aliases.get(&c).cloned().unwrap_or(c);
+        if a == target {
+            return Err("alias equals canonical after chain collapse".into());
+        }
+        // Re-point earlier accepts whose canonical just became an alias.
+        for v in self.aliases.values_mut() {
+            if *v == a {
+                *v = target.clone();
+            }
+        }
+        self.ignore.remove(&Self::pair(&a, &target));
+        self.aliases.insert(a, target);
         Ok(())
     }
 
@@ -685,6 +699,23 @@ pub fn toml_basic_string(s: &str) -> String {
 /// appends to an existing block list, extends an inline `tags: [...]`, or
 /// creates the block before the closing `---`. Tags already present (after
 /// normalization) are skipped; returns `None` when nothing changed.
+/// A tag as a YAML double-quoted scalar: escape `\` and `"`, strip control
+/// characters (a tag carrying one is junk that would corrupt the note).
+fn yaml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option<String>, String> {
     let rest = text
         .strip_prefix("---\n")
@@ -754,7 +785,7 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
                     } else {
                         inner.split(',').map(|s| s.trim().to_string()).collect()
                     };
-                    items.extend(additions.iter().map(|t| format!("\"{t}\"")));
+                    items.extend(additions.iter().map(|t| yaml_quote(t)));
                     out_fm.push(format!("tags: [{}]", items.join(", ")));
                 } else {
                     out_fm.push((*line).to_string());
@@ -776,7 +807,7 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
                 out_fm.push((*line).to_string());
                 if i == insert_after {
                     for t in &additions {
-                        out_fm.push(format!("  - \"{t}\""));
+                        out_fm.push(format!("  - {}", yaml_quote(t)));
                     }
                 }
             }
@@ -787,7 +818,7 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
             }
             out_fm.push("tags:".to_string());
             for t in &additions {
-                out_fm.push(format!("  - \"{t}\""));
+                out_fm.push(format!("  - {}", yaml_quote(t)));
             }
         }
     }

@@ -253,7 +253,7 @@ export function fetchTags(): Promise<TagsPayload> {
   return fetchJson<TagsPayload>('/api/tags');
 }
 
-async function postJson(path: string, payload: unknown): Promise<void> {
+async function postJson<T = unknown>(path: string, payload: unknown): Promise<T> {
   const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -269,20 +269,26 @@ async function postJson(path: string, payload: unknown): Promise<void> {
     }
     throw new Error(message);
   }
+  return res.json() as Promise<T>;
 }
 
 /** POST /api/tags/decision — record accept/reject; the server rebuilds the
  * projection so the merge is visible on the next fetch. */
-export function postTagDecision(
+export async function postTagDecision(
   action: 'accept' | 'reject',
   alias: string,
   canonical: string,
 ): Promise<void> {
-  return postJson('/api/tags/decision', { action, alias, canonical });
+  await postJson('/api/tags/decision', { action, alias, canonical });
 }
 
 /** POST /api/source/:sha/tags — the one sanctioned frontmatter write
- * (accepting an inferred tag / adding a tag is a user edit via the product). */
-export function postSourceTags(sha: string, tags: string[]): Promise<void> {
+ * (accepting an inferred tag / adding a tag is a user edit via the product).
+ * Editing a queued note changes its content hash; the response carries the
+ * sha the source now lives under so the caller can re-route. */
+export function postSourceTags(
+  sha: string,
+  tags: string[],
+): Promise<{ ok: boolean; changed: boolean; sha?: string }> {
   return postJson(`/api/source/${encodeURIComponent(sha)}/tags`, { tags });
 }
