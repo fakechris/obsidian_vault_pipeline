@@ -14,6 +14,23 @@ use std::path::Path;
 /// capture mechanism, not the content, so no projection surfaces them.
 pub const BOILERPLATE_TAGS: &[&str] = &["clippings", "pinboard"];
 
+/// Write via a temp sibling + atomic rename — for the tag files that carry
+/// non-rederivable judgments (decisions, vocabulary llm entries), a crash or
+/// full disk mid-write must never truncate the only copy.
+fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("writing {}: {e}", path.display())
+        })
+}
+
 /// Deterministic tag normalization: trim, strip a leading `#`, lowercase,
 /// fold separators (whitespace/underscore/`/`) to `-`, collapse runs of `-`,
 /// strip leading/trailing `-`. Returns `None` when nothing survives.
@@ -166,6 +183,12 @@ impl TagAliases {
             // Re-point at the operator's final canonical so a decision can
             // never introduce a chain.
             let c = self.resolve(c).to_string();
+            // An alias that is itself an OPERATOR canonical (`x → a` in the
+            // hand-edited file) would form the chain `x → a → c`; the
+            // operator's mapping wins, so the decision is skipped.
+            if self.map.values().any(|v| v == a) {
+                continue;
+            }
             if *a == c
                 || self.map.contains_key(a.as_str())
                 || self.map.contains_key(c.as_str())
@@ -421,7 +444,7 @@ impl TagVocabulary {
             };
             body.push_str(&format!("{} = \"{origin}\"\n", toml_basic_string(name)));
         }
-        std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        write_atomic(&path, &body)?;
         Ok(path.display().to_string())
     }
 }
@@ -666,7 +689,7 @@ impl TagDecisions {
                 toml_basic_string(c)
             ));
         }
-        std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        write_atomic(&path, &body)?;
         Ok(path.display().to_string())
     }
 }
@@ -710,6 +733,27 @@ fn split_inline_list(value: &str) -> (&str, &str) {
     }
 }
 
+/// Split flow-list items on commas OUTSIDE quotes, so `["x, y"]` is ONE item.
+/// Duplicate-detection only — the rewrite path never re-splits items.
+fn split_flow_items(inner: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in inner.char_indices() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, ',') => {
+                out.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&inner[start..]);
+    out
+}
+
 /// A tag as a YAML double-quoted scalar: escape `\` and `"`, strip control
 /// characters (a tag carrying one is junk that would corrupt the note).
 fn yaml_quote(s: &str) -> String {
@@ -751,8 +795,8 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
                 inline = Some(after.to_string());
                 let (inner, _suffix) = split_inline_list(after);
                 existing.extend(
-                    inner
-                        .split(',')
+                    split_flow_items(inner)
+                        .into_iter()
                         .filter_map(|t| normalize_tag(t.trim().trim_matches(['"', '\'']))),
                 );
             }
