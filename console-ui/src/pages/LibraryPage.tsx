@@ -221,6 +221,17 @@ function LibraryBody({ model }: { model: IndexModel }) {
                         #{tg}
                       </button>
                     ))}
+                    {(s.tags_inferred ?? []).map((tg) => (
+                      <button
+                        key={`~${tg}`}
+                        type="button"
+                        className={`tag-chip inferred${tag === tg ? ' active' : ''}`}
+                        title="inferred (tags-suggest)"
+                        onClick={() => setParam('tag', tag === tg ? null : tg)}
+                      >
+                        ~#{tg}
+                      </button>
+                    ))}
                     {s.date ?? ''} · {t(collectionLabel(collectionOf(s)))}
                   </span>
                 </div>

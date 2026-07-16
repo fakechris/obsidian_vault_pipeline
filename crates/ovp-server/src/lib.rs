@@ -1931,6 +1931,7 @@ mod tests {
                 fail_count: 0,
                 last_reason: None,
                 tags: Vec::new(),
+                tags_inferred: Vec::new(),
             }],
             packs: vec![PackRow {
                 pack_dir: "40-Resources/Reader/good".into(),
@@ -2449,6 +2450,7 @@ mod tests {
             fail_count: 0,
             last_reason: None,
             tags: Vec::new(),
+            tags_inferred: Vec::new(),
         }
     }
 

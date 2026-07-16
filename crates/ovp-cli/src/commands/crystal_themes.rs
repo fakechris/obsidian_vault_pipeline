@@ -191,8 +191,10 @@ pub(crate) fn collect_docs(reader_root: &Path) -> Result<Vec<ThemeDoc>, CliError
 }
 
 /// Resolve vectors for every doc: cache first, embedder for the misses.
-/// `Ok(None)` = a graceful skip (reason already printed).
-fn resolve_vectors(
+/// `Ok(None)` = a graceful skip (reason already printed). `pub(crate)`:
+/// `tags-suggest` shares the cache/embedder plumbing (messages still say
+/// crystal-themes — same model, same cache, same degradation contract).
+pub(crate) fn resolve_vectors(
     docs: &[ThemeDoc],
     cache_dir: &Path,
 ) -> Result<Option<Vec<Vec<f32>>>, CliError> {

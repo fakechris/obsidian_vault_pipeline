@@ -81,9 +81,13 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             None => return Vec::new(),
         },
     };
-    let tag_ok = |tags: &[String]| match &tag {
+    // Operator tags and inferred backfill are both matchable — the filter's
+    // job is recall; the row display keeps the provenance visible (`~#x`).
+    let tag_ok = |s: &crate::model::SourceRow| match &tag {
         None => true,
-        Some(t) => tags.iter().any(|have| have == t),
+        Some(t) => {
+            s.tags.iter().any(|have| have == t) || s.tags_inferred.iter().any(|have| have == t)
+        }
     };
 
     let mut hits = Vec::new();
@@ -92,25 +96,39 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     // one row per canonical tag over the status/date-filtered sources, count
     // descending. `term` narrows by substring; a `--tag` filter is exact.
     if q.kind == Some(QueryKind::Tags) {
-        let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        // (operator count, inferred count) per canonical tag.
+        let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
+            std::collections::BTreeMap::new();
         for s in &model.sources {
             if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) {
                 continue;
             }
             for t in &s.tags {
-                *counts.entry(t.as_str()).or_default() += 1;
+                counts.entry(t.as_str()).or_default().0 += 1;
+            }
+            for t in &s.tags_inferred {
+                counts.entry(t.as_str()).or_default().1 += 1;
             }
         }
-        let mut rows: Vec<(&str, usize)> = counts
+        let mut rows: Vec<(&str, (usize, usize))> = counts
             .into_iter()
             .filter(|(t, _)| matches(&[t]) && tag.as_deref().map(|want| *t == want).unwrap_or(true))
             .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        for (t, n) in rows {
+        rows.sort_by(|a, b| {
+            (b.1.0 + b.1.1)
+                .cmp(&(a.1.0 + a.1.1))
+                .then_with(|| a.0.cmp(b.0))
+        });
+        for (t, (user, inferred)) in rows {
+            let line = if inferred > 0 {
+                format!("{t} ({user}, ~{inferred})")
+            } else {
+                format!("{t} ({user})")
+            };
             hits.push(Hit {
                 kind: "tag".into(),
                 status: "tag".into(),
-                line: format!("{t} ({n})"),
+                line,
                 path: None,
                 id: Some(t.to_string()),
             });
@@ -121,7 +139,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Sources) {
         for s in &model.sources {
             let status = source_status_str(s.status);
-            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(&s.tags) {
+            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(s) {
                 continue;
             }
             let title = s.title.as_deref().unwrap_or("(untitled)");
@@ -136,6 +154,9 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             }
             if !s.tags.is_empty() {
                 line.push_str(&format!(" #{}", s.tags.join(" #")));
+            }
+            if !s.tags_inferred.is_empty() {
+                line.push_str(&format!(" ~#{}", s.tags_inferred.join(" ~#")));
             }
             if s.fail_count > 0 {
                 line.push_str(&format!(" fails={}", s.fail_count));

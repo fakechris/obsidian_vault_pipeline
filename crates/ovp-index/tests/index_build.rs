@@ -889,6 +889,65 @@ fn tags_are_read_from_current_frontmatter_normalized_and_alias_resolved() {
 }
 
 #[test]
+fn inferred_tags_attach_only_to_untagged_sources_and_match_the_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let untagged_sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-06/untagged.md",
+        "---\ntitle: Untagged Note\nsource: https://e.x/u\n---\nbody\n",
+    );
+    let tagged_sha = place(
+        root,
+        "50-Inbox/01-Raw/2026-06/tagged.md",
+        "---\ntitle: Tagged Note\nsource: https://e.x/t\ntags:\n  - rust\n---\nbody\n",
+    );
+    // Inferred file covers BOTH shas: the untagged row gains tags_inferred;
+    // the tagged row must ignore its (stale) entry entirely.
+    place(
+        root,
+        ".ovp/tags/inferred.json",
+        &format!(
+            r#"{{"schema":"ovp.tags-inferred/v1","model":"m","entries":{{
+                "{untagged_sha}": [{{"tag":"agent","score":0.7,"support":3}}],
+                "{tagged_sha}": [{{"tag":"python","score":0.5,"support":2}}]
+            }}}}"#
+        ),
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let untagged = model.sources.iter().find(|s| s.sha256 == untagged_sha).unwrap();
+    assert!(untagged.tags.is_empty());
+    assert_eq!(untagged.tags_inferred, vec!["agent"]);
+    let tagged = model.sources.iter().find(|s| s.sha256 == tagged_sha).unwrap();
+    assert_eq!(tagged.tags, vec!["rust"]);
+    assert!(tagged.tags_inferred.is_empty(), "hand-tagging retires inference");
+
+    // The tag filter matches inferred tags; the line marks them `~#`.
+    let hits = run_query(
+        &model,
+        &Query {
+            tag: Some("agent".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].line.contains("~#agent"), "{}", hits[0].line);
+
+    // Vocabulary listing separates operator and inferred counts.
+    let vocab = run_query(
+        &model,
+        &Query {
+            kind: Some(QueryKind::Tags),
+            ..Default::default()
+        },
+    );
+    let lines: Vec<&str> = vocab.iter().map(|h| h.line.as_str()).collect();
+    assert_eq!(lines, vec!["agent (0, ~1)", "rust (1)"]);
+}
+
+#[test]
 fn broken_alias_table_fails_the_build_loudly() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

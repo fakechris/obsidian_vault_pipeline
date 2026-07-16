@@ -157,6 +157,73 @@ impl TagAliases {
     }
 }
 
+pub const TAGS_INFERRED_SCHEMA: &str = "ovp.tags-inferred/v1";
+
+/// One machine-inferred tag on one source, with its evidence.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InferredTag {
+    pub tag: String,
+    /// Share of neighbor similarity weight that voted for this tag (0..1).
+    pub score: f64,
+    /// Number of neighbors carrying the tag.
+    pub support: usize,
+}
+
+/// `.ovp/tags/inferred.json` — kNN-voted tags for sources that had NO
+/// operator tags at generation time. A rebuildable projection: regenerate
+/// with `tags-suggest`, delete freely. The index attaches these as
+/// `tags_inferred`, never mixing them into operator tags, and drops them for
+/// any source that has since gained real tags (self-healing staleness).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TagsInferredFile {
+    pub schema: String,
+    /// Embedding model the neighbor graph was built with.
+    pub model: String,
+    /// Generation parameters, recorded for auditability (k, thresholds…).
+    #[serde(default)]
+    pub params: BTreeMap<String, f64>,
+    /// source sha256 → inferred tags (score descending).
+    #[serde(default)]
+    pub entries: BTreeMap<String, Vec<InferredTag>>,
+}
+
+impl TagsInferredFile {
+    /// Load from the vault. Missing file → `None` (feature unused); a present
+    /// but unparseable file is an error — silently dropping every inferred
+    /// tag would read as "backfill vanished".
+    pub fn load(vault_root: &Path) -> Result<Option<Self>, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_inferred_file());
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("reading {}: {e}", path.display())),
+        };
+        let file: Self = serde_json::from_str(&raw)
+            .map_err(|e| format!("parsing {}: {e}", path.display()))?;
+        if file.schema != TAGS_INFERRED_SCHEMA {
+            return Err(format!(
+                "{}: unknown schema {:?} (expected {TAGS_INFERRED_SCHEMA:?})",
+                path.display(),
+                file.schema
+            ));
+        }
+        Ok(Some(file))
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<String, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_inferred_file());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let body = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("serializing inferred tags: {e}"))?;
+        std::fs::write(&path, format!("{body}\n"))
+            .map_err(|e| format!("writing {}: {e}", path.display()))?;
+        Ok(path.display().to_string())
+    }
+}
+
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop
 /// boilerplate, resolve aliases, apply the operator drop list. The one entry
 /// point projections use.

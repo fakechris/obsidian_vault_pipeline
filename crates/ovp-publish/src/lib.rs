@@ -454,6 +454,7 @@ mod tests {
             fail_count: 0,
             last_reason: None,
             tags: Vec::new(),
+            tags_inferred: Vec::new(),
         }
     }
 
