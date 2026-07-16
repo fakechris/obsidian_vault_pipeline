@@ -240,6 +240,12 @@ impl VaultLayout {
     pub fn tags_proposals_file(&self) -> &'static str {
         ".ovp/tags/proposals.md"
     }
+
+    /// The closed tag vocabulary the classifier picks from (`tags-bootstrap`
+    /// rebuilds user/community entries; llm entries persist; operator-curable).
+    pub fn tags_vocabulary_file(&self) -> &'static str {
+        ".ovp/tags/vocabulary.toml"
+    }
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be
