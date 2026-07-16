@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use ovp_domain::tags::{TagAliases, normalize_tag};
+use ovp_domain::tags::TagAliases;
 use ovp_index::{
     build_evidence, build_index_with_progress, read_evidence, read_index, run_evidence_query,
     run_query, write_evidence, write_index, Query, QueryKind,
@@ -79,9 +79,9 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         None => None,
         Some(raw) => {
             let aliases = TagAliases::load(&args.vault_root).map_err(CliError::Io)?;
-            let normalized = normalize_tag(raw)
-                .ok_or_else(|| CliError::Io(format!("--tag {raw:?} normalizes to nothing")))?;
-            Some(aliases.resolve(&normalized).to_string())
+            Some(aliases.resolve_raw(raw).ok_or_else(|| {
+                CliError::Io(format!("--tag {raw:?} normalizes to nothing"))
+            })?)
         }
     };
     let query = Query {

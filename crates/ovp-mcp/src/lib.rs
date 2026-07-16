@@ -6,7 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use ovp_domain::VaultLayout;
-use ovp_domain::tags::{TagAliases, normalize_tag};
+use ovp_domain::tags::TagAliases;
 use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -207,10 +207,7 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // should answer, not crash); `ovp2 index` is where breakage fails loud.
     let tag = args.get("tag").and_then(|v| v.as_str()).map(|raw| {
         let aliases = TagAliases::load(&state.vault_root).unwrap_or_default();
-        match normalize_tag(raw) {
-            Some(n) => aliases.resolve(&n).to_string(),
-            None => raw.to_string(),
-        }
+        aliases.resolve_raw(raw).unwrap_or_else(|| raw.to_string())
     });
     let query = Query {
         kind: args.get("kind").and_then(|v| v.as_str()).and_then(|k| match k {

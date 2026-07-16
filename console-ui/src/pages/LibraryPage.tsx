@@ -81,9 +81,11 @@ function LibraryBody({ model }: { model: IndexModel }) {
   // when the index carries no tags (pre-tag index or redacted public model).
   const TAG_FACET_LIMIT = 15;
   const tagFacet = tagCounts.slice(0, TAG_FACET_LIMIT);
+  let hiddenTagCount = Math.max(0, tagCounts.length - TAG_FACET_LIMIT);
   if (tag && !tagFacet.some(([t]) => t === tag)) {
     const active = tagCounts.find(([t]) => t === tag);
     tagFacet.push(active ?? [tag, 0]);
+    if (active) hiddenTagCount -= 1; // revealed below, no longer hidden
   }
 
   return (
@@ -156,9 +158,9 @@ function LibraryBody({ model }: { model: IndexModel }) {
                 </li>
               ))}
             </ul>
-            {tagCounts.length > TAG_FACET_LIMIT && (
+            {hiddenTagCount > 0 && (
               <p className="muted sm">
-                +{tagCounts.length - TAG_FACET_LIMIT} {t('library.moreTags')}
+                +{hiddenTagCount} {t('library.moreTags')}
               </p>
             )}
           </div>
@@ -216,7 +218,10 @@ function LibraryBody({ model }: { model: IndexModel }) {
                         key={tg}
                         type="button"
                         className={`tag-chip${tag === tg ? ' active' : ''}`}
-                        onClick={() => setParam('tag', tag === tg ? null : tg)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setParam('tag', tag === tg ? null : tg);
+                        }}
                       >
                         #{tg}
                       </button>

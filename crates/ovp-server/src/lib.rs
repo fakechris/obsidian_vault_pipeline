@@ -638,10 +638,7 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
     // not 500 — `ovp2 index` is where table breakage fails loud).
     let tag = params.get("tag").map(|raw| {
         let aliases = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
-        match ovp_domain::tags::normalize_tag(raw) {
-            Some(n) => aliases.resolve(&n).to_string(),
-            None => raw.clone(),
-        }
+        aliases.resolve_raw(raw).unwrap_or_else(|| raw.clone())
     });
     let query = Query {
         kind: params.get("kind").and_then(|k| match k.as_str() {
