@@ -127,6 +127,8 @@ export const en = {
   'library.pinboard': 'Pinboard',
   'library.capture': 'Capture',
   'library.byMonth': 'By month',
+  'library.byTag': 'By tag',
+  'library.moreTags': 'more tags',
   'library.statusAll': 'All',
   'library.empty': 'No sources match the current filters.',
   'library.noDate': 'no date',

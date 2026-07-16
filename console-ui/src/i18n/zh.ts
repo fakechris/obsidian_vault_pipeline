@@ -118,6 +118,8 @@ export const zh: Record<keyof typeof en, string> = {
   'library.pinboard': '书签',
   'library.capture': '捕获',
   'library.byMonth': '按月',
+  'library.byTag': '按标签',
+  'library.moreTags': '更多标签',
   'library.statusAll': '全部',
   'library.empty': '当前筛选下没有匹配的源。',
   'library.noDate': '无日期',

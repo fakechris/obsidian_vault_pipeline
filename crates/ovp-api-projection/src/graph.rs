@@ -1953,6 +1953,7 @@ mod tests {
                     pack_dir: Some(format!("40-Resources/Reader/{case}")),
                     fail_count: 0,
                     last_reason: None,
+                    tags: Vec::new(),
                 })
                 .collect(),
             packs: cases
@@ -2033,6 +2034,7 @@ mod tests {
             pack_dir: None,
             fail_count: 0,
             last_reason: None,
+            tags: Vec::new(),
         });
         let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
         assert_eq!(resp.nodes.len(), 1);
@@ -2082,6 +2084,7 @@ mod tests {
             pack_dir: Some("40-Resources/Reader/fresh".into()),
             fail_count: 0,
             last_reason: None,
+            tags: Vec::new(),
         });
         let evidence = evidence_for("fresh", "freshsha", 2);
         let resp =

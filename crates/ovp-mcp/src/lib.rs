@@ -6,6 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use ovp_domain::VaultLayout;
+use ovp_domain::tags::{TagAliases, normalize_tag};
 use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,14 +148,15 @@ fn handle_tools_list() -> Result<Value, RpcError> {
         "tools": [
             {
                 "name": "find",
-                "description": "Query the OVP index: sources, packs, claims, runs. Filter by kind, status, date, or free-text term.",
+                "description": "Query the OVP index: sources, packs, claims, runs, tags. Filter by kind, status, date, tag, or free-text term.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "term": { "type": "string", "description": "Free-text search term" },
-                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs"] },
+                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs", "tags"] },
                         "status": { "type": "string" },
-                        "date": { "type": "string", "description": "Date prefix (YYYY or YYYY-MM or YYYY-MM-DD)" }
+                        "date": { "type": "string", "description": "Date prefix (YYYY or YYYY-MM or YYYY-MM-DD)" },
+                        "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" }
                     }
                 }
             },
@@ -200,17 +202,29 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     let model = state.load_model()
         .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
 
+    // A queried alias resolves to its canonical tag, same as `ovp2 find`.
+    // A broken alias table degrades to normalize-only here (a read tool
+    // should answer, not crash); `ovp2 index` is where breakage fails loud.
+    let tag = args.get("tag").and_then(|v| v.as_str()).map(|raw| {
+        let aliases = TagAliases::load(&state.vault_root).unwrap_or_default();
+        match normalize_tag(raw) {
+            Some(n) => aliases.resolve(&n).to_string(),
+            None => raw.to_string(),
+        }
+    });
     let query = Query {
         kind: args.get("kind").and_then(|v| v.as_str()).and_then(|k| match k {
             "sources" => Some(QueryKind::Sources),
             "packs" => Some(QueryKind::Packs),
             "claims" => Some(QueryKind::Claims),
             "runs" => Some(QueryKind::Runs),
+            "tags" => Some(QueryKind::Tags),
             _ => None,
         }),
         status: args.get("status").and_then(|v| v.as_str()).map(String::from),
         date: args.get("date").and_then(|v| v.as_str()).map(String::from),
         term: args.get("term").and_then(|v| v.as_str()).map(String::from),
+        tag,
     };
 
     let hits = run_query(&model, &query);
@@ -226,7 +240,7 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
 
     let term = args.get("query").and_then(|v| v.as_str()).map(String::from);
-    let query = Query { kind: None, status: None, date: None, term };
+    let query = Query { kind: None, status: None, date: None, term, tag: None };
     let hits = run_query(&model, &query);
     let text = serde_json::to_string_pretty(&hits).unwrap_or_else(|_| "[]".into());
 

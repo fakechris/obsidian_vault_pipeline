@@ -307,7 +307,8 @@ enum Cmd {
         vault_root: PathBuf,
         /// Case-insensitive substring over titles/URLs/paths/cards/claims.
         term: Option<String>,
-        /// Restrict to one kind: sources|packs|claims|runs|cards|units.
+        /// Restrict to one kind: sources|packs|claims|runs|cards|units|tags
+        /// (`tags` lists the canonical tag vocabulary with source counts).
         #[arg(long)]
         kind: Option<String>,
         /// Status filter (queued|processed|failed|blocked|needs_content|
@@ -317,6 +318,10 @@ enum Cmd {
         /// Date prefix filter (2026 / 2026-06 / 2026-06-09).
         #[arg(long)]
         date: Option<String>,
+        /// Canonical tag filter over sources (variant spellings and aliases
+        /// resolve via `.ovp/tags/aliases.toml` before matching).
+        #[arg(long)]
+        tag: Option<String>,
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -1375,6 +1380,7 @@ fn main() -> ExitCode {
             kind,
             status,
             date,
+            tag,
             json,
         } => commands::index_cmd::run_find(commands::index_cmd::FindArgs {
             vault_root,
@@ -1382,6 +1388,7 @@ fn main() -> ExitCode {
             kind,
             status,
             date,
+            tag,
             json,
         }),
         Cmd::Console { vault_root, date } => {

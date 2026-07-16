@@ -633,17 +633,29 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
     };
 
     let params = parse_query_string(url);
+    // Alias-resolve the tag param the same way `ovp2 find` does; a broken
+    // alias table degrades to normalize-only (a read endpoint should answer,
+    // not 500 — `ovp2 index` is where table breakage fails loud).
+    let tag = params.get("tag").map(|raw| {
+        let aliases = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+        match ovp_domain::tags::normalize_tag(raw) {
+            Some(n) => aliases.resolve(&n).to_string(),
+            None => raw.clone(),
+        }
+    });
     let query = Query {
         kind: params.get("kind").and_then(|k| match k.as_str() {
             "sources" => Some(QueryKind::Sources),
             "packs" => Some(QueryKind::Packs),
             "claims" => Some(QueryKind::Claims),
             "runs" => Some(QueryKind::Runs),
+            "tags" => Some(QueryKind::Tags),
             _ => None,
         }),
         status: params.get("status").cloned(),
         date: params.get("date").cloned(),
         term: params.get("term").cloned(),
+        tag,
     };
 
     let body = bodies::find_body(&model, &query).to_string();
@@ -679,6 +691,7 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         status: None,
         date: None,
         term,
+        tag: None,
     };
     let body = bodies::find_body(&model, &query).to_string();
     json_stamped(200, &body, Some(&model))
@@ -1917,6 +1930,7 @@ mod tests {
                 pack_dir: Some("40-Resources/Reader/good".into()),
                 fail_count: 0,
                 last_reason: None,
+                tags: Vec::new(),
             }],
             packs: vec![PackRow {
                 pack_dir: "40-Resources/Reader/good".into(),
@@ -2434,6 +2448,7 @@ mod tests {
             pack_dir: None,
             fail_count: 0,
             last_reason: None,
+            tags: Vec::new(),
         }
     }
 

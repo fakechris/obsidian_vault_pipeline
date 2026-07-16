@@ -17,6 +17,7 @@ use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_le
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
+use ovp_domain::tags::{TagAliases, canonical_tags};
 use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
 use ovp_intake::{IntakeAction, read_intake_ledger};
@@ -106,6 +107,8 @@ pub fn build_index_at_with_progress(
     backfill_corpus_packs(vault_root, &layout, &mut sources, &mut packs)?;
     on_phase(&format!("hashed {} pack(s)", packs.len()));
     enrich_titles_from_packs(&mut sources, &packs);
+    let tagged = attach_tags(vault_root, &mut sources)?;
+    on_phase(&format!("tagged {tagged} source(s)"));
     let claims = build_claims(vault_root, &layout)?;
     on_phase(&format!("folded {} claim(s)", claims.len()));
 
@@ -230,6 +233,7 @@ fn build_sources(
                 pack_dir: None,
                 fail_count: 0,
                 last_reason: rec.note.clone(),
+                tags: Vec::new(),
             },
         );
     }
@@ -251,6 +255,7 @@ fn build_sources(
                 pack_dir: None,
                 fail_count: 0,
                 last_reason: None,
+                tags: Vec::new(),
             });
         entry.date = Some(rec.date.clone());
         entry.last_run_id = Some(rec.run_id.clone());
@@ -314,6 +319,7 @@ fn build_sources(
                     pack_dir: None,
                     fail_count: 0,
                     last_reason: None,
+                    tags: Vec::new(),
                 }
             });
         }
@@ -343,6 +349,30 @@ fn build_sources(
         .collect();
     sort_sources(&mut out);
     Ok(out)
+}
+
+/// Re-read each row's note frontmatter and attach canonical tags. The note's
+/// CURRENT frontmatter is the per-source tag truth (the operator edits it in
+/// place after ingest), so tags are re-derived on every build rather than
+/// copied from ledgers. Per-row read/parse failures are non-fatal — tags
+/// enrich a row, they never gate it — but a present-and-broken alias table
+/// is a hard error (a silently ignored table would un-merge the vocabulary).
+fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, String> {
+    let aliases = TagAliases::load(vault_root)?;
+    let mut tagged = 0;
+    for row in rows.iter_mut() {
+        let Some(rel) = row.rel_path.as_deref() else {
+            continue;
+        };
+        let Ok(doc) = read_source_from_path(&vault_root.join(rel)) else {
+            continue;
+        };
+        row.tags = canonical_tags(&doc.tags, &aliases);
+        if !row.tags.is_empty() {
+            tagged += 1;
+        }
+    }
+    Ok(tagged)
 }
 
 /// Canonical source-row order: status band, then title, then hash. Shared by
@@ -641,6 +671,7 @@ fn backfill_corpus_packs(
                     pack_dir: Some(packs[i].pack_dir.clone()),
                     fail_count: 0,
                     last_reason: None,
+                    tags: Vec::new(),
                 });
                 by_sha.insert(sha256.clone(), sources.len() - 1);
                 changed = true;
@@ -1178,6 +1209,7 @@ mod tests {
             pack_dir: None,
             fail_count: 3,
             last_reason: Some("boom".into()),
+            tags: Vec::new(),
         };
         let sources = vec![
             src("aaaa", SourceStatus::Blocked, "2026-06-30"), // 8 days stuck

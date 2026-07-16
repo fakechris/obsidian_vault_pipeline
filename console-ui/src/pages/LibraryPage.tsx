@@ -8,6 +8,7 @@ import { useI18n, type MsgKey } from '../i18n';
 import {
   collectionOf,
   countBy,
+  countTags,
   filterSources,
   groupByMonth,
   monthOf,
@@ -32,6 +33,11 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const collection = params.get('c') as Collection | null;
   const month = params.get('m');
   const status = params.get('status');
+  // Honor ?tag= only when the model actually carries tags — on a pre-tag
+  // index or the redacted public model a deep-linked tag would silently
+  // filter out every source under an invisible facet.
+  const tagCounts = countTags(model.sources);
+  const tag = tagCounts.length > 0 ? params.get('tag') : null;
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -66,8 +72,19 @@ function LibraryBody({ model }: { model: IndexModel }) {
       !STATIC_MODE && collection && COLLECTIONS.includes(collection) ? collection : null,
     month,
     status,
+    tag,
   });
   const groups = groupByMonth(filtered);
+
+  // Tag facet: top of the vocabulary by count (plus the active tag, so a
+  // deep-linked ?tag= never renders as an invisible filter). Hidden entirely
+  // when the index carries no tags (pre-tag index or redacted public model).
+  const TAG_FACET_LIMIT = 15;
+  const tagFacet = tagCounts.slice(0, TAG_FACET_LIMIT);
+  if (tag && !tagFacet.some(([t]) => t === tag)) {
+    const active = tagCounts.find(([t]) => t === tag);
+    tagFacet.push(active ?? [tag, 0]);
+  }
 
   return (
     <div className="grid library">
@@ -122,6 +139,30 @@ function LibraryBody({ model }: { model: IndexModel }) {
             ))}
           </ul>
         </div>
+        {tagFacet.length > 0 && (
+          <div className="facet-group">
+            <h3>{t('library.byTag')}</h3>
+            <ul className="facet-list">
+              {tagFacet.map(([tg, n]) => (
+                <li key={tg}>
+                  <button
+                    type="button"
+                    className={tag === tg ? 'active' : ''}
+                    onClick={() => setParam('tag', tag === tg ? null : tg)}
+                  >
+                    <span>#{tg}</span>
+                    <span className="count">{n}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {tagCounts.length > TAG_FACET_LIMIT && (
+              <p className="muted sm">
+                +{tagCounts.length - TAG_FACET_LIMIT} {t('library.moreTags')}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* list column */}
@@ -170,6 +211,16 @@ function LibraryBody({ model }: { model: IndexModel }) {
                       )}
                   </span>
                   <span className="meta">
+                    {(s.tags ?? []).map((tg) => (
+                      <button
+                        key={tg}
+                        type="button"
+                        className={`tag-chip${tag === tg ? ' active' : ''}`}
+                        onClick={() => setParam('tag', tag === tg ? null : tg)}
+                      >
+                        #{tg}
+                      </button>
+                    ))}
                     {s.date ?? ''} · {t(collectionLabel(collectionOf(s)))}
                   </span>
                 </div>

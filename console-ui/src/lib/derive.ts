@@ -324,6 +324,7 @@ export interface LibraryFilter {
   collection: Collection | null;
   month: string | null;
   status: string | null;
+  tag: string | null;
 }
 
 export function filterSources(
@@ -334,8 +335,20 @@ export function filterSources(
     (s) =>
       (filter.collection === null || collectionOf(s) === filter.collection) &&
       (filter.month === null || monthOf(s) === filter.month) &&
-      (filter.status === null || s.status === filter.status),
+      (filter.status === null || s.status === filter.status) &&
+      (filter.tag === null || (s.tags ?? []).includes(filter.tag)),
   );
+}
+
+/** Tag → source count over the whole library, count desc then name. */
+export function countTags(sources: SourceRow[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const s of sources) {
+    for (const t of s.tags ?? []) {
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
 export interface MonthGroup {

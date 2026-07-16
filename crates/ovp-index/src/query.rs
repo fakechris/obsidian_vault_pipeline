@@ -15,6 +15,10 @@ pub enum QueryKind {
     Runs,
     Cards,
     Units,
+    /// The tag vocabulary itself: one row per canonical tag with its source
+    /// count. Never included in the default all-kinds sweep — only an
+    /// explicit `--kind tags` lists it.
+    Tags,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -29,6 +33,11 @@ pub struct Query {
     /// Case-insensitive substring over titles, URLs, paths, card titles,
     /// claim text, themes, run ids.
     pub term: Option<String>,
+    /// Canonical tag filter (exact match after normalization). Tags are a
+    /// source-level axis: a tag filter restricts sources and excludes the
+    /// kinds that carry no tags (packs/claims/runs/cards/units), the same
+    /// way a date filter excludes claims.
+    pub tag: Option<String>,
 }
 
 /// One result row, kind-tagged, with a printable line and a link target.
@@ -61,13 +70,58 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         Some(prefix) => d.is_some_and(|d| d.starts_with(prefix)),
     };
     let kind_ok = |k: QueryKind| q.kind.map(|want| want == k).unwrap_or(true);
+    // Normalized once so `--tag Claude_Code` matches the canonical form. An
+    // explicit filter that normalizes to nothing (`tag=#`, whitespace) must
+    // match NOTHING — collapsing it to "no filter" would silently return
+    // every row.
+    let tag = match q.tag.as_deref() {
+        None => None,
+        Some(raw) => match ovp_domain::tags::normalize_tag(raw) {
+            Some(t) => Some(t),
+            None => return Vec::new(),
+        },
+    };
+    let tag_ok = |tags: &[String]| match &tag {
+        None => true,
+        Some(t) => tags.iter().any(|have| have == t),
+    };
 
     let mut hits = Vec::new();
+
+    // The vocabulary listing is explicit-only (never in the all-kinds sweep):
+    // one row per canonical tag over the status/date-filtered sources, count
+    // descending. `term` narrows by substring; a `--tag` filter is exact.
+    if q.kind == Some(QueryKind::Tags) {
+        let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for s in &model.sources {
+            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) {
+                continue;
+            }
+            for t in &s.tags {
+                *counts.entry(t.as_str()).or_default() += 1;
+            }
+        }
+        let mut rows: Vec<(&str, usize)> = counts
+            .into_iter()
+            .filter(|(t, _)| matches(&[t]) && tag.as_deref().map(|want| *t == want).unwrap_or(true))
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        for (t, n) in rows {
+            hits.push(Hit {
+                kind: "tag".into(),
+                status: "tag".into(),
+                line: format!("{t} ({n})"),
+                path: None,
+                id: Some(t.to_string()),
+            });
+        }
+        return hits;
+    }
 
     if kind_ok(QueryKind::Sources) {
         for s in &model.sources {
             let status = source_status_str(s.status);
-            if !status_ok(status) || !date_ok(s.date.as_deref()) {
+            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(&s.tags) {
                 continue;
             }
             let title = s.title.as_deref().unwrap_or("(untitled)");
@@ -79,6 +133,9 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             let mut line = format!("{title} [{status}]");
             if let Some(d) = &s.date {
                 line.push_str(&format!(" {d}"));
+            }
+            if !s.tags.is_empty() {
+                line.push_str(&format!(" #{}", s.tags.join(" #")));
             }
             if s.fail_count > 0 {
                 line.push_str(&format!(" fails={}", s.fail_count));
@@ -98,7 +155,8 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
 
     if kind_ok(QueryKind::Packs) {
         for p in &model.packs {
-            if !status_ok("pack") || !date_ok(p.date.as_deref()) {
+            // Packs/claims/runs carry no tags; a tag filter excludes them.
+            if tag.is_some() || !status_ok("pack") || !date_ok(p.date.as_deref()) {
                 continue;
             }
             let cards_joined = p.card_titles.join(" | ");
@@ -128,8 +186,8 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Claims) {
         for c in &model.claims {
             let status = claim_status_str(c.status);
-            // Claims carry no date; a date filter excludes them.
-            if !status_ok(status) || q.date.is_some() {
+            // Claims carry no date or tags; either filter excludes them.
+            if !status_ok(status) || q.date.is_some() || tag.is_some() {
                 continue;
             }
             let theme = c.theme.as_deref().unwrap_or("");
@@ -152,7 +210,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
 
     if kind_ok(QueryKind::Runs) {
         for r in &model.runs {
-            if !status_ok("run") || !date_ok(Some(&r.date)) {
+            if tag.is_some() || !status_ok("run") || !date_ok(Some(&r.date)) {
                 continue;
             }
             if !matches(&[&r.run_id, &r.date]) {
@@ -180,7 +238,8 @@ pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> 
     let term = q.term.as_deref().unwrap_or("");
     let mut scored: Vec<(f64, String, Hit)> = Vec::new();
 
-    if q.date.is_some() {
+    // Evidence rows carry no date or tags; either filter excludes them.
+    if q.date.is_some() || q.tag.is_some() {
         return Vec::new();
     }
 

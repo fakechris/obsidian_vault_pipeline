@@ -36,6 +36,10 @@ impl PublicView {
             s.last_run_id = None;
             s.fail_count = 0;
             s.pack_dir = s.pack_dir.as_deref().map(case_id).map(str::to_string);
+            // Tags are the operator's personal taxonomy — private by default.
+            // Publishing them is a deliberate future decision, not a side
+            // effect of the tag facet landing on the live portal.
+            s.tags.clear();
         }
         let public_shas: std::collections::HashSet<&str> =
             m.sources.iter().map(|s| s.sha256.as_str()).collect();
@@ -134,6 +138,7 @@ mod tests {
             pack_dir: Some("40-Resources/Reader/case".into()),
             fail_count: 3,
             last_reason: reason.map(String::from),
+            tags: vec!["agent".into()],
         }
     }
 
@@ -187,6 +192,8 @@ mod tests {
         assert!(m.sources[0].last_reason.is_none());
         assert!(m.sources[0].last_run_id.is_none());
         assert_eq!(m.sources[0].fail_count, 0);
+        // Personal taxonomy never ships publicly.
+        assert!(m.sources[0].tags.is_empty());
         // Only the durable claim survives, citing only the public case.
         assert_eq!(m.claims.len(), 1);
         assert_eq!(m.claims[0].claim_id, "d1");
