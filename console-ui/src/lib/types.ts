@@ -118,6 +118,9 @@ export interface SourceRow {
   /** Canonical content tags (normalized + alias-resolved at index build).
    * Absent on pre-tag indexes and on the redacted public model. */
   tags?: string[];
+  /** Machine-inferred backfill tags (tags-suggest kNN vote). Present only
+   * while the source has no operator tags; rendered visibly weaker. */
+  tags_inferred?: string[];
 }
 
 export interface PackRow {

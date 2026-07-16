@@ -55,6 +55,12 @@ pub struct SourceRow {
     /// Serde-additive: pre-tag indexes deserialize to empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Machine-inferred tags (`tags-suggest` kNN vote, `.ovp/tags/inferred.json`)
+    /// — attached ONLY while the source has no operator tags, so a later
+    /// hand-tagging silently retires them. Kept strictly apart from `tags`;
+    /// surfaces render them visibly weaker (`~#tag`, dashed chips).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_inferred: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

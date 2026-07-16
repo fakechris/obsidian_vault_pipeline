@@ -336,15 +336,21 @@ export function filterSources(
       (filter.collection === null || collectionOf(s) === filter.collection) &&
       (filter.month === null || monthOf(s) === filter.month) &&
       (filter.status === null || s.status === filter.status) &&
-      (filter.tag === null || (s.tags ?? []).includes(filter.tag)),
+      (filter.tag === null ||
+        (s.tags ?? []).includes(filter.tag) ||
+        (s.tags_inferred ?? []).includes(filter.tag)),
   );
 }
 
-/** Tag → source count over the whole library, count desc then name. */
+/** Tag → source count over the whole library (operator + inferred — the
+ * facet filters on both), count desc then name. */
 export function countTags(sources: SourceRow[]): [string, number][] {
   const counts = new Map<string, number>();
   for (const s of sources) {
     for (const t of s.tags ?? []) {
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    for (const t of s.tags_inferred ?? []) {
       counts.set(t, (counts.get(t) ?? 0) + 1);
     }
   }

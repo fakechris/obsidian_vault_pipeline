@@ -17,7 +17,7 @@ use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_le
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
-use ovp_domain::tags::{TagAliases, canonical_tags};
+use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
 use ovp_intake::{IntakeAction, read_intake_ledger};
@@ -234,6 +234,7 @@ fn build_sources(
                 fail_count: 0,
                 last_reason: rec.note.clone(),
                 tags: Vec::new(),
+                tags_inferred: Vec::new(),
             },
         );
     }
@@ -256,6 +257,7 @@ fn build_sources(
                 fail_count: 0,
                 last_reason: None,
                 tags: Vec::new(),
+                tags_inferred: Vec::new(),
             });
         entry.date = Some(rec.date.clone());
         entry.last_run_id = Some(rec.run_id.clone());
@@ -320,6 +322,7 @@ fn build_sources(
                     fail_count: 0,
                     last_reason: None,
                     tags: Vec::new(),
+                    tags_inferred: Vec::new(),
                 }
             });
         }
@@ -359,6 +362,7 @@ fn build_sources(
 /// is a hard error (a silently ignored table would un-merge the vocabulary).
 fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, String> {
     let aliases = TagAliases::load(vault_root)?;
+    let inferred = TagsInferredFile::load(vault_root)?.unwrap_or_default();
     let mut tagged = 0;
     for row in rows.iter_mut() {
         let Some(rel) = row.rel_path.as_deref() else {
@@ -370,6 +374,13 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         row.tags = canonical_tags(&doc.tags, &aliases);
         if !row.tags.is_empty() {
             tagged += 1;
+        } else if let Some(voted) = inferred.entries.get(&row.sha256) {
+            // Backfill applies ONLY while the source has no operator tags —
+            // hand-tagging a note silently retires its inferred tags on the
+            // next build. Inferred names re-run through the alias pipe so a
+            // later merge also heals stale inference output.
+            let names: Vec<&str> = voted.iter().map(|t| t.tag.as_str()).collect();
+            row.tags_inferred = canonical_tags(&names, &aliases);
         }
     }
     Ok(tagged)
@@ -672,6 +683,7 @@ fn backfill_corpus_packs(
                     fail_count: 0,
                     last_reason: None,
                     tags: Vec::new(),
+                    tags_inferred: Vec::new(),
                 });
                 by_sha.insert(sha256.clone(), sources.len() - 1);
                 changed = true;
@@ -1210,6 +1222,7 @@ mod tests {
             fail_count: 3,
             last_reason: Some("boom".into()),
             tags: Vec::new(),
+            tags_inferred: Vec::new(),
         };
         let sources = vec![
             src("aaaa", SourceStatus::Blocked, "2026-06-30"), // 8 days stuck

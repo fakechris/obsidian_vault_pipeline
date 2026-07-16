@@ -664,6 +664,30 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         seed: u64,
     },
+    /// Propose tag curation over the embedding layer: merge candidates for
+    /// near-duplicate tags (→ .ovp/tags/proposals.md, paste into aliases.toml
+    /// after review) and kNN-voted backfill tags for untagged sources
+    /// (→ .ovp/tags/inferred.json, surfaced as tags_inferred). Deterministic,
+    /// no LLM; reuses the crystal-themes embedding cache. Run `index` first.
+    TagsSuggest {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Cosine floor for a merge proposal to enter the report.
+        #[arg(long, default_value_t = 0.75)]
+        merge_threshold: f64,
+        /// Tagged neighbors consulted per untagged source.
+        #[arg(long, default_value_t = 10)]
+        knn_k: usize,
+        /// Minimum share of neighbor similarity weight a tag needs (0..1).
+        #[arg(long, default_value_t = 0.35)]
+        vote_threshold: f64,
+        /// Minimum number of neighbors carrying the tag.
+        #[arg(long, default_value_t = 2)]
+        min_support: usize,
+        /// Cap on inferred tags per source.
+        #[arg(long, default_value_t = 5)]
+        max_tags: usize,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M25 Crystal Review Workbench: apply human review decisions over caveated
     /// claims into a REVISED structured candidate. The decision authors a
@@ -1716,6 +1740,21 @@ fn main() -> ExitCode {
                 seed,
             })
         }
+        Cmd::TagsSuggest {
+            vault_root,
+            merge_threshold,
+            knn_k,
+            vote_threshold,
+            min_support,
+            max_tags,
+        } => commands::tags_suggest::run(commands::tags_suggest::TagsSuggestArgs {
+            vault_root,
+            merge_threshold,
+            knn: knn_k,
+            vote_threshold,
+            min_support,
+            max_tags,
+        }),
         Cmd::CrystalReview {
             candidate,
             decisions,
