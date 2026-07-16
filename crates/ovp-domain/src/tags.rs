@@ -127,6 +127,15 @@ impl TagAliases {
                      capture-mechanism tags never surface as content facets"
                 ));
             }
+            // Boilerplate is filtered BEFORE alias resolution, so an alias
+            // keyed on it could never fire — dead config fails loud like
+            // every other structural-rot case here.
+            if BOILERPLATE_TAGS.contains(&alias.as_str()) {
+                return Err(format!(
+                    "tag aliases: {alias:?} is a boilerplate capture tag; it is \
+                     filtered before alias resolution, so this entry can never fire"
+                ));
+            }
         }
         Ok(Self { map, drop })
     }
@@ -146,6 +155,14 @@ impl TagAliases {
     /// Canonical form of an already-normalized tag.
     pub fn resolve<'a>(&'a self, normalized: &'a str) -> &'a str {
         self.map.get(normalized).map(String::as_str).unwrap_or(normalized)
+    }
+
+    /// Resolve a RAW user-supplied tag (query params, CLI flags): normalize,
+    /// then alias-resolve. `None` when nothing survives normalization — the
+    /// caller decides whether that is an error (CLI) or a match-nothing
+    /// passthrough (read endpoints). The one helper every query surface uses.
+    pub fn resolve_raw(&self, raw: &str) -> Option<String> {
+        normalize_tag(raw).map(|n| self.resolve(&n).to_string())
     }
 
     pub fn is_empty(&self) -> bool {
