@@ -68,7 +68,10 @@ impl TagAliases {
     /// to its canonical, or a transitive chain (a canonical that is itself
     /// an alias) — chains would make resolution order-dependent.
     pub fn parse(text: &str) -> Result<Self, String> {
+        // deny_unknown_fields: a typo like `[alias]` must fail loud, not
+        // parse as an empty table that silently un-merges the vocabulary.
         #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct File {
             #[serde(default)]
             aliases: BTreeMap<String, String>,
@@ -99,7 +102,7 @@ impl TagAliases {
                 ));
             }
         }
-        for canonical in map.values() {
+        for (alias, canonical) in &map {
             if map.contains_key(canonical) {
                 return Err(format!(
                     "tag aliases: {canonical:?} is both a canonical and an alias (chain); \
@@ -110,6 +113,18 @@ impl TagAliases {
                 return Err(format!(
                     "tag aliases: {canonical:?} is both a canonical and dropped; \
                      alias the variants to a kept tag or drop them directly"
+                ));
+            }
+            if drop.contains(alias) {
+                return Err(format!(
+                    "tag aliases: {alias:?} is both an alias and dropped; \
+                     pick one — drop wins would silently disable the merge"
+                ));
+            }
+            if BOILERPLATE_TAGS.contains(&canonical.as_str()) {
+                return Err(format!(
+                    "tag aliases: {alias:?} maps to boilerplate {canonical:?}; \
+                     capture-mechanism tags never surface as content facets"
                 ));
             }
         }
@@ -195,6 +210,20 @@ mod tests {
         let err = TagAliases::parse("drop = [\"tweet\"]\n[aliases]\n\"tweets\" = \"tweet\"\n")
             .unwrap_err();
         assert!(err.contains("dropped"), "{err}");
+        // An alias key in the drop list is ambiguous config — fail loud.
+        let err = TagAliases::parse("drop = [\"tweets\"]\n[aliases]\n\"tweets\" = \"tweet\"\n")
+            .unwrap_err();
+        assert!(err.contains("both an alias and dropped"), "{err}");
+    }
+
+    #[test]
+    fn parse_rejects_typo_sections_and_boilerplate_canonicals() {
+        // `[alias]` (typo) must not parse as an empty table.
+        assert!(TagAliases::parse("[alias]\n\"a\" = \"b\"\n").is_err());
+        // Aliasing onto a boilerplate capture tag can never surface.
+        let err =
+            TagAliases::parse("[aliases]\n\"clipping\" = \"clippings\"\n").unwrap_err();
+        assert!(err.contains("boilerplate"), "{err}");
     }
 
     #[test]

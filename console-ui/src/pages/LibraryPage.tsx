@@ -33,7 +33,11 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const collection = params.get('c') as Collection | null;
   const month = params.get('m');
   const status = params.get('status');
-  const tag = params.get('tag');
+  // Honor ?tag= only when the model actually carries tags — on a pre-tag
+  // index or the redacted public model a deep-linked tag would silently
+  // filter out every source under an invisible facet.
+  const tagCounts = countTags(model.sources);
+  const tag = tagCounts.length > 0 ? params.get('tag') : null;
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -76,7 +80,6 @@ function LibraryBody({ model }: { model: IndexModel }) {
   // deep-linked ?tag= never renders as an invisible filter). Hidden entirely
   // when the index carries no tags (pre-tag index or redacted public model).
   const TAG_FACET_LIMIT = 15;
-  const tagCounts = countTags(model.sources);
   const tagFacet = tagCounts.slice(0, TAG_FACET_LIMIT);
   if (tag && !tagFacet.some(([t]) => t === tag)) {
     const active = tagCounts.find(([t]) => t === tag);

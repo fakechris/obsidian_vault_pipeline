@@ -70,8 +70,17 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         Some(prefix) => d.is_some_and(|d| d.starts_with(prefix)),
     };
     let kind_ok = |k: QueryKind| q.kind.map(|want| want == k).unwrap_or(true);
-    // Normalized once so `--tag Claude_Code` matches the canonical form.
-    let tag = q.tag.as_deref().and_then(ovp_domain::tags::normalize_tag);
+    // Normalized once so `--tag Claude_Code` matches the canonical form. An
+    // explicit filter that normalizes to nothing (`tag=#`, whitespace) must
+    // match NOTHING — collapsing it to "no filter" would silently return
+    // every row.
+    let tag = match q.tag.as_deref() {
+        None => None,
+        Some(raw) => match ovp_domain::tags::normalize_tag(raw) {
+            Some(t) => Some(t),
+            None => return Vec::new(),
+        },
+    };
     let tag_ok = |tags: &[String]| match &tag {
         None => true,
         Some(t) => tags.iter().any(|have| have == t),
