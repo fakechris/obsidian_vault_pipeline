@@ -205,7 +205,7 @@ impl TagAliases {
     }
 
     /// All generics `tag` transitively rolls up to (`autogen` → {agent, ai}),
-    /// excluding `tag`. Cycle-safe.
+    /// excluding `tag` itself even if a cycle (`a⇒b⇒a`) leads back to it.
     pub fn implied_generics(&self, tag: &str) -> std::collections::BTreeSet<String> {
         let mut out = std::collections::BTreeSet::new();
         let mut stack: Vec<String> = self
@@ -214,6 +214,9 @@ impl TagAliases {
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default();
         while let Some(g) = stack.pop() {
+            if g == tag {
+                continue; // a cycle back to the start is not a self-implication
+            }
             if out.insert(g.clone())
                 && let Some(next) = self.implications.get(&g)
             {
@@ -282,6 +285,23 @@ impl TagAliases {
                 continue;
             }
             self.map.insert(a.clone(), c);
+        }
+        // Re-canonicalize the OPERATOR implication edges through the now-merged
+        // alias map: a UI merge on an endpoint (`ai-agents → agent`) must move
+        // the edge (`autogen ⇒ ai-agents` → `autogen ⇒ agent`), not leave it
+        // pointing at the obsolete name that source tags no longer carry.
+        let old = std::mem::take(&mut self.implications);
+        for (s, generics) in old {
+            let s2 = self.resolve(&s).to_string();
+            for g in generics {
+                let g2 = self.resolve(&g).to_string();
+                if s2 != g2
+                    && !self.drop.contains(&g2)
+                    && !BOILERPLATE_TAGS.contains(&g2.as_str())
+                {
+                    self.implications.entry(s2.clone()).or_default().insert(g2);
+                }
+            }
         }
         // Merge UI-accepted implications: alias-resolve both sides, skip dead
         // config (self-loop, dropped/boilerplate target), then add the edge.
@@ -1188,6 +1208,27 @@ mod tests {
             ["agent", "autogen"].iter().map(|s| s.to_string()).collect()
         );
         assert!(TagAliases::parse("[implications]\n\"x\" = [\"x\"]\n").is_err());
+
+        // A cycle (a⇒b⇒a) must not make a its own implied-generic/child.
+        let cyc = TagAliases::parse("[implications]\n\"a\" = [\"b\"]\n\"b\" = [\"a\"]\n").unwrap();
+        assert_eq!(cyc.implied_generics("a"), ["b"].iter().map(|s| s.to_string()).collect());
+        assert!(!cyc.specifics_of("a").contains("a"));
+
+        // A UI merge on an implication endpoint re-canonicalizes the edge:
+        // operator `autogen ⇒ ai-agents`, then UI accepts `ai-agents → agent`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ovp/tags")).unwrap();
+        std::fs::write(
+            dir.path().join(".ovp/tags/aliases.toml"),
+            "[implications]\n\"autogen\" = [\"ai-agents\"]\n",
+        )
+        .unwrap();
+        let mut d = TagDecisions::default();
+        d.accept("ai-agents", "agent").unwrap();
+        d.save(dir.path()).unwrap();
+        let merged = TagAliases::load(dir.path()).unwrap();
+        assert!(merged.implied_generics("autogen").contains("agent"));
+        assert!(!merged.implied_generics("autogen").contains("ai-agents"));
     }
 
     #[test]
