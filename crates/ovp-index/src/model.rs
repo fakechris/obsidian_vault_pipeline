@@ -61,6 +61,12 @@ pub struct SourceRow {
     /// surfaces render them visibly weaker (`~#tag`, dashed chips).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags_inferred: Vec<String>,
+    /// Generic tags this source rolls up to via `[implications]` (`autogen`
+    /// source ⇒ `agent`). Derived from `tags`/`tags_inferred` at build, kept
+    /// separate so operator tags stay pure; searching/faceting a generic
+    /// matches these, surfaces render them as a weaker roll-up (`>#tag`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_implied: Vec<String>,
     /// Tier-0 URL entity ids this source mentions (`github:owner/repo`,
     /// `arxiv:2504.19413`, …), extracted deterministically from the note's
     /// URL + body. Forward list for the SourceDetail chips + `find --entity`;

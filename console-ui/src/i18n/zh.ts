@@ -151,6 +151,13 @@ export const zh: Record<keyof typeof en, string> = {
   'tags.reverseHint': '反方向合并（把第二个标签作为别名）',
   'tags.showWeak': '显示较弱候选',
   'tags.hideWeak': '隐藏较弱候选',
+  'tags.implyInbox': '蕴含提案',
+  'tags.implyHelp':
+    '一个具体标签几乎总是和某个更宽泛的标签同现,但反过来不成立——接受后把具体标签归入泛化标签(之后搜索/筛选泛化标签也能找到它)。',
+  'tags.forward': '归入',
+  'tags.reverseProb': '反向',
+  'tags.implyHint': '把具体标签归入泛化标签',
+  'library.byTagChildren': '更具体',
   'tags.accept': '接受',
   'tags.reject': '拒绝',
   'tags.vocabulary': '词表',

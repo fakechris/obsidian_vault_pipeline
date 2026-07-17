@@ -160,6 +160,13 @@ export const en = {
   'tags.reverseHint': 'Merge the other direction (make the second tag the alias)',
   'tags.showWeak': 'Show weaker candidates',
   'tags.hideWeak': 'Hide weaker candidates',
+  'tags.implyInbox': 'Implication proposals',
+  'tags.implyHelp':
+    'A specific tag that almost always co-occurs with a broader one, but not the reverse — accept to roll the specific up under the generic (searching/faceting the generic then finds it).',
+  'tags.forward': 'rolls up',
+  'tags.reverseProb': 'reverse',
+  'tags.implyHint': 'Roll the specific tag up under the generic',
+  'library.byTagChildren': 'more specific',
   'tags.accept': 'Accept',
   'tags.reject': 'Reject',
   'tags.vocabulary': 'Vocabulary',

@@ -889,6 +889,61 @@ fn tags_are_read_from_current_frontmatter_normalized_and_alias_resolved() {
 }
 
 #[test]
+fn implications_roll_up_generics_and_expand_the_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/a.md",
+        "---\ntitle: Autogen Piece\nsource: https://e.x/a\ntags:\n  - autogen\n---\nbody\n",
+    );
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/b.md",
+        "---\ntitle: Plain Agent\nsource: https://e.x/b\ntags:\n  - agent\n---\nbody\n",
+    );
+    // autogen ⇒ agent ⇒ ai.
+    place(
+        root,
+        ".ovp/tags/aliases.toml",
+        "[implications]\n\"autogen\" = [\"agent\"]\n\"agent\" = [\"ai\"]\n",
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let a = model.sources.iter().find(|s| s.title.as_deref() == Some("Autogen Piece")).unwrap();
+    assert_eq!(a.tags, vec!["autogen"]);
+    // Rolls up transitively, own tag excluded.
+    assert_eq!(a.tags_implied, vec!["agent", "ai"]);
+
+    // `--tag agent` finds the autogen source (roll-up) AND the plain one.
+    let hits = run_query(
+        &model,
+        &Query {
+            tag: Some("agent".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    // The roll-up source marks the implied tag `>#`.
+    assert!(
+        hits.iter().any(|h| h.line.contains("#autogen") && h.line.contains(">#agent")),
+        "{hits:?}"
+    );
+
+    // Vocabulary shows the roll-up count: agent = 1 direct + 1 implied.
+    let vocab = run_query(
+        &model,
+        &Query {
+            kind: Some(QueryKind::Tags),
+            ..Default::default()
+        },
+    );
+    let agent = vocab.iter().find(|h| h.id.as_deref() == Some("agent")).unwrap();
+    assert_eq!(agent.line, "agent (1, >1)");
+}
+
+#[test]
 fn url_entities_extract_dedup_across_sources_and_drive_the_filter() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

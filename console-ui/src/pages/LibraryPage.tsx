@@ -1,8 +1,9 @@
 /** Library `/library` — answers US2/US6 (design §3.2). In-page secondary
  * navigation over three dimensions (collection × month × status), month-
  * grouped rows, all state URL-parameterized: /library?c=&m=&status=. */
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { STATIC_MODE } from '../lib/api';
+import { fetchTags, STATIC_MODE } from '../lib/api';
 import { AgeLabel, EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -38,6 +39,24 @@ function LibraryBody({ model }: { model: IndexModel }) {
   // filter out every source under an invisible facet.
   const tagCounts = countTags(model.sources);
   const tag = tagCounts.length > 0 ? params.get('tag') : null;
+
+  // Implication edges (specific → generics) drive the two-level roll-up:
+  // an active generic tag expands to its specific children for drill-down.
+  // Live server only; the published site has no implications.
+  const [implications, setImplications] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    fetchTags()
+      .then((d) => setImplications(d.implications ?? {}))
+      .catch(() => setImplications({}));
+  }, []);
+  // Reverse: generic → its direct specific children (present in the vocab).
+  const childrenOf = (generic: string): string[] =>
+    Object.entries(implications)
+      .filter(([, generics]) => generics.includes(generic))
+      .map(([specific]) => specific)
+      .filter((s) => tagCounts.some(([t]) => t === s))
+      .sort();
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -145,18 +164,41 @@ function LibraryBody({ model }: { model: IndexModel }) {
           <div className="facet-group">
             <h3>{t('library.byTag')}</h3>
             <ul className="facet-list">
-              {tagFacet.map(([tg, n]) => (
-                <li key={tg}>
-                  <button
-                    type="button"
-                    className={tag === tg ? 'active' : ''}
-                    onClick={() => setParam('tag', tag === tg ? null : tg)}
-                  >
-                    <span>#{tg}</span>
-                    <span className="count">{n}</span>
-                  </button>
-                </li>
-              ))}
+              {tagFacet.map(([tg, n]) => {
+                const children = childrenOf(tg);
+                return (
+                  <li key={tg}>
+                    <button
+                      type="button"
+                      className={tag === tg ? 'active' : ''}
+                      onClick={() => setParam('tag', tag === tg ? null : tg)}
+                    >
+                      <span>
+                        #{tg}
+                        {children.length > 0 && <span className="muted"> ▾</span>}
+                      </span>
+                      <span className="count">{n}</span>
+                    </button>
+                    {/* Drill-down: when this generic is active, list its
+                        specific children so you can narrow the roll-up. */}
+                    {tag === tg && children.length > 0 && (
+                      <ul className="facet-list facet-children">
+                        {children.map((child) => (
+                          <li key={child}>
+                            <button
+                              type="button"
+                              className={tag === child ? 'active' : ''}
+                              onClick={() => setParam('tag', child)}
+                            >
+                              <span>#{child}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             {hiddenTagCount > 0 && (
               <p className="muted sm">

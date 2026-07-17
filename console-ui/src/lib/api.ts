@@ -229,7 +229,18 @@ export interface TagRow {
   tag: string;
   user: number;
   inferred: number;
+  implied?: number;
   origin?: 'user' | 'community' | 'llm' | null;
+}
+
+export interface ImplicationProposal {
+  specific: string;
+  specific_count: number;
+  generic: string;
+  generic_count: number;
+  forward: number;
+  reverse: number;
+  name_cosine?: number;
 }
 
 export interface TagProposal {
@@ -250,9 +261,12 @@ export interface TagsPayload {
   tags: TagRow[];
   banned: string[];
   proposals: TagProposal[];
+  implication_proposals?: ImplicationProposal[];
+  /** Accepted implication edges: specific → generics it rolls up to. */
+  implications?: Record<string, string[]>;
 }
 
-/** GET /api/tags — vocabulary counts + pending merge proposals. */
+/** GET /api/tags — vocabulary counts + pending merge/implication proposals. */
 export function fetchTags(): Promise<TagsPayload> {
   if (STATIC_MODE) {
     return Promise.resolve({ tags: [], banned: [], proposals: [] });
@@ -287,6 +301,15 @@ export async function postTagDecision(
   canonical: string,
 ): Promise<void> {
   await postJson('/api/tags/decision', { action, alias, canonical });
+}
+
+/** POST /api/tags/decision — accept/reject an implication `specific ⇒ generic`. */
+export async function postImplicationDecision(
+  action: 'accept_implication' | 'reject',
+  specific: string,
+  generic: string,
+): Promise<void> {
+  await postJson('/api/tags/decision', { action, specific, generic });
 }
 
 /** POST /api/source/:sha/tags — the one sanctioned frontmatter write

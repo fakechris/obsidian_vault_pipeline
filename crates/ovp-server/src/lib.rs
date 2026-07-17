@@ -671,7 +671,7 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     };
     let vocabulary =
         ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
-    let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
+    let mut counts: std::collections::BTreeMap<&str, (usize, usize, usize)> =
         std::collections::BTreeMap::new();
     // Seed from the vocabulary so zero-count community/llm entries still
     // appear (browser completeness + Source Detail autocomplete).
@@ -684,6 +684,9 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
         for t in &s.tags_inferred {
             counts.entry(t.as_str()).or_default().1 += 1;
+        }
+        for t in &s.tags_implied {
+            counts.entry(t.as_str()).or_default().2 += 1;
         }
     }
     let origins: std::collections::BTreeMap<&str, &str> = vocabulary
@@ -701,11 +704,12 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         .collect();
     let tags: Vec<serde_json::Value> = counts
         .iter()
-        .map(|(tag, (user, inferred))| {
+        .map(|(tag, (user, inferred, implied))| {
             serde_json::json!({
                 "tag": tag,
                 "user": user,
                 "inferred": inferred,
+                "implied": implied,
                 "origin": origins.get(tag),
             })
         })
@@ -736,11 +740,44 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             && !decisions.is_ignored(alias, canonical)
     })
     .collect();
+    // Implication proposals awaiting a decision: drop ones already implied
+    // (operator + UI table) or UI-rejected — same immediate-retire rule.
+    let impl_proposals: Vec<serde_json::Value> = std::fs::read_to_string(
+        state
+            .vault_root
+            .join(state.layout.tags_proposals_json_file()),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|v| v.get("implications").cloned())
+    .and_then(|v| v.as_array().cloned())
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|p| {
+        let specific = p.get("specific").and_then(|v| v.as_str()).unwrap_or("");
+        let generic = p.get("generic").and_then(|v| v.as_str()).unwrap_or("");
+        !specific.is_empty()
+            && !aliases.implied_generics(specific).contains(generic)
+            && !decisions.is_ignored(specific, generic)
+    })
+    .collect();
+    // The accepted implication edges (specific → generics) for the two-level
+    // facet rollup.
+    let implications = serde_json::to_value(
+        aliases
+            .implications()
+            .iter()
+            .map(|(s, generics)| (s.clone(), generics.iter().cloned().collect::<Vec<_>>()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    )
+    .unwrap_or_default();
     let banned: Vec<&str> = vocabulary.banned().collect();
     let body = serde_json::json!({
         "tags": tags,
         "banned": banned,
         "proposals": proposals,
+        "implication_proposals": impl_proposals,
+        "implications": implications,
     })
     .to_string();
     json_stamped(200, &body, Some(&model))
@@ -756,10 +793,20 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
         Err(_) => return json_response(400, r#"{"error":"invalid JSON body"}"#),
     };
     let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    let alias = parsed.get("alias").and_then(|v| v.as_str()).unwrap_or("");
-    let canonical = parsed.get("canonical").and_then(|v| v.as_str()).unwrap_or("");
+    // Merge decisions carry alias/canonical; implication decisions carry
+    // specific/generic. `reject` accepts either pair.
+    let alias = parsed
+        .get("alias")
+        .or_else(|| parsed.get("specific"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let canonical = parsed
+        .get("canonical")
+        .or_else(|| parsed.get("generic"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if alias.is_empty() || canonical.is_empty() {
-        return json_response(400, r#"{"error":"alias and canonical are required"}"#);
+        return json_response(400, r#"{"error":"both tags of the pair are required"}"#);
     }
     let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
     let mut decisions = match ovp_domain::tags::TagDecisions::load(&state.vault_root) {
@@ -768,8 +815,14 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     };
     let result = match action {
         "accept" => decisions.accept(alias, canonical),
+        "accept_implication" => decisions.accept_implication(alias, canonical),
         "reject" => decisions.reject(alias, canonical),
-        _ => return json_response(400, r#"{"error":"action must be accept or reject"}"#),
+        _ => {
+            return json_response(
+                400,
+                r#"{"error":"action must be accept, accept_implication, or reject"}"#,
+            );
+        }
     };
     if let Err(e) = result {
         return json_response(400, &format!(r#"{{"error":{}}}"#, json_str(&e)));
@@ -2271,6 +2324,7 @@ mod tests {
                 last_reason: None,
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                tags_implied: Vec::new(),
                 entities: Vec::new(),
             }],
             packs: vec![PackRow {
@@ -2791,6 +2845,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         }
     }

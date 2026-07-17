@@ -235,6 +235,7 @@ fn build_sources(
                 last_reason: rec.note.clone(),
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                tags_implied: Vec::new(),
                 entities: Vec::new(),
             },
         );
@@ -259,6 +260,7 @@ fn build_sources(
                 last_reason: None,
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                tags_implied: Vec::new(),
                 entities: Vec::new(),
             });
         entry.date = Some(rec.date.clone());
@@ -325,6 +327,7 @@ fn build_sources(
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    tags_implied: Vec::new(),
                     entities: Vec::new(),
                 }
             });
@@ -399,6 +402,16 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
             let names: Vec<&str> = voted.iter().map(|t| t.tag.as_str()).collect();
             row.tags_inferred = canonical_tags(&names, &aliases);
         }
+        // Roll-up: the generics every own/inferred tag implies (transitive),
+        // minus any already present. Separate field so operator tags stay pure.
+        let mut implied: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.extend(aliases.implied_generics(t));
+        }
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.remove(t);
+        }
+        row.tags_implied = implied.into_iter().collect();
         // Tier-0 URL entities from the SAME per-source read (no extra I/O):
         // the reverse index (entity → sources) is derived on demand from
         // these forward lists, so nothing else is persisted.
@@ -708,6 +721,7 @@ fn backfill_corpus_packs(
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    tags_implied: Vec::new(),
                     entities: Vec::new(),
                 });
                 by_sha.insert(sha256.clone(), sources.len() - 1);
@@ -1248,6 +1262,7 @@ mod tests {
             last_reason: Some("boom".into()),
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         };
         let sources = vec![

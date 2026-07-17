@@ -338,21 +338,20 @@ export function filterSources(
       (filter.status === null || s.status === filter.status) &&
       (filter.tag === null ||
         (s.tags ?? []).includes(filter.tag) ||
-        (s.tags_inferred ?? []).includes(filter.tag)),
+        (s.tags_inferred ?? []).includes(filter.tag) ||
+        (s.tags_implied ?? []).includes(filter.tag)),
   );
 }
 
-/** Tag → source count over the whole library (operator + inferred — the
- * facet filters on both), count desc then name. */
+/** Tag → source count over the whole library (operator + inferred + implied
+ * roll-up — the facet filters on all three), count desc then name. */
 export function countTags(sources: SourceRow[]): [string, number][] {
   const counts = new Map<string, number>();
+  const bump = (t: string) => counts.set(t, (counts.get(t) ?? 0) + 1);
   for (const s of sources) {
-    for (const t of s.tags ?? []) {
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    for (const t of s.tags_inferred ?? []) {
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
+    for (const t of s.tags ?? []) bump(t);
+    for (const t of s.tags_inferred ?? []) bump(t);
+    for (const t of s.tags_implied ?? []) bump(t);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
