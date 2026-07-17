@@ -141,7 +141,15 @@ pub(crate) struct MergeProposal {
 /// Deliberately NO bare context fallback: high context similarity between
 /// unrelated names is precisely the related-topics-not-variants failure
 /// mode this gate exists to kill (git/go at ctx 0.54 would sneak back in).
-pub(crate) fn name_evidence(a: &str, b: &str, ctx: f64) -> bool {
+///
+/// `sim` is the NAME cosine. Cross-script (中↔英) pairs are the one case the
+/// multilingual model is genuinely good at, BUT only for real translations,
+/// which it places VERY close: on the real vault every true pair scores
+/// ≥0.926 (训练→training 0.979, 预测市场→prediction-market 0.926) while the
+/// `算命`-style garbage cluster of degenerate short-token vectors tops out at
+/// 0.906 — a clean gap. So a cross-script pair needs both a high name cosine
+/// AND minimal context support.
+pub(crate) fn name_evidence(a: &str, b: &str, sim: f64, ctx: f64) -> bool {
     fn tokens(s: &str) -> Vec<&str> {
         s.split('-').filter(|t| t.len() >= 2).collect()
     }
@@ -155,7 +163,7 @@ pub(crate) fn name_evidence(a: &str, b: &str, ctx: f64) -> bool {
         >= 5;
     let has_cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
     let cross_script = has_cjk(a) != has_cjk(b);
-    shared_token || containment || common_prefix || (cross_script && ctx >= 0.24)
+    shared_token || containment || common_prefix || (cross_script && sim >= 0.92 && ctx >= 0.24)
 }
 
 /// Two tags on mostly the SAME sources are co-occurring (related topics on
@@ -209,7 +217,7 @@ pub(crate) fn merge_proposals(
                 continue;
             }
             let ctx = cosine(&context_vectors[i], &context_vectors[j]);
-            if !name_evidence(&tags[i].0, &tags[j].0, ctx) {
+            if !name_evidence(&tags[i].0, &tags[j].0, sim, ctx) {
                 continue;
             }
             let (ni, nj) = (tags[i].1.len(), tags[j].1.len());
@@ -582,20 +590,24 @@ mod tests {
 
     #[test]
     fn name_evidence_kills_short_token_degeneracy_and_keeps_real_pairs() {
-        // Lexical kinship passes regardless of context.
-        assert!(name_evidence("agents", "agent", 0.0)); // containment
-        assert!(name_evidence("self-improvement", "self-improving", 0.0)); // prefix
-        assert!(name_evidence("agent-sdk", "agent", 0.0)); // shared token
-        assert!(name_evidence("github项目", "github", 0.0)); // containment
-        // Cross-script pairs need minimal context support.
-        assert!(name_evidence("训练", "training", 0.253));
-        assert!(!name_evidence("fastapi", "算命", 0.16));
-        assert!(!name_evidence("tui", "算命", 0.227));
+        // Lexical kinship passes regardless of name/context similarity.
+        assert!(name_evidence("agents", "agent", 0.99, 0.0)); // containment
+        assert!(name_evidence("self-improvement", "self-improving", 0.98, 0.0)); // prefix
+        assert!(name_evidence("agent-sdk", "agent", 0.93, 0.0)); // shared token
+        assert!(name_evidence("github项目", "github", 0.94, 0.0)); // containment
+        // Real cross-script translations: high name cosine + context support.
+        assert!(name_evidence("训练", "training", 0.979, 0.253));
+        assert!(name_evidence("预测市场", "prediction-market", 0.926, 0.589));
+        // 算命-class garbage: cross-script but name cosine below the 0.92
+        // translation floor → rejected even with passing context.
+        assert!(!name_evidence("sem", "算命", 0.906, 0.285));
+        assert!(!name_evidence("ios", "算命", 0.841, 0.327));
+        assert!(!name_evidence("fastapi", "算命", 0.946, 0.16)); // high name, low ctx
         // Same-script opaque tokens with no lexical kinship never pass —
         // not even with high context (related topics ≠ variants).
-        assert!(!name_evidence("ios", "ai", 0.242));
-        assert!(!name_evidence("git", "go", 0.544));
-        assert!(!name_evidence("tiptap", "nodejs", 0.9));
+        assert!(!name_evidence("ios", "ai", 0.94, 0.242));
+        assert!(!name_evidence("git", "go", 0.93, 0.544));
+        assert!(!name_evidence("tiptap", "nodejs", 0.94, 0.9));
     }
 
     #[test]

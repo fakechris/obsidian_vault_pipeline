@@ -107,6 +107,21 @@ redacted (unchanged).
      judgments (accepts as aliases, rejects as ignores, drops as drops).
    - `tags-suggest` additionally emits `proposals.json` next to the md report
      (same data, machine-readable) for this UI.
+   - **Reverse merge** (operator feedback 2026-07-16): a ⇄ button accepts
+     the merge the OTHER direction (make the higher-count member the alias)
+     — the auto-picked canonical isn't always the one the operator wants
+     kept (e.g. `software-engineering (1) → 软件工程 (3)` reversed).
+   - **Bounded queue** (operator feedback: "will undecided cards pile up?"):
+     no — `proposals.json` is regenerated (≤100) each `tags-suggest` run and
+     accept/reject/existing-alias pairs are filtered, so the inbox is a work
+     queue that shrinks as decided, never an accreting ledger. Weak
+     candidates (name-cos < 0.90) sit behind a toggle so the decidable
+     strong ones stay front and center.
+   - **DEFERRED (operator says uncommon, know-it-exists only)**: rename a tag
+     to a THIRD name, or split one tag into two. Both are reachable today via
+     the manual path — edit `aliases.toml` (rename = alias old→new; the new
+     canonical need not pre-exist) or add tags per-source — so no dedicated
+     UI until a real need appears.
 3. **Per-source tag editing** (SourceDetailPage):
    - inferred chips get an accept affordance: `~#memory ✓` →
      `POST /api/source/:sha/tags` inserts the tag into that note's
