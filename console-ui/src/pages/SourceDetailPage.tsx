@@ -185,6 +185,16 @@ function SourceTags({
           )}
         </span>
       ))}
+      {(source.tags_implied ?? []).map((tg) => (
+        <Link
+          key={`>${tg}`}
+          className="tag-chip implied"
+          to={`/library?tag=${encodeURIComponent(tg)}`}
+          title="rolled up via implications"
+        >
+          &gt;#{tg}
+        </Link>
+      ))}
       {!STATIC_MODE && (
         <>
           <input
@@ -764,7 +774,10 @@ export default function SourceDetailPage() {
           </>
         )}
         {(!STATIC_MODE ||
-          (source.tags ?? []).length + (source.tags_inferred ?? []).length > 0) && (
+          (source.tags ?? []).length +
+            (source.tags_inferred ?? []).length +
+            (source.tags_implied ?? []).length >
+            0) && (
           <>
             <dt>{t('tags.title')}</dt>
             <SourceTags

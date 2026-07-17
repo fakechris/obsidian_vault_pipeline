@@ -1960,6 +1960,7 @@ mod tests {
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    tags_implied: Vec::new(),
                     entities: Vec::new(),
                 })
                 .collect(),
@@ -2048,6 +2049,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         });
         let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
@@ -2105,6 +2107,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         });
         let evidence = evidence_for("fresh", "freshsha", 2);

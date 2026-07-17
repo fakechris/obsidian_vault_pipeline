@@ -41,6 +41,7 @@ impl PublicView {
             // effect of the tag facet landing on the live portal.
             s.tags.clear();
             s.tags_inferred.clear();
+            s.tags_implied.clear();
             // `author` is KEPT, deliberately: it is the byline of an article
             // that is already public, and the `url` beside it names the same
             // person or org anyway. This scrubber works by deletion, so every
@@ -151,6 +152,7 @@ mod tests {
             last_reason: reason.map(String::from),
             tags: vec!["agent".into()],
             tags_inferred: vec!["rust".into()],
+            tags_implied: Vec::new(),
             entities: vec!["github:owner/repo".into()],
         }
     }
