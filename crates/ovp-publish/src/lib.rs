@@ -167,7 +167,7 @@ fn write_api_tree(
     write_json(&api.join("themes.json"), &bodies::themes_body(records))?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
-    let empty = Query { kind: None, status: None, date: None, term: None, tag: None };
+    let empty = Query { kind: None, status: None, date: None, term: None, tag: None , entity: None };
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 5;
 
@@ -229,6 +229,23 @@ fn write_api_tree(
             files += 1;
             if r.claim_id != r.claim_key && id_counts.get(r.claim_id.as_str()) == Some(&1) {
                 write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
+                files += 1;
+            }
+        }
+    }
+
+    // Tier-0 URL entities: the index + one page per entity. Public content
+    // (URLs, unlike personal tags), so they ship. `safe_component` guards the
+    // filename against `/` in ids like `github:owner/repo`.
+    let entities = bodies::entities_body(public);
+    write_json(&api.join("entities.json"), &entities)?;
+    files += 1;
+    if let Some(list) = entities.get("entities").and_then(|v| v.as_array()) {
+        for e in list {
+            if let Some(id) = e.get("id").and_then(|v| v.as_str())
+                && let Some(v) = bodies::entity_body(public, id)
+            {
+                write_json(&api.join("entity").join(format!("{}.json", entity_filename(id))), &v)?;
                 files += 1;
             }
         }
@@ -393,6 +410,31 @@ fn safe_component(id: &str) -> String {
     }
 }
 
+/// Base64url (no padding) — a REVERSIBLE, collision-free, filesystem-safe
+/// filename for an entity id. `safe_component` maps both `:` and `/` to `_`,
+/// so `doi:10.x/a:b` and `doi:10.x/a/b` would collide; entity ids are ascii
+/// (URL-derived), and the SPA computes the same encoding to fetch the file.
+fn entity_filename(id: &str) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let b = id.as_bytes();
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for chunk in b.chunks(3) {
+        let n = chunk.len();
+        let triple = (u32::from(chunk[0]) << 16)
+            | (chunk.get(1).map_or(0, |&c| u32::from(c)) << 8)
+            | chunk.get(2).map_or(0, |&c| u32::from(c));
+        out.push(T[((triple >> 18) & 63) as usize] as char);
+        out.push(T[((triple >> 12) & 63) as usize] as char);
+        if n > 1 {
+            out.push(T[((triple >> 6) & 63) as usize] as char);
+        }
+        if n > 2 {
+            out.push(T[(triple & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
@@ -417,6 +459,20 @@ mod tests {
         CrystalStatus, DurableCitation, DurableRecord, FinalClass, ProvenanceClass, StrengthClass,
     };
     use ovp_index::{ClaimRow, ClaimStatus, PackRow, SourceRow, SourceStatus, Totals};
+
+    #[test]
+    fn entity_filename_is_collision_free_and_matches_base64url() {
+        // The two DOIs that collide under `safe_component` (`:`/`/` → `_`)
+        // get distinct base64url filenames.
+        assert_ne!(
+            entity_filename("doi:10.x/a:b"),
+            entity_filename("doi:10.x/a/b")
+        );
+        // Standard base64url(no-pad) — the exact string the SPA's
+        // `btoa(id).replace(+→-,/→_).strip(=)` produces.
+        assert_eq!(entity_filename("github:mem0ai/mem0"), "Z2l0aHViOm1lbTBhaS9tZW0w");
+        assert_eq!(entity_filename("arxiv:1"), "YXJ4aXY6MQ");
+    }
 
     fn record() -> DurableRecord {
         DurableRecord {
@@ -455,6 +511,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         }
     }
 

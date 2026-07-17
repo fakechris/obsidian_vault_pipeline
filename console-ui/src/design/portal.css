@@ -623,6 +623,22 @@ body {
   font-size: inherit;
   padding: 0 0 0 0.3rem;
 }
+/* URL entity chip: mono id + a small external-link-out arrow. */
+.entity-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.5rem;
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+}
+.entity-out {
+  margin-left: 0.15rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+.entity-out:hover {
+  color: var(--accent);
+}
 /* Add-tag input beside the chips — same scale as the chips it feeds. */
 .tag-add {
   border: 1px solid var(--border);

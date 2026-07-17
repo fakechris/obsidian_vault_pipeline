@@ -23,12 +23,14 @@ const NAV = STATIC_MODE
   ? ([
       { to: '/knowledge', key: 'nav.knowledge', end: false },
       { to: '/library', key: 'nav.library', end: false },
+      { to: '/entities', key: 'nav.entities', end: false },
       { to: '/search', key: 'nav.search', end: false },
     ] as const)
   : ([
       { to: '/', key: 'nav.today', end: true },
       { to: '/library', key: 'nav.library', end: false },
       { to: '/tags', key: 'nav.tags', end: false },
+      { to: '/entities', key: 'nav.entities', end: false },
       { to: '/search', key: 'nav.search', end: false },
       { to: '/knowledge', key: 'nav.knowledge', end: false },
       { to: '/ask', key: 'nav.ask', end: false },

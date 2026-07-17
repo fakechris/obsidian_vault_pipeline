@@ -350,6 +350,7 @@ mod tests {
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    entities: Vec::new(),
                 },
                 SourceRow {
                     sha256: "cccc".into(),
@@ -364,6 +365,7 @@ mod tests {
                     last_reason: Some("card synthesis did not parse".into()),
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    entities: Vec::new(),
                 },
             ],
             packs: vec![PackRow {

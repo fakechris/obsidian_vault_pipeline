@@ -148,15 +148,16 @@ fn handle_tools_list() -> Result<Value, RpcError> {
         "tools": [
             {
                 "name": "find",
-                "description": "Query the OVP index: sources, packs, claims, runs, tags. Filter by kind, status, date, tag, or free-text term.",
+                "description": "Query the OVP index: sources, packs, claims, runs, tags, entities. Filter by kind, status, date, tag, entity, or free-text term.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "term": { "type": "string", "description": "Free-text search term" },
-                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs", "tags"] },
+                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs", "tags", "entities"] },
                         "status": { "type": "string" },
                         "date": { "type": "string", "description": "Date prefix (YYYY or YYYY-MM or YYYY-MM-DD)" },
-                        "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" }
+                        "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" },
+                        "entity": { "type": "string", "description": "URL entity id filter over sources, e.g. github:owner/repo (kind=entities lists the index)" }
                     }
                 }
             },
@@ -216,12 +217,14 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             "claims" => Some(QueryKind::Claims),
             "runs" => Some(QueryKind::Runs),
             "tags" => Some(QueryKind::Tags),
+            "entities" => Some(QueryKind::Entities),
             _ => None,
         }),
         status: args.get("status").and_then(|v| v.as_str()).map(String::from),
         date: args.get("date").and_then(|v| v.as_str()).map(String::from),
         term: args.get("term").and_then(|v| v.as_str()).map(String::from),
         tag,
+        entity: args.get("entity").and_then(|v| v.as_str()).map(String::from),
     };
 
     let hits = run_query(&model, &query);
@@ -237,7 +240,7 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
 
     let term = args.get("query").and_then(|v| v.as_str()).map(String::from);
-    let query = Query { kind: None, status: None, date: None, term, tag: None };
+    let query = Query { kind: None, status: None, date: None, term, tag: None , entity: None };
     let hits = run_query(&model, &query);
     let text = serde_json::to_string_pretty(&hits).unwrap_or_else(|_| "[]".into());
 

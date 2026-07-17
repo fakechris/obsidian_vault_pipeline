@@ -1955,6 +1955,7 @@ mod tests {
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    entities: Vec::new(),
                 })
                 .collect(),
             packs: cases
@@ -2037,6 +2038,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         });
         let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
         assert_eq!(resp.nodes.len(), 1);
@@ -2088,6 +2090,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         });
         let evidence = evidence_for("fresh", "freshsha", 2);
         let resp =

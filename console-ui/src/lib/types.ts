@@ -121,6 +121,9 @@ export interface SourceRow {
   /** Machine-inferred backfill tags (tags-suggest kNN vote). Present only
    * while the source has no operator tags; rendered visibly weaker. */
   tags_inferred?: string[];
+  /** Tier-0 URL entity ids this source mentions (`github:owner/repo`,
+   * `arxiv:2504.19413`). Public content — present on the published model too. */
+  entities?: string[];
 }
 
 export interface PackRow {

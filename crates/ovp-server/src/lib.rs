@@ -635,6 +635,8 @@ fn dispatch(
         }
         (Method::Get, "/api/tags") => handle_tags_api(state),
         (Method::Post, "/api/tags/decision") => handle_tag_decision(state, body),
+        (Method::Get, "/api/entities") => handle_entities_api(state),
+        (Method::Get, p) if p.starts_with("/api/entity/") => handle_entity_api(state, url),
         (Method::Post, p) if p.starts_with("/api/source/") && p.ends_with("/tags") => {
             handle_source_tags_post(state, p, body)
         }
@@ -943,12 +945,14 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
             "claims" => Some(QueryKind::Claims),
             "runs" => Some(QueryKind::Runs),
             "tags" => Some(QueryKind::Tags),
+            "entities" => Some(QueryKind::Entities),
             _ => None,
         }),
         status: params.get("status").cloned(),
         date: params.get("date").cloned(),
         term: params.get("term").cloned(),
         tag,
+        entity: params.get("entity").cloned(),
     };
 
     let body = bodies::find_body(&model, &query).to_string();
@@ -985,6 +989,7 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         date: None,
         term,
         tag: None,
+        entity: None,
     };
     let body = bodies::find_body(&model, &query).to_string();
     json_stamped(200, &body, Some(&model))
@@ -1189,6 +1194,31 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
             let body = serde_json::json!({ "error": e.message });
             json_response(e.status, &body.to_string())
         }
+    }
+}
+
+/// `GET /api/entities` — the Tier-0 URL entity index (id/kind/url/count).
+fn handle_entities_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    json_stamped(200, &bodies::entities_body(&model).to_string(), Some(&model))
+}
+
+/// `GET /api/entity/:id` — one entity's mentioning sources + citing claims.
+fn handle_entity_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    // Strip any query string before the id so `?x=1` never lands in it.
+    let path = url.split('?').next().unwrap_or(url);
+    let id = url_decode(path.strip_prefix("/api/entity/").unwrap_or(""));
+    if id.is_empty() {
+        return json_response(400, r#"{"error":"missing entity id"}"#);
+    }
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    match bodies::entity_body(&model, &id) {
+        Some(v) => json_stamped(200, &v.to_string(), Some(&model)),
+        None => json_response(404, r#"{"error":"entity not found"}"#),
     }
 }
 
@@ -2241,6 +2271,7 @@ mod tests {
                 last_reason: None,
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                entities: Vec::new(),
             }],
             packs: vec![PackRow {
                 pack_dir: "40-Resources/Reader/good".into(),
@@ -2760,6 +2791,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         }
     }
 

@@ -141,6 +141,7 @@ mod tests {
             last_reason: reason.map(String::from),
             tags: vec!["agent".into()],
             tags_inferred: vec!["rust".into()],
+            entities: vec!["github:owner/repo".into()],
         }
     }
 
@@ -197,6 +198,8 @@ mod tests {
         // Personal taxonomy never ships publicly (operator or inferred).
         assert!(m.sources[0].tags.is_empty());
         assert!(m.sources[0].tags_inferred.is_empty());
+        // URL entities are public content (unlike personal tags) — they survive.
+        assert_eq!(m.sources[0].entities, vec!["github:owner/repo".to_string()]);
         // Only the durable claim survives, citing only the public case.
         assert_eq!(m.claims.len(), 1);
         assert_eq!(m.claims[0].claim_id, "d1");
