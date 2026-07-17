@@ -889,6 +889,65 @@ fn tags_are_read_from_current_frontmatter_normalized_and_alias_resolved() {
 }
 
 #[test]
+fn url_entities_extract_dedup_across_sources_and_drive_the_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Two sources mention the same repo (once via source_url, once in body)
+    // plus a paper; a third mentions only the paper. Extraction dedups per
+    // source; the entity index aggregates across sources.
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/a.md",
+        "---\ntitle: A\nsource: https://github.com/AI4Finance-Foundation/FinGPT\n---\nsee arXiv:2504.19413\n",
+    );
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/b.md",
+        "---\ntitle: B\nsource: https://e.x/b\n---\nrepo https://github.com/ai4finance-foundation/fingpt.git and https://arxiv.org/abs/2504.19413v2\n",
+    );
+    place(
+        root,
+        "50-Inbox/01-Raw/2026-06/c.md",
+        "---\ntitle: C\nsource: https://e.x/c\n---\njust a plain https://example.com/x link\n",
+    );
+
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let a = model.sources.iter().find(|s| s.title.as_deref() == Some("A")).unwrap();
+    assert_eq!(
+        a.entities,
+        vec!["arxiv:2504.19413", "github:ai4finance-foundation/fingpt"]
+    );
+    let c = model.sources.iter().find(|s| s.title.as_deref() == Some("C")).unwrap();
+    assert!(c.entities.is_empty(), "non-registry URLs are not entities");
+
+    // `--entity` restricts sources and excludes tagless kinds.
+    let hits = run_query(
+        &model,
+        &Query {
+            entity: Some("github:AI4Finance-Foundation/FinGPT".into()), // case-forgiving
+            ..Default::default()
+        },
+    );
+    assert_eq!(hits.len(), 2, "both A and B mention the repo: {hits:?}");
+    assert!(hits.iter().all(|h| h.kind == "source"));
+
+    // `--kind entities` = the aggregated index, most-mentioned first.
+    let vocab = run_query(
+        &model,
+        &Query {
+            kind: Some(QueryKind::Entities),
+            ..Default::default()
+        },
+    );
+    let lines: Vec<&str> = vocab.iter().map(|h| h.line.as_str()).collect();
+    assert_eq!(
+        lines,
+        vec!["arxiv:2504.19413 (2)", "github:ai4finance-foundation/fingpt (2)"]
+    );
+}
+
+#[test]
 fn inferred_tags_attach_only_to_untagged_sources_and_match_the_filter() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

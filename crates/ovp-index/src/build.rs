@@ -235,6 +235,7 @@ fn build_sources(
                 last_reason: rec.note.clone(),
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                entities: Vec::new(),
             },
         );
     }
@@ -258,6 +259,7 @@ fn build_sources(
                 last_reason: None,
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                entities: Vec::new(),
             });
         entry.date = Some(rec.date.clone());
         entry.last_run_id = Some(rec.run_id.clone());
@@ -323,6 +325,7 @@ fn build_sources(
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    entities: Vec::new(),
                 }
             });
         }
@@ -396,6 +399,13 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
             let names: Vec<&str> = voted.iter().map(|t| t.tag.as_str()).collect();
             row.tags_inferred = canonical_tags(&names, &aliases);
         }
+        // Tier-0 URL entities from the SAME per-source read (no extra I/O):
+        // the reverse index (entity → sources) is derived on demand from
+        // these forward lists, so nothing else is persisted.
+        row.entities = ovp_domain::url_entities::extract(&doc.source_url, &doc.body_markdown)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
     }
     Ok(tagged)
 }
@@ -698,6 +708,7 @@ fn backfill_corpus_packs(
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    entities: Vec::new(),
                 });
                 by_sha.insert(sha256.clone(), sources.len() - 1);
                 changed = true;
@@ -1237,6 +1248,7 @@ mod tests {
             last_reason: Some("boom".into()),
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         };
         let sources = vec![
             src("aaaa", SourceStatus::Blocked, "2026-06-30"), // 8 days stuck

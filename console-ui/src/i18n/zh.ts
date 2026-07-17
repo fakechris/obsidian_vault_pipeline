@@ -6,6 +6,22 @@ export const zh: Record<keyof typeof en, string> = {
   'nav.today': '今天',
   'nav.library': '资料',
   'nav.tags': '标签',
+  'nav.entities': '实体',
+
+  // entities (Tier-0 URL 实体)
+  'entities.title': '实体',
+  'entities.help':
+    '从来源的链接里抽取的机器可验证实体——GitHub 仓库、arXiv 论文、软件包。按被多少来源提及排序。确定性,无 LLM。',
+  'entities.all': '全部',
+  'entities.filter': '筛选实体…',
+  'entities.empty': '来源里还没有 URL 实体。',
+  'entities.sources': '个来源',
+  'entities.url': '链接',
+  'entities.kind': '类型',
+  'entities.mentionedIn': '被这些来源提及',
+  'entities.citingClaims': '这些来源支撑的论断',
+  'entities.noClaims': '还没有持久论断引用这些来源。',
+  'entities.notFound': '实体不存在。',
   'nav.search': '搜索',
   'nav.knowledge': '知识',
   'nav.ask': '对话',

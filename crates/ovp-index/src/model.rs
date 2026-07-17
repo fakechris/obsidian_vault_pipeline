@@ -61,6 +61,13 @@ pub struct SourceRow {
     /// surfaces render them visibly weaker (`~#tag`, dashed chips).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags_inferred: Vec<String>,
+    /// Tier-0 URL entity ids this source mentions (`github:owner/repo`,
+    /// `arxiv:2504.19413`, …), extracted deterministically from the note's
+    /// URL + body. Forward list for the SourceDetail chips + `find --entity`;
+    /// the reverse index (entity → sources) lives in the entities projection.
+    /// Serde-additive: pre-entity indexes deserialize to empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entities: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -9,7 +9,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
+import { entityUrl, fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { MarkdownView } from '../lib/markdown';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
@@ -306,6 +306,29 @@ export default function SourceDetailPage() {
                 }
               }}
             />
+          </>
+        )}
+        {(source.entities ?? []).length > 0 && (
+          <>
+            <dt>{t('entities.title')}</dt>
+            <dd>
+              {(source.entities ?? []).map((id) => (
+                <span key={id} className="entity-chip">
+                  <Link to={`/entity/${encodeURIComponent(id)}`}>@{id}</Link>
+                  {entityUrl(id) && (
+                    <a
+                      href={entityUrl(id)!}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={entityUrl(id)!}
+                      className="entity-out"
+                    >
+                      ↗
+                    </a>
+                  )}
+                </span>
+              ))}
+            </dd>
           </>
         )}
         {source.last_run_id && (

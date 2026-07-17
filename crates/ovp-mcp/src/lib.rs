@@ -216,12 +216,14 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             "claims" => Some(QueryKind::Claims),
             "runs" => Some(QueryKind::Runs),
             "tags" => Some(QueryKind::Tags),
+            "entities" => Some(QueryKind::Entities),
             _ => None,
         }),
         status: args.get("status").and_then(|v| v.as_str()).map(String::from),
         date: args.get("date").and_then(|v| v.as_str()).map(String::from),
         term: args.get("term").and_then(|v| v.as_str()).map(String::from),
         tag,
+        entity: args.get("entity").and_then(|v| v.as_str()).map(String::from),
     };
 
     let hits = run_query(&model, &query);
@@ -237,7 +239,7 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
 
     let term = args.get("query").and_then(|v| v.as_str()).map(String::from);
-    let query = Query { kind: None, status: None, date: None, term, tag: None };
+    let query = Query { kind: None, status: None, date: None, term, tag: None , entity: None };
     let hits = run_query(&model, &query);
     let text = serde_json::to_string_pretty(&hits).unwrap_or_else(|_| "[]".into());
 

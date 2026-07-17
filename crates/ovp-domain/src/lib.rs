@@ -33,6 +33,9 @@ pub mod sources;
 /// alias table. Canonicalization happens at projection build only; raw
 /// frontmatter tags are never rewritten.
 pub mod tags;
+/// Tier-0 URL entities: machine-verifiable referents (github/arxiv/doi/npm/…)
+/// whose identity is a registry URL — deterministic extraction, no LLM.
+pub mod url_entities;
 pub mod transforms;
 /// M14a experimental Grounded Unit extraction spike (parallel, deletable; not
 /// wired into the typed pipeline). See `docs/stage-m14a-grounded-units.md`.

@@ -53,6 +53,7 @@ pub struct FindArgs {
     pub status: Option<String>,
     pub date: Option<String>,
     pub tag: Option<String>,
+    pub entity: Option<String>,
     pub json: bool,
 }
 
@@ -67,9 +68,10 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         Some("cards") => Some(QueryKind::Cards),
         Some("units") => Some(QueryKind::Units),
         Some("tags") => Some(QueryKind::Tags),
+        Some("entities") => Some(QueryKind::Entities),
         Some(other) => {
             return Err(CliError::Io(format!(
-                "unknown --kind `{other}` (sources|packs|claims|runs|cards|units|tags)"
+                "unknown --kind `{other}` (sources|packs|claims|runs|cards|units|tags|entities)"
             )))
         }
     };
@@ -90,6 +92,7 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         date: args.date,
         term: args.term,
         tag,
+        entity: args.entity,
     };
     let hits = match kind {
         Some(QueryKind::Cards | QueryKind::Units) => {

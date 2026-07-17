@@ -167,7 +167,7 @@ fn write_api_tree(
     write_json(&api.join("themes.json"), &bodies::themes_body(records))?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
-    let empty = Query { kind: None, status: None, date: None, term: None, tag: None };
+    let empty = Query { kind: None, status: None, date: None, term: None, tag: None , entity: None };
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 5;
 
@@ -229,6 +229,23 @@ fn write_api_tree(
             files += 1;
             if r.claim_id != r.claim_key && id_counts.get(r.claim_id.as_str()) == Some(&1) {
                 write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
+                files += 1;
+            }
+        }
+    }
+
+    // Tier-0 URL entities: the index + one page per entity. Public content
+    // (URLs, unlike personal tags), so they ship. `safe_component` guards the
+    // filename against `/` in ids like `github:owner/repo`.
+    let entities = bodies::entities_body(public);
+    write_json(&api.join("entities.json"), &entities)?;
+    files += 1;
+    if let Some(list) = entities.get("entities").and_then(|v| v.as_array()) {
+        for e in list {
+            if let Some(id) = e.get("id").and_then(|v| v.as_str())
+                && let Some(v) = bodies::entity_body(public, id)
+            {
+                write_json(&api.join("entity").join(format!("{}.json", safe_component(id))), &v)?;
                 files += 1;
             }
         }
@@ -455,6 +472,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            entities: Vec::new(),
         }
     }
 

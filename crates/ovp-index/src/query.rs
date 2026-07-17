@@ -19,6 +19,9 @@ pub enum QueryKind {
     /// count. Never included in the default all-kinds sweep — only an
     /// explicit `--kind tags` lists it.
     Tags,
+    /// The URL entity index: one row per entity id with its mention count.
+    /// Explicit-only, like `tags`.
+    Entities,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -38,6 +41,9 @@ pub struct Query {
     /// kinds that carry no tags (packs/claims/runs/cards/units), the same
     /// way a date filter excludes claims.
     pub tag: Option<String>,
+    /// URL entity id filter (`github:owner/repo`), exact match over a
+    /// source's `entities`. Source-level like `tag`: excludes tagless kinds.
+    pub entity: Option<String>,
 }
 
 /// One result row, kind-tagged, with a printable line and a link target.
@@ -89,8 +95,47 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             s.tags.iter().any(|have| have == t) || s.tags_inferred.iter().any(|have| have == t)
         }
     };
+    // Entity ids are already lowercase from extraction; lowercase the query
+    // so `--entity github:Owner/Repo` still matches.
+    let entity = q.entity.as_deref().map(str::to_lowercase);
+    let entity_ok = |s: &crate::model::SourceRow| match &entity {
+        None => true,
+        Some(e) => s.entities.iter().any(|have| have == e),
+    };
 
     let mut hits = Vec::new();
+
+    // Entity vocabulary listing (explicit-only): one row per entity id with
+    // its mention count, most-mentioned first — the cross-source value.
+    if q.kind == Some(QueryKind::Entities) {
+        let mut counts: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for s in &model.sources {
+            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) {
+                continue;
+            }
+            for e in &s.entities {
+                *counts.entry(e.as_str()).or_default() += 1;
+            }
+        }
+        let mut rows: Vec<(&str, usize)> = counts
+            .into_iter()
+            .filter(|(e, _)| {
+                matches(&[e]) && entity.as_deref().map(|want| *e == want).unwrap_or(true)
+            })
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        for (e, n) in rows {
+            hits.push(Hit {
+                kind: "entity".into(),
+                status: "entity".into(),
+                line: format!("{e} ({n})"),
+                path: None,
+                id: Some(e.to_string()),
+            });
+        }
+        return hits;
+    }
 
     // The vocabulary listing is explicit-only (never in the all-kinds sweep):
     // one row per canonical tag over the status/date-filtered sources, count
@@ -139,7 +184,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Sources) {
         for s in &model.sources {
             let status = source_status_str(s.status);
-            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(s) {
+            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(s) || !entity_ok(s) {
                 continue;
             }
             let title = s.title.as_deref().unwrap_or("(untitled)");
@@ -157,6 +202,9 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             }
             if !s.tags_inferred.is_empty() {
                 line.push_str(&format!(" ~#{}", s.tags_inferred.join(" ~#")));
+            }
+            if !s.entities.is_empty() {
+                line.push_str(&format!(" @{}", s.entities.join(" @")));
             }
             if s.fail_count > 0 {
                 line.push_str(&format!(" fails={}", s.fail_count));
@@ -177,7 +225,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Packs) {
         for p in &model.packs {
             // Packs/claims/runs carry no tags; a tag filter excludes them.
-            if tag.is_some() || !status_ok("pack") || !date_ok(p.date.as_deref()) {
+            if tag.is_some() || entity.is_some() || !status_ok("pack") || !date_ok(p.date.as_deref()) {
                 continue;
             }
             let cards_joined = p.card_titles.join(" | ");
@@ -208,7 +256,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         for c in &model.claims {
             let status = claim_status_str(c.status);
             // Claims carry no date or tags; either filter excludes them.
-            if !status_ok(status) || q.date.is_some() || tag.is_some() {
+            if !status_ok(status) || q.date.is_some() || tag.is_some() || entity.is_some() {
                 continue;
             }
             let theme = c.theme.as_deref().unwrap_or("");
@@ -231,7 +279,7 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
 
     if kind_ok(QueryKind::Runs) {
         for r in &model.runs {
-            if tag.is_some() || !status_ok("run") || !date_ok(Some(&r.date)) {
+            if tag.is_some() || entity.is_some() || !status_ok("run") || !date_ok(Some(&r.date)) {
                 continue;
             }
             if !matches(&[&r.run_id, &r.date]) {
@@ -260,7 +308,7 @@ pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> 
     let mut scored: Vec<(f64, String, Hit)> = Vec::new();
 
     // Evidence rows carry no date or tags; either filter excludes them.
-    if q.date.is_some() || q.tag.is_some() {
+    if q.date.is_some() || q.tag.is_some() || q.entity.is_some() {
         return Vec::new();
     }
 

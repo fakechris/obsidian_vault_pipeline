@@ -48,6 +48,79 @@ pub fn find_body(model: &IndexModel, query: &Query) -> Value {
     serde_json::to_value(&hits).unwrap_or_else(|_| json!([]))
 }
 
+/// `/api/entities` — the Tier-0 URL entity index, one row per entity id with
+/// its kind, external URL, and mention count, most-mentioned first. Derived
+/// entirely from `SourceRow.entities` (no sidecar), so live and publish agree.
+pub fn entities_body(model: &IndexModel) -> Value {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for s in &model.sources {
+        for e in &s.entities {
+            *counts.entry(e.as_str()).or_default() += 1;
+        }
+    }
+    let mut rows: Vec<(&str, usize)> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let entities: Vec<Value> = rows
+        .into_iter()
+        .filter_map(|(id, count)| {
+            Some(json!({
+                "id": id,
+                "kind": ovp_domain::url_entities::kind_of_id(id)?,
+                "url": ovp_domain::url_entities::url_for_id(id)?,
+                "count": count,
+            }))
+        })
+        .collect();
+    json!({ "entities": entities })
+}
+
+/// `/api/entity/:id` — one entity: its external URL + the sources that mention
+/// it (title/sha for linking) + the durable/caveated claims those sources
+/// cite (via pack join). `None` when the id mentions no source (→ 404).
+pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
+    let id_lc = id.to_lowercase();
+    let sources: Vec<&SourceRow> = model
+        .sources
+        .iter()
+        .filter(|s| s.entities.iter().any(|e| *e == id_lc))
+        .collect();
+    if sources.is_empty() {
+        return None;
+    }
+    // Claims whose cited case_ids join to any mentioning source's pack.
+    let cases: std::collections::HashSet<String> = sources
+        .iter()
+        .filter_map(|s| s.pack_dir.as_deref().and_then(last_path_segment))
+        .map(str::to_string)
+        .collect();
+    let mut claims: Vec<&ClaimRow> = model
+        .claims
+        .iter()
+        .filter(|c| c.sources.iter().any(|s| cases.contains(s)))
+        .collect();
+    claims.sort_by_key(|c| {
+        (
+            match c.status {
+                ClaimStatus::Durable => 0u8,
+                ClaimStatus::Caveated => 1,
+                _ => 2,
+            },
+            c.claim_id.clone(),
+        )
+    });
+    Some(json!({
+        "id": id_lc,
+        "kind": ovp_domain::url_entities::kind_of_id(&id_lc),
+        "url": ovp_domain::url_entities::url_for_id(&id_lc),
+        "sources": sources.iter().map(|s| json!({
+            "sha256": s.sha256,
+            "title": s.title,
+            "date": s.date,
+        })).collect::<Vec<_>>(),
+        "citing_claims": claims,
+    }))
+}
+
 /// `/api/settings` — the PUBLIC subset only. Drops `vault_root`, `llm_configured`,
 /// `ask_limits`, the last-run heartbeat, and live-queued backlog; keeps schema,
 /// date, provenance stamp, and the public counts. The live server has its own

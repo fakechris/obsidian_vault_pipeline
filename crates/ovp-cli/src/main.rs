@@ -322,6 +322,10 @@ enum Cmd {
         /// resolve via `.ovp/tags/aliases.toml` before matching).
         #[arg(long)]
         tag: Option<String>,
+        /// URL entity id filter over sources (`github:owner/repo`,
+        /// `arxiv:2504.19413`). `--kind entities` lists the entity index.
+        #[arg(long)]
+        entity: Option<String>,
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -1432,6 +1436,7 @@ fn main() -> ExitCode {
             status,
             date,
             tag,
+            entity,
             json,
         } => commands::index_cmd::run_find(commands::index_cmd::FindArgs {
             vault_root,
@@ -1440,6 +1445,7 @@ fn main() -> ExitCode {
             status,
             date,
             tag,
+            entity,
             json,
         }),
         Cmd::Console { vault_root, date } => {

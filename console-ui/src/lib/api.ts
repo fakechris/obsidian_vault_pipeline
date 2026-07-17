@@ -2,6 +2,7 @@ import type {
   AskResponse,
   ChatEntry,
   ClaimDetail,
+  ClaimRow,
   FindHit,
   FlowData,
   GraphResponse,
@@ -297,4 +298,70 @@ export function postSourceTags(
   tags: string[],
 ): Promise<{ ok: boolean; changed: boolean; sha?: string }> {
   return postJson(`/api/source/${encodeURIComponent(sha)}/tags`, { tags });
+}
+
+// ---- Tier-0 URL entities (docs/stage-tags-product.md §5b) ----
+
+export interface EntityRow {
+  id: string;
+  kind: string;
+  url: string;
+  count: number;
+}
+
+export interface EntitySource {
+  sha256: string;
+  title?: string;
+  date?: string;
+}
+
+export interface EntityDetail {
+  id: string;
+  kind: string | null;
+  url: string | null;
+  sources: EntitySource[];
+  citing_claims: ClaimRow[];
+}
+
+/** GET /api/entities — the URL entity index, most-mentioned first. Static
+ * mode reads the snapshotted `entities.json`. */
+export function fetchEntities(): Promise<EntityRow[]> {
+  const path = STATIC_MODE ? `${API}/entities.json` : '/api/entities';
+  return fetchJson<{ entities: EntityRow[] }>(path).then((d) => d.entities ?? []);
+}
+
+/** GET /api/entity/:id — one entity's mentioning sources + citing claims. */
+export function fetchEntity(id: string): Promise<EntityDetail> {
+  if (STATIC_MODE) {
+    // Published per-entity files are named with the same safe-component rule
+    // the publisher uses (`:` and `/` → `_`).
+    const safe = id.replace(/[^A-Za-z0-9._-]/g, '_');
+    return fetchJson<EntityDetail>(`${API}/entity/${safe}.json`);
+  }
+  return fetchJson<EntityDetail>(`/api/entity/${encodeURIComponent(id)}`);
+}
+
+/** Reconstruct the external URL from an entity id (client-side mirror of the
+ * server's `url_for_id`, for chips that don't fetch the detail). */
+export function entityUrl(id: string): string | null {
+  const [kind, key] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)];
+  if (!key) return null;
+  switch (kind) {
+    case 'github':
+      return `https://github.com/${key}`;
+    case 'arxiv':
+      return `https://arxiv.org/abs/${key}`;
+    case 'doi':
+      return `https://doi.org/${key}`;
+    case 'npm':
+      return `https://www.npmjs.com/package/${key}`;
+    case 'crates':
+      return `https://crates.io/crates/${key}`;
+    case 'pypi':
+      return `https://pypi.org/project/${key}`;
+    case 'hn':
+      return `https://news.ycombinator.com/item?id=${key}`;
+    default:
+      return null;
+  }
 }

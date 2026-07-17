@@ -6,6 +6,22 @@ export const en = {
   'nav.today': 'Today',
   'nav.library': 'Library',
   'nav.tags': 'Tags',
+  'nav.entities': 'Entities',
+
+  // entities (Tier-0 URL entities)
+  'entities.title': 'Entities',
+  'entities.help':
+    'Machine-verified referents pulled from links in your sources — GitHub repos, arXiv papers, packages. Ranked by how many sources mention each. Deterministic, no LLM.',
+  'entities.all': 'All',
+  'entities.filter': 'Filter entities…',
+  'entities.empty': 'No URL entities found in your sources yet.',
+  'entities.sources': 'sources',
+  'entities.url': 'URL',
+  'entities.kind': 'Kind',
+  'entities.mentionedIn': 'Mentioned in',
+  'entities.citingClaims': 'Claims from these sources',
+  'entities.noClaims': 'No durable claims cite these sources yet.',
+  'entities.notFound': 'Entity not found.',
   'nav.search': 'Search',
   'nav.knowledge': 'Knowledge',
   'nav.ask': 'Ask',
