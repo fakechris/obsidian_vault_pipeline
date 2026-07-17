@@ -739,8 +739,14 @@ fn split_flow_items(inner: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut quote: Option<char> = None;
+    let mut escaped = false;
     for (i, c) in inner.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match (quote, c) {
+            (Some('"'), '\\') => escaped = true,
             (None, '"' | '\'') => quote = Some(c),
             (Some(q), c) if c == q => quote = None,
             (None, ',') => {
@@ -775,11 +781,14 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
     // The intake parser strips a UTF-8 BOM before recognizing frontmatter —
     // this write path must accept the same notes it indexes.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // Match and reconstruct with the note's own line endings — a CRLF note
+    // must neither be rejected nor come back with mixed endings.
+    let le = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let rest = text
-        .strip_prefix("---\n")
+        .strip_prefix(&format!("---{le}"))
         .ok_or("note has no YAML frontmatter (leading ---)")?;
     let close = rest
-        .find("\n---")
+        .find(&format!("{le}---"))
         .ok_or("note frontmatter is unterminated (no closing ---)")?;
     let fm = &rest[..close];
 
@@ -879,7 +888,7 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
             }
         }
     }
-    Ok(Some(format!("---\n{}{}", out_fm.join("\n"), &rest[close..])))
+    Ok(Some(format!("---{le}{}{}", out_fm.join(le), &rest[close..])))
 }
 
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop

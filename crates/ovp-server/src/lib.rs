@@ -264,6 +264,10 @@ struct AppState {
     /// live number is the whole point — it may differ from the projection
     /// mid-run, and it is the authoritative-now figure.
     live_queued: RwLock<LiveQueued>,
+    /// Serializes the tag mutation handlers end-to-end (decisions/vocabulary
+    /// load-modify-save + note frontmatter replace + projection rebuild) —
+    /// two concurrent curation writes must never interleave.
+    tags_write_lock: std::sync::Mutex<()>,
 }
 
 /// TTL cache for the live 01-Raw backlog count. A recursive walk of ~200 files
@@ -500,6 +504,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
                 .unwrap_or(DEFAULT_MAX_CONCURRENT_ASKS),
         ),
         live_queued: RwLock::new(LiveQueued::default()),
+        tags_write_lock: std::sync::Mutex::new(()),
     });
 
     // Pre-load model
@@ -754,6 +759,7 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     if alias.is_empty() || canonical.is_empty() {
         return json_response(400, r#"{"error":"alias and canonical are required"}"#);
     }
+    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
     let mut decisions = match ovp_domain::tags::TagDecisions::load(&state.vault_root) {
         Ok(d) => d,
         Err(e) => return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
@@ -806,6 +812,7 @@ fn handle_source_tags_post(
     if tags.is_empty() {
         return json_response(400, r#"{"error":"tags must be a non-empty string array"}"#);
     }
+    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
     let Some(model) = state.current_model() else {
         return json_response(503, r#"{"error":"index not available"}"#);
     };
@@ -832,7 +839,9 @@ fn handle_source_tags_post(
     {
         moved
     } else {
-        recorded
+        // Recorded path gone and no lifecycle candidate: a stale row, not a
+        // server fault — 404, never a 500 from the read below.
+        return json_response(404, r#"{"error":"source file not found"}"#);
     };
     let text = match std::fs::read_to_string(&note_path) {
         Ok(t) => t,
@@ -1973,6 +1982,7 @@ mod tests {
             ask_timeout: Duration::from_secs(60),
             ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
             live_queued: RwLock::new(LiveQueued::default()),
+        tags_write_lock: std::sync::Mutex::new(()),
         }
     }
 
