@@ -350,6 +350,7 @@ mod tests {
                     last_reason: None,
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    tags_implied: Vec::new(),
                     entities: Vec::new(),
                 },
                 SourceRow {
@@ -365,6 +366,7 @@ mod tests {
                     last_reason: Some("card synthesis did not parse".into()),
                     tags: Vec::new(),
                     tags_inferred: Vec::new(),
+                    tags_implied: Vec::new(),
                     entities: Vec::new(),
                 },
             ],

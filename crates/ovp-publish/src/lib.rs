@@ -511,6 +511,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         }
     }

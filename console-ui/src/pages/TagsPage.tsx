@@ -14,7 +14,14 @@
  *     decidable ones stay front and center. */
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchTags, postTagDecision, type TagProposal, type TagsPayload } from '../lib/api';
+import {
+  fetchTags,
+  postImplicationDecision,
+  postTagDecision,
+  type ImplicationProposal,
+  type TagProposal,
+  type TagsPayload,
+} from '../lib/api';
 import { EmptyState, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 
@@ -50,6 +57,62 @@ export default function TagsPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const decideImplication = async (
+    action: 'accept_implication' | 'reject',
+    specific: string,
+    generic: string,
+  ) => {
+    setBusy(`${specific}=>${generic}`);
+    setError(null);
+    try {
+      await postImplicationDecision(action, specific, generic);
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const implProposals = data?.implication_proposals ?? [];
+
+  const implCard = (p: ImplicationProposal) => {
+    const key = `${p.specific}=>${p.generic}`;
+    return (
+      <div className="row" key={key}>
+        <span className="row-main">
+          <span className="mono">
+            #{p.specific} ({p.specific_count}) ⇒ #{p.generic} ({p.generic_count})
+          </span>
+          <span className="muted sm">
+            {p.name_cosine != null && `${t('tags.nameCos')} ${p.name_cosine.toFixed(2)} · `}
+            {t('tags.forward')} {p.forward.toFixed(2)} · {t('tags.reverseProb')}{' '}
+            {p.reverse.toFixed(2)}
+          </span>
+        </span>
+        <span className="meta">
+          <button
+            type="button"
+            className="tag-chip"
+            disabled={busy === key}
+            title={t('tags.implyHint')}
+            onClick={() => decideImplication('accept_implication', p.specific, p.generic)}
+          >
+            ✓ {t('tags.accept')}
+          </button>
+          <button
+            type="button"
+            className="tag-chip"
+            disabled={busy === key}
+            onClick={() => decideImplication('reject', p.specific, p.generic)}
+          >
+            ✕ {t('tags.reject')}
+          </button>
+        </span>
+      </div>
+    );
   };
 
   const proposals = data?.proposals ?? [];
@@ -138,6 +201,16 @@ export default function TagsPage() {
         </div>
       )}
 
+      {implProposals.length > 0 && (
+        <div className="section">
+          <h2>
+            {t('tags.implyInbox')} ({implProposals.length})
+          </h2>
+          <p className="muted sm">{t('tags.implyHelp')}</p>
+          <div className="row-list">{implProposals.map(implCard)}</div>
+        </div>
+      )}
+
       <div className="section">
         <h2>
           {t('tags.vocabulary')} ({data?.tags.length ?? 0})
@@ -166,6 +239,7 @@ export default function TagsPage() {
               <span className="meta">
                 {r.user}
                 {r.inferred > 0 ? ` + ~${r.inferred}` : ''}
+                {(r.implied ?? 0) > 0 ? ` + >${r.implied}` : ''}
               </span>
             </div>
           ))}

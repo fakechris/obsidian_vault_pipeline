@@ -41,6 +41,7 @@ impl PublicView {
             // effect of the tag facet landing on the live portal.
             s.tags.clear();
             s.tags_inferred.clear();
+            s.tags_implied.clear();
         }
         let public_shas: std::collections::HashSet<&str> =
             m.sources.iter().map(|s| s.sha256.as_str()).collect();
@@ -141,6 +142,7 @@ mod tests {
             last_reason: reason.map(String::from),
             tags: vec!["agent".into()],
             tags_inferred: vec!["rust".into()],
+            tags_implied: Vec::new(),
             entities: vec!["github:owner/repo".into()],
         }
     }

@@ -614,6 +614,17 @@ body {
   border-style: dashed;
   opacity: 0.75;
 }
+/* Implied roll-up tags (`>#generic`): dotted + faint — a derived view. */
+.tag-chip.implied {
+  border-style: dotted;
+  opacity: 0.6;
+}
+/* Facet drill-down children: indented sub-list under an active generic. */
+.facet-children {
+  margin: 0.15rem 0 0.3rem 0.9rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--border);
+}
 /* Inline accept ✓ inside an inferred chip (SourceDetail). */
 .tag-chip-accept {
   border: 0;

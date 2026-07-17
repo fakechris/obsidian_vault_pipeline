@@ -87,6 +87,10 @@ pub fn normalize_tag(raw: &str) -> Option<String> {
 pub struct TagAliases {
     map: BTreeMap<String, String>,
     drop: std::collections::BTreeSet<String>,
+    /// Danbooru-style implications: a SPECIFIC tag → the GENERIC tags it rolls
+    /// up to (`autogen` ⇒ `agent`). Direct edges only; the closure is
+    /// computed on demand. Both sides normalized + alias-resolved.
+    implications: BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 impl TagAliases {
@@ -104,6 +108,9 @@ impl TagAliases {
             aliases: BTreeMap<String, String>,
             #[serde(default)]
             drop: Vec<String>,
+            /// `"specific" = ["generic", …]`.
+            #[serde(default)]
+            implications: BTreeMap<String, Vec<String>>,
         }
         let file: File =
             toml::from_str(text).map_err(|e| format!("tag aliases: invalid TOML: {e}"))?;
@@ -164,7 +171,74 @@ impl TagAliases {
                 ));
             }
         }
-        Ok(Self { map, drop })
+        // Implications: normalize + alias-resolve both sides, reject dead
+        // config (self-loop, dropped/boilerplate target).
+        let resolve = |t: &str| -> Option<String> {
+            let n = normalize_tag(t)?;
+            Some(map.get(&n).cloned().unwrap_or(n))
+        };
+        let mut implications: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for (specific, generics) in &file.implications {
+            let s = resolve(specific).ok_or_else(|| {
+                format!("tag implications: {specific:?} normalizes to nothing")
+            })?;
+            for generic in generics {
+                let g = resolve(generic).ok_or_else(|| {
+                    format!("tag implications: {generic:?} (for {specific:?}) normalizes to nothing")
+                })?;
+                if s == g {
+                    return Err(format!("tag implications: {specific:?} implies itself"));
+                }
+                if drop.contains(&g) || BOILERPLATE_TAGS.contains(&g.as_str()) {
+                    return Err(format!(
+                        "tag implications: {specific:?} ⇒ {g:?} targets a dropped/boilerplate tag"
+                    ));
+                }
+                implications.entry(s.clone()).or_default().insert(g);
+            }
+        }
+        Ok(Self {
+            map,
+            drop,
+            implications,
+        })
+    }
+
+    /// All generics `tag` transitively rolls up to (`autogen` → {agent, ai}),
+    /// excluding `tag` itself even if a cycle (`a⇒b⇒a`) leads back to it.
+    pub fn implied_generics(&self, tag: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut stack: Vec<String> = self
+            .implications
+            .get(tag)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        while let Some(g) = stack.pop() {
+            if g == tag {
+                continue; // a cycle back to the start is not a self-implication
+            }
+            if out.insert(g.clone())
+                && let Some(next) = self.implications.get(&g)
+            {
+                stack.extend(next.iter().cloned());
+            }
+        }
+        out
+    }
+
+    /// All specifics that transitively imply `generic` — the facet children +
+    /// query-expansion set. O(keys²) but keys is a small curated set.
+    pub fn specifics_of(&self, generic: &str) -> std::collections::BTreeSet<String> {
+        self.implications
+            .keys()
+            .filter(|s| self.implied_generics(s).contains(generic))
+            .cloned()
+            .collect()
+    }
+
+    /// Direct implication edges (specific → generics) for surfaces.
+    pub fn implications(&self) -> &BTreeMap<String, std::collections::BTreeSet<String>> {
+        &self.implications
     }
 
     /// Load the table from `<vault_root>/.ovp/tags/aliases.toml`, then merge
@@ -211,6 +285,38 @@ impl TagAliases {
                 continue;
             }
             self.map.insert(a.clone(), c);
+        }
+        // Re-canonicalize the OPERATOR implication edges through the now-merged
+        // alias map: a UI merge on an endpoint (`ai-agents → agent`) must move
+        // the edge (`autogen ⇒ ai-agents` → `autogen ⇒ agent`), not leave it
+        // pointing at the obsolete name that source tags no longer carry.
+        let old = std::mem::take(&mut self.implications);
+        for (s, generics) in old {
+            let s2 = self.resolve(&s).to_string();
+            for g in generics {
+                let g2 = self.resolve(&g).to_string();
+                if s2 != g2
+                    && !self.drop.contains(&g2)
+                    && !BOILERPLATE_TAGS.contains(&g2.as_str())
+                {
+                    self.implications.entry(s2.clone()).or_default().insert(g2);
+                }
+            }
+        }
+        // Merge UI-accepted implications: alias-resolve both sides, skip dead
+        // config (self-loop, dropped/boilerplate target), then add the edge.
+        for (specific, generics) in &decisions.implications {
+            let s = self.resolve(specific).to_string();
+            for generic in generics {
+                let g = self.resolve(generic).to_string();
+                if s == g
+                    || self.drop.contains(&g)
+                    || BOILERPLATE_TAGS.contains(&g.as_str())
+                {
+                    continue;
+                }
+                self.implications.entry(s.clone()).or_default().insert(g);
+            }
         }
     }
 
@@ -579,6 +685,8 @@ pub struct TagDecisions {
     pub aliases: BTreeMap<String, String>,
     /// Rejected pairs, stored as sorted (a, b) name tuples.
     pub ignore: std::collections::BTreeSet<(String, String)>,
+    /// Accepted implications: specific → generics it rolls up to.
+    pub implications: BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 impl TagDecisions {
@@ -629,11 +737,25 @@ impl TagDecisions {
         }
     }
 
-    /// Record a rejected pair (the proposal never resurfaces).
+    /// Record a rejected pair (the proposal never resurfaces). Covers both
+    /// merge proposals and implication proposals (a rejected `specific⇒generic`
+    /// is stored as the same order-insensitive ignored pair).
     pub fn reject(&mut self, a: &str, b: &str) -> Result<(), String> {
         let a = normalize_tag(a).ok_or("tag normalizes to nothing")?;
         let b = normalize_tag(b).ok_or("tag normalizes to nothing")?;
         self.ignore.insert(Self::pair(&a, &b));
+        Ok(())
+    }
+
+    /// Record an accepted implication `specific ⇒ generic`.
+    pub fn accept_implication(&mut self, specific: &str, generic: &str) -> Result<(), String> {
+        let s = normalize_tag(specific).ok_or("specific normalizes to nothing")?;
+        let g = normalize_tag(generic).ok_or("generic normalizes to nothing")?;
+        if s == g {
+            return Err("a tag cannot imply itself".into());
+        }
+        self.ignore.remove(&Self::pair(&s, &g));
+        self.implications.entry(s).or_default().insert(g);
         Ok(())
     }
 
@@ -646,6 +768,8 @@ impl TagDecisions {
             aliases: BTreeMap<String, String>,
             #[serde(default)]
             ignore: Vec<(String, String)>,
+            #[serde(default)]
+            implications: BTreeMap<String, Vec<String>>,
         }
         let file: File =
             toml::from_str(text).map_err(|e| format!("tag decisions: invalid TOML: {e}"))?;
@@ -663,6 +787,12 @@ impl TagDecisions {
         for (a, b) in &file.ignore {
             out.reject(a, b)
                 .map_err(|e| format!("tag decisions: ignore ({a:?}, {b:?}): {e}"))?;
+        }
+        for (s, generics) in &file.implications {
+            for g in generics {
+                out.accept_implication(s, g)
+                    .map_err(|e| format!("tag decisions: implication {s:?} ⇒ {g:?}: {e}"))?;
+            }
         }
         Ok(out)
     }
@@ -707,6 +837,13 @@ impl TagDecisions {
                 toml_basic_string(a),
                 toml_basic_string(c)
             ));
+        }
+        if !self.implications.is_empty() {
+            body.push_str("\n[implications]\n");
+            for (s, generics) in &self.implications {
+                let list: Vec<String> = generics.iter().map(|g| toml_basic_string(g)).collect();
+                body.push_str(&format!("{} = [{}]\n", toml_basic_string(s), list.join(", ")));
+            }
         }
         write_atomic(&path, &body)?;
         Ok(path.display().to_string())
@@ -1050,6 +1187,61 @@ mod tests {
         assert!(parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]}]}"#, 2).is_err());
         assert!(parse_tag_classify(r#"{"sources":[{"id":5,"tags":[]}]}"#, 1).is_err());
         assert!(parse_tag_classify(r#"{"new_tags":[]}"#, 0).is_err());
+    }
+
+    #[test]
+    fn implications_transitive_closure_and_reverse() {
+        // autogen ⇒ agent ⇒ ai (two edges); ai-agents is an alias of agent.
+        let t = TagAliases::parse(
+            "[aliases]\n\"ai-agents\" = \"agent\"\n\
+             [implications]\n\"autogen\" = [\"ai-agents\"]\n\"agent\" = [\"ai\"]\n",
+        )
+        .unwrap();
+        // autogen rolls up to agent (alias-resolved) AND ai (transitive).
+        assert_eq!(
+            t.implied_generics("autogen"),
+            ["agent", "ai"].iter().map(|s| s.to_string()).collect()
+        );
+        // reverse: everything that implies ai = autogen + agent.
+        assert_eq!(
+            t.specifics_of("ai"),
+            ["agent", "autogen"].iter().map(|s| s.to_string()).collect()
+        );
+        assert!(TagAliases::parse("[implications]\n\"x\" = [\"x\"]\n").is_err());
+
+        // A cycle (a⇒b⇒a) must not make a its own implied-generic/child.
+        let cyc = TagAliases::parse("[implications]\n\"a\" = [\"b\"]\n\"b\" = [\"a\"]\n").unwrap();
+        assert_eq!(cyc.implied_generics("a"), ["b"].iter().map(|s| s.to_string()).collect());
+        assert!(!cyc.specifics_of("a").contains("a"));
+
+        // A UI merge on an implication endpoint re-canonicalizes the edge:
+        // operator `autogen ⇒ ai-agents`, then UI accepts `ai-agents → agent`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ovp/tags")).unwrap();
+        std::fs::write(
+            dir.path().join(".ovp/tags/aliases.toml"),
+            "[implications]\n\"autogen\" = [\"ai-agents\"]\n",
+        )
+        .unwrap();
+        let mut d = TagDecisions::default();
+        d.accept("ai-agents", "agent").unwrap();
+        d.save(dir.path()).unwrap();
+        let merged = TagAliases::load(dir.path()).unwrap();
+        assert!(merged.implied_generics("autogen").contains("agent"));
+        assert!(!merged.implied_generics("autogen").contains("ai-agents"));
+    }
+
+    #[test]
+    fn ui_implications_persist_and_merge_and_roll_up() {
+        let mut d = TagDecisions::default();
+        d.accept_implication("Autogen", "agent").unwrap();
+        assert!(d.accept_implication("x", "x").is_err());
+        let dir = tempfile::tempdir().unwrap();
+        d.save(dir.path()).unwrap();
+        assert_eq!(TagDecisions::load(dir.path()).unwrap(), d);
+        // Merged into TagAliases via load (no operator file needed).
+        let merged = TagAliases::load(dir.path()).unwrap();
+        assert!(merged.implied_generics("autogen").contains("agent"));
     }
 
     #[test]

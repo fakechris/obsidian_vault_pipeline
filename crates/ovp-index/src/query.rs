@@ -87,12 +87,16 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             None => return Vec::new(),
         },
     };
-    // Operator tags and inferred backfill are both matchable — the filter's
-    // job is recall; the row display keeps the provenance visible (`~#x`).
+    // Operator tags, inferred backfill, AND implied roll-ups are all
+    // matchable — a `--tag agent` filter finds `autogen` sources that roll up
+    // to it. Recall is the filter's job; the row display keeps provenance
+    // visible (`~#` inferred, `>#` implied).
     let tag_ok = |s: &crate::model::SourceRow| match &tag {
         None => true,
         Some(t) => {
-            s.tags.iter().any(|have| have == t) || s.tags_inferred.iter().any(|have| have == t)
+            s.tags.iter().any(|have| have == t)
+                || s.tags_inferred.iter().any(|have| have == t)
+                || s.tags_implied.iter().any(|have| have == t)
         }
     };
     // Entity ids are already lowercase from extraction; lowercase the query
@@ -143,8 +147,8 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     // one row per canonical tag over the status/date-filtered sources, count
     // descending. `term` narrows by substring; a `--tag` filter is exact.
     if q.kind == Some(QueryKind::Tags) {
-        // (operator count, inferred count) per canonical tag.
-        let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
+        // (operator, inferred, implied roll-up) counts per canonical tag.
+        let mut counts: std::collections::BTreeMap<&str, (usize, usize, usize)> =
             std::collections::BTreeMap::new();
         for s in &model.sources {
             // `--kind tags --entity github:x/y` = tags of sources mentioning
@@ -159,26 +163,31 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             for t in &s.tags_inferred {
                 counts.entry(t.as_str()).or_default().1 += 1;
             }
+            for t in &s.tags_implied {
+                counts.entry(t.as_str()).or_default().2 += 1;
+            }
         }
-        let mut rows: Vec<(&str, (usize, usize))> = counts
+        let mut rows: Vec<(&str, (usize, usize, usize))> = counts
             .into_iter()
             .filter(|(t, _)| matches(&[t]) && tag.as_deref().map(|want| *t == want).unwrap_or(true))
             .collect();
         rows.sort_by(|a, b| {
-            (b.1.0 + b.1.1)
-                .cmp(&(a.1.0 + a.1.1))
+            (b.1.0 + b.1.1 + b.1.2)
+                .cmp(&(a.1.0 + a.1.1 + a.1.2))
                 .then_with(|| a.0.cmp(b.0))
         });
-        for (t, (user, inferred)) in rows {
-            let line = if inferred > 0 {
-                format!("{t} ({user}, ~{inferred})")
-            } else {
-                format!("{t} ({user})")
-            };
+        for (t, (user, inferred, implied)) in rows {
+            let mut extra = String::new();
+            if inferred > 0 {
+                extra.push_str(&format!(", ~{inferred}"));
+            }
+            if implied > 0 {
+                extra.push_str(&format!(", >{implied}"));
+            }
             hits.push(Hit {
                 kind: "tag".into(),
                 status: "tag".into(),
-                line,
+                line: format!("{t} ({user}{extra})"),
                 path: None,
                 id: Some(t.to_string()),
             });
@@ -207,6 +216,9 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             }
             if !s.tags_inferred.is_empty() {
                 line.push_str(&format!(" ~#{}", s.tags_inferred.join(" ~#")));
+            }
+            if !s.tags_implied.is_empty() {
+                line.push_str(&format!(" >#{}", s.tags_implied.join(" >#")));
             }
             if !s.entities.is_empty() {
                 line.push_str(&format!(" @{}", s.entities.join(" @")));
