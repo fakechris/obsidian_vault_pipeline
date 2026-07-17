@@ -28,6 +28,7 @@ const NAV = STATIC_MODE
   : ([
       { to: '/', key: 'nav.today', end: true },
       { to: '/library', key: 'nav.library', end: false },
+      { to: '/tags', key: 'nav.tags', end: false },
       { to: '/search', key: 'nav.search', end: false },
       { to: '/knowledge', key: 'nav.knowledge', end: false },
       { to: '/ask', key: 'nav.ask', end: false },

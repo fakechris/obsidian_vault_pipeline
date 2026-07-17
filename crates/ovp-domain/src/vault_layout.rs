@@ -246,6 +246,21 @@ impl VaultLayout {
     pub fn tags_vocabulary_file(&self) -> &'static str {
         ".ovp/tags/vocabulary.toml"
     }
+
+    /// UI-recorded curation decisions (accepted merges + rejected pairs).
+    /// MACHINE-owned — the curation endpoints rewrite it freely — and merged
+    /// with the operator-owned `aliases.toml` at load time, so accepting a
+    /// proposal in the portal never rewrites (or eats the comments of) the
+    /// hand-edited file.
+    pub fn tags_decisions_file(&self) -> &'static str {
+        ".ovp/tags/decisions.toml"
+    }
+
+    /// Machine-readable twin of `proposals.md` (same merge candidates) — the
+    /// curation inbox reads this; the md stays the human-review artifact.
+    pub fn tags_proposals_json_file(&self) -> &'static str {
+        ".ovp/tags/proposals.json"
+    }
 }
 
 /// Last path segment of a pack dir — the case_id that claim↔source↔theme
@@ -254,6 +269,24 @@ impl VaultLayout {
 /// paths and break the join.
 pub fn pack_case_id(pack_dir: &str) -> &str {
     pack_dir.rsplit(['/', '\\']).next().unwrap_or(pack_dir)
+}
+
+/// Lifecycle-move fallback: `rel_path` often records the INTAKE location
+/// (`50-Inbox/01-Raw/<month>/…`) while the daily lifecycle step has moved the
+/// processed source to `50-Inbox/03-Processed/<month>/…` keeping the trailing
+/// subpath. When the recorded path misses and sits under the raw inbox dir,
+/// return the processed-dir candidate iff it exists. One implementation for
+/// every reader/writer (`rel` must already be traversal-checked).
+pub fn lifecycle_moved_path(
+    vault_root: &std::path::Path,
+    layout: &VaultLayout,
+    rel: &str,
+) -> Option<std::path::PathBuf> {
+    let raw_prefix = format!("{}/", layout.inbox_raw_dir());
+    let rest = rel.strip_prefix(&raw_prefix)?;
+    let (month, file) = rest.split_once('/')?;
+    let candidate = vault_root.join(layout.processed_dir(month)).join(file);
+    candidate.is_file().then_some(candidate)
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be

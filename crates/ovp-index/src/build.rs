@@ -364,11 +364,25 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
     let aliases = TagAliases::load(vault_root)?;
     let inferred = TagsInferredFile::load(vault_root)?.unwrap_or_default();
     let mut tagged = 0;
+    let layout = VaultLayout::new();
     for row in rows.iter_mut() {
         let Some(rel) = row.rel_path.as_deref() else {
             continue;
         };
-        let Ok(doc) = read_source_from_path(&vault_root.join(rel)) else {
+        // Same lifecycle-move fallback as every read surface: a processed
+        // source's recorded raw-inbox path may have moved to 03-Processed,
+        // and its CURRENT frontmatter (the tag truth) lives there.
+        let recorded = vault_root.join(rel);
+        let path = if recorded.is_file() {
+            recorded
+        } else if let Some(moved) =
+            ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel)
+        {
+            moved
+        } else {
+            recorded
+        };
+        let Ok(doc) = read_source_from_path(&path) else {
             continue;
         };
         row.tags = canonical_tags(&doc.tags, &aliases);

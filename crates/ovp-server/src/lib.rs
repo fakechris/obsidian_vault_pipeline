@@ -264,6 +264,10 @@ struct AppState {
     /// live number is the whole point — it may differ from the projection
     /// mid-run, and it is the authoritative-now figure.
     live_queued: RwLock<LiveQueued>,
+    /// Serializes the tag mutation handlers end-to-end (decisions/vocabulary
+    /// load-modify-save + note frontmatter replace + projection rebuild) —
+    /// two concurrent curation writes must never interleave.
+    tags_write_lock: std::sync::Mutex<()>,
 }
 
 /// TTL cache for the live 01-Raw backlog count. A recursive walk of ~200 files
@@ -500,6 +504,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
                 .unwrap_or(DEFAULT_MAX_CONCURRENT_ASKS),
         ),
         live_queued: RwLock::new(LiveQueued::default()),
+        tags_write_lock: std::sync::Mutex::new(()),
     });
 
     // Pre-load model
@@ -563,6 +568,28 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             });
             continue;
         }
+        // Tag mutation routes: same JSON/same-origin gate as ask BEFORE any
+        // body is read, and the body read + handler run on a detached worker
+        // — a client that stalls mid-body must never pin the accept loop
+        // (the same slow-body failure mode /api/ask already avoids).
+        if method == Method::Post {
+            let p = path.split('?').next().unwrap_or(&path).to_string();
+            if p == "/api/tags/decision" || (p.starts_with("/api/source/") && p.ends_with("/tags"))
+            {
+                let headers = AskHeaders::of(&request);
+                if let Some(resp) = guard_json_same_origin(&headers) {
+                    let _ = request.respond(resp);
+                    continue;
+                }
+                let state = Arc::clone(state);
+                std::thread::spawn(move || {
+                    let body = read_post_body(&mut request);
+                    let resp = dispatch(&state, Method::Post, &path, &body);
+                    let _ = request.respond(resp);
+                });
+                continue;
+            }
+        }
         let body = if method == Method::Post {
             read_post_body(&mut request)
         } else {
@@ -598,13 +625,18 @@ fn dispatch(
     url: &str,
     // POST bodies are consumed pre-dispatch today (ask is the only POST
     // route); the parameter stays so a future body-taking route slots in.
-    _body: &str,
+    body: &str,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let path = url.split('?').next().unwrap_or(url);
     match (method, path) {
         (Method::Get, "/api/refresh") => {
             state.refresh_model();
             json_response(200, r#"{"ok":true}"#)
+        }
+        (Method::Get, "/api/tags") => handle_tags_api(state),
+        (Method::Post, "/api/tags/decision") => handle_tag_decision(state, body),
+        (Method::Post, p) if p.starts_with("/api/source/") && p.ends_with("/tags") => {
+            handle_source_tags_post(state, p, body)
         }
         (Method::Get, "/api/chats") => handle_chats_list(state),
         (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
@@ -624,6 +656,270 @@ fn dispatch(
         (Method::Get, _) => serve_static(state, url),
         _ => text_response(405, "Method Not Allowed"),
     }
+}
+
+/// `GET /api/tags` — the curation surface's one read: the canonical
+/// vocabulary with per-tag user/inferred counts, the banned list, and the
+/// still-undecided merge proposals (`proposals.json` minus pairs the alias
+/// table already resolves).
+fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let model = match state.current_model() {
+        Some(m) => m,
+        None => return json_response(503, r#"{"error":"index not available"}"#),
+    };
+    let vocabulary =
+        ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
+    let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    // Seed from the vocabulary so zero-count community/llm entries still
+    // appear (browser completeness + Source Detail autocomplete).
+    for (name, _) in vocabulary.iter() {
+        counts.entry(name).or_default();
+    }
+    for s in &model.sources {
+        for t in &s.tags {
+            counts.entry(t.as_str()).or_default().0 += 1;
+        }
+        for t in &s.tags_inferred {
+            counts.entry(t.as_str()).or_default().1 += 1;
+        }
+    }
+    let origins: std::collections::BTreeMap<&str, &str> = vocabulary
+        .iter()
+        .map(|(name, origin)| {
+            (
+                name,
+                match origin {
+                    ovp_domain::tags::TagOrigin::User => "user",
+                    ovp_domain::tags::TagOrigin::Community => "community",
+                    ovp_domain::tags::TagOrigin::Llm => "llm",
+                },
+            )
+        })
+        .collect();
+    let tags: Vec<serde_json::Value> = counts
+        .iter()
+        .map(|(tag, (user, inferred))| {
+            serde_json::json!({
+                "tag": tag,
+                "user": user,
+                "inferred": inferred,
+                "origin": origins.get(tag),
+            })
+        })
+        .collect();
+    // Proposals still awaiting a decision: drop pairs the (operator +
+    // decisions) alias table already merges AND pairs rejected in the UI —
+    // proposals.json only refreshes on the next tags-suggest run, so both
+    // decision kinds must retire cards here, immediately.
+    let aliases = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+    let decisions = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
+    let proposals: Vec<serde_json::Value> = std::fs::read_to_string(
+        state
+            .vault_root
+            .join(state.layout.tags_proposals_json_file()),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|v| v.get("proposals").cloned())
+    .and_then(|v| v.as_array().cloned())
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|p| {
+        let alias = p.get("alias").and_then(|v| v.as_str()).unwrap_or("");
+        let canonical = p.get("canonical").and_then(|v| v.as_str()).unwrap_or("");
+        !alias.is_empty()
+            && aliases.resolve(alias) == alias
+            && aliases.resolve(canonical) == canonical
+            && !decisions.is_ignored(alias, canonical)
+    })
+    .collect();
+    let banned: Vec<&str> = vocabulary.banned().collect();
+    let body = serde_json::json!({
+        "tags": tags,
+        "banned": banned,
+        "proposals": proposals,
+    })
+    .to_string();
+    json_stamped(200, &body, Some(&model))
+}
+
+/// `POST /api/tags/decision` `{action: "accept"|"reject", alias, canonical}`
+/// — record a curation decision in the MACHINE-owned decisions.toml (the
+/// operator's aliases.toml is never rewritten), then rebuild the projection
+/// so the merge takes effect immediately.
+fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"invalid JSON body"}"#),
+    };
+    let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let alias = parsed.get("alias").and_then(|v| v.as_str()).unwrap_or("");
+    let canonical = parsed.get("canonical").and_then(|v| v.as_str()).unwrap_or("");
+    if alias.is_empty() || canonical.is_empty() {
+        return json_response(400, r#"{"error":"alias and canonical are required"}"#);
+    }
+    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
+    let mut decisions = match ovp_domain::tags::TagDecisions::load(&state.vault_root) {
+        Ok(d) => d,
+        Err(e) => return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+    };
+    let result = match action {
+        "accept" => decisions.accept(alias, canonical),
+        "reject" => decisions.reject(alias, canonical),
+        _ => return json_response(400, r#"{"error":"action must be accept or reject"}"#),
+    };
+    if let Err(e) = result {
+        return json_response(400, &format!(r#"{{"error":{}}}"#, json_str(&e)));
+    }
+    if let Err(e) = decisions.save(&state.vault_root) {
+        return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e)));
+    }
+    // An accept can be silently un-absorbed when it conflicts with the
+    // operator's aliases.toml (e.g. `alias` is already an operator canonical):
+    // the merged table then still resolves `alias` to itself. Detect that,
+    // roll the decision back, and report a conflict instead of a false success
+    // that leaves the proposal card stuck.
+    if action == "accept" {
+        let na = ovp_domain::tags::normalize_tag(alias).unwrap_or_default();
+        let merged = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+        if na.is_empty() || merged.resolve(&na) == na {
+            let mut d = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
+            d.remove_alias(alias);
+            let _ = d.save(&state.vault_root);
+            return json_response(
+                409,
+                &format!(
+                    r#"{{"error":{}}}"#,
+                    json_str(&format!(
+                        "cannot merge #{alias} → #{canonical}: it conflicts with an existing \
+                         rule in aliases.toml — edit that file directly"
+                    ))
+                ),
+            );
+        }
+    }
+    match rebuild_index_now(state) {
+        Ok(_) => json_response(200, r#"{"ok":true,"changed":true}"#),
+        Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+    }
+}
+
+/// `POST /api/source/:sha/tags` `{tags: ["..."]}` — the ONE sanctioned
+/// product write to a source file: an explicit per-source user action
+/// (accepting an inferred tag / adding a tag) inserts into that note's
+/// frontmatter, identical in kind to an Obsidian edit. Everything else about
+/// tags stays projection-only.
+fn handle_source_tags_post(
+    state: &AppState,
+    path: &str,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let sha = path
+        .trim_start_matches("/api/source/")
+        .trim_end_matches("/tags")
+        .trim_matches('/');
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"invalid JSON body"}"#),
+    };
+    let tags: Vec<String> = parsed
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str())
+                .filter_map(ovp_domain::tags::normalize_tag)
+                .collect()
+        })
+        .unwrap_or_default();
+    if tags.is_empty() {
+        return json_response(400, r#"{"error":"tags must be a non-empty string array"}"#);
+    }
+    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    let Some(rel) = model
+        .sources
+        .iter()
+        .find(|s| s.sha256 == sha)
+        .and_then(|s| s.rel_path.clone())
+    else {
+        return json_response(404, r#"{"error":"unknown source or no file path"}"#);
+    };
+    // Same traversal guard as the read path: a poisoned index must never
+    // direct a WRITE outside the vault.
+    if !ovp_api_projection::is_plain_relative(&rel) {
+        return json_response(400, r#"{"error":"source path rejected"}"#);
+    }
+    // Same lifecycle-move fallback as the read path: a processed source's
+    // recorded raw-inbox path may have moved to 03-Processed.
+    let recorded = state.vault_root.join(&rel);
+    let note_path = if recorded.is_file() {
+        recorded
+    } else if let Some(moved) =
+        ovp_api_projection::readers::lifecycle_moved_path(&state.vault_root, &state.layout, &rel)
+    {
+        moved
+    } else {
+        // Recorded path gone and no lifecycle candidate: a stale row, not a
+        // server fault — 404, never a 500 from the read below.
+        return json_response(404, r#"{"error":"source file not found"}"#);
+    };
+    let text = match std::fs::read_to_string(&note_path) {
+        Ok(t) => t,
+        Err(e) => {
+            return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("reading {rel}: {e}"))));
+        }
+    };
+    match ovp_domain::tags::add_tags_to_frontmatter(&text, &tags) {
+        Ok(Some(updated)) => {
+            // Atomic replace with a unique temp sibling: canonical USER data,
+            // not rebuildable — a crash mid-write must never truncate the note.
+            if let Err(e) = ovp_domain::tags::write_atomic(&note_path, &updated) {
+                return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("writing {rel}: {e}"))));
+            }
+            // Editing a QUEUED note changes its content hash → the rebuilt
+            // index keys it under a NEW sha. Report the row now living at
+            // this rel_path so the client can re-route instead of 404ing.
+            match rebuild_index_now(state) {
+                Ok(rebuilt) => {
+                    let new_sha = rebuilt
+                        .sources
+                        .iter()
+                        .find(|s| s.rel_path.as_deref() == Some(rel.as_str()))
+                        .map(|s| s.sha256.clone())
+                        .unwrap_or_else(|| sha.to_string());
+                    json_response(
+                        200,
+                        &format!(r#"{{"ok":true,"changed":true,"sha":{}}}"#, json_str(&new_sha)),
+                    )
+                }
+                Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+            }
+        }
+        Ok(None) => json_response(200, r#"{"ok":true,"changed":false}"#),
+        Err(e) => json_response(400, &format!(r#"{{"error":{}}}"#, json_str(&e))),
+    }
+}
+
+/// Rebuild the read model (the tag changes live in files the projection
+/// derives from), persist it, refresh the served snapshot, and return it.
+/// Synchronous — vault-scale rebuilds are ~2s and curation is a
+/// one-operator surface.
+fn rebuild_index_now(state: &AppState) -> Result<ovp_index::IndexModel, String> {
+    let built_at = ovp_index::now_rfc3339();
+    let date = built_at.get(..10).unwrap_or("1970-01-01").to_string();
+    let model = ovp_index::build_index_at(&state.vault_root, &date, Some("tags-ui"), &built_at)?;
+    ovp_index::write_index(&state.vault_root, &model)?;
+    state.refresh_model();
+    Ok(model)
+}
+
+/// A string as a JSON string literal (error payloads).
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"error\"".into())
 }
 
 fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1083,12 +1379,11 @@ fn admit_ask_slot(state: &AppState) -> Result<AskSlot, Response<std::io::Cursor<
 /// POST is refused with 415, and a real JSON POST from a foreign origin
 /// needs a CORS preflight this server never grants. Belt-and-braces, any
 /// attached `Origin` must additionally be loopback (403 otherwise).
-fn handle_ask(
-    state: &AppState,
-    headers: &AskHeaders,
-    body: &str,
-    slot: AskSlot,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+/// The mutation-route guard: JSON content type + same-machine origin. A
+/// browser will happily SEND a cross-site `text/plain` simple POST to
+/// loopback even though it can't read the response — every state-changing
+/// route (ask, tag decisions, source tag writes) must pass this first.
+fn guard_json_same_origin(headers: &AskHeaders) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
     let is_json = headers
         .content_type
         .as_deref()
@@ -1096,12 +1391,28 @@ fn handle_ask(
         .map(|v| v.trim().eq_ignore_ascii_case("application/json"))
         .unwrap_or(false);
     if !is_json {
-        return json_response(415, r#"{"error":"content-type must be application/json"}"#);
+        return Some(json_response(
+            415,
+            r#"{"error":"content-type must be application/json"}"#,
+        ));
     }
     if let Some(origin) = headers.origin.as_deref()
-        && !is_loopback_origin(origin) {
-            return json_response(403, r#"{"error":"cross-origin ask rejected"}"#);
-        }
+        && !is_loopback_origin(origin)
+    {
+        return Some(json_response(403, r#"{"error":"cross-origin write rejected"}"#));
+    }
+    None
+}
+
+fn handle_ask(
+    state: &AppState,
+    headers: &AskHeaders,
+    body: &str,
+    slot: AskSlot,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if let Some(resp) = guard_json_same_origin(headers) {
+        return resp;
+    }
     if body.len() > MAX_POST_BODY_BYTES {
         return json_response(400, r#"{"error":"request body too large"}"#);
     }
@@ -1691,6 +2002,7 @@ mod tests {
             ask_timeout: Duration::from_secs(60),
             ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
             live_queued: RwLock::new(LiveQueued::default()),
+        tags_write_lock: std::sync::Mutex::new(()),
         }
     }
 
@@ -3461,6 +3773,102 @@ mod tests {
 
         let live = st.model_with_live_last_run().unwrap();
         assert!(live.ops.last_run.is_none(), "no sidecar → live overlay is None, not the stale baked snapshot");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The T2 curation loop end-to-end at the dispatch level: GET /api/tags
+    /// lists the vocabulary+proposals; POST /api/tags/decision records into
+    /// the MACHINE-owned decisions.toml (operator aliases.toml untouched) and
+    /// the rebuilt index reflects the merge; POST /api/source/:sha/tags is
+    /// the sanctioned frontmatter write and retires inferred tags.
+    #[test]
+    fn tag_curation_endpoints_round_trip() {
+        let root = temp_root("tag-curation");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(vault.join("50-Inbox/01-Raw/2026-07")).unwrap();
+        let note = vault.join("50-Inbox/01-Raw/2026-07/n.md");
+        std::fs::write(
+            &note,
+            "---\ntitle: N\nsource: https://e.x/n\ntags:\n  - ai-agents\n---\nbody\n",
+        )
+        .unwrap();
+        // A proposals file with one pending merge.
+        std::fs::create_dir_all(vault.join(".ovp/tags")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/tags/proposals.json"),
+            r#"{"schema":"ovp.tags-proposals/v1","proposals":[{"alias":"ai-agents","alias_count":1,"canonical":"agent","canonical_count":9,"cosine":0.93}]}"#,
+        )
+        .unwrap();
+        let model = ovp_index::build_index(&vault, "2026-07-16", None).unwrap();
+        ovp_index::write_index(&vault, &model).unwrap();
+        let st = state(vault.clone(), None);
+
+        // GET: the pending proposal + the tag counts are visible.
+        let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
+        assert_eq!(v["proposals"][0]["alias"], "ai-agents");
+        assert_eq!(v["tags"][0]["tag"], "ai-agents");
+
+        // POST accept: decisions.toml written, index rebuilt with the merge.
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            "/api/tags/decision",
+            r#"{"action":"accept","alias":"ai-agents","canonical":"agent"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        assert!(vault.join(".ovp/tags/decisions.toml").exists());
+        assert!(!vault.join(".ovp/tags/aliases.toml").exists(), "operator file untouched");
+        let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
+        assert_eq!(v["tags"][0]["tag"], "agent", "merge applied on rebuild");
+        assert!(v["proposals"].as_array().unwrap().is_empty(), "decided card retired");
+
+        // POST reject: the card retires IMMEDIATELY (proposals.json is only
+        // regenerated by tags-suggest, so /api/tags must filter decisions).
+        std::fs::write(
+            vault.join(".ovp/tags/proposals.json"),
+            r#"{"schema":"ovp.tags-proposals/v1","proposals":[{"alias":"crypto","alias_count":4,"canonical":"benchmark","canonical_count":5,"cosine":0.79}]}"#,
+        )
+        .unwrap();
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            "/api/tags/decision",
+            r#"{"action":"reject","alias":"crypto","canonical":"benchmark"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
+        assert!(v["proposals"].as_array().unwrap().is_empty(), "rejected card retired");
+
+        // POST source tags: the one sanctioned frontmatter write. Editing a
+        // QUEUED note changes its content hash — the response must carry the
+        // sha the source now lives under.
+        let old_sha = model.sources[0].sha256.clone();
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            &format!("/api/source/{old_sha}/tags"),
+            r#"{"tags":["Memory Systems"]}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        let new_sha = v["sha"].as_str().unwrap();
+        assert_ne!(new_sha, old_sha, "queued edit re-keys the row");
+        let text = std::fs::read_to_string(&note).unwrap();
+        assert!(text.contains("- \"memory-systems\""), "{text}");
+        let rebuilt = ovp_index::read_index(&vault).unwrap();
+        assert!(rebuilt.sources.iter().any(|s| s.sha256 == new_sha));
+
+        // Bad requests fail loud, not silently.
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/tags/decision", "{}").status_code(),
+            400
+        );
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/source/nope/tags", r#"{"tags":["x"]}"#)
+                .status_code(),
+            404
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

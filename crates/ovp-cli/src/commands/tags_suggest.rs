@@ -112,8 +112,9 @@ pub(crate) fn vote_tags(
     out
 }
 
-/// One proposed merge, evidence attached.
-#[derive(Debug, PartialEq)]
+/// One proposed merge, evidence attached. Serialized as-is into
+/// `proposals.json` (the curation inbox's input).
+#[derive(Debug, PartialEq, serde::Serialize)]
 pub(crate) struct MergeProposal {
     /// Lower-count member — the proposed alias.
     pub(crate) alias: String,
@@ -121,7 +122,48 @@ pub(crate) struct MergeProposal {
     /// Higher-count member — the proposed canonical.
     pub(crate) canonical: String,
     pub(crate) canonical_count: usize,
+    /// NAME-only embedding similarity — the score that decides candidacy.
+    /// Two tags are merge candidates because their NAMES mean the same
+    /// thing (variants, 中英 pairs), never because their articles do.
     pub(crate) cosine: f64,
+    /// Content-context similarity (name + sample titles) — display-only
+    /// evidence. High context + low name = related topics, not variants
+    /// (the operator-confirmed false-positive mode this field exposes).
+    pub(crate) context_cosine: f64,
+}
+
+/// Corroboration gate for a name-cosine candidate. The paraphrase embedding
+/// model degenerates on short opaque tech tokens (ios/ida/ai/ui/git/go
+/// cluster together at cosine >0.9), so name similarity alone is not enough:
+/// a pair must ALSO show lexical kinship (shared hyphen-token, containment,
+/// long common prefix), or be a cross-script pair (中↔英 — the case the
+/// multilingual model is actually good at) with minimal context support.
+/// Deliberately NO bare context fallback: high context similarity between
+/// unrelated names is precisely the related-topics-not-variants failure
+/// mode this gate exists to kill (git/go at ctx 0.54 would sneak back in).
+///
+/// `sim` is the NAME cosine. Cross-script (中↔英) pairs are the one case the
+/// multilingual model is genuinely good at, BUT only for real translations,
+/// which it places VERY close: on the real vault every true pair scores
+/// ≥0.926 (训练→training 0.979, 预测市场→prediction-market 0.926) while the
+/// `算命`-style garbage cluster of degenerate short-token vectors tops out at
+/// 0.906 — a clean gap. So a cross-script pair needs both a high name cosine
+/// AND minimal context support.
+pub(crate) fn name_evidence(a: &str, b: &str, sim: f64, ctx: f64) -> bool {
+    fn tokens(s: &str) -> Vec<&str> {
+        s.split('-').filter(|t| t.len() >= 2).collect()
+    }
+    let shared_token = tokens(a).iter().any(|t| tokens(b).contains(t));
+    let containment = a.contains(b) || b.contains(a);
+    let common_prefix = a
+        .chars()
+        .zip(b.chars())
+        .take_while(|(x, y)| x == y)
+        .count()
+        >= 5;
+    let has_cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    let cross_script = has_cjk(a) != has_cjk(b);
+    shared_token || containment || common_prefix || (cross_script && sim >= 0.92 && ctx >= 0.24)
 }
 
 /// Two tags on mostly the SAME sources are co-occurring (related topics on
@@ -132,19 +174,29 @@ pub(crate) struct MergeProposal {
 /// Overlap = |A∩B| / min(|A|,|B|); at or above this the pair is suppressed.
 const CO_OCCURRENCE_OVERLAP: f64 = 0.5;
 
-/// Pairwise merge candidates over per-tag vectors (pure, unit-tested).
-/// `tags` = (name, source indices carrying it). Canonical = higher count;
-/// ties by name (lexicographically smaller wins). Returns (proposals,
-/// suppressed co-occurrence pair count).
+/// Pairwise merge candidates over per-tag NAME vectors (pure, unit-tested).
+/// `tags` = (name, source indices carrying it). Candidacy is decided by
+/// name-embedding similarity alone — the operator-confirmed failure mode of
+/// scoring on titles is that a few similar ARTICLES make two unrelated tag
+/// names look synonymous. `context_vectors` (name + sample titles) only
+/// annotates each proposal as evidence. Canonical = higher count; ties by
+/// name (lexicographically smaller wins). Returns (proposals, suppressed
+/// co-occurrence pair count).
 pub(crate) fn merge_proposals(
     tags: &[(String, Vec<usize>)],
     vectors: &[Vec<f32>],
+    context_vectors: &[Vec<f32>],
     threshold: f64,
 ) -> (Vec<MergeProposal>, usize) {
     assert_eq!(
         tags.len(),
         vectors.len(),
-        "merge_proposals: one vector per tag"
+        "merge_proposals: one name vector per tag"
+    );
+    assert_eq!(
+        tags.len(),
+        context_vectors.len(),
+        "merge_proposals: one context vector per tag"
     );
     let sets: Vec<std::collections::BTreeSet<usize>> = tags
         .iter()
@@ -164,6 +216,10 @@ pub(crate) fn merge_proposals(
                 suppressed += 1;
                 continue;
             }
+            let ctx = cosine(&context_vectors[i], &context_vectors[j]);
+            if !name_evidence(&tags[i].0, &tags[j].0, sim, ctx) {
+                continue;
+            }
             let (ni, nj) = (tags[i].1.len(), tags[j].1.len());
             let (a, c) = if ni < nj || (ni == nj && tags[i].0 > tags[j].0) {
                 (i, j)
@@ -176,6 +232,7 @@ pub(crate) fn merge_proposals(
                 canonical: tags[c].0.clone(),
                 canonical_count: tags[c].1.len(),
                 cosine: (sim * 1000.0).round() / 1000.0,
+                context_cosine: (ctx * 1000.0).round() / 1000.0,
             });
         }
     }
@@ -315,6 +372,22 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
             }
         }
     }
+    // NAME-only vectors decide candidacy (same `tagname:` texts the
+    // bootstrap dedup embeds — one shared cache population); the
+    // name+titles context vectors are display-only evidence.
+    let name_docs: Vec<ThemeDoc> = vocab
+        .keys()
+        .map(|tag| {
+            let text = document_text(tag, "", 0);
+            let sha = ovp_embed::cache::text_sha256(&text);
+            ThemeDoc {
+                case_id: format!("tagname:{tag}"),
+                title: (*tag).to_string(),
+                text,
+                sha,
+            }
+        })
+        .collect();
     let tag_docs: Vec<ThemeDoc> = vocab
         .iter()
         .map(|(tag, (_, titles))| {
@@ -328,7 +401,10 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
             }
         })
         .collect();
-    let Some(tag_vectors) = resolve_vectors(&tag_docs, &embed_cache_dir)? else {
+    let (Some(name_vectors), Some(tag_vectors)) = (
+        resolve_vectors(&name_docs, &embed_cache_dir)?,
+        resolve_vectors(&tag_docs, &embed_cache_dir)?,
+    ) else {
         println!(
             "tags-suggest: nothing written — tag-vocabulary embeddings unavailable \
              (both projections persist together or not at all)."
@@ -345,9 +421,47 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         .map(|(tag, (srcs, _))| ((*tag).to_string(), srcs.clone()))
         .collect();
     let (mut proposals, suppressed) =
-        merge_proposals(&counts, &tag_vectors, args.merge_threshold);
+        merge_proposals(&counts, &name_vectors, &tag_vectors, args.merge_threshold);
+    // Rejected-in-the-UI pairs never resurface (decisions.toml `ignore`).
+    let decisions = ovp_domain::tags::TagDecisions::load(&args.vault_root).map_err(CliError::Io)?;
+    proposals.retain(|p| !decisions.is_ignored(&p.alias, &p.canonical));
     let dropped = proposals.len().saturating_sub(MAX_MERGE_PROPOSALS);
     proposals.truncate(MAX_MERGE_PROPOSALS);
+
+    // Machine-readable twin for the curation inbox, with per-side sample
+    // titles — a high-cosine pair can be related-topics rather than
+    // variants, and names+cosine alone don't let the operator tell.
+    let titles_of = |tag: &str| -> Vec<&str> {
+        vocab.get(tag).map(|(_, t)| t.clone()).unwrap_or_default()
+    };
+    let proposals_with_titles: Vec<serde_json::Value> = proposals
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "alias": p.alias,
+                "alias_count": p.alias_count,
+                "alias_titles": titles_of(&p.alias),
+                "canonical": p.canonical,
+                "canonical_count": p.canonical_count,
+                "canonical_titles": titles_of(&p.canonical),
+                "cosine": p.cosine,
+                "context_cosine": p.context_cosine,
+            })
+        })
+        .collect();
+    let proposals_json = serde_json::json!({
+        "schema": "ovp.tags-proposals/v1",
+        "date": model.date,
+        "merge_threshold": args.merge_threshold,
+        "suppressed_co_occurrence": suppressed,
+        "proposals": proposals_with_titles,
+    });
+    let json_path = args.vault_root.join(layout.tags_proposals_json_file());
+    // Atomic write: the live portal polls this file — a truncated read (or a
+    // silently-blank serialize failure) would make the inbox look empty.
+    let json_body = serde_json::to_string_pretty(&proposals_json)
+        .map_err(|e| CliError::Io(format!("serializing proposals: {e}")))?;
+    ovp_domain::tags::write_atomic(&json_path, &(json_body + "\n")).map_err(CliError::Io)?;
 
     // ---- Human-review report ----
     let mut report = String::new();
@@ -361,7 +475,7 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     report.push_str(&format!(
         "## Merge candidates ({}{}; {suppressed} co-occurrence pair(s) suppressed — \
          tags sharing most sources are related topics, not variants)\n\n\
-         | cosine | alias (count) | → canonical (count) |\n|---|---|---|\n",
+         | name cos | context cos | alias (count) | → canonical (count) |\n|---|---|---|---|\n",
         proposals.len(),
         if dropped > 0 {
             format!(", {dropped} more below the display cap")
@@ -371,9 +485,10 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     ));
     for p in &proposals {
         report.push_str(&format!(
-            "| {:.3}{} | {} ({}) | {} ({}) |\n",
+            "| {:.3}{} | {:.3} | {} ({}) | {} ({}) |\n",
             p.cosine,
             if p.cosine >= STRONG_MERGE { " ★" } else { "" },
+            p.context_cosine,
             p.alias,
             p.alias_count,
             p.canonical,
@@ -451,7 +566,7 @@ mod tests {
         ];
         // agent ≈ agents (disjoint sources); python orthogonal.
         let v = vec![vec![1.0, 0.0], vec![0.99, 0.14], vec![0.0, 1.0]];
-        let (got, suppressed) = merge_proposals(&t, &v, 0.75);
+        let (got, suppressed) = merge_proposals(&t, &v, &v, 0.75);
         assert_eq!(suppressed, 0);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].alias, "agents");
@@ -470,6 +585,28 @@ mod tests {
     }
 
     #[test]
+    fn name_evidence_kills_short_token_degeneracy_and_keeps_real_pairs() {
+        // Lexical kinship passes regardless of name/context similarity.
+        assert!(name_evidence("agents", "agent", 0.99, 0.0)); // containment
+        assert!(name_evidence("self-improvement", "self-improving", 0.98, 0.0)); // prefix
+        assert!(name_evidence("agent-sdk", "agent", 0.93, 0.0)); // shared token
+        assert!(name_evidence("github项目", "github", 0.94, 0.0)); // containment
+        // Real cross-script translations: high name cosine + context support.
+        assert!(name_evidence("训练", "training", 0.979, 0.253));
+        assert!(name_evidence("预测市场", "prediction-market", 0.926, 0.589));
+        // 算命-class garbage: cross-script but name cosine below the 0.92
+        // translation floor → rejected even with passing context.
+        assert!(!name_evidence("sem", "算命", 0.906, 0.285));
+        assert!(!name_evidence("ios", "算命", 0.841, 0.327));
+        assert!(!name_evidence("fastapi", "算命", 0.946, 0.16)); // high name, low ctx
+        // Same-script opaque tokens with no lexical kinship never pass —
+        // not even with high context (related topics ≠ variants).
+        assert!(!name_evidence("ios", "ai", 0.94, 0.242));
+        assert!(!name_evidence("git", "go", 0.93, 0.544));
+        assert!(!name_evidence("tiptap", "nodejs", 0.94, 0.9));
+    }
+
+    #[test]
     fn merge_suppresses_co_occurring_pairs() {
         // Two singleton tags on the SAME source: near-1.0 cosine (shared
         // sample titles) but co-occurrence, not synonymy — suppressed.
@@ -478,7 +615,7 @@ mod tests {
             ("内容创作".to_string(), vec![7]),
         ];
         let v = vec![vec![1.0, 0.0], vec![0.999, 0.04]];
-        let (got, suppressed) = merge_proposals(&t, &v, 0.75);
+        let (got, suppressed) = merge_proposals(&t, &v, &v, 0.75);
         assert!(got.is_empty());
         assert_eq!(suppressed, 1);
     }

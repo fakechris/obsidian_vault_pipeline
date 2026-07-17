@@ -14,6 +14,33 @@ use std::path::Path;
 /// capture mechanism, not the content, so no projection surfaces them.
 pub const BOILERPLATE_TAGS: &[&str] = &["clippings", "pinboard"];
 
+/// Write via a temp sibling + atomic rename — a crash or full disk mid-write
+/// must never truncate the destination, and a concurrent reader never sees a
+/// half-written file. Used for the tag files that carry non-rederivable
+/// judgments (decisions, vocabulary) AND the projections a live reader polls
+/// (proposals.json, edited notes).
+pub fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    // Unique temp name (pid + counter) so two concurrent writers to the same
+    // path never clobber each other's sibling before the rename.
+    let tmp = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&tmp, body)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("writing {}: {e}", path.display())
+        })
+}
+
 /// Deterministic tag normalization: trim, strip a leading `#`, lowercase,
 /// fold separators (whitespace/underscore/`/`) to `-`, collapse runs of `-`,
 /// strip leading/trailing `-`. Returns `None` when nothing survives.
@@ -140,15 +167,50 @@ impl TagAliases {
         Ok(Self { map, drop })
     }
 
-    /// Load the table from `<vault_root>/.ovp/tags/aliases.toml`. Missing
-    /// file → empty table; unreadable or invalid file → error (a present but
-    /// broken table must not silently un-merge the vocabulary).
+    /// Load the table from `<vault_root>/.ovp/tags/aliases.toml`, then merge
+    /// the UI decisions file (`decisions.toml`) on top. Missing files →
+    /// empty; a present-but-broken file is an error (a silently ignored
+    /// table must not un-merge the vocabulary). The operator file wins every
+    /// conflict; decision entries that would violate an invariant (chain,
+    /// dropped/boilerplate target, already-aliased key) are skipped rather
+    /// than failing the load — the operator's hand-edit is the correction.
     pub fn load(vault_root: &Path) -> Result<Self, String> {
         let path = vault_root.join(crate::vault_layout::VaultLayout.tag_aliases_file());
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(format!("reading {}: {e}", path.display())),
+        let mut table = match std::fs::read_to_string(&path) {
+            Ok(text) => Self::parse(&text)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(format!("reading {}: {e}", path.display())),
+        };
+        let decisions = TagDecisions::load(vault_root)?;
+        table.absorb(&decisions);
+        Ok(table)
+    }
+
+    /// Merge UI decisions under the operator table (operator wins; invalid
+    /// entries skipped — see [`TagAliases::load`]).
+    fn absorb(&mut self, decisions: &TagDecisions) {
+        for (a, c) in &decisions.aliases {
+            // Re-point at the operator's final canonical so a decision can
+            // never introduce a chain.
+            let c = self.resolve(c).to_string();
+            // An alias that is itself an OPERATOR canonical (`x → a` in the
+            // hand-edited file) would form the chain `x → a → c`; the
+            // operator's mapping wins, so the decision is skipped.
+            if self.map.values().any(|v| v == a) {
+                continue;
+            }
+            if *a == c
+                || self.map.contains_key(a.as_str())
+                || self.map.contains_key(c.as_str())
+                || self.drop.contains(a.as_str())
+                || self.drop.contains(c.as_str())
+                || BOILERPLATE_TAGS.contains(&a.as_str())
+                || BOILERPLATE_TAGS.contains(&c.as_str())
+                || decisions.aliases.contains_key(c.as_str())
+            {
+                continue;
+            }
+            self.map.insert(a.clone(), c);
         }
     }
 
@@ -392,7 +454,7 @@ impl TagVocabulary {
             };
             body.push_str(&format!("{} = \"{origin}\"\n", toml_basic_string(name)));
         }
-        std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        write_atomic(&path, &body)?;
         Ok(path.display().to_string())
     }
 }
@@ -506,6 +568,151 @@ pub fn parse_tag_classify(reply_text: &str, expected: usize) -> Result<ClassifyR
     Ok(ClassifyReply { picks, new_tags })
 }
 
+pub const TAGS_DECISIONS_SCHEMA: &str = "ovp.tags-decisions/v1";
+
+/// UI-recorded curation decisions: accepted merges (alias → canonical) and
+/// rejected pairs (never re-proposed). MACHINE-owned (`decisions.toml`) so
+/// portal accepts never rewrite the operator's commented `aliases.toml`;
+/// [`TagAliases::load`] merges both, operator entries winning conflicts.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TagDecisions {
+    pub aliases: BTreeMap<String, String>,
+    /// Rejected pairs, stored as sorted (a, b) name tuples.
+    pub ignore: std::collections::BTreeSet<(String, String)>,
+}
+
+impl TagDecisions {
+    fn pair(a: &str, b: &str) -> (String, String) {
+        if a <= b {
+            (a.to_string(), b.to_string())
+        } else {
+            (b.to_string(), a.to_string())
+        }
+    }
+
+    pub fn is_ignored(&self, a: &str, b: &str) -> bool {
+        self.ignore.contains(&Self::pair(a, b))
+    }
+
+    /// Record an accepted merge. Fails on names that normalize to nothing.
+    /// Chains collapse to their final canonical (accepting `a→b` then `b→c`
+    /// re-points `a` at `c`), keeping the map flat so every accepted merge
+    /// keeps applying.
+    pub fn accept(&mut self, alias: &str, canonical: &str) -> Result<(), String> {
+        let a = normalize_tag(alias).ok_or("alias normalizes to nothing")?;
+        let c = normalize_tag(canonical).ok_or("canonical normalizes to nothing")?;
+        if a == c {
+            return Err("alias equals canonical".into());
+        }
+        // Final target: follow an existing mapping of the canonical.
+        let target = self.aliases.get(&c).cloned().unwrap_or(c);
+        if a == target {
+            return Err("alias equals canonical after chain collapse".into());
+        }
+        // Re-point earlier accepts whose canonical just became an alias.
+        for v in self.aliases.values_mut() {
+            if *v == a {
+                *v = target.clone();
+            }
+        }
+        self.ignore.remove(&Self::pair(&a, &target));
+        self.aliases.insert(a, target);
+        Ok(())
+    }
+
+    /// Drop an accepted-merge entry (used to roll back a decision that the
+    /// operator's aliases.toml blocks). Returns whether anything was removed.
+    pub fn remove_alias(&mut self, alias: &str) -> bool {
+        match normalize_tag(alias) {
+            Some(a) => self.aliases.remove(&a).is_some(),
+            None => false,
+        }
+    }
+
+    /// Record a rejected pair (the proposal never resurfaces).
+    pub fn reject(&mut self, a: &str, b: &str) -> Result<(), String> {
+        let a = normalize_tag(a).ok_or("tag normalizes to nothing")?;
+        let b = normalize_tag(b).ok_or("tag normalizes to nothing")?;
+        self.ignore.insert(Self::pair(&a, &b));
+        Ok(())
+    }
+
+    pub fn parse(text: &str) -> Result<Self, String> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct File {
+            schema: String,
+            #[serde(default)]
+            aliases: BTreeMap<String, String>,
+            #[serde(default)]
+            ignore: Vec<(String, String)>,
+        }
+        let file: File =
+            toml::from_str(text).map_err(|e| format!("tag decisions: invalid TOML: {e}"))?;
+        if file.schema != TAGS_DECISIONS_SCHEMA {
+            return Err(format!(
+                "tag decisions: unknown schema {:?} (expected {TAGS_DECISIONS_SCHEMA:?})",
+                file.schema
+            ));
+        }
+        let mut out = Self::default();
+        for (a, c) in &file.aliases {
+            out.accept(a, c)
+                .map_err(|e| format!("tag decisions: {a:?} -> {c:?}: {e}"))?;
+        }
+        for (a, b) in &file.ignore {
+            out.reject(a, b)
+                .map_err(|e| format!("tag decisions: ignore ({a:?}, {b:?}): {e}"))?;
+        }
+        Ok(out)
+    }
+
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_decisions_file());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::parse(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("reading {}: {e}", path.display())),
+        }
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<String, String> {
+        let path = vault_root.join(crate::vault_layout::VaultLayout.tags_decisions_file());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let mut body = String::from(
+            "# UI-recorded tag curation decisions — MACHINE-owned (the portal\n\
+             # rewrites this file). Hand-edits belong in aliases.toml instead.\n\
+             schema = \"ovp.tags-decisions/v1\"\n",
+        );
+        if self.ignore.is_empty() {
+            body.push_str("ignore = []\n");
+        } else {
+            body.push_str("ignore = [\n");
+            for (a, b) in &self.ignore {
+                body.push_str(&format!(
+                    "  [{}, {}],\n",
+                    toml_basic_string(a),
+                    toml_basic_string(b)
+                ));
+            }
+            body.push_str("]\n");
+        }
+        body.push_str("\n[aliases]\n");
+        for (a, c) in &self.aliases {
+            body.push_str(&format!(
+                "{} = {}\n",
+                toml_basic_string(a),
+                toml_basic_string(c)
+            ));
+        }
+        write_atomic(&path, &body)?;
+        Ok(path.display().to_string())
+    }
+}
+
 /// A tag name as a valid TOML basic string — normalized tags can still carry
 /// quotes/backslashes/control characters, which unescaped would break the
 /// vocabulary file and the paste-ready proposals block. One implementation
@@ -525,6 +732,210 @@ pub fn toml_basic_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Insert tags into a note's YAML frontmatter — THE one sanctioned way the
+/// product writes a source file (an explicit per-source user action in the
+/// UI; identical in kind to an Obsidian edit). Line surgery, not a YAML
+/// round-trip, so every other frontmatter line survives byte-for-byte:
+/// appends to an existing block list, extends an inline `tags: [...]`, or
+/// creates the block before the closing `---`. Tags already present (after
+/// normalization) are skipped; returns `None` when nothing changed.
+/// Split an inline `[...]` list value into (inner items, trailing suffix —
+/// typically a comment). Keyed on the LAST `]` so `tags: [a, b] # curated`
+/// keeps its comment; a missing bracket degrades to (whole value, "").
+fn split_inline_list(value: &str) -> (&str, &str) {
+    let value = value.strip_prefix('[').unwrap_or(value);
+    // FIRST unquoted `]` is the list terminator; a `]` inside a trailing
+    // comment (`[a] # see ]`) or a quoted item must not be mistaken for it.
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (Some('"'), '\\') => escaped = true,
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, ']') => return (&value[..i], &value[i + 1..]),
+            _ => {}
+        }
+    }
+    (value, "")
+}
+
+/// Split flow-list items on commas OUTSIDE quotes, so `["x, y"]` is ONE item.
+/// Duplicate-detection only — the rewrite path never re-splits items.
+fn split_flow_items(inner: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in inner.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (Some('"'), '\\') => escaped = true,
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, ',') => {
+                out.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&inner[start..]);
+    out
+}
+
+/// A tag as a YAML double-quoted scalar: escape `\` and `"`, strip control
+/// characters (a tag carrying one is junk that would corrupt the note).
+fn yaml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option<String>, String> {
+    // The intake parser strips a UTF-8 BOM before recognizing frontmatter —
+    // this write path must accept the same notes it indexes.
+    // A stripped BOM must be restored so the write is byte-preserving.
+    let (bom, text): (&str, &str) = match text.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", text),
+    };
+    // Match and reconstruct with the note's own line endings — a CRLF note
+    // must neither be rejected nor come back with mixed endings.
+    let le = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let rest = text
+        .strip_prefix(&format!("---{le}"))
+        .ok_or("note has no YAML frontmatter (leading ---)")?;
+    let close = rest
+        .find(&format!("{le}---"))
+        .ok_or("note frontmatter is unterminated (no closing ---)")?;
+    let fm = &rest[..close];
+
+    // What's already there, normalized (either list form). `block_ended`
+    // stops item collection at the next top-level key so a later list
+    // (`authors:` etc.) is never mistaken for more tags.
+    let mut existing: Vec<String> = Vec::new();
+    let mut tags_line: Option<usize> = None; // line index of `tags:` in fm
+    let mut inline: Option<String> = None;
+    let mut block_ended = false;
+    for (i, line) in fm.lines().enumerate() {
+        if let Some(after) = line.strip_prefix("tags:") {
+            tags_line = Some(i);
+            let after = after.trim();
+            if after.starts_with('[') {
+                inline = Some(after.to_string());
+                let (inner, _suffix) = split_inline_list(after);
+                existing.extend(
+                    split_flow_items(inner)
+                        .into_iter()
+                        .filter_map(|t| normalize_tag(t.trim().trim_matches(['"', '\'']))),
+                );
+            }
+        } else if tags_line.is_some() && inline.is_none() && !block_ended {
+            if let Some(item) = line.trim_start().strip_prefix("- ") {
+                if let Some(n) = normalize_tag(item.trim().trim_matches(['"', '\''])) {
+                    existing.push(n);
+                }
+                continue;
+            }
+            // YAML comments inside the list are not data and do not end it.
+            if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+                block_ended = true;
+            }
+        }
+    }
+    // Normalize once; dedup against existing frontmatter AND against each
+    // other (a request with `memory` + `Memory` must not append twice). The
+    // emitted scalar is the normalized form, so the write is canonical.
+    let mut additions: Vec<String> = Vec::new();
+    for t in new_tags {
+        if let Some(n) = normalize_tag(t)
+            && !existing.contains(&n)
+            && !additions.contains(&n)
+        {
+            additions.push(n);
+        }
+    }
+    if additions.is_empty() {
+        return Ok(None);
+    }
+
+    let lines: Vec<&str> = fm.lines().collect();
+    let mut out_fm: Vec<String> = Vec::with_capacity(lines.len() + additions.len() + 1);
+    match tags_line {
+        Some(idx) if inline.is_some() => {
+            // Extend the inline list by APPENDING inside the brackets — the
+            // existing item text (quoted commas and all) and any trailing
+            // comment survive byte-for-byte.
+            for (i, line) in lines.iter().enumerate() {
+                if i == idx {
+                    let (inner, suffix) = split_inline_list(inline.as_deref().unwrap_or("[]"));
+                    let added: Vec<String> =
+                        additions.iter().map(|t| yaml_quote(t)).collect();
+                    let joined = if inner.trim().is_empty() {
+                        added.join(", ")
+                    } else {
+                        format!("{}, {}", inner.trim(), added.join(", "))
+                    };
+                    out_fm.push(format!("tags: [{joined}]{suffix}"));
+                } else {
+                    out_fm.push((*line).to_string());
+                }
+            }
+        }
+        Some(idx) => {
+            // Append to the block list: after the last `- ` item following
+            // `tags:` (or right after `tags:` when the list is empty).
+            let mut insert_after = idx;
+            for (i, line) in lines.iter().enumerate().skip(idx + 1) {
+                if line.trim_start().starts_with("- ") {
+                    insert_after = i;
+                } else if !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+                    break;
+                }
+            }
+            for (i, line) in lines.iter().enumerate() {
+                out_fm.push((*line).to_string());
+                if i == insert_after {
+                    for t in &additions {
+                        out_fm.push(format!("  - {}", yaml_quote(t)));
+                    }
+                }
+            }
+        }
+        None => {
+            for line in &lines {
+                out_fm.push((*line).to_string());
+            }
+            out_fm.push("tags:".to_string());
+            for t in &additions {
+                out_fm.push(format!("  - {}", yaml_quote(t)));
+            }
+        }
+    }
+    Ok(Some(format!(
+        "{bom}---{le}{}{}",
+        out_fm.join(le),
+        &rest[close..]
+    )))
 }
 
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop
@@ -639,6 +1050,86 @@ mod tests {
         assert!(parse_tag_classify(r#"{"sources":[{"id":0,"tags":[]}]}"#, 2).is_err());
         assert!(parse_tag_classify(r#"{"sources":[{"id":5,"tags":[]}]}"#, 1).is_err());
         assert!(parse_tag_classify(r#"{"new_tags":[]}"#, 0).is_err());
+    }
+
+    #[test]
+    fn decisions_round_trip_and_merge_under_operator_table() {
+        let mut d = TagDecisions::default();
+        d.accept("ai-agents", "agent").unwrap();
+        d.reject("crypto", "benchmark").unwrap();
+        assert!(d.is_ignored("benchmark", "crypto"), "pair order-insensitive");
+        let dir = tempfile::tempdir().unwrap();
+        d.save(dir.path()).unwrap();
+        assert_eq!(TagDecisions::load(dir.path()).unwrap(), d);
+
+        // Merged load: operator file wins; decision alias applies otherwise.
+        std::fs::create_dir_all(dir.path().join(".ovp/tags")).unwrap();
+        std::fs::write(
+            dir.path().join(".ovp/tags/aliases.toml"),
+            "[aliases]\n\"agents\" = \"agent\"\n",
+        )
+        .unwrap();
+        let merged = TagAliases::load(dir.path()).unwrap();
+        assert_eq!(merged.resolve("ai-agents"), "agent"); // from decisions
+        assert_eq!(merged.resolve("agents"), "agent"); // from operator file
+    }
+
+    #[test]
+    fn frontmatter_add_appends_block_inline_and_creates() {
+        // Block list: append after the last item, everything else untouched.
+        let block = "---\ntitle: T\ntags:\n  - clippings\n  - agent\nsource: u\n---\nbody\n";
+        let got = add_tags_to_frontmatter(block, &["memory".into(), "Agent".into()])
+            .unwrap()
+            .unwrap();
+        assert!(got.contains("  - agent\n  - \"memory\"\nsource: u"), "{got}");
+        // "Agent" normalizes to an existing tag → skipped; only memory added.
+        assert_eq!(got.matches("memory").count(), 1);
+
+        // Inline list — trailing comments and quoted commas survive.
+        let inline = "---\ntitle: T\ntags: [a, b] # curated\n---\nbody\n";
+        let got = add_tags_to_frontmatter(inline, &["c".into()]).unwrap().unwrap();
+        assert!(got.contains("tags: [a, b, \"c\"] # curated"), "{got}");
+        let quoted = "---\ntags: [\"x, y\"]\n---\nbody\n";
+        let got = add_tags_to_frontmatter(quoted, &["z".into()]).unwrap().unwrap();
+        assert!(got.contains("tags: [\"x, y\", \"z\"]"), "{got}");
+
+        // A list under a LATER key is never mistaken for tags: `bob` is not
+        // an existing tag, so adding it must change the note.
+        let two_lists = "---\ntags:\n  - a\nauthors:\n  - bob\n---\nbody\n";
+        let got = add_tags_to_frontmatter(two_lists, &["bob".into()]).unwrap().unwrap();
+        assert!(got.contains("  - a\n  - \"bob\"\nauthors:"), "{got}");
+
+        // YAML-significant characters are escaped, not interpolated.
+        let base = "---\ntitle: T\ntags:\n  - a\n---\nbody\n";
+        let got = add_tags_to_frontmatter(base, &["foo\"bar".into()]).unwrap().unwrap();
+        assert!(got.contains("  - \"foo\\\"bar\""), "{got}");
+
+        // No tags key → created before the closing fence.
+        let none = "---\ntitle: T\n---\nbody\n";
+        let got = add_tags_to_frontmatter(none, &["x".into()]).unwrap().unwrap();
+        assert!(got.contains("title: T\ntags:\n  - \"x\"\n---"), "{got}");
+
+        // A `]` inside a trailing comment is not the list terminator.
+        let comment = "---\ntags: [a] # see ]\n---\nbody\n";
+        let got = add_tags_to_frontmatter(comment, &["b".into()]).unwrap().unwrap();
+        assert!(got.contains("tags: [a, \"b\"] # see ]"), "{got}");
+
+        // BOM survives; CRLF endings preserved, not mixed.
+        let bom = "\u{feff}---\r\ntags:\r\n  - a\r\n---\r\nbody\r\n";
+        let got = add_tags_to_frontmatter(bom, &["b".into()]).unwrap().unwrap();
+        assert!(got.starts_with('\u{feff}'), "BOM restored");
+        assert!(got.contains("  - a\r\n  - \"b\"\r\n---"), "{got:?}");
+        assert!(!got.contains("\n\n"), "no stray LF mixed into CRLF file");
+
+        // Duplicate additions collapse (memory + Memory → one).
+        let got = add_tags_to_frontmatter(none, &["memory".into(), "Memory".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.matches("- \"memory\"").count(), 1, "{got}");
+
+        // Nothing new → None; missing frontmatter → error.
+        assert!(add_tags_to_frontmatter(block, &["agent".into()]).unwrap().is_none());
+        assert!(add_tags_to_frontmatter("no frontmatter", &["x".into()]).is_err());
     }
 
     #[test]

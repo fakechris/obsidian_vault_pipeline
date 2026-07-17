@@ -614,6 +614,26 @@ body {
   border-style: dashed;
   opacity: 0.75;
 }
+/* Inline accept ✓ inside an inferred chip (SourceDetail). */
+.tag-chip-accept {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0 0 0 0.3rem;
+}
+/* Add-tag input beside the chips — same scale as the chips it feeds. */
+.tag-add {
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--ovp-text-xs);
+  font-family: var(--ovp-font-mono);
+  padding: 0 0.4rem;
+  width: 8rem;
+}
 
 /* ---------- sections / footer timeline ---------- */
 .section {

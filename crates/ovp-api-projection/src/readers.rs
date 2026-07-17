@@ -94,15 +94,9 @@ pub fn read_source_doc(
     }
 }
 
-/// Lifecycle-move fallback: `SourceRow.rel_path` records the INTAKE location
-/// (`50-Inbox/01-Raw/<month>/…`), but the daily lifecycle step moves processed
-/// sources to `50-Inbox/03-Processed/<month>/…` keeping the trailing subpath.
-/// When the recorded path misses and sits under the raw inbox dir, retry the
-/// processed dir. `rel` is already traversal-checked by the caller.
+/// Lifecycle-move fallback — delegates to the shared implementation in
+/// `ovp_domain::vault_layout` so every reader AND writer resolves the same
+/// candidate. Kept as a re-export shim for existing callers.
 pub fn lifecycle_moved_path(vault_root: &Path, layout: &VaultLayout, rel: &str) -> Option<PathBuf> {
-    let raw_prefix = format!("{}/", layout.inbox_raw_dir());
-    let rest = rel.strip_prefix(&raw_prefix)?;
-    let (month, file) = rest.split_once('/')?;
-    let candidate = vault_root.join(layout.processed_dir(month)).join(file);
-    candidate.is_file().then_some(candidate)
+    ovp_domain::vault_layout::lifecycle_moved_path(vault_root, layout, rel)
 }
