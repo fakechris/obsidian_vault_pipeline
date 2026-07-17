@@ -130,20 +130,26 @@ fn candidate_urls(text: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Inline `arXiv:NNNN.NNNNN` mentions (case-insensitive), version suffix
-/// stripped — the paper id even when no arxiv.org URL is present.
+/// stripped — the paper id even when no arxiv.org URL is present. Scans the
+/// ORIGINAL bytes (the `arxiv:` needle is pure ASCII, so a case-insensitive
+/// byte match yields offsets into `text` directly — no lowercased-copy
+/// offsets that would misalign after a non-ASCII char).
 fn arxiv_inline_ids(text: &str) -> impl Iterator<Item = String> + '_ {
-    let lower = text.to_lowercase();
+    const NEEDLE: &[u8] = b"arxiv:";
     let bytes = text.as_bytes();
     let mut positions = Vec::new();
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find("arxiv:") {
-        let at = from + rel + "arxiv:".len();
-        positions.push(at);
-        from = at;
+    let mut i = 0;
+    while i + NEEDLE.len() <= bytes.len() {
+        if bytes[i..i + NEEDLE.len()].eq_ignore_ascii_case(NEEDLE) {
+            positions.push(i + NEEDLE.len());
+            i += NEEDLE.len();
+        } else {
+            i += 1;
+        }
     }
     positions
         .into_iter()
-        .filter_map(move |at| normalize_arxiv_id(std::str::from_utf8(&bytes[at..]).ok()?))
+        .filter_map(move |at| normalize_arxiv_id(text.get(at..)?))
 }
 
 /// Parse one already-trimmed URL into an entity, or `None`.
@@ -229,6 +235,11 @@ fn parse_url(url: &str) -> Option<UrlEntity> {
             })
         }
         "news.ycombinator.com" => {
+            // Only the /item route names a story/comment; /user?id=… is a
+            // profile, not an item entity.
+            if segs.first() != Some(&"item") {
+                return None;
+            }
             let id = url.split("id=").nth(1)?;
             let id: String = id.chars().take_while(|c| c.is_ascii_digit()).collect();
             if id.is_empty() {
@@ -327,6 +338,16 @@ mod tests {
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].id, "github:owner/repo");
         assert_eq!(entities[0].url, "https://github.com/owner/repo");
+    }
+
+    #[test]
+    fn hn_requires_item_route_and_arxiv_inline_after_non_ascii() {
+        // /user is a profile, not an item.
+        assert!(ids("", "https://news.ycombinator.com/user?id=12345").is_empty());
+        assert_eq!(ids("", "https://news.ycombinator.com/item?id=42"), vec!["hn:42"]);
+        // Inline arXiv mention preceded by a multi-byte char: the byte offset
+        // must land on the original string, not a lowercased copy.
+        assert_eq!(ids("", "论文 arXiv:2504.19413 见"), vec!["arxiv:2504.19413"]);
     }
 
     #[test]

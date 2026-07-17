@@ -15,13 +15,20 @@ export default function EntityDetailPage() {
 
   useEffect(() => {
     if (!id) return;
+    let cancelled = false;
     setStatus('loading');
     fetchEntity(id)
       .then((d) => {
+        if (cancelled) return;
         setDetail(d);
         setStatus('ready');
       })
-      .catch(() => setStatus('error'));
+      .catch(() => {
+        if (!cancelled) setStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   return (

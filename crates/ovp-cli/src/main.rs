@@ -307,8 +307,8 @@ enum Cmd {
         vault_root: PathBuf,
         /// Case-insensitive substring over titles/URLs/paths/cards/claims.
         term: Option<String>,
-        /// Restrict to one kind: sources|packs|claims|runs|cards|units|tags
-        /// (`tags` lists the canonical tag vocabulary with source counts).
+        /// Restrict to one kind: sources|packs|claims|runs|cards|units|tags|
+        /// entities (`tags`/`entities` list the vocabulary with source counts).
         #[arg(long)]
         kind: Option<String>,
         /// Status filter (queued|processed|failed|blocked|needs_content|

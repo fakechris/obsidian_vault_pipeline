@@ -111,7 +111,9 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         let mut counts: std::collections::BTreeMap<&str, usize> =
             std::collections::BTreeMap::new();
         for s in &model.sources {
-            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) {
+            // Cross-axis filters narrow the CONTRIBUTING sources (`--kind
+            // entities --tag agent` = entities of agent-tagged sources).
+            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) || !tag_ok(s) {
                 continue;
             }
             for e in &s.entities {
@@ -145,7 +147,10 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
             std::collections::BTreeMap::new();
         for s in &model.sources {
-            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) {
+            // `--kind tags --entity github:x/y` = tags of sources mentioning
+            // that entity; the `tag` filter narrows the OUTPUT rows below.
+            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) || !entity_ok(s)
+            {
                 continue;
             }
             for t in &s.tags {

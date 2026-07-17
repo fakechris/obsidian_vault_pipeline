@@ -1207,7 +1207,9 @@ fn handle_entities_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 
 /// `GET /api/entity/:id` — one entity's mentioning sources + citing claims.
 fn handle_entity_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    let id = url_decode(url.strip_prefix("/api/entity/").unwrap_or(""));
+    // Strip any query string before the id so `?x=1` never lands in it.
+    let path = url.split('?').next().unwrap_or(url);
+    let id = url_decode(path.strip_prefix("/api/entity/").unwrap_or(""));
     if id.is_empty() {
         return json_response(400, r#"{"error":"missing entity id"}"#);
     }
