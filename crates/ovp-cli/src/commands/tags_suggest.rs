@@ -457,15 +457,11 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
         "proposals": proposals_with_titles,
     });
     let json_path = args.vault_root.join(layout.tags_proposals_json_file());
-    if let Some(parent) = json_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| CliError::Io(format!("creating {}: {e}", parent.display())))?;
-    }
-    std::fs::write(
-        &json_path,
-        serde_json::to_string_pretty(&proposals_json).unwrap_or_default() + "\n",
-    )
-    .map_err(|e| CliError::Io(format!("writing {}: {e}", json_path.display())))?;
+    // Atomic write: the live portal polls this file — a truncated read (or a
+    // silently-blank serialize failure) would make the inbox look empty.
+    let json_body = serde_json::to_string_pretty(&proposals_json)
+        .map_err(|e| CliError::Io(format!("serializing proposals: {e}")))?;
+    ovp_domain::tags::write_atomic(&json_path, &(json_body + "\n")).map_err(CliError::Io)?;
 
     // ---- Human-review report ----
     let mut report = String::new();

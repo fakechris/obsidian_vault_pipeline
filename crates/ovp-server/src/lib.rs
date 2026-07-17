@@ -775,6 +775,30 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     if let Err(e) = decisions.save(&state.vault_root) {
         return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e)));
     }
+    // An accept can be silently un-absorbed when it conflicts with the
+    // operator's aliases.toml (e.g. `alias` is already an operator canonical):
+    // the merged table then still resolves `alias` to itself. Detect that,
+    // roll the decision back, and report a conflict instead of a false success
+    // that leaves the proposal card stuck.
+    if action == "accept" {
+        let na = ovp_domain::tags::normalize_tag(alias).unwrap_or_default();
+        let merged = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+        if na.is_empty() || merged.resolve(&na) == na {
+            let mut d = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
+            d.remove_alias(alias);
+            let _ = d.save(&state.vault_root);
+            return json_response(
+                409,
+                &format!(
+                    r#"{{"error":{}}}"#,
+                    json_str(&format!(
+                        "cannot merge #{alias} → #{canonical}: it conflicts with an existing \
+                         rule in aliases.toml — edit that file directly"
+                    ))
+                ),
+            );
+        }
+    }
     match rebuild_index_now(state) {
         Ok(_) => json_response(200, r#"{"ok":true,"changed":true}"#),
         Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
@@ -851,13 +875,9 @@ fn handle_source_tags_post(
     };
     match ovp_domain::tags::add_tags_to_frontmatter(&text, &tags) {
         Ok(Some(updated)) => {
-            // Atomic replace: this is canonical USER data, not a rebuildable
-            // projection — a crash mid-write must never truncate the note.
-            let tmp = note_path.with_extension("md.tags-tmp");
-            if let Err(e) = std::fs::write(&tmp, updated)
-                .and_then(|()| std::fs::rename(&tmp, &note_path))
-            {
-                let _ = std::fs::remove_file(&tmp);
+            // Atomic replace with a unique temp sibling: canonical USER data,
+            // not rebuildable — a crash mid-write must never truncate the note.
+            if let Err(e) = ovp_domain::tags::write_atomic(&note_path, &updated) {
                 return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("writing {rel}: {e}"))));
             }
             // Editing a QUEUED note changes its content hash → the rebuilt

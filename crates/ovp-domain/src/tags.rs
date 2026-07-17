@@ -14,15 +14,25 @@ use std::path::Path;
 /// capture mechanism, not the content, so no projection surfaces them.
 pub const BOILERPLATE_TAGS: &[&str] = &["clippings", "pinboard"];
 
-/// Write via a temp sibling + atomic rename — for the tag files that carry
-/// non-rederivable judgments (decisions, vocabulary llm entries), a crash or
-/// full disk mid-write must never truncate the only copy.
-fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+/// Write via a temp sibling + atomic rename — a crash or full disk mid-write
+/// must never truncate the destination, and a concurrent reader never sees a
+/// half-written file. Used for the tag files that carry non-rederivable
+/// judgments (decisions, vocabulary) AND the projections a live reader polls
+/// (proposals.json, edited notes).
+pub fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
-    let tmp = path.with_extension("tmp");
+    // Unique temp name (pid + counter) so two concurrent writers to the same
+    // path never clobber each other's sibling before the rename.
+    let tmp = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, body)
         .and_then(|()| std::fs::rename(&tmp, path))
         .map_err(|e| {
@@ -610,6 +620,15 @@ impl TagDecisions {
         Ok(())
     }
 
+    /// Drop an accepted-merge entry (used to roll back a decision that the
+    /// operator's aliases.toml blocks). Returns whether anything was removed.
+    pub fn remove_alias(&mut self, alias: &str) -> bool {
+        match normalize_tag(alias) {
+            Some(a) => self.aliases.remove(&a).is_some(),
+            None => false,
+        }
+    }
+
     /// Record a rejected pair (the proposal never resurfaces).
     pub fn reject(&mut self, a: &str, b: &str) -> Result<(), String> {
         let a = normalize_tag(a).ok_or("tag normalizes to nothing")?;
@@ -727,10 +746,24 @@ pub fn toml_basic_string(s: &str) -> String {
 /// keeps its comment; a missing bracket degrades to (whole value, "").
 fn split_inline_list(value: &str) -> (&str, &str) {
     let value = value.strip_prefix('[').unwrap_or(value);
-    match value.rfind(']') {
-        Some(i) => (&value[..i], &value[i + 1..]),
-        None => (value, ""),
+    // FIRST unquoted `]` is the list terminator; a `]` inside a trailing
+    // comment (`[a] # see ]`) or a quoted item must not be mistaken for it.
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (Some('"'), '\\') => escaped = true,
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, ']') => return (&value[..i], &value[i + 1..]),
+            _ => {}
+        }
     }
+    (value, "")
 }
 
 /// Split flow-list items on commas OUTSIDE quotes, so `["x, y"]` is ONE item.
@@ -780,7 +813,11 @@ fn yaml_quote(s: &str) -> String {
 pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option<String>, String> {
     // The intake parser strips a UTF-8 BOM before recognizing frontmatter —
     // this write path must accept the same notes it indexes.
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // A stripped BOM must be restored so the write is byte-preserving.
+    let (bom, text): (&str, &str) = match text.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", text),
+    };
     // Match and reconstruct with the note's own line endings — a CRLF note
     // must neither be rejected nor come back with mixed endings.
     let le = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -825,12 +862,18 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
             }
         }
     }
-    let additions: Vec<&String> = new_tags
-        .iter()
-        .filter(|t| {
-            normalize_tag(t).is_some_and(|n| !existing.contains(&n))
-        })
-        .collect();
+    // Normalize once; dedup against existing frontmatter AND against each
+    // other (a request with `memory` + `Memory` must not append twice). The
+    // emitted scalar is the normalized form, so the write is canonical.
+    let mut additions: Vec<String> = Vec::new();
+    for t in new_tags {
+        if let Some(n) = normalize_tag(t)
+            && !existing.contains(&n)
+            && !additions.contains(&n)
+        {
+            additions.push(n);
+        }
+    }
     if additions.is_empty() {
         return Ok(None);
     }
@@ -888,7 +931,11 @@ pub fn add_tags_to_frontmatter(text: &str, new_tags: &[String]) -> Result<Option
             }
         }
     }
-    Ok(Some(format!("---{le}{}{}", out_fm.join(le), &rest[close..])))
+    Ok(Some(format!(
+        "{bom}---{le}{}{}",
+        out_fm.join(le),
+        &rest[close..]
+    )))
 }
 
 /// Raw frontmatter tags → sorted, deduped canonical tags: normalize, drop
@@ -1061,6 +1108,24 @@ mod tests {
         let none = "---\ntitle: T\n---\nbody\n";
         let got = add_tags_to_frontmatter(none, &["x".into()]).unwrap().unwrap();
         assert!(got.contains("title: T\ntags:\n  - \"x\"\n---"), "{got}");
+
+        // A `]` inside a trailing comment is not the list terminator.
+        let comment = "---\ntags: [a] # see ]\n---\nbody\n";
+        let got = add_tags_to_frontmatter(comment, &["b".into()]).unwrap().unwrap();
+        assert!(got.contains("tags: [a, \"b\"] # see ]"), "{got}");
+
+        // BOM survives; CRLF endings preserved, not mixed.
+        let bom = "\u{feff}---\r\ntags:\r\n  - a\r\n---\r\nbody\r\n";
+        let got = add_tags_to_frontmatter(bom, &["b".into()]).unwrap().unwrap();
+        assert!(got.starts_with('\u{feff}'), "BOM restored");
+        assert!(got.contains("  - a\r\n  - \"b\"\r\n---"), "{got:?}");
+        assert!(!got.contains("\n\n"), "no stray LF mixed into CRLF file");
+
+        // Duplicate additions collapse (memory + Memory → one).
+        let got = add_tags_to_frontmatter(none, &["memory".into(), "Memory".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.matches("- \"memory\"").count(), 1, "{got}");
 
         // Nothing new → None; missing frontmatter → error.
         assert!(add_tags_to_frontmatter(block, &["agent".into()]).unwrap().is_none());

@@ -30,19 +30,21 @@ export default function TagsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [showWeak, setShowWeak] = useState(false);
 
-  const reload = () => {
+  const reload = () =>
     fetchTags()
       .then((d) => setData(d))
       .catch((e: Error) => setError(e.message));
-  };
-  useEffect(reload, []);
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const decide = async (action: 'accept' | 'reject', alias: string, canonical: string) => {
     setBusy(`${alias}→${canonical}`);
     setError(null);
     try {
       await postTagDecision(action, alias, canonical);
-      reload();
+      await reload(); // keep the row disabled until the refreshed list lands
     } catch (e) {
       setError((e as Error).message);
     } finally {
