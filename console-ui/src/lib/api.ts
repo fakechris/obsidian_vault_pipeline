@@ -333,10 +333,10 @@ export function fetchEntities(): Promise<EntityRow[]> {
 /** GET /api/entity/:id — one entity's mentioning sources + citing claims. */
 export function fetchEntity(id: string): Promise<EntityDetail> {
   if (STATIC_MODE) {
-    // Published per-entity files are named with the same safe-component rule
-    // the publisher uses (`:` and `/` → `_`).
-    const safe = id.replace(/[^A-Za-z0-9._-]/g, '_');
-    return fetchJson<EntityDetail>(`${API}/entity/${safe}.json`);
+    // Published per-entity files are base64url(id) — reversible + collision-
+    // free, matching the publisher's `entity_filename`. Entity ids are ascii.
+    const b64 = btoa(id).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return fetchJson<EntityDetail>(`${API}/entity/${b64}.json`);
   }
   return fetchJson<EntityDetail>(`/api/entity/${encodeURIComponent(id)}`);
 }

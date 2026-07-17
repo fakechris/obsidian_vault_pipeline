@@ -93,9 +93,13 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
         .filter_map(|s| s.pack_dir.as_deref().and_then(last_path_segment))
         .map(str::to_string)
         .collect();
+    // Only durable/caveated claims — the endpoint contract + UI describe
+    // active knowledge; a superseded/retracted claim rendered without a pill
+    // would read as current.
     let mut claims: Vec<&ClaimRow> = model
         .claims
         .iter()
+        .filter(|c| matches!(c.status, ClaimStatus::Durable | ClaimStatus::Caveated))
         .filter(|c| c.sources.iter().any(|s| cases.contains(s)))
         .collect();
     claims.sort_by_key(|c| {

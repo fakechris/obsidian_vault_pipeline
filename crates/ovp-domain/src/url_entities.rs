@@ -151,8 +151,11 @@ fn parse_url(url: &str) -> Option<UrlEntity> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
-    let rest = rest.strip_prefix("www.").unwrap_or(rest);
-    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (host_raw, path) = rest.split_once('/').unwrap_or((rest, ""));
+    // Hostnames are case-insensitive; lowercase before matching so
+    // `GitHub.com` / `WWW.ARXIV.ORG` resolve like their canonical forms.
+    let host_lc = host_raw.to_lowercase();
+    let host = host_lc.strip_prefix("www.").unwrap_or(&host_lc);
     // Strip query + fragment from the whole path.
     let path = path.split(['?', '#']).next().unwrap_or(path);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();

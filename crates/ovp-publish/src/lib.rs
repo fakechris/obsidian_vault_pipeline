@@ -245,7 +245,7 @@ fn write_api_tree(
             if let Some(id) = e.get("id").and_then(|v| v.as_str())
                 && let Some(v) = bodies::entity_body(public, id)
             {
-                write_json(&api.join("entity").join(format!("{}.json", safe_component(id))), &v)?;
+                write_json(&api.join("entity").join(format!("{}.json", entity_filename(id))), &v)?;
                 files += 1;
             }
         }
@@ -410,6 +410,31 @@ fn safe_component(id: &str) -> String {
     }
 }
 
+/// Base64url (no padding) — a REVERSIBLE, collision-free, filesystem-safe
+/// filename for an entity id. `safe_component` maps both `:` and `/` to `_`,
+/// so `doi:10.x/a:b` and `doi:10.x/a/b` would collide; entity ids are ascii
+/// (URL-derived), and the SPA computes the same encoding to fetch the file.
+fn entity_filename(id: &str) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let b = id.as_bytes();
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for chunk in b.chunks(3) {
+        let n = chunk.len();
+        let triple = (u32::from(chunk[0]) << 16)
+            | (chunk.get(1).map_or(0, |&c| u32::from(c)) << 8)
+            | chunk.get(2).map_or(0, |&c| u32::from(c));
+        out.push(T[((triple >> 18) & 63) as usize] as char);
+        out.push(T[((triple >> 12) & 63) as usize] as char);
+        if n > 1 {
+            out.push(T[((triple >> 6) & 63) as usize] as char);
+        }
+        if n > 2 {
+            out.push(T[(triple & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
@@ -434,6 +459,20 @@ mod tests {
         CrystalStatus, DurableCitation, DurableRecord, FinalClass, ProvenanceClass, StrengthClass,
     };
     use ovp_index::{ClaimRow, ClaimStatus, PackRow, SourceRow, SourceStatus, Totals};
+
+    #[test]
+    fn entity_filename_is_collision_free_and_matches_base64url() {
+        // The two DOIs that collide under `safe_component` (`:`/`/` → `_`)
+        // get distinct base64url filenames.
+        assert_ne!(
+            entity_filename("doi:10.x/a:b"),
+            entity_filename("doi:10.x/a/b")
+        );
+        // Standard base64url(no-pad) — the exact string the SPA's
+        // `btoa(id).replace(+→-,/→_).strip(=)` produces.
+        assert_eq!(entity_filename("github:mem0ai/mem0"), "Z2l0aHViOm1lbTBhaS9tZW0w");
+        assert_eq!(entity_filename("arxiv:1"), "YXJ4aXY6MQ");
+    }
 
     fn record() -> DurableRecord {
         DurableRecord {

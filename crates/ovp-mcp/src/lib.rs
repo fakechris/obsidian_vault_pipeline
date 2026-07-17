@@ -148,15 +148,16 @@ fn handle_tools_list() -> Result<Value, RpcError> {
         "tools": [
             {
                 "name": "find",
-                "description": "Query the OVP index: sources, packs, claims, runs, tags. Filter by kind, status, date, tag, or free-text term.",
+                "description": "Query the OVP index: sources, packs, claims, runs, tags, entities. Filter by kind, status, date, tag, entity, or free-text term.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "term": { "type": "string", "description": "Free-text search term" },
-                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs", "tags"] },
+                        "kind": { "type": "string", "enum": ["sources", "packs", "claims", "runs", "tags", "entities"] },
                         "status": { "type": "string" },
                         "date": { "type": "string", "description": "Date prefix (YYYY or YYYY-MM or YYYY-MM-DD)" },
-                        "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" }
+                        "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" },
+                        "entity": { "type": "string", "description": "URL entity id filter over sources, e.g. github:owner/repo (kind=entities lists the index)" }
                     }
                 }
             },
