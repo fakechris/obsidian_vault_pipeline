@@ -63,7 +63,11 @@ export default function TagsPage() {
                     <span className="mono">
                       #{p.alias} ({p.alias_count}) → #{p.canonical} ({p.canonical_count})
                     </span>
-                    <span className="muted sm">cosine {p.cosine.toFixed(3)}</span>
+                    <span className="muted sm">
+                      {t('tags.nameCos')} {p.cosine.toFixed(3)}
+                      {p.context_cosine != null &&
+                        ` · ${t('tags.contextCos')} ${p.context_cosine.toFixed(3)}`}
+                    </span>
                     {((p.alias_titles?.length ?? 0) > 0 ||
                       (p.canonical_titles?.length ?? 0) > 0) && (
                       <span className="fail-note muted tiny" style={{ color: 'inherit' }}>

@@ -238,7 +238,11 @@ export interface TagProposal {
   canonical: string;
   canonical_count: number;
   canonical_titles?: string[];
+  /** NAME-only similarity — the score that made this a candidate. */
   cosine: number;
+  /** name+titles similarity, display-only evidence (high context + low
+   * name = related topics, not variants). */
+  context_cosine?: number;
 }
 
 export interface TagsPayload {

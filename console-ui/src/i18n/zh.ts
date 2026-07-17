@@ -127,6 +127,8 @@ export const zh: Record<keyof typeof en, string> = {
   'tags.help':
     '标签词表与治理收件箱。接受合并会写入决策文件（你手工编辑的 aliases.toml 永不改动）并重建索引；拒绝会被记住，该组合不再出现。',
   'tags.inbox': '合并提案',
+  'tags.nameCos': '名称',
+  'tags.contextCos': '语境',
   'tags.accept': '接受',
   'tags.reject': '拒绝',
   'tags.vocabulary': '词表',

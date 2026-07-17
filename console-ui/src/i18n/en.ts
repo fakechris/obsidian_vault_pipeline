@@ -136,6 +136,8 @@ export const en = {
   'tags.help':
     'Your tag vocabulary and its curation inbox. Accepting a merge records it in the decisions file (your hand-edited aliases.toml is never touched) and rebuilds the index; rejecting remembers the pair so it never resurfaces.',
   'tags.inbox': 'Merge proposals',
+  'tags.nameCos': 'name',
+  'tags.contextCos': 'context',
   'tags.accept': 'Accept',
   'tags.reject': 'Reject',
   'tags.vocabulary': 'Vocabulary',
