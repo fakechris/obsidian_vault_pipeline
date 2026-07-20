@@ -36,6 +36,7 @@ pub mod rag;
 pub mod read_source;
 pub mod review_run;
 pub mod mcp;
+pub mod mcp_guidance;
 pub mod run;
 pub mod run_cycle;
 pub mod schedule;
