@@ -1,0 +1,21 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_citation_keys-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "prompt",
+  "component": "prompt.ask",
+  "hypothesis": "Citing claims by their STABLE ledger key (ck-…, via ClaimRow.claim_key) instead of the collision-prone claim_id, plus a system-prompt rule demanding the full bracketed key verbatim and tokenizer normalization of the bare [ck-…] form models reliably produce, makes every claim citation in an ask answer unambiguously auditable (MCP `claim` tool, portal claim links) without losing verification recall. Predicted: citation-ID resolution rate on real-vault asks >= the v2 baseline (v2 live sample: claim ids resolved but card ids were shortened and lost; v3 live sample: 3/3 resolved), and zero ambiguous-claim audit dead-ends.",
+  "predicted_delta": {
+    "citation_auditability": "every [claim:…] citation resolves to exactly one ledger record via claim_key",
+    "verification_recall": ">= v2 (bare ck- forms normalize instead of dropping to 0 citations)"
+  },
+  "guardrails": {},
+  "eval_plan": {
+    "replay_set": "real-vault asks 2026-07-20 (.run/theme-pages-tp1/mcp-ask-*.log): v3 first live sample 3/3 citations resolved vs a v2 sample where the model's shortened forms left citations unresolved",
+    "paired_sources": 2,
+    "soak": false
+  },
+  "rollback": "Revert the ask/v3 namespace to ask/v2 and drop the claim_key preference in assemble_evidence (EvidenceItem.id falls back to claim_id); ClaimRow.claim_key is additive and can stay. Cassettes are namespaced, so v2 replies remain replayable.",
+  "ablation_required": false
+}

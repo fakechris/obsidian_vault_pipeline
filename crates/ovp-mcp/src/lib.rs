@@ -391,7 +391,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // claims-only while the report implies full evidence (codex P2).
     let (evidence, degraded_note) = match ovp_index::read_evidence(&state.vault_root) {
         Ok(e) => (Some(e), None),
-        Err(e) if !state.vault_root.join(".ovp/evidence.json").exists() => {
+        Err(e) if !ovp_index::evidence::evidence_path(&state.vault_root).exists() => {
             let _ = e;
             (
                 None,

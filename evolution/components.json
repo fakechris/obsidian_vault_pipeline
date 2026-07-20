@@ -63,6 +63,13 @@
       "quality_buckets": ["card_quality"]
     },
     {
+      "id": "prompt.ask",
+      "surface": "prompt",
+      "current_version": "v3",
+      "file": "crates/ovp-memory/src/ask.rs",
+      "quality_buckets": ["crystal_provenance", "operational_reliability"]
+    },
+    {
       "id": "prompt.theme_page",
       "surface": "prompt",
       "current_version": "v1",

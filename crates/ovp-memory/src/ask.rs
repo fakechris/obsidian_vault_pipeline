@@ -146,7 +146,9 @@ pub fn ask_with_optional_evidence(
         messages: vec![ModelMessage::User { content: user_msg }],
         max_tokens: args.max_tokens,
         temperature: Some(0.4),
-        cache_namespace: Some("ask/v2".into()),
+        // v3: stable ck- claim citation keys + verbatim-full-key prompt rule
+        // (evolution candidate ask_citation_keys-v3).
+        cache_namespace: Some("ask/v3".into()),
     };
 
     let reply = client.call(&request).map_err(|e| format!("ask LLM: {e}"))?;
@@ -594,7 +596,7 @@ mod tests {
                     && item.id == "unit:40-Resources/Reader/memory:u-001")
         );
         let request = captured.lock().unwrap().clone().unwrap();
-        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v2"));
+        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v3"));
         let user = match &request.messages[0] {
             ovp_llm::ModelMessage::User { content } => content,
             ovp_llm::ModelMessage::Assistant { .. } => panic!("expected user message"),
