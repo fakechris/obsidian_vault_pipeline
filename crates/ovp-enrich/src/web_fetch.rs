@@ -5,8 +5,15 @@
 //! - `FixtureWebFetch` = compile-time fixture for tests
 //! - `LiveWebFetch` = behind `web-fetch-live` feature, uses reqwest blocking
 
+#[cfg(any(feature = "web-fetch-live", test))]
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
+
+#[cfg(feature = "web-fetch-live")]
+const XQUIK_API_BASE: &str = "https://xquik.com/api/v1";
+#[cfg(feature = "web-fetch-live")]
+const XQUIK_API_CONTRACT: &str = "2026-04-29";
 
 /// Result of fetching a single URL.
 #[derive(Debug, Clone)]
@@ -119,6 +126,7 @@ pub struct LiveWebFetch {
     config: WebFetchConfig,
     client: reqwest::blocking::Client,
     last_fetch: Option<std::time::Instant>,
+    xquik_api_key: Option<String>,
 }
 
 #[cfg(feature = "web-fetch-live")]
@@ -134,6 +142,9 @@ impl LiveWebFetch {
             config,
             client,
             last_fetch: None,
+            xquik_api_key: std::env::var("XQUIK_API_KEY")
+                .ok()
+                .filter(|key| !key.trim().is_empty()),
         })
     }
 
@@ -150,6 +161,87 @@ impl LiveWebFetch {
             }
         }
     }
+
+    fn fetch_xquik_tweet(
+        &self,
+        source_url: &str,
+        tweet_id: &str,
+        api_key: &str,
+        fetched_at: String,
+    ) -> FetchResult {
+        let endpoint = format!("{XQUIK_API_BASE}/x/tweets/{tweet_id}");
+        let response = match self
+            .client
+            .get(endpoint)
+            .header("accept", "application/json")
+            .header("x-api-key", api_key)
+            .header("xquik-api-contract", XQUIK_API_CONTRACT)
+            .send()
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return FetchResult {
+                    url: source_url.to_string(),
+                    content: None,
+                    title: None,
+                    error: Some(format!("Xquik request failed: {error}")),
+                    fetched_at,
+                };
+            }
+        };
+
+        if !response.status().is_success() {
+            return FetchResult {
+                url: source_url.to_string(),
+                content: None,
+                title: None,
+                error: Some(format!("Xquik HTTP {}", response.status())),
+                fetched_at,
+            };
+        }
+
+        let body = match read_body_limited(response, self.config.max_content_bytes) {
+            Ok(body) => body,
+            Err(error) => {
+                return FetchResult {
+                    url: source_url.to_string(),
+                    content: None,
+                    title: None,
+                    error: Some(format!("reading Xquik body: {error}")),
+                    fetched_at,
+                };
+            }
+        };
+        let payload: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return FetchResult {
+                    url: source_url.to_string(),
+                    content: None,
+                    title: None,
+                    error: Some(format!("parsing Xquik JSON: {error}")),
+                    fetched_at,
+                };
+            }
+        };
+
+        match xquik_tweet_markdown(&payload) {
+            Ok((title, content)) => FetchResult {
+                url: source_url.to_string(),
+                content: Some(content),
+                title,
+                error: None,
+                fetched_at,
+            },
+            Err(error) => FetchResult {
+                url: source_url.to_string(),
+                content: None,
+                title: None,
+                error: Some(error),
+                fetched_at,
+            },
+        }
+    }
 }
 
 #[cfg(feature = "web-fetch-live")]
@@ -159,6 +251,9 @@ impl WebFetch for LiveWebFetch {
         self.last_fetch = Some(std::time::Instant::now());
 
         let now = chrono_now_iso();
+        if let (Some(tweet_id), Some(api_key)) = (x_status_id(url), self.xquik_api_key.as_deref()) {
+            return self.fetch_xquik_tweet(url, tweet_id, api_key, now);
+        }
 
         let response = match self.client.get(url).send() {
             Ok(r) => r,
@@ -200,8 +295,8 @@ impl WebFetch for LiveWebFetch {
             };
         }
 
-        let body = match response.text() {
-            Ok(t) => t,
+        let body = match read_body_limited(response, self.config.max_content_bytes) {
+            Ok(body) => body,
             Err(e) => {
                 return FetchResult {
                     url: url.to_string(),
@@ -212,20 +307,6 @@ impl WebFetch for LiveWebFetch {
                 };
             }
         };
-
-        if body.len() > self.config.max_content_bytes {
-            return FetchResult {
-                url: url.to_string(),
-                content: None,
-                title: None,
-                error: Some(format!(
-                    "content too large: {} bytes (limit {})",
-                    body.len(),
-                    self.config.max_content_bytes
-                )),
-                fetched_at: now,
-            };
-        }
 
         let (title, readable) = readable_from_body(&content_type, &body);
 
@@ -239,8 +320,104 @@ impl WebFetch for LiveWebFetch {
     }
 
     fn origin(&self) -> String {
-        "live web fetch".to_string()
+        if self.xquik_api_key.is_some() {
+            "live web fetch + Xquik".to_string()
+        } else {
+            "live web fetch".to_string()
+        }
     }
+}
+
+#[cfg(any(feature = "web-fetch-live", test))]
+fn read_body_limited(reader: impl Read, max_bytes: usize) -> Result<String, String> {
+    let read_limit = max_bytes.saturating_add(1);
+    let mut bytes = Vec::with_capacity(read_limit.min(8192));
+    reader
+        .take(read_limit as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > max_bytes {
+        return Err(format!("content exceeds {max_bytes} byte limit"));
+    }
+    String::from_utf8(bytes).map_err(|error| format!("body is not UTF-8: {error}"))
+}
+
+#[cfg(any(feature = "web-fetch-live", test))]
+fn x_status_id(url: &str) -> Option<&str> {
+    let (scheme, authority_and_path) = url.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let authority_and_path = authority_and_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(authority_and_path);
+    let (host, path) = authority_and_path.split_once('/')?;
+    if !matches!(
+        host.to_ascii_lowercase().as_str(),
+        "x.com" | "www.x.com" | "twitter.com" | "www.twitter.com"
+    ) {
+        return None;
+    }
+
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    while let Some(segment) = segments.next() {
+        if segment.eq_ignore_ascii_case("status") {
+            let id = segments.next()?;
+            return (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())).then_some(id);
+        }
+    }
+    None
+}
+
+#[cfg(any(feature = "web-fetch-live", test))]
+fn xquik_tweet_markdown(payload: &serde_json::Value) -> Result<(Option<String>, String), String> {
+    let tweet = payload
+        .get("tweet")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "Xquik response did not include a tweet object".to_string())?;
+    let text = tweet
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if text.is_empty() {
+        return Err("Xquik tweet did not include readable text".to_string());
+    }
+
+    let username = tweet
+        .get("author")
+        .and_then(|author| author.get("username"))
+        .or_else(|| {
+            payload
+                .get("author")
+                .and_then(|author| author.get("username"))
+        })
+        .and_then(serde_json::Value::as_str);
+    let title = username.map(|username| format!("@{username} on X"));
+    let mut content = text.to_string();
+
+    let urls = tweet
+        .get("entities")
+        .and_then(|entities| entities.get("urls"))
+        .and_then(serde_json::Value::as_array);
+    if let Some(urls) = urls {
+        for url in urls {
+            let expanded = url
+                .get("expanded_url")
+                .or_else(|| url.get("expandedUrl"))
+                .and_then(serde_json::Value::as_str);
+            if let Some(expanded) = expanded
+                && !content.contains(expanded)
+            {
+                content.push_str("\n\n[Linked source](");
+                content.push_str(expanded);
+                content.push(')');
+            }
+        }
+    }
+
+    Ok((title, content))
 }
 
 /// The mime essence: lowercase type/subtype with parameters (`; charset=…`)
@@ -504,6 +681,79 @@ mod tests {
         let result = fetcher.fetch_readable("https://missing.example.com");
         assert!(result.content.is_none());
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn bounded_body_reader_stops_before_unbounded_allocation() {
+        assert_eq!(read_body_limited("hello".as_bytes(), 5).unwrap(), "hello");
+        assert_eq!(
+            read_body_limited("too large".as_bytes(), 3).unwrap_err(),
+            "content exceeds 3 byte limit"
+        );
+        assert!(
+            read_body_limited([0xff, 0xfe].as_slice(), 2)
+                .unwrap_err()
+                .contains("not UTF-8")
+        );
+    }
+
+    #[test]
+    fn x_status_id_accepts_canonical_hosts_and_rejects_lookalikes() {
+        assert_eq!(
+            x_status_id("https://x.com/example/status/1893456789012345678?s=20"),
+            Some("1893456789012345678")
+        );
+        assert_eq!(
+            x_status_id("https://www.twitter.com/i/web/status/42#fragment"),
+            Some("42")
+        );
+        assert_eq!(x_status_id("https://x.com/example/status/not-an-id"), None);
+        assert_eq!(
+            x_status_id("https://x.com.evil.example/example/status/42"),
+            None
+        );
+        assert_eq!(x_status_id("ftp://x.com/example/status/42"), None);
+        assert_eq!(x_status_id("https://x.com/example"), None);
+    }
+
+    #[test]
+    fn xquik_tweet_payload_becomes_readable_markdown() {
+        let payload = serde_json::json!({
+            "tweet": {
+                "text": "A useful thread about grounded knowledge.",
+                "entities": {
+                    "urls": [
+                        {"expanded_url": "https://example.com/article"},
+                        {"expandedUrl": "https://example.com/second"}
+                    ]
+                }
+            },
+            "author": {"username": "researcher"}
+        });
+
+        let (title, content) = xquik_tweet_markdown(&payload).unwrap();
+
+        assert_eq!(title.as_deref(), Some("@researcher on X"));
+        assert!(content.starts_with("A useful thread"));
+        assert!(content.contains("[Linked source](https://example.com/article)"));
+        assert!(content.contains("[Linked source](https://example.com/second)"));
+    }
+
+    #[test]
+    fn xquik_tweet_payload_requires_readable_text() {
+        let missing_tweet = serde_json::json!({"author": {"username": "example"}});
+        assert!(
+            xquik_tweet_markdown(&missing_tweet)
+                .unwrap_err()
+                .contains("tweet object")
+        );
+
+        let empty_text = serde_json::json!({"tweet": {"text": ""}});
+        assert!(
+            xquik_tweet_markdown(&empty_text)
+                .unwrap_err()
+                .contains("readable text")
+        );
     }
 
     #[test]

@@ -586,7 +586,7 @@ fn nowledge_scoped_retrieval(
             })
             .filter(|(s, _)| *s > 0)
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|hit| std::cmp::Reverse(hit.0));
         for (rank, (_, m)) in scored.into_iter().take(limit).enumerate() {
             hits.push(NormRetrievalHit {
                 query: query.clone(),

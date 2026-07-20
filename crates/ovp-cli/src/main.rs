@@ -2234,13 +2234,12 @@ fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
         30,
         31,
     ];
-    let mut month: u32 = 1;
-    for m in months.iter() {
+    for (month_index, m) in months.iter().enumerate() {
         if days < *m {
+            let month = month_index as u32 + 1;
             return (year, month, (days + 1) as u32);
         }
         days -= *m;
-        month += 1;
     }
     (year, 12, 31)
 }

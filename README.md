@@ -160,7 +160,10 @@ leave your machine, each under your explicit configuration:
 - **Pinboard sync** — `pinboard-sync --live` talks to pinboard.in with your
   `PINBOARD_TOKEN` (never stored, never logged).
 - **Web/GitHub enrichment** — enrichment fetches the URLs you bookmarked
-  (plus GitHub API metadata for repo links) to capture their content.
+  (plus GitHub API metadata for repo links) to capture their content. Set
+  `XQUIK_API_KEY` to resolve X/Twitter status bookmarks through Xquik when
+  live web enrichment is enabled. Xquik is an independent third-party service,
+  not affiliated with or endorsed by X Corp.
 - **`compare-run` (diagnostic, manual)** — the external comparator sends the
   source path/URL and queries to the Nowledge Mem HTTP service you point it
   at. It never runs as part of `daily`; skip the command and nothing is sent.

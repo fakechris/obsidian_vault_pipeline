@@ -10,7 +10,7 @@ use std::path::Path;
 
 use ovp_domain::crystal::DurableRecord;
 use ovp_domain::units::Unit;
-use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, PackRow, Query, SourceRow};
+use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, Query, SourceRow};
 use serde_json::{Value, json};
 
 use crate::graph::{last_path_segment, theme_counts};
@@ -82,16 +82,15 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
     let sources: Vec<&SourceRow> = model
         .sources
         .iter()
-        .filter(|s| s.entities.iter().any(|e| *e == id_lc))
+        .filter(|s| s.entities.contains(&id_lc))
         .collect();
     if sources.is_empty() {
         return None;
     }
     // Claims whose cited case_ids join to any mentioning source's pack.
-    let cases: std::collections::HashSet<String> = sources
+    let cases: std::collections::HashSet<&str> = sources
         .iter()
         .filter_map(|s| s.pack_dir.as_deref().and_then(last_path_segment))
-        .map(str::to_string)
         .collect();
     // Only durable/caveated claims — the endpoint contract + UI describe
     // active knowledge; a superseded/retracted claim rendered without a pill
@@ -100,17 +99,12 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
         .claims
         .iter()
         .filter(|c| matches!(c.status, ClaimStatus::Durable | ClaimStatus::Caveated))
-        .filter(|c| c.sources.iter().any(|s| cases.contains(s)))
+        .filter(|c| c.sources.iter().any(|s| cases.contains(s.as_str())))
         .collect();
-    claims.sort_by_key(|c| {
-        (
-            match c.status {
-                ClaimStatus::Durable => 0u8,
-                ClaimStatus::Caveated => 1,
-                _ => 2,
-            },
-            c.claim_id.clone(),
-        )
+    claims.sort_by(|a, b| {
+        claim_status_order(a)
+            .cmp(&claim_status_order(b))
+            .then_with(|| a.claim_id.cmp(&b.claim_id))
     });
     Some(json!({
         "id": id_lc,
@@ -163,18 +157,6 @@ pub fn claim_body(
         .iter()
         .find(|r| r.claim_key == id || r.claim_id == id)?;
 
-    let source_lookup: HashMap<String, &SourceRow> = model
-        .map(|m| m.sources.iter().map(|s| (s.sha256.clone(), s)).collect())
-        .unwrap_or_default();
-    let pack_lookup: HashMap<String, &PackRow> = model
-        .map(|m| {
-            m.packs
-                .iter()
-                .filter_map(|p| Some((last_path_segment(&p.pack_dir)?.to_string(), p)))
-                .collect()
-        })
-        .unwrap_or_default();
-
     let mut citations = Vec::new();
     for cit in &rec.citations {
         let unit_text = if include_unit_text {
@@ -182,24 +164,37 @@ pub fn claim_body(
             std::fs::read_to_string(&units_path)
                 .ok()
                 .and_then(|raw| serde_json::from_str::<Vec<Unit>>(&raw).ok())
-                .and_then(|units| units.into_iter().find(|u| u.id == cit.unit_id).map(|u| u.text))
+                .and_then(|units| {
+                    units
+                        .into_iter()
+                        .find(|u| u.id == cit.unit_id)
+                        .map(|u| u.text)
+                })
                 .unwrap_or_default()
         } else {
             String::new()
         };
 
-        let (source_title, source_url, source_sha) =
-            if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
-                let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
-                let src = source_lookup.get(&sha);
-                (
-                    src.and_then(|s| s.title.clone()).unwrap_or_else(|| pack.title.clone()),
-                    src.and_then(|s| s.url.clone()).unwrap_or_default(),
-                    sha,
-                )
-            } else {
-                (cit.case_id.clone(), String::new(), String::new())
-            };
+        let pack = model.and_then(|m| {
+            m.packs
+                .iter()
+                .find(|p| last_path_segment(&p.pack_dir) == Some(cit.case_id.as_str()))
+        });
+        let (source_title, source_url, source_sha) = if let Some(pack) = pack {
+            let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
+            let source = model.and_then(|m| m.sources.iter().find(|source| source.sha256 == sha));
+            (
+                source
+                    .and_then(|source| source.title.clone())
+                    .unwrap_or_else(|| pack.title.clone()),
+                source
+                    .and_then(|source| source.url.clone())
+                    .unwrap_or_default(),
+                sha,
+            )
+        } else {
+            (cit.case_id.clone(), String::new(), String::new())
+        };
 
         citations.push(json!({
             "unit_id": cit.unit_id,
@@ -284,18 +279,17 @@ pub fn source_body(
             .collect(),
         None => Vec::new(),
     };
-    citing.sort_by_key(|c| {
-        (
-            match c.status {
-                ClaimStatus::Durable => 0u8,
-                ClaimStatus::Caveated => 1,
-                _ => 2,
-            },
-            c.claim_id.clone(),
-        )
+    citing.sort_by(|a, b| {
+        claim_status_order(a)
+            .cmp(&claim_status_order(b))
+            .then_with(|| a.claim_id.cmp(&b.claim_id))
     });
 
-    let doc = doc.unwrap_or(SourceDoc { markdown: None, truncated: false, error: None });
+    let doc = doc.unwrap_or(SourceDoc {
+        markdown: None,
+        truncated: false,
+        error: None,
+    });
     Some(json!({
         "source": source,
         "memory": {
@@ -310,4 +304,12 @@ pub fn source_body(
             "error": doc.error,
         },
     }))
+}
+
+fn claim_status_order(claim: &ClaimRow) -> u8 {
+    match claim.status {
+        ClaimStatus::Durable => 0,
+        ClaimStatus::Caveated => 1,
+        _ => 2,
+    }
 }

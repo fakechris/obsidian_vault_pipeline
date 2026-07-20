@@ -953,7 +953,7 @@ fn build_ops_state(
         })
         .collect();
     // Most-stuck first so the render escalates the worst offenders at the top.
-    blocked_sources.sort_by(|a, b| b.days_stuck.cmp(&a.days_stuck));
+    blocked_sources.sort_by_key(|source| std::cmp::Reverse(source.days_stuck));
 
     let mut stuck_sources: Vec<StuckSource> = sources
         .iter()
@@ -965,7 +965,7 @@ fn build_ops_state(
             days_stuck: s.date.as_deref().and_then(|d| days_between(d, today)),
         })
         .collect();
-    stuck_sources.sort_by(|a, b| b.days_stuck.cmp(&a.days_stuck));
+    stuck_sources.sort_by_key(|source| std::cmp::Reverse(source.days_stuck));
 
     let queue_depth = sources
         .iter()
