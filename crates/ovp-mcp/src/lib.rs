@@ -225,6 +225,7 @@ fn dispatch(state: &McpState, method: &str, params: &Value) -> Result<Value, Rpc
         "tools/list" => handle_tools_list(),
         "tools/call" => handle_tools_call(state, params),
         "resources/list" => handle_resources_list(),
+        "resources/templates/list" => handle_resources_templates_list(),
         "resources/read" => handle_resources_read(state, params),
         "notifications/initialized" | "notifications/cancelled" => Ok(Value::Null),
         _ => Err(RpcError {
@@ -350,35 +351,17 @@ fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
 
-fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+/// One theme page + ONLY its claims from the lookup, so the closure travels
+/// with the narrative. `theme` accepts a label (exact), `t003`, `3`, or an
+/// `ovp://theme-page/<id>` URI — the payload behind both the `theme_page`
+/// tool and the `ovp://theme-page/<id>` resource.
+fn theme_page_payload(state: &McpState, theme: &str) -> Result<Value, RpcError> {
     let pages = state.load_theme_pages();
     let records = state.load_records();
     let body = bodies::theme_pages_body(pages.as_ref(), &records);
     let all = body["pages"].as_array().cloned().unwrap_or_default();
 
-    let theme = args
-        .get("theme")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let Some(theme) = theme else {
-        // No theme → the directory of available pages.
-        let listing: Vec<Value> = all
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "community_id": p["community_id"],
-                    "label": p["label"],
-                    "label_zh": p["label_zh"],
-                    "claim_count": p["claim_count"],
-                    "uri": format!("ovp://theme-page/{}", p["community_id"]),
-                })
-            })
-            .collect();
-        let text = serde_json::to_string_pretty(&listing).unwrap_or_else(|_| "[]".into());
-        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
-    };
-
+    let theme = theme.strip_prefix("ovp://theme-page/").unwrap_or(theme);
     // `t003` / `3` → community id; anything else matches the label exactly.
     let by_id = theme.strip_prefix('t').unwrap_or(theme).parse::<i64>().ok();
     let page = all.iter().find(|p| {
@@ -393,8 +376,6 @@ fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             ),
         });
     };
-    // Ship the page plus ONLY its claims from the lookup, so the closure
-    // travels with the narrative.
     let keys: std::collections::BTreeSet<String> = page["sections"]
         .as_array()
         .into_iter()
@@ -409,7 +390,38 @@ fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         .into_iter()
         .filter(|(k, _)| keys.contains(k))
         .collect();
-    let out = serde_json::json!({ "page": page, "claims": claims });
+    Ok(serde_json::json!({ "page": page, "claims": claims }))
+}
+
+fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let theme = args
+        .get("theme")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(theme) = theme else {
+        // No theme → the directory of available pages.
+        let pages = state.load_theme_pages();
+        let records = state.load_records();
+        let body = bodies::theme_pages_body(pages.as_ref(), &records);
+        let listing: Vec<Value> = body["pages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| {
+                serde_json::json!({
+                    "community_id": p["community_id"],
+                    "label": p["label"],
+                    "label_zh": p["label_zh"],
+                    "claim_count": p["claim_count"],
+                    "uri": format!("ovp://theme-page/{}", p["community_id"]),
+                })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&listing).unwrap_or_else(|_| "[]".into());
+        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
+    };
+    let out = theme_page_payload(state, theme)?;
     let text = serde_json::to_string_pretty(&out).unwrap_or_else(|_| "{}".into());
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
@@ -556,16 +568,32 @@ fn handle_resources_list() -> Result<Value, RpcError> {
                 "description": "Today's working memory context package",
                 "mimeType": "text/markdown"
             },
+        ]
+    }))
+}
+
+/// Dynamic (parameterized) resources are advertised as RFC 6570 URI
+/// templates, not fake concrete entries — a client must never receive a
+/// listed URI that `resources/read` cannot dereference.
+fn handle_resources_templates_list() -> Result<Value, RpcError> {
+    Ok(serde_json::json!({
+        "resourceTemplates": [
             {
-                "uri": "ovp://claim/<claim_key>",
+                "uriTemplate": "ovp://claim/{claim_key}",
                 "name": "Durable claim (stable reference)",
                 "description": "One durable claim's full evidence closure — same payload as the `claim` tool. claim_keys (ck-…) are deterministic and survive re-runs, so these URIs are safe to store in notes and answers.",
                 "mimeType": "application/json"
             },
             {
-                "uri": "ovp://source/<sha256>",
+                "uriTemplate": "ovp://source/{sha256}",
                 "name": "Source document (stable reference)",
                 "description": "One captured source's metadata and markdown body, addressed by content sha256.",
+                "mimeType": "application/json"
+            },
+            {
+                "uriTemplate": "ovp://theme-page/{community_id}",
+                "name": "Grounded topic page",
+                "description": "One theme's topic page with its claims lookup — same payload as the `theme_page` tool. The `theme_page` tool called without arguments lists these URIs.",
                 "mimeType": "application/json"
             }
         ]
@@ -600,6 +628,13 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
             let model = state.load_model();
             let json = serde_json::to_string(&claim_closure(record, model.as_ref()))
                 .unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
+            }))
+        }
+        _ if uri.starts_with("ovp://theme-page/") => {
+            let payload = theme_page_payload(state, uri)?;
+            let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
             Ok(serde_json::json!({
                 "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
             }))
@@ -777,6 +812,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("No topic page"), "{}", err.message);
+    }
+
+    #[test]
+    fn theme_page_uris_from_the_listing_are_dereferenceable() {
+        // codex P2: every URI a tool emits must resolve via resources/read.
+        let (_tmp, state) = fixture_vault();
+        let v = call(&state, "theme_page", serde_json::json!({})).unwrap();
+        let listing: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        let uri = listing[0]["uri"].as_str().unwrap().to_string();
+        assert_eq!(uri, "ovp://theme-page/0");
+        let read = dispatch(&state, "resources/read", &serde_json::json!({ "uri": uri })).unwrap();
+        let payload: Value =
+            serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["page"]["label"], "Agent memory");
+    }
+
+    #[test]
+    fn dynamic_uris_are_advertised_as_templates_not_fake_resources() {
+        let (_tmp, state) = fixture_vault();
+        let listed = dispatch(&state, "resources/list", &Value::Null).unwrap();
+        for r in listed["resources"].as_array().unwrap() {
+            let uri = r["uri"].as_str().unwrap();
+            assert!(
+                !uri.contains('<') && !uri.contains('{'),
+                "concrete resource list must not carry placeholders: {uri}"
+            );
+        }
+        let templates = dispatch(&state, "resources/templates/list", &Value::Null).unwrap();
+        let uris: Vec<&str> = templates["resourceTemplates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["uriTemplate"].as_str().unwrap())
+            .collect();
+        assert!(uris.contains(&"ovp://claim/{claim_key}"), "{uris:?}");
+        assert!(
+            uris.contains(&"ovp://theme-page/{community_id}"),
+            "{uris:?}"
+        );
     }
 
     #[test]

@@ -91,10 +91,15 @@ export function fetchFlow(): Promise<FlowData> {
 
 let themePagesCache: Promise<ThemePagesResponse> | null = null;
 export function fetchThemePages(): Promise<ThemePagesResponse> {
+  // Cache only the STATIC snapshot (immutable for the session). The live
+  // server's projection changes when `crystal-theme-pages` reruns, and a
+  // transient failure or empty first response must not freeze the panel
+  // until a full reload.
+  if (!STATIC_MODE) {
+    return fetchJson<ThemePagesResponse>('/api/theme-pages');
+  }
   if (!themePagesCache) {
-    themePagesCache = fetchJson<ThemePagesResponse>(
-      STATIC_MODE ? `${API}/theme-pages.json` : '/api/theme-pages',
-    );
+    themePagesCache = fetchJson<ThemePagesResponse>(`${API}/theme-pages.json`);
   }
   return themePagesCache;
 }

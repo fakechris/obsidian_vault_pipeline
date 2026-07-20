@@ -515,11 +515,13 @@ export function parsePageBody(body: string): PageBodyToken[][] {
       const marker = /\[claim:([^\]]+)\]/g;
       let cursor = 0;
       for (const match of paragraph.matchAll(marker)) {
-        const index = match.index;
+        const index = match.index ?? 0;
         if (index > cursor) {
           tokens.push({ kind: 'text', text: paragraph.slice(cursor, index) });
         }
-        tokens.push({ kind: 'cite', key: match[1] });
+        // Same key semantics as the Rust extractor: `[claim: ck-b ]` is a
+        // valid citation, so the key must be trimmed before lookup.
+        tokens.push({ kind: 'cite', key: match[1].trim() });
         cursor = index + match[0].length;
       }
       if (cursor < paragraph.length) {

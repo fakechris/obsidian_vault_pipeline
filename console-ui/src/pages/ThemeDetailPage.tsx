@@ -67,7 +67,18 @@ function TopicOverview({ theme }: { theme: string }) {
         }
       }
     }
-    return { sections, citationNumberByKey };
+    // claim_ids can collide across runs while claim_keys stay unique. The
+    // card anchors below are keyed by claim_id, so a chip pointing at a
+    // duplicated id could scroll to the wrong card — such chips render as
+    // plain (tooltip-only) markers instead of links.
+    const idCounts = new Map<string, number>();
+    for (const info of Object.values(themePages.claims)) {
+      idCounts.set(info.claim_id, (idCounts.get(info.claim_id) ?? 0) + 1);
+    }
+    const ambiguousIds = new Set(
+      [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id),
+    );
+    return { sections, citationNumberByKey, ambiguousIds };
   }, [page, themePages]);
 
   if (!page || !themePages || !overview) return null;
@@ -91,6 +102,17 @@ function TopicOverview({ theme }: { theme: string }) {
                 const claim = themePages.claims[token.key];
                 const number = overview.citationNumberByKey.get(token.key);
                 if (!claim || number == null) return null;
+                if (overview.ambiguousIds.has(claim.claim_id)) {
+                  return (
+                    <span
+                      className="topic-cite"
+                      key={`${token.key}-${tokenIndex}`}
+                      title={claim.claim}
+                    >
+                      [{number}]
+                    </span>
+                  );
+                }
                 return (
                   <Link
                     className="topic-cite"
