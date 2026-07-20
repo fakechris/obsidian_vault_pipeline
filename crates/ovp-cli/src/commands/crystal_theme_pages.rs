@@ -54,6 +54,11 @@ pub(crate) struct PageBuildOutcome {
     pub(crate) built: usize,
     pub(crate) kept: usize,
     pub(crate) skipped_small: usize,
+    /// Themes whose draft AND bounded repair both failed the gate, with the
+    /// final defect list. Their old pages are NOT in `pages` — the caller
+    /// writes the partial projection (a missing page is honest; a stale one
+    /// citing retracted claims is not) and then fails loud.
+    pub(crate) failures: Vec<(i64, Vec<String>)>,
 }
 
 /// Group active durable records by majority theme community and synthesize a
@@ -80,11 +85,11 @@ pub(crate) fn build_pages(
         built: 0,
         kept: 0,
         skipped_small: 0,
+        failures: Vec::new(),
     };
     // Failed themes accumulate instead of aborting the loop: one run
     // invalidates EVERY ungrounded cassette entry, so the next live pass
-    // re-asks all of them at once (successes stay cached).
-    let mut failures: Vec<(i64, Vec<String>)> = Vec::new();
+    // re-asks them all at once (successes stay cached).
     for community in &themes.communities {
         let Some(mut group) = by_community.remove(&community.id) else {
             continue;
@@ -152,7 +157,7 @@ pub(crate) fn build_pages(
                 // replaying the same ungrounded page (no-op on replay).
                 client.invalidate(&req);
                 client.invalidate(&repair_req);
-                failures.push((
+                outcome.failures.push((
                     community.id,
                     defects.iter().map(|d| d.to_string()).collect(),
                 ));
@@ -168,19 +173,6 @@ pub(crate) fn build_pages(
             sections,
         });
         outcome.built += 1;
-    }
-    if !failures.is_empty() {
-        let mut msg = format!(
-            "crystal-theme-pages: {} theme(s) failed the page gate (nothing written; rerun re-asks them):",
-            failures.len()
-        );
-        for (id, defects) in &failures {
-            msg.push_str(&format!("\n  t{:03} ({} defect(s)):", id, defects.len()));
-            for d in defects {
-                msg.push_str(&format!("\n    {d}"));
-            }
-        }
-        return Err(CliError::Io(msg));
     }
     Ok(outcome)
 }
@@ -282,11 +274,29 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
         args.refresh,
     )?;
 
+    // Write the projection BEFORE reporting gate failures: the passing pages
+    // land, and a failed theme's OLD page (which may cite claims that are no
+    // longer active) is dropped rather than left to masquerade as current
+    // (codex round-3 P2). A missing page is honest; a stale one is not.
     let file = ThemePagesFile {
         schema: THEME_PAGES_SCHEMA.to_string(),
         pages: outcome.pages,
     };
     write_pages_file(&store, &pages_path, &file)?;
+    if !outcome.failures.is_empty() {
+        let mut msg = format!(
+            "crystal-theme-pages: {} theme(s) failed the page gate \
+             (partial projection written without them; rerun re-asks them):",
+            outcome.failures.len()
+        );
+        for (id, defects) in &outcome.failures {
+            msg.push_str(&format!("\n  t{:03} ({} defect(s)):", id, defects.len()));
+            for d in defects {
+                msg.push_str(&format!("\n    {d}"));
+            }
+        }
+        return Err(CliError::Io(msg));
+    }
 
     println!(
         "crystal-theme-pages: {} page(s) ({} built, {} kept, {} theme(s) below --min-claims {}) → {}",
@@ -542,21 +552,24 @@ mod tests {
         r#"{"sections":[{"heading":"H","body":"No citation here.\n\nGhost handle [claim:c9]."}]}"#;
 
     #[test]
-    fn failed_repair_fails_the_gate_loudly() {
+    fn failed_repair_lands_in_failures_and_drops_the_page() {
         let themes = themes_fixture();
         let records = records_fixture();
         let mut client = FixtureModelClient::new();
         client.insert(&fixture_request(), reply(BAD_REPLY));
         // The repair attempt returns the SAME bad draft — still ungrounded.
         client.insert(&fixture_repair_request(BAD_REPLY), reply(BAD_REPLY));
-        let err = build_pages(&records, &themes, None, &mut client, 2, false).unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(msg.contains("1 theme(s) failed the page gate"), "{msg}");
+        let out = build_pages(&records, &themes, None, &mut client, 2, false).unwrap();
+        assert!(out.pages.is_empty(), "failed theme must not produce a page");
+        assert_eq!(out.failures.len(), 1);
+        let (id, defects) = &out.failures[0];
+        assert_eq!(*id, 0);
+        let joined = defects.join("\n");
         assert!(
-            msg.contains("uncited sentence `No citation here.`"),
-            "{msg}"
+            joined.contains("uncited sentence `No citation here.`"),
+            "{joined}"
         );
-        assert!(msg.contains("unknown claim `c9`"), "{msg}");
+        assert!(joined.contains("unknown claim `c9`"), "{joined}");
     }
 
     #[test]

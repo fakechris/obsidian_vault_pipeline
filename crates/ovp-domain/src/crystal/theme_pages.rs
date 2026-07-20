@@ -464,8 +464,8 @@ fn sentences(paragraph: &str) -> Vec<String> {
 }
 
 /// Is the `.` at `dot` part of an abbreviation rather than a sentence end?
-/// True when the word before it is a single-letter dotted segment (`e.g.`,
-/// `i.e.`, `U.S.`) or a common non-terminal abbreviation.
+/// True only for the two high-confidence shapes: a dotted single-letter
+/// segment (`e.g.`, `i.e.`, `U.S.`) or a single-letter initial (`J. Smith`).
 fn is_abbreviation_dot(chars: &[char], dot: usize) -> bool {
     if chars[dot] != '.' {
         return false;
@@ -477,33 +477,13 @@ fn is_abbreviation_dot(chars: &[char], dot: usize) -> bool {
     if s > 0 && chars[s - 1] == '.' && dot - s <= 2 {
         return true; // dotted abbreviation segment: e.g. / i.e. / U.S.
     }
-    if dot - s == 1 && chars[s].is_alphabetic() {
-        return true; // single-letter initial: J. Smith
-    }
-    let word: String = chars[s..dot].iter().collect::<String>().to_lowercase();
-    matches!(
-        word.as_str(),
-        "etc"
-            | "vs"
-            | "cf"
-            | "al"
-            | "fig"
-            | "ca"
-            | "approx"
-            | "inc"
-            | "corp"
-            | "ltd"
-            | "et"
-            | "vol"
-            | "dr"
-            | "mr"
-            | "ms"
-            | "mrs"
-            | "prof"
-            | "jr"
-            | "sr"
-            | "st"
-    )
+    // Single-letter initial (J. Smith). NO word list beyond these two
+    // high-confidence shapes: every list entry ("Inc.", "etc.", …) is a
+    // laundering vector — `Acme Inc. A supported sentence [claim:x].` would
+    // merge and verify as one cited fragment (codex round-3 P1). A false
+    // SPLIT only costs a spurious defect that the bounded repair pass
+    // absorbs; a false MERGE breaks the grounding guarantee. Split wins.
+    dot - s == 1 && chars[s].is_alphabetic()
 }
 
 /// Split a fragment's leading run of `[claim:…]` citations (with surrounding
@@ -726,6 +706,24 @@ mod tests {
             vec![PageDefect::UncitedSentence {
                 section: 0,
                 snippet: "Unsupported claim.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn word_abbreviations_split_rather_than_launder() {
+        // Codex round-3 P1: `Inc.`-style tokens must not merge an uncited
+        // sentence into the cited one after it. The false-split cost lands
+        // on the repair pass, never on the grounding guarantee.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "Acme Inc. A supported sentence [claim:ck-a].".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Acme Inc.".into()
             }]
         );
     }
