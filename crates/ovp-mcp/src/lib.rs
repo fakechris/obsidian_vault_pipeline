@@ -5,9 +5,12 @@
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
+use ovp_api_projection::{bodies, readers};
 use ovp_domain::VaultLayout;
+use ovp_domain::crystal::DurableRecord;
+use ovp_domain::crystal::theme_pages::ThemePagesFile;
 use ovp_domain::tags::TagAliases;
-use ovp_index::{read_index, run_query, IndexModel, Query, QueryKind};
+use ovp_index::{IndexModel, Query, QueryKind, read_index, run_query};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -34,7 +37,7 @@ struct RpcResponse {
     error: Option<RpcError>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RpcError {
     code: i32,
     message: String,
@@ -42,19 +45,104 @@ struct RpcError {
 
 struct McpState {
     vault_root: PathBuf,
-    _layout: VaultLayout,
+    layout: VaultLayout,
 }
 
 impl McpState {
     fn load_model(&self) -> Option<IndexModel> {
         read_index(&self.vault_root).ok()
     }
+
+    /// ACTIVE durable records with display themes applied — the same fold the
+    /// live server uses (`readers::load_active_records`); corrupt state
+    /// degrades to empty (read tools answer, `ovp2 index` fails loud).
+    fn load_records(&self) -> Vec<DurableRecord> {
+        readers::load_active_records(&self.vault_root, &self.layout)
+    }
+
+    fn load_theme_pages(&self) -> Option<ThemePagesFile> {
+        let path = self
+            .vault_root
+            .join(self.layout.crystal_store_dir())
+            .join("theme_pages.json");
+        ThemePagesFile::load(&path).ok().flatten()
+    }
+}
+
+/// Resolve `key` (a `claim_key`, `claim_id`, or `ovp://claim/<key>` URI)
+/// against the active records. claim_key wins; claim_id is a convenience
+/// alias resolved only when unambiguous.
+fn find_record<'a>(records: &'a [DurableRecord], key: &str) -> Result<&'a DurableRecord, RpcError> {
+    let key = key.strip_prefix("ovp://claim/").unwrap_or(key);
+    if let Some(r) = records.iter().find(|r| r.claim_key == key) {
+        return Ok(r);
+    }
+    let by_id: Vec<&DurableRecord> = records.iter().filter(|r| r.claim_id == key).collect();
+    match by_id.as_slice() {
+        [one] => Ok(one),
+        [] => Err(RpcError {
+            code: -32602,
+            message: format!("No active claim with key or id `{key}`"),
+        }),
+        many => Err(RpcError {
+            code: -32602,
+            message: format!(
+                "claim_id `{key}` is ambiguous ({} records) — use the claim_key: {}",
+                many.len(),
+                many.iter()
+                    .map(|r| r.claim_key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
+    }
+}
+
+/// The full evidence closure for one claim: text + gate verdicts + every
+/// citation resolved to its source row (title/sha) when the index knows it.
+/// This is the payload behind both the `claim` tool and `ovp://claim/<key>`.
+fn claim_closure(record: &DurableRecord, model: Option<&IndexModel>) -> Value {
+    // pack_dir basenames key claim↔source joins everywhere else too.
+    let source_of = |case_id: &str| -> Value {
+        let Some(m) = model else { return Value::Null };
+        let sha = m
+            .packs
+            .iter()
+            .find(|p| p.pack_dir.rsplit(['/', '\\']).next() == Some(case_id))
+            .and_then(|p| p.source_sha256.clone());
+        let Some(sha) = sha else { return Value::Null };
+        let Some(src) = m.sources.iter().find(|s| s.sha256 == sha) else {
+            return Value::Null;
+        };
+        serde_json::json!({
+            "sha256": src.sha256,
+            "title": src.title,
+            "url": src.url,
+            "uri": format!("ovp://source/{}", src.sha256),
+        })
+    };
+    serde_json::json!({
+        "uri": format!("ovp://claim/{}", record.claim_key),
+        "claim_key": record.claim_key,
+        "claim_id": record.claim_id,
+        "claim": record.claim,
+        "theme": record.theme,
+        "strength": record.strength,
+        "provenance_score": record.provenance_score,
+        "citations": record.citations.iter().map(|c| serde_json::json!({
+            "case_id": c.case_id,
+            "unit_id": c.unit_id,
+            "quote": c.quote,
+            "resolved_line": c.resolved_line,
+            "source": source_of(&c.case_id),
+        })).collect::<Vec<Value>>(),
+    })
 }
 
 pub fn run_mcp(config: McpConfig) -> Result<(), String> {
     let state = McpState {
         vault_root: config.vault_root,
-        _layout: VaultLayout::new(),
+        layout: VaultLayout::new(),
     };
 
     let stdin = io::stdin();
@@ -77,7 +165,10 @@ pub fn run_mcp(config: McpConfig) -> Result<(), String> {
                     jsonrpc: "2.0",
                     id: Value::Null,
                     result: None,
-                    error: Some(RpcError { code: -32700, message: format!("Parse error: {e}") }),
+                    error: Some(RpcError {
+                        code: -32700,
+                        message: format!("Parse error: {e}"),
+                    }),
                 };
                 write_response(&mut out, &resp);
                 continue;
@@ -89,7 +180,10 @@ pub fn run_mcp(config: McpConfig) -> Result<(), String> {
                 jsonrpc: "2.0",
                 id: req.id.unwrap_or(Value::Null),
                 result: None,
-                error: Some(RpcError { code: -32600, message: "Invalid jsonrpc version".into() }),
+                error: Some(RpcError {
+                    code: -32600,
+                    message: "Invalid jsonrpc version".into(),
+                }),
             };
             write_response(&mut out, &resp);
             continue;
@@ -99,8 +193,18 @@ pub fn run_mcp(config: McpConfig) -> Result<(), String> {
         let result = dispatch(&state, &req.method, &req.params);
 
         let resp = match result {
-            Ok(val) => RpcResponse { jsonrpc: "2.0", id, result: Some(val), error: None },
-            Err(e) => RpcResponse { jsonrpc: "2.0", id, result: None, error: Some(e) },
+            Ok(val) => RpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: Some(val),
+                error: None,
+            },
+            Err(e) => RpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: None,
+                error: Some(e),
+            },
         };
         write_response(&mut out, &resp);
     }
@@ -121,11 +225,13 @@ fn dispatch(state: &McpState, method: &str, params: &Value) -> Result<Value, Rpc
         "tools/list" => handle_tools_list(),
         "tools/call" => handle_tools_call(state, params),
         "resources/list" => handle_resources_list(),
+        "resources/templates/list" => handle_resources_templates_list(),
         "resources/read" => handle_resources_read(state, params),
-        "notifications/initialized" | "notifications/cancelled" => {
-            Ok(Value::Null)
-        }
-        _ => Err(RpcError { code: -32601, message: format!("Method not found: {method}") }),
+        "notifications/initialized" | "notifications/cancelled" => Ok(Value::Null),
+        _ => Err(RpcError {
+            code: -32601,
+            message: format!("Method not found: {method}"),
+        }),
     }
 }
 
@@ -173,6 +279,27 @@ fn handle_tools_list() -> Result<Value, RpcError> {
                 }
             },
             {
+                "name": "claim",
+                "description": "Read one durable claim's FULL evidence closure: claim text, gate verdicts, and every citation resolved to its verbatim quote, line, and source (title/sha/url). Accepts a claim_key (ck-…), a claim_id, or an ovp://claim/<key> URI. This is how an answer's [claim:…] citation is audited.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key": { "type": "string", "description": "claim_key (preferred, stable), claim_id, or ovp://claim/<key>" }
+                    },
+                    "required": ["key"]
+                }
+            },
+            {
+                "name": "theme_page",
+                "description": "Read one grounded topic page (wiki-style narrative woven from durable claims; every sentence carries a [claim:<key>] citation resolvable via the `claim` tool). Lists all pages when no theme is given.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "theme": { "type": "string", "description": "Theme label (exact) or community id (t000 / 0). Omit to list available pages." }
+                    }
+                }
+            },
+            {
                 "name": "doctor",
                 "description": "Run health checks over OVP vault state.",
                 "inputSchema": { "type": "object", "properties": {} }
@@ -188,20 +315,122 @@ fn handle_tools_list() -> Result<Value, RpcError> {
 
 fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError> {
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let arguments = params.get("arguments").cloned().unwrap_or(Value::Object(Default::default()));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
 
     match name {
         "find" => tool_find(state, &arguments),
         "search" => tool_search(state, &arguments),
+        "claim" => tool_claim(state, &arguments),
+        "theme_page" => tool_theme_page(state, &arguments),
         "status" => tool_status(state),
         "doctor" => tool_doctor(state),
-        _ => Err(RpcError { code: -32602, message: format!("Unknown tool: {name}") }),
+        _ => Err(RpcError {
+            code: -32602,
+            message: format!("Unknown tool: {name}"),
+        }),
     }
 }
 
+fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| RpcError {
+            code: -32602,
+            message: "`key` is required".into(),
+        })?;
+    let records = state.load_records();
+    let record = find_record(&records, key.trim())?;
+    let model = state.load_model();
+    let text = serde_json::to_string_pretty(&claim_closure(record, model.as_ref()))
+        .unwrap_or_else(|_| "{}".into());
+    Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
+}
+
+/// One theme page + ONLY its claims from the lookup, so the closure travels
+/// with the narrative. `theme` accepts a label (exact), `t003`, `3`, or an
+/// `ovp://theme-page/<id>` URI — the payload behind both the `theme_page`
+/// tool and the `ovp://theme-page/<id>` resource.
+fn theme_page_payload(state: &McpState, theme: &str) -> Result<Value, RpcError> {
+    let pages = state.load_theme_pages();
+    let records = state.load_records();
+    let body = bodies::theme_pages_body(pages.as_ref(), &records);
+    let all = body["pages"].as_array().cloned().unwrap_or_default();
+
+    let theme = theme.strip_prefix("ovp://theme-page/").unwrap_or(theme);
+    // `t003` / `3` → community id; anything else matches the label exactly.
+    let by_id = theme.strip_prefix('t').unwrap_or(theme).parse::<i64>().ok();
+    let page = all.iter().find(|p| {
+        by_id.is_some_and(|id| p["community_id"].as_i64() == Some(id))
+            || p["label"].as_str() == Some(theme)
+    });
+    let Some(page) = page else {
+        return Err(RpcError {
+            code: -32602,
+            message: format!(
+                "No topic page for `{theme}` — call theme_page without arguments to list pages"
+            ),
+        });
+    };
+    let keys: std::collections::BTreeSet<String> = page["sections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["body"].as_str())
+        .flat_map(ovp_domain::crystal::theme_pages::extract_claim_citations)
+        .collect();
+    let claims: serde_json::Map<String, Value> = body["claims"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(k, _)| keys.contains(k))
+        .collect();
+    Ok(serde_json::json!({ "page": page, "claims": claims }))
+}
+
+fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let theme = args
+        .get("theme")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(theme) = theme else {
+        // No theme → the directory of available pages.
+        let pages = state.load_theme_pages();
+        let records = state.load_records();
+        let body = bodies::theme_pages_body(pages.as_ref(), &records);
+        let listing: Vec<Value> = body["pages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| {
+                serde_json::json!({
+                    "community_id": p["community_id"],
+                    "label": p["label"],
+                    "label_zh": p["label_zh"],
+                    "claim_count": p["claim_count"],
+                    "uri": format!("ovp://theme-page/{}", p["community_id"]),
+                })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&listing).unwrap_or_else(|_| "[]".into());
+        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
+    };
+    let out = theme_page_payload(state, theme)?;
+    let text = serde_json::to_string_pretty(&out).unwrap_or_else(|_| "{}".into());
+    Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
+}
+
 fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
-    let model = state.load_model()
-        .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
+    let model = state.load_model().ok_or_else(|| RpcError {
+        code: -32000,
+        message: "Index not available".into(),
+    })?;
 
     // A queried alias resolves to its canonical tag, same as `ovp2 find`.
     // A broken alias table degrades to normalize-only here (a read tool
@@ -211,20 +440,29 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         aliases.resolve_raw(raw).unwrap_or_else(|| raw.to_string())
     });
     let query = Query {
-        kind: args.get("kind").and_then(|v| v.as_str()).and_then(|k| match k {
-            "sources" => Some(QueryKind::Sources),
-            "packs" => Some(QueryKind::Packs),
-            "claims" => Some(QueryKind::Claims),
-            "runs" => Some(QueryKind::Runs),
-            "tags" => Some(QueryKind::Tags),
-            "entities" => Some(QueryKind::Entities),
-            _ => None,
-        }),
-        status: args.get("status").and_then(|v| v.as_str()).map(String::from),
+        kind: args
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .and_then(|k| match k {
+                "sources" => Some(QueryKind::Sources),
+                "packs" => Some(QueryKind::Packs),
+                "claims" => Some(QueryKind::Claims),
+                "runs" => Some(QueryKind::Runs),
+                "tags" => Some(QueryKind::Tags),
+                "entities" => Some(QueryKind::Entities),
+                _ => None,
+            }),
+        status: args
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         date: args.get("date").and_then(|v| v.as_str()).map(String::from),
         term: args.get("term").and_then(|v| v.as_str()).map(String::from),
         tag,
-        entity: args.get("entity").and_then(|v| v.as_str()).map(String::from),
+        entity: args
+            .get("entity")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     };
 
     let hits = run_query(&model, &query);
@@ -236,11 +474,20 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
 }
 
 fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
-    let model = state.load_model()
-        .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
+    let model = state.load_model().ok_or_else(|| RpcError {
+        code: -32000,
+        message: "Index not available".into(),
+    })?;
 
     let term = args.get("query").and_then(|v| v.as_str()).map(String::from);
-    let query = Query { kind: None, status: None, date: None, term, tag: None , entity: None };
+    let query = Query {
+        kind: None,
+        status: None,
+        date: None,
+        term,
+        tag: None,
+        entity: None,
+    };
     let hits = run_query(&model, &query);
     let text = serde_json::to_string_pretty(&hits).unwrap_or_else(|_| "[]".into());
 
@@ -250,8 +497,10 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
 }
 
 fn tool_status(state: &McpState) -> Result<Value, RpcError> {
-    let model = state.load_model()
-        .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
+    let model = state.load_model().ok_or_else(|| RpcError {
+        code: -32000,
+        message: "Index not available".into(),
+    })?;
 
     let text = format!(
         "OVP Status (index date: {})\n\
@@ -262,10 +511,14 @@ fn tool_status(state: &McpState) -> Result<Value, RpcError> {
          Queue depth: {}\n\
          Blocked sources: {}",
         model.date,
-        model.totals.sources, model.totals.queued, model.totals.processed,
-        model.totals.failed, model.totals.blocked,
+        model.totals.sources,
+        model.totals.queued,
+        model.totals.processed,
+        model.totals.failed,
+        model.totals.blocked,
         model.totals.packs,
-        model.totals.claims_durable, model.totals.claims_caveated,
+        model.totals.claims_durable,
+        model.totals.claims_caveated,
         model.totals.runs,
         model.ops.queue_depth,
         model.ops.blocked_sources.len(),
@@ -314,6 +567,34 @@ fn handle_resources_list() -> Result<Value, RpcError> {
                 "name": "Working Memory",
                 "description": "Today's working memory context package",
                 "mimeType": "text/markdown"
+            },
+        ]
+    }))
+}
+
+/// Dynamic (parameterized) resources are advertised as RFC 6570 URI
+/// templates, not fake concrete entries — a client must never receive a
+/// listed URI that `resources/read` cannot dereference.
+fn handle_resources_templates_list() -> Result<Value, RpcError> {
+    Ok(serde_json::json!({
+        "resourceTemplates": [
+            {
+                "uriTemplate": "ovp://claim/{claim_key}",
+                "name": "Durable claim (stable reference)",
+                "description": "One durable claim's full evidence closure — same payload as the `claim` tool. claim_keys (ck-…) are deterministic and survive re-runs, so these URIs are safe to store in notes and answers.",
+                "mimeType": "application/json"
+            },
+            {
+                "uriTemplate": "ovp://source/{sha256}",
+                "name": "Source document (stable reference)",
+                "description": "One captured source's metadata and markdown body, addressed by content sha256.",
+                "mimeType": "application/json"
+            },
+            {
+                "uriTemplate": "ovp://theme-page/{community_id}",
+                "name": "Grounded topic page",
+                "description": "One theme's topic page with its claims lookup — same payload as the `theme_page` tool. The `theme_page` tool called without arguments lists these URIs.",
+                "mimeType": "application/json"
             }
         ]
     }))
@@ -324,8 +605,10 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
 
     match uri {
         "ovp://index" => {
-            let model = state.load_model()
-                .ok_or_else(|| RpcError { code: -32000, message: "Index not available".into() })?;
+            let model = state.load_model().ok_or_else(|| RpcError {
+                code: -32000,
+                message: "Index not available".into(),
+            })?;
             let json = serde_json::to_string(&model).unwrap_or_else(|_| "{}".into());
             Ok(serde_json::json!({
                 "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
@@ -339,6 +622,248 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
                 "contents": [{ "uri": uri, "mimeType": "text/markdown", "text": text }]
             }))
         }
-        _ => Err(RpcError { code: -32602, message: format!("Unknown resource: {uri}") }),
+        _ if uri.starts_with("ovp://claim/") => {
+            let records = state.load_records();
+            let record = find_record(&records, uri)?;
+            let model = state.load_model();
+            let json = serde_json::to_string(&claim_closure(record, model.as_ref()))
+                .unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
+            }))
+        }
+        _ if uri.starts_with("ovp://theme-page/") => {
+            let payload = theme_page_payload(state, uri)?;
+            let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
+            }))
+        }
+        _ if uri.starts_with("ovp://source/") => {
+            let sha = uri.strip_prefix("ovp://source/").unwrap_or(uri);
+            let model = state.load_model().ok_or_else(|| RpcError {
+                code: -32000,
+                message: "Index not available".into(),
+            })?;
+            let src = model
+                .sources
+                .iter()
+                .find(|s| s.sha256 == sha)
+                .ok_or_else(|| RpcError {
+                    code: -32602,
+                    message: format!("No source with sha256 `{sha}`"),
+                })?;
+            let (doc, truncated, err) =
+                readers::read_source_doc(&state.vault_root, &state.layout, src.rel_path.as_deref());
+            let json = serde_json::to_string(&serde_json::json!({
+                "uri": uri,
+                "source": src,
+                "markdown": doc,
+                "truncated": truncated,
+                "doc_error": err,
+            }))
+            .unwrap_or_else(|_| "{}".into());
+            Ok(serde_json::json!({
+                "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
+            }))
+        }
+        _ => Err(RpcError {
+            code: -32602,
+            message: format!("Unknown resource: {uri}"),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_domain::crystal::{
+        CrystalStatus, DurableCitation, FinalClass, ProvenanceClass, StoreEvent, StoreOp,
+        StrengthClass,
+    };
+
+    fn record(key: &str, id: &str, case: &str) -> DurableRecord {
+        DurableRecord {
+            claim_key: key.into(),
+            claim_id: id.into(),
+            claim: format!("claim text for {key}"),
+            theme: "Agent memory".into(),
+            source_cases: vec![case.into()],
+            citations: vec![DurableCitation {
+                case_id: case.into(),
+                unit_id: "u-1".into(),
+                quote: "verbatim quote".into(),
+                resolved_line: Some(12),
+            }],
+            provenance_score: 0.8,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "test".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        }
+    }
+
+    /// A vault with a two-claim ledger and a one-page theme_pages.json.
+    fn fixture_vault() -> (tempfile::TempDir, McpState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let layout = VaultLayout::new();
+        let store = root.join(layout.crystal_store_dir());
+        std::fs::create_dir_all(&store).unwrap();
+        let events = [
+            StoreEvent {
+                op: StoreOp::Write,
+                record: record("ck-aaa", "id-a", "case-1"),
+                supersedes: None,
+                reason: None,
+            },
+            StoreEvent {
+                op: StoreOp::Write,
+                record: record("ck-bbb", "id-b", "case-2"),
+                supersedes: None,
+                reason: None,
+            },
+        ];
+        let ledger: String = events
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap() + "\n")
+            .collect();
+        std::fs::write(store.join("ledger.jsonl"), ledger).unwrap();
+        std::fs::write(
+            store.join("theme_pages.json"),
+            serde_json::json!({
+                "schema": "ovp.theme_pages/v1",
+                "pages": [{
+                    "community_id": 0,
+                    "label": "Agent memory",
+                    "label_zh": "智能体记忆",
+                    "claim_keys": ["ck-aaa", "ck-bbb"],
+                    "sections": [{"heading": "H",
+                                   "body": "One [claim:ck-aaa]. Two [claim:ck-bbb]."}]
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = McpState {
+            vault_root: root,
+            layout,
+        };
+        (tmp, state)
+    }
+
+    fn call(state: &McpState, tool: &str, args: serde_json::Value) -> Result<Value, RpcError> {
+        dispatch(
+            state,
+            "tools/call",
+            &serde_json::json!({ "name": tool, "arguments": args }),
+        )
+    }
+
+    fn text_of(v: &Value) -> String {
+        v["content"][0]["text"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn claim_tool_returns_the_evidence_closure_by_key_id_or_uri() {
+        let (_tmp, state) = fixture_vault();
+        for key in ["ck-aaa", "id-a", "ovp://claim/ck-aaa"] {
+            let v = call(&state, "claim", serde_json::json!({ "key": key })).unwrap();
+            let closure: Value = serde_json::from_str(&text_of(&v)).unwrap();
+            assert_eq!(closure["claim_key"], "ck-aaa", "lookup by `{key}`");
+            assert_eq!(closure["uri"], "ovp://claim/ck-aaa");
+            assert_eq!(closure["citations"][0]["quote"], "verbatim quote");
+            assert_eq!(closure["citations"][0]["resolved_line"], 12);
+        }
+        let err = call(&state, "claim", serde_json::json!({ "key": "nope" })).unwrap_err();
+        assert!(err.message.contains("No active claim"), "{}", err.message);
+    }
+
+    #[test]
+    fn ambiguous_claim_id_lists_the_candidate_keys() {
+        let records = vec![record("ck-one", "dup", "c1"), record("ck-two", "dup", "c2")];
+        let err = find_record(&records, "dup").unwrap_err();
+        assert!(err.message.contains("ambiguous"), "{}", err.message);
+        assert!(err.message.contains("ck-one") && err.message.contains("ck-two"));
+    }
+
+    #[test]
+    fn theme_page_tool_lists_and_fetches_by_label_or_id() {
+        let (_tmp, state) = fixture_vault();
+        // Listing.
+        let v = call(&state, "theme_page", serde_json::json!({})).unwrap();
+        let listing: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        assert_eq!(listing[0]["label"], "Agent memory");
+        assert_eq!(listing[0]["uri"], "ovp://theme-page/0");
+        // By label and by t000 — the page ships with its claims closure.
+        for theme in ["Agent memory", "t000", "0"] {
+            let v = call(&state, "theme_page", serde_json::json!({ "theme": theme })).unwrap();
+            let out: Value = serde_json::from_str(&text_of(&v)).unwrap();
+            assert_eq!(out["page"]["label"], "Agent memory", "lookup by `{theme}`");
+            assert_eq!(out["claims"]["ck-aaa"]["claim_id"], "id-a");
+            assert_eq!(out["claims"]["ck-bbb"]["claim_id"], "id-b");
+        }
+        let err = call(
+            &state,
+            "theme_page",
+            serde_json::json!({ "theme": "Ghost" }),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("No topic page"), "{}", err.message);
+    }
+
+    #[test]
+    fn theme_page_uris_from_the_listing_are_dereferenceable() {
+        // codex P2: every URI a tool emits must resolve via resources/read.
+        let (_tmp, state) = fixture_vault();
+        let v = call(&state, "theme_page", serde_json::json!({})).unwrap();
+        let listing: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        let uri = listing[0]["uri"].as_str().unwrap().to_string();
+        assert_eq!(uri, "ovp://theme-page/0");
+        let read = dispatch(&state, "resources/read", &serde_json::json!({ "uri": uri })).unwrap();
+        let payload: Value =
+            serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["page"]["label"], "Agent memory");
+    }
+
+    #[test]
+    fn dynamic_uris_are_advertised_as_templates_not_fake_resources() {
+        let (_tmp, state) = fixture_vault();
+        let listed = dispatch(&state, "resources/list", &Value::Null).unwrap();
+        for r in listed["resources"].as_array().unwrap() {
+            let uri = r["uri"].as_str().unwrap();
+            assert!(
+                !uri.contains('<') && !uri.contains('{'),
+                "concrete resource list must not carry placeholders: {uri}"
+            );
+        }
+        let templates = dispatch(&state, "resources/templates/list", &Value::Null).unwrap();
+        let uris: Vec<&str> = templates["resourceTemplates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["uriTemplate"].as_str().unwrap())
+            .collect();
+        assert!(uris.contains(&"ovp://claim/{claim_key}"), "{uris:?}");
+        assert!(
+            uris.contains(&"ovp://theme-page/{community_id}"),
+            "{uris:?}"
+        );
+    }
+
+    #[test]
+    fn claim_resource_reads_by_stable_uri() {
+        let (_tmp, state) = fixture_vault();
+        let v = dispatch(
+            &state,
+            "resources/read",
+            &serde_json::json!({ "uri": "ovp://claim/ck-bbb" }),
+        )
+        .unwrap();
+        let text = v["contents"][0]["text"].as_str().unwrap();
+        let closure: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(closure["claim_id"], "id-b");
     }
 }

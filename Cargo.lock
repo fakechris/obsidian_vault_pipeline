@@ -2887,10 +2887,12 @@ dependencies = [
 name = "ovp-mcp"
 version = "2.0.1"
 dependencies = [
+ "ovp-api-projection",
  "ovp-domain",
  "ovp-index",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

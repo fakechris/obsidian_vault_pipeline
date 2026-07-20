@@ -9,5 +9,9 @@ authors.workspace = true
 [dependencies]
 ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
+ovp-api-projection = { path = "../ovp-api-projection" }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -10,6 +10,7 @@ import type {
   SettingsPayload,
   SourceDetail,
   ThemeCount,
+  ThemePagesResponse,
 } from './types';
 
 /** Static-publish mode: the SPA reads snapshotted `<base>/api/*.json` files
@@ -86,6 +87,26 @@ export function fetchClaim(id: string): Promise<ClaimDetail> {
 
 export function fetchFlow(): Promise<FlowData> {
   return fetchJson<FlowData>(STATIC_MODE ? `${API}/flow.json` : '/api/flow');
+}
+
+let themePagesCache: Promise<ThemePagesResponse> | null = null;
+export function fetchThemePages(): Promise<ThemePagesResponse> {
+  // Cache only the STATIC snapshot (immutable for the session). The live
+  // server's projection changes when `crystal-theme-pages` reruns, and a
+  // transient failure or empty first response must not freeze the panel
+  // until a full reload.
+  if (!STATIC_MODE) {
+    return fetchJson<ThemePagesResponse>('/api/theme-pages');
+  }
+  if (!themePagesCache) {
+    themePagesCache = fetchJson<ThemePagesResponse>(`${API}/theme-pages.json`);
+    // A transiently failed fetch must not pin a rejected promise for the
+    // whole session — drop it so the next mount retries.
+    themePagesCache.catch(() => {
+      themePagesCache = null;
+    });
+  }
+  return themePagesCache;
 }
 
 export function fetchFind(term: string): Promise<FindHit[]> {

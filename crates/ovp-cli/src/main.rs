@@ -443,10 +443,19 @@ enum Cmd {
         since_hours: Option<u64>,
     },
     /// PRODUCT — start the OVP MCP server (stdio JSON-RPC, synchronous).
-    /// Exposes OVP tools (find/search/status/doctor) and resources
-    /// (ovp://index, ovp://working-memory) to any MCP-compatible client.
+    /// Exposes OVP tools (find/search/claim/theme_page/status/doctor) and
+    /// resources (ovp://index, ovp://working-memory, ovp://claim/<key>,
+    /// ovp://source/<sha>) to any MCP-compatible client.
     /// Level 3+ integration surface — not a daily pipeline blocker.
     Mcp {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
+    /// PRODUCT — write the "when to consult the OVP vault" section into the
+    /// vault's CLAUDE.md and AGENTS.md (idempotent, marker-delimited; content
+    /// outside the markers is never touched), so MCP-capable agents actually
+    /// reach for the vault's tools.
+    McpGuidance {
         #[arg(long)]
         vault_root: PathBuf,
     },
@@ -1565,6 +1574,9 @@ fn main() -> ExitCode {
             since_hours,
         }),
         Cmd::Mcp { vault_root } => commands::mcp::run(commands::mcp::McpArgs { vault_root }),
+        Cmd::McpGuidance { vault_root } => {
+            commands::mcp_guidance::run(commands::mcp_guidance::McpGuidanceArgs { vault_root })
+        }
         Cmd::Serve {
             vault_root,
             port,

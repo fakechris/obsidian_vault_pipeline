@@ -79,6 +79,31 @@ export interface FlowData {
   flows: FlowLink[];
 }
 
+export interface ThemePageSection {
+  heading: string;
+  body: string;
+}
+
+export interface ThemePageData {
+  community_id: number;
+  label: string;
+  label_zh: string;
+  claim_count: number;
+  sections: ThemePageSection[];
+}
+
+export interface ThemePageClaimInfo {
+  claim_id: string;
+  claim: string;
+  strength?: string;
+  sources: string[];
+}
+
+export interface ThemePagesResponse {
+  pages: ThemePageData[];
+  claims: Record<string, ThemePageClaimInfo>;
+}
+
 /** /api/find and /api/search hit — a display line plus a kind-specific
  * stable id for entity links (source → sha256, pack → pack_dir,
  * claim → claim_id, run → run_id). */

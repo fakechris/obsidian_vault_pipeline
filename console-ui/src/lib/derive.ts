@@ -499,6 +499,38 @@ export function sourcesByCase(model: IndexModel): Map<string, SourceRow> {
   return out;
 }
 
+export type PageBodyToken =
+  | { kind: 'text'; text: string }
+  | { kind: 'cite'; key: string };
+
+/** Blank-line paragraphs with inline `[claim:<key>]` references tokenized for
+ * the grounded topic-page renderer. Malformed/unterminated markers stay text. */
+export function parsePageBody(body: string): PageBodyToken[][] {
+  if (!body) return [];
+  return body
+    .split(/\r?\n(?:[ \t]*\r?\n)+/)
+    .filter((paragraph) => paragraph.length > 0)
+    .map((paragraph) => {
+      const tokens: PageBodyToken[] = [];
+      const marker = /\[claim:([^\]]+)\]/g;
+      let cursor = 0;
+      for (const match of paragraph.matchAll(marker)) {
+        const index = match.index ?? 0;
+        if (index > cursor) {
+          tokens.push({ kind: 'text', text: paragraph.slice(cursor, index) });
+        }
+        // Same key semantics as the Rust extractor: `[claim: ck-b ]` is a
+        // valid citation, so the key must be trimmed before lookup.
+        tokens.push({ kind: 'cite', key: match[1].trim() });
+        cursor = index + match[0].length;
+      }
+      if (cursor < paragraph.length) {
+        tokens.push({ kind: 'text', text: paragraph.slice(cursor) });
+      }
+      return tokens;
+    });
+}
+
 export function countBy<T, K>(items: T[], key: (item: T) => K): Map<K, number> {
   const counts = new Map<K, number>();
   for (const item of items) {

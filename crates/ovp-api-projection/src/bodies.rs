@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ovp_domain::crystal::DurableRecord;
+use ovp_domain::crystal::theme_pages::ThemePagesFile;
 use ovp_domain::units::Unit;
 use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, PackRow, Query, SourceRow};
 use serde_json::{Value, json};
@@ -22,6 +23,50 @@ pub fn themes_body(records: &[DurableRecord]) -> Value {
         .map(|(theme, count)| json!({ "theme": theme, "count": count }))
         .collect();
     Value::Array(themes)
+}
+
+/// `/api/theme-pages` — the grounded topic pages plus a claim lookup for
+/// citation rendering (`[claim:<key>]` markers in section bodies resolve
+/// through `claims`). A page citing ANY claim key absent from `records` is
+/// dropped whole: the publisher feeds SCRUBBED public records, so a page
+/// touching a non-public claim never ships (a partial page would carry
+/// dangling citations); the live server feeds every active record, so
+/// nothing drops there.
+pub fn theme_pages_body(file: Option<&ThemePagesFile>, records: &[DurableRecord]) -> Value {
+    let by_key: HashMap<&str, &DurableRecord> =
+        records.iter().map(|r| (r.claim_key.as_str(), r)).collect();
+    let mut pages: Vec<Value> = Vec::new();
+    let mut claims = serde_json::Map::new();
+    for page in file.map(|f| f.pages.as_slice()).unwrap_or_default() {
+        let resolved: Option<Vec<&DurableRecord>> = page
+            .claim_keys
+            .iter()
+            .map(|k| by_key.get(k.as_str()).copied())
+            .collect();
+        let Some(resolved) = resolved else { continue };
+        for r in resolved {
+            claims.entry(r.claim_key.clone()).or_insert_with(|| {
+                json!({
+                    "claim_id": r.claim_id,
+                    "claim": r.claim,
+                    "strength": r.strength,
+                    "sources": r.source_cases,
+                })
+            });
+        }
+        pages.push(json!({
+            "community_id": page.community_id,
+            "label": page.label,
+            "label_zh": page.label_zh,
+            "claim_count": page.claim_keys.len(),
+            "sections": page
+                .sections
+                .iter()
+                .map(|s| json!({ "heading": s.heading, "body": s.body }))
+                .collect::<Vec<Value>>(),
+        }));
+    }
+    json!({ "pages": pages, "claims": claims })
 }
 
 /// `/api/flow` — the intake→reader→units→cards→crystal Sankey totals.
