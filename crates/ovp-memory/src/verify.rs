@@ -55,7 +55,7 @@ fn extract_citations(answer: &str) -> Vec<String> {
         };
         let candidate = after_start[..end].trim();
         if is_citation_candidate(candidate) {
-            out.insert(candidate.to_string());
+            out.insert(normalize_candidate(candidate));
         }
         rest = &after_start[end + 1..];
     }
@@ -76,8 +76,11 @@ pub fn citations_in_order(answer: &str) -> Vec<String> {
             break;
         };
         let candidate = after_start[..end].trim();
-        if is_citation_candidate(candidate) && seen.insert(candidate.to_string()) {
-            out.push(candidate.to_string());
+        if is_citation_candidate(candidate) {
+            let normalized = normalize_candidate(candidate);
+            if seen.insert(normalized.clone()) {
+                out.push(normalized);
+            }
         }
         rest = &after_start[end + 1..];
     }
@@ -86,10 +89,23 @@ pub fn citations_in_order(answer: &str) -> Vec<String> {
 
 fn is_citation_candidate(candidate: &str) -> bool {
     !candidate.is_empty()
-        && matches!(
-            candidate.split_once(':').map(|(prefix, _)| prefix),
-            Some("unit" | "card" | "claim")
-        )
+        && (candidate.starts_with("ck-")
+            || matches!(
+                candidate.split_once(':').map(|(prefix, _)| prefix),
+                Some("unit" | "card" | "claim")
+            ))
+}
+
+/// Canonical citation key for a bracket candidate. Models reliably shorten
+/// `[claim:ck-…]` to `[ck-…]` — the `ck-` ledger prefix is reserved and
+/// unambiguous, so a bare key normalizes to its `claim:` form instead of
+/// being dropped as a non-citation. Everything else passes through.
+fn normalize_candidate(candidate: &str) -> String {
+    if candidate.starts_with("ck-") {
+        format!("claim:{candidate}")
+    } else {
+        candidate.to_string()
+    }
 }
 
 /// The `<kind>:<id>` key an answer must use to cite this evidence item.
@@ -232,6 +248,33 @@ mod tests {
         assert_eq!(
             crate::verify::citations_in_order(answer),
             vec!["claim:b".to_string(), "unit:a".to_string()],
+        );
+    }
+
+    #[test]
+    fn bare_ck_keys_normalize_to_claim_citations() {
+        // Models reliably shorten `[claim:ck-…]` to `[ck-…]`; the reserved
+        // ck- prefix is unambiguous, so both forms verify identically.
+        let evidence = vec![EvidenceItem {
+            id: "ck-793a2f557d2be6f9".into(),
+            kind: EvidenceKind::Claim,
+            title: "durable claim".into(),
+            body: "Claim: governed forgetting is necessary.".into(),
+            quote: None,
+            path: None,
+        }];
+        let report = verify_answer(
+            "Forgetting is governed [ck-793a2f557d2be6f9], twice [claim:ck-793a2f557d2be6f9].",
+            &evidence,
+        );
+        assert_eq!(report.cited, 1, "both forms collapse to one citation");
+        assert_eq!(report.verified, 1);
+        assert!(report.missing.is_empty());
+        assert_eq!(
+            crate::verify::citations_in_order(
+                "[ck-793a2f557d2be6f9] then [claim:ck-793a2f557d2be6f9]"
+            ),
+            vec!["claim:ck-793a2f557d2be6f9".to_string()],
         );
     }
 

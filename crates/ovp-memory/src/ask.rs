@@ -15,7 +15,7 @@ use ovp_index::score::lexical_score;
 use ovp_llm::{ModelClient, ModelMessage, ModelRequest};
 use serde::{Deserialize, Serialize};
 
-use crate::verify::{verify_answer, VerificationReport};
+use crate::verify::{VerificationReport, verify_answer};
 
 pub struct AskArgs {
     pub question: String,
@@ -129,7 +129,9 @@ pub fn ask_with_optional_evidence(
 
     let system = "You are a knowledge assistant for OVP (Obsidian Vault Pipeline). \
         Answer questions using ONLY the provided claim/card/unit evidence context. \
-        Cite evidence ids in square brackets. \
+        Cite evidence with the FULL bracketed key exactly as shown in the context \
+        (e.g. [claim:ck-1a2b3c4d], [card:…], [unit:…]) — never shorten or drop the \
+        kind prefix. \
         If evidence is insufficient, say what is missing. Do not invent citations."
         .to_string();
 
@@ -144,7 +146,9 @@ pub fn ask_with_optional_evidence(
         messages: vec![ModelMessage::User { content: user_msg }],
         max_tokens: args.max_tokens,
         temperature: Some(0.4),
-        cache_namespace: Some("ask/v2".into()),
+        // v3: stable ck- claim citation keys + verbatim-full-key prompt rule
+        // (evolution candidate ask_citation_keys-v3).
+        cache_namespace: Some("ask/v3".into()),
     };
 
     let reply = client.call(&request).map_err(|e| format!("ask LLM: {e}"))?;
@@ -212,7 +216,13 @@ pub fn assemble_evidence(
             score,
             tier: 0,
             item: EvidenceItem {
-                id: claim.claim_id.clone(),
+                // The STABLE ledger key when the index carries it (claim_ids
+                // can collide across runs; an answer's [claim:…] citation
+                // must audit unambiguously), claim_id for older indexes.
+                id: claim
+                    .claim_key
+                    .clone()
+                    .unwrap_or_else(|| claim.claim_id.clone()),
                 kind: EvidenceKind::Claim,
                 title: format!("{status} claim{}", optional_theme_suffix(theme)),
                 body: format!(
@@ -449,13 +459,13 @@ fn write_unique_chat(dir: &Path, ts: &str, content: &str) -> Result<PathBuf, Str
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use ovp_index::evidence::{CardEvidenceRow, EvidenceModel, UnitEvidenceRow, EVIDENCE_SCHEMA};
+    use ovp_index::evidence::{CardEvidenceRow, EVIDENCE_SCHEMA, EvidenceModel, UnitEvidenceRow};
     use ovp_index::model::{
-        ClaimRow, ClaimStatus, IndexModel, OpsState, PackRow, Totals, INDEX_SCHEMA,
+        ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, OpsState, PackRow, Totals,
     };
     use ovp_llm::{CallError, ModelClient, ModelReply, ModelRequest, StopReason, Usage};
 
-    use crate::ask::{ask_with_evidence, assemble_evidence, AskArgs, EvidenceKind, EvidenceQuotas};
+    use crate::ask::{AskArgs, EvidenceKind, EvidenceQuotas, ask_with_evidence, assemble_evidence};
 
     struct CapturingClient {
         request: Arc<Mutex<Option<ModelRequest>>>,
@@ -497,13 +507,14 @@ mod tests {
             }],
             claims: vec![ClaimRow {
                 claim_id: "claim-memory-1".into(),
+                claim_key: None,
                 claim: "Agent memory should be treated as persistent state.".into(),
                 theme: Some("memory".into()),
                 status: ClaimStatus::Durable,
                 sources: vec!["40-Resources/Reader/memory".into()],
                 strength: Some("supported".into()),
                 run_id: Some("run-1".into()),
-                    lane: None,
+                lane: None,
             }],
             runs: vec![],
             ops: OpsState::default(),
@@ -564,22 +575,28 @@ mod tests {
 
         assert_eq!(result.context_hits, 3);
         assert_eq!(result.evidence.len(), 3);
-        assert!(result
-            .evidence
-            .iter()
-            .any(|item| item.kind == EvidenceKind::Claim && item.id == "claim-memory-1"));
-        assert!(result
-            .evidence
-            .iter()
-            .any(|item| item.kind == EvidenceKind::Card
-                && item.id == "card:40-Resources/Reader/memory:0"));
-        assert!(result
-            .evidence
-            .iter()
-            .any(|item| item.kind == EvidenceKind::Unit
-                && item.id == "unit:40-Resources/Reader/memory:u-001"));
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|item| item.kind == EvidenceKind::Claim && item.id == "claim-memory-1")
+        );
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|item| item.kind == EvidenceKind::Card
+                    && item.id == "card:40-Resources/Reader/memory:0")
+        );
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|item| item.kind == EvidenceKind::Unit
+                    && item.id == "unit:40-Resources/Reader/memory:u-001")
+        );
         let request = captured.lock().unwrap().clone().unwrap();
-        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v2"));
+        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v3"));
         let user = match &request.messages[0] {
             ovp_llm::ModelMessage::User { content } => content,
             ovp_llm::ModelMessage::Assistant { .. } => panic!("expected user message"),
@@ -631,10 +648,8 @@ mod tests {
 
     #[test]
     fn saving_two_chats_in_the_same_second_creates_two_files() {
-        let vault = std::env::temp_dir().join(format!(
-            "ovp-memory-chat-collision-{}",
-            std::process::id()
-        ));
+        let vault =
+            std::env::temp_dir().join(format!("ovp-memory-chat-collision-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&vault);
         std::fs::create_dir_all(&vault).unwrap();
 
@@ -710,9 +725,11 @@ mod tests {
             },
         );
 
-        assert!(items
-            .iter()
-            .any(|item| item.kind == EvidenceKind::Card && item.body.contains("长期状态")));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.kind == EvidenceKind::Card && item.body.contains("长期状态"))
+        );
         assert!(items.iter().any(|item| {
             item.kind == EvidenceKind::Unit
                 && item

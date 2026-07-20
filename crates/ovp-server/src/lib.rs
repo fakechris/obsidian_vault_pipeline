@@ -87,8 +87,7 @@ fn ask_guard(lookup: impl Fn(&str) -> Option<String>) -> Duration {
 /// Builds the LLM client for `POST /api/ask` on demand. Injected by the CLI,
 /// which owns the feature-gated live transport and the key check — the
 /// server itself stays transport-free. `None` = ask answers 503.
-pub type AskClientFactory =
-    Arc<dyn Fn() -> Result<Box<dyn ModelClient>, String> + Send + Sync>;
+pub type AskClientFactory = Arc<dyn Fn() -> Result<Box<dyn ModelClient>, String> + Send + Sync>;
 
 pub struct ServeConfig {
     pub vault_root: PathBuf,
@@ -228,8 +227,6 @@ fn markdown_basenames(dir: &Path) -> std::collections::HashSet<String> {
     walk(dir, &mut out);
     out
 }
-
-
 
 struct AppState {
     vault_root: PathBuf,
@@ -411,7 +408,9 @@ impl AppState {
     /// reloads the instant one appears.
     fn current_evidence(&self) -> Option<EvidenceModel> {
         let path = self.evidence_path();
-        freshen(&self.evidence, &path, || read_evidence(&self.vault_root).ok())
+        freshen(&self.evidence, &path, || {
+            read_evidence(&self.vault_root).ok()
+        })
     }
 
     /// Force-reload both caches from disk regardless of mtime. `/api/refresh`
@@ -670,8 +669,7 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
-    let vocabulary =
-        ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
+    let vocabulary = ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
     let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
         std::collections::BTreeMap::new();
     // Seed from the vocabulary so zero-count community/llm entries still
@@ -758,11 +756,17 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     };
     let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("");
     let alias = parsed.get("alias").and_then(|v| v.as_str()).unwrap_or("");
-    let canonical = parsed.get("canonical").and_then(|v| v.as_str()).unwrap_or("");
+    let canonical = parsed
+        .get("canonical")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if alias.is_empty() || canonical.is_empty() {
         return json_response(400, r#"{"error":"alias and canonical are required"}"#);
     }
-    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
+    let _write = state
+        .tags_write_lock
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let mut decisions = match ovp_domain::tags::TagDecisions::load(&state.vault_root) {
         Ok(d) => d,
         Err(e) => return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
@@ -839,7 +843,10 @@ fn handle_source_tags_post(
     if tags.is_empty() {
         return json_response(400, r#"{"error":"tags must be a non-empty string array"}"#);
     }
-    let _write = state.tags_write_lock.lock().unwrap_or_else(|p| p.into_inner());
+    let _write = state
+        .tags_write_lock
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let Some(model) = state.current_model() else {
         return json_response(503, r#"{"error":"index not available"}"#);
     };
@@ -873,7 +880,13 @@ fn handle_source_tags_post(
     let text = match std::fs::read_to_string(&note_path) {
         Ok(t) => t,
         Err(e) => {
-            return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("reading {rel}: {e}"))));
+            return json_response(
+                500,
+                &format!(
+                    r#"{{"error":{}}}"#,
+                    json_str(&format!("reading {rel}: {e}"))
+                ),
+            );
         }
     };
     match ovp_domain::tags::add_tags_to_frontmatter(&text, &tags) {
@@ -881,7 +894,13 @@ fn handle_source_tags_post(
             // Atomic replace with a unique temp sibling: canonical USER data,
             // not rebuildable — a crash mid-write must never truncate the note.
             if let Err(e) = ovp_domain::tags::write_atomic(&note_path, &updated) {
-                return json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&format!("writing {rel}: {e}"))));
+                return json_response(
+                    500,
+                    &format!(
+                        r#"{{"error":{}}}"#,
+                        json_str(&format!("writing {rel}: {e}"))
+                    ),
+                );
             }
             // Editing a QUEUED note changes its content hash → the rebuilt
             // index keys it under a NEW sha. Report the row now living at
@@ -896,7 +915,10 @@ fn handle_source_tags_post(
                         .unwrap_or_else(|| sha.to_string());
                     json_response(
                         200,
-                        &format!(r#"{{"ok":true,"changed":true,"sha":{}}}"#, json_str(&new_sha)),
+                        &format!(
+                            r#"{{"ok":true,"changed":true,"sha":{}}}"#,
+                            json_str(&new_sha)
+                        ),
                     )
                 }
                 Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),
@@ -1227,7 +1249,11 @@ fn handle_entities_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let Some(model) = state.current_model() else {
         return json_response(503, r#"{"error":"index not available"}"#);
     };
-    json_stamped(200, &bodies::entities_body(&model).to_string(), Some(&model))
+    json_stamped(
+        200,
+        &bodies::entities_body(&model).to_string(),
+        Some(&model),
+    )
 }
 
 /// `GET /api/entity/:id` — one entity's mentioning sources + citing claims.
@@ -1292,15 +1318,22 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
     // Read the doc via the shared reader (needs the source's rel_path). The
     // live server ships the full markdown; the publisher passes `None` for a
     // lite page. Missing sha → None doc → 404 from the builder below.
-    let doc = model.sources.iter().find(|s| s.sha256 == sha).map(|source| {
-        let (markdown, truncated, error) =
-            readers::read_source_doc(&state.vault_root, &state.layout, source.rel_path.as_deref());
-        bodies::SourceDoc {
-            markdown,
-            truncated,
-            error,
-        }
-    });
+    let doc = model
+        .sources
+        .iter()
+        .find(|s| s.sha256 == sha)
+        .map(|source| {
+            let (markdown, truncated, error) = readers::read_source_doc(
+                &state.vault_root,
+                &state.layout,
+                source.rel_path.as_deref(),
+            );
+            bodies::SourceDoc {
+                markdown,
+                truncated,
+                error,
+            }
+        });
 
     let evidence = state.current_evidence();
     match bodies::source_body(&model, evidence.as_ref(), &sha, doc) {
@@ -1454,7 +1487,10 @@ fn guard_json_same_origin(headers: &AskHeaders) -> Option<Response<std::io::Curs
     if let Some(origin) = headers.origin.as_deref()
         && !is_loopback_origin(origin)
     {
-        return Some(json_response(403, r#"{"error":"cross-origin write rejected"}"#));
+        return Some(json_response(
+            403,
+            r#"{"error":"cross-origin write rejected"}"#,
+        ));
     }
     None
 }
@@ -1593,7 +1629,7 @@ fn ask_response_json(model: &IndexModel, result: &AskResult) -> serde_json::Valu
                     "kind": kind_str(item.kind),
                     "title": item.title,
                     "snippet": citation_snippet(item),
-                    "link_target": citation_link(item, &pack_sha),
+                    "link_target": citation_link(item, &pack_sha, model),
                     "verified": verified,
                 }),
                 // Cited but never supplied as evidence — surfaced so the UI
@@ -1660,9 +1696,34 @@ fn citation_snippet(item: &EvidenceItem) -> String {
 
 /// Portal deep link for a citation (or None — the sha-guard: legacy packs
 /// without a source sha must not produce a dead `/library/...` link).
-fn citation_link(item: &EvidenceItem, pack_sha: &HashMap<&str, &str>) -> Option<String> {
+fn citation_link(
+    item: &EvidenceItem,
+    pack_sha: &HashMap<&str, &str>,
+    model: &IndexModel,
+) -> Option<String> {
     match item.kind {
-        EvidenceKind::Claim => Some(format!("/knowledge#{}", item.id)),
+        EvidenceKind::Claim => {
+            // Claim evidence ids are now the STABLE ck- ledger key, but the
+            // portal's claim-card anchors are keyed by claim_id — resolve the
+            // key back through the model so the link lands on the card
+            // instead of an unknown anchor (codex P1). Older indexes (no
+            // claim_key) pass the id through unchanged. When the RESOLVED
+            // claim_id is shared by several rows the anchor is ambiguous and
+            // could open the wrong claim — no link then (round-3 P1; the
+            // citation stays visible and auditable, just unclickable — same
+            // degradation the theme-page chips use).
+            let anchor = model
+                .claims
+                .iter()
+                .find(|c| c.claim_key.as_deref() == Some(item.id.as_str()))
+                .map(|c| c.claim_id.as_str())
+                .unwrap_or(item.id.as_str());
+            let occurrences = model.claims.iter().filter(|c| c.claim_id == anchor).count();
+            if occurrences > 1 {
+                return None;
+            }
+            Some(format!("/knowledge#{anchor}"))
+        }
         EvidenceKind::Card | EvidenceKind::Unit => {
             let pack_dir = item.path.as_deref()?.strip_suffix("/reader.md")?;
             let sha = pack_sha.get(pack_dir)?;
@@ -1841,12 +1902,13 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
     }
 
     if is_client_route(relative)
-        && let Some(body) = read_app_file(state, "index.html") {
-            return Resolved::File {
-                body,
-                content_type: "text/html; charset=utf-8",
-            };
-        }
+        && let Some(body) = read_app_file(state, "index.html")
+    {
+        return Resolved::File {
+            body,
+            content_type: "text/html; charset=utf-8",
+        };
+    }
 
     Resolved::NotFound
 }
@@ -2031,7 +2093,9 @@ mod tests {
         assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1"}"#)); // no points
         assert!(!terrain_shape_ok(r#"{"points":[]}"#)); // no schema
         assert!(!terrain_shape_ok(r#"{"schema":"other","points":[]}"#)); // wrong schema
-        assert!(!terrain_shape_ok(r#"{"schema":"ovp.crystal.terrain/v1","points":{}}"#)); // points not array
+        assert!(!terrain_shape_ok(
+            r#"{"schema":"ovp.crystal.terrain/v1","points":{}}"#
+        )); // points not array
         assert!(!terrain_shape_ok("{truncated")); // unparseable
     }
 
@@ -2057,15 +2121,12 @@ mod tests {
             ask_timeout: Duration::from_secs(60),
             ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
             live_queued: RwLock::new(LiveQueued::default()),
-        tags_write_lock: std::sync::Mutex::new(()),
+            tags_write_lock: std::sync::Mutex::new(()),
         }
     }
 
     /// Read a response header value (test helper).
-    fn header_value(
-        resp: &Response<std::io::Cursor<Vec<u8>>>,
-        name: &str,
-    ) -> String {
+    fn header_value(resp: &Response<std::io::Cursor<Vec<u8>>>, name: &str) -> String {
         resp.headers()
             .iter()
             .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
@@ -2073,7 +2134,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-        /// A ModelClient that replies with a fixed answer (or blocks) — the
+    /// A ModelClient that replies with a fixed answer (or blocks) — the
     /// /api/ask tests never touch a real transport.
     struct ScriptedClient {
         text: String,
@@ -2310,6 +2371,7 @@ mod tests {
             }],
             claims: vec![ClaimRow {
                 claim_id: "c01".into(),
+                claim_key: None,
                 claim: "Filesystem works as memory.".into(),
                 theme: Some("memory".into()),
                 status: ClaimStatus::Durable,
@@ -2722,13 +2784,19 @@ mod tests {
         // P1 provenance: the instant, its producer, and a non-negative age.
         assert_eq!(v["built_at"], "2026-07-09T00:00:00Z");
         assert_eq!(v["run_id"], "daily-2026-07-09");
-        assert!(v["age_seconds"].as_i64().unwrap() >= 0, "age is present and non-negative");
+        assert!(
+            v["age_seconds"].as_i64().unwrap() >= 0,
+            "age is present and non-negative"
+        );
         assert_eq!(v["counts"]["sources"], 1);
         assert_eq!(v["counts"]["packs"], 1);
         assert!(v["counts"]["claims"].is_u64());
         assert_eq!(v["llm_configured"], false);
         assert_eq!(v["ask_limits"]["timeout_secs"], st.ask_timeout.as_secs());
-        assert_eq!(v["ask_limits"]["max_concurrent"], DEFAULT_MAX_CONCURRENT_ASKS);
+        assert_eq!(
+            v["ask_limits"]["max_concurrent"],
+            DEFAULT_MAX_CONCURRENT_ASKS
+        );
         assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
 
         // With an ask client the flag flips.
@@ -2822,7 +2890,10 @@ mod tests {
         st.live_queued.write().unwrap().computed_at = None;
 
         let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
-        assert_eq!(v["queued_live"], 2, "live count ticked down as 01-Raw drained");
+        assert_eq!(
+            v["queued_live"], 2,
+            "live count ticked down as 01-Raw drained"
+        );
         assert_eq!(
             v["queued_at_build"], 4,
             "projection stays frozen — the whole point of the live overlay"
@@ -2831,7 +2902,10 @@ mod tests {
         // /api/model carries the same live overlay while totals.queued stays 4.
         let m = body_json(dispatch(&st, Method::Get, "/api/model", ""));
         assert_eq!(m["queued_live"], 2);
-        assert_eq!(m["totals"]["queued"], 4, "projection value untouched for other readers");
+        assert_eq!(
+            m["totals"]["queued"], 4,
+            "projection value untouched for other readers"
+        );
         assert_eq!(m["queued_at_build"], 4);
 
         let _ = std::fs::remove_dir_all(&root);
@@ -2900,12 +2974,18 @@ mod tests {
         }
         let mut baked = index_dated("2026-07-12");
         baked.sources = sources;
-        baked.totals = Totals { queued: 2, ..Default::default() };
+        baked.totals = Totals {
+            queued: 2,
+            ..Default::default()
+        };
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault, None);
         let live = st.live_queued_count(st.current_model().as_ref());
-        assert_eq!(live, 2, "the 3 departed Processed rows must NOT be subtracted");
+        assert_eq!(
+            live, 2,
+            "the 3 departed Processed rows must NOT be subtracted"
+        );
     }
 
     #[test]
@@ -2921,7 +3001,11 @@ mod tests {
         for f in ["q0.md", "q1.md", "q2.md", "blocked.md", "dup.md", "proc.md"] {
             std::fs::write(raw.join(f), "body\n").unwrap();
         }
-        assert_eq!(markdown_basenames(&raw).len(), 6, "6 files physically present");
+        assert_eq!(
+            markdown_basenames(&raw).len(),
+            6,
+            "6 files physically present"
+        );
 
         // Projection mirroring what build_sources would classify for these
         // files: 3 Queued, 1 Blocked, 1 Duplicate — all rel_path under 01-Raw.
@@ -2940,12 +3024,18 @@ mod tests {
             .count();
         let mut baked = index_dated("2026-07-12");
         baked.sources = sources;
-        baked.totals = Totals { queued, ..Default::default() };
+        baked.totals = Totals {
+            queued,
+            ..Default::default()
+        };
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault.clone(), None);
         let live = st.live_queued_count(st.current_model().as_ref());
-        assert_eq!(live, 3, "6 files − (blocked + dup + processed-in-raw) = 3 queued");
+        assert_eq!(
+            live, 3,
+            "6 files − (blocked + dup + processed-in-raw) = 3 queued"
+        );
         assert_eq!(
             live,
             st.current_model().unwrap().totals.queued,
@@ -2980,7 +3070,10 @@ mod tests {
             raw_source("h1", SourceStatus::Queued, "q1.md"),
             raw_source("hb", SourceStatus::Blocked, "blocked.md"),
         ];
-        baked.totals = Totals { queued: 2, ..Default::default() };
+        baked.totals = Totals {
+            queued: 2,
+            ..Default::default()
+        };
         ovp_index::write_index(&vault, &baked).unwrap();
         let st = state(vault.clone(), None);
 
@@ -3007,20 +3100,36 @@ mod tests {
 
     #[test]
     fn model_endpoint_carries_built_at_run_id_and_age() {
-        let vault = portal_vault("model-provenance", "50-Inbox/03-Processed/good.md", "body\n");
+        let vault = portal_vault(
+            "model-provenance",
+            "50-Inbox/03-Processed/good.md",
+            "body\n",
+        );
         let st = state(vault.clone(), None);
 
         let resp = dispatch(&st, Method::Get, "/api/model", "");
         assert_eq!(resp.status_code(), 200);
         // Provenance headers pair the body with the build that produced it.
-        assert_eq!(header_of(&resp, "X-OVP-Built-At").as_deref(), Some("2026-07-09T00:00:00Z"));
-        assert_eq!(header_of(&resp, "X-OVP-Run-Id").as_deref(), Some("daily-2026-07-09"));
-        assert!(header_of(&resp, "X-OVP-Age-Seconds").is_some(), "age header present");
+        assert_eq!(
+            header_of(&resp, "X-OVP-Built-At").as_deref(),
+            Some("2026-07-09T00:00:00Z")
+        );
+        assert_eq!(
+            header_of(&resp, "X-OVP-Run-Id").as_deref(),
+            Some("daily-2026-07-09")
+        );
+        assert!(
+            header_of(&resp, "X-OVP-Age-Seconds").is_some(),
+            "age header present"
+        );
 
         let v = body_json(resp);
         assert_eq!(v["built_at"], "2026-07-09T00:00:00Z");
         assert_eq!(v["run_id"], "daily-2026-07-09");
-        assert!(v["age_seconds"].as_i64().unwrap() >= 0, "server-computed age spliced in");
+        assert!(
+            v["age_seconds"].as_i64().unwrap() >= 0,
+            "server-computed age spliced in"
+        );
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
@@ -3039,14 +3148,20 @@ mod tests {
         let resp = dispatch(&st, Method::Get, "/api/claim/a", "");
         assert_eq!(resp.status_code(), 200);
         // Response is paired with the projection it resolved against.
-        assert_eq!(header_of(&resp, "X-OVP-Built-At").as_deref(), Some("2026-07-09T00:00:00Z"));
+        assert_eq!(
+            header_of(&resp, "X-OVP-Built-At").as_deref(),
+            Some("2026-07-09T00:00:00Z")
+        );
         let v = body_json(resp);
         assert_eq!(v["claim_id"], "a");
         let cit = &v["citations"][0];
         assert_eq!(cit["case_id"], "good");
         // The fresh source's metadata resolved from the SAME-freshness index —
         // NOT a dangling citation (case `good` → sha aaaa1111 via the pack).
-        assert_eq!(cit["source_sha256"], "aaaa1111", "source sha resolved from the index");
+        assert_eq!(
+            cit["source_sha256"], "aaaa1111",
+            "source sha resolved from the index"
+        );
         assert_eq!(cit["source_title"], "Good Article", "source title resolved");
         assert_eq!(cit["source_url"], "https://example.com/good");
 
@@ -3068,11 +3183,17 @@ mod tests {
 
         let html = dispatch(&st, Method::Get, "/", "");
         let hv = header_value(&html, "Cache-Control");
-        assert!(hv.contains("no-cache"), "index.html must not be cached, got {hv:?}");
+        assert!(
+            hv.contains("no-cache"),
+            "index.html must not be cached, got {hv:?}"
+        );
 
         let js = dispatch(&st, Method::Get, "/assets/index-abc123.js", "");
         let jv = header_value(&js, "Cache-Control");
-        assert!(jv.contains("immutable"), "hashed asset should be immutable, got {jv:?}");
+        assert!(
+            jv.contains("immutable"),
+            "hashed asset should be immutable, got {jv:?}"
+        );
     }
 
     #[test]
@@ -3095,12 +3216,18 @@ mod tests {
         }
 
         // Non-API client routes still reach the SPA shell…
-        assert_eq!(dispatch(&st, Method::Get, "/library", "").status_code(), 200);
+        assert_eq!(
+            dispatch(&st, Method::Get, "/library", "").status_code(),
+            200
+        );
         // …exact API routes keep working even with a query string…
         let resp = dispatch(&st, Method::Get, "/api/refresh?x=1", "");
         assert_eq!(resp.status_code(), 200);
         // …and non-GET stays 405.
-        assert_eq!(dispatch(&st, Method::Post, "/api/model", "").status_code(), 405);
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/model", "").status_code(),
+            405
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3277,7 +3404,12 @@ mod tests {
 
         // Not JSON / wrong shape / blank question — all 400 with a JSON
         // error, and all checked BEFORE the llm-config 503.
-        for body in ["not json", "{}", r#"{"question":"   "}"#, r#"{"question":7}"#] {
+        for body in [
+            "not json",
+            "{}",
+            r#"{"question":"   "}"#,
+            r#"{"question":7}"#,
+        ] {
             let resp = ask(&st, body);
             assert_eq!(resp.status_code(), 400, "body {body}");
             let v = body_json(resp);
@@ -3289,10 +3421,7 @@ mod tests {
             r#"{{"question":"{}"}}"#,
             "x".repeat(MAX_POST_BODY_BYTES + 10)
         );
-        assert_eq!(
-            ask(&st, &huge).status_code(),
-            400
-        );
+        assert_eq!(ask(&st, &huge).status_code(), 400);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
@@ -3336,7 +3465,12 @@ mod tests {
 
         // The chat was saved like `ovp2 ask --save` and is listed + readable.
         let chat = v["chat"].as_str().expect("chat name").to_string();
-        assert!(vault.join(".ovp/chats").join(format!("{chat}.md")).is_file());
+        assert!(
+            vault
+                .join(".ovp/chats")
+                .join(format!("{chat}.md"))
+                .is_file()
+        );
 
         let list = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
         let rows = list.as_array().unwrap();
@@ -3479,11 +3613,7 @@ mod tests {
         let state = Arc::new(st);
 
         let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
-        let port = server
-            .server_addr()
-            .to_ip()
-            .expect("ip listener")
-            .port();
+        let port = server.server_addr().to_ip().expect("ip listener").port();
         {
             let server = Arc::clone(&server);
             let state = Arc::clone(&state);
@@ -3834,7 +3964,10 @@ mod tests {
         // /api/model overlays the live sidecar over the baked "running".
         let live = st.model_with_live_last_run().unwrap();
         let lr = live.ops.last_run.expect("live last_run present");
-        assert_eq!(lr.status, "completed", "must reflect the finalized sidecar, not baked 'running'");
+        assert_eq!(
+            lr.status, "completed",
+            "must reflect the finalized sidecar, not baked 'running'"
+        );
         assert_eq!(lr.processed, Some(8));
 
         // /api/settings reads the same live value.
@@ -3875,7 +4008,10 @@ mod tests {
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let live = st.model_with_live_last_run().unwrap();
-        assert!(live.ops.last_run.is_none(), "no sidecar → live overlay is None, not the stale baked snapshot");
+        assert!(
+            live.ops.last_run.is_none(),
+            "no sidecar → live overlay is None, not the stale baked snapshot"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3921,10 +4057,16 @@ mod tests {
         );
         assert_eq!(resp.status_code(), 200);
         assert!(vault.join(".ovp/tags/decisions.toml").exists());
-        assert!(!vault.join(".ovp/tags/aliases.toml").exists(), "operator file untouched");
+        assert!(
+            !vault.join(".ovp/tags/aliases.toml").exists(),
+            "operator file untouched"
+        );
         let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
         assert_eq!(v["tags"][0]["tag"], "agent", "merge applied on rebuild");
-        assert!(v["proposals"].as_array().unwrap().is_empty(), "decided card retired");
+        assert!(
+            v["proposals"].as_array().unwrap().is_empty(),
+            "decided card retired"
+        );
 
         // POST reject: the card retires IMMEDIATELY (proposals.json is only
         // regenerated by tags-suggest, so /api/tags must filter decisions).
@@ -3941,7 +4083,10 @@ mod tests {
         );
         assert_eq!(resp.status_code(), 200);
         let v = body_json(dispatch(&st, Method::Get, "/api/tags", ""));
-        assert!(v["proposals"].as_array().unwrap().is_empty(), "rejected card retired");
+        assert!(
+            v["proposals"].as_array().unwrap().is_empty(),
+            "rejected card retired"
+        );
 
         // POST source tags: the one sanctioned frontmatter write. Editing a
         // QUEUED note changes its content hash — the response must carry the
@@ -3968,8 +4113,13 @@ mod tests {
             400
         );
         assert_eq!(
-            dispatch(&st, Method::Post, "/api/source/nope/tags", r#"{"tags":["x"]}"#)
-                .status_code(),
+            dispatch(
+                &st,
+                Method::Post,
+                "/api/source/nope/tags",
+                r#"{"tags":["x"]}"#
+            )
+            .status_code(),
             404
         );
 

@@ -14,8 +14,16 @@ use ovp_index::{IndexModel, Query, QueryKind, read_index, run_query};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// LLM client factory for the `ask` tool — same contract as the server's
+/// `ServeConfig::ask_client`: `None` means no live LLM is configured and
+/// `ask` answers with a clear configuration error instead of failing
+/// silently. The factory builds a fresh (cassette-recording) client per ask.
+pub type AskClientFactory =
+    std::sync::Arc<dyn Fn() -> Result<Box<dyn ovp_llm::ModelClient>, String> + Send + Sync>;
+
 pub struct McpConfig {
     pub vault_root: PathBuf,
+    pub ask_client: Option<AskClientFactory>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +54,7 @@ struct RpcError {
 struct McpState {
     vault_root: PathBuf,
     layout: VaultLayout,
+    ask_client: Option<AskClientFactory>,
 }
 
 impl McpState {
@@ -143,6 +152,7 @@ pub fn run_mcp(config: McpConfig) -> Result<(), String> {
     let state = McpState {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
+        ask_client: config.ask_client,
     };
 
     let stdin = io::stdin();
@@ -279,6 +289,17 @@ fn handle_tools_list() -> Result<Value, RpcError> {
                 }
             },
             {
+                "name": "ask",
+                "description": "Ask a question answered FROM THE VAULT'S EVIDENCE (active durable claims, cards, verbatim units). The answer carries inline citations and a deterministic report of how many citation IDs resolve against the supplied evidence (ID resolution — it does not prove every sentence is cited). Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "The question to answer from vault evidence" }
+                    },
+                    "required": ["question"]
+                }
+            },
+            {
                 "name": "claim",
                 "description": "Read one durable claim's FULL evidence closure: claim text, gate verdicts, and every citation resolved to its verbatim quote, line, and source (title/sha/url). Accepts a claim_key (ck-…), a claim_id, or an ovp://claim/<key> URI. This is how an answer's [claim:…] citation is audited.",
                 "inputSchema": {
@@ -323,6 +344,7 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
     match name {
         "find" => tool_find(state, &arguments),
         "search" => tool_search(state, &arguments),
+        "ask" => tool_ask(state, &arguments),
         "claim" => tool_claim(state, &arguments),
         "theme_page" => tool_theme_page(state, &arguments),
         "status" => tool_status(state),
@@ -332,6 +354,112 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
             message: format!("Unknown tool: {name}"),
         }),
     }
+}
+
+fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let question = args
+        .get("question")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RpcError {
+            code: -32602,
+            message: "`question` is required".into(),
+        })?;
+    // Explicit configuration error, never a silent degrade: an agent must be
+    // able to tell "no LLM wired" from "the vault has no answer".
+    let Some(factory) = &state.ask_client else {
+        return Err(RpcError {
+            code: -32000,
+            message: "ask is not configured — run ovp2 built with `--features anthropic` \
+                      and set ANTHROPIC_API_KEY in the MCP server's environment"
+                .into(),
+        });
+    };
+    let mut model = state.load_model().ok_or_else(|| RpcError {
+        code: -32000,
+        message: "Index not available — run `ovp2 index` first".into(),
+    })?;
+    // This tool promises answers grounded in DURABLE claims — caveated,
+    // superseded, and retracted rows must not be retrievable here (codex
+    // P1; they also could not be audited by the active-record `claim` tool).
+    model
+        .claims
+        .retain(|c| c.status == ovp_index::ClaimStatus::Durable);
+    // Missing evidence.json = a fresh/claims-only vault (fine, noted);
+    // a CORRUPT sidecar is surfaced, never silently downgraded to
+    // claims-only while the report implies full evidence (codex P2).
+    // Existence is checked BEFORE the read so a read failure on a present
+    // file is always classified as corruption, not misfiled as missing.
+    let (evidence, degraded_note) = if !ovp_index::evidence::evidence_path(&state.vault_root)
+        .exists()
+    {
+        (
+            None,
+            Some("note: no evidence sidecar — answer drawn from claims only (no cards/units)"),
+        )
+    } else {
+        match ovp_index::read_evidence(&state.vault_root) {
+            Ok(e) => (Some(e), None),
+            Err(e) => {
+                return Err(RpcError {
+                    code: -32000,
+                    message: format!(
+                        "evidence sidecar unreadable ({e}) — rebuild with `ovp2 index` before asking"
+                    ),
+                });
+            }
+        }
+    };
+    let mut client = factory().map_err(|e| RpcError {
+        code: -32000,
+        message: format!("ask client configuration invalid: {e}"),
+    })?;
+    let ask_args = ovp_memory::ask::AskArgs {
+        question: question.to_string(),
+        verify_citations: true,
+        save_chat: false,
+        ..Default::default()
+    };
+    let result = ovp_memory::ask::ask_with_optional_evidence(
+        &model,
+        evidence.as_ref(),
+        client.as_mut(),
+        &ask_args,
+        &state.vault_root,
+    )
+    .map_err(|e| RpcError {
+        code: -32000,
+        message: format!("ask failed: {e}"),
+    })?;
+
+    // Answer first, then the deterministic verification report — the agent
+    // sees HOW grounded the answer is, not just the prose. The report checks
+    // that citation IDs resolve against the supplied evidence; it does NOT
+    // prove every sentence is cited (that gate exists only for theme pages).
+    let mut text = result.answer.trim().to_string();
+    if let Some(v) = &result.verification {
+        text.push_str(&format!(
+            "\n\n---\nverification (citation-ID resolution, not per-sentence): \
+             {} citation(s), {} resolved against supplied evidence",
+            v.cited, v.verified
+        ));
+        if !v.missing.is_empty() {
+            text.push_str(&format!("; UNRESOLVED: {}", v.missing.join(", ")));
+        }
+        if !v.warnings.is_empty() {
+            text.push_str(&format!("; warnings: {}", v.warnings.join(", ")));
+        }
+        text.push_str(
+            "\naudit any [claim:<key>] citation with the `claim` tool \
+             (accepts ck- claim keys, claim ids, and ovp://claim/ URIs)",
+        );
+    }
+    if let Some(note) = degraded_note {
+        text.push_str("\n");
+        text.push_str(note);
+    }
+    Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
 
 fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
@@ -750,6 +878,7 @@ mod tests {
         let state = McpState {
             vault_root: root,
             layout,
+            ask_client: None,
         };
         (tmp, state)
     }
@@ -850,6 +979,33 @@ mod tests {
         assert!(
             uris.contains(&"ovp://theme-page/{community_id}"),
             "{uris:?}"
+        );
+    }
+
+    #[test]
+    fn ask_without_a_client_is_a_clear_configuration_error() {
+        let (_tmp, state) = fixture_vault();
+        let err = call(&state, "ask", serde_json::json!({ "question": "q" })).unwrap_err();
+        assert!(
+            err.message.contains("ask is not configured"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("ANTHROPIC_API_KEY"), "{}", err.message);
+    }
+
+    #[test]
+    fn ask_with_a_client_reaches_past_the_config_gate() {
+        let (_tmp, mut state) = fixture_vault();
+        // A configured factory moves the failure past "not configured" — the
+        // fixture vault has no index, so the next honest error is index
+        // availability (the full pipeline is covered in ovp-memory).
+        state.ask_client = Some(std::sync::Arc::new(|| Err("never built".into())));
+        let err = call(&state, "ask", serde_json::json!({ "question": "q" })).unwrap_err();
+        assert!(
+            err.message.contains("Index not available"),
+            "{}",
+            err.message
         );
     }
 

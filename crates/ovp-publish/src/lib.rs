@@ -555,6 +555,7 @@ mod tests {
             claims: vec![
                 ClaimRow {
                     claim_id: "id-1".into(),
+                    claim_key: Some("ck-abc123".into()),
                     claim: "A durable claim.".into(),
                     theme: Some("Theme A".into()),
                     status: ClaimStatus::Durable,
@@ -565,6 +566,7 @@ mod tests {
                 },
                 ClaimRow {
                     claim_id: "id-2".into(),
+                    claim_key: None,
                     claim: "caveated".into(),
                     theme: Some("Theme A".into()),
                     status: ClaimStatus::Caveated,

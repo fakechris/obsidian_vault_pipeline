@@ -102,6 +102,13 @@ pub enum ClaimStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimRow {
     pub claim_id: String,
+    /// The claim's STABLE ledger identity (`ck-…`, deterministic over claim
+    /// text + citation set). Additive: pre-existing indexes deserialize as
+    /// None; claim_ids can collide across runs, claim_keys cannot — surfaces
+    /// that need an unambiguous address (MCP ask citations, claim pages)
+    /// prefer this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_key: Option<String>,
     pub claim: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,

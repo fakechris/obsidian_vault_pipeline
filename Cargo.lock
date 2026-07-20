@@ -2890,6 +2890,8 @@ dependencies = [
  "ovp-api-projection",
  "ovp-domain",
  "ovp-index",
+ "ovp-llm",
+ "ovp-memory",
  "serde",
  "serde_json",
  "tempfile",

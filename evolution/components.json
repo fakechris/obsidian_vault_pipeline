@@ -5,82 +5,143 @@
       "surface": "prompt",
       "current_version": "v5",
       "file": "crates/ovp-domain/prompts/unit_extraction.md",
-      "quality_buckets": ["extraction_fidelity", "coverage"],
-      "regression_fixtures": ["fixtures/reader/m14a-coverage-set/"]
+      "quality_buckets": [
+        "extraction_fidelity",
+        "coverage"
+      ],
+      "regression_fixtures": [
+        "fixtures/reader/m14a-coverage-set/"
+      ]
     },
     {
       "id": "prompt.unit_critic",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/unit_critic.md",
-      "quality_buckets": ["extraction_fidelity"]
+      "quality_buckets": [
+        "extraction_fidelity"
+      ]
     },
     {
       "id": "prompt.card_synth",
       "surface": "prompt",
       "current_version": "v3",
       "file": "crates/ovp-domain/prompts/card_synthesis.md",
-      "quality_buckets": ["card_quality", "coverage"]
+      "quality_buckets": [
+        "card_quality",
+        "coverage"
+      ]
     },
     {
       "id": "runtime.web_fetch",
       "surface": "runtime",
       "file": "crates/ovp-enrich/src/web_fetch.rs",
-      "quality_buckets": ["operational_reliability"]
+      "quality_buckets": [
+        "operational_reliability"
+      ]
     },
     {
       "id": "gate.crystal_lint",
       "surface": "gate",
       "file": "crates/ovp-cli/src/commands/crystal_lint.rs",
-      "quality_buckets": ["crystal_provenance"]
+      "quality_buckets": [
+        "crystal_provenance"
+      ]
     },
     {
       "id": "prompt.crystal_synth",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/crystal_synth.md",
-      "quality_buckets": ["crystal_provenance", "coverage"]
+      "quality_buckets": [
+        "crystal_provenance",
+        "coverage"
+      ]
     },
     {
       "id": "prompt.crystal_strength",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/crystal_strength.md",
-      "quality_buckets": ["crystal_provenance"]
+      "quality_buckets": [
+        "crystal_provenance"
+      ]
     },
     {
       "id": "prompt.cluster_select",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/cluster_select.md",
-      "quality_buckets": ["crystal_provenance", "coverage"]
+      "quality_buckets": [
+        "crystal_provenance",
+        "coverage"
+      ]
     },
     {
       "id": "prompt.theme_label",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/theme_label.md",
-      "quality_buckets": ["card_quality"]
+      "quality_buckets": [
+        "card_quality"
+      ]
+    },
+    {
+      "id": "prompt.ask",
+      "surface": "prompt",
+      "current_version": "v3",
+      "file": "crates/ovp-memory/src/ask.rs",
+      "quality_buckets": [
+        "crystal_provenance",
+        "operational_reliability"
+      ]
     },
     {
       "id": "prompt.theme_page",
       "surface": "prompt",
       "current_version": "v1",
       "file": "crates/ovp-domain/prompts/theme_page.md",
-      "quality_buckets": ["crystal_provenance", "coverage"]
+      "quality_buckets": [
+        "crystal_provenance",
+        "coverage"
+      ]
     },
     {
       "id": "parser.json_repair",
       "surface": "parser",
       "file": "crates/ovp-domain/src/units/parser.rs",
-      "quality_buckets": ["operational_reliability", "extraction_fidelity"]
+      "quality_buckets": [
+        "operational_reliability",
+        "extraction_fidelity"
+      ]
     },
     {
       "id": "runtime.scheduler",
       "surface": "runtime",
       "current_version": "v1",
       "file": "crates/ovp-scheduler/src/lib.rs",
-      "quality_buckets": ["operational_reliability"]
+      "quality_buckets": [
+        "operational_reliability"
+      ]
+    },
+    {
+      "id": "parser.ask_verify",
+      "surface": "parser",
+      "current_version": "v1",
+      "file": "crates/ovp-memory/src/verify.rs",
+      "quality_buckets": [
+        "crystal_provenance",
+        "operational_reliability"
+      ]
+    },
+    {
+      "id": "runtime.claim_citation_keys",
+      "surface": "runtime",
+      "current_version": "v1",
+      "file": "crates/ovp-index/src/model.rs",
+      "quality_buckets": [
+        "crystal_provenance"
+      ]
     }
   ]
 }

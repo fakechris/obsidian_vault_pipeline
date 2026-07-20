@@ -27,10 +27,17 @@ interface Turn {
   errorKey: MsgKey | null;
 }
 
-/** `[claim:…] [card:…] [unit:…]` tokens — mirrors the server tokenizer
- * (ovp-memory::verify), which is the source of truth for what counts as a
- * citation; anything this regex misses simply stays plain text. */
-const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?)\s*\]/g;
+/** `[claim:…] [card:…] [unit:…]` tokens plus the bare `[ck-…]` form models
+ * shorten claim keys to — mirrors the server tokenizer (ovp-memory::verify),
+ * which is the source of truth for what counts as a citation; anything this
+ * regex misses simply stays plain text. */
+const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
+
+/** Same normalization as the server tokenizer: a bare ck- key is a claim
+ * citation, so both bracket forms resolve to the same returned citation id. */
+function normalizeCiteToken(token: string): string {
+  return token.startsWith('ck-') ? `claim:${token}` : token;
+}
 
 function errorKeyFor(err: unknown): MsgKey {
   if (err instanceof AskError) {
@@ -66,7 +73,7 @@ function AnswerText({
   const marker: InlineMarker = {
     pattern: CITE_RE,
     render: (m, key) => {
-      const i = index.get(m[1]);
+      const i = index.get(normalizeCiteToken(m[1]));
       if (i === undefined) return null; // not a returned citation — plain text
       const cit = citations[i];
       return (
