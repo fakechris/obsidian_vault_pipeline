@@ -121,6 +121,17 @@ fn resolve_viz_dir(app: &AppHandle) -> PathBuf {
 /// left unconfigured for now (POST /api/ask answers 503) — read/query/portal all
 /// work; live ask is wired in a later stage.
 fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
+    // Providers config (.ovp/providers.toml) BEFORE any server/scheduler
+    // thread spawns — this is the desktop's replacement for shell-sourcing
+    // daily.env (which launchd/GUI launches cannot do). Env-set vars win.
+    match ovp_domain::providers::apply_providers_env(&vault) {
+        Ok(applied) if !applied.applied.is_empty() => eprintln!(
+            "ovp2-desktop: providers: {} var(s) from .ovp/providers.toml",
+            applied.applied.len()
+        ),
+        Ok(_) => {}
+        Err(e) => return Err(format!("providers.toml: {e}")),
+    }
     // Retry a few times: free_port has a tiny TOCTOU window (another process
     // could grab the port between the probe and run_server binding it), so a
     // lost race just picks a new port rather than failing the launch.

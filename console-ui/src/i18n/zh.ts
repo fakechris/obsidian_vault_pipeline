@@ -354,6 +354,16 @@ export const zh: Record<keyof typeof en, string> = {
     'durable（持久）主张通过了全部证据门；caveated（存疑）主张带有已知弱点、等待复核——只会被标注，不会被隐藏。',
   'system.conceptGate':
     '"门"（gate）是写入结晶账本前的机械校验：每条引用必须对应真实的引文单元，主张强度会被评分——人的裁决也要过门，从不绕过。',
+  'system.publish': '发布',
+  'system.publishHelp': '按 .ovp/publish.toml 的配置生成公开知识站点快照并部署。',
+  'system.publishNotConfigured':
+    '未配置——在 .ovp/publish.toml 里设置 `out`（可选 `repo`/`branch`/`spa_dir`）。',
+  'system.publishNow': '立即发布',
+  'system.publishRunning': '发布中…',
+  'system.publishLastOk': '上次发布：{files} 个文件，{claims} 条结晶主张',
+  'system.publishPushed': '已推送',
+  'system.publishNoChange': '无变更可部署',
+  'system.publishLastFailed': '上次发布失败',
   'system.settings': '设置',
   'system.settingsReadonly':
     'v1 只读——修改在 CLI 完成，这里展示服务端当前运行的配置。',

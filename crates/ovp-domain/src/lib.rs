@@ -32,6 +32,7 @@ pub mod sources;
 /// Tag vocabulary layer: deterministic normalization + the operator-owned
 /// alias table. Canonicalization happens at projection build only; raw
 /// frontmatter tags are never rewritten.
+pub mod providers;
 pub mod tags;
 /// Tier-0 URL entities: machine-verifiable referents (github/arxiv/doi/npm/…)
 /// whose identity is a registry URL — deterministic extraction, no LLM.

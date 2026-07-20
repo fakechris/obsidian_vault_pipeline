@@ -13,7 +13,13 @@ import AttentionCard from '../components/AttentionCard';
 import { RunActivitySection } from '../components/RunActivity';
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchSettings } from '../lib/api';
+import {
+  STATIC_MODE,
+  fetchPublishStatus,
+  fetchSettings,
+  startPublish,
+  type PublishStatus,
+} from '../lib/api';
 import { attentionSources } from '../lib/derive';
 import type { IndexModel, SettingsPayload } from '../lib/types';
 import { useModel } from '../model';
@@ -167,6 +173,108 @@ function ConceptsSection() {
   );
 }
 
+/** Publish card: one button running `.ovp/publish.toml`'s configured publish
+ * (build site + optional git deploy) via POST /api/publish, with a 2s status
+ * poll while it runs. Hidden entirely in static mode (a published site can't
+ * publish) and shows a configure hint when publish.toml is absent. */
+function PublishSection() {
+  const { t } = useI18n();
+  const [status, setStatus] = useState<PublishStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = () => {
+      fetchPublishStatus()
+        .then((s) => {
+          if (cancelled) return;
+          setStatus(s);
+          if (s.running) timer = setTimeout(poll, 2000);
+        })
+        .catch(() => {
+          // Silent: the card simply stays in its last state.
+        });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  if (STATIC_MODE) return null;
+
+  const onPublish = () => {
+    setError(null);
+    startPublish()
+      .then(() => {
+        setStatus((s) => (s ? { ...s, running: true } : s));
+        // Re-arm the poll loop.
+        const tick = () =>
+          fetchPublishStatus()
+            .then((s) => {
+              setStatus(s);
+              if (s.running) setTimeout(tick, 2000);
+            })
+            .catch(() => {});
+        setTimeout(tick, 1500);
+      })
+      .catch((e: Error) => setError(e.message));
+  };
+
+  const last = status?.last as
+    | {
+        ok?: boolean;
+        error?: string;
+        file_count?: number;
+        claims?: number;
+        deployed_to?: string;
+        pushed?: boolean;
+        finished_at?: string;
+      }
+    | null
+    | undefined;
+
+  return (
+    <div className="section">
+      <h2>{t('system.publish')}</h2>
+      {status && !status.configured ? (
+        <p className="sm muted">{t('system.publishNotConfigured')}</p>
+      ) : (
+        <>
+          <p className="sm muted">{t('system.publishHelp')}</p>
+          <button
+            type="button"
+            className="publish-btn"
+            disabled={!status || status.running}
+            onClick={onPublish}
+          >
+            {status?.running ? t('system.publishRunning') : t('system.publishNow')}
+          </button>
+          {error && <p className="sm warn">{error}</p>}
+          {last && (
+            <p className="sm">
+              {last.ok
+                ? t('system.publishLastOk', {
+                    files: last.file_count ?? 0,
+                    claims: last.claims ?? 0,
+                  }) +
+                  (last.deployed_to
+                    ? last.pushed
+                      ? ` · ${t('system.publishPushed')}`
+                      : ` · ${t('system.publishNoChange')}`
+                    : '')
+                : `${t('system.publishLastFailed')}: ${last.error ?? ''}`}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SettingsSection() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
@@ -293,6 +401,7 @@ export default function SystemPage() {
       </ModelGate>
       <SurfacesSection />
       <ConceptsSection />
+      <PublishSection />
       <SettingsSection />
     </>
   );

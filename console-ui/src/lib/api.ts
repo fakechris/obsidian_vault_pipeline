@@ -137,6 +137,27 @@ export function fetchSettings(): Promise<SettingsPayload> {
   return fetchJson<SettingsPayload>(STATIC_MODE ? `${API}/settings.json` : '/api/settings');
 }
 
+/** Publish job status (live server only — the published site itself has no
+ * publish button). */
+export interface PublishStatus {
+  running: boolean;
+  configured: boolean;
+  last: Record<string, unknown> | null;
+}
+export function fetchPublishStatus(): Promise<PublishStatus> {
+  return fetchJson<PublishStatus>('/api/publish/status');
+}
+export async function startPublish(): Promise<void> {
+  const resp = await fetch('/api/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!resp.ok && resp.status !== 202) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `publish failed (${resp.status})`);
+  }
+}
+
 /** Three-layer source detail: meta + memory + citing claims + raw md. */
 export function fetchSourceDetail(sha: string): Promise<SourceDetail> {
   if (STATIC_MODE) return fetchJson<SourceDetail>(`${API}/source/${encodeURIComponent(sha)}.json`);
