@@ -98,7 +98,9 @@ function TopicOverview({ theme }: { theme: string }) {
           {section.paragraphs.map((paragraph, paragraphIndex) => (
             <p key={paragraphIndex}>
               {paragraph.map((token, tokenIndex) => {
-                if (token.kind === 'text') return token.text;
+                if (token.kind === 'text') {
+                  return <span key={tokenIndex}>{token.text}</span>;
+                }
                 const claim = themePages.claims[token.key];
                 const number = overview.citationNumberByKey.get(token.key);
                 if (!claim || number == null) return null;

@@ -640,7 +640,7 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
             }))
         }
         _ if uri.starts_with("ovp://source/") => {
-            let sha = uri.trim_start_matches("ovp://source/");
+            let sha = uri.strip_prefix("ovp://source/").unwrap_or(uri);
             let model = state.load_model().ok_or_else(|| RpcError {
                 code: -32000,
                 message: "Index not available".into(),
