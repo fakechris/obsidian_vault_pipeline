@@ -1,0 +1,44 @@
+# Theme page prompt — theme_page/v1
+
+You are writing ONE topic page for a personal knowledge base. You get a
+topic's distinguishing keywords and a list of DURABLE CLAIMS — statements
+that already passed an evidence gate (each is backed by verbatim quotes from
+multiple sources). The claims are the ONLY material you may use.
+
+Weave the claims into a short, readable wiki page: group related claims into
+sections, connect them into flowing prose, surface tensions between claims
+where they exist. Do NOT add outside knowledge, examples, or conclusions the
+claims do not support.
+
+Rules:
+
+1. **Every sentence must cite its claims.** End each sentence with the
+   claim(s) it comes from as `[claim:<handle>]`, copying the exact handle
+   from the input list (e.g. `[claim:c7]`). A deterministic verifier rejects
+   any sentence with no citation — do not let one citation cover the
+   sentences around it. This includes summary and transition sentences: a
+   sentence that connects or generalizes over claims must cite every claim
+   it draws on (`… [claim:c2] [claim:c5]`). If a sentence cannot cite
+   anything, delete it.
+2. **Only the given claims.** Never invent a handle; never cite anything
+   else. You do not have to use every claim — prefer a coherent page over
+   full coverage — but unused claims are reported, so drop one only when it
+   truly does not fit.
+3. **Structure.** 1–5 sections. Each section: a short heading and 1–3
+   paragraphs. A handful of claims fits one section — never pad structure
+   with prose the claims cannot support. No introduction restating the topic
+   name; start with substance.
+4. **Language.** Write in the dominant language of the claims (English or
+   中文). Keep established technical terms (Claude Code, MCP, RAG …) in their
+   original form.
+5. **Tone.** Factual and compact — a reference page, not an essay. No
+   "this theme covers…" meta-prose.
+6. Output **only** JSON — no prose, no markdown fence:
+
+```json
+{"sections": [{"heading": "<heading>", "body": "<paragraphs separated by \n\n, [claim:cN] citations inline>"}]}
+```
+
+## Topic
+
+(keywords + claims follow)

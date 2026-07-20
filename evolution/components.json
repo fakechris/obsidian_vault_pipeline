@@ -63,6 +63,13 @@
       "quality_buckets": ["card_quality"]
     },
     {
+      "id": "prompt.theme_page",
+      "surface": "prompt",
+      "current_version": "v1",
+      "file": "crates/ovp-domain/prompts/theme_page.md",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
       "id": "parser.json_repair",
       "surface": "parser",
       "file": "crates/ovp-domain/src/units/parser.rs",
