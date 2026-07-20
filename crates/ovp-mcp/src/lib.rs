@@ -389,22 +389,26 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // Missing evidence.json = a fresh/claims-only vault (fine, noted);
     // a CORRUPT sidecar is surfaced, never silently downgraded to
     // claims-only while the report implies full evidence (codex P2).
-    let (evidence, degraded_note) = match ovp_index::read_evidence(&state.vault_root) {
-        Ok(e) => (Some(e), None),
-        Err(e) if !ovp_index::evidence::evidence_path(&state.vault_root).exists() => {
-            let _ = e;
-            (
-                None,
-                Some("note: no evidence sidecar — answer drawn from claims only (no cards/units)"),
-            )
-        }
-        Err(e) => {
-            return Err(RpcError {
-                code: -32000,
-                message: format!(
-                    "evidence sidecar unreadable ({e}) — rebuild with `ovp2 index` before asking"
-                ),
-            });
+    // Existence is checked BEFORE the read so a read failure on a present
+    // file is always classified as corruption, not misfiled as missing.
+    let (evidence, degraded_note) = if !ovp_index::evidence::evidence_path(&state.vault_root)
+        .exists()
+    {
+        (
+            None,
+            Some("note: no evidence sidecar — answer drawn from claims only (no cards/units)"),
+        )
+    } else {
+        match ovp_index::read_evidence(&state.vault_root) {
+            Ok(e) => (Some(e), None),
+            Err(e) => {
+                return Err(RpcError {
+                    code: -32000,
+                    message: format!(
+                        "evidence sidecar unreadable ({e}) — rebuild with `ovp2 index` before asking"
+                    ),
+                });
+            }
         }
     };
     let mut client = factory().map_err(|e| RpcError {
