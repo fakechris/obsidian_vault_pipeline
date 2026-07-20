@@ -48,24 +48,36 @@ fn guidance_body() -> String {
 }
 
 /// Replace the marked section in `content`, or append it. Returns the new
-/// file content.
-fn splice(content: &str, body: &str) -> String {
+/// file content, or an error when the markers are unmatched/mis-ordered —
+/// appending a second block there would make the NEXT run pair the stray
+/// marker with the new one and delete the operator's content in between
+/// (codex review P2). Fail loud; the operator repairs the markers by hand.
+fn splice(content: &str, body: &str) -> Result<String, String> {
     let section = format!("{START}\n{body}{END}\n");
-    match (content.find(START), content.find(END)) {
-        (Some(s), Some(e)) if e >= s => {
+    let starts = content.matches(START).count();
+    let ends = content.matches(END).count();
+    match (starts, ends) {
+        (0, 0) => Ok(if content.trim().is_empty() {
+            section
+        } else {
+            // Keep exactly one blank line before the appended section.
+            format!("{}\n\n{section}", content.trim_end())
+        }),
+        (1, 1) => {
+            let s = content.find(START).expect("counted above");
+            let e = content.find(END).expect("counted above");
+            if e < s {
+                return Err(format!(
+                    "guidance markers are out of order ({END} before {START}) — fix the file manually"
+                ));
+            }
             let after = &content[e + END.len()..];
             let after = after.strip_prefix('\n').unwrap_or(after);
-            format!("{}{section}{after}", &content[..s])
+            Ok(format!("{}{section}{after}", &content[..s]))
         }
-        _ => {
-            // Append (or start) — keep exactly one blank line before the
-            // section when the file already has content.
-            if content.trim().is_empty() {
-                section
-            } else {
-                format!("{}\n\n{section}", content.trim_end())
-            }
-        }
+        _ => Err(format!(
+            "unmatched guidance markers ({starts}× start, {ends}× end) — fix the file manually"
+        )),
     }
 }
 
@@ -75,7 +87,8 @@ fn update_file(path: &Path, body: &str) -> Result<bool, CliError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(CliError::Io(format!("reading {}: {e}", path.display()))),
     };
-    let new = splice(&old, body);
+    let new = splice(&old, body)
+        .map_err(|e| CliError::Io(format!("mcp-guidance: {}: {e}", path.display())))?;
     if new == old {
         return Ok(false);
     }
@@ -109,7 +122,10 @@ mod tests {
 
         // Existing CLAUDE.md with operator content survives around the section.
         std::fs::write(root.join("CLAUDE.md"), "# My vault rules\n\nkeep me\n").unwrap();
-        run(McpGuidanceArgs { vault_root: root.clone() }).unwrap();
+        run(McpGuidanceArgs {
+            vault_root: root.clone(),
+        })
+        .unwrap();
         let claude = std::fs::read_to_string(root.join("CLAUDE.md")).unwrap();
         assert!(claude.starts_with("# My vault rules"), "{claude}");
         assert!(claude.contains("keep me"));
@@ -121,16 +137,43 @@ mod tests {
         assert!(agents.starts_with(START), "{agents}");
 
         // Re-run: no change (idempotent).
-        run(McpGuidanceArgs { vault_root: root.clone() }).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("CLAUDE.md")).unwrap(), claude);
+        run(McpGuidanceArgs {
+            vault_root: root.clone(),
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("CLAUDE.md")).unwrap(),
+            claude
+        );
 
         // Content added AFTER the section survives an update; a stale body
         // between the markers is replaced.
         let edited = claude.replace("Prefer citing claims", "STALE TEXT") + "\n## Appended later\n";
         std::fs::write(root.join("CLAUDE.md"), &edited).unwrap();
-        run(McpGuidanceArgs { vault_root: root.clone() }).unwrap();
+        run(McpGuidanceArgs {
+            vault_root: root.clone(),
+        })
+        .unwrap();
         let fresh = std::fs::read_to_string(root.join("CLAUDE.md")).unwrap();
         assert!(!fresh.contains("STALE TEXT"));
         assert!(fresh.contains("## Appended later"));
+    }
+
+    #[test]
+    fn unmatched_or_misordered_markers_fail_instead_of_eating_content() {
+        // A lone START must NOT trigger the append path: the next run would
+        // pair the stray START with the appended END and delete everything
+        // between them.
+        let lone_start = format!("# rules\n\n{START}\nuser content here\n");
+        let err = splice(&lone_start, "body\n").unwrap_err();
+        assert!(err.contains("unmatched"), "{err}");
+
+        let misordered = format!("{END}\nmiddle\n{START}\n");
+        let err = splice(&misordered, "body\n").unwrap_err();
+        assert!(err.contains("out of order"), "{err}");
+
+        let doubled = format!("{START}\na\n{END}\n{START}\nb\n{END}\n");
+        let err = splice(&doubled, "body\n").unwrap_err();
+        assert!(err.contains("unmatched") || err.contains("2"), "{err}");
     }
 }
