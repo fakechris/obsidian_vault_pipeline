@@ -129,7 +129,9 @@ pub fn ask_with_optional_evidence(
 
     let system = "You are a knowledge assistant for OVP (Obsidian Vault Pipeline). \
         Answer questions using ONLY the provided claim/card/unit evidence context. \
-        Cite evidence ids in square brackets. \
+        Cite evidence with the FULL bracketed key exactly as shown in the context \
+        (e.g. [claim:ck-1a2b3c4d], [card:…], [unit:…]) — never shorten or drop the \
+        kind prefix. \
         If evidence is insufficient, say what is missing. Do not invent citations."
         .to_string();
 
