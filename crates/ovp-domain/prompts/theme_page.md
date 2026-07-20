@@ -12,16 +12,22 @@ claims do not support.
 
 Rules:
 
-1. **Every paragraph must cite its claims.** After each statement, cite the
+1. **Every sentence must cite its claims.** End each sentence with the
    claim(s) it comes from as `[claim:<handle>]`, copying the exact handle
-   from the input list (e.g. `[claim:c7]`). A paragraph with no citation
-   will be rejected by a deterministic verifier.
+   from the input list (e.g. `[claim:c7]`). A deterministic verifier rejects
+   any sentence with no citation — do not let one citation cover the
+   sentences around it. This includes summary and transition sentences: a
+   sentence that connects or generalizes over claims must cite every claim
+   it draws on (`… [claim:c2] [claim:c5]`). If a sentence cannot cite
+   anything, delete it.
 2. **Only the given claims.** Never invent a handle; never cite anything
    else. You do not have to use every claim — prefer a coherent page over
    full coverage — but unused claims are reported, so drop one only when it
    truly does not fit.
-3. **Structure.** 2–5 sections. Each section: a short heading and 1–3
-   paragraphs. No introduction restating the topic name; start with substance.
+3. **Structure.** 1–5 sections. Each section: a short heading and 1–3
+   paragraphs. A handful of claims fits one section — never pad structure
+   with prose the claims cannot support. No introduction restating the topic
+   name; start with substance.
 4. **Language.** Write in the dominant language of the claims (English or
    中文). Keep established technical terms (Claude Code, MCP, RAG …) in their
    original form.

@@ -8,8 +8,9 @@
 //!       for `ClaimRow.theme`, keyed by community id — labels never vote)
 //!     → per community ≥ --min-claims: `theme_page/v1` synthesis over the
 //!       sorted claim set (request sees keywords + claims, NEVER labels)
-//!     → deterministic page gate: every paragraph cites ≥1 known
-//!       `[claim:<claim_key>]`, unknown keys fail loud
+//!     → deterministic page gate: every sentence cites ≥1 known
+//!       `[claim:<claim_key>]`, unknown keys fail loud; a failing draft
+//!       gets one bounded repair call before the theme counts as failed
 //!     → `.ovp/crystal/theme_pages.json` (rebuildable projection).
 //!
 //! Staleness: a page whose theme's active claim set is unchanged is kept
@@ -22,7 +23,7 @@ use std::path::PathBuf;
 
 use ovp_domain::crystal::theme_pages::{
     PageClaim, THEME_PAGES_SCHEMA, ThemePage, ThemePagesFile, parse_theme_page, resolve_handles,
-    theme_page_request, uncited_keys, verify_page,
+    theme_page_repair_request, theme_page_request, uncited_keys, verify_page,
 };
 use ovp_domain::crystal::themes::ThemesFile;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
@@ -80,6 +81,10 @@ pub(crate) fn build_pages(
         kept: 0,
         skipped_small: 0,
     };
+    // Failed themes accumulate instead of aborting the loop: one run
+    // invalidates EVERY ungrounded cassette entry, so the next live pass
+    // re-asks all of them at once (successes stay cached).
+    let mut failures: Vec<(i64, Vec<String>)> = Vec::new();
     for community in &themes.communities {
         let Some(mut group) = by_community.remove(&community.id) else {
             continue;
@@ -90,13 +95,17 @@ pub(crate) fn build_pages(
         }
         group.sort_by(|a, b| a.claim_key.cmp(&b.claim_key));
         let claim_keys: Vec<String> = group.iter().map(|r| r.claim_key.clone()).collect();
+        let known: BTreeSet<String> = claim_keys.iter().cloned().collect();
 
         if !refresh
             && let Some(prev) = existing.and_then(|f| f.page(community.id))
             && prev.claim_keys == claim_keys
+            && verify_page(&prev.sections, &known).is_empty()
         {
-            // Unchanged claim set — keep the page, refresh only the
-            // presentation labels (they are never synthesis input).
+            // Unchanged claim set AND the retained page still passes the
+            // gate (a hand-edited or older-generator projection must not
+            // ride the fast path — codex review P2). Labels refresh; they
+            // are never synthesis input.
             outcome.pages.push(ThemePage {
                 label: community.label.clone(),
                 label_zh: community.label_zh.clone(),
@@ -115,25 +124,40 @@ pub(crate) fn build_pages(
             })
             .collect();
         let req = theme_page_request(&community.synth_theme(), &claims);
-        let (mut sections, _repair) = call_and_parse(client, &req, "theme-page", parse_theme_page)?;
+        let (draft, _repair) = call_and_parse(client, &req, "theme-page", parse_theme_page)?;
         // The model cites positional handles (c1, c2, …); the code owns the
         // handle → claim_key substitution. Unresolved handles survive into
         // the verifier and fail loud as UnknownClaim.
+        let mut sections = draft.clone();
         resolve_handles(&mut sections, &claim_keys);
 
-        let known: BTreeSet<String> = claim_keys.iter().cloned().collect();
-        let defects = verify_page(&sections, &known);
+        let mut defects = verify_page(&sections, &known);
         if !defects.is_empty() {
-            // Forget the exchange so a rerun re-asks the model instead of
-            // replaying the same ungrounded page forever (no-op on replay).
-            client.invalidate(&req);
+            // ONE bounded repair (M36 repair-workshop shape): the model gets
+            // its own draft + the defect list and must cite or delete each
+            // offending sentence. Small themes reliably need this — the
+            // model pads them with uncited synthesis glue.
             let listed: Vec<String> = defects.iter().map(|d| d.to_string()).collect();
-            return Err(CliError::Io(format!(
-                "crystal-theme-pages: t{:03} failed the page gate ({} defect(s)):\n  {}",
-                community.id,
-                listed.len(),
-                listed.join("\n  ")
-            )));
+            let repair_req =
+                theme_page_repair_request(&community.synth_theme(), &claims, &draft, &listed);
+            let (repaired, _log) =
+                call_and_parse(client, &repair_req, "theme-page-repair", parse_theme_page)?;
+            let mut repaired_resolved = repaired;
+            resolve_handles(&mut repaired_resolved, &claim_keys);
+            defects = verify_page(&repaired_resolved, &known);
+            if defects.is_empty() {
+                sections = repaired_resolved;
+            } else {
+                // Forget both exchanges so a rerun re-asks instead of
+                // replaying the same ungrounded page (no-op on replay).
+                client.invalidate(&req);
+                client.invalidate(&repair_req);
+                failures.push((
+                    community.id,
+                    defects.iter().map(|d| d.to_string()).collect(),
+                ));
+                continue;
+            }
         }
 
         outcome.pages.push(ThemePage {
@@ -145,7 +169,39 @@ pub(crate) fn build_pages(
         });
         outcome.built += 1;
     }
+    if !failures.is_empty() {
+        let mut msg = format!(
+            "crystal-theme-pages: {} theme(s) failed the page gate (nothing written; rerun re-asks them):",
+            failures.len()
+        );
+        for (id, defects) in &failures {
+            msg.push_str(&format!("\n  t{:03} ({} defect(s)):", id, defects.len()));
+            for d in defects {
+                msg.push_str(&format!("\n    {d}"));
+            }
+        }
+        return Err(CliError::Io(msg));
+    }
     Ok(outcome)
+}
+
+/// Atomically publish the projection (temp + rename) — readers must never see
+/// a torn file.
+fn write_pages_file(
+    store: &std::path::Path,
+    pages_path: &std::path::Path,
+    file: &ThemePagesFile,
+) -> Result<(), CliError> {
+    std::fs::create_dir_all(store)
+        .map_err(|e| CliError::Io(format!("creating {}: {e}", store.display())))?;
+    let body = serde_json::to_string_pretty(file)
+        .map_err(|e| CliError::Io(format!("serializing theme_pages.json: {e}")))?;
+    let tmp = pages_path.with_extension("json.tmp");
+    std::fs::write(&tmp, format!("{body}\n"))
+        .map_err(|e| CliError::Io(format!("writing {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, pages_path)
+        .map_err(|e| CliError::Io(format!("publishing {}: {e}", pages_path.display())))?;
+    Ok(())
 }
 
 pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
@@ -182,7 +238,21 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
         .filter(|r| r.status == CrystalStatus::Active)
         .collect();
     if records.is_empty() {
-        println!("crystal-theme-pages: no active durable claims — nothing to page.");
+        // Publish an EMPTY projection rather than leaving a stale one behind:
+        // if every claim was later retracted/superseded, readers must not keep
+        // serving pages whose citations are no longer active (codex review P2).
+        write_pages_file(
+            &store,
+            &pages_path,
+            &ThemePagesFile {
+                schema: THEME_PAGES_SCHEMA.to_string(),
+                pages: Vec::new(),
+            },
+        )?;
+        println!(
+            "crystal-theme-pages: no active durable claims — wrote empty {}.",
+            pages_path.display()
+        );
         return Ok(());
     }
 
@@ -216,16 +286,7 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
         schema: THEME_PAGES_SCHEMA.to_string(),
         pages: outcome.pages,
     };
-    std::fs::create_dir_all(&store)
-        .map_err(|e| CliError::Io(format!("creating {}: {e}", store.display())))?;
-    let body = serde_json::to_string_pretty(&file)
-        .map_err(|e| CliError::Io(format!("serializing theme_pages.json: {e}")))?;
-    // Publish atomically (temp + rename) — readers must never see a torn file.
-    let tmp = pages_path.with_extension("json.tmp");
-    std::fs::write(&tmp, format!("{body}\n"))
-        .map_err(|e| CliError::Io(format!("writing {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, &pages_path)
-        .map_err(|e| CliError::Io(format!("publishing {}: {e}", pages_path.display())))?;
+    write_pages_file(&store, &pages_path, &file)?;
 
     println!(
         "crystal-theme-pages: {} page(s) ({} built, {} kept, {} theme(s) below --min-claims {}) → {}",
@@ -447,22 +508,103 @@ mod tests {
         assert_eq!(out.pages[0].sections[0].heading, "New");
     }
 
+    /// The repair request the command will issue for `bad_reply` below.
+    fn fixture_repair_request(bad_reply_json: &str) -> ovp_llm::ModelRequest {
+        let draft = parse_theme_page(bad_reply_json).unwrap();
+        let mut resolved = draft.clone();
+        resolve_handles(&mut resolved, &["ck-a".into(), "ck-b".into()]);
+        let known: BTreeSet<String> = ["ck-a".to_string(), "ck-b".to_string()].into();
+        let defects: Vec<String> = verify_page(&resolved, &known)
+            .iter()
+            .map(|d| d.to_string())
+            .collect();
+        let claims = [
+            PageClaim {
+                claim_key: "ck-a".into(),
+                claim: "Context compounds.".into(),
+                source_count: 2,
+            },
+            PageClaim {
+                claim_key: "ck-b".into(),
+                claim: "Memory persists.".into(),
+                source_count: 2,
+            },
+        ];
+        theme_page_repair_request(
+            &themes_fixture().communities[0].synth_theme(),
+            &claims,
+            &draft,
+            &defects,
+        )
+    }
+
+    const BAD_REPLY: &str =
+        r#"{"sections":[{"heading":"H","body":"No citation here.\n\nGhost handle [claim:c9]."}]}"#;
+
     #[test]
-    fn ungrounded_page_fails_the_gate_loudly() {
+    fn failed_repair_fails_the_gate_loudly() {
         let themes = themes_fixture();
         let records = records_fixture();
         let mut client = FixtureModelClient::new();
-        client.insert(
-            &fixture_request(),
-            reply(
-                r#"{"sections":[{"heading":"H","body":"No citation here.\n\nGhost handle [claim:c9]."}]}"#,
-            ),
-        );
+        client.insert(&fixture_request(), reply(BAD_REPLY));
+        // The repair attempt returns the SAME bad draft — still ungrounded.
+        client.insert(&fixture_repair_request(BAD_REPLY), reply(BAD_REPLY));
         let err = build_pages(&records, &themes, None, &mut client, 2, false).unwrap_err();
         let msg = format!("{err:?}");
-        assert!(msg.contains("failed the page gate"), "{msg}");
-        assert!(msg.contains("no [claim:…] citation"), "{msg}");
+        assert!(msg.contains("1 theme(s) failed the page gate"), "{msg}");
+        assert!(
+            msg.contains("uncited sentence `No citation here.`"),
+            "{msg}"
+        );
         assert!(msg.contains("unknown claim `c9`"), "{msg}");
+    }
+
+    #[test]
+    fn one_bounded_repair_can_save_a_failing_page() {
+        let themes = themes_fixture();
+        let records = records_fixture();
+        let mut client = FixtureModelClient::new();
+        client.insert(&fixture_request(), reply(BAD_REPLY));
+        client.insert(
+            &fixture_repair_request(BAD_REPLY),
+            reply(r#"{"sections":[{"heading":"H","body":"Now cited [claim:c1]."}]}"#),
+        );
+        let out = build_pages(&records, &themes, None, &mut client, 2, false).unwrap();
+        assert_eq!((out.built, out.kept), (1, 0));
+        assert_eq!(out.pages[0].sections[0].body, "Now cited [claim:ck-a].");
+    }
+
+    #[test]
+    fn keep_path_revalidates_and_regenerates_an_invalid_retained_page() {
+        let themes = themes_fixture();
+        let records = records_fixture();
+        // Same claim set, but the retained page violates the sentence gate
+        // (hand edit / older generator) — it must NOT ride the fast path.
+        let existing = ThemePagesFile {
+            schema: THEME_PAGES_SCHEMA.into(),
+            pages: vec![ThemePage {
+                community_id: 0,
+                label: "Agent memory".into(),
+                label_zh: "智能体记忆".into(),
+                claim_keys: vec!["ck-a".into(), "ck-b".into()],
+                sections: vec![ovp_domain::crystal::theme_pages::PageSection {
+                    heading: "H".into(),
+                    body: "Uncited sentence. Cited one [claim:ck-a].".into(),
+                }],
+            }],
+        };
+        let mut client = FixtureModelClient::new();
+        client.insert(
+            &fixture_request(),
+            reply(r#"{"sections":[{"heading":"Regen","body":"Fresh [claim:c1]."}]}"#),
+        );
+        let out = build_pages(&records, &themes, Some(&existing), &mut client, 2, false).unwrap();
+        assert_eq!(
+            (out.built, out.kept),
+            (1, 0),
+            "invalid page regenerated, not kept"
+        );
+        assert_eq!(out.pages[0].sections[0].heading, "Regen");
     }
 
     #[test]

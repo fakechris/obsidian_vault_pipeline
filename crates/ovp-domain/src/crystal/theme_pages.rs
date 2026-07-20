@@ -4,9 +4,10 @@
 //! majority theme community (the same vote `ovp-index` uses for
 //! `ClaimRow.theme`), asks the model to weave each group into a short wiki
 //! page (`theme_page/v1`), and gates the reply through a DETERMINISTIC
-//! verifier: every paragraph must cite at least one `[claim:<claim_key>]`
+//! verifier: every SENTENCE must cite at least one `[claim:<claim_key>]`
 //! and every cited key must be one of the claims supplied for that theme.
-//! A page that fails the verifier is never written.
+//! A failing draft gets ONE bounded repair call; a page that still fails
+//! the verifier is never written.
 //!
 //! `.ovp/crystal/theme_pages.json` is a REBUILDABLE projection: it is never
 //! baked into the crystal ledger, and pages are regenerated only when a
@@ -155,6 +156,57 @@ pub fn theme_page_request(synth_theme: &str, claims: &[PageClaim]) -> ModelReque
     }
 }
 
+/// Build the ONE bounded repair request for a draft that failed the page
+/// gate: the model gets its own previous JSON (still handle-cited), the
+/// verifier's defect list, and the claim list again — and must either cite
+/// or delete each offending sentence, never add content. Same cassette
+/// namespace as the synthesis stage; the request is deterministic given the
+/// draft + defects, so replay works. If the repaired draft still fails the
+/// gate, the command fails loud — there is no second repair (same bounded
+/// contract as the JSON-repair pass in `call_and_parse`).
+pub fn theme_page_repair_request(
+    synth_theme: &str,
+    claims: &[PageClaim],
+    previous_sections: &[PageSection],
+    defects: &[String],
+) -> ModelRequest {
+    let marker = "## Topic";
+    let (system, _) = THEME_PAGE_TEMPLATE
+        .split_once(marker)
+        .unwrap_or((THEME_PAGE_TEMPLATE, ""));
+    let mut user = format!("{marker}\n\nKeywords: {synth_theme}\n\nClaims:\n");
+    for (i, c) in claims.iter().enumerate() {
+        user.push_str(&format!(
+            "- [claim:{}] ({} source(s)) {}\n",
+            claim_handle(i),
+            c.source_count,
+            c.claim
+        ));
+    }
+    let draft = serde_json::json!({ "sections": previous_sections });
+    user.push_str("\n## Previous draft (failed the citation gate)\n\n");
+    user.push_str(&draft.to_string());
+    user.push_str("\n\n## Verifier defects\n\n");
+    for d in defects {
+        user.push_str(&format!("- {d}\n"));
+    }
+    user.push_str(
+        "\nRepair the draft: for each uncited sentence, either add the \
+         [claim:cN] citation(s) whose claims genuinely support it, or delete \
+         the sentence. Replace any unknown citation with a valid handle or \
+         remove it. Do NOT add new sentences, sections, or content. Output \
+         only the corrected JSON in the same format.",
+    );
+    ModelRequest {
+        model: PAGE_MODEL.to_string(),
+        system: Some(system.trim_end().to_string()),
+        messages: vec![ModelMessage::User { content: user }],
+        max_tokens: PAGE_MAX_TOKENS,
+        temperature: None,
+        cache_namespace: Some(THEME_PAGE_PROMPT_ID.to_string()),
+    }
+}
+
 /// Replace `[claim:cN]` handles with the real claim keys, in the same sorted
 /// claim order the request was built from. Unknown or out-of-range handles
 /// are left untouched — the verifier then reports them as `UnknownClaim`
@@ -229,8 +281,10 @@ pub enum PageDefect {
     NoSections,
     /// A cited key is not in this theme's claim set.
     UnknownClaim { section: usize, citation: String },
-    /// A paragraph carries no `[claim:…]` citation.
-    UncitedParagraph { section: usize, paragraph: usize },
+    /// A sentence carries no `[claim:…]` citation. Sentence-level, not
+    /// paragraph-level: one citation must not launder the uncited sentences
+    /// around it into the grounded projection (codex review P1).
+    UncitedSentence { section: usize, snippet: String },
 }
 
 impl std::fmt::Display for PageDefect {
@@ -240,11 +294,8 @@ impl std::fmt::Display for PageDefect {
             PageDefect::UnknownClaim { section, citation } => {
                 write!(f, "section {section}: cites unknown claim `{citation}`")
             }
-            PageDefect::UncitedParagraph { section, paragraph } => {
-                write!(
-                    f,
-                    "section {section} paragraph {paragraph}: no [claim:…] citation"
-                )
+            PageDefect::UncitedSentence { section, snippet } => {
+                write!(f, "section {section}: uncited sentence `{snippet}`")
             }
         }
     }
@@ -275,7 +326,9 @@ pub fn extract_claim_citations(text: &str) -> Vec<String> {
 
 /// Verify a synthesized page against the claim set it was given. Deterministic
 /// and total: returns EVERY defect (the command fails loud and reports all of
-/// them, so a rerun's repair pass has the full picture).
+/// them, so a rerun's repair pass has the full picture). Grounding is checked
+/// per SENTENCE — `Unsupported claim. Supported claim [claim:x].` must fail on
+/// the first sentence, not ride on the second's citation.
 pub fn verify_page(sections: &[PageSection], known_keys: &BTreeSet<String>) -> Vec<PageDefect> {
     let mut defects = Vec::new();
     if sections.is_empty() {
@@ -283,15 +336,16 @@ pub fn verify_page(sections: &[PageSection], known_keys: &BTreeSet<String>) -> V
         return defects;
     }
     for (si, section) in sections.iter().enumerate() {
-        for (pi, para) in paragraphs(&section.body).iter().enumerate() {
-            let cited = extract_claim_citations(para);
-            if cited.is_empty() {
-                defects.push(PageDefect::UncitedParagraph {
-                    section: si,
-                    paragraph: pi,
-                });
+        for para in paragraphs(&section.body) {
+            for sentence in sentences(&para) {
+                if extract_claim_citations(&sentence).is_empty() {
+                    defects.push(PageDefect::UncitedSentence {
+                        section: si,
+                        snippet: snippet_of(&sentence),
+                    });
+                }
             }
-            for key in cited {
+            for key in extract_claim_citations(&para) {
                 if !known_keys.contains(&key) {
                     defects.push(PageDefect::UnknownClaim {
                         section: si,
@@ -302,6 +356,147 @@ pub fn verify_page(sections: &[PageSection], known_keys: &BTreeSet<String>) -> V
         }
     }
     defects
+}
+
+/// First ~40 chars of a sentence, for actionable defect messages.
+fn snippet_of(sentence: &str) -> String {
+    let t = sentence.trim();
+    let cut: String = t.chars().take(40).collect();
+    if cut.chars().count() < t.chars().count() {
+        format!("{cut}…")
+    } else {
+        cut
+    }
+}
+
+/// CJK ranges relevant to sentence splitting (ideographs, kana, fullwidth,
+/// CJK punctuation) — used only to decide whether a `.` ends a sentence.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3000..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+}
+
+/// Split a paragraph into sentences for the citation gate. Deterministic and
+/// deliberately conservative:
+///
+/// - `。！？` always end a sentence.
+/// - `.!?` end one only when followed (after closing quotes/brackets) by
+///   whitespace and then an uppercase letter, a CJK char, or end of text —
+///   so `e.g. something` and `v2.0 is` do not split.
+/// - A fragment's LEADING `[claim:…]` cluster re-attaches to the previous
+///   sentence (`Text. [claim:c1] Next…` cites "Text." with c1).
+/// - Fragments with no letters/digits/CJK (stray punctuation) are dropped.
+fn sentences(paragraph: &str) -> Vec<String> {
+    let chars: Vec<char> = paragraph.chars().collect();
+    let mut fragments: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        let hard = matches!(c, '。' | '！' | '？');
+        let soft = matches!(c, '.' | '!' | '?');
+        let mut end = i + 1;
+        if hard || soft {
+            // Closing quotes/brackets belong to the sentence they end.
+            while end < chars.len() && matches!(chars[end], '"' | '”' | '\'' | ')' | '）' | ']')
+            {
+                end += 1;
+            }
+        }
+        let splits = if hard {
+            true
+        } else if soft {
+            if is_abbreviation_dot(&chars, i) {
+                false
+            } else if end >= chars.len() {
+                true
+            } else if chars[end].is_whitespace() {
+                let mut k = end;
+                while k < chars.len() && chars[k].is_whitespace() {
+                    k += 1;
+                }
+                k >= chars.len() || chars[k].is_uppercase() || is_cjk(chars[k]) || chars[k] == '['
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if splits {
+            fragments.push(chars[start..end].iter().collect());
+            start = end;
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    if start < chars.len() {
+        fragments.push(chars[start..].iter().collect());
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for fragment in fragments {
+        let (leading, rest) = split_leading_citations(&fragment);
+        if !leading.is_empty()
+            && let Some(prev) = out.last_mut()
+        {
+            prev.push(' ');
+            prev.push_str(&leading);
+        }
+        let rest = rest.trim();
+        if rest.chars().any(|c| c.is_alphanumeric() || is_cjk(c)) {
+            out.push(rest.to_string());
+        } else if !rest.is_empty()
+            && let Some(prev) = out.last_mut()
+        {
+            // Citation-less punctuation tail (e.g. a stray `.`) — keep it
+            // attached rather than inventing an empty sentence.
+            prev.push(' ');
+            prev.push_str(rest);
+        }
+    }
+    out
+}
+
+/// Is the `.` at `dot` part of an abbreviation rather than a sentence end?
+/// True when the word before it is a single-letter dotted segment (`e.g.`,
+/// `i.e.`, `U.S.`) or a common non-terminal abbreviation.
+fn is_abbreviation_dot(chars: &[char], dot: usize) -> bool {
+    if chars[dot] != '.' {
+        return false;
+    }
+    let mut s = dot;
+    while s > 0 && chars[s - 1].is_alphanumeric() {
+        s -= 1;
+    }
+    if s > 0 && chars[s - 1] == '.' && dot - s <= 2 {
+        return true; // dotted abbreviation segment: e.g. / i.e. / U.S.
+    }
+    let word: String = chars[s..dot].iter().collect::<String>().to_lowercase();
+    matches!(
+        word.as_str(),
+        "etc" | "vs" | "cf" | "al" | "fig" | "ca" | "approx"
+    )
+}
+
+/// Split a fragment's leading run of `[claim:…]` citations (with surrounding
+/// whitespace) from the rest.
+fn split_leading_citations(fragment: &str) -> (String, String) {
+    let mut rest = fragment;
+    let mut leading = String::new();
+    loop {
+        let trimmed = rest.trim_start();
+        if let Some(after) = trimmed.strip_prefix("[claim:")
+            && let Some(end) = after.find(']')
+        {
+            if !leading.is_empty() {
+                leading.push(' ');
+            }
+            leading.push_str(&trimmed[..("[claim:".len() + end + 1)]);
+            rest = &after[end + 1..];
+        } else {
+            return (leading, rest.trim_start().to_string());
+        }
+    }
 }
 
 /// Claim keys the page never cites — reported as coverage, never a defect
@@ -457,9 +652,9 @@ mod tests {
         assert_eq!(
             defects,
             vec![
-                PageDefect::UncitedParagraph {
+                PageDefect::UncitedSentence {
                     section: 0,
-                    paragraph: 0
+                    snippet: "Uncited paragraph.".into()
                 },
                 PageDefect::UnknownClaim {
                     section: 0,
@@ -470,6 +665,51 @@ mod tests {
         assert_eq!(
             verify_page(&[], &keys(&["ck-a"])),
             vec![PageDefect::NoSections]
+        );
+    }
+
+    #[test]
+    fn one_citation_does_not_launder_the_uncited_sentence_beside_it() {
+        // The codex-review P1 example: paragraph-level checking would pass
+        // this; sentence-level must not.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "Unsupported claim. Supported claim [claim:ck-a].".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Unsupported claim.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn sentence_splitting_handles_trailing_citations_abbreviations_and_cjk() {
+        // Citation AFTER the period attaches to the sentence it follows.
+        let ok = vec![PageSection {
+            heading: "H".into(),
+            body: "Text. [claim:ck-a] Next sentence [claim:ck-b].".into(),
+        }];
+        assert!(verify_page(&ok, &keys(&["ck-a", "ck-b"])).is_empty());
+        // Abbreviations and version numbers do not split.
+        let abbrev = vec![PageSection {
+            heading: "H".into(),
+            body: "Systems like e.g. Mem0 v2.0 persist state [claim:ck-a].".into(),
+        }];
+        assert!(verify_page(&abbrev, &keys(&["ck-a"])).is_empty());
+        // CJK terminators split; the uncited CJK sentence fails.
+        let cjk = vec![PageSection {
+            heading: "H".into(),
+            body: "记忆需要治理 [claim:ck-a]。存储不是难点。".into(),
+        }];
+        assert_eq!(
+            verify_page(&cjk, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "存储不是难点。".into()
+            }]
         );
     }
 

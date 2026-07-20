@@ -1,0 +1,24 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_page-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.theme_page",
+  "hypothesis": "Given one theme community's ACTIVE durable claims (sorted, addressed by positional c1..cN handles), one LLM call weaves them into a 2-5 section topic page in which EVERY sentence carries a [claim:<key>] citation that survives a deterministic sentence-level gate (unknown keys and uncited sentences fail loud; code, not the model, substitutes handles for real claim_keys). Predicted: >=90% of themes on the real vault pass the gate within two live passes, and the operator judges >=80% of sampled pages coherent-and-faithful vs reading the raw claim list.",
+  "predicted_delta": {
+    "grounded_synthesis_coverage": "cross-source topic narrative with per-sentence provenance, a surface no competitor's wiki mode has",
+    "cost": "<= 1 cached theme_page/v1 call per theme per claim-set change (unchanged themes replay/keep)"
+  },
+  "guardrails": {
+    "gate": "sentence-level citation verifier in ovp-domain::crystal::theme_pages (deterministic, total); pages failing the gate are never written",
+    "cassette_stability": "request depends on synth_theme keywords + sorted claims only, never display labels"
+  },
+  "eval_plan": {
+    "replay_set": "real-vault run 2026-07-20: 15 communities / 465 active durable claims; first pass exposed key-copying degradation (t003, 35 fake keys) which motivated the handle design",
+    "paired_sources": 15,
+    "soak": false
+  },
+  "rollback": "Delete .ovp/crystal/theme_pages.json and stop running crystal-theme-pages (no surface reads it yet in TP1); remove prompt.theme_page from evolution/components.json. The file is a rebuildable projection — no durable state carries page text.",
+  "ablation_required": false
+}
