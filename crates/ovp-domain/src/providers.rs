@@ -61,7 +61,12 @@ pub fn apply_providers_env(vault_root: &Path) -> Result<ProvidersApplied, String
     let file: ProvidersFile =
         toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
 
-    let mut out = ProvidersApplied::default();
+    // Two phases: validate + convert the ENTIRE table first, mutate second.
+    // A partial apply followed by an error would leave the process with an
+    // earlier entry exported; a corrected retry (long-lived desktop process)
+    // would then see it as "already set" and keep the stale value until
+    // restart (codex P2).
+    let mut pending: Vec<(String, String)> = Vec::with_capacity(file.env.len());
     for (name, value) in &file.env {
         if name.is_empty()
             || !name
@@ -91,15 +96,20 @@ pub fn apply_providers_env(vault_root: &Path) -> Result<ProvidersApplied, String
                 ));
             }
         };
-        if std::env::var_os(name).is_some() {
-            out.already_set.push(name.clone());
+        pending.push((name.clone(), text));
+    }
+
+    let mut out = ProvidersApplied::default();
+    for (name, text) in pending {
+        if std::env::var_os(&name).is_some() {
+            out.already_set.push(name);
             continue;
         }
         // SAFETY: single-threaded startup path (see the function contract);
         // set_var is only unsound with concurrent env readers on some
         // platforms, and both call sites run before any thread spawns.
-        unsafe { std::env::set_var(name, &text) };
-        out.applied.push(name.clone());
+        unsafe { std::env::set_var(&name, &text) };
+        out.applied.push(name);
     }
     Ok(out)
 }
