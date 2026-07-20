@@ -1,0 +1,20 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_verify_tokenizer-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "parser",
+  "component": "parser.ask_verify",
+  "hypothesis": "PARSER surface only: normalizing the bare [ck-…] bracket form (a reserved, unambiguous ledger prefix) to its claim: citation key in BOTH shared tokenizers (verify_answer + citations_in_order, mirrored in the AskPage regex) recovers citations models reliably shorten, instead of honestly-but-uselessly reporting 0 citations. Predicted: verification recall >= baseline with zero false citations (ck- cannot collide with prose brackets).",
+  "predicted_delta": {
+    "verification_recall": "bare-key answers report their true citation count instead of 0"
+  },
+  "guardrails": {},
+  "eval_plan": {
+    "replay_set": "real-vault ask 2026-07-20: identical question, pre-normalization sample reported 0 citations (no_citations warning), post 3/3 resolved",
+    "paired_sources": 2,
+    "soak": false
+  },
+  "rollback": "Revert normalize_candidate to a pass-through and drop the ck- arm in is_citation_candidate (plus the AskPage regex alternative); strict-prefix-only tokenizing returns.",
+  "ablation_required": false
+}

@@ -1,0 +1,20 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "claim_key_plumbing-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.claim_citation_keys",
+  "hypothesis": "RUNTIME/INDEX surface only: carrying the ledger's deterministic claim_key on ClaimRow (additive) and preferring it as the claim evidence id makes every ask claim citation resolve to exactly one ledger record (claim_ids can collide across runs), with portal links resolving the key back to an unambiguous claim_id anchor and degrading to no-link when the anchor is shared. Predicted: zero ambiguous-claim audit dead-ends via the MCP claim tool, no wrong-card navigations from ask citations.",
+  "predicted_delta": {
+    "citation_auditability": "every [claim:…] citation resolves to exactly one ledger record via claim_key"
+  },
+  "guardrails": {},
+  "eval_plan": {
+    "replay_set": "real-vault index rebuild 2026-07-20 (465 durable claims all carrying claim_key) + MCP ask live samples in .run/theme-pages-tp1/",
+    "paired_sources": 2,
+    "soak": false
+  },
+  "rollback": "Drop the claim_key preference in assemble_evidence (id falls back to claim_id) and the citation_link key-resolution branch; ClaimRow.claim_key is additive and harmless to leave in place.",
+  "ablation_required": false
+}

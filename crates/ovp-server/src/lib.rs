@@ -1707,13 +1707,21 @@ fn citation_link(
             // portal's claim-card anchors are keyed by claim_id — resolve the
             // key back through the model so the link lands on the card
             // instead of an unknown anchor (codex P1). Older indexes (no
-            // claim_key) pass the id through unchanged.
+            // claim_key) pass the id through unchanged. When the RESOLVED
+            // claim_id is shared by several rows the anchor is ambiguous and
+            // could open the wrong claim — no link then (round-3 P1; the
+            // citation stays visible and auditable, just unclickable — same
+            // degradation the theme-page chips use).
             let anchor = model
                 .claims
                 .iter()
                 .find(|c| c.claim_key.as_deref() == Some(item.id.as_str()))
                 .map(|c| c.claim_id.as_str())
                 .unwrap_or(item.id.as_str());
+            let occurrences = model.claims.iter().filter(|c| c.claim_id == anchor).count();
+            if occurrences > 1 {
+                return None;
+            }
             Some(format!("/knowledge#{anchor}"))
         }
         EvidenceKind::Card | EvidenceKind::Unit => {

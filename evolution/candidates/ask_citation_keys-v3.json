@@ -5,7 +5,7 @@
   "target_version": "v3",
   "surface": "prompt",
   "component": "prompt.ask",
-  "hypothesis": "Citing claims by their STABLE ledger key (ck-…, via ClaimRow.claim_key) instead of the collision-prone claim_id, plus a system-prompt rule demanding the full bracketed key verbatim and tokenizer normalization of the bare [ck-…] form models reliably produce, makes every claim citation in an ask answer unambiguously auditable (MCP `claim` tool, portal claim links) without losing verification recall. Predicted: citation-ID resolution rate on real-vault asks >= the v2 baseline (v2 live sample: claim ids resolved but card ids were shortened and lost; v3 live sample: 3/3 resolved), and zero ambiguous-claim audit dead-ends.",
+  "hypothesis": "PROMPT surface only: adding the system-prompt rule 'cite the FULL bracketed key exactly as shown, never shorten or drop the kind prefix' raises citation-format compliance for the ck- claim keys the v3 evidence ids carry. Predicted: citation-ID resolution rate on real-vault asks >= the v2 baseline (v3 first live sample: 3/3 resolved vs a v2 sample where shortened forms left citations unresolved). Companion candidates cover the non-prompt surfaces: ask_verify_tokenizer-v1 (parser normalization of bare [ck-…]), claim_key_plumbing-v1 (index/runtime key routing).",
   "predicted_delta": {
     "citation_auditability": "every [claim:…] citation resolves to exactly one ledger record via claim_key",
     "verification_recall": ">= v2 (bare ck- forms normalize instead of dropping to 0 citations)"
