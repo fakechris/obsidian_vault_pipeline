@@ -1064,7 +1064,9 @@ fn handle_publish_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> 
         }
     };
     {
-        let mut job = state.publish_job.lock().expect("publish job lock");
+        // A poisoned lock (a prior panic while holding it) must not brick the
+        // endpoint for the server's lifetime — recover the inner state.
+        let mut job = state.publish_job.lock().unwrap_or_else(|e| e.into_inner());
         if job.running {
             return json_response(
                 409,
@@ -1077,7 +1079,20 @@ fn handle_publish_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> 
     let job = Arc::clone(&state.publish_job);
     std::thread::spawn(move || {
         let date = ovp_index::now_rfc3339()[..10].to_string();
-        let result = ovp_publish::run::run_publish(&vault_root, &date, &resolved, false, false);
+        // catch_unwind: a panic anywhere inside the publish must still clear
+        // `running` and surface as a failed outcome — otherwise the slot
+        // wedges at running=true until restart (review finding).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ovp_publish::run::run_publish(&vault_root, &date, &resolved, false, false)
+        }))
+        .unwrap_or_else(|panic| {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "publish panicked".to_string());
+            Err(format!("publish panicked: {msg}"))
+        });
         let outcome = match result {
             Ok(summary) => {
                 let mut v = serde_json::to_value(&summary).unwrap_or_default();
@@ -1093,7 +1108,7 @@ fn handle_publish_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> 
                 "finished_at": ovp_index::now_rfc3339(),
             }),
         };
-        let mut job = job.lock().expect("publish job lock");
+        let mut job = job.lock().unwrap_or_else(|e| e.into_inner());
         job.running = false;
         job.last = Some(outcome);
     });
@@ -1108,7 +1123,7 @@ fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>>
         &ovp_publish::run::RunOverrides::default(),
     )
     .is_ok();
-    let job = state.publish_job.lock().expect("publish job lock");
+    let job = state.publish_job.lock().unwrap_or_else(|e| e.into_inner());
     let body = serde_json::json!({
         "running": job.running,
         "configured": configured,

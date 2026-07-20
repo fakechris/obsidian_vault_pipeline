@@ -177,8 +177,20 @@ pub fn run_publish(
 
     // Copy the pre-built static SPA bundle over the site root (if given). The
     // bundle bakes its base path at build time — nothing to rewrite here.
+    // Guard: an out dir nested INSIDE the SPA dir would make this copy
+    // recurse into its own output forever (review finding).
     let spa_copied = if let Some(spa) = &resolved.spa_dir {
-        copy_dir(spa, &resolved.out)?;
+        let spa_c = std::fs::canonicalize(spa)
+            .map_err(|e| format!("resolve spa_dir {}: {e}", spa.display()))?;
+        let out_c = std::fs::canonicalize(&resolved.out).unwrap_or_else(|_| resolved.out.clone());
+        if out_c.starts_with(&spa_c) {
+            return Err(format!(
+                "out dir {} is inside spa_dir {} — the SPA copy would recurse into its own output",
+                out_c.display(),
+                spa_c.display()
+            ));
+        }
+        copy_dir(&spa_c, &resolved.out)?;
         true
     } else {
         false

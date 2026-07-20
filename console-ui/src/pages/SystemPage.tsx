@@ -182,6 +182,12 @@ function PublishSection() {
   const [status, setStatus] = useState<PublishStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // ONE lifecycle-managed poll loop: fetch once on mount, and keep polling
+  // while a run is in flight. Every timer lives inside this effect, so
+  // navigating away cancels everything (no detached setTimeout chain —
+  // review finding). `onPublish` never schedules its own timers; it just
+  // flips `running`, which re-arms this effect.
+  const running = status?.running ?? false;
   useEffect(() => {
     if (STATIC_MODE) return;
     let cancelled = false;
@@ -202,25 +208,14 @@ function PublishSection() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [running]);
 
   if (STATIC_MODE) return null;
 
   const onPublish = () => {
     setError(null);
     startPublish()
-      .then(() => {
-        setStatus((s) => (s ? { ...s, running: true } : s));
-        // Re-arm the poll loop.
-        const tick = () =>
-          fetchPublishStatus()
-            .then((s) => {
-              setStatus(s);
-              if (s.running) setTimeout(tick, 2000);
-            })
-            .catch(() => {});
-        setTimeout(tick, 1500);
-      })
+      .then(() => setStatus((s) => (s ? { ...s, running: true } : s)))
       .catch((e: Error) => setError(e.message));
   };
 
