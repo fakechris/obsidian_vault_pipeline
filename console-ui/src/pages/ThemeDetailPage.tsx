@@ -11,9 +11,104 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
 import { useI18n } from '../i18n';
-import { isMiscTheme, sourcesByCase, themeClaims, themeFromRoute } from '../lib/derive';
-import type { ClaimRow, IndexModel, SourceRow } from '../lib/types';
+import { fetchThemePages } from '../lib/api';
+import {
+  isMiscTheme,
+  parsePageBody,
+  sourcesByCase,
+  themeClaims,
+  themeFromRoute,
+} from '../lib/derive';
+import type {
+  ClaimRow,
+  IndexModel,
+  SourceRow,
+  ThemePagesResponse,
+} from '../lib/types';
 import { useModel } from '../model';
+
+function TopicOverview({ theme }: { theme: string }) {
+  const { t } = useI18n();
+  const [themePages, setThemePages] = useState<ThemePagesResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchThemePages().then(
+      (response) => {
+        if (!cancelled) setThemePages(response);
+      },
+      () => {
+        // Optional enhancement: fetch failures leave the original page intact.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const page = themePages?.pages.find((candidate) => candidate.label === theme);
+  const overview = useMemo(() => {
+    if (!page || !themePages) return null;
+    const sections = page.sections.map((section) => ({
+      ...section,
+      paragraphs: parsePageBody(section.body),
+    }));
+    const citationNumberByKey = new Map<string, number>();
+    for (const section of sections) {
+      for (const paragraph of section.paragraphs) {
+        for (const token of paragraph) {
+          if (
+            token.kind === 'cite' &&
+            themePages.claims[token.key] &&
+            !citationNumberByKey.has(token.key)
+          ) {
+            citationNumberByKey.set(token.key, citationNumberByKey.size + 1);
+          }
+        }
+      }
+    }
+    return { sections, citationNumberByKey };
+  }, [page, themePages]);
+
+  if (!page || !themePages || !overview) return null;
+
+  return (
+    <div className="card topic-overview">
+      <h2>{t('theme.topicOverview')}</h2>
+      <div className="claim-meta topic-overview-caption">
+        {t('theme.topicOverviewCaption', { n: page.claim_count })}
+      </div>
+      {overview.sections.map((section, sectionIndex) => (
+        <section
+          className="topic-overview-section"
+          key={`${section.heading}-${sectionIndex}`}
+        >
+          <h3>{section.heading}</h3>
+          {section.paragraphs.map((paragraph, paragraphIndex) => (
+            <p key={paragraphIndex}>
+              {paragraph.map((token, tokenIndex) => {
+                if (token.kind === 'text') return token.text;
+                const claim = themePages.claims[token.key];
+                const number = overview.citationNumberByKey.get(token.key);
+                if (!claim || number == null) return null;
+                return (
+                  <Link
+                    className="topic-cite"
+                    key={`${token.key}-${tokenIndex}`}
+                    title={claim.claim}
+                    to={{ hash: `#${encodeURIComponent(claim.claim_id)}` }}
+                  >
+                    [{number}]
+                  </Link>
+                );
+              })}
+            </p>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
 
 function ClaimSources({
   claim,
@@ -192,6 +287,7 @@ export default function ThemeDetailPage() {
               {t('theme.unclassifiedNote')}
             </p>
           )}
+          <TopicOverview theme={theme} />
           <ThemeBody model={model} theme={theme} />
         </>
       )}

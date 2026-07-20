@@ -264,6 +264,8 @@ export const zh: Record<keyof typeof en, string> = {
     '未命中任何关键词分组的来源——自动聚类是计划中的改进（M34）。',
 
   // theme detail
+  'theme.topicOverview': '主题综述',
+  'theme.topicOverviewCaption': '由 {n} 条结晶主张编织',
   'theme.counts': '持久 {durable} · 存疑 {caveated}',
   'theme.citedSources': '来源：',
   'theme.legacySource': '旧源——该 vault 中没有对应的详情页。',

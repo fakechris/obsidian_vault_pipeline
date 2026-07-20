@@ -1273,6 +1273,31 @@ body {
 .claim-card .claim-meta a {
   font-weight: 500;
 }
+.topic-overview-caption {
+  margin-bottom: 1rem;
+}
+.topic-overview-section + .topic-overview-section {
+  margin-top: 1.25rem;
+}
+.topic-overview-section p {
+  color: var(--text-soft);
+  line-height: 1.65;
+}
+.topic-overview-section p:last-child {
+  margin-bottom: 0;
+}
+.topic-cite {
+  display: inline-block;
+  margin: 0 0.1em;
+  padding: 0.1rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--accent-soft);
+  font-family: var(--ovp-font-mono);
+  font-size: var(--ovp-text-xs);
+  line-height: 1.1;
+  vertical-align: baseline;
+}
 
 /* ---------- search omnibox: page + ⌘K overlay (B3) ---------- */
 .omni-open {

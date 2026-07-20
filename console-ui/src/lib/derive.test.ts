@@ -5,6 +5,7 @@ import {
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
+  parsePageBody,
   runActivity,
   STALE_AFTER_MS,
 } from './derive';
@@ -284,5 +285,48 @@ describe('runActivity (live per-source feed)', () => {
       status: 'running',
     });
     expect(runActivity(m).pct).toBeNull();
+  });
+});
+
+describe('parsePageBody', () => {
+  it('tokenizes a claim marker in the middle of a sentence', () => {
+    expect(parsePageBody('Memory is infrastructure [claim:ck-001] for agents.')).toEqual([
+      [
+        { kind: 'text', text: 'Memory is infrastructure ' },
+        { kind: 'cite', key: 'ck-001' },
+        { kind: 'text', text: ' for agents.' },
+      ],
+    ]);
+  });
+
+  it('tokenizes multiple markers and separates blank-line paragraphs', () => {
+    expect(
+      parsePageBody('First [claim:ck-001] and second [claim:ck-002].\n\nNext paragraph.'),
+    ).toEqual([
+      [
+        { kind: 'text', text: 'First ' },
+        { kind: 'cite', key: 'ck-001' },
+        { kind: 'text', text: ' and second ' },
+        { kind: 'cite', key: 'ck-002' },
+        { kind: 'text', text: '.' },
+      ],
+      [{ kind: 'text', text: 'Next paragraph.' }],
+    ]);
+  });
+
+  it('treats an unterminated claim bracket as text', () => {
+    expect(parsePageBody('Keep [claim:ck-001 as written.')).toEqual([
+      [{ kind: 'text', text: 'Keep [claim:ck-001 as written.' }],
+    ]);
+  });
+
+  it('preserves CJK text around claim markers', () => {
+    expect(parsePageBody('记忆是智能体的基础设施[claim:ck-中文]，而不是附加功能。')).toEqual([
+      [
+        { kind: 'text', text: '记忆是智能体的基础设施' },
+        { kind: 'cite', key: 'ck-中文' },
+        { kind: 'text', text: '，而不是附加功能。' },
+      ],
+    ]);
   });
 });
