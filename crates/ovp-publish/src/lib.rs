@@ -126,10 +126,22 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         .join(layout.crystal_store_dir())
         .join("terrain.json");
 
+    // Grounded topic pages. Strict like the ledger: a corrupt projection must
+    // FAIL the publish, not silently deploy a site without its wiki layer. A
+    // genuinely missing file (never built) is fine — the body ships empty.
+    let theme_pages = ovp_domain::crystal::theme_pages::ThemePagesFile::load(
+        &args
+            .vault_root
+            .join(layout.crystal_store_dir())
+            .join("theme_pages.json"),
+    )
+    .map_err(|e| format!("publish: {e}"))?;
+
     let files = write_api_tree(
         &args.out_dir.join("api"),
         public,
         &records,
+        theme_pages.as_ref(),
         &terrain_src,
         args.published_at.as_deref(),
     )?;
@@ -154,6 +166,7 @@ fn write_api_tree(
     api: &Path,
     public: &IndexModel,
     records: &[ovp_domain::crystal::DurableRecord],
+    theme_pages: Option<&ovp_domain::crystal::theme_pages::ThemePagesFile>,
     terrain_src: &Path,
     published_at: Option<&str>,
 ) -> Result<usize, String> {
@@ -165,11 +178,17 @@ fn write_api_tree(
     // Top-level projections.
     write_json(&api.join("model.json"), &serde_json::to_value(public).unwrap_or_default())?;
     write_json(&api.join("themes.json"), &bodies::themes_body(records))?;
+    // Topic pages join against the SCRUBBED records: a page citing any
+    // non-public claim is dropped whole inside the body builder.
+    write_json(
+        &api.join("theme-pages.json"),
+        &bodies::theme_pages_body(theme_pages, records),
+    )?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
     let empty = Query { kind: None, status: None, date: None, term: None, tag: None , entity: None };
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
-    files += 5;
+    files += 6;
 
     // Graph: the global overview + one keyed file of per-theme subgraphs (keyed
     // by label so the SPA looks up client-side, no slug-matching). Neighborhood
@@ -570,15 +589,51 @@ mod tests {
         let api = tmp.path().join("api");
         let pv = PublicView::from_model(&model());
         let recs = vec![record()];
+        let pages = ovp_domain::crystal::theme_pages::ThemePagesFile {
+            schema: ovp_domain::crystal::theme_pages::THEME_PAGES_SCHEMA.into(),
+            pages: vec![
+                ovp_domain::crystal::theme_pages::ThemePage {
+                    community_id: 0,
+                    label: "Theme A".into(),
+                    label_zh: "主题A".into(),
+                    claim_keys: vec!["ck-abc123".into()],
+                    sections: vec![ovp_domain::crystal::theme_pages::PageSection {
+                        heading: "H".into(),
+                        body: "Grounded [claim:ck-abc123].".into(),
+                    }],
+                },
+                // Cites a claim that does not survive redaction — the page
+                // must be dropped whole from the published body.
+                ovp_domain::crystal::theme_pages::ThemePage {
+                    community_id: 1,
+                    label: "Private".into(),
+                    label_zh: "私有".into(),
+                    claim_keys: vec!["ck-private".into()],
+                    sections: vec![ovp_domain::crystal::theme_pages::PageSection {
+                        heading: "P".into(),
+                        body: "Hidden [claim:ck-private].".into(),
+                    }],
+                },
+            ],
+        };
         let n = write_api_tree(
             &api,
             pv.model(),
             &recs,
+            Some(&pages),
             &tmp.path().join("no-terrain.json"),
             Some("2026-07-01T12:00:00Z"),
         )
         .unwrap();
         assert!(n >= 8, "expected the full tree, got {n} files");
+
+        // theme-pages.json: the public page ships with its claim lookup, the
+        // page citing a non-public claim is dropped whole.
+        let tp = read(&api.join("theme-pages.json"));
+        assert_eq!(tp["pages"].as_array().unwrap().len(), 1);
+        assert_eq!(tp["pages"][0]["label"], "Theme A");
+        assert_eq!(tp["claims"]["ck-abc123"]["claim_id"], "id-1");
+        assert!(tp["claims"].get("ck-private").is_none());
 
         // model.json: processed source only, durable claim only.
         let m = read(&api.join("model.json"));

@@ -649,6 +649,7 @@ fn dispatch(
         (Method::Get, "/api/flow") => handle_flow(state),
         (Method::Get, "/api/settings") => handle_settings(state),
         (Method::Get, "/api/themes") => handle_themes(state),
+        (Method::Get, "/api/theme-pages") => handle_theme_pages(state),
         (Method::Get, "/api/terrain") => handle_terrain(state),
         (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
         (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
@@ -1002,6 +1003,27 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let records = load_active_records(state);
     let body = bodies::themes_body(&records).to_string();
+    json_stamped(200, &body, model.as_ref())
+}
+
+/// `GET /api/theme-pages` — the grounded topic pages built by
+/// `ovp2 crystal-theme-pages`, joined against the live active records for the
+/// citation lookup. A missing/corrupt projection degrades to an empty body
+/// (the portal simply hides the wiki panel); corruption is logged, and
+/// `crystal-theme-pages` is where it fails loud.
+fn handle_theme_pages(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let model = state.current_model();
+    let records = load_active_records(state);
+    let pages = match ovp_domain::crystal::theme_pages::ThemePagesFile::load(
+        &state.vault_root.join(".ovp/crystal/theme_pages.json"),
+    ) {
+        Ok(pages) => pages,
+        Err(e) => {
+            eprintln!("handle_theme_pages: ignoring theme_pages.json ({e})");
+            None
+        }
+    };
+    let body = bodies::theme_pages_body(pages.as_ref(), &records).to_string();
     json_stamped(200, &body, model.as_ref())
 }
 
@@ -2519,6 +2541,52 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
         let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy", "");
         assert_eq!(resp.status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn theme_pages_endpoint_serves_pages_with_claim_lookup_and_degrades() {
+        let vault = portal_vault("theme-pages-ep", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let store = vault.join(VaultLayout::new().crystal_store_dir());
+        std::fs::write(
+            store.join("theme_pages.json"),
+            serde_json::json!({
+                "schema": "ovp.theme_pages/v1",
+                "pages": [
+                    {"community_id": 0, "label": "Agent memory", "label_zh": "智能体记忆",
+                     "claim_keys": ["a"],
+                     "sections": [{"heading": "H", "body": "Grounded [claim:a]."}]},
+                    // Cites an unknown key — dropped whole from the body.
+                    {"community_id": 1, "label": "Ghost", "label_zh": "鬼",
+                     "claim_keys": ["nope"],
+                     "sections": [{"heading": "G", "body": "X [claim:nope]."}]}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let st = state(vault.clone(), None);
+
+        let v = body_json(dispatch(&st, Method::Get, "/api/theme-pages", ""));
+        let pages = v["pages"].as_array().unwrap();
+        assert_eq!(pages.len(), 1, "ghost-claim page must drop: {v}");
+        assert_eq!(pages[0]["label"], "Agent memory");
+        assert_eq!(pages[0]["sections"][0]["body"], "Grounded [claim:a].");
+        assert_eq!(v["claims"]["a"]["claim_id"], "id-a");
+        assert_eq!(v["claims"]["a"]["sources"][0], "good");
+
+        // Missing projection → empty body, still 200 (portal hides the wiki).
+        std::fs::remove_file(store.join("theme_pages.json")).unwrap();
+        let v = body_json(dispatch(&st, Method::Get, "/api/theme-pages", ""));
+        assert_eq!(v["pages"].as_array().unwrap().len(), 0);
+        // Corrupt projection degrades the same way (logged, never a 500).
+        std::fs::write(store.join("theme_pages.json"), "not json").unwrap();
+        let resp = dispatch(&st, Method::Get, "/api/theme-pages", "");
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(resp);
+        assert_eq!(v["pages"].as_array().unwrap().len(), 0);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
