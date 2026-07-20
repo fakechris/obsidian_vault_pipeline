@@ -1015,7 +1015,10 @@ fn handle_theme_pages(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let records = load_active_records(state);
     let pages = match ovp_domain::crystal::theme_pages::ThemePagesFile::load(
-        &state.vault_root.join(".ovp/crystal/theme_pages.json"),
+        &state
+            .vault_root
+            .join(state.layout.crystal_store_dir())
+            .join("theme_pages.json"),
     ) {
         Ok(pages) => pages,
         Err(e) => {

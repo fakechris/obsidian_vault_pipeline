@@ -100,6 +100,11 @@ export function fetchThemePages(): Promise<ThemePagesResponse> {
   }
   if (!themePagesCache) {
     themePagesCache = fetchJson<ThemePagesResponse>(`${API}/theme-pages.json`);
+    // A transiently failed fetch must not pin a rejected promise for the
+    // whole session — drop it so the next mount retries.
+    themePagesCache.catch(() => {
+      themePagesCache = null;
+    });
   }
   return themePagesCache;
 }
