@@ -347,6 +347,19 @@ describe('closureNodeIds (VZ1 evidence closure)', () => {
     expect([...out].sort()).toEqual(['claim:ck-a', 'source:s1']);
   });
 
+  it('never presents related claims as evidence once citations are known', () => {
+    // Claim-perspective overview: NO source nodes exist, only `related`
+    // claim neighbors — with citations resolved, the closure must be the
+    // claim alone (codex P1), not its related claims.
+    const out = closureNodeIds(
+      'claim:ck-a',
+      [{ source_sha256: 's1' }],
+      (id) => id.startsWith('claim:'),
+      adjacency,
+    );
+    expect([...out]).toEqual(['claim:ck-a']);
+  });
+
   it('falls back to graph neighbors while citations are unavailable', () => {
     const out = closureNodeIds('claim:ck-a', null, () => true, adjacency);
     expect(out.has('source:s1')).toBe(true);

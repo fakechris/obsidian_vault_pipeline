@@ -364,11 +364,16 @@ export default function KnowledgeGraph({
     fittedRef.current = false;
   }, [data, mode]);
 
-  /** ~15% alpha variant of a #rrggbb color (pass-through otherwise) — the
-   * out-of-closure fade for 3D nodes and 2D links, matching drawNode's
-   * globalAlpha dim. */
-  const faintColor = (c: string) =>
-    /^#[0-9a-f]{6}$/i.test(c) ? `${c}26` : c;
+  /** ~15% alpha variant of a color — the out-of-closure fade for 3D nodes
+   * and 2D links, matching drawNode's globalAlpha dim. Handles both the
+   * #rrggbb form and the rgba(...) form the --graph-link tokens use
+   * (alpha replaced, not multiplied — the fade is the statement). */
+  const faintColor = (c: string) => {
+    if (/^#[0-9a-f]{6}$/i.test(c)) return `${c}26`;
+    const m = c.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+    if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0.15)`;
+    return c;
+  };
 
   const openNode = (n: GraphNode) => {
     if (n.type === 'source') {

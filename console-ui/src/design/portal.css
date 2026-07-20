@@ -1073,6 +1073,11 @@ body {
   bottom: 0.5rem;
   z-index: 2;
   max-width: min(320px, calc(100% - 1rem));
+  /* The whole card stays inside the graph viewport and scrolls as one —
+     an inner-only scroll would let a long evidence list push the claim
+     header + Open button above the embed's overflow:hidden clip (VZ1). */
+  max-height: calc(100% - 1rem);
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--ovp-radius-md);
   background: var(--surface);
@@ -1728,8 +1733,6 @@ body {
   margin-top: 8px;
   border-top: 1px solid var(--border, #2a2f3a);
   padding-top: 6px;
-  max-height: 260px;
-  overflow-y: auto;
 }
 .graph-evidence-title {
   font-size: 11px;
