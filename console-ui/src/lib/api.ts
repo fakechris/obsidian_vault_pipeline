@@ -10,6 +10,7 @@ import type {
   SettingsPayload,
   SourceDetail,
   ThemeCount,
+  ThemePagesResponse,
 } from './types';
 
 /** Static-publish mode: the SPA reads snapshotted `<base>/api/*.json` files
@@ -86,6 +87,16 @@ export function fetchClaim(id: string): Promise<ClaimDetail> {
 
 export function fetchFlow(): Promise<FlowData> {
   return fetchJson<FlowData>(STATIC_MODE ? `${API}/flow.json` : '/api/flow');
+}
+
+let themePagesCache: Promise<ThemePagesResponse> | null = null;
+export function fetchThemePages(): Promise<ThemePagesResponse> {
+  if (!themePagesCache) {
+    themePagesCache = fetchJson<ThemePagesResponse>(
+      STATIC_MODE ? `${API}/theme-pages.json` : '/api/theme-pages',
+    );
+  }
+  return themePagesCache;
 }
 
 export function fetchFind(term: string): Promise<FindHit[]> {

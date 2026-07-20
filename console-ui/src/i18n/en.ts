@@ -285,6 +285,8 @@ export const en = {
     "Sources that didn't match any keyword bucket — automatic clustering is a planned improvement (M34).",
 
   // theme detail
+  'theme.topicOverview': 'Topic overview',
+  'theme.topicOverviewCaption': 'woven from {n} claims',
   'theme.counts': 'durable {durable} · caveated {caveated}',
   'theme.citedSources': 'Sources:',
   'theme.legacySource': 'Legacy source — no detail page in this vault.',
