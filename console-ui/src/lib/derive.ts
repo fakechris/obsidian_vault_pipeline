@@ -586,3 +586,29 @@ export function ageParts(
     return { unknown: false, builtAt, seconds, unit: 'hour', value: Math.floor(seconds / HOUR) };
   return { unknown: false, builtAt, seconds, unit: 'day', value: Math.floor(seconds / DAY) };
 }
+
+/** VZ1 — the evidence-closure node set for a selected claim node: the claim
+ * itself plus its cited sources' graph nodes (`source:<sha256>`, filtered to
+ * nodes actually present). ONLY while the citation detail hasn't arrived (or
+ * the fetch failed, `citations === null`) does it fall back to direct graph
+ * neighbors — once citations are known, neighbors must NOT stand in for
+ * evidence: in the claim-perspective overview the neighbors are merely
+ * `related` claims, and lighting them up would present relatedness as
+ * provenance. Pure — vitest-covered. */
+export function closureNodeIds(
+  selectedId: string,
+  citations: { source_sha256: string }[] | null,
+  hasNode: (id: string) => boolean,
+  adjacency: Map<string, Set<string>>,
+): Set<string> {
+  const out = new Set<string>([selectedId]);
+  if (citations === null) {
+    for (const n of adjacency.get(selectedId) ?? []) out.add(n);
+    return out;
+  }
+  for (const c of citations) {
+    const id = `source:${c.source_sha256}`;
+    if (hasNode(id)) out.add(id);
+  }
+  return out;
+}

@@ -2,6 +2,7 @@
  * Pure functions over the model + a passed-in wall clock — no DOM. */
 import { describe, expect, it } from 'vitest';
 import {
+  closureNodeIds,
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
@@ -328,5 +329,45 @@ describe('parsePageBody', () => {
         { kind: 'text', text: '，而不是附加功能。' },
       ],
     ]);
+  });
+});
+
+describe('closureNodeIds (VZ1 evidence closure)', () => {
+  const adjacency = new Map<string, Set<string>>([
+    ['claim:ck-a', new Set(['source:s1', 'claim:ck-b'])],
+  ]);
+
+  it('uses cited sources present in the graph, ignoring absent ones', () => {
+    const out = closureNodeIds(
+      'claim:ck-a',
+      [{ source_sha256: 's1' }, { source_sha256: 's-absent' }],
+      (id) => id === 'source:s1' || id === 'claim:ck-a',
+      adjacency,
+    );
+    expect([...out].sort()).toEqual(['claim:ck-a', 'source:s1']);
+  });
+
+  it('never presents related claims as evidence once citations are known', () => {
+    // Claim-perspective overview: NO source nodes exist, only `related`
+    // claim neighbors — with citations resolved, the closure must be the
+    // claim alone (codex P1), not its related claims.
+    const out = closureNodeIds(
+      'claim:ck-a',
+      [{ source_sha256: 's1' }],
+      (id) => id.startsWith('claim:'),
+      adjacency,
+    );
+    expect([...out]).toEqual(['claim:ck-a']);
+  });
+
+  it('falls back to graph neighbors while citations are unavailable', () => {
+    const out = closureNodeIds('claim:ck-a', null, () => true, adjacency);
+    expect(out.has('source:s1')).toBe(true);
+    expect(out.has('claim:ck-b')).toBe(true);
+  });
+
+  it('always contains the claim itself, even with nothing else', () => {
+    const out = closureNodeIds('claim:ck-x', [], () => false, new Map());
+    expect([...out]).toEqual(['claim:ck-x']);
   });
 });

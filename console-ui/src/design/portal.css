@@ -1073,6 +1073,11 @@ body {
   bottom: 0.5rem;
   z-index: 2;
   max-width: min(320px, calc(100% - 1rem));
+  /* The whole card stays inside the graph viewport and scrolls as one —
+     an inner-only scroll would let a long evidence list push the claim
+     header + Open button above the embed's overflow:hidden clip (VZ1). */
+  max-height: calc(100% - 1rem);
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--ovp-radius-md);
   background: var(--surface);
@@ -1721,4 +1726,37 @@ body {
 .terrain-legend button:hover {
   background: rgba(120, 180, 205, 0.2);
   color: #fff;
+}
+
+/* VZ1 — evidence-closure panel inside .graph-info */
+.graph-evidence {
+  margin-top: 8px;
+  border-top: 1px solid var(--border, #2a2f3a);
+  padding-top: 6px;
+}
+.graph-evidence-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.graph-evidence-item {
+  margin-bottom: 8px;
+}
+.graph-evidence-quote {
+  font-size: 12px;
+  line-height: 1.45;
+  font-style: italic;
+  opacity: 0.9;
+}
+.graph-evidence-src {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, #7aa2f7);
+  cursor: pointer;
+  text-decoration: underline;
 }

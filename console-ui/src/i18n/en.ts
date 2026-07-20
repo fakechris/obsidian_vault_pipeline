@@ -231,6 +231,8 @@ export const en = {
   'graph.kindCard': 'card',
   'graph.openHint': 'Click for a summary, then Open.',
   'graph.open': 'Open',
+  'graph.evidenceTitle': 'Evidence chain',
+  'graph.evidenceLine': 'line {n}',
   'graph.no3d': '3D needs WebGL, which is unavailable in this browser.',
   'graph.controls3d': 'Drag to rotate · scroll to zoom · right-drag to pan',
   'graph.focusCommunity': 'Focus this community',
