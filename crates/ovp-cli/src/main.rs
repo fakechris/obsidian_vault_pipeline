@@ -668,6 +668,30 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         seed: u64,
     },
+    /// PRODUCT — weave each theme's ACTIVE durable claims into a grounded
+    /// topic page (.ovp/crystal/theme_pages.json): claims grouped by majority
+    /// community → theme_page/v1 narrative → deterministic page gate (every
+    /// paragraph cites a known [claim:<key>]). Rebuildable projection; pages
+    /// with an unchanged claim set are kept without an LLM call. Run
+    /// `crystal-themes` first.
+    CrystalThemePages {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// `replay` (default) serves cassette replies; `live` calls the API
+        /// and records one theme_page/v1 exchange per stale theme.
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        /// Cassette root for theme_page/v1. Default:
+        /// `<vault-root>/.ovp/cassettes/crystal`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Regenerate every page even when its claim set is unchanged.
+        #[arg(long)]
+        refresh: bool,
+        /// Themes with fewer active durable claims get no page.
+        #[arg(long, default_value_t = ovp_domain::crystal::theme_pages::MIN_PAGE_CLAIMS)]
+        min_claims: usize,
+    },
     /// Cold-start tagging for vaults without a curated vocabulary: theme
     /// communities seed a closed vocabulary (.ovp/tags/vocabulary.toml) and a
     /// deterministic keyword floor; `--client live` adds batched LLM
@@ -1771,6 +1795,21 @@ fn main() -> ExitCode {
                 cosine_threshold,
                 resolution,
                 seed,
+            })
+        }
+        Cmd::CrystalThemePages { vault_root, client, cache_dir, refresh, min_claims } => {
+            use commands::client::ClientKind;
+            use commands::crystal_theme_pages::CrystalThemePagesArgs;
+            let client_kind = match client {
+                ClientKindArg::Replay => ClientKind::Replay,
+                ClientKindArg::Live => ClientKind::Live,
+            };
+            commands::crystal_theme_pages::run(CrystalThemePagesArgs {
+                vault_root,
+                client_kind,
+                cache_dir,
+                refresh,
+                min_claims,
             })
         }
         Cmd::TagsBootstrap {

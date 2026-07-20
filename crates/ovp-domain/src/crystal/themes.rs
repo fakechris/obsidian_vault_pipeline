@@ -159,12 +159,13 @@ impl ThemesFile {
         self.community(id).map(|c| c.label.as_str())
     }
 
-    /// Majority community among `case_ids`, resolved to its display label
-    /// AFTER the vote. Votes are keyed by community ID — two distinct
-    /// communities that happen to share a display label must not pool
-    /// their votes (codex review P2). Ties → smallest community id.
-    /// `None` when no case maps to a community.
-    pub fn majority_label(&self, case_ids: &[String]) -> Option<String> {
+    /// Majority community ID among `case_ids`. Votes are keyed by community
+    /// ID — two distinct communities that happen to share a display label
+    /// must not pool their votes (codex review P2). Ties → smallest community
+    /// id. `None` when no case maps to a community. This is the STABLE
+    /// grouping identity (theme pages key on it); `majority_label` resolves
+    /// it to presentation only.
+    pub fn majority_community(&self, case_ids: &[String]) -> Option<i64> {
         let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
         for case in case_ids {
             if let Some(&id) = self.packs.get(case)
@@ -176,7 +177,14 @@ impl ThemesFile {
         let (winner, _) = counts
             .into_iter()
             .max_by(|(ia, ca), (ib, cb)| ca.cmp(cb).then(ib.cmp(ia)))?;
-        self.community(winner).map(|c| c.label.clone())
+        self.community(winner).map(|c| c.id)
+    }
+
+    /// Majority community among `case_ids`, resolved to its display label
+    /// AFTER the vote (see `majority_community` for the vote semantics).
+    pub fn majority_label(&self, case_ids: &[String]) -> Option<String> {
+        let id = self.majority_community(case_ids)?;
+        self.community(id).map(|c| c.label.clone())
     }
 }
 
