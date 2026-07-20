@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ovp_domain::crystal::theme_pages::{
-    PageClaim, THEME_PAGES_SCHEMA, ThemePage, ThemePagesFile, parse_theme_page, theme_page_request,
-    uncited_keys, verify_page,
+    PageClaim, THEME_PAGES_SCHEMA, ThemePage, ThemePagesFile, parse_theme_page, resolve_handles,
+    theme_page_request, uncited_keys, verify_page,
 };
 use ovp_domain::crystal::themes::ThemesFile;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
@@ -115,7 +115,11 @@ pub(crate) fn build_pages(
             })
             .collect();
         let req = theme_page_request(&community.synth_theme(), &claims);
-        let (sections, _repair) = call_and_parse(client, &req, "theme-page", parse_theme_page)?;
+        let (mut sections, _repair) = call_and_parse(client, &req, "theme-page", parse_theme_page)?;
+        // The model cites positional handles (c1, c2, …); the code owns the
+        // handle → claim_key substitution. Unresolved handles survive into
+        // the verifier and fail loud as UnknownClaim.
+        resolve_handles(&mut sections, &claim_keys);
 
         let known: BTreeSet<String> = claim_keys.iter().cloned().collect();
         let defects = verify_page(&sections, &known);
@@ -373,7 +377,7 @@ mod tests {
         client.insert(
             &fixture_request(),
             reply(
-                r#"{"sections":[{"heading":"Memory","body":"Persists [claim:ck-b], compounds [claim:ck-a]."}]}"#,
+                r#"{"sections":[{"heading":"Memory","body":"Persists [claim:c2], compounds [claim:c1]."}]}"#,
             ),
         );
 
@@ -385,6 +389,10 @@ mod tests {
         assert_eq!(page.label, "Agent memory");
         assert_eq!(page.claim_keys, vec!["ck-a", "ck-b"], "sorted claim keys");
         assert_eq!(page.sections.len(), 1);
+        assert_eq!(
+            page.sections[0].body, "Persists [claim:ck-b], compounds [claim:ck-a].",
+            "persisted pages carry real claim keys, not handles"
+        );
     }
 
     #[test]
@@ -432,7 +440,7 @@ mod tests {
         let mut client = FixtureModelClient::new();
         client.insert(
             &fixture_request(),
-            reply(r#"{"sections":[{"heading":"New","body":"New [claim:ck-b]."}]}"#),
+            reply(r#"{"sections":[{"heading":"New","body":"New [claim:c2]."}]}"#),
         );
         let out = build_pages(&records, &themes, Some(&existing), &mut client, 2, true).unwrap();
         assert_eq!((out.built, out.kept), (1, 0));
@@ -447,14 +455,14 @@ mod tests {
         client.insert(
             &fixture_request(),
             reply(
-                r#"{"sections":[{"heading":"H","body":"No citation here.\n\nGhost [claim:ck-ghost]."}]}"#,
+                r#"{"sections":[{"heading":"H","body":"No citation here.\n\nGhost handle [claim:c9]."}]}"#,
             ),
         );
         let err = build_pages(&records, &themes, None, &mut client, 2, false).unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.contains("failed the page gate"), "{msg}");
         assert!(msg.contains("no [claim:…] citation"), "{msg}");
-        assert!(msg.contains("ck-ghost"), "{msg}");
+        assert!(msg.contains("unknown claim `c9`"), "{msg}");
     }
 
     #[test]

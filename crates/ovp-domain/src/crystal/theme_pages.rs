@@ -114,22 +114,35 @@ impl ThemePagesFile {
 
 // ---- Synthesis request (`theme_page/v1`) ----
 
+/// The positional citation handle the MODEL uses for claim `index` (0-based
+/// caller side, 1-based in the prompt): `c1`, `c2`, …. Real `claim_key`s are
+/// 16-hex strings the model cannot reliably copy dozens of times — the first
+/// live run on the real vault degraded into pattern-continued fake keys after
+/// ~4 sections (t003, 35 defects). Small handles are copyable; the code, not
+/// the model, owns the handle → claim_key substitution.
+pub fn claim_handle(index: usize) -> String {
+    format!("c{}", index + 1)
+}
+
 /// Build the page-synthesis `ModelRequest` for one theme. `synth_theme` is
 /// the community's DETERMINISTIC keyword identity
 /// (`ThemeCommunity::synth_theme`) — never the display label, so a
 /// presentation relabel cannot move the cassette key or change a prompt
 /// byte. Claims are pre-sorted by the caller (sorted claim_key order) so the
-/// same claim set always builds the same request.
+/// same claim set always builds the same request; the prompt shows each
+/// claim under its positional handle (`claim_handle`), never the raw key.
 pub fn theme_page_request(synth_theme: &str, claims: &[PageClaim]) -> ModelRequest {
     let marker = "## Topic";
     let (system, _) = THEME_PAGE_TEMPLATE
         .split_once(marker)
         .unwrap_or((THEME_PAGE_TEMPLATE, ""));
     let mut user = format!("{marker}\n\nKeywords: {synth_theme}\n\nClaims:\n");
-    for c in claims {
+    for (i, c) in claims.iter().enumerate() {
         user.push_str(&format!(
             "- [claim:{}] ({} source(s)) {}\n",
-            c.claim_key, c.source_count, c.claim
+            claim_handle(i),
+            c.source_count,
+            c.claim
         ));
     }
     ModelRequest {
@@ -139,6 +152,40 @@ pub fn theme_page_request(synth_theme: &str, claims: &[PageClaim]) -> ModelReque
         max_tokens: PAGE_MAX_TOKENS,
         temperature: None,
         cache_namespace: Some(THEME_PAGE_PROMPT_ID.to_string()),
+    }
+}
+
+/// Replace `[claim:cN]` handles with the real claim keys, in the same sorted
+/// claim order the request was built from. Unknown or out-of-range handles
+/// are left untouched — the verifier then reports them as `UnknownClaim`
+/// (fail loud, never silently drop a citation). Bodies that already carry a
+/// full `[claim:ck-…]` key pass through unchanged.
+pub fn resolve_handles(sections: &mut [PageSection], claim_keys: &[String]) {
+    for section in sections.iter_mut() {
+        let mut out = String::with_capacity(section.body.len());
+        let mut rest = section.body.as_str();
+        while let Some(start) = rest.find("[claim:") {
+            let (head, tail) = rest.split_at(start);
+            out.push_str(head);
+            let Some(end) = tail.find(']') else {
+                out.push_str(tail);
+                rest = "";
+                break;
+            };
+            let inner = tail["[claim:".len()..end].trim();
+            let resolved = inner
+                .strip_prefix('c')
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|i| claim_keys.get(i));
+            match resolved {
+                Some(key) => out.push_str(&format!("[claim:{key}]")),
+                None => out.push_str(&tail[..=end]),
+            }
+            rest = &tail[end + 1..];
+        }
+        out.push_str(rest);
+        section.body = out;
     }
 }
 
@@ -315,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn request_carries_keys_and_claims_and_namespace() {
+    fn request_carries_handles_and_claims_and_namespace() {
         let req = theme_page_request("memory · context · agent", &claims_fixture());
         assert_eq!(req.cache_namespace.as_deref(), Some("theme_page/v1"));
         assert!(req.system.as_deref().unwrap().contains("theme_page/v1"));
@@ -323,8 +370,47 @@ mod tests {
             panic!()
         };
         assert!(content.contains("memory · context · agent"));
-        assert!(content.contains("[claim:ck-aaaa111122223333] (3 source(s))"));
+        assert!(content.contains("[claim:c1] (3 source(s))"));
+        assert!(content.contains("[claim:c2] (2 source(s))"));
         assert!(content.contains("Retrieval quality beats graph rendering."));
+        assert!(
+            !content.contains("ck-aaaa111122223333"),
+            "raw keys never reach the model — handles only"
+        );
+    }
+
+    #[test]
+    fn resolve_handles_substitutes_and_leaves_the_unresolvable_loud() {
+        let keys_vec = vec!["ck-aaaa".to_string(), "ck-bbbb".to_string()];
+        let mut sections = vec![PageSection {
+            heading: "H".into(),
+            body: "First [claim:c1] and second [claim: c2 ].\n\n\
+                   Out of range [claim:c9], not a handle [claim:ck-aaaa], \
+                   garbage [claim:cx], unterminated [claim:c1"
+                .into(),
+        }];
+        resolve_handles(&mut sections, &keys_vec);
+        assert_eq!(
+            sections[0].body,
+            "First [claim:ck-aaaa] and second [claim:ck-bbbb].\n\n\
+             Out of range [claim:c9], not a handle [claim:ck-aaaa], \
+             garbage [claim:cx], unterminated [claim:c1"
+        );
+        // The survivors are exactly what the verifier then flags.
+        let defects = verify_page(&sections, &keys(&["ck-aaaa", "ck-bbbb"]));
+        assert_eq!(
+            defects,
+            vec![
+                PageDefect::UnknownClaim {
+                    section: 0,
+                    citation: "c9".into()
+                },
+                PageDefect::UnknownClaim {
+                    section: 0,
+                    citation: "cx".into()
+                },
+            ]
+        );
     }
 
     #[test]
