@@ -142,6 +142,7 @@ mod tests {
         let claims = (0..50)
             .map(|i| ClaimRow {
                 claim_id: format!("c{i}"),
+                claim_key: None,
                 claim: "代理记忆与上下文系统：文件系统即记忆，语义检索不足以独立支撑长期记忆。".into(),
                 theme: Some("记忆与上下文".into()),
                 status: ClaimStatus::Durable,

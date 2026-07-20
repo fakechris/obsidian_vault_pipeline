@@ -840,6 +840,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
         };
         claims.push(ClaimRow {
             claim_id: rec.claim_id.clone(),
+            claim_key: Some(rec.claim_key.clone()),
             claim: rec.claim.clone(),
             theme: (!rec.theme.is_empty()).then(|| rec.theme.clone()),
             status,
@@ -868,6 +869,8 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             };
             claims.push(ClaimRow {
                 claim_id: entry.claim_id,
+                // Review entries live outside the ledger and have no ck- key.
+                claim_key: None,
                 claim: entry.claim,
                 theme: (!entry.theme.is_empty()).then_some(entry.theme),
                 status: ClaimStatus::Caveated,

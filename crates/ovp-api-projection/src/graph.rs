@@ -2267,6 +2267,7 @@ mod tests {
         let mut model = model_for_cases(&[("case1", "sha1", "Source One")]);
         model.claims.push(ovp_index::ClaimRow {
             claim_id: "cav-1".into(),
+            claim_key: None,
             claim: "caveated-only claim".into(),
             theme: Some("gamma".into()),
             status: ovp_index::ClaimStatus::Caveated,

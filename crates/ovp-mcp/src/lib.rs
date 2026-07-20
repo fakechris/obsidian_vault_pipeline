@@ -290,7 +290,7 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             },
             {
                 "name": "ask",
-                "description": "Ask a question ANSWERED FROM THE VAULT'S EVIDENCE ONLY (durable claims, cards, verbatim units) — every statement cites its evidence and a deterministic verifier reports how many citations resolve. Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool.",
+                "description": "Ask a question answered FROM THE VAULT'S EVIDENCE (active durable claims, cards, verbatim units). The answer carries inline citations and a deterministic report of how many citation IDs resolve against the supplied evidence (ID resolution — it does not prove every sentence is cited). Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -376,11 +376,37 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                 .into(),
         });
     };
-    let model = state.load_model().ok_or_else(|| RpcError {
+    let mut model = state.load_model().ok_or_else(|| RpcError {
         code: -32000,
         message: "Index not available — run `ovp2 index` first".into(),
     })?;
-    let evidence = ovp_index::read_evidence(&state.vault_root).ok();
+    // This tool promises answers grounded in DURABLE claims — caveated,
+    // superseded, and retracted rows must not be retrievable here (codex
+    // P1; they also could not be audited by the active-record `claim` tool).
+    model
+        .claims
+        .retain(|c| c.status == ovp_index::ClaimStatus::Durable);
+    // Missing evidence.json = a fresh/claims-only vault (fine, noted);
+    // a CORRUPT sidecar is surfaced, never silently downgraded to
+    // claims-only while the report implies full evidence (codex P2).
+    let (evidence, degraded_note) = match ovp_index::read_evidence(&state.vault_root) {
+        Ok(e) => (Some(e), None),
+        Err(e) if !state.vault_root.join(".ovp/evidence.json").exists() => {
+            let _ = e;
+            (
+                None,
+                Some("note: no evidence sidecar — answer drawn from claims only (no cards/units)"),
+            )
+        }
+        Err(e) => {
+            return Err(RpcError {
+                code: -32000,
+                message: format!(
+                    "evidence sidecar unreadable ({e}) — rebuild with `ovp2 index` before asking"
+                ),
+            });
+        }
+    };
     let mut client = factory().map_err(|e| RpcError {
         code: -32000,
         message: format!("ask client configuration invalid: {e}"),
@@ -404,11 +430,14 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     })?;
 
     // Answer first, then the deterministic verification report — the agent
-    // sees HOW grounded the answer is, not just the prose.
+    // sees HOW grounded the answer is, not just the prose. The report checks
+    // that citation IDs resolve against the supplied evidence; it does NOT
+    // prove every sentence is cited (that gate exists only for theme pages).
     let mut text = result.answer.trim().to_string();
     if let Some(v) = &result.verification {
         text.push_str(&format!(
-            "\n\n---\nverification: {} citation(s), {} verified against supplied evidence",
+            "\n\n---\nverification (citation-ID resolution, not per-sentence): \
+             {} citation(s), {} resolved against supplied evidence",
             v.cited, v.verified
         ));
         if !v.missing.is_empty() {
@@ -418,9 +447,13 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             text.push_str(&format!("; warnings: {}", v.warnings.join(", ")));
         }
         text.push_str(
-            "\naudit any [claim:<id>] citation with the `claim` tool \
-             (accepts claim ids and ovp://claim/ keys)",
+            "\naudit any [claim:<key>] citation with the `claim` tool \
+             (accepts ck- claim keys, claim ids, and ovp://claim/ URIs)",
         );
+    }
+    if let Some(note) = degraded_note {
+        text.push_str("\n");
+        text.push_str(note);
     }
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }

@@ -2310,6 +2310,7 @@ mod tests {
             }],
             claims: vec![ClaimRow {
                 claim_id: "c01".into(),
+                claim_key: None,
                 claim: "Filesystem works as memory.".into(),
                 theme: Some("memory".into()),
                 status: ClaimStatus::Durable,

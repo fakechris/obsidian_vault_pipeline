@@ -148,6 +148,7 @@ mod tests {
     fn claim(id: &str, status: ClaimStatus) -> ClaimRow {
         ClaimRow {
             claim_id: id.into(),
+            claim_key: None,
             claim: "c".into(),
             theme: Some("Th".into()),
             status,

@@ -381,6 +381,7 @@ mod tests {
             claims: vec![
                 ClaimRow {
                     claim_id: "c01".into(),
+                    claim_key: None,
                     claim: "Filesystem works as memory.".into(),
                     theme: Some("memory".into()),
                     status: ClaimStatus::Durable,
@@ -391,6 +392,7 @@ mod tests {
                 },
                 ClaimRow {
                     claim_id: "c02".into(),
+                    claim_key: None,
                     claim: "Context is the moat.".into(),
                     theme: None,
                     status: ClaimStatus::Caveated,
