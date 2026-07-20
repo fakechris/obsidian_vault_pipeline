@@ -8,6 +8,8 @@
 //! diff. It reuses the SAME `ovp-api-projection` builders the live server uses
 //! (no drift) over a `PublicView` (durable claims + processed sources only).
 
+pub mod run;
+
 use std::path::{Path, PathBuf};
 
 use ovp_api_projection::{PublicView, bodies, graph, readers};

@@ -379,6 +379,17 @@ export const en = {
     'DURABLE claims passed every evidence gate; CAVEATED claims carry a known weakness and wait for review — they are labeled, never hidden.',
   'system.conceptGate':
     'THE GATE is a mechanical check before anything is written to the crystal ledger: every citation must resolve to a real quoted unit, and claim strength is scored — human decisions go through it too, never around it.',
+  'system.publish': 'Publish',
+  'system.publishHelp':
+    'Snapshot the public-safe knowledge site and deploy it as configured in .ovp/publish.toml.',
+  'system.publishNotConfigured':
+    'Not configured — set `out` (and optionally `repo`/`branch`/`spa_dir`) in .ovp/publish.toml.',
+  'system.publishNow': 'Publish now',
+  'system.publishRunning': 'Publishing…',
+  'system.publishLastOk': 'Last publish: {files} files, {claims} durable claims',
+  'system.publishPushed': 'pushed',
+  'system.publishNoChange': 'no change to deploy',
+  'system.publishLastFailed': 'Last publish failed',
   'system.settings': 'Settings',
   'system.settingsReadonly':
     'Read-only in v1 — changes happen at the CLI, this panel shows what the server is running with.',

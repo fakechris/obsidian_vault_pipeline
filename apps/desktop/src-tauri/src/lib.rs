@@ -121,6 +121,12 @@ fn resolve_viz_dir(app: &AppHandle) -> PathBuf {
 /// left unconfigured for now (POST /api/ask answers 503) — read/query/portal all
 /// work; live ask is wired in a later stage.
 fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
+    // NOTE deliberately NO `providers::apply_providers_env` here: the Tauri
+    // runtime is multithreaded by the time any command handler runs, so the
+    // unsafe `set_var` contract cannot hold. The desktop process itself does
+    // not read provider env today (in-process ask stays unconfigured), and
+    // every scheduler job execs a fresh `ovp2` child whose own startup loads
+    // `.ovp/providers.toml` safely.
     // Retry a few times: free_port has a tiny TOCTOU window (another process
     // could grab the port between the probe and run_server binding it), so a
     // lost race just picks a new port rather than failing the launch.

@@ -37,8 +37,15 @@ pub const VAULT_PLACEHOLDER: &str = "{vault}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cadence {
-    Daily { hour: u8, minute: u8 },
-    Weekly { weekday: Weekday, hour: u8, minute: u8 },
+    Daily {
+        hour: u8,
+        minute: u8,
+    },
+    Weekly {
+        weekday: Weekday,
+        hour: u8,
+        minute: u8,
+    },
 }
 
 fn parse_hm(s: &str) -> Result<(u8, u8), String> {
@@ -445,7 +452,14 @@ pub fn job_shell_command(
     job: &JobConfig,
 ) -> String {
     let mut cmd = String::new();
-    if let Some(env) = env_file {
+    // `.ovp/providers.toml` supersedes shell-sourcing: the child ovp2 process
+    // loads it itself at startup, so sourcing daily.env here would both
+    // OVERRIDE the file's values (env wins inside the child) and reintroduce
+    // the launchd EPERM failure mode the file exists to retire.
+    let providers_active = vault_root.join(".ovp/providers.toml").is_file();
+    if let Some(env) = env_file
+        && !providers_active
+    {
         let env = resolve_vault(&env.display().to_string(), vault_root);
         cmd.push_str(&format!("set -a; . {}; set +a; ", sh_quote(&env)));
     }
@@ -678,9 +692,10 @@ mod tests {
         let cry = reg.get("crystallize").unwrap();
         assert_eq!(cry.cadence, "weekly Sun 10:00");
         assert!(cry.argv.contains(&"--refresh".to_string()));
-        assert!(cry
-            .argv
-            .contains(&format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth")));
+        assert!(
+            cry.argv
+                .contains(&format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth"))
+        );
         assert_eq!(
             reg.env_file.as_deref(),
             Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env").as_str())
@@ -777,6 +792,33 @@ mod tests {
              exec '/opt/homebrew/bin/ovp2' 'daily' '--vault-root' '/Users/op/ovp-vault' \
              --date \"$(date +%F)\""
         );
+    }
+
+    #[test]
+    fn shell_command_skips_env_sourcing_when_providers_toml_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        std::fs::write(vault.join(".ovp/providers.toml"), "[env]\n").unwrap();
+        let j = JobConfig {
+            id: "daily".into(),
+            cadence: "daily 09:00".into(),
+            argv: vec!["daily".into()],
+            enabled: true,
+            description: String::new(),
+            stamp_date: false,
+        };
+        let cmd = job_shell_command(
+            Path::new("/bin/ovp2"),
+            Some(Path::new("{vault}/.ovp/daily.env")),
+            vault,
+            &j,
+        );
+        assert!(
+            !cmd.contains("daily.env"),
+            "providers.toml supersedes daily.env sourcing: {cmd}"
+        );
+        assert!(cmd.starts_with("exec "), "{cmd}");
     }
 
     #[test]

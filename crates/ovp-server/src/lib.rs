@@ -265,6 +265,19 @@ struct AppState {
     /// load-modify-save + note frontmatter replace + projection rebuild) —
     /// two concurrent curation writes must never interleave.
     tags_write_lock: std::sync::Mutex<()>,
+    /// The one background publish job (`POST /api/publish` + status). One at
+    /// a time — the vault RunLock inside the run enforces cross-process
+    /// safety, this slot gives the portal an honest "already running".
+    publish_job: Arc<std::sync::Mutex<PublishJob>>,
+}
+
+/// State of the portal-triggered publish job.
+#[derive(Default)]
+struct PublishJob {
+    running: bool,
+    /// Last finished run: the RunSummary JSON on success, `{error}` on
+    /// failure, plus `finished_at`.
+    last: Option<serde_json::Value>,
 }
 
 /// TTL cache for the live 01-Raw backlog count. A recursive walk of ~200 files
@@ -504,6 +517,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         ),
         live_queued: RwLock::new(LiveQueued::default()),
         tags_write_lock: std::sync::Mutex::new(()),
+        publish_job: Arc::new(std::sync::Mutex::new(PublishJob::default())),
     });
 
     // Pre-load model
@@ -573,7 +587,9 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
         // (the same slow-body failure mode /api/ask already avoids).
         if method == Method::Post {
             let p = path.split('?').next().unwrap_or(&path).to_string();
-            if p == "/api/tags/decision" || (p.starts_with("/api/source/") && p.ends_with("/tags"))
+            if p == "/api/tags/decision"
+                || p == "/api/publish"
+                || (p.starts_with("/api/source/") && p.ends_with("/tags"))
             {
                 let headers = AskHeaders::of(&request);
                 if let Some(resp) = guard_json_same_origin(&headers) {
@@ -633,6 +649,8 @@ fn dispatch(
             json_response(200, r#"{"ok":true}"#)
         }
         (Method::Get, "/api/tags") => handle_tags_api(state),
+        (Method::Get, "/api/publish/status") => handle_publish_status(state),
+        (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Post, "/api/tags/decision") => handle_tag_decision(state, body),
         (Method::Get, "/api/entities") => handle_entities_api(state),
         (Method::Get, p) if p.starts_with("/api/entity/") => handle_entity_api(state, url),
@@ -1026,6 +1044,92 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let records = load_active_records(state);
     let body = bodies::themes_body(&records).to_string();
     json_stamped(200, &body, model.as_ref())
+}
+
+/// `POST /api/publish` — kick off ONE background publish run using
+/// `.ovp/publish.toml` (the portal/desktop button never passes flags; an
+/// unconfigured vault gets a 400 naming the file). 202 on start, 409 while a
+/// prior run is still going; progress/result via `GET /api/publish/status`.
+/// Vault consistency is the RunLock's job inside the run — this slot only
+/// keeps the portal honest about concurrency.
+fn handle_publish_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let resolved = match ovp_publish::run::resolve_publish(
+        &state.vault_root,
+        &ovp_publish::run::RunOverrides::default(),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let body = serde_json::json!({ "error": e, "code": "publish_not_configured" });
+            return json_response(400, &body.to_string());
+        }
+    };
+    {
+        // A poisoned lock (a prior panic while holding it) must not brick the
+        // endpoint for the server's lifetime — recover the inner state.
+        let mut job = state.publish_job.lock().unwrap_or_else(|e| e.into_inner());
+        if job.running {
+            return json_response(
+                409,
+                r#"{"error":"publish already running","code":"publish_running"}"#,
+            );
+        }
+        job.running = true;
+    }
+    let vault_root = state.vault_root.clone();
+    let job = Arc::clone(&state.publish_job);
+    std::thread::spawn(move || {
+        let date = ovp_index::now_rfc3339()[..10].to_string();
+        // catch_unwind: a panic anywhere inside the publish must still clear
+        // `running` and surface as a failed outcome — otherwise the slot
+        // wedges at running=true until restart (review finding).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ovp_publish::run::run_publish(&vault_root, &date, &resolved, false, false)
+        }))
+        .unwrap_or_else(|panic| {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "publish panicked".to_string());
+            Err(format!("publish panicked: {msg}"))
+        });
+        let outcome = match result {
+            Ok(summary) => {
+                let mut v = serde_json::to_value(&summary).unwrap_or_default();
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("ok".into(), serde_json::Value::Bool(true));
+                    obj.insert("finished_at".into(), ovp_index::now_rfc3339().into());
+                }
+                v
+            }
+            Err(e) => serde_json::json!({
+                "ok": false,
+                "error": e,
+                "finished_at": ovp_index::now_rfc3339(),
+            }),
+        };
+        let mut job = job.lock().unwrap_or_else(|e| e.into_inner());
+        job.running = false;
+        job.last = Some(outcome);
+    });
+    json_response(202, r#"{"started":true}"#)
+}
+
+/// `GET /api/publish/status` — `{running, configured, last}` for the portal's
+/// publish card.
+fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let configured = ovp_publish::run::resolve_publish(
+        &state.vault_root,
+        &ovp_publish::run::RunOverrides::default(),
+    )
+    .is_ok();
+    let job = state.publish_job.lock().unwrap_or_else(|e| e.into_inner());
+    let body = serde_json::json!({
+        "running": job.running,
+        "configured": configured,
+        "last": job.last,
+    });
+    json_response(200, &body.to_string())
 }
 
 /// `GET /api/theme-pages` — the grounded topic pages built by
@@ -2122,6 +2226,7 @@ mod tests {
             ask_slots: AskSlots::new(DEFAULT_MAX_CONCURRENT_ASKS),
             live_queued: RwLock::new(LiveQueued::default()),
             tags_write_lock: std::sync::Mutex::new(()),
+            publish_job: Arc::new(std::sync::Mutex::new(PublishJob::default())),
         }
     }
 
@@ -2606,6 +2711,56 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
         let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy", "");
         assert_eq!(resp.status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn publish_endpoints_report_config_state_and_run_in_background() {
+        let vault = portal_vault("publish-ep", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Unconfigured: status says so, POST is a 400 naming the config file.
+        let v = body_json(dispatch(&st, Method::Get, "/api/publish/status", ""));
+        assert_eq!(v["configured"], false);
+        assert_eq!(v["running"], false);
+        let resp = dispatch(&st, Method::Post, "/api/publish", "");
+        assert_eq!(resp.status_code(), 400);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "publish_not_configured");
+
+        // Configure via .ovp/publish.toml (relative out resolves against the
+        // vault) and run one background publish to completion.
+        std::fs::write(
+            vault.join(".ovp/publish.toml"),
+            "out = \"../publish-site\"\n",
+        )
+        .unwrap();
+        // `..` in the configured out is rejected by the run guard — use an
+        // absolute sibling path instead.
+        let site = vault.parent().unwrap().join("publish-site");
+        std::fs::write(
+            vault.join(".ovp/publish.toml"),
+            format!("out = \"{}\"\n", site.display()),
+        )
+        .unwrap();
+        let resp = dispatch(&st, Method::Post, "/api/publish", "");
+        assert_eq!(resp.status_code(), 202);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let last = loop {
+            let v = body_json(dispatch(&st, Method::Get, "/api/publish/status", ""));
+            if v["running"] == false && !v["last"].is_null() {
+                break v["last"].clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "publish never finished"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert_eq!(last["ok"], true, "{last}");
+        assert!(site.join("api/model.json").is_file(), "site tree written");
+        assert!(last["pushed"].is_null(), "no repo configured → no deploy");
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

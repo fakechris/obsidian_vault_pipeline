@@ -349,8 +349,9 @@ enum Cmd {
         #[arg(long)]
         vault_root: PathBuf,
         /// Output site directory (the API tree lands under `<out>/api/`).
+        /// Falls back to `out` in `.ovp/publish.toml`.
         #[arg(long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
         #[arg(long)]
         date: Option<String>,
         /// Build the model in memory WITHOUT persisting index.json/evidence.json
@@ -359,18 +360,21 @@ enum Cmd {
         #[arg(long)]
         no_rebuild: bool,
         /// A pre-built static SPA bundle to copy into `<out>/` (from
-        /// `VITE_OVP_STATIC=1 npm run build`). Omit to snapshot API JSON only.
+        /// `VITE_OVP_STATIC=1 npm run build`). Falls back to `spa_dir` in
+        /// `.ovp/publish.toml`; absent in both → API JSON only.
         #[arg(long)]
         spa_dir: Option<PathBuf>,
         /// Publish even when the content hash is unchanged since the last run.
         #[arg(long)]
         force: bool,
         /// Public git repo URL to push the built site to (GitHub Pages).
+        /// Falls back to `repo` in `.ovp/publish.toml`.
         #[arg(long)]
         repo: Option<String>,
-        /// Branch on `--repo` to publish (default `gh-pages`).
-        #[arg(long, default_value = "gh-pages")]
-        branch: String,
+        /// Branch to publish (falls back to `branch` in `.ovp/publish.toml`,
+        /// then `gh-pages`).
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// PRODUCT — Projection Lanes: view claims by routing lane (durable/review),
     /// or write durable claims as vault notes (`--write` / `--rebuild`).
@@ -1257,7 +1261,44 @@ enum EvolveAction {
     Diagnose,
 }
 
+/// Pre-parse peek at `--vault-root` so `.ovp/providers.toml` can seed the
+/// environment BEFORE any command logic reads it. A peek (not clap) because
+/// the vault path lives on ~40 different subcommand structs; failure mode of
+/// a miss is simply "providers.toml not loaded" — the environment still
+/// works exactly as before the file existed.
+fn peek_vault_root() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--vault-root" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+        if let Some(v) = a.strip_prefix("--vault-root=") {
+            return Some(std::path::PathBuf::from(v));
+        }
+    }
+    None
+}
+
 fn main() -> ExitCode {
+    // Providers config: applied before Cli::parse spawns nothing — set_var's
+    // single-threaded-startup contract holds. A broken file fails the run
+    // loud (a typo'd secrets file must not silently run unconfigured).
+    if let Some(vault_root) = peek_vault_root() {
+        match ovp_domain::providers::apply_providers_env(&vault_root) {
+            Ok(applied) if !applied.applied.is_empty() => {
+                eprintln!(
+                    "providers: {} var(s) from .ovp/providers.toml ({} already set in env)",
+                    applied.applied.len(),
+                    applied.already_set.len()
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("error: providers.toml: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Graph { manifest } => commands::graph::run(manifest),
