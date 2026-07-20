@@ -671,9 +671,9 @@ enum Cmd {
     /// PRODUCT — weave each theme's ACTIVE durable claims into a grounded
     /// topic page (.ovp/crystal/theme_pages.json): claims grouped by majority
     /// community → theme_page/v1 narrative → deterministic page gate (every
-    /// paragraph cites a known [claim:<key>]). Rebuildable projection; pages
-    /// with an unchanged claim set are kept without an LLM call. Run
-    /// `crystal-themes` first.
+    /// sentence cites a known [claim:<key>]; failing drafts get one bounded
+    /// repair call). Rebuildable projection; pages with an unchanged claim
+    /// set are kept without an LLM call. Run `crystal-themes` first.
     CrystalThemePages {
         #[arg(long)]
         vault_root: PathBuf,

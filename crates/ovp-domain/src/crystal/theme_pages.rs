@@ -437,6 +437,13 @@ fn sentences(paragraph: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for fragment in fragments {
         let (leading, rest) = split_leading_citations(&fragment);
+        // A leading citation with NO previous sentence (paragraph starts
+        // with `[claim:…]`) is deliberately dropped, so the following
+        // sentence fails as uncited. Attaching it forward would certify
+        // whatever prose the model chose to put after it — the same
+        // laundering shape the abbreviation escapes had. The false positive
+        // costs one bounded repair; the prompt says citations FOLLOW their
+        // statement.
         if !leading.is_empty()
             && let Some(prev) = out.last_mut()
         {
@@ -788,6 +795,26 @@ mod tests {
             vec![PageDefect::UncitedSentence {
                 section: 0,
                 snippet: "Unsupported follow-up.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn paragraph_leading_citation_does_not_certify_the_following_sentence() {
+        // gemini review suggested attaching a paragraph-leading citation to
+        // the sentence AFTER it. That is a laundering vector (the citation
+        // would certify arbitrary following prose), so the strict behavior
+        // is intentional: the citation drops, the sentence fails, the
+        // bounded repair pass rewrites it with a trailing citation.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "[claim:ck-a] Prose the citation precedes.".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Prose the citation precedes.".into()
             }]
         );
     }
