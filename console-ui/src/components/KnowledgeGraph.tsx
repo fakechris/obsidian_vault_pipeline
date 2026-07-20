@@ -50,6 +50,8 @@ export interface KnowledgeGraphProps {
 }
 
 const DEFAULT_HEIGHT = 360;
+/** Evidence-panel quote truncation (VZ1). */
+const MAX_QUOTE_LENGTH = 160;
 /** Base zoom at which a MAX-importance node reveals its label; leaves need to
  * be zoomed in further. Below this the graph reads as a labelled constellation
  * of only its most important nodes — the level-of-detail the old view lacked. */
@@ -365,11 +367,15 @@ export default function KnowledgeGraph({
   }, [data, mode]);
 
   /** ~15% alpha variant of a color — the out-of-closure fade for 3D nodes
-   * and 2D links, matching drawNode's globalAlpha dim. Handles both the
-   * #rrggbb form and the rgba(...) form the --graph-link tokens use
-   * (alpha replaced, not multiplied — the fade is the statement). */
+   * and 2D links, matching drawNode's globalAlpha dim. Handles #rgb/#rrggbb
+   * and the rgba(...) form the --graph-link tokens use (alpha replaced, not
+   * multiplied — the fade is the statement). */
   const faintColor = (c: string) => {
     if (/^#[0-9a-f]{6}$/i.test(c)) return `${c}26`;
+    if (/^#[0-9a-f]{3}$/i.test(c)) {
+      const [r, g, b] = c.slice(1);
+      return `#${r}${r}${g}${g}${b}${b}26`;
+    }
     const m = c.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
     if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0.15)`;
     return c;
@@ -848,10 +854,10 @@ export default function KnowledgeGraph({
                   <div className="graph-evidence-title">
                     {t('graph.evidenceTitle')}
                   </div>
-                  {closure.detail.citations.map((c, i) => (
+                  {(closure.detail.citations ?? []).map((c, i) => (
                     <div className="graph-evidence-item" key={`${c.unit_id}-${i}`}>
                       <div className="graph-evidence-quote">
-                        “{c.quote.length > 160 ? `${c.quote.slice(0, 160)}…` : c.quote}”
+                        “{c.quote.length > MAX_QUOTE_LENGTH ? `${c.quote.slice(0, MAX_QUOTE_LENGTH)}…` : c.quote}”
                       </div>
                       <div className="tiny muted">
                         {c.unit_id}
