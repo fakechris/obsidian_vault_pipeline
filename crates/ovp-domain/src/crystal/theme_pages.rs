@@ -381,22 +381,23 @@ fn snippet_of(sentence: &str) -> String {
     }
 }
 
-/// CJK ranges relevant to sentence splitting (ideographs, kana, fullwidth,
-/// CJK punctuation) — used only to decide whether a `.` ends a sentence.
-fn is_cjk(c: char) -> bool {
-    matches!(c as u32, 0x3000..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
-}
-
-/// Split a paragraph into sentences for the citation gate. Deterministic and
-/// deliberately conservative:
+/// Split a paragraph into sentences for the citation gate.
 ///
-/// - `。！？` always end a sentence.
-/// - `.!?` end one only when followed (after closing quotes/brackets) by
-///   whitespace and then an uppercase letter, a CJK char, or end of text —
-///   so `e.g. something` and `v2.0 is` do not split.
+/// One rule, ZERO merge heuristics: a terminator (`.!?。！？`) ends a
+/// sentence whenever it is followed — after closing quotes/brackets — by
+/// whitespace, a `[claim:` citation, or end of text. Codex review rounds
+/// 2–4 demonstrated that every "don't split here" heuristic (uppercase
+/// look-ahead, abbreviation word lists, dotted segments like `U.S.`) is a
+/// laundering vector that merges an uncited sentence into a cited one. A
+/// false SPLIT costs one spurious defect that the bounded repair pass
+/// absorbs; a false MERGE breaks the grounding guarantee. Split wins,
+/// always. (`v2.0` still holds together — the dot is not followed by
+/// whitespace.)
+///
 /// - A fragment's LEADING `[claim:…]` cluster re-attaches to the previous
 ///   sentence (`Text. [claim:c1] Next…` cites "Text." with c1).
-/// - Fragments with no letters/digits/CJK (stray punctuation) are dropped.
+/// - Fragments with no alphanumeric content (stray punctuation, bare
+///   citations) are never semantic sentences.
 fn sentences(paragraph: &str) -> Vec<String> {
     let chars: Vec<char> = paragraph.chars().collect();
     let mut fragments: Vec<String> = Vec::new();
@@ -414,16 +415,10 @@ fn sentences(paragraph: &str) -> Vec<String> {
                 end += 1;
             }
         }
-        // A soft terminator splits whenever it is followed by whitespace (or
-        // ends the text) and is not an abbreviation dot. No uppercase
-        // heuristic: `Unsupported claim. however supported [claim:x].` must
-        // split too, or the trailing citation launders the first sentence
-        // (codex review round-2 P1). Abbreviation escapes carry the false-
-        // positive burden instead.
         let splits = if hard {
             true
         } else if soft {
-            !is_abbreviation_dot(&chars, i) && (end >= chars.len() || chars[end].is_whitespace())
+            end >= chars.len() || chars[end].is_whitespace() || chars[end] == '['
         } else {
             false
         };
@@ -449,7 +444,10 @@ fn sentences(paragraph: &str) -> Vec<String> {
             prev.push_str(&leading);
         }
         let rest = rest.trim();
-        if rest.chars().any(|c| c.is_alphanumeric() || is_cjk(c)) {
+        // `is_alphanumeric` covers CJK ideographs (Unicode Letter) while
+        // excluding CJK punctuation like `。` — a section of `。[claim:x]`
+        // confetti must not count as a semantic sentence (codex round-4 P2).
+        if rest.chars().any(char::is_alphanumeric) {
             out.push(rest.to_string());
         } else if !rest.is_empty()
             && let Some(prev) = out.last_mut()
@@ -461,29 +459,6 @@ fn sentences(paragraph: &str) -> Vec<String> {
         }
     }
     out
-}
-
-/// Is the `.` at `dot` part of an abbreviation rather than a sentence end?
-/// True only for the two high-confidence shapes: a dotted single-letter
-/// segment (`e.g.`, `i.e.`, `U.S.`) or a single-letter initial (`J. Smith`).
-fn is_abbreviation_dot(chars: &[char], dot: usize) -> bool {
-    if chars[dot] != '.' {
-        return false;
-    }
-    let mut s = dot;
-    while s > 0 && chars[s - 1].is_alphanumeric() {
-        s -= 1;
-    }
-    if s > 0 && chars[s - 1] == '.' && dot - s <= 2 {
-        return true; // dotted abbreviation segment: e.g. / i.e. / U.S.
-    }
-    // Single-letter initial (J. Smith). NO word list beyond these two
-    // high-confidence shapes: every list entry ("Inc.", "etc.", …) is a
-    // laundering vector — `Acme Inc. A supported sentence [claim:x].` would
-    // merge and verify as one cited fragment (codex round-3 P1). A false
-    // SPLIT only costs a spurious defect that the bounded repair pass
-    // absorbs; a false MERGE breaks the grounding guarantee. Split wins.
-    dot - s == 1 && chars[s].is_alphabetic()
 }
 
 /// Split a fragment's leading run of `[claim:…]` citations (with surrounding
@@ -743,19 +718,19 @@ mod tests {
     }
 
     #[test]
-    fn sentence_splitting_handles_trailing_citations_abbreviations_and_cjk() {
+    fn sentence_splitting_handles_trailing_citations_numbers_and_cjk() {
         // Citation AFTER the period attaches to the sentence it follows.
         let ok = vec![PageSection {
             heading: "H".into(),
             body: "Text. [claim:ck-a] Next sentence [claim:ck-b].".into(),
         }];
         assert!(verify_page(&ok, &keys(&["ck-a", "ck-b"])).is_empty());
-        // Abbreviations and version numbers do not split.
-        let abbrev = vec![PageSection {
+        // Version numbers hold together (dot not followed by whitespace).
+        let version = vec![PageSection {
             heading: "H".into(),
-            body: "Systems like e.g. Mem0 v2.0 persist state [claim:ck-a].".into(),
+            body: "Mem0 v2.0 persists state [claim:ck-a].".into(),
         }];
-        assert!(verify_page(&abbrev, &keys(&["ck-a"])).is_empty());
+        assert!(verify_page(&version, &keys(&["ck-a"])).is_empty());
         // CJK terminators split; the uncited CJK sentence fails.
         let cjk = vec![PageSection {
             heading: "H".into(),
@@ -767,6 +742,67 @@ mod tests {
                 section: 0,
                 snippet: "存储不是难点。".into()
             }]
+        );
+    }
+
+    #[test]
+    fn split_over_launder_has_no_abbreviation_escapes() {
+        // Codex rounds 3-4: every abbreviation escape was a laundering
+        // vector. `e.g.` now splits — the false positive is the accepted
+        // cost (the repair pass absorbs it), the merge would be a hole.
+        let eg = vec![PageSection {
+            heading: "H".into(),
+            body: "Systems like e.g. Mem0 persist state [claim:ck-a].".into(),
+        }];
+        assert_eq!(
+            verify_page(&eg, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Systems like e.g.".into()
+            }]
+        );
+        // The round-4 U.S. laundering example must produce a defect.
+        let us = vec![PageSection {
+            heading: "H".into(),
+            body: "Unsupported assertion about the U.S. Supported assertion [claim:ck-a].".into(),
+        }];
+        assert_eq!(
+            verify_page(&us, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Unsupported assertion about the U.S.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn citation_directly_after_period_still_splits() {
+        // Codex round-4 P1: `Supported fact.[claim:ck-a] Unsupported.` must
+        // not verify as one cited fragment.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "Supported fact.[claim:ck-a] Unsupported follow-up.".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Unsupported follow-up.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn cjk_punctuation_confetti_is_not_semantic_content() {
+        // Codex round-4 P2: `。[claim:ck-a]` must be an EmptySection, not a
+        // "sentence".
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "。[claim:ck-a]".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::EmptySection { section: 0 }]
         );
     }
 

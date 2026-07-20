@@ -128,8 +128,20 @@ pub(crate) fn build_pages(
                 source_count: r.source_cases.len(),
             })
             .collect();
+        // A call/parse failure on ONE theme must not abort the run before
+        // the safe partial write — the old page may cite claims that are no
+        // longer active, and exiting early would leave it serving (codex
+        // round-4 P1). Same failure path as a gate failure.
         let req = theme_page_request(&community.synth_theme(), &claims);
-        let (draft, _repair) = call_and_parse(client, &req, "theme-page", parse_theme_page)?;
+        let draft = match call_and_parse(client, &req, "theme-page", parse_theme_page) {
+            Ok((draft, _repair)) => draft,
+            Err(e) => {
+                outcome
+                    .failures
+                    .push((community.id, vec![format!("{e:?}")]));
+                continue;
+            }
+        };
         // The model cites positional handles (c1, c2, …); the code owns the
         // handle → claim_key substitution. Unresolved handles survive into
         // the verifier and fail loud as UnknownClaim.
@@ -145,8 +157,17 @@ pub(crate) fn build_pages(
             let listed: Vec<String> = defects.iter().map(|d| d.to_string()).collect();
             let repair_req =
                 theme_page_repair_request(&community.synth_theme(), &claims, &draft, &listed);
-            let (repaired, _log) =
-                call_and_parse(client, &repair_req, "theme-page-repair", parse_theme_page)?;
+            let repaired =
+                match call_and_parse(client, &repair_req, "theme-page-repair", parse_theme_page) {
+                    Ok((repaired, _log)) => repaired,
+                    Err(e) => {
+                        client.invalidate(&req);
+                        outcome
+                            .failures
+                            .push((community.id, vec![format!("{e:?}")]));
+                        continue;
+                    }
+                };
             let mut repaired_resolved = repaired;
             resolve_handles(&mut repaired_resolved, &claim_keys);
             defects = verify_page(&repaired_resolved, &known);
