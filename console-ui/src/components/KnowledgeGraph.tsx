@@ -21,12 +21,13 @@ import { polygonCentroid, polygonHull } from 'd3-polygon';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
+  fetchClaim,
   fetchGlobalGraph,
   fetchSourceNeighborhood,
   fetchThemeGraph,
 } from '../lib/api';
-import { isMiscTheme, themeRoute } from '../lib/derive';
-import type { GraphNode, GraphResponse } from '../lib/types';
+import { closureNodeIds, isMiscTheme, themeRoute } from '../lib/derive';
+import type { ClaimDetail, GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
 
@@ -190,6 +191,10 @@ export default function KnowledgeGraph({
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  /** Evidence closure of the SELECTED claim node (VZ1): its full citation
+   * detail, fetched on selection. `forId` guards against a stale response
+   * landing after the selection moved on. */
+  const [closure, setClosure] = useState<{ forId: string; detail: ClaimDetail } | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
@@ -294,6 +299,42 @@ export default function KnowledgeGraph({
     [data],
   );
 
+  // Fetch the selected claim's evidence closure. Silent on failure — the
+  // highlight then falls back to direct graph neighbors and the panel keeps
+  // its pre-VZ1 content.
+  useEffect(() => {
+    if (selected?.type !== 'claim') {
+      setClosure(null);
+      return;
+    }
+    const nodeId = selected.id;
+    const claimKey = nodeId.startsWith('claim:') ? nodeId.slice('claim:'.length) : nodeId;
+    let cancelled = false;
+    fetchClaim(claimKey)
+      .then((detail) => {
+        if (!cancelled) setClosure({ forId: nodeId, detail });
+      })
+      .catch(() => {
+        if (!cancelled) setClosure(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  /** Node ids inside the selected claim's evidence closure, or null when no
+   * claim is selected. Everything OUTSIDE the closure dims. */
+  const closureSet = useMemo(() => {
+    if (selected?.type !== 'claim') return null;
+    const detail = closure?.forId === selected.id ? closure.detail : null;
+    return closureNodeIds(
+      selected.id,
+      detail?.citations ?? null,
+      (id) => nodeById.has(id),
+      adjacency,
+    );
+  }, [selected, closure, nodeById, adjacency]);
+
   // Configure forces the moment the (lazy) graph instance mounts — a
   // data-effect would run while the graph is still suspended (ref null) and
   // never apply. Also fires when 2D/3D swaps to a fresh instance.
@@ -322,6 +363,12 @@ export default function KnowledgeGraph({
   useEffect(() => {
     fittedRef.current = false;
   }, [data, mode]);
+
+  /** ~15% alpha variant of a #rrggbb color (pass-through otherwise) — the
+   * out-of-closure fade for 3D nodes and 2D links, matching drawNode's
+   * globalAlpha dim. */
+  const faintColor = (c: string) =>
+    /^#[0-9a-f]{6}$/i.test(c) ? `${c}26` : c;
 
   const openNode = (n: GraphNode) => {
     if (n.type === 'source') {
@@ -412,10 +459,12 @@ export default function KnowledgeGraph({
     const isHover = hoverId === node.id;
     const isNeighbor =
       hoverId != null && (adjacency.get(hoverId)?.has(node.id) ?? false);
-    // Dim the rest to focus the hovered neighborhood. Safe now that hover only
-    // engages after the cursor settles (handleHover) — it no longer flips as
-    // the mouse sweeps across.
-    const dim = hoverId != null && !isHover && !isNeighbor;
+    // Dim the rest to focus the hovered neighborhood — or, when a claim is
+    // selected, everything OUTSIDE its evidence closure (VZ1: the claim +
+    // its cited sources stay lit; hover still punches through the dim).
+    const dim = closureSet
+      ? !closureSet.has(node.id) && !isHover
+      : hoverId != null && !isHover && !isNeighbor;
     const r = nodeRadius(node, isFocus);
     const x = node.x ?? 0;
     const y = node.y ?? 0;
@@ -526,9 +575,11 @@ export default function KnowledgeGraph({
 
   const onNodeClick = (node: FGNode) => {
     const n = nodeById.get(node.id) ?? node;
-    // Single click opens (matches the Terrain view's one-click-to-source). Only
-    // non-openable nodes (e.g. focus-tier units) fall back to select + zoom.
-    if (canOpen(n)) {
+    // Sources open on single click (matches the Terrain view). Claims now
+    // SELECT instead (VZ1): the click lights up the claim's evidence closure
+    // and the side panel lists its citations — navigation moved to the
+    // panel's Open button. Other non-openable nodes fall back to select+zoom.
+    if (n.type !== 'claim' && canOpen(n)) {
       openNode(n);
       return;
     }
@@ -540,10 +591,10 @@ export default function KnowledgeGraph({
     }
   };
 
-  // 3D: single click opens too; non-openable nodes select + fly the camera.
+  // 3D: same contract — sources open, claims select + closure + camera fly.
   const onNodeClick3D = (node: FGNode) => {
     const n = nodeById.get(node.id) ?? node;
-    if (canOpen(n)) {
+    if (n.type !== 'claim' && canOpen(n)) {
       openNode(n);
       return;
     }
@@ -637,19 +688,26 @@ export default function KnowledgeGraph({
                 onRenderFramePost={drawLabels}
                 nodePointerAreaPaint={paintPointerArea}
                 linkColor={(l: { source: FGNode; target: FGNode }) => {
-                  const active =
-                    hoverId != null &&
-                    ((l.source as FGNode).id === hoverId ||
-                      (l.target as FGNode).id === hoverId);
+                  const s = (l.source as FGNode).id;
+                  const t2 = (l.target as FGNode).id;
+                  if (closureSet) {
+                    // Closure edges (claim ↔ cited source) light up; every
+                    // other edge fades with its nodes.
+                    return closureSet.has(s) && closureSet.has(t2)
+                      ? tokens.linkHi
+                      : faintColor(tokens.link);
+                  }
+                  const active = hoverId != null && (s === hoverId || t2 === hoverId);
                   return active ? tokens.linkHi : tokens.link;
                 }}
-                linkWidth={(l: { source: FGNode; target: FGNode }) =>
-                  hoverId != null &&
-                  ((l.source as FGNode).id === hoverId ||
-                    (l.target as FGNode).id === hoverId)
-                    ? 1.5
-                    : 0.6
-                }
+                linkWidth={(l: { source: FGNode; target: FGNode }) => {
+                  const s = (l.source as FGNode).id;
+                  const t2 = (l.target as FGNode).id;
+                  if (closureSet) {
+                    return closureSet.has(s) && closureSet.has(t2) ? 1.5 : 0.4;
+                  }
+                  return hoverId != null && (s === hoverId || t2 === hoverId) ? 1.5 : 0.6;
+                }}
                 onNodeHover={handleHover}
                 onNodeClick={onNodeClick}
                 onBackgroundClick={() => setSelected(null)}
@@ -662,21 +720,28 @@ export default function KnowledgeGraph({
                 graphData={graphData}
                 backgroundColor="#0b0e15"
                 nodeRelSize={4}
-                nodeColor={(n: FGNode) =>
-                  n.id === hoverId ? tokens.linkHi : scopedFill(scope, n, tokens)
-                }
+                nodeColor={(n: FGNode) => {
+                  if (n.id === hoverId) return tokens.linkHi;
+                  const fill = scopedFill(scope, n, tokens);
+                  return closureSet && !closureSet.has(n.id) ? faintColor(fill) : fill;
+                }}
                 nodeVal={(n: FGNode) => 1.5 + 6 * (n.importance ?? 0)}
                 nodeLabel={(n: FGNode) => escapeHtml(n.label)}
                 nodeOpacity={1}
                 nodeResolution={12}
                 showNavInfo={false}
-                linkColor={(l: { source: FGNode; target: FGNode }) =>
-                  hoverId != null &&
-                  ((l.source as FGNode).id === hoverId ||
-                    (l.target as FGNode).id === hoverId)
+                linkColor={(l: { source: FGNode; target: FGNode }) => {
+                  const s = (l.source as FGNode).id;
+                  const t2 = (l.target as FGNode).id;
+                  if (closureSet) {
+                    return closureSet.has(s) && closureSet.has(t2)
+                      ? tokens.linkHi
+                      : '#2a2f3a';
+                  }
+                  return hoverId != null && (s === hoverId || t2 === hoverId)
                     ? tokens.linkHi
-                    : '#5a6270'
-                }
+                    : '#5a6270';
+                }}
                 linkOpacity={0.5}
                 linkWidth={0.6}
                 onNodeHover={handleHover}
@@ -771,6 +836,37 @@ export default function KnowledgeGraph({
               ) : (
                 <div className="tiny muted">
                   {selected.type === 'card' ? t('graph.cardHint') : t('graph.noPage')}
+                </div>
+              )}
+              {selected.type === 'claim' && closure?.forId === selected.id && (
+                <div className="graph-evidence">
+                  <div className="graph-evidence-title">
+                    {t('graph.evidenceTitle')}
+                  </div>
+                  {closure.detail.citations.map((c, i) => (
+                    <div className="graph-evidence-item" key={`${c.unit_id}-${i}`}>
+                      <div className="graph-evidence-quote">
+                        “{c.quote.length > 160 ? `${c.quote.slice(0, 160)}…` : c.quote}”
+                      </div>
+                      <div className="tiny muted">
+                        {c.unit_id}
+                        {c.resolved_line != null &&
+                          ` · ${t('graph.evidenceLine', { n: c.resolved_line })}`}
+                        {' · '}
+                        {c.source_sha256 && knownShas.has(c.source_sha256) ? (
+                          <button
+                            type="button"
+                            className="graph-evidence-src"
+                            onClick={() => navigate(`/library/${c.source_sha256}`)}
+                          >
+                            {c.source_title || c.case_id}
+                          </button>
+                        ) : (
+                          <span>{c.source_title || c.case_id}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

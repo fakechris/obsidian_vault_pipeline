@@ -221,6 +221,8 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.controls3d': '拖拽旋转 · 滚轮缩放 · 右键平移',
   'graph.focusCommunity': '聚焦这个社区',
   'graph.open': '打开',
+  'graph.evidenceTitle': '证据链路',
+  'graph.evidenceLine': '第 {n} 行',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
 
