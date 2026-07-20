@@ -285,6 +285,10 @@ pub enum PageDefect {
     /// paragraph-level: one citation must not launder the uncited sentences
     /// around it into the grounded projection (codex review P1).
     UncitedSentence { section: usize, snippet: String },
+    /// A section whose body contains no semantic sentence at all (only
+    /// punctuation or bare citations) — a "grounded" page must contain
+    /// grounded prose, not citation confetti (codex review round-2 P2).
+    EmptySection { section: usize },
 }
 
 impl std::fmt::Display for PageDefect {
@@ -296,6 +300,9 @@ impl std::fmt::Display for PageDefect {
             }
             PageDefect::UncitedSentence { section, snippet } => {
                 write!(f, "section {section}: uncited sentence `{snippet}`")
+            }
+            PageDefect::EmptySection { section } => {
+                write!(f, "section {section}: no semantic sentences")
             }
         }
     }
@@ -336,8 +343,10 @@ pub fn verify_page(sections: &[PageSection], known_keys: &BTreeSet<String>) -> V
         return defects;
     }
     for (si, section) in sections.iter().enumerate() {
+        let mut semantic_sentences = 0usize;
         for para in paragraphs(&section.body) {
             for sentence in sentences(&para) {
+                semantic_sentences += 1;
                 if extract_claim_citations(&sentence).is_empty() {
                     defects.push(PageDefect::UncitedSentence {
                         section: si,
@@ -353,6 +362,9 @@ pub fn verify_page(sections: &[PageSection], known_keys: &BTreeSet<String>) -> V
                     });
                 }
             }
+        }
+        if semantic_sentences == 0 {
+            defects.push(PageDefect::EmptySection { section: si });
         }
     }
     defects
@@ -402,22 +414,16 @@ fn sentences(paragraph: &str) -> Vec<String> {
                 end += 1;
             }
         }
+        // A soft terminator splits whenever it is followed by whitespace (or
+        // ends the text) and is not an abbreviation dot. No uppercase
+        // heuristic: `Unsupported claim. however supported [claim:x].` must
+        // split too, or the trailing citation launders the first sentence
+        // (codex review round-2 P1). Abbreviation escapes carry the false-
+        // positive burden instead.
         let splits = if hard {
             true
         } else if soft {
-            if is_abbreviation_dot(&chars, i) {
-                false
-            } else if end >= chars.len() {
-                true
-            } else if chars[end].is_whitespace() {
-                let mut k = end;
-                while k < chars.len() && chars[k].is_whitespace() {
-                    k += 1;
-                }
-                k >= chars.len() || chars[k].is_uppercase() || is_cjk(chars[k]) || chars[k] == '['
-            } else {
-                false
-            }
+            !is_abbreviation_dot(&chars, i) && (end >= chars.len() || chars[end].is_whitespace())
         } else {
             false
         };
@@ -471,10 +477,32 @@ fn is_abbreviation_dot(chars: &[char], dot: usize) -> bool {
     if s > 0 && chars[s - 1] == '.' && dot - s <= 2 {
         return true; // dotted abbreviation segment: e.g. / i.e. / U.S.
     }
+    if dot - s == 1 && chars[s].is_alphabetic() {
+        return true; // single-letter initial: J. Smith
+    }
     let word: String = chars[s..dot].iter().collect::<String>().to_lowercase();
     matches!(
         word.as_str(),
-        "etc" | "vs" | "cf" | "al" | "fig" | "ca" | "approx"
+        "etc"
+            | "vs"
+            | "cf"
+            | "al"
+            | "fig"
+            | "ca"
+            | "approx"
+            | "inc"
+            | "corp"
+            | "ltd"
+            | "et"
+            | "vol"
+            | "dr"
+            | "mr"
+            | "ms"
+            | "mrs"
+            | "prof"
+            | "jr"
+            | "sr"
+            | "st"
     )
 }
 
@@ -682,6 +710,37 @@ mod tests {
                 section: 0,
                 snippet: "Unsupported claim.".into()
             }]
+        );
+    }
+
+    #[test]
+    fn lowercase_continuation_still_splits_and_fails_uncited() {
+        // Codex round-2 P1: sentence boundaries must not depend on the next
+        // sentence starting uppercase.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "Unsupported claim. however supported [claim:ck-a].".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::UncitedSentence {
+                section: 0,
+                snippet: "Unsupported claim.".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn content_free_sections_are_rejected() {
+        // Codex round-2 P2: a section of citation confetti with no prose
+        // must not count as grounded content.
+        let sections = vec![PageSection {
+            heading: "H".into(),
+            body: "[claim:ck-a]".into(),
+        }];
+        assert_eq!(
+            verify_page(&sections, &keys(&["ck-a"])),
+            vec![PageDefect::EmptySection { section: 0 }]
         );
     }
 
