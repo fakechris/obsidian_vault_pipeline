@@ -29,6 +29,41 @@ function showOnboard(text: string) {
   spinner.classList.add("hidden");
   onboard.classList.remove("hidden");
   msg.textContent = text;
+  void renderRecentVaults();
+}
+
+/** Obsidian-style quick pick: one click into a known vault — no folder
+ * dialog (and none of its slow panel-service spin-up) involved. */
+async function renderRecentVaults() {
+  const recent = document.getElementById("recent")!;
+  recent.innerHTML = "";
+  let vaults: string[] = [];
+  try {
+    vaults = (await invoke("known_vaults")) as string[];
+  } catch {
+    return; // older backend — just keep the picker button
+  }
+  for (const v of vaults) {
+    const name = v.split(/[\\/]/).filter(Boolean).pop() ?? v;
+    const b = document.createElement("button");
+    b.textContent = `Open ${name}`;
+    const path = document.createElement("span");
+    path.className = "path";
+    path.textContent = v;
+    b.appendChild(path);
+    b.addEventListener("click", () => void openVault(v));
+    recent.appendChild(b);
+  }
+}
+
+async function openVault(dir: string) {
+  showStarting("Setting up…");
+  try {
+    const url = (await invoke("set_vault_and_start", { vault: dir })) as string;
+    goto(url);
+  } catch (e) {
+    showOnboard(`Could not open that folder: ${e}`);
+  }
 }
 
 async function boot() {
@@ -46,14 +81,8 @@ pick.addEventListener("click", async () => {
   const dir = await open({ directory: true, multiple: false, title: "Choose your OVP2 vault" });
   if (!dir || typeof dir !== "string") return;
   pick.disabled = true;
-  showStarting("Setting up…");
-  try {
-    const url = (await invoke("set_vault_and_start", { vault: dir })) as string;
-    goto(url);
-  } catch (e) {
-    pick.disabled = false;
-    showOnboard(`Could not open that folder: ${e}`);
-  }
+  await openVault(dir);
+  pick.disabled = false;
 });
 
 boot();
