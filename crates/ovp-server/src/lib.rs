@@ -1271,7 +1271,11 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
         for key in &managed {
             cmd.env_remove(key);
         }
-        let out = cmd.output();
+        // catch_unwind: a panic anywhere here must still clear the slot, or
+        // the manual-run button wedges until restart (same contract as the
+        // publish job).
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd.output()))
+            .unwrap_or_else(|_| Err(std::io::Error::other("manual-run thread panicked")));
         let outcome = match out {
             Ok(o) => {
                 let stderr_tail: String = String::from_utf8_lossy(&o.stderr)

@@ -200,7 +200,11 @@ function RunNowSection() {
           setStatus(s);
           if (s.running !== null || s.heartbeat_running) timer = setTimeout(poll, 3000);
         })
-        .catch(() => {});
+        .catch(() => {
+          // Transient failure (server restart): keep polling while a run was
+          // believed in flight, so the card recovers on its own.
+          if (!cancelled && busy) timer = setTimeout(poll, 5000);
+        });
     };
     poll();
     return () => {

@@ -140,13 +140,29 @@ pub fn write_providers_file(
     for (k, v) in entries {
         body.push_str(&format!("{k} = {}\n", toml_escape(v)));
     }
-    std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    // Create with 0600 FROM THE START — a write-then-chmod leaves a window
+    // where the credentials are readable under the default umask (review
+    // security finding).
     #[cfg(unix)]
     {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("opening {}: {e}", path.display()))?;
+        // An EXISTING file keeps its old mode — enforce 0600 on it too.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+        f.write_all(body.as_bytes())
+            .map_err(|e| format!("writing {}: {e}", path.display()))?;
     }
+    #[cfg(not(unix))]
+    std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(())
 }
 
