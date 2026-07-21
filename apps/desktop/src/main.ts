@@ -44,7 +44,7 @@ async function renderRecentVaults() {
     return; // older backend — just keep the picker button
   }
   for (const v of vaults) {
-    const name = v.split("/").filter(Boolean).pop() ?? v;
+    const name = v.split(/[\\/]/).filter(Boolean).pop() ?? v;
     const b = document.createElement("button");
     b.textContent = `Open ${name}`;
     const path = document.createElement("span");

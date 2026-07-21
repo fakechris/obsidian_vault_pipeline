@@ -393,7 +393,10 @@ fn switch_to_vault(app: &AppHandle, vault: &str) {
         eprintln!("ovp2-desktop: vault {vault} is not a readable directory — not switching");
         return;
     }
-    let prev = load_config(app);
+    // The PERSISTED config is the truth here — under an OVP2_VAULT override
+    // load_config reports the env vault, which would both mis-skip a real
+    // switch and derive the saved state from a temporary value (bot review).
+    let prev = read_config_file(app);
     if prev.vault.as_deref() == Some(vault) {
         return;
     }
