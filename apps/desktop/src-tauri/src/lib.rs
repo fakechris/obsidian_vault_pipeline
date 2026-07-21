@@ -232,7 +232,9 @@ fn start_scheduler(state: &AppState, vault: &Path) {
         // spawn error (codex/bot review).
         match init {
             Ok(s) if !s.success() => {
-                eprintln!("ovp2-desktop: schedule init exited non-zero ({s}) — scheduler may not run")
+                eprintln!(
+                    "ovp2-desktop: schedule init exited non-zero ({s}) — scheduler may not run"
+                )
             }
             Err(e) => eprintln!("ovp2-desktop: schedule init failed to spawn: {e}"),
             _ => {}
@@ -264,10 +266,13 @@ fn valid_vault(vault: &str) -> bool {
 // Tauri commands (the small surface the splash calls).
 // ---------------------------------------------------------------------------
 
+// async: Tauri runs async commands OFF the main thread, so the 1-2s server
+// start (and any slow vault IO) can never beachball the window. The sync
+// form runs on the main thread and froze the UI for its whole duration.
 #[tauri::command]
-fn boot(app: AppHandle, state: State<AppState>) -> BootState {
+async fn boot(app: AppHandle, state: State<'_, AppState>) -> Result<BootState, String> {
     let cfg = load_config(&app);
-    match cfg.vault {
+    Ok(match cfg.vault {
         Some(vault) if valid_vault(&vault) => {
             let v = PathBuf::from(&vault);
             match ensure_server(&app, &state, &v) {
@@ -279,15 +284,24 @@ fn boot(app: AppHandle, state: State<AppState>) -> BootState {
             }
         }
         _ => BootState::NeedVault,
-    }
+    })
 }
 
 #[tauri::command]
-fn set_vault_and_start(app: AppHandle, state: State<AppState>, vault: String) -> Result<String, String> {
+async fn set_vault_and_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    vault: String,
+) -> Result<String, String> {
     if !valid_vault(&vault) {
         return Err("that folder is not a readable directory".into());
     }
-    save_config(&app, &AppConfig { vault: Some(vault.clone()) })?;
+    save_config(
+        &app,
+        &AppConfig {
+            vault: Some(vault.clone()),
+        },
+    )?;
     let v = PathBuf::from(&vault);
     let url = ensure_server(&app, &state, &v)?;
     start_scheduler(&state, &v);
