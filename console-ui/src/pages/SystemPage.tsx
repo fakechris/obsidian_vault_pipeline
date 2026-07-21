@@ -15,10 +15,15 @@ import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   STATIC_MODE,
+  fetchProviders,
   fetchPublishStatus,
+  fetchRunNowStatus,
   fetchSettings,
+  saveProviders,
   startPublish,
+  startRunNow,
   type PublishStatus,
+  type RunNowStatus,
 } from '../lib/api';
 import { attentionSources } from '../lib/derive';
 import type { IndexModel, SettingsPayload } from '../lib/types';
@@ -169,6 +174,247 @@ function ConceptsSection() {
           {t('system.conceptGate')}
         </p>
       </div>
+    </div>
+  );
+}
+
+/** Manual-run card: force today's pipeline job right now, under the server's
+ * triple overlap protection (endpoint slot → heartbeat → scheduler dispatch
+ * lock + vault RunLock in the child). A second click while anything runs is
+ * a 409, surfaced as a plain message; a re-run after today's job already
+ * completed asks for confirmation first. */
+function RunNowSection() {
+  const { t } = useI18n();
+  const [status, setStatus] = useState<RunNowStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const busy = !!status && (status.running !== null || status.heartbeat_running);
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = () => {
+      fetchRunNowStatus()
+        .then((s) => {
+          if (cancelled) return;
+          setStatus(s);
+          if (s.running !== null || s.heartbeat_running) timer = setTimeout(poll, 3000);
+        })
+        .catch(() => {});
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [busy]);
+
+  if (STATIC_MODE) return null;
+
+  const ranToday = (() => {
+    const lr = status?.jobs?.daily?.last_run;
+    if (!lr) return false;
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    return lr.startsWith(stamp) && status?.jobs?.daily?.last_status !== 'seeded';
+  })();
+
+  const onRun = () => {
+    if (ranToday && !window.confirm(t('run.confirmAgain'))) return;
+    setError(null);
+    startRunNow('daily')
+      .then(() => setStatus((s) => (s ? { ...s, running: 'daily' } : s)))
+      .catch((e: Error) => setError(e.message));
+  };
+
+  const last = status?.last as
+    | { ok?: boolean; job?: string; finished_at?: string; error?: string }
+    | null
+    | undefined;
+
+  return (
+    <div className="section">
+      <h2>{t('run.title')}</h2>
+      <p className="sm muted">{t('run.help')}</p>
+      <button type="button" className="publish-btn" disabled={!status || busy} onClick={onRun}>
+        {busy ? t('run.running') : ranToday ? t('run.runAgain') : t('run.runNow')}
+      </button>
+      {status?.jobs?.daily?.last_run && (
+        <p className="sm muted">
+          {t('run.lastRun', {
+            when: status.jobs.daily.last_run,
+            status: status.jobs.daily.last_status,
+          })}
+        </p>
+      )}
+      {error && <p className="sm warn">{error}</p>}
+      {last && !busy && (
+        <p className="sm">
+          {last.ok ? t('run.lastOk') : `${t('run.lastFailed')}: ${last.error ?? ''}`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Built-in provider presets — all Anthropic-Messages-compatible endpoints
+ * (the protocol our runtime speaks). base_url is the FULL messages endpoint.
+ * OpenAI-compatible / Gemini native protocols need a new client and are not
+ * offered yet. */
+const PROVIDER_PRESETS: {
+  id: string;
+  label: string;
+  base_url: string;
+  model: string;
+}[] = [
+  { id: 'anthropic', label: 'Anthropic', base_url: '', model: 'claude-sonnet-4-6' },
+  {
+    id: 'kimi',
+    label: 'Kimi (Moonshot)',
+    base_url: 'https://api.moonshot.cn/anthropic/v1/messages',
+    model: 'kimi-k2-0711-preview',
+  },
+  {
+    id: 'glm',
+    label: 'GLM (智谱)',
+    base_url: 'https://open.bigmodel.cn/api/anthropic/v1/messages',
+    model: 'glm-4.6',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    base_url: 'https://api.deepseek.com/anthropic/v1/messages',
+    model: 'deepseek-chat',
+  },
+  {
+    id: 'minimax-cn',
+    label: 'MiniMax 中国',
+    base_url: 'https://api.minimaxi.com/anthropic/v1/messages',
+    model: 'MiniMax-M2',
+  },
+  {
+    id: 'minimax-global',
+    label: 'MiniMax Global',
+    base_url: 'https://api.minimax.io/anthropic/v1/messages',
+    model: 'MiniMax-M2',
+  },
+  { id: 'custom', label: 'Custom (Anthropic-compatible)', base_url: '', model: '' },
+];
+
+/** LLM provider card — a GUI over `.ovp/providers.toml`. Reads the current
+ * values back (secrets masked; a masked value round-tripped on save means
+ * "unchanged"). Children (scheduled runs) pick changes up immediately; the
+ * in-process ask needs an app/server restart. */
+function ProviderSection() {
+  const { t } = useI18n();
+  const [preset, setPreset] = useState('custom');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [noProxy, setNoProxy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    fetchProviders()
+      .then((p) => {
+        if (cancelled) return;
+        const env = p.env;
+        const url = env.ANTHROPIC_BASE_URL ?? '';
+        setBaseUrl(url);
+        setModel(env.OVP_LLM_MODEL ?? '');
+        setApiKey(env.ANTHROPIC_API_KEY ?? '');
+        setNoProxy(env.OVP_LLM_NO_PROXY === '1' || env.OVP_LLM_NO_PROXY === 'true');
+        const match = PROVIDER_PRESETS.find((pr) => pr.base_url === url && pr.id !== 'custom');
+        setPreset(match?.id ?? (url ? 'custom' : 'anthropic'));
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (STATIC_MODE) return null;
+
+  const onPreset = (id: string) => {
+    setPreset(id);
+    const p = PROVIDER_PRESETS.find((pr) => pr.id === id);
+    if (p && p.id !== 'custom') {
+      setBaseUrl(p.base_url);
+      if (p.model) setModel(p.model);
+    }
+  };
+
+  const onSave = () => {
+    setError(null);
+    setNote(null);
+    saveProviders({
+      ANTHROPIC_BASE_URL: baseUrl,
+      OVP_LLM_MODEL: model,
+      ANTHROPIC_API_KEY: apiKey,
+      OVP_LLM_NO_PROXY: noProxy ? '1' : '',
+    })
+      .then(() => setNote(t('providers.saved')))
+      .catch((e: Error) => setError(e.message));
+  };
+
+  return (
+    <div className="section">
+      <h2>{t('providers.title')}</h2>
+      <p className="sm muted">{t('providers.help')}</p>
+      <div className="provider-form">
+        <label>
+          {t('providers.preset')}
+          <select value={preset} onChange={(e) => onPreset(e.target.value)}>
+            {PROVIDER_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t('providers.baseUrl')}
+          <input
+            type="text"
+            value={baseUrl}
+            placeholder={t('providers.baseUrlHint')}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </label>
+        <label>
+          {t('providers.model')}
+          <input type="text" value={model} onChange={(e) => setModel(e.target.value)} />
+        </label>
+        <label>
+          {t('providers.apiKey')}
+          <input
+            type="text"
+            value={apiKey}
+            placeholder={t('providers.apiKeyHint')}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </label>
+        <label className="provider-check">
+          <input
+            type="checkbox"
+            checked={noProxy}
+            onChange={(e) => setNoProxy(e.target.checked)}
+          />
+          {t('providers.noProxy')}
+        </label>
+        <button type="button" className="publish-btn" disabled={!loaded} onClick={onSave}>
+          {t('providers.save')}
+        </button>
+      </div>
+      <p className="tiny muted">{t('providers.protocolNote')}</p>
+      {note && <p className="sm">{note}</p>}
+      {error && <p className="sm warn">{error}</p>}
     </div>
   );
 }
@@ -396,7 +642,9 @@ export default function SystemPage() {
       </ModelGate>
       <SurfacesSection />
       <ConceptsSection />
+      <RunNowSection />
       <PublishSection />
+      <ProviderSection />
       <SettingsSection />
     </>
   );

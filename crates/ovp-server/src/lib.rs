@@ -104,6 +104,11 @@ pub struct ServeConfig {
     /// Override the /api/ask wall-clock guard (tests). `None` derives it
     /// from the transport timeout env — see [`ask_guard_from_env`].
     pub ask_timeout: Option<Duration>,
+    /// The `ovp2` CLI binary the manual-run endpoint spawns for
+    /// `schedule run-now`. `None` → `std::env::current_exe()` (correct when
+    /// the server IS `ovp2 serve`); the desktop app passes its bundled
+    /// sidecar (its own current_exe is the GUI shell, not the CLI).
+    pub ovp2_bin: Option<PathBuf>,
     /// Override the in-flight ask cap (tests). `None` =
     /// [`DEFAULT_MAX_CONCURRENT_ASKS`].
     pub max_concurrent_asks: Option<usize>,
@@ -269,6 +274,23 @@ struct AppState {
     /// a time — the vault RunLock inside the run enforces cross-process
     /// safety, this slot gives the portal an honest "already running".
     publish_job: Arc<std::sync::Mutex<PublishJob>>,
+    /// The one MANUAL pipeline run (`POST /api/schedule/run`): double-click
+    /// protection at the endpoint. The scheduler dispatch lock + the vault
+    /// RunLock still guard cross-process races underneath.
+    manual_run: Arc<std::sync::Mutex<ManualRun>>,
+    /// See [`ServeConfig::ovp2_bin`].
+    ovp2_bin: Option<PathBuf>,
+    /// Serializes attention-ack read-modify-writes.
+    acks_write_lock: std::sync::Mutex<()>,
+}
+
+/// State of the portal-triggered manual pipeline run.
+#[derive(Default)]
+struct ManualRun {
+    /// The job id currently running, if any.
+    running: Option<String>,
+    /// Last finished run: `{ok, job, exit, finished_at, ...}`.
+    last: Option<serde_json::Value>,
 }
 
 /// State of the portal-triggered publish job.
@@ -518,6 +540,9 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         live_queued: RwLock::new(LiveQueued::default()),
         tags_write_lock: std::sync::Mutex::new(()),
         publish_job: Arc::new(std::sync::Mutex::new(PublishJob::default())),
+        manual_run: Arc::new(std::sync::Mutex::new(ManualRun::default())),
+        ovp2_bin: config.ovp2_bin,
+        acks_write_lock: std::sync::Mutex::new(()),
     });
 
     // Pre-load model
@@ -589,6 +614,9 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             let p = path.split('?').next().unwrap_or(&path).to_string();
             if p == "/api/tags/decision"
                 || p == "/api/publish"
+                || p == "/api/schedule/run"
+                || p == "/api/attention/ack"
+                || p == "/api/providers"
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
             {
                 let headers = AskHeaders::of(&request);
@@ -651,6 +679,11 @@ fn dispatch(
         (Method::Get, "/api/tags") => handle_tags_api(state),
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
+        (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
+        (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
+        (Method::Get, "/api/providers") => handle_providers_get(state),
+        (Method::Post, "/api/providers") => handle_providers_set(state, body),
         (Method::Post, "/api/tags/decision") => handle_tag_decision(state, body),
         (Method::Get, "/api/entities") => handle_entities_api(state),
         (Method::Get, p) if p.starts_with("/api/entity/") => handle_entity_api(state, url),
@@ -1132,6 +1165,335 @@ fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>>
     json_response(200, &body.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Manual pipeline run (`POST /api/schedule/run`) — the portal's "run today's
+// job now". Triple protection: this slot rejects double-clicks (409), a LIVE
+// heartbeat run rejects overlap with the automatic schedule (409), and the
+// scheduler dispatch lock + vault RunLock in the child guard cross-process
+// races underneath. The child is `ovp2 schedule run-now`, which records
+// schedule-state so the automatic tick will NOT re-run the same occurrence.
+// ---------------------------------------------------------------------------
+
+/// Jobs the portal may trigger — the registry's built-ins.
+const MANUAL_RUN_JOBS: &[&str] = &["daily", "crystallize"];
+
+fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let job = if body.trim().is_empty() {
+        "daily".to_string()
+    } else {
+        match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(v) => v
+                .get("job")
+                .and_then(|j| j.as_str())
+                .unwrap_or("daily")
+                .to_string(),
+            Err(_) => return json_response(400, r#"{"error":"body must be JSON"}"#),
+        }
+    };
+    if !MANUAL_RUN_JOBS.contains(&job.as_str()) {
+        let body = serde_json::json!({
+            "error": format!("unknown job `{job}` — expected one of {MANUAL_RUN_JOBS:?}"),
+            "code": "unknown_job",
+        });
+        return json_response(400, &body.to_string());
+    }
+    // Overlap guard 1: a run the SCHEDULER (or a previous click) already has
+    // in flight, as seen by the live heartbeat.
+    if let Some(lr) = state.current_last_run()
+        && lr.status == "running"
+    {
+        return json_response(
+            409,
+            r#"{"error":"a pipeline run is already in progress","code":"run_in_progress"}"#,
+        );
+    }
+    // Overlap guard 2: this endpoint's own slot (double-click protection).
+    {
+        let mut slot = state.manual_run.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(running) = &slot.running {
+            let body = serde_json::json!({
+                "error": format!("manual run `{running}` is already in progress"),
+                "code": "manual_run_running",
+            });
+            return json_response(409, &body.to_string());
+        }
+        slot.running = Some(job.clone());
+    }
+    let bin = state
+        .ovp2_bin
+        .clone()
+        .or_else(|| std::env::current_exe().ok());
+    let Some(bin) = bin else {
+        let mut slot = state.manual_run.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = None;
+        return json_response(500, r#"{"error":"cannot resolve the ovp2 binary"}"#);
+    };
+    let vault_root = state.vault_root.clone();
+    let slot = Arc::clone(&state.manual_run);
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&bin)
+            .args([
+                "schedule",
+                "run-now",
+                "--vault-root",
+                &vault_root.display().to_string(),
+                "--id",
+                &job_id,
+            ])
+            .output();
+        let outcome = match out {
+            Ok(o) => {
+                let stderr_tail: String = String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::json!({
+                    "ok": o.status.success(),
+                    "job": job_id,
+                    "finished_at": ovp_index::now_rfc3339(),
+                    "error": if o.status.success() { serde_json::Value::Null } else { serde_json::json!(stderr_tail) },
+                })
+            }
+            Err(e) => serde_json::json!({
+                "ok": false,
+                "job": job_id,
+                "finished_at": ovp_index::now_rfc3339(),
+                "error": format!("spawn {}: {e}", bin.display()),
+            }),
+        };
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = None;
+        slot.last = Some(outcome);
+    });
+    json_response(202, r#"{"started":true}"#)
+}
+
+/// `GET /api/schedule/run/status` — `{running, heartbeat_running, last,
+/// jobs: {id: {last_run, last_status}}}` so the portal can disable the
+/// button, ask for confirmation on a re-run, and show the last outcome.
+fn handle_run_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let heartbeat_running = state
+        .current_last_run()
+        .is_some_and(|lr| lr.status == "running");
+    let jobs: serde_json::Map<String, serde_json::Value> =
+        ovp_scheduler::load_state(&state.vault_root)
+            .map(|st| {
+                st.runs
+                    .iter()
+                    .map(|(id, run)| {
+                        (
+                            id.clone(),
+                            serde_json::json!({
+                                "last_run": run.last_run,
+                                "last_status": run.last_status,
+                            }),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    let slot = state.manual_run.lock().unwrap_or_else(|e| e.into_inner());
+    let body = serde_json::json!({
+        "running": slot.running,
+        "heartbeat_running": heartbeat_running,
+        "last": slot.last,
+        "jobs": jobs,
+    });
+    json_response(200, &body.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Attention acknowledgements — `.ovp/attention-acks.json`. Keyed by
+// (sha, status): an acknowledged needs-content source stays hidden until its
+// STATUS changes (e.g. it later blocks), which re-surfaces it.
+// ---------------------------------------------------------------------------
+
+const ATTENTION_ACKS_REL: &str = ".ovp/attention-acks.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct AttentionAck {
+    sha: String,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acked_at: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct AttentionAcksFile {
+    #[serde(default)]
+    acks: Vec<AttentionAck>,
+}
+
+fn read_attention_acks(vault_root: &Path) -> AttentionAcksFile {
+    let path = vault_root.join(ATTENTION_ACKS_REL);
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn handle_attention_ack(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"body must be JSON"}"#),
+    };
+    let (Some(sha), Some(status)) = (
+        v.get("sha")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty()),
+        v.get("status")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty()),
+    ) else {
+        return json_response(400, r#"{"error":"`sha` and `status` are required"}"#);
+    };
+    // Only real sources are acknowledgeable — a typo'd sha must not append.
+    let known = state
+        .current_model()
+        .is_some_and(|m| m.sources.iter().any(|s| s.sha256 == sha));
+    if !known {
+        return json_response(404, r#"{"error":"unknown source sha"}"#);
+    }
+    let _guard = state
+        .acks_write_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut file = read_attention_acks(&state.vault_root);
+    let ack = AttentionAck {
+        sha: sha.to_string(),
+        status: status.to_string(),
+        acked_at: Some(ovp_index::now_rfc3339()),
+    };
+    file.acks
+        .retain(|a| !(a.sha == ack.sha && a.status == ack.status));
+    file.acks.push(ack);
+    let path = state.vault_root.join(ATTENTION_ACKS_REL);
+    let body_json = match serde_json::to_string_pretty(&file) {
+        Ok(b) => b,
+        Err(e) => {
+            let b = serde_json::json!({ "error": format!("serialize acks: {e}") });
+            return json_response(500, &b.to_string());
+        }
+    };
+    if let Err(e) = std::fs::write(&path, format!("{body_json}\n")) {
+        let b = serde_json::json!({ "error": format!("write {}: {e}", path.display()) });
+        return json_response(500, &b.to_string());
+    }
+    json_response(200, r#"{"acked":true}"#)
+}
+
+// ---------------------------------------------------------------------------
+// LLM provider configuration — a GUI over `.ovp/providers.toml`.
+// ---------------------------------------------------------------------------
+
+/// Values for these names are secrets: GET masks them to their last 4 chars,
+/// and POST ignores round-tripped masked values.
+fn provider_secret(name: &str) -> bool {
+    name.contains("KEY") || name.contains("TOKEN") || name.contains("SECRET")
+}
+
+const MASK_PREFIX: &str = "\u{2022}\u{2022}\u{2022}\u{2022}";
+
+fn handle_providers_get(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    match ovp_domain::providers::read_providers_file(&state.vault_root) {
+        Ok(map) => {
+            let masked: serde_json::Map<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| {
+                    let shown = if provider_secret(&k) {
+                        let tail: String = v
+                            .chars()
+                            .rev()
+                            .take(4)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        format!("{MASK_PREFIX}{tail}")
+                    } else {
+                        v
+                    };
+                    (k, serde_json::json!(shown))
+                })
+                .collect();
+            let body = serde_json::json!({ "env": masked });
+            json_response(200, &body.to_string())
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "error": e });
+            json_response(500, &body.to_string())
+        }
+    }
+}
+
+fn handle_providers_set(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"body must be JSON"}"#),
+    };
+    let Some(set) = v.get("set").and_then(|s| s.as_object()) else {
+        return json_response(400, r#"{"error":"`set` object is required"}"#);
+    };
+    let unset: Vec<String> = v
+        .get("unset")
+        .and_then(|u| u.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let _guard = state
+        .acks_write_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut map = match ovp_domain::providers::read_providers_file(&state.vault_root) {
+        Ok(m) => m,
+        Err(e) => {
+            let body = serde_json::json!({ "error": e });
+            return json_response(500, &body.to_string());
+        }
+    };
+    for (k, val) in set {
+        let Some(text) = val.as_str() else {
+            let body = serde_json::json!({ "error": format!("`{k}` must be a string") });
+            return json_response(400, &body.to_string());
+        };
+        // A masked value round-tripped from GET means "unchanged".
+        if text.starts_with(MASK_PREFIX) {
+            continue;
+        }
+        if text.trim().is_empty() {
+            map.remove(k);
+        } else {
+            map.insert(k.clone(), text.to_string());
+        }
+    }
+    for k in unset {
+        map.remove(&k);
+    }
+    match ovp_domain::providers::write_providers_file(&state.vault_root, &map) {
+        Ok(()) => json_response(
+            200,
+            // The RUNNING server seeded its env at startup and env wins over
+            // the file — children (scheduler jobs) pick the change up
+            // immediately, the in-process ask does after a restart.
+            r#"{"saved":true,"restart_required":true}"#,
+        ),
+        Err(e) => {
+            let body = serde_json::json!({ "error": e });
+            json_response(500, &body.to_string())
+        }
+    }
+}
+
 /// `GET /api/theme-pages` — the grounded topic pages built by
 /// `ovp2 crystal-theme-pages`, joined against the live active records for the
 /// citation lookup. A missing/corrupt projection degrades to an empty body
@@ -1224,6 +1586,19 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         obj.insert(
             "age_seconds".into(),
             serde_json::json!(age_seconds(model.built_at.as_deref())),
+        );
+        // Attention acknowledgements overlay: (sha,status) pairs the operator
+        // dismissed. All attention surfaces (Today, System, the nav dot)
+        // derive from this one model payload, so filtering stays consistent.
+        let acks = read_attention_acks(&state.vault_root);
+        obj.insert(
+            "attention_acks".into(),
+            serde_json::json!(
+                acks.acks
+                    .iter()
+                    .map(|a| serde_json::json!({ "sha": a.sha, "status": a.status }))
+                    .collect::<Vec<_>>()
+            ),
         );
         // LIVE queued overlay: `totals.queued` stays the projection value (other
         // readers depend on it and it's the end-of-run provenance figure);
@@ -2227,6 +2602,9 @@ mod tests {
             live_queued: RwLock::new(LiveQueued::default()),
             tags_write_lock: std::sync::Mutex::new(()),
             publish_job: Arc::new(std::sync::Mutex::new(PublishJob::default())),
+            manual_run: Arc::new(std::sync::Mutex::new(ManualRun::default())),
+            ovp2_bin: None,
+            acks_write_lock: std::sync::Mutex::new(()),
         }
     }
 
@@ -2711,6 +3089,136 @@ mod tests {
         assert_eq!(resp.status_code(), 400);
         let resp = dispatch(&st, Method::Get, "/api/graph?scope=galaxy", "");
         assert_eq!(resp.status_code(), 400);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn attention_ack_persists_and_overlays_the_model() {
+        let vault = portal_vault("attn-ack", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Unknown sha → 404 (typos must not append).
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            "/api/attention/ack",
+            r#"{"sha":"nope","status":"needs_content"}"#,
+        );
+        assert_eq!(resp.status_code(), 404);
+        // Missing fields → 400.
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/attention/ack", "{}").status_code(),
+            400
+        );
+
+        // A real source acks fine and shows up in the /api/model overlay.
+        let sha = body_json(dispatch(&st, Method::Get, "/api/model", ""))["sources"][0]["sha256"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            "/api/attention/ack",
+            &format!(r#"{{"sha":"{sha}","status":"needs_content"}}"#),
+        );
+        assert_eq!(resp.status_code(), 200);
+        let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
+        let acks = v["attention_acks"].as_array().unwrap();
+        assert_eq!(acks.len(), 1);
+        assert_eq!(acks[0]["sha"], sha.as_str());
+        assert_eq!(acks[0]["status"], "needs_content");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn providers_endpoints_mask_secrets_and_merge_saves() {
+        let vault = portal_vault("providers-ep", "50-Inbox/03-Processed/good.md", "body\n");
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nANTHROPIC_API_KEY = \"sk-secret-1234\"\nGITHUB_TOKEN = \"ghp-tok-5678\"\nOVP_LLM_MODEL = \"m-1\"\n",
+        ).unwrap();
+        let st = state(vault.clone(), None);
+
+        let v = body_json(dispatch(&st, Method::Get, "/api/providers", ""));
+        let key = v["env"]["ANTHROPIC_API_KEY"].as_str().unwrap();
+        assert!(
+            key.ends_with("1234") && key.starts_with('\u{2022}'),
+            "masked: {key}"
+        );
+        assert_eq!(
+            v["env"]["OVP_LLM_MODEL"], "m-1",
+            "non-secret values are plain"
+        );
+
+        // Round-tripping the masked key keeps the stored secret; new values
+        // write; empty removes; unrelated keys survive.
+        let body = format!(
+            r#"{{"set":{{"ANTHROPIC_API_KEY":{},"OVP_LLM_MODEL":"m-2","OVP_LLM_NO_PROXY":"1","ANTHROPIC_BASE_URL":""}}}}"#,
+            serde_json::json!(key)
+        );
+        let resp = dispatch(&st, Method::Post, "/api/providers", &body);
+        assert_eq!(resp.status_code(), 200);
+        let saved = ovp_domain::providers::read_providers_file(&vault).unwrap();
+        assert_eq!(
+            saved.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("sk-secret-1234")
+        );
+        assert_eq!(saved.get("OVP_LLM_MODEL").map(String::as_str), Some("m-2"));
+        assert_eq!(saved.get("OVP_LLM_NO_PROXY").map(String::as_str), Some("1"));
+        assert_eq!(
+            saved.get("GITHUB_TOKEN").map(String::as_str),
+            Some("ghp-tok-5678")
+        );
+        assert!(
+            !saved.contains_key("ANTHROPIC_BASE_URL"),
+            "empty value removes the key"
+        );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn manual_run_rejects_overlap_and_unknown_jobs() {
+        let vault = portal_vault("run-now-ep", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Unknown job → 400.
+        let resp = dispatch(&st, Method::Post, "/api/schedule/run", r#"{"job":"nuke"}"#);
+        assert_eq!(resp.status_code(), 400);
+
+        // A LIVE heartbeat run → 409 (the automatic schedule already runs).
+        std::fs::write(
+            vault.join(".ovp/last-run.json"),
+            serde_json::json!({
+                "schema": "ovp.last-run/v1",
+                "run_id": "r-test",
+                "status": "running",
+                "started_at": ovp_index::now_rfc3339(),
+                // Our own pid: alive and probe-able, so effective_status()
+                // keeps the record `running` instead of downgrading it.
+                "pid": std::process::id(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let resp = dispatch(&st, Method::Post, "/api/schedule/run", r#"{"job":"daily"}"#);
+        assert_eq!(resp.status_code(), 409);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "run_in_progress");
+
+        // Endpoint slot busy → 409 even without a heartbeat.
+        std::fs::remove_file(vault.join(".ovp/last-run.json")).unwrap();
+        st.manual_run.lock().unwrap().running = Some("daily".into());
+        let resp = dispatch(&st, Method::Post, "/api/schedule/run", r#"{"job":"daily"}"#);
+        assert_eq!(resp.status_code(), 409);
+        let v = body_json(resp);
+        assert_eq!(v["code"], "manual_run_running");
+        // Status reflects the slot.
+        let v = body_json(dispatch(&st, Method::Get, "/api/schedule/run/status", ""));
+        assert_eq!(v["running"], "daily");
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

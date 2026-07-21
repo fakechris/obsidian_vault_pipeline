@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { isRunningWithProgress, lastRunBanner, runActivity, type BannerLevel } from '../lib/derive';
+import { startRunNow } from '../lib/api';
 import { useModel } from '../model';
 import RunActivity from './RunActivity';
 
@@ -41,6 +42,7 @@ export default function RunBanner() {
   const navigate = useNavigate();
   const now = useNowTick();
   const [expanded, setExpanded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const banner = lastRunBanner(model, now);
   // The activity feed is worth expanding when there IS a run to show (a live
@@ -133,6 +135,23 @@ export default function RunBanner() {
             </span>
           )}
         </button>
+        {/* Failed run → retry on the spot: the manual-run endpoint reruns
+            today's job under the full overlap protection (heartbeat + slot +
+            dispatch lock). The banner flips to "running" via the heartbeat
+            as soon as the child starts. */}
+        {banner.level === 'failed' && (
+          <button
+            type="button"
+            className="run-banner-retry"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              startRunNow('daily').catch(() => {}).finally(() => setRetrying(false));
+            }}
+          >
+            {retrying ? t('banner.retrying') : t('banner.retry')}
+          </button>
+        )}
         {/* Expand the live per-source activity feed inline, without leaving the
             current page — the operator's tail -f, one click away everywhere. */}
         {hasActivity && (

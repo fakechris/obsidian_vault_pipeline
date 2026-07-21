@@ -3007,6 +3007,7 @@ dependencies = [
  "ovp-llm",
  "ovp-memory",
  "ovp-publish",
+ "ovp-scheduler",
  "serde",
  "serde_json",
  "tiny_http",

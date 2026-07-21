@@ -397,6 +397,9 @@ export interface Totals {
 }
 
 export interface IndexModel {
+  /** Live-server overlay: acknowledged attention items (hidden until the
+   * source's status changes). Absent in static snapshots. */
+  attention_acks?: { sha: string; status: string }[];
   schema: string;
   date: string;
   /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the
