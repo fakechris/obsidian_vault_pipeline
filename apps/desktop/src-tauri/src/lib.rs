@@ -314,15 +314,18 @@ async fn boot(app: AppHandle, state: State<'_, AppState>) -> Result<BootState, S
     let cfg = load_config(&app);
     Ok(match cfg.vault {
         Some(vault) if valid_vault(&vault) => {
-            // A hand-seeded or env-provided vault may not be in the recent
-            // list yet — remember it (best-effort) so the Vault menu and the
-            // splash quick-pick know about it.
-            if !cfg.known_vaults.iter().any(|v| v == &vault) {
+            // Keep the recents honest: the vault that just opened belongs at
+            // the HEAD of the list (MRU invariant), whether it is brand new
+            // (hand-seeded config) or merely not first. Only `known_vaults`
+            // is touched — the persisted `vault` stays as the FILE has it,
+            // so a temporary OVP2_VAULT override never turns into a
+            // persistent selection (codex P2s).
+            if cfg.known_vaults.first() != Some(&vault) {
                 let cfg_file = read_config_file(&app);
                 let _ = save_config(
                     &app,
                     &AppConfig {
-                        vault: cfg_file.vault.clone().or_else(|| Some(vault.clone())),
+                        vault: cfg_file.vault.clone(),
                         known_vaults: remember_vault(&cfg_file.known_vaults, &vault),
                     },
                 );
