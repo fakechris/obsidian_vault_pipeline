@@ -78,6 +78,40 @@ pub fn read_providers_file(
     Ok(out)
 }
 
+/// Parse the LEGACY `<vault>/.ovp/daily.env` (KEY=VALUE lines, optional
+/// `export `, optional quotes) — the migration source when providers.toml
+/// is first created. Once providers.toml exists the scheduler stops
+/// sourcing daily.env, so its credentials MUST be carried over or scheduled
+/// runs silently lose them.
+pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<String, String> {
+    let path = vault_root.join(".ovp/daily.env");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Default::default();
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let k = k.trim();
+        if k.is_empty()
+            || !k
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
+            continue;
+        }
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        out.insert(k.to_string(), v.to_string());
+    }
+    out
+}
+
 /// Rewrite `<vault>/.ovp/providers.toml` from a validated map (UPPER_SNAKE
 /// names enforced; values written as TOML strings), with the standard header
 /// and 0600 permissions (it holds credentials).

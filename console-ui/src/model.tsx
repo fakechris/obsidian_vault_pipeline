@@ -85,10 +85,15 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     // state immediately, not wait out the interval. (Not on the static site.)
     const onFocus = () => load(false);
     if (!STATIC_MODE) window.addEventListener('focus', onFocus);
+    // Programmatic revalidation for actions that change server state (e.g.
+    // the banner's Retry): dispatch `ovp:model-refresh` on window.
+    const onRefresh = () => load(false);
+    if (!STATIC_MODE) window.addEventListener('ovp:model-refresh', onRefresh);
 
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('ovp:model-refresh', onRefresh);
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);

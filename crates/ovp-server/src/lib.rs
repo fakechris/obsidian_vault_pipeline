@@ -1232,16 +1232,46 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
     let slot = Arc::clone(&state.manual_run);
     let job_id = job.clone();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&bin)
-            .args([
-                "schedule",
-                "run-now",
-                "--vault-root",
-                &vault_root.display().to_string(),
-                "--id",
-                &job_id,
-            ])
-            .output();
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args([
+            "schedule",
+            "run-now",
+            "--vault-root",
+            &vault_root.display().to_string(),
+            "--id",
+            &job_id,
+            // Atomic with the dispatch lock in the child: skip when the job
+            // (auto tick or another trigger) already ran moments ago — closes
+            // the check-then-spawn window (codex P2).
+            "--unless-ran-within-secs",
+            "120",
+        ]);
+        // The child must re-derive provider values from the FILES, not
+        // inherit this server's startup env (env wins over providers.toml in
+        // the child, so stale inherited values would shadow a fresh edit —
+        // codex P1). Remove every provider-managed variable.
+        let mut managed: std::collections::BTreeSet<String> =
+            ovp_domain::providers::read_providers_file(&vault_root)
+                .map(|m| m.into_keys().collect())
+                .unwrap_or_default();
+        managed.extend(ovp_domain::providers::read_legacy_daily_env(&vault_root).into_keys());
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "OVP_LLM_MODEL",
+            "OVP_LLM_MAX_TOKENS",
+            "OVP_LLM_NO_PROXY",
+            "OVP_LLM_TIMEOUT_SECS",
+            "GITHUB_TOKEN",
+            "PINBOARD_TOKEN",
+            "PINBOARD_API_BASE",
+        ] {
+            managed.insert(key.to_string());
+        }
+        for key in &managed {
+            cmd.env_remove(key);
+        }
+        let out = cmd.output();
         let outcome = match out {
             Ok(o) => {
                 let stderr_tail: String = String::from_utf8_lossy(&o.stderr)

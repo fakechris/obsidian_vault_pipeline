@@ -45,6 +45,12 @@ export default function RunBanner() {
   const [retrying, setRetrying] = useState(false);
 
   const banner = lastRunBanner(model, now);
+  // Retry stays pending until the heartbeat actually moves the banner off
+  // `failed` — the 202 alone doesn't mean the model caught up yet.
+  const bannerLevel = banner.level;
+  useEffect(() => {
+    if (bannerLevel !== 'failed') setRetrying(false);
+  }, [bannerLevel]);
   // The activity feed is worth expanding when there IS a run to show (a live
   // run, or a just-finished one whose feed is still on the heartbeat).
   const hasActivity = runActivity(model).status !== null;
@@ -146,7 +152,22 @@ export default function RunBanner() {
             disabled={retrying}
             onClick={() => {
               setRetrying(true);
-              startRunNow('daily').catch(() => {}).finally(() => setRetrying(false));
+              startRunNow('daily')
+                .then(() => {
+                  // Revalidate soon so the banner flips to "running" via the
+                  // heartbeat instead of sitting on the stale failed state
+                  // for the idle poll interval. `retrying` stays true until
+                  // the banner actually leaves `failed` (effect below).
+                  window.setTimeout(
+                    () => window.dispatchEvent(new Event('ovp:model-refresh')),
+                    1500,
+                  );
+                  window.setTimeout(
+                    () => window.dispatchEvent(new Event('ovp:model-refresh')),
+                    5000,
+                  );
+                })
+                .catch(() => setRetrying(false));
             }}
           >
             {retrying ? t('banner.retrying') : t('banner.retry')}
