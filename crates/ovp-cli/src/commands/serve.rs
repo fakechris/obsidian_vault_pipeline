@@ -39,6 +39,9 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         port: args.port,
         viz_dir: args.viz_dir,
         ask_client,
+        // The server IS ovp2 — current_exe is the right binary for
+        // `schedule run-now` children.
+        ovp2_bin: None,
         // Server defaults: the ask guard derives from OVP_LLM_TIMEOUT_SECS
         // (the same env the live client reads), the in-flight cap from
         // DEFAULT_MAX_CONCURRENT_ASKS.

@@ -133,6 +133,61 @@ export function fetchModel(): Promise<IndexModel> {
 }
 
 /** Read-only server/vault configuration for the System page (B5 v1). */
+/** Acknowledge one attention item — hides (sha,status) until the status
+ * changes. Live server only. */
+export async function ackAttention(sha: string, status: string): Promise<void> {
+  const resp = await fetch('/api/attention/ack', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sha, status }),
+  });
+  if (!resp.ok) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `ack failed (${resp.status})`);
+  }
+}
+
+/** Manual pipeline run (`schedule run-now` under triple overlap protection). */
+export interface RunNowStatus {
+  running: string | null;
+  heartbeat_running: boolean;
+  last: Record<string, unknown> | null;
+  jobs: Record<string, { last_run: string; last_status: string }>;
+}
+export function fetchRunNowStatus(): Promise<RunNowStatus> {
+  return fetchJson<RunNowStatus>('/api/schedule/run/status');
+}
+export async function startRunNow(job: string): Promise<void> {
+  const resp = await fetch('/api/schedule/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job }),
+  });
+  if (!resp.ok && resp.status !== 202) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `run failed (${resp.status})`);
+  }
+}
+
+/** LLM provider config (a GUI over .ovp/providers.toml; secrets masked). */
+export interface ProvidersPayload {
+  env: Record<string, string>;
+}
+export function fetchProviders(): Promise<ProvidersPayload> {
+  return fetchJson<ProvidersPayload>('/api/providers');
+}
+export async function saveProviders(set: Record<string, string>): Promise<void> {
+  const resp = await fetch('/api/providers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ set }),
+  });
+  if (!resp.ok) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `save failed (${resp.status})`);
+  }
+}
+
 export function fetchSettings(): Promise<SettingsPayload> {
   return fetchJson<SettingsPayload>(STATIC_MODE ? `${API}/settings.json` : '/api/settings');
 }

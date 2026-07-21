@@ -39,6 +39,138 @@ pub struct ProvidersApplied {
     pub already_set: Vec<String>,
 }
 
+/// Read `<vault>/.ovp/providers.toml`'s `[env]` table as strings (the same
+/// scalar coercion `apply_providers_env` uses). Missing file → empty map;
+/// malformed → Err.
+pub fn read_providers_file(
+    vault_root: &Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let path = vault_root.join(".ovp/providers.toml");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    let file: ProvidersFile =
+        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    let mut out = std::collections::BTreeMap::new();
+    for (name, value) in &file.env {
+        let text = match value {
+            toml::Value::String(s) => s.clone(),
+            toml::Value::Integer(i) => i.to_string(),
+            toml::Value::Boolean(b) => {
+                if *b {
+                    "1".into()
+                } else {
+                    "0".into()
+                }
+            }
+            other => {
+                return Err(format!(
+                    "{}: `{name}` must be a string/integer/boolean, got {}",
+                    path.display(),
+                    other.type_str()
+                ));
+            }
+        };
+        out.insert(name.clone(), text);
+    }
+    Ok(out)
+}
+
+/// Parse the LEGACY `<vault>/.ovp/daily.env` (KEY=VALUE lines, optional
+/// `export `, optional quotes) — the migration source when providers.toml
+/// is first created. Once providers.toml exists the scheduler stops
+/// sourcing daily.env, so its credentials MUST be carried over or scheduled
+/// runs silently lose them.
+pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<String, String> {
+    let path = vault_root.join(".ovp/daily.env");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Default::default();
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let k = k.trim();
+        if k.is_empty()
+            || !k
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
+            continue;
+        }
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        out.insert(k.to_string(), v.to_string());
+    }
+    out
+}
+
+/// Rewrite `<vault>/.ovp/providers.toml` from a validated map (UPPER_SNAKE
+/// names enforced; values written as TOML strings), with the standard header
+/// and 0600 permissions (it holds credentials).
+pub fn write_providers_file(
+    vault_root: &Path,
+    entries: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    for name in entries.keys() {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
+            return Err(format!(
+                "`{name}` is not an UPPER_SNAKE_CASE environment variable name"
+            ));
+        }
+    }
+    let dir = vault_root.join(".ovp");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let path = dir.join("providers.toml");
+    let mut body = String::from(
+        "# Provider configuration — read by ovp2/desktop at startup.\n\
+         # Values are DEFAULTS: variables already set in the environment win.\n[env]\n",
+    );
+    for (k, v) in entries {
+        body.push_str(&format!("{k} = {}\n", toml_escape(v)));
+    }
+    // Create with 0600 FROM THE START — a write-then-chmod leaves a window
+    // where the credentials are readable under the default umask (review
+    // security finding).
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("opening {}: {e}", path.display()))?;
+        // An EXISTING file keeps its old mode — enforce 0600 on it too.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod {}: {e}", path.display()))?;
+        f.write_all(body.as_bytes())
+            .map_err(|e| format!("writing {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// A TOML basic-string literal for `v` (serde_toml handles the escaping).
+fn toml_escape(v: &str) -> String {
+    toml::Value::String(v.to_string()).to_string()
+}
+
 /// Load `<vault>/.ovp/providers.toml` and export every `[env]` entry that is
 /// not already set in the process environment. Missing file → no-op;
 /// unparseable file, unknown top-level keys, lowercase names, or non-scalar

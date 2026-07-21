@@ -1760,3 +1760,60 @@ body {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* Attention acknowledge + banner retry + provider form */
+.attention-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.attention-ack {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  padding: 0.15rem 0.6rem;
+  font-size: var(--ovp-text-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+.attention-ack:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.run-banner-retry {
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  background: var(--surface);
+  padding: 0.15rem 0.7rem;
+  font-size: var(--ovp-text-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.run-banner-retry:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.provider-form {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 480px;
+}
+.provider-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: var(--ovp-text-sm);
+}
+.provider-form input[type='text'],
+.provider-form select {
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+}
+.provider-form .provider-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

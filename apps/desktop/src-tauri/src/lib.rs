@@ -185,6 +185,9 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
             port,
             viz_dir: Some(viz_dir.clone()),
             ask_client: None,
+            // Manual-run children must exec the bundled CLI sidecar — the
+            // desktop's own current_exe is the GUI shell, not ovp2.
+            ovp2_bin: resolve_ovp2_bin(),
             ask_timeout: None,
             max_concurrent_asks: None,
         };

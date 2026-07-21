@@ -7,12 +7,12 @@
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
-use ovp_scheduler::{plan_tick, run_now_with, JobConfig, JobRunner};
+use ovp_scheduler::{JobConfig, JobRunner, plan_tick, run_now_with};
 // Re-export the engine items the sibling `schedule` module (installer) and the
 // CLI dispatch reference, so call sites keep using `commands::scheduler::…`.
 pub use ovp_scheduler::{
-    default_registry, is_due, job_shell_command, registry_path, resolve_vault, Cadence, Registry,
-    State, VAULT_PLACEHOLDER,
+    Cadence, Registry, State, VAULT_PLACEHOLDER, default_registry, is_due, job_shell_command,
+    registry_path, resolve_vault,
 };
 
 use crate::CliError;
@@ -44,8 +44,12 @@ pub struct ShellRunner {
 
 impl JobRunner for ShellRunner {
     fn run(&self, job: &JobConfig) -> bool {
-        let cmd =
-            job_shell_command(&self.ovp2_path, self.env_file.as_deref(), &self.vault_root, job);
+        let cmd = job_shell_command(
+            &self.ovp2_path,
+            self.env_file.as_deref(),
+            &self.vault_root,
+            job,
+        );
         match std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&cmd)
@@ -209,7 +213,10 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     let plan = plan_tick(&reg, &state, now);
     let stamp = now.format("%Y-%m-%dT%H:%M:%S");
     if plan.due.is_empty() {
-        println!("scheduler tick {stamp}: nothing due ({} job(s))", reg.jobs.len());
+        println!(
+            "scheduler tick {stamp}: nothing due ({} job(s))",
+            reg.jobs.len()
+        );
         return Ok(());
     }
     let mut failed = Vec::new();
@@ -220,7 +227,10 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
         // Persist after EACH job so an interrupted tick never reruns a completed
         // (possibly expensive/non-idempotent) job on the next tick.
         save_state(vault_root, &state)?;
-        println!("scheduler tick {stamp}: ran '{id}' -> {}", if ok { "ok" } else { "ERROR" });
+        println!(
+            "scheduler tick {stamp}: ran '{id}' -> {}",
+            if ok { "ok" } else { "ERROR" }
+        );
         if !ok {
             failed.push(id.clone());
         }
@@ -247,17 +257,38 @@ pub fn run_list(vault_root: &Path) -> Result<(), CliError> {
 }
 
 /// `schedule run-now <id>` — force one job immediately.
-pub fn run_run_now(vault_root: &Path, id: &str) -> Result<(), CliError> {
+pub fn run_run_now(
+    vault_root: &Path,
+    id: &str,
+    unless_ran_within_secs: Option<u64>,
+) -> Result<(), CliError> {
     // A mutating command must FAIL on a missing registry, not exit 0, so a
     // script/desktop client can't record false success.
     let _lock = acquire_dispatch_lock(vault_root)?;
     let reg = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
     let state = load_state(vault_root)?;
+    // Recency skip UNDER the dispatch lock: if a tick (or another trigger)
+    // dispatched this job moments ago, a forced re-run is a duplicate, not
+    // intent. Exit 0 — the caller asked for "make sure it ran", and it did.
+    if let Some(window) = unless_ran_within_secs
+        && let Some(run) = state.runs.get(id)
+        && run.last_status != "seeded"
+        && let Ok(last) = chrono::NaiveDateTime::parse_from_str(&run.last_run, "%Y-%m-%dT%H:%M:%S")
+    {
+        let ago = (local_now() - last).num_seconds();
+        if ago >= 0 && (ago as u64) < window {
+            println!("schedule run-now '{id}' skipped — already ran {ago}s ago (within {window}s)");
+            return Ok(());
+        }
+    }
     let runner = shell_runner(vault_root, &reg)?;
     let (new_state, ok) =
         run_now_with(&reg, &state, id, local_now(), &runner).map_err(CliError::Io)?;
     save_state(vault_root, &new_state)?;
-    println!("schedule run-now '{id}' -> {}", if ok { "ok" } else { "ERROR" });
+    println!(
+        "schedule run-now '{id}' -> {}",
+        if ok { "ok" } else { "ERROR" }
+    );
     if !ok {
         return Err(CliError::Io(format!("job '{id}' exited non-zero")));
     }
@@ -275,12 +306,18 @@ pub fn run_set_enabled(vault_root: &Path, id: &str, enabled: bool) -> Result<(),
         .get_mut(id)
         .ok_or_else(|| CliError::Io(format!("no job '{id}' in the registry")))?;
     if job.enabled == enabled {
-        println!("schedule: '{id}' already {}", if enabled { "enabled" } else { "disabled" });
+        println!(
+            "schedule: '{id}' already {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
         return Ok(());
     }
     job.enabled = enabled;
     save_registry(vault_root, &reg)?;
-    println!("schedule: '{id}' {}", if enabled { "enabled" } else { "disabled" });
+    println!(
+        "schedule: '{id}' {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
     Ok(())
 }
 
@@ -325,7 +362,12 @@ mod tests {
         // Second call is a no-op (never clobbers recorded runs).
         seed_missing_state(vault).unwrap();
         assert_eq!(
-            load_state(vault).unwrap().runs.get("daily").unwrap().last_run,
+            load_state(vault)
+                .unwrap()
+                .runs
+                .get("daily")
+                .unwrap()
+                .last_run,
             before
         );
     }
@@ -336,7 +378,7 @@ mod tests {
         let vault = dir.path();
         // No registry -> enable/disable/run-now must FAIL, not exit 0.
         assert!(run_set_enabled(vault, "daily", false).is_err());
-        assert!(run_run_now(vault, "daily").is_err());
+        assert!(run_run_now(vault, "daily", None).is_err());
         // list stays lenient (prints a hint, returns Ok).
         assert!(run_list(vault).is_ok());
     }

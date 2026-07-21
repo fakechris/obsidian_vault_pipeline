@@ -1222,6 +1222,11 @@ enum ScheduleAction {
     },
     /// Force one job to run immediately, ignoring its cadence.
     RunNow {
+        /// Skip (exit 0) when the job already ran within this many seconds —
+        /// closes the race between an overlap check and dispatch (the check
+        /// happens INSIDE the dispatch lock). Portal-triggered runs pass 120.
+        #[arg(long)]
+        unless_ran_within_secs: Option<u64>,
         #[arg(long)]
         vault_root: PathBuf,
         /// Job id (see `schedule list`), e.g. `daily` or `crystallize`.
@@ -1674,9 +1679,11 @@ fn main() -> ExitCode {
             ScheduleAction::Status => commands::schedule::run_status(&today_iso()),
             ScheduleAction::List { vault_root } => commands::scheduler::run_list(&vault_root),
             ScheduleAction::Tick { vault_root } => commands::scheduler::run_tick(&vault_root),
-            ScheduleAction::RunNow { vault_root, id } => {
-                commands::scheduler::run_run_now(&vault_root, &id)
-            }
+            ScheduleAction::RunNow {
+                vault_root,
+                id,
+                unless_ran_within_secs,
+            } => commands::scheduler::run_run_now(&vault_root, &id, unless_ran_within_secs),
             ScheduleAction::Enable { vault_root, id } => {
                 commands::scheduler::run_set_enabled(&vault_root, &id, true)
             }

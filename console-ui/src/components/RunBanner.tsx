@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { isRunningWithProgress, lastRunBanner, runActivity, type BannerLevel } from '../lib/derive';
+import { startRunNow } from '../lib/api';
 import { useModel } from '../model';
 import RunActivity from './RunActivity';
 
@@ -41,8 +42,15 @@ export default function RunBanner() {
   const navigate = useNavigate();
   const now = useNowTick();
   const [expanded, setExpanded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const banner = lastRunBanner(model, now);
+  // Retry stays pending until the heartbeat actually moves the banner off
+  // `failed` — the 202 alone doesn't mean the model caught up yet.
+  const bannerLevel = banner.level;
+  useEffect(() => {
+    if (bannerLevel !== 'failed') setRetrying(false);
+  }, [bannerLevel]);
   // The activity feed is worth expanding when there IS a run to show (a live
   // run, or a just-finished one whose feed is still on the heartbeat).
   const hasActivity = runActivity(model).status !== null;
@@ -133,6 +141,38 @@ export default function RunBanner() {
             </span>
           )}
         </button>
+        {/* Failed run → retry on the spot: the manual-run endpoint reruns
+            today's job under the full overlap protection (heartbeat + slot +
+            dispatch lock). The banner flips to "running" via the heartbeat
+            as soon as the child starts. */}
+        {banner.level === 'failed' && (
+          <button
+            type="button"
+            className="run-banner-retry"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              startRunNow('daily')
+                .then(() => {
+                  // Revalidate soon so the banner flips to "running" via the
+                  // heartbeat instead of sitting on the stale failed state
+                  // for the idle poll interval. `retrying` stays true until
+                  // the banner actually leaves `failed` (effect below).
+                  window.setTimeout(
+                    () => window.dispatchEvent(new Event('ovp:model-refresh')),
+                    1500,
+                  );
+                  window.setTimeout(
+                    () => window.dispatchEvent(new Event('ovp:model-refresh')),
+                    5000,
+                  );
+                })
+                .catch(() => setRetrying(false));
+            }}
+          >
+            {retrying ? t('banner.retrying') : t('banner.retry')}
+          </button>
+        )}
         {/* Expand the live per-source activity feed inline, without leaving the
             current page — the operator's tail -f, one click away everywhere. */}
         {hasActivity && (

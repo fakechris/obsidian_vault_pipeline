@@ -381,6 +381,35 @@ export const en = {
     'DURABLE claims passed every evidence gate; CAVEATED claims carry a known weakness and wait for review — they are labeled, never hidden.',
   'system.conceptGate':
     'THE GATE is a mechanical check before anything is written to the crystal ledger: every citation must resolve to a real quoted unit, and claim strength is scored — human decisions go through it too, never around it.',
+  'attention.ack': 'Acknowledge',
+  'attention.ackHint': 'Hide this item until its status changes',
+  'banner.retry': 'Retry',
+  'banner.retrying': 'Starting…',
+  'run.title': 'Pipeline run',
+  'run.help':
+    'Force today\'s daily job to run right now. Protected: a second click while any run is in progress is rejected, and a completed manual run counts for the automatic schedule (no double run).',
+  'run.runNow': 'Run today\'s job now',
+  'run.runAgain': 'Run again',
+  'run.running': 'Running…',
+  'run.confirmAgain': 'Today\'s job already ran. Run it again?',
+  'run.lastRun': 'Last scheduled run: {when} ({status})',
+  'run.lastOk': 'Manual run completed.',
+  'run.lastFailed': 'Manual run failed',
+  'providers.title': 'LLM Provider',
+  'providers.help':
+    'Which model endpoint the pipeline uses (stored in .ovp/providers.toml; keys are masked once saved).',
+  'providers.preset': 'Provider',
+  'providers.baseUrl': 'Endpoint',
+  'providers.baseUrlHint': 'empty = official Anthropic API',
+  'providers.model': 'Model',
+  'providers.apiKey': 'API key',
+  'providers.apiKeyHint': 'leave masked value to keep the current key',
+  'providers.noProxy': 'Bypass system proxy for LLM calls',
+  'providers.save': 'Save',
+  'providers.saved':
+    'Saved. Scheduled runs pick this up immediately; restart the app/server for in-portal ask.',
+  'providers.protocolNote':
+    'All presets use Anthropic-Messages-compatible endpoints. OpenAI-compatible and Gemini native protocols are not supported yet.',
   'system.publish': 'Publish',
   'system.publishHelp':
     'Snapshot the public-safe knowledge site and deploy it as configured in .ovp/publish.toml.',

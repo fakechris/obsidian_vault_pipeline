@@ -198,7 +198,9 @@ export function healthLevel(
 }
 
 export function attentionCount(model: IndexModel): number {
-  return model.totals.blocked + model.totals.needs_content;
+  // Count from the rows (not the baked totals) so acknowledged items drop
+  // out of the nav dot / Today counter consistently with the lists.
+  return attentionSources(model).length;
 }
 
 // -------------------------------------------------------------------- today
@@ -259,8 +261,20 @@ export function readToday(model: IndexModel): ReadSource[] {
 
 /** Sources needing operator attention: blocked + needs-content. */
 export function attentionSources(model: IndexModel): SourceRow[] {
+  const acked = ackedSet(model);
   return model.sources.filter(
-    (s) => s.status === 'blocked' || s.status === 'needs_content',
+    (s) =>
+      (s.status === 'blocked' || s.status === 'needs_content') &&
+      !acked.has(`${s.sha256}\u0000${s.status}`),
+  );
+}
+
+/** Acknowledged (sha,status) pairs from the live-server overlay. An ack is
+ * status-scoped: a needs-content source the operator dismissed re-surfaces
+ * if it later BLOCKS (different status = different problem). */
+function ackedSet(model: IndexModel): Set<string> {
+  return new Set(
+    (model.attention_acks ?? []).map((a) => `${a.sha}\u0000${a.status}`),
   );
 }
 
