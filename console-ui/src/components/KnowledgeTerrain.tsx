@@ -99,7 +99,11 @@ function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[]
       claim_id: c.claim_id,
       title: c.claim,
       date: '',
-      theme: c.theme ?? (home ? home.label : ''),
+      // `theme` is the ROUTE key only (click → themeRoute). Keep the claim's own
+      // theme, '' for unthemed — never borrow the dominant CLUSTER label, or an
+      // unthemed claim would open an unrelated theme page. The tooltip shows the
+      // dominant cluster name separately via `theme_id`.
+      theme: c.theme ?? '',
       theme_id: domId,
       x: baseX + Math.cos(ang) * rr,
       y: baseY + Math.sin(ang) * rr,
@@ -346,12 +350,18 @@ export default function KnowledgeTerrain({
     // Recency: rank sources by date across the corpus's OWN range so we need no
     // "now"; newest ~1, oldest ~0.15, undated a low baseline. This is "growth".
     const dated = data.points.map((p) => p.date).filter(Boolean).sort();
-    const asNum = (d: string) => Number(d.replaceAll('-', '')) || 0;
-    const lo = asNum(dated[0] ?? '');
-    const hi = asNum(dated[dated.length - 1] ?? '');
+    // Epoch DAYS, not YYYYMMDD-as-decimal: the latter makes 2025-12-31 and
+    // 2026-01-01 read ~8870 apart despite being adjacent, warping the relief at
+    // every month/year boundary.
+    const asDay = (d: string) => {
+      const t = Date.parse(d);
+      return Number.isNaN(t) ? 0 : Math.floor(t / 86_400_000);
+    };
+    const lo = asDay(dated[0] ?? '');
+    const hi = asDay(dated[dated.length - 1] ?? '');
     const recencyW = (p: TPoint) => {
       if (!p.date || hi <= lo) return 0.15;
-      return 0.15 + 0.85 * ((asNum(p.date) - lo) / (hi - lo));
+      return 0.15 + 0.85 * ((asDay(p.date) - lo) / (hi - lo));
     };
     // Influence: how many active crystals cite each source. A source that feeds
     // many durable claims rises; uncited stays flat. Terrain points carry `sha`;
@@ -570,6 +580,10 @@ export default function KnowledgeTerrain({
     // Interaction state, hoisted so `applyCutoff` can reset a stale hover when
     // the visible set shrinks under it.
     let hoverSlot = -1;
+    // Which crystal's evidence lines are currently drawn — so hovering the same
+    // crystal across many pointermoves doesn't rebuild the line buffer each time
+    // (setPositions reallocates interleaved attributes). -1 = none.
+    let drawnCrystalIdx = -1;
     let downX = 0;
     let downY = 0;
 
@@ -657,6 +671,7 @@ export default function KnowledgeTerrain({
       cgeo.boundingSphere = null;
       cmark.visible = false;
       elines.visible = false;
+      drawnCrystalIdx = -1; // land reshaped; force a redraw on next hover
     };
     // Scene rebuilds (persp/dataset change) re-apply the CURRENT UI filters —
     // the driving effect below also fires post-mount with the real cutoff.
@@ -712,18 +727,25 @@ export default function KnowledgeTerrain({
       if (showCrystals) {
         const cslot = cSlotAt(ev.offsetX, ev.offsetY);
         if (cslot >= 0) {
-          const cr = crystals[cVisibleIdx[cslot]];
+          const ci = cVisibleIdx[cslot];
+          const cr = crystals[ci];
           cmark.visible = true;
           (cmark.geometry.attributes.position as THREE.BufferAttribute).copyArray([
             cparr[cslot * 3], cparr[cslot * 3 + 1], cparr[cslot * 3 + 2],
           ]);
           cmark.geometry.attributes.position.needsUpdate = true;
-          drawEvidenceLines(cr, cslot);
+          // Only rebuild the line buffer when the hovered crystal changes — the
+          // land is static between reshapes, so the lines don't move.
+          if (ci !== drawnCrystalIdx) {
+            drawEvidenceLines(cr, cslot);
+            drawnCrystalIdx = ci;
+          }
           setHover({ mx: ev.offsetX, my: ev.offsetY, p: cr });
           renderer.domElement.style.cursor = 'pointer';
         } else {
           cmark.visible = false;
           elines.visible = false;
+          drawnCrystalIdx = -1;
           setHover(null);
           renderer.domElement.style.cursor = 'grab';
         }
