@@ -11,17 +11,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { STATIC_MODE, terrainUrl } from '../lib/api';
-import { activeClaims, sourcesByCase, themeRoute } from '../lib/derive';
+import { activeClaims, themeRoute } from '../lib/derive';
 import { useModel } from '../model';
 import type { IndexModel } from '../lib/types';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+// Fat lines: plain THREE.Line ignores linewidth in WebGL (always 1px), so the
+// evidence lines need Line2/LineMaterial to render at a real pixel width.
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
 // A rendered point is either a source (has `sha`, opens /library) or — in the
-// claim perspective — a claim (has `claim_id`, opens its theme page). The two
+// claim perspective — a crystal (has `claim_id`, opens its theme page). The two
 // share the same buffer/hover/label machinery; only the click target differs.
-type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; tags?: string[]; tags_inferred?: string[]; claim_id?: string };
+// A crystal also carries `sx`/`sy`: the LAYOUT positions of its cited sources,
+// so hovering it can draw evidence lines out to them (they scatter across
+// islands — that scatter IS the signal).
+type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; tags?: string[]; tags_inferred?: string[]; claim_id?: string; sx?: number[]; sy?: number[]; srcCount?: number; spanClusters?: number };
 type TTheme = { id: number; label: string; label_zh: string; cx: number; cy: number; count: number };
 type Terrain = {
   points: TPoint[];
@@ -30,43 +38,91 @@ type Terrain = {
   point_count: number;
 };
 
-/** Claim perspective of the terrain: each active claim placed at the centroid
- * of its cited sources' positions, with a small deterministic golden-angle
- * nudge so co-located claims don't fully overlap. The land + theme labels stay
- * source-derived — claims simply scatter on the same corpus landscape. Returns
- * null until the model loads; claims with no positioned source are dropped. */
-function buildClaimTerrain(data: Terrain | null, model: IndexModel | null): Terrain | null {
-  if (!data || !model) return null;
-  const byCase = sourcesByCase(model);
-  const posBySha = new Map(data.points.map((p) => [p.sha, p]));
-  const themeIdByLabel = new Map(data.themes.map((th) => [th.label, th.id]));
-  const [minx, miny, maxx, maxy] = data.bounds;
-  const jitter = Math.max(maxx - minx, maxy - miny, 1e-6) * 0.008;
-  const GOLDEN = 2.399963229728653; // radians — spreads indices around a ring
+const GOLDEN = 2.399963229728653; // radians — phyllotaxis angle, spreads indices
 
-  const points: TPoint[] = [];
-  activeClaims(model.claims).forEach((c, i) => {
+// What the mountain HEIGHT encodes (KMEM-style selectable relief). The land
+// layout (x/y) is always semantic; only the z-metric changes.
+type Metric = 'density' | 'recency' | 'influence';
+
+/** Crystal overlay for the SOURCE terrain: each active claim marked at the
+ * island of the theme its evidence most belongs to (the DOMINANT cluster among
+ * its cited sources), NOT at the 2D centroid of those sources. Averaging
+ * already-projected coordinates is meaningless on a non-linear layout — the mean
+ * of scattered points lands in a semantic no-man's-land (often a different
+ * theme's peak). Dominant-cluster placement instead sits the crystal on a real
+ * evidence home; the evidence LINES (sx/sy) then reveal how far its support
+ * reaches. Co-located crystals spiral out around their shared home via a
+ * deterministic phyllotaxis so they don't stack. The land + theme labels stay
+ * source-derived. Returns [] until the model loads; claims with no positioned
+ * source are dropped. */
+function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[] {
+  if (!data || !model) return [];
+  // Join claim sources to terrain points by case_id — `p.id` IS the case_id
+  // crystal-terrain emitted, and claims cite by case_id. A sha round-trip would
+  // collapse packs that share a content sha and drop legacy packs with no sha.
+  const posByCase = new Map(data.points.map((p) => [p.id, p]));
+  const themeById = new Map(data.themes.map((th) => [th.id, th]));
+  const [minx, miny, maxx, maxy] = data.bounds;
+  const step = Math.max(maxx - minx, maxy - miny, 1e-6) * 0.012;
+  // Per-home spiral counter so many crystals sharing one island fan out.
+  const homeSeen = new Map<number, number>();
+
+  const out: TPoint[] = [];
+  activeClaims(model.claims).forEach((c) => {
     const srcPts = c.sources
-      .map((caseId) => byCase.get(caseId)?.sha256)
-      .map((sha) => (sha ? posBySha.get(sha) : undefined))
+      .map((caseId) => posByCase.get(caseId))
       .filter((p): p is TPoint => !!p);
     if (srcPts.length === 0) return;
-    const cx = srcPts.reduce((s, p) => s + p.x, 0) / srcPts.length;
-    const cy = srcPts.reduce((s, p) => s + p.y, 0) / srcPts.length;
-    const theme = c.theme ?? '';
-    points.push({
+    // Dominant cluster = the real theme id contributing the most sources.
+    // Prefer a real theme (id >= 0) over the noise bucket on ties.
+    const counts = new Map<number, number>();
+    for (const p of srcPts) counts.set(p.theme_id, (counts.get(p.theme_id) ?? 0) + 1);
+    let domId = srcPts[0].theme_id;
+    let best = -1;
+    for (const [tid, n] of counts) {
+      if (n > best || (n === best && tid >= 0 && domId < 0)) {
+        best = n;
+        domId = tid;
+      }
+    }
+    const home = themeById.get(domId);
+    // Fall back to the source centroid only when the dominant cluster is noise
+    // (no island center to anchor to).
+    const baseX = home ? home.cx : srcPts.reduce((s, p) => s + p.x, 0) / srcPts.length;
+    const baseY = home ? home.cy : srcPts.reduce((s, p) => s + p.y, 0) / srcPts.length;
+    // Spiral only crystals that share a REAL island home. Noise-dominated
+    // crystals have no shared anchor — each sits on its own evidence centroid, so
+    // sharing one counter would push later ones ever further from their evidence
+    // and off the land.
+    let rr = 0;
+    let ang = 0;
+    if (home) {
+      const k = homeSeen.get(domId) ?? 0;
+      homeSeen.set(domId, k + 1);
+      rr = step * Math.sqrt(k); // 0 for the first, growing spiral after
+      ang = k * GOLDEN;
+    }
+    out.push({
       id: `claim:${c.claim_id}`,
       sha: '',
       claim_id: c.claim_id,
       title: c.claim,
       date: '',
-      theme,
-      theme_id: themeIdByLabel.get(theme) ?? -1,
-      x: cx + Math.cos(i * GOLDEN) * jitter,
-      y: cy + Math.sin(i * GOLDEN) * jitter,
+      // `theme` is the ROUTE key only (click → themeRoute). Keep the claim's own
+      // theme, '' for unthemed — never borrow the dominant CLUSTER label, or an
+      // unthemed claim would open an unrelated theme page. The tooltip shows the
+      // dominant cluster name separately via `theme_id`.
+      theme: c.theme ?? '',
+      theme_id: domId,
+      x: baseX + Math.cos(ang) * rr,
+      y: baseY + Math.sin(ang) * rr,
+      sx: srcPts.map((p) => p.x),
+      sy: srcPts.map((p) => p.y),
+      srcCount: srcPts.length,
+      spanClusters: counts.size,
     });
   });
-  return { points, themes: data.themes, bounds: data.bounds, point_count: points.length };
+  return out;
 }
 
 const SIZE = 220;
@@ -85,6 +141,10 @@ const FULL = '9999-99-99'; // cutoff meaning "everything"
 // exact cross-view color identity would need a shared theme→color projection.
 const THEME_COLORS = ['#3b82f6', '#06b6d4', '#22c55e', '#eab308', '#a78bfa', '#f472b6', '#14b8a6', '#94a3b8'];
 const NOISE_COLOR = '#66707c'; // unthemed/noise points — dim slate background
+// Crystals are a distinct FOREGROUND layer over the source land: a warm gold
+// that no theme swatch uses, so a marked claim never reads as just another
+// source dot. Evidence lines share the hue at low alpha.
+const CRYSTAL_COLOR = '#ffd76a';
 
 function themeColorMap(themes: TTheme[]): Map<number, string> {
   const m = new Map<number, string>();
@@ -116,6 +176,42 @@ function glowTexture(): THREE.Texture {
   return t;
 }
 
+/** A four-point diamond/star sprite for crystals — a shape the round source
+ * glow never takes, so crystals stay distinguishable even at the same color
+ * rank. White ramp (the material color multiplies it). */
+function crystalTexture(): THREE.Texture {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  g.translate(S / 2, S / 2);
+  // Soft round core for a bright center.
+  const core = g.createRadialGradient(0, 0, 0, 0, 0, S * 0.22);
+  core.addColorStop(0, 'rgba(255,255,255,1)');
+  core.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = core;
+  g.beginPath();
+  g.arc(0, 0, S * 0.22, 0, Math.PI * 2);
+  g.fill();
+  // Diamond body.
+  const r = S * 0.46;
+  const grd = g.createRadialGradient(0, 0, 0, 0, 0, r);
+  grd.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grd.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.beginPath();
+  g.moveTo(0, -r);
+  g.lineTo(r * 0.62, 0);
+  g.lineTo(0, r);
+  g.lineTo(-r * 0.62, 0);
+  g.closePath();
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.needsUpdate = true;
+  return t;
+}
+
 export default function KnowledgeTerrain({
   height = 600,
   persp = 'source',
@@ -141,13 +237,40 @@ export default function KnowledgeTerrain({
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  // Selectable height metric — read imperatively so a change reshapes the land
+  // without rebuilding the WebGL scene (like the timeline scrubber).
+  const [metric, setMetric] = useState<Metric>('density');
+  const metricRef = useRef(metric);
+  metricRef.current = metric;
   const [hover, setHover] = useState<{ mx: number; my: number; p: TPoint } | null>(null);
 
-  // The rendered dataset: source points as fetched, or claims placed on the same
-  // landscape. Everything below (scene, HUD, legend, timeline) reads `render`;
-  // `data` stays the source terrain that both modes are derived from.
-  const claimData = useMemo(() => buildClaimTerrain(data, model), [data, model]);
-  const render = persp === 'claim' ? claimData : data;
+  // The land, source points, theme labels, legend and timeline ALWAYS read the
+  // source terrain `data` — that layer is semantically honest (peaks = dense
+  // source communities). Crystals are an OVERLAY on top of that same landscape,
+  // shown only in the claim perspective. `render` aliases `data` so the scene's
+  // land/point machinery is unchanged.
+  const render = data;
+  // Stabilize the crystals reference across model polls. ModelProvider swaps
+  // `model` every 12-60s, but the overlay only changes when a claim's
+  // id/theme/sources change. Keying the memo on a content SIGNATURE (not the
+  // model reference) keeps the WebGL scene — a build dep of `crystals` — from
+  // tearing down and resetting the camera on every no-op poll, including in the
+  // default source view where the overlay isn't even shown.
+  const claimSig = useMemo(
+    () =>
+      model
+        ? activeClaims(model.claims)
+            // Include the claim TEXT: a rewrite can keep id/theme/sources yet
+            // change what the tooltip must show, and claim_id can collide across
+            // runs, so text is what makes the signature honest.
+            .map((c) => `${c.claim_id}:${c.theme ?? ''}:${c.claim}:${c.sources.join(',')}`)
+            .join('|')
+        : '',
+    [model],
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const crystals = useMemo(() => buildCrystals(data, model), [data, claimSig]);
+  const showCrystals = persp === 'claim';
 
   const months = useMemo(() => {
     if (!render) return [] as string[];
@@ -236,21 +359,68 @@ export default function KnowledgeTerrain({
         }
       return o;
     };
-    const densityFor = (pts: TPoint[]) => {
+    // Weighted KDE: each source's contribution to the land height is scaled by
+    // the ACTIVE metric (density=1, recency=newer higher, influence=how many
+    // crystals cite it). `weightOf` maps a point to its weight.
+    const densityFor = (pts: TPoint[], weightOf: (p: TPoint) => number) => {
       const grid = new Float32Array(GRID * GRID);
       for (const p of pts) {
+        const w = weightOf(p);
+        if (w <= 0) continue;
         const gx = Math.min(GRID - 1, Math.max(0, Math.round(((sx(p.x) / SIZE) + 0.5) * (GRID - 1))));
         const gy = Math.min(GRID - 1, Math.max(0, Math.round(((sy(p.y) / SIZE) + 0.5) * (GRID - 1))));
-        grid[gy * GRID + gx] += 1;
+        grid[gy * GRID + gx] += w;
       }
       return blur(grid);
     };
-    // Fixed normalizer from the FULL corpus, so the terrain GROWS over the
-    // timeline instead of rescaling to full height at every step.
-    const fullDens = densityFor(data.points);
-    let fullMax = 1e-6;
-    for (const v of fullDens) fullMax = Math.max(fullMax, v);
-    const heightFn = (dens: Float32Array) => (wx: number, wz: number) => {
+
+    // ---- per-metric source weights ----
+    // Recency: rank sources by date across the corpus's OWN range so we need no
+    // "now"; newest ~1, oldest ~0.15, undated a low baseline. This is "growth".
+    const dated = data.points.map((p) => p.date).filter(Boolean).sort();
+    // Epoch DAYS, not YYYYMMDD-as-decimal: the latter makes 2025-12-31 and
+    // 2026-01-01 read ~8870 apart despite being adjacent, warping the relief at
+    // every month/year boundary.
+    const asDay = (d: string) => {
+      const t = Date.parse(d);
+      return Number.isNaN(t) ? 0 : Math.floor(t / 86_400_000);
+    };
+    const lo = asDay(dated[0] ?? '');
+    const hi = asDay(dated[dated.length - 1] ?? '');
+    const recencyW = (p: TPoint) => {
+      if (!p.date || hi <= lo) return 0.15;
+      return 0.15 + 0.85 * ((asDay(p.date) - lo) / (hi - lo));
+    };
+    // Influence: how many active crystals cite each source. A source that feeds
+    // many durable claims rises; uncited stays flat. A terrain point's `id` IS
+    // the case_id that crystal-terrain emitted, and claims cite by case_id — so
+    // key on `p.id` directly. (The old sha bridge zeroed legacy empty-sha points
+    // and collapsed distinct case_ids that share one source sha.)
+    const citeByCase = new Map<string, number>();
+    if (model) {
+      for (const c of activeClaims(model.claims)) {
+        for (const caseId of c.sources) citeByCase.set(caseId, (citeByCase.get(caseId) ?? 0) + 1);
+      }
+    }
+    const influenceW = (p: TPoint) => citeByCase.get(p.id) ?? 0;
+    const weightOfFor = (metric: Metric): ((p: TPoint) => number) =>
+      metric === 'recency' ? recencyW : metric === 'influence' ? influenceW : () => 1;
+
+    // Fixed normalizer PER METRIC from the FULL corpus, cached, so the terrain
+    // GROWS over the timeline instead of rescaling to full height each step and
+    // each metric fills the height range on its own scale.
+    const fullMaxCache = new Map<Metric, number>();
+    const fullMaxFor = (metric: Metric): number => {
+      let m = fullMaxCache.get(metric);
+      if (m == null) {
+        const dens = densityFor(data.points, weightOfFor(metric));
+        m = 1e-6;
+        for (const v of dens) m = Math.max(m, v);
+        fullMaxCache.set(metric, m);
+      }
+      return m;
+    };
+    const heightFn = (dens: Float32Array, fullMax: number) => (wx: number, wz: number) => {
       const fx = ((wx / SIZE) + 0.5) * (GRID - 1);
       const fz = ((wz / SIZE) + 0.5) * (GRID - 1);
       const x0 = Math.min(GRID - 1, Math.max(0, Math.floor(fx)));
@@ -362,6 +532,64 @@ export default function KnowledgeTerrain({
     mark.visible = false;
     scene.add(mark);
 
+    // ---- crystal overlay (claim perspective only) ----
+    // A gold diamond layer floating over the source land. Each crystal sits at
+    // its dominant-cluster home; hovering it draws evidence lines to its cited
+    // sources (which scatter across islands). Built lazily — an empty layer when
+    // there are no crystals or we're in source mode costs nothing.
+    const CRYSTAL_LIFT = 4; // float above the source dots so they read as markers
+    const cgeo = new THREE.BufferGeometry();
+    const cparr = new Float32Array(Math.max(crystals.length, 1) * 3);
+    cgeo.setAttribute('position', new THREE.BufferAttribute(cparr, 3));
+    // Resting crystals are SMALL and dim — anchors, not the story. The story is
+    // the relationship, which lights up on hover (bigger mark + bright thick
+    // lines). A field of hundreds of loud diamonds would drown both the land and
+    // the lines, which is exactly the "markers too big, lines invisible" failure.
+    const cmat = new THREE.PointsMaterial({
+      size: 4, map: crystalTexture(), transparent: true, opacity: 0.6, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR),
+      sizeAttenuation: true,
+    });
+    const cpoints = new THREE.Points(cgeo, cmat);
+    cpoints.frustumCulled = false;
+    cpoints.visible = showCrystals;
+    scene.add(cpoints);
+    const cVisibleIdx: number[] = []; // geometry slot -> crystals index
+
+    // Highlight sprite for the hovered crystal (the only bright diamond).
+    const cmark = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3)),
+      new THREE.PointsMaterial({ size: 11, map: crystalTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR) }),
+    );
+    cmark.visible = false;
+    // Never cull: the cached boundingSphere is from the marker's FIRST position,
+    // so after moving it (copyArray) a distant camera could wrongly cull the
+    // highlight. The single sprite is trivial to always-draw.
+    cmark.frustumCulled = false;
+    scene.add(cmark);
+
+    // Evidence lines: fat Line2 segments rewritten to the hovered crystal's
+    // crystal→source pairs. Bright + ~3px so the relationship is the salient
+    // thing, not the anchor. Capped so a pathological claim can't blow the
+    // buffer; the tooltip still reports the true source count.
+    const LINE_CAP = 64;
+    const larr = new Float32Array(LINE_CAP * 2 * 3);
+    const lgeo = new LineSegmentsGeometry();
+    const lmat = new LineMaterial({
+      color: new THREE.Color(CRYSTAL_COLOR).getHex(),
+      linewidth: 3, // pixels (worldUnits off)
+      transparent: true, opacity: 0.95, depthWrite: false, depthTest: false,
+    });
+    lmat.resolution.set(W, H);
+    const elines = new LineSegments2(lgeo, lmat);
+    elines.frustumCulled = false;
+    elines.visible = false;
+    elines.renderOrder = 3; // draw over the land + points
+    scene.add(elines);
+    // Current land-height sampler, refreshed by applyFilter so crystal + line
+    // endpoints sit on the land at the active timeline cutoff.
+    let hAtCurrent: (x: number, z: number) => number = () => 0;
+
     // ---- theme labels ----
     const labelObjs = data.themes
       .slice()
@@ -381,6 +609,10 @@ export default function KnowledgeTerrain({
     // Interaction state, hoisted so `applyCutoff` can reset a stale hover when
     // the visible set shrinks under it.
     let hoverSlot = -1;
+    // Which crystal's evidence lines are currently drawn — so hovering the same
+    // crystal across many pointermoves doesn't rebuild the line buffer each time
+    // (setPositions reallocates interleaved attributes). -1 = none.
+    let drawnCrystalIdx = -1;
     let downX = 0;
     let downY = 0;
 
@@ -392,12 +624,17 @@ export default function KnowledgeTerrain({
           (themeId == null || p.theme_id === themeId) &&
           (tag == null || (p.tags ?? []).includes(tag) || (p.tags_inferred ?? []).includes(tag)),
       );
-      const dens = densityFor(vis);
-      const hAt = heightFn(dens);
+      const metric = metricRef.current;
+      const dens = densityFor(vis, weightOfFor(metric));
+      const hAt = heightFn(dens, fullMaxFor(metric));
+      hAtCurrent = hAt;
       for (let i = 0; i < gpos.count; i++) gpos.setY(i, hAt(gpos.getX(i), gpos.getZ(i)));
       gpos.needsUpdate = true;
       geo.computeVertexNormals();
 
+      // In claim mode the sources recede to context so the gold crystals read as
+      // the foreground; in source mode they stay full-strength.
+      const srcDim = showCrystals ? 0.4 : 1;
       visibleIdx.length = 0;
       vis.forEach((p) => {
         const wx = sx(p.x);
@@ -407,9 +644,9 @@ export default function KnowledgeTerrain({
         parr[slot * 3 + 1] = hAt(wx, wz) + 1.6;
         parr[slot * 3 + 2] = wz;
         const col = colorByTheme.get(p.theme_id) ?? noiseColor;
-        carr[slot * 3] = col.r;
-        carr[slot * 3 + 1] = col.g;
-        carr[slot * 3 + 2] = col.b;
+        carr[slot * 3] = col.r * srcDim;
+        carr[slot * 3 + 1] = col.g * srcDim;
+        carr[slot * 3 + 2] = col.b * srcDim;
         visibleIdx.push(data.points.indexOf(p));
       });
       pgeo.setDrawRange(0, vis.length);
@@ -440,6 +677,30 @@ export default function KnowledgeTerrain({
           l.el.style.display = 'none';
         }
       }
+
+      // ---- crystals: place the gold markers on the current land surface ----
+      // Respect only the theme filter (crystals have no date/tags); a crystal
+      // shows when its DOMINANT cluster matches the selected theme. A hovered
+      // crystal's lines are cleared here since the map just reshaped under it.
+      cVisibleIdx.length = 0;
+      if (showCrystals) {
+        crystals.forEach((cr, ci) => {
+          if (themeId != null && cr.theme_id !== themeId) return;
+          const wx = sx(cr.x);
+          const wz = sy(cr.y);
+          const slot = cVisibleIdx.length;
+          cparr[slot * 3] = wx;
+          cparr[slot * 3 + 1] = hAt(wx, wz) + CRYSTAL_LIFT;
+          cparr[slot * 3 + 2] = wz;
+          cVisibleIdx.push(ci);
+        });
+      }
+      cgeo.setDrawRange(0, cVisibleIdx.length);
+      cgeo.attributes.position.needsUpdate = true;
+      cgeo.boundingSphere = null;
+      cmark.visible = false;
+      elines.visible = false;
+      drawnCrystalIdx = -1; // land reshaped; force a redraw on next hover
     };
     // Scene rebuilds (persp/dataset change) re-apply the CURRENT UI filters —
     // the driving effect below also fires post-mount with the real cutoff.
@@ -460,7 +721,65 @@ export default function KnowledgeTerrain({
       const hit = hits.find((h) => (h.index ?? -1) < visibleIdx.length);
       return hit ? hit.index ?? -1 : -1;
     };
+    // Crystal raycast (claim mode). Separate object + threshold so the bigger
+    // gold markers are easy to grab.
+    const cSlotAt = (offX: number, offY: number): number => {
+      ndc.x = (offX / W) * 2 - 1;
+      ndc.y = -(offY / H) * 2 + 1;
+      ray.setFromCamera(ndc, camera);
+      const hits = ray.intersectObject(cpoints, false);
+      const hit = hits.find((h) => (h.index ?? -1) < cVisibleIdx.length);
+      return hit ? hit.index ?? -1 : -1;
+    };
+    // Draw the hovered crystal's evidence lines: crystal → each cited source, on
+    // the current land surface. Returns the source count actually drawn.
+    const drawEvidenceLines = (cr: TPoint, cslot: number) => {
+      const cx0 = cparr[cslot * 3];
+      const cy0 = cparr[cslot * 3 + 1];
+      const cz0 = cparr[cslot * 3 + 2];
+      const n = Math.min(cr.sx?.length ?? 0, LINE_CAP);
+      for (let j = 0; j < n; j++) {
+        const wx = sx(cr.sx![j]);
+        const wz = sy(cr.sy![j]);
+        larr[j * 6] = cx0;
+        larr[j * 6 + 1] = cy0;
+        larr[j * 6 + 2] = cz0;
+        larr[j * 6 + 3] = wx;
+        larr[j * 6 + 4] = hAtCurrent(wx, wz) + 1.6;
+        larr[j * 6 + 5] = wz;
+      }
+      if (n > 0) lgeo.setPositions(larr.subarray(0, n * 6));
+      elines.visible = n > 0;
+    };
     const pick = (ev: PointerEvent) => {
+      // Claim mode: crystals are the interactive foreground; sources are context.
+      if (showCrystals) {
+        const cslot = cSlotAt(ev.offsetX, ev.offsetY);
+        if (cslot >= 0) {
+          const ci = cVisibleIdx[cslot];
+          const cr = crystals[ci];
+          cmark.visible = true;
+          (cmark.geometry.attributes.position as THREE.BufferAttribute).copyArray([
+            cparr[cslot * 3], cparr[cslot * 3 + 1], cparr[cslot * 3 + 2],
+          ]);
+          cmark.geometry.attributes.position.needsUpdate = true;
+          // Only rebuild the line buffer when the hovered crystal changes — the
+          // land is static between reshapes, so the lines don't move.
+          if (ci !== drawnCrystalIdx) {
+            drawEvidenceLines(cr, cslot);
+            drawnCrystalIdx = ci;
+          }
+          setHover({ mx: ev.offsetX, my: ev.offsetY, p: cr });
+          renderer.domElement.style.cursor = 'pointer';
+        } else {
+          cmark.visible = false;
+          elines.visible = false;
+          drawnCrystalIdx = -1;
+          setHover(null);
+          renderer.domElement.style.cursor = 'grab';
+        }
+        return;
+      }
       hoverSlot = slotAt(ev.offsetX, ev.offsetY);
       if (hoverSlot >= 0) {
         const p = data.points[visibleIdx[hoverSlot]];
@@ -485,11 +804,17 @@ export default function KnowledgeTerrain({
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return; // a drag, not a click
       // Raycast AT the click/tap point — a touch tap (or a click after wheel
       // zoom) never fires pointermove, so hoverSlot would be stale or unset.
-      const slot = slotAt(e.offsetX, e.offsetY);
-      if (slot < 0 || slot >= visibleIdx.length) return;
-      const p = data.points[visibleIdx[slot]];
-      // Claim points open their theme page; source points open /library. Both in
-      // a NEW tab so the operator's tuned camera/timeline state survives (in-app
+      let p: TPoint | null = null;
+      if (showCrystals) {
+        const cslot = cSlotAt(e.offsetX, e.offsetY);
+        if (cslot >= 0 && cslot < cVisibleIdx.length) p = crystals[cVisibleIdx[cslot]];
+      } else {
+        const slot = slotAt(e.offsetX, e.offsetY);
+        if (slot >= 0 && slot < visibleIdx.length) p = data.points[visibleIdx[slot]];
+      }
+      if (!p) return;
+      // Crystals open their theme page; source points open /library. Both in a
+      // NEW tab so the operator's tuned camera/timeline state survives (in-app
       // navigation would unmount the terrain and reset it).
       const path = p.claim_id
         ? themeRoute(p.theme)
@@ -566,6 +891,7 @@ export default function KnowledgeTerrain({
       camera.updateProjectionMatrix();
       renderer.setSize(W, H);
       labelRenderer.setSize(W, H);
+      lmat.resolution.set(W, H); // fat lines scale in screen space
     });
     ro.observe(wrap);
 
@@ -590,13 +916,26 @@ export default function KnowledgeTerrain({
       const markMat = mark.material as THREE.PointsMaterial;
       markMat.map?.dispose();
       markMat.dispose();
+      // Crystal overlay: geometry + material + diamond textures + evidence lines.
+      cgeo.dispose();
+      cmat.map?.dispose();
+      cmat.dispose();
+      cmark.geometry.dispose();
+      const cmarkMat = cmark.material as THREE.PointsMaterial;
+      cmarkMat.map?.dispose();
+      cmarkMat.dispose();
+      lgeo.dispose();
+      lmat.dispose();
       renderer.dispose();
       wrap.removeChild(renderer.domElement);
       wrap.removeChild(labelRenderer.domElement);
       labelObjs.forEach((l) => l.obj.removeFromParent());
       labelHandlesRef.current = [];
     };
-  }, [render, height]);
+    // `crystals`/`showCrystals` are build deps: toggling the perspective must
+    // rebuild the scene so the overlay layer + its interaction bind to the
+    // current state (the land itself, from `render`, is perspective-invariant).
+  }, [render, crystals, showCrystals, height]);
 
   // ---- drive the terrain from the scrubber ----
   const atLatest = monthIdx >= months.length - 1;
@@ -628,7 +967,10 @@ export default function KnowledgeTerrain({
       selTheme,
       persp === 'claim' ? null : selTag,
     );
-  }, [monthIdx, months, atLatest, selTheme, selTag, persp]);
+    // `crystals`/`showCrystals` included: a model poll can rebuild the scene
+    // (which re-inits at FULL), so reapply the current cutoff or the slider and
+    // terrain would silently disagree.
+  }, [monthIdx, months, atLatest, selTheme, selTag, persp, metric, crystals, showCrystals]);
 
   // ---- play ----
   useEffect(() => {
@@ -716,7 +1058,9 @@ export default function KnowledgeTerrain({
     >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
         {render
-          ? t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
+          ? showCrystals
+            ? t('knowledge.terrainHudClaims', { crystals: crystals.length, themes: render.themes.length })
+            : t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
       {/* Clickable theme list — pick a cluster to FILTER the terrain to it and
@@ -770,13 +1114,27 @@ export default function KnowledgeTerrain({
             })}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
-        style={{ position: 'absolute', top: 10, right: 12, zIndex: 2, cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 12px', font: '12px system-ui' }}
-      >
-        {mode === '3d' ? '2D' : '3D'}
-      </button>
+      <div style={{ position: 'absolute', top: 10, right: 12, zIndex: 2, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {/* Height metric — what the mountains ENCODE. The x/y layout is fixed
+            (semantic); this only reshapes z. */}
+        <select
+          value={metric}
+          onChange={(e) => setMetric(e.target.value as Metric)}
+          title={t('knowledge.terrainHeightBy')}
+          style={{ cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 8px', font: '12px system-ui' }}
+        >
+          <option value="density">{t('knowledge.terrainHeightDensity')}</option>
+          <option value="recency">{t('knowledge.terrainHeightRecency')}</option>
+          <option value="influence">{t('knowledge.terrainHeightInfluence')}</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
+          style={{ cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 12px', font: '12px system-ui' }}
+        >
+          {mode === '3d' ? '2D' : '3D'}
+        </button>
+      </div>
 
       {/* Tag filter chips — single-select over the top tags of the rendered
           points; sits above the timeline bar when that is present. */}
@@ -860,7 +1218,11 @@ export default function KnowledgeTerrain({
         >
           <div
             style={{
-              color: themeColors.get(hover.p.theme_id) ?? '#7fd6e6',
+              // Crystals get the gold header (their dominant theme), sources the
+              // theme-rank color.
+              color: hover.p.claim_id
+                ? CRYSTAL_COLOR
+                : themeColors.get(hover.p.theme_id) ?? '#7fd6e6',
               fontSize: 11, marginBottom: 3,
             }}
           >
@@ -871,10 +1233,19 @@ export default function KnowledgeTerrain({
               const name = th
                 ? (lang === 'zh' ? th.label_zh : th.label)
                 : t('knowledge.terrainUnclassified');
-              return `${name}${hover.p.date ? ` · ${hover.p.date}` : ''}`;
+              const prefix = hover.p.claim_id ? `◆ ${t('knowledge.terrainCrystalTag')} · ` : '';
+              return `${prefix}${name}${hover.p.date ? ` · ${hover.p.date}` : ''}`;
             })()}
           </div>
           <div style={{ lineHeight: 1.35 }}>{hover.p.title}</div>
+          {hover.p.claim_id && (hover.p.srcCount ?? 0) > 0 && (
+            <div style={{ marginTop: 4, color: CRYSTAL_COLOR, opacity: 0.85, fontSize: 11 }}>
+              {t('knowledge.terrainCrystalEvidence', {
+                n: hover.p.srcCount ?? 0,
+                m: hover.p.spanClusters ?? 0,
+              })}
+            </div>
+          )}
           {((hover.p.tags?.length ?? 0) > 0 || (hover.p.tags_inferred?.length ?? 0) > 0) && (
             <div style={{ marginTop: 4, color: 'rgba(233,230,224,0.55)', fontSize: 11 }}>
               {[

@@ -36,3 +36,6 @@ Cargo.lock.bak
 .gstack/
 console-ui/dist/
 console-ui/dist-static/
+
+# Local-only planning scratchpad — never commit (operator directive)
+IMPLEMENTATION_PLAN.md
