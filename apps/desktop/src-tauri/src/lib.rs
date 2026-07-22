@@ -438,6 +438,31 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 }
             });
         }
+        "page-open-browser" => {
+            let Some(win) = app.get_webview_window("main") else {
+                return;
+            };
+            match win.url() {
+                // Only the portal's http(s) pages make sense in a browser —
+                // the tauri:// splash does not.
+                Ok(url) if url.scheme() == "http" || url.scheme() == "https" => {
+                    #[cfg(target_os = "macos")]
+                    let opener = "open";
+                    #[cfg(target_os = "linux")]
+                    let opener = "xdg-open";
+                    #[cfg(target_os = "windows")]
+                    let opener = "explorer";
+                    if let Err(e) = std::process::Command::new(opener)
+                        .arg(url.to_string())
+                        .spawn()
+                    {
+                        eprintln!("ovp2-desktop: open in browser failed: {e}");
+                    }
+                }
+                Ok(url) => eprintln!("ovp2-desktop: not a browser-openable page: {url}"),
+                Err(e) => eprintln!("ovp2-desktop: cannot read the page url: {e}"),
+            }
+        }
         other => {
             if let Some(path) = other.strip_prefix("vault-open:") {
                 switch_to_vault(app, path);
@@ -486,6 +511,17 @@ fn rebuild_vault_menu(handle: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?)?;
     menu.append(&vault_menu)?;
+    // Page menu: browser hand-off for the current portal page (⌘⇧O) — the
+    // in-app webview and a real browser tab show the same loopback URL.
+    let page_menu = Submenu::new(handle, "Page", true)?;
+    page_menu.append(&MenuItem::with_id(
+        handle,
+        "page-open-browser",
+        "Open Page in Browser",
+        true,
+        Some("CmdOrCtrl+Shift+O"),
+    )?)?;
+    menu.append(&page_menu)?;
     handle.set_menu(menu)?;
     Ok(())
 }
