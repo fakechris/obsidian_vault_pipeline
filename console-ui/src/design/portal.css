@@ -563,6 +563,18 @@ body {
 .row-list .row .meta {
   color: var(--muted);
   font-size: var(--ovp-text-xs);
+  /* A flex container that WRAPS ITS ITEMS (many tag chips flow onto extra
+     lines) while `nowrap` still keeps each text run — the date/collection —
+     unbroken. The width cap is what protects the title column: without it a
+     heavily-tagged row forces the meta to min-content width and crushes the
+     title to one word per line (2026-07-21 layout bug). */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  row-gap: 0.15rem;
+  max-width: 55%;
+  min-width: 0;
   white-space: nowrap;
   font-family: var(--ovp-font-mono);
 }
