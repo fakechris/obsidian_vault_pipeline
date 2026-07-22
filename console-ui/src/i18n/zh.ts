@@ -254,6 +254,7 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.terrainUnclassified': '未分类',
   'knowledge.terrainFocusTheme': '只看这个主题并飞过去（再点一次取消）',
   'knowledge.terrainTagFilter': '按标签过滤（再点一次取消）',
+  'knowledge.terrainCrystalEvidence': '{n} 篇来源 · 跨 {m} 个簇',
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',
