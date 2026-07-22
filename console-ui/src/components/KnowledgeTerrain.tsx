@@ -40,6 +40,10 @@ type Terrain = {
 
 const GOLDEN = 2.399963229728653; // radians — phyllotaxis angle, spreads indices
 
+// What the mountain HEIGHT encodes (KMEM-style selectable relief). The land
+// layout (x/y) is always semantic; only the z-metric changes.
+type Metric = 'density' | 'recency' | 'influence';
+
 /** Crystal overlay for the SOURCE terrain: each active claim marked at the
  * island of the theme its evidence most belongs to (the DOMINANT cluster among
  * its cited sources), NOT at the 2D centroid of those sources. Averaging
@@ -220,6 +224,11 @@ export default function KnowledgeTerrain({
   const [mode, setMode] = useState<'3d' | '2d'>('3d');
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  // Selectable height metric — read imperatively so a change reshapes the land
+  // without rebuilding the WebGL scene (like the timeline scrubber).
+  const [metric, setMetric] = useState<Metric>('density');
+  const metricRef = useRef(metric);
+  metricRef.current = metric;
   const [hover, setHover] = useState<{ mx: number; my: number; p: TPoint } | null>(null);
 
   // The land, source points, theme labels, legend and timeline ALWAYS read the
@@ -318,21 +327,65 @@ export default function KnowledgeTerrain({
         }
       return o;
     };
-    const densityFor = (pts: TPoint[]) => {
+    // Weighted KDE: each source's contribution to the land height is scaled by
+    // the ACTIVE metric (density=1, recency=newer higher, influence=how many
+    // crystals cite it). `weightOf` maps a point to its weight.
+    const densityFor = (pts: TPoint[], weightOf: (p: TPoint) => number) => {
       const grid = new Float32Array(GRID * GRID);
       for (const p of pts) {
+        const w = weightOf(p);
+        if (w <= 0) continue;
         const gx = Math.min(GRID - 1, Math.max(0, Math.round(((sx(p.x) / SIZE) + 0.5) * (GRID - 1))));
         const gy = Math.min(GRID - 1, Math.max(0, Math.round(((sy(p.y) / SIZE) + 0.5) * (GRID - 1))));
-        grid[gy * GRID + gx] += 1;
+        grid[gy * GRID + gx] += w;
       }
       return blur(grid);
     };
-    // Fixed normalizer from the FULL corpus, so the terrain GROWS over the
-    // timeline instead of rescaling to full height at every step.
-    const fullDens = densityFor(data.points);
-    let fullMax = 1e-6;
-    for (const v of fullDens) fullMax = Math.max(fullMax, v);
-    const heightFn = (dens: Float32Array) => (wx: number, wz: number) => {
+
+    // ---- per-metric source weights ----
+    // Recency: rank sources by date across the corpus's OWN range so we need no
+    // "now"; newest ~1, oldest ~0.15, undated a low baseline. This is "growth".
+    const dated = data.points.map((p) => p.date).filter(Boolean).sort();
+    const asNum = (d: string) => Number(d.replaceAll('-', '')) || 0;
+    const lo = asNum(dated[0] ?? '');
+    const hi = asNum(dated[dated.length - 1] ?? '');
+    const recencyW = (p: TPoint) => {
+      if (!p.date || hi <= lo) return 0.15;
+      return 0.15 + 0.85 * ((asNum(p.date) - lo) / (hi - lo));
+    };
+    // Influence: how many active crystals cite each source. A source that feeds
+    // many durable claims rises; uncited stays flat. Terrain points carry `sha`;
+    // claims cite by case_id, so bridge sha->case_id through the index.
+    const citeByCase = new Map<string, number>();
+    const shaToCase = new Map<string, string>();
+    if (model) {
+      for (const [caseId, src] of sourcesByCase(model)) shaToCase.set(src.sha256, caseId);
+      for (const c of activeClaims(model.claims)) {
+        for (const caseId of c.sources) citeByCase.set(caseId, (citeByCase.get(caseId) ?? 0) + 1);
+      }
+    }
+    const influenceW = (p: TPoint) => {
+      const caseId = shaToCase.get(p.sha);
+      return caseId ? (citeByCase.get(caseId) ?? 0) : 0;
+    };
+    const weightOfFor = (metric: Metric): ((p: TPoint) => number) =>
+      metric === 'recency' ? recencyW : metric === 'influence' ? influenceW : () => 1;
+
+    // Fixed normalizer PER METRIC from the FULL corpus, cached, so the terrain
+    // GROWS over the timeline instead of rescaling to full height each step and
+    // each metric fills the height range on its own scale.
+    const fullMaxCache = new Map<Metric, number>();
+    const fullMaxFor = (metric: Metric): number => {
+      let m = fullMaxCache.get(metric);
+      if (m == null) {
+        const dens = densityFor(data.points, weightOfFor(metric));
+        m = 1e-6;
+        for (const v of dens) m = Math.max(m, v);
+        fullMaxCache.set(metric, m);
+      }
+      return m;
+    };
+    const heightFn = (dens: Float32Array, fullMax: number) => (wx: number, wz: number) => {
       const fx = ((wx / SIZE) + 0.5) * (GRID - 1);
       const fz = ((wz / SIZE) + 0.5) * (GRID - 1);
       const x0 = Math.min(GRID - 1, Math.max(0, Math.floor(fx)));
@@ -528,8 +581,9 @@ export default function KnowledgeTerrain({
           (themeId == null || p.theme_id === themeId) &&
           (tag == null || (p.tags ?? []).includes(tag) || (p.tags_inferred ?? []).includes(tag)),
       );
-      const dens = densityFor(vis);
-      const hAt = heightFn(dens);
+      const metric = metricRef.current;
+      const dens = densityFor(vis, weightOfFor(metric));
+      const hAt = heightFn(dens, fullMaxFor(metric));
       hAtCurrent = hAt;
       for (let i = 0; i < gpos.count; i++) gpos.setY(i, hAt(gpos.getX(i), gpos.getZ(i)));
       gpos.needsUpdate = true;
@@ -862,7 +916,7 @@ export default function KnowledgeTerrain({
       selTheme,
       persp === 'claim' ? null : selTag,
     );
-  }, [monthIdx, months, atLatest, selTheme, selTag, persp]);
+  }, [monthIdx, months, atLatest, selTheme, selTag, persp, metric]);
 
   // ---- play ----
   useEffect(() => {
@@ -1004,13 +1058,27 @@ export default function KnowledgeTerrain({
             })}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
-        style={{ position: 'absolute', top: 10, right: 12, zIndex: 2, cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 12px', font: '12px system-ui' }}
-      >
-        {mode === '3d' ? '2D' : '3D'}
-      </button>
+      <div style={{ position: 'absolute', top: 10, right: 12, zIndex: 2, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {/* Height metric — what the mountains ENCODE. The x/y layout is fixed
+            (semantic); this only reshapes z. */}
+        <select
+          value={metric}
+          onChange={(e) => setMetric(e.target.value as Metric)}
+          title={t('knowledge.terrainHeightBy')}
+          style={{ cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 8px', font: '12px system-ui' }}
+        >
+          <option value="density">{t('knowledge.terrainHeightDensity')}</option>
+          <option value="recency">{t('knowledge.terrainHeightRecency')}</option>
+          <option value="influence">{t('knowledge.terrainHeightInfluence')}</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => setMode((m) => (m === '3d' ? '2d' : '3d'))}
+          style={{ cursor: 'pointer', background: 'rgba(20,24,30,0.9)', color: '#e9e6e0', border: '1px solid rgba(120,180,205,0.4)', borderRadius: 8, padding: '5px 12px', font: '12px system-ui' }}
+        >
+          {mode === '3d' ? '2D' : '3D'}
+        </button>
+      </div>
 
       {/* Tag filter chips — single-select over the top tags of the rendered
           points; sits above the timeline bar when that is present. */}
