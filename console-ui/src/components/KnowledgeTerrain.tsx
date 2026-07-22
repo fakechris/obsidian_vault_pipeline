@@ -1233,7 +1233,7 @@ export default function KnowledgeTerrain({
               const name = th
                 ? (lang === 'zh' ? th.label_zh : th.label)
                 : t('knowledge.terrainUnclassified');
-              const prefix = hover.p.claim_id ? `◆ ${t('knowledge.perspNodeClaim')} · ` : '';
+              const prefix = hover.p.claim_id ? `◆ ${t('knowledge.terrainCrystalTag')} · ` : '';
               return `${prefix}${name}${hover.p.date ? ` · ${hover.p.date}` : ''}`;
             })()}
           </div>
