@@ -21,7 +21,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 // A rendered point is either a source (has `sha`, opens /library) or — in the
 // claim perspective — a claim (has `claim_id`, opens its theme page). The two
 // share the same buffer/hover/label machinery; only the click target differs.
-type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; claim_id?: string };
+type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; tags?: string[]; tags_inferred?: string[]; claim_id?: string };
 type TTheme = { id: number; label: string; label_zh: string; cx: number; cy: number; count: number };
 type Terrain = {
   points: TPoint[];
@@ -75,19 +75,40 @@ const HEIGHT = 42;
 const SIGMA = 3.4;
 const FULL = '9999-99-99'; // cutoff meaning "everything"
 
+// Community palette for coloring points by theme. The terrain is its own dark
+// night map regardless of app theme, so this pins the DARK-theme values of the
+// design system's --c-1..8 — reading the live CSS vars would tint points with
+// light-theme inks on a dark map. Colors are assigned by theme size rank
+// (biggest theme = first color), the same CONVENTION KnowledgeGraph uses for
+// clusters. Note: the graph ranks themes by claim count and the terrain by
+// source count, so the two views usually — not provably — agree per theme;
+// exact cross-view color identity would need a shared theme→color projection.
+const THEME_COLORS = ['#3b82f6', '#06b6d4', '#22c55e', '#eab308', '#a78bfa', '#f472b6', '#14b8a6', '#94a3b8'];
+const NOISE_COLOR = '#66707c'; // unthemed/noise points — dim slate background
+
+function themeColorMap(themes: TTheme[]): Map<number, string> {
+  const m = new Map<number, string>();
+  [...themes]
+    .sort((a, b) => b.count - a.count)
+    .forEach((th, i) => m.set(th.id, THEME_COLORS[i % THEME_COLORS.length]));
+  return m;
+}
+
 function glowTexture(): THREE.Texture {
   // 128px (was 64 → the points looked pixelated/mosaic when magnified) with a
   // BRIGHT SHARP core and a quick soft falloff, so each source reads as a crisp
-  // bright dot rather than a fuzzy blob.
+  // bright dot rather than a fuzzy blob. NEUTRAL white ramp: the per-vertex
+  // theme color multiplies this texture, so any blue tint here would shift
+  // every warm theme color toward mud.
   const S = 128;
   const c = document.createElement('canvas');
   c.width = c.height = S;
   const g = c.getContext('2d')!;
   const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
   grd.addColorStop(0, 'rgba(255,255,255,1)');
-  grd.addColorStop(0.14, 'rgba(215,238,252,0.98)');
-  grd.addColorStop(0.4, 'rgba(150,205,238,0.4)');
-  grd.addColorStop(1, 'rgba(150,205,238,0)');
+  grd.addColorStop(0.14, 'rgba(255,255,255,0.98)');
+  grd.addColorStop(0.4, 'rgba(255,255,255,0.4)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = grd;
   g.fillRect(0, 0, S, S);
   const t = new THREE.CanvasTexture(c);
@@ -136,7 +157,15 @@ export default function KnowledgeTerrain({
   }, [render]);
   const [monthIdx, setMonthIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const applyCutoffRef = useRef<((cutoff: string) => void) | null>(null);
+  // Theme/tag filters compose with the timeline cutoff; the terrain reshapes to
+  // the filtered subset just like it does when scrubbing time. `selTag` is
+  // ignored (not cleared) in the claim perspective — claims carry no tags, so
+  // applying it would blank the map; it comes back when you return to sources.
+  const [selTheme, setSelTheme] = useState<number | null>(null);
+  const [selTag, setSelTag] = useState<string | null>(null);
+  const applyFilterRef = useRef<
+    ((cutoff: string, themeId: number | null, tag: string | null) => void) | null
+  >(null);
   // Imperative "fly the camera to this theme's cluster" — set by the three.js
   // effect, called from the legend so you don't have to orbit around to find a
   // cluster.
@@ -308,12 +337,18 @@ export default function KnowledgeTerrain({
     scene.add(new THREE.Mesh(geo, terrainMat));
 
     // ---- points (full-size buffer, drawn up to the visible count) ----
+    const colorByTheme = new Map<number, THREE.Color>();
+    for (const [id, hex] of themeColorMap(data.themes)) colorByTheme.set(id, new THREE.Color(hex));
+    const noiseColor = new THREE.Color(NOISE_COLOR);
     const pgeo = new THREE.BufferGeometry();
     const parr = new Float32Array(data.points.length * 3);
+    const carr = new Float32Array(data.points.length * 3);
     pgeo.setAttribute('position', new THREE.BufferAttribute(parr, 3));
+    pgeo.setAttribute('color', new THREE.BufferAttribute(carr, 3));
     const pmat = new THREE.PointsMaterial({
       size: 3.8, map: glowTexture(), transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending, color: 0xffffff, sizeAttenuation: true,
+      vertexColors: true,
     });
     const points = new THREE.Points(pgeo, pmat);
     points.frustumCulled = false;
@@ -349,9 +384,14 @@ export default function KnowledgeTerrain({
     let downX = 0;
     let downY = 0;
 
-    // ---- rebuild terrain/points/labels for a date cutoff ----
-    const applyCutoff = (cutoff: string) => {
-      const vis = data.points.filter((p) => !p.date || p.date <= cutoff);
+    // ---- rebuild terrain/points/labels for a date cutoff + theme/tag filter ----
+    const applyFilter = (cutoff: string, themeId: number | null, tag: string | null) => {
+      const vis = data.points.filter(
+        (p) =>
+          (!p.date || p.date <= cutoff) &&
+          (themeId == null || p.theme_id === themeId) &&
+          (tag == null || (p.tags ?? []).includes(tag) || (p.tags_inferred ?? []).includes(tag)),
+      );
       const dens = densityFor(vis);
       const hAt = heightFn(dens);
       for (let i = 0; i < gpos.count; i++) gpos.setY(i, hAt(gpos.getX(i), gpos.getZ(i)));
@@ -366,10 +406,19 @@ export default function KnowledgeTerrain({
         parr[slot * 3] = wx;
         parr[slot * 3 + 1] = hAt(wx, wz) + 1.6;
         parr[slot * 3 + 2] = wz;
+        const col = colorByTheme.get(p.theme_id) ?? noiseColor;
+        carr[slot * 3] = col.r;
+        carr[slot * 3 + 1] = col.g;
+        carr[slot * 3 + 2] = col.b;
         visibleIdx.push(data.points.indexOf(p));
       });
       pgeo.setDrawRange(0, vis.length);
       pgeo.attributes.position.needsUpdate = true;
+      pgeo.attributes.color.needsUpdate = true;
+      // needsUpdate does NOT invalidate the cached bounding sphere the
+      // raycaster culls against — after widening a filter, points outside the
+      // stale sphere would be unhoverable. Null it so three recomputes lazily.
+      pgeo.boundingSphere = null;
 
       // The hovered/marked point may have just dropped out of the visible set;
       // clear it so `onClick` can't read a now-out-of-range `visibleIdx` slot.
@@ -392,8 +441,10 @@ export default function KnowledgeTerrain({
         }
       }
     };
-    applyCutoff(FULL);
-    applyCutoffRef.current = applyCutoff;
+    // Scene rebuilds (persp/dataset change) re-apply the CURRENT UI filters —
+    // the driving effect below also fires post-mount with the real cutoff.
+    applyFilter(FULL, selTheme, persp === 'claim' ? null : selTag);
+    applyFilterRef.current = applyFilter;
 
     // ---- interaction (click-vs-drag) ----
     const ray = new THREE.Raycaster();
@@ -519,7 +570,7 @@ export default function KnowledgeTerrain({
     ro.observe(wrap);
 
     return () => {
-      applyCutoffRef.current = null;
+      applyFilterRef.current = null;
       focusThemeRef.current = null;
       cancelAnimationFrame(raf);
       ro.disconnect();
@@ -560,10 +611,24 @@ export default function KnowledgeTerrain({
     }
     return s;
   }, [render, cutoff]);
+  // A dataset switch (e.g. claim ⇄ source perspective on divergent data) can
+  // drop the selected theme entirely; clear the selection rather than leaving
+  // an empty terrain whose filter has no visible control to undo it.
   useEffect(() => {
-    if (!applyCutoffRef.current || !months.length) return;
-    applyCutoffRef.current(atLatest ? FULL : `${months[monthIdx]}-31`);
-  }, [monthIdx, months, atLatest]);
+    if (selTheme != null && render && !render.themes.some((th) => th.id === selTheme)) {
+      setSelTheme(null);
+    }
+  }, [render, selTheme]);
+
+  useEffect(() => {
+    // No months guard: theme/tag filters must apply even on an undated corpus
+    // (months empty → atLatest → FULL cutoff).
+    applyFilterRef.current?.(
+      atLatest || !months.length ? FULL : `${months[monthIdx]}-31`,
+      selTheme,
+      persp === 'claim' ? null : selTag,
+    );
+  }, [monthIdx, months, atLatest, selTheme, selTag, persp]);
 
   // ---- play ----
   useEffect(() => {
@@ -592,6 +657,44 @@ export default function KnowledgeTerrain({
     () => new Map((render?.themes ?? []).map((th) => [th.id, th] as const)),
     [render],
   );
+  // Same rank→color assignment the scene uses, for legend swatches + tooltip.
+  const themeColors = useMemo(() => themeColorMap(render?.themes ?? []), [render]);
+  // Top tags across the rendered points, for the filter chips. A tag that only
+  // ever appears machine-inferred keeps the portal's "weak" treatment (~#tag,
+  // dashed). Claim points carry no tags → no chips in that perspective.
+  // Legend rows: themes with visible points at the timeline cutoff, top-16 by
+  // size — but the SELECTED theme always keeps its row, even when the cutoff
+  // (or the cap) would drop it. Otherwise scrubbing to before the theme's
+  // first point leaves an empty terrain with no control to clear the filter.
+  const legendThemes = useMemo(() => {
+    if (!render) return [] as TTheme[];
+    const list = [...render.themes]
+      .filter((th) => activeThemeIds.has(th.id))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 16);
+    if (selTheme != null && !list.some((th) => th.id === selTheme)) {
+      const sel = render.themes.find((th) => th.id === selTheme);
+      if (sel) list.push(sel);
+    }
+    return list;
+  }, [render, activeThemeIds, selTheme]);
+  const tagChips = useMemo(() => {
+    const counts = new Map<string, { n: number; inferredOnly: boolean }>();
+    for (const p of render?.points ?? []) {
+      for (const tg of p.tags ?? []) {
+        const e = counts.get(tg) ?? { n: 0, inferredOnly: false };
+        e.n += 1;
+        e.inferredOnly = false;
+        counts.set(tg, e);
+      }
+      for (const tg of p.tags_inferred ?? []) {
+        const e = counts.get(tg) ?? { n: 0, inferredOnly: true };
+        e.n += 1;
+        counts.set(tg, e);
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
+  }, [render]);
 
   if (failed)
     return (
@@ -616,8 +719,9 @@ export default function KnowledgeTerrain({
           ? t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
-      {/* Clickable theme list — pick a cluster and the camera flies to it, so you
-          don't have to orbit around hunting for it. */}
+      {/* Clickable theme list — pick a cluster to FILTER the terrain to it and
+          fly the camera there (click again to clear). Swatches carry the same
+          rank-assigned community colors as the points. */}
       {render && render.themes.length > 0 && (
         <div
           className="terrain-legend"
@@ -628,29 +732,42 @@ export default function KnowledgeTerrain({
             background: 'rgba(14,18,24,0.5)', borderRadius: 8, padding: '5px 6px',
           }}
         >
-          {[...render.themes]
-            .filter((th) => activeThemeIds.has(th.id))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 16)
-            .map((th) => (
-              <button
-                key={th.id}
-                type="button"
-                title={t('knowledge.terrainFocusTheme')}
-                onClick={() => {
-                  if (mode === '2d') setMode('3d');
-                  focusThemeRef.current?.(th.cx, th.cy);
-                }}
-                style={{
-                  cursor: 'pointer', textAlign: 'left', background: 'none', border: 'none',
-                  color: 'rgba(233,230,224,0.82)', font: '11px system-ui', padding: '2px 5px',
-                  borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                }}
-              >
-                {(lang === 'zh' ? th.label_zh : th.label) || th.label}
-                <span style={{ opacity: 0.45 }}> · {th.count}</span>
-              </button>
-            ))}
+          {legendThemes.map((th) => {
+              const on = selTheme === th.id;
+              return (
+                <button
+                  key={th.id}
+                  type="button"
+                  title={t('knowledge.terrainFocusTheme')}
+                  onClick={() => {
+                    if (on) {
+                      setSelTheme(null);
+                      return;
+                    }
+                    setSelTheme(th.id);
+                    if (mode === '2d') setMode('3d');
+                    focusThemeRef.current?.(th.cx, th.cy);
+                  }}
+                  style={{
+                    cursor: 'pointer', textAlign: 'left', border: 'none',
+                    background: on ? 'rgba(127,214,230,0.16)' : 'none',
+                    color: on ? '#e9f4f8' : 'rgba(233,230,224,0.82)',
+                    font: '11px system-ui', padding: '2px 5px',
+                    borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+                      background: themeColors.get(th.id) ?? NOISE_COLOR,
+                      marginRight: 5, verticalAlign: 'middle',
+                    }}
+                  />
+                  {(lang === 'zh' ? th.label_zh : th.label) || th.label}
+                  <span style={{ opacity: 0.45 }}> · {th.count}</span>
+                </button>
+              );
+            })}
         </div>
       )}
       <button
@@ -660,6 +777,38 @@ export default function KnowledgeTerrain({
       >
         {mode === '3d' ? '2D' : '3D'}
       </button>
+
+      {/* Tag filter chips — single-select over the top tags of the rendered
+          points; sits above the timeline bar when that is present. */}
+      {persp === 'source' && tagChips.length > 0 && (
+        <div
+          style={{
+            position: 'absolute', bottom: months.length > 1 ? 58 : 12, left: 16, right: 16,
+            zIndex: 2, display: 'flex', flexWrap: 'wrap', gap: 6,
+          }}
+        >
+          {tagChips.map(([tg, info]) => {
+            const on = selTag === tg;
+            return (
+              <button
+                key={tg}
+                type="button"
+                title={t('knowledge.terrainTagFilter')}
+                onClick={() => setSelTag(on ? null : tg)}
+                style={{
+                  cursor: 'pointer', font: '11px system-ui', padding: '3px 9px', borderRadius: 999,
+                  background: on ? 'rgba(127,214,230,0.18)' : 'rgba(16,20,26,0.8)',
+                  color: on ? '#bfe9f2' : 'rgba(233,230,224,0.75)',
+                  border: `1px ${info.inferredOnly ? 'dashed' : 'solid'} rgba(120,180,205,${on ? 0.55 : 0.28})`,
+                }}
+              >
+                {info.inferredOnly ? `~#${tg}` : `#${tg}`}
+                <span style={{ opacity: 0.5 }}> {info.n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {months.length > 1 && (
         <div
@@ -709,7 +858,12 @@ export default function KnowledgeTerrain({
             boxShadow: '0 8px 26px rgba(0,0,0,0.55)',
           }}
         >
-          <div style={{ color: '#7fd6e6', fontSize: 11, marginBottom: 3 }}>
+          <div
+            style={{
+              color: themeColors.get(hover.p.theme_id) ?? '#7fd6e6',
+              fontSize: 11, marginBottom: 3,
+            }}
+          >
             {(() => {
               const th = themeById.get(hover.p.theme_id);
               // Noise packs (theme_id < 0) are omitted from `themes`, so localize
@@ -721,6 +875,16 @@ export default function KnowledgeTerrain({
             })()}
           </div>
           <div style={{ lineHeight: 1.35 }}>{hover.p.title}</div>
+          {((hover.p.tags?.length ?? 0) > 0 || (hover.p.tags_inferred?.length ?? 0) > 0) && (
+            <div style={{ marginTop: 4, color: 'rgba(233,230,224,0.55)', fontSize: 11 }}>
+              {[
+                ...(hover.p.tags ?? []).map((tg) => `#${tg}`),
+                ...(hover.p.tags_inferred ?? []).map((tg) => `~#${tg}`),
+              ]
+                .slice(0, 4)
+                .join(' ')}
+            </div>
+          )}
         </div>
       )}
     </div>

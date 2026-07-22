@@ -1,4 +1,124 @@
-# 当前工作 — Desktop GUI (Tauri) + DMG 发布
+# 当前工作 — 竞品扫描后四项立项（operator 2026-07-20 拍板，P0→P3 逐个推进）
+
+> **背景**：2026-07-20 对 9 个竞品/邻居的扫描（Marble curriculum、GBrain、obsidian-second-brain、
+> inkeep/open-knowledge、langchain openwiki、arkon、WeKnora、Hyper-Extract、Nowledge Mem 即 KMEM）。
+> 结论：行业收敛到 agent 维护的 rewrite-not-append markdown wiki + MCP 交付层；
+> 我们的独占能力 = 证据门控（claim→unit→quote→line）。KMEM 7 月同月补齐了同类 curation
+> （entity/label merge 带预览），curation 线上只是打平；投入应流向 grounded topic pages + agent 面。
+> 对比锚点：M34 测得 KMEM 面答案 43% 无源支撑。
+> **明确不做**：超图（M34 已判死实体图层）、Team Mode、3D 可视化军备竞赛、再造编辑器。
+> **外包纪律（operator 要求）**：每个任务交给 codex subagent 前过一遍科斯定理——
+> 规格说明成本 + 验收成本 < 自己做的成本才外包。适合：边界清晰、可独立验收的机械实现
+> （前端交互、配置层管道、照既有模式加工具）。不适合：吃隐性上下文的设计决策
+> （gate 语义、cassette key 稳定性、投影-账本边界）。
+
+## P0 — Theme Deepening: grounded topic pages
+
+**Why**: 竞品全在做 wiki 主题页（WeKnora wiki mode、KMEM Library Wiki topic pages、openwiki、arkon），
+没人能做带证据门的版本。直接消化 organization-layer 研究遗留项（theme deepening）+
+M34 测出的真实差距（跨源综合覆盖率，不是图）。
+
+**Design 要点**（细节执行中定，遵守既有铁律）：
+- 产物 = **投影不是账本**：`.ovp/crystal/theme_pages.json`（schema `ovp.theme_pages/v1`），
+  可从 ledger + themes.json 完全重建，绝不进 crystal ledger。
+- 输入 = 该 theme 下 active durable claims（**v1 scope 决定：叙事只用 durable**——
+  caveated 是没过门的材料，进旗舰 grounded 页会稀释承诺；TP3 在页面侧栏展示
+  caveated 计数/列表，不进叙事）；叙事由 LLM 组装（cassette `theme_page/v1`），
+  **每句必须引用 `[claim:<key>]`**（句级验证，模型抄 c1..cN 句柄、代码换回真 key）。
+- 确定性验证器（复用 ask 的 verify 模式）：句子无引用/引用不存在/引用非 active → fail loud。
+  cassette key 只依赖 claim 集合（学 `synth_theme()`：改标签不得改 key）。
+- 增量 merge（M36 修理铺哲学）：per-theme claim-set hash 做 staleness；claim 集合没变的
+  theme 不重生成；变了的走 section 级修补（新 claim → grow，superseded → shrink），不整页重写。
+
+**Stages**：
+- **TP1 合成核心**：`ovp2 crystal theme-pages` 命令 — per-theme claims → `theme_page/v1` 叙事
+  → 句级引用验证门 → `theme_pages.json`。成功标准：真 vault 全量跑通、验证器零漏、
+  operator 抽查 3-5 页质量（价值实验先行，不先做 UI）。**Status: Not Started**
+- **TP2 增量 merge**：staleness hash + 只重生成受影响 theme + section 级修补。
+  成功标准：加一个新源只动其所属 theme，diff 局部。**Status: Not Started**
+- **TP3 产品面**：`GET /api/theme-page/:theme` + ThemeDetailPage 维基视图（叙事在上、
+  引用悬停跳 claim 卡）+ publish 树带 `api/theme-page/*.json`（redaction 走 PublicView）。
+  **Status: Not Started**
+
+**科斯判断**：TP1/TP2 自己做（gate 语义 + cassette 稳定性 + M36 修补哲学全是隐性上下文）；
+TP3 的前端部分可外包（spec 清晰：给定 JSON 渲染叙事 + 锚点跳转，照 ThemeDetailPage 既有模式）。
+
+## P1 — Agent 面硬化：ask 走 MCP + 稳定引用
+
+**Why**: 行业共识（GBrain 30+ 工具、KMEM MCP+`nmem ask`+`nowledgemem://`、arkon 权限化 MCP、
+openwiki 写 AGENTS.md）：记忆层第一读者是 agent。卖点 = grounded answers vs KMEM 43% 无支撑。
+现状：`ovp-mcp` 已有 find/search/status/doctor + `ovp://index`，缺答案面。
+
+**Stages**：
+- **MP1a 只读工具面**：`claim`（证据闭包：claim→quote→line→source，trace 并入此工具）、
+  `theme_page`（无参列目录）。**Status: Complete（PR #349）**
+- **MP1b ask 工具**：`ask`（带 verify 报告），需要 LLM client 注入——仿 ovp-server
+  `ServeConfig.ask_client` 工厂（feature-gated anthropic；无 key → 明确报错不静默）。
+  **Status: Not Started（有意分期：只读面先行，ask 单独 PR）**
+- **MP2 稳定引用**：`ovp://claim/{claim_key}`、`ovp://source/{sha256}`、
+  `ovp://theme-page/{community_id}`（比原计划的 ovp://theme 更精确——指向 grounded 页
+  而非聚类社区），全部可 resources/read 解引用 + RFC 6570 templates/list。
+  **Status: Complete（PR #349）**
+- **MP3 引导**：`ovp2 mcp-guidance` 往 vault CLAUDE.md/AGENTS.md 写"何时查 vault"段落
+  （openwiki 模式，marker 分隔幂等，marker 不配对 fail loud）。**Status: Complete（PR #349）**
+
+**科斯判断**：MP1/MP2 可外包大半（照 `ovp-mcp/src/lib.rs` 既有 JSON-RPC 模式加工具，
+验收 = 工具调用返回正确 JSON + 测试）；ask 的 LLM 注入和 MP3 的引导文案自己做。
+
+## P2 — Publish 产品化收尾 + providers.toml
+
+**Why**: operator 已拍板的欠账（PR #336 merge-now 时明确的 follow-up），不受扫描影响但别被挤掉。
+
+**Stages**：
+- **PP1 publish.toml**：`.ovp/publish.toml` 持久化 repo/branch/out/spa-dir，CLI flags 覆盖；
+  现状是纯 flags 零配置。**Status: Not Started**
+- **PP2 发布入口**：portal System 页 + desktop 触发 publish。**Status: Not Started**
+- **PP3 真仓实测**：真实公开 GitHub repo 走一次 live deploy（`deploy_git` 从未实测过），
+  验证 Pages 可访问，写 runbook。**Status: Not Started**
+- **PP4 providers.toml**：散落的 env 读取（LLM/Pinboard/GitHub/Web-fetch）收敛到
+  `<vault>/.ovp/providers.toml`（launchd EPERM 触发的老问题）。**Status: Not Started**
+
+**科斯判断**：PP1/PP4 是理想外包件（纯配置层管道，spec 完全可写清，验收 = 测试 + 兼容旧 env）；
+PP3 必须自己做（要 operator 的 GitHub 凭证环境 + 实地判断）。
+
+## P3 — 可视化：一个英雄交互，不搞军备竞赛
+
+**Why**: Marble 的课 = 语义轴 + 闭包高亮才是可视化的价值；GBrain 26K stars 证明没图也能赢。
+KMEM 出 3D 我们不跟。
+
+**Stages**：
+- **VZ1 证据闭包追溯**：graph 里点 claim → 高亮其 units→sources 链路（数据已在
+  `/api/claim/:id` citations 里）；terrain 联动 fly-to 被引 sources。**Status: Complete（PR #353）**
+- **VZ2 时间轴（可选）**：capture date 绑到一个视觉通道（轴或色带）。**Status: Not Started**
+- **VZ3 terrain 视觉编码**（operator 2026-07-21 批准）：现状 terrain 只有一个语义通道
+  （高度=密度），点全白、theme/tag/date 数据在管线里现成却没进视觉。两项增强，
+  不加新 3D 面、不加持久层（terrain.json 仍是可重建投影）：
+  - **VZ3a 点按主题分色**：per-vertex color，复用设计系统 community 调色板
+    （`--c-1..8` dark 变体——terrain 固定暗色夜图），按主题 count 降序取色，
+    与 KnowledgeGraph 的 cluster 着色约定一致（最大簇=第一色，跨运行稳定）；
+    图例加色点，点击图例 = 过滤该主题 + fly-to（再点取消）；噪声点（theme_id<0）灰色。
+  - **VZ3b tag 过滤**：`crystal_terrain.rs` 构造点时从 index 把 `tags`/`tags_inferred`
+    join 进 terrain.json（serde-additive，schema 仍 v1；publish 的 filter_terrain
+    在 Value 上原样保留，自动流过）；前端出 top-N tag chips 单选过滤，
+    inferred 按既有惯例弱显示（`~` 前缀）；hover tooltip 附 tags。
+  **Success Criteria**：分色约定与 graph 一致（按簇大小取色；跨视图完全同色需共享投影，
+  未做）；图例/tag 过滤联动时间轴（地形高度随过滤重建）；无 tag 的旧 terrain.json
+  前端向后兼容；publish 侧剥离 tags（PublicView 私有分类契约）；cargo test +
+  console-ui build 绿。**Status: PR #358 待 review**（codex 门两轮：P1 发布泄露
+  tags + P2 过滤不可清除/包围球失效，均已修）
+
+**科斯判断**：VZ1 整体适合外包（纯前端、既有 KnowledgeGraph/terrain 组件内加交互、
+验收可截图判定）；spec 里要写死"高亮闭包"的语义（claim→citations 的 case_id 集合）。
+
+## 依赖与推进顺序
+
+TP1（价值实验）→ operator 抽查 → TP2/TP3；MP1 可与 TP2 并行（不同 crate）；
+PP1/PP4 随时可插入外包；VZ1 在 TP3 之后（ThemeDetailPage 会动，避免冲突）。
+每项独立 feature branch off `main` → PR → bot review → codex 本地门 → merge（既有流程）。
+
+---
+
+# 已完成 — Desktop GUI (Tauri) + DMG 发布
 
 > **完整设计见 `docs/design/desktop-gui-plan.md`**（operator 2026-07-13 拍板：ad-hoc 签名 + 内嵌 ovp-server + ovp2 sidecar）。
 > 参考 `~/source/lumen-asr` 的 apps/desktop Tauri 壳 + release-macos.yml。

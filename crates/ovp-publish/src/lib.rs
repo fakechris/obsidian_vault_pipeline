@@ -355,6 +355,15 @@ fn filter_terrain(
             .and_then(|s| s.as_str())
             .is_some_and(|s| public_shas.contains(s))
     });
+    // Tags are the operator's private taxonomy — PublicView clears them off
+    // every source (redact.rs), so the terrain points must not re-leak them
+    // through this raw-JSON path.
+    for p in points.iter_mut() {
+        if let Some(obj) = p.as_object_mut() {
+            obj.remove("tags");
+            obj.remove("tags_inferred");
+        }
+    }
 
     // Recompute per-theme count + centroid from the retained points only.
     let mut agg: BTreeMap<i64, (usize, f64, f64)> = BTreeMap::new();
@@ -684,7 +693,8 @@ mod tests {
                 { "id": 5, "label": "PrivateOnly", "label_zh": "私有", "cx": 1.0, "cy": 1.0, "count": 7 }
             ],
             "points": [
-                { "sha": "aaa", "theme_id": 1, "x": 10.0, "y": 20.0, "title": "A" },
+                { "sha": "aaa", "theme_id": 1, "x": 10.0, "y": 20.0, "title": "A",
+                  "tags": ["private-taxonomy"], "tags_inferred": ["guessed"] },
                 { "sha": "bbb", "theme_id": 1, "x": 30.0, "y": 40.0, "title": "B" },
                 { "sha": "zzz", "theme_id": 5, "x": 1.0, "y": 1.0, "title": "orphan-private" }
             ]
@@ -705,6 +715,12 @@ mod tests {
         assert_eq!(themes[0]["cx"], 20.0);
         assert_eq!(themes[0]["cy"], 30.0);
         assert_eq!(themes[0]["label"], "Public");
+        // Tags are the operator's private taxonomy (PublicView clears them on
+        // sources) — the raw-JSON terrain path must strip them too.
+        for p in v["points"].as_array().unwrap() {
+            assert!(p.get("tags").is_none(), "tags leaked: {p}");
+            assert!(p.get("tags_inferred").is_none(), "tags_inferred leaked: {p}");
+        }
     }
 
     #[test]

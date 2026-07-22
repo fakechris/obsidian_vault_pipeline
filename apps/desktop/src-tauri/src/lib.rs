@@ -537,6 +537,24 @@ fn refresh_vault_menu(app: &AppHandle) {
     });
 }
 
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            boot,
+            set_vault_and_start,
+            known_vaults
+        ])
+        .setup(|app| {
+            rebuild_vault_menu(app.handle())?;
+            Ok(())
+        })
+        .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
+        .run(tauri::generate_context!())
+        .expect("error while running the OVP2 desktop app");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,22 +618,4 @@ mod tests {
         let p = free_port().unwrap();
         assert!(p > 0);
     }
-}
-
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![
-            boot,
-            set_vault_and_start,
-            known_vaults
-        ])
-        .setup(|app| {
-            rebuild_vault_menu(app.handle())?;
-            Ok(())
-        })
-        .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
-        .run(tauri::generate_context!())
-        .expect("error while running the OVP2 desktop app");
 }
