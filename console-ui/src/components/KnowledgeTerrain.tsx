@@ -241,7 +241,23 @@ export default function KnowledgeTerrain({
   // shown only in the claim perspective. `render` aliases `data` so the scene's
   // land/point machinery is unchanged.
   const render = data;
-  const crystals = useMemo(() => buildCrystals(data, model), [data, model]);
+  // Stabilize the crystals reference across model polls. ModelProvider swaps
+  // `model` every 12-60s, but the overlay only changes when a claim's
+  // id/theme/sources change. Keying the memo on a content SIGNATURE (not the
+  // model reference) keeps the WebGL scene — a build dep of `crystals` — from
+  // tearing down and resetting the camera on every no-op poll, including in the
+  // default source view where the overlay isn't even shown.
+  const claimSig = useMemo(
+    () =>
+      model
+        ? activeClaims(model.claims)
+            .map((c) => `${c.claim_id}:${c.theme ?? ''}:${c.sources.join(',')}`)
+            .join('|')
+        : '',
+    [model],
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const crystals = useMemo(() => buildCrystals(data, model), [data, claimSig]);
   const showCrystals = persp === 'claim';
 
   const months = useMemo(() => {
