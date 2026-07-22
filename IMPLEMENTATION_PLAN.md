@@ -101,9 +101,11 @@ KMEM 出 3D 我们不跟。
     join 进 terrain.json（serde-additive，schema 仍 v1；publish 的 filter_terrain
     在 Value 上原样保留，自动流过）；前端出 top-N tag chips 单选过滤，
     inferred 按既有惯例弱显示（`~` 前缀）；hover tooltip 附 tags。
-  **Success Criteria**：分色后 graph/terrain 同主题同色序；图例/tag 过滤联动时间轴
-  （地形高度随过滤重建）；无 tag 的旧 terrain.json 前端向后兼容；cargo test +
-  console-ui build 绿。**Status: In Progress（分支 feat/terrain-visual-encoding）**
+  **Success Criteria**：分色约定与 graph 一致（按簇大小取色；跨视图完全同色需共享投影，
+  未做）；图例/tag 过滤联动时间轴（地形高度随过滤重建）；无 tag 的旧 terrain.json
+  前端向后兼容；publish 侧剥离 tags（PublicView 私有分类契约）；cargo test +
+  console-ui build 绿。**Status: PR #358 待 review**（codex 门两轮：P1 发布泄露
+  tags + P2 过滤不可清除/包围球失效，均已修）
 
 **科斯判断**：VZ1 整体适合外包（纯前端、既有 KnowledgeGraph/terrain 组件内加交互、
 验收可截图判定）；spec 里要写死"高亮闭包"的语义（claim→citations 的 case_id 集合）。
