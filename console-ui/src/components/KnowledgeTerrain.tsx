@@ -79,8 +79,10 @@ const FULL = '9999-99-99'; // cutoff meaning "everything"
 // night map regardless of app theme, so this pins the DARK-theme values of the
 // design system's --c-1..8 — reading the live CSS vars would tint points with
 // light-theme inks on a dark map. Colors are assigned by theme size rank
-// (biggest theme = first color), the same convention KnowledgeGraph uses for
-// clusters, so a theme wears the same color in both views.
+// (biggest theme = first color), the same CONVENTION KnowledgeGraph uses for
+// clusters. Note: the graph ranks themes by claim count and the terrain by
+// source count, so the two views usually — not provably — agree per theme;
+// exact cross-view color identity would need a shared theme→color projection.
 const THEME_COLORS = ['#3b82f6', '#06b6d4', '#22c55e', '#eab308', '#a78bfa', '#f472b6', '#14b8a6', '#94a3b8'];
 const NOISE_COLOR = '#66707c'; // unthemed/noise points — dim slate background
 
@@ -413,6 +415,10 @@ export default function KnowledgeTerrain({
       pgeo.setDrawRange(0, vis.length);
       pgeo.attributes.position.needsUpdate = true;
       pgeo.attributes.color.needsUpdate = true;
+      // needsUpdate does NOT invalidate the cached bounding sphere the
+      // raycaster culls against — after widening a filter, points outside the
+      // stale sphere would be unhoverable. Null it so three recomputes lazily.
+      pgeo.boundingSphere = null;
 
       // The hovered/marked point may have just dropped out of the visible set;
       // clear it so `onClick` can't read a now-out-of-range `visibleIdx` slot.
