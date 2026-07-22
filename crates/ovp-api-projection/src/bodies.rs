@@ -127,7 +127,7 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
     let sources: Vec<&SourceRow> = model
         .sources
         .iter()
-        .filter(|s| s.entities.iter().any(|e| *e == id_lc))
+        .filter(|s| s.entities.contains(&id_lc))
         .collect();
     if sources.is_empty() {
         return None;

@@ -456,7 +456,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         );
     }
     if let Some(note) = degraded_note {
-        text.push_str("\n");
+        text.push('\n');
         text.push_str(note);
     }
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
