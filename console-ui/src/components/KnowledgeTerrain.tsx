@@ -17,6 +17,11 @@ import type { IndexModel } from '../lib/types';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+// Fat lines: plain THREE.Line ignores linewidth in WebGL (always 1px), so the
+// evidence lines need Line2/LineMaterial to render at a real pixel width.
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
 // A rendered point is either a source (has `sha`, opens /library) or — in the
 // claim perspective — a crystal (has `claim_id`, opens its theme page). The two
@@ -448,8 +453,12 @@ export default function KnowledgeTerrain({
     const cgeo = new THREE.BufferGeometry();
     const cparr = new Float32Array(Math.max(crystals.length, 1) * 3);
     cgeo.setAttribute('position', new THREE.BufferAttribute(cparr, 3));
+    // Resting crystals are SMALL and dim — anchors, not the story. The story is
+    // the relationship, which lights up on hover (bigger mark + bright thick
+    // lines). A field of hundreds of loud diamonds would drown both the land and
+    // the lines, which is exactly the "markers too big, lines invisible" failure.
     const cmat = new THREE.PointsMaterial({
-      size: 7.5, map: crystalTexture(), transparent: true, depthWrite: false,
+      size: 4, map: crystalTexture(), transparent: true, opacity: 0.6, depthWrite: false,
       blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR),
       sizeAttenuation: true,
     });
@@ -459,28 +468,31 @@ export default function KnowledgeTerrain({
     scene.add(cpoints);
     const cVisibleIdx: number[] = []; // geometry slot -> crystals index
 
-    // Highlight sprite for the hovered crystal.
+    // Highlight sprite for the hovered crystal (the only bright diamond).
     const cmark = new THREE.Points(
       new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3)),
-      new THREE.PointsMaterial({ size: 14, map: crystalTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR) }),
+      new THREE.PointsMaterial({ size: 11, map: crystalTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR) }),
     );
     cmark.visible = false;
     scene.add(cmark);
 
-    // Evidence lines: one LineSegments whose buffer is rewritten to the hovered
-    // crystal's crystal→source pairs. Capped so a pathological claim can't blow
-    // the buffer; the tooltip still reports the true source count.
+    // Evidence lines: fat Line2 segments rewritten to the hovered crystal's
+    // crystal→source pairs. Bright + ~3px so the relationship is the salient
+    // thing, not the anchor. Capped so a pathological claim can't blow the
+    // buffer; the tooltip still reports the true source count.
     const LINE_CAP = 64;
-    const lgeo = new THREE.BufferGeometry();
     const larr = new Float32Array(LINE_CAP * 2 * 3);
-    lgeo.setAttribute('position', new THREE.BufferAttribute(larr, 3));
-    const lmat = new THREE.LineBasicMaterial({
-      color: new THREE.Color(CRYSTAL_COLOR), transparent: true, opacity: 0.55,
-      blending: THREE.AdditiveBlending, depthWrite: false,
+    const lgeo = new LineSegmentsGeometry();
+    const lmat = new LineMaterial({
+      color: new THREE.Color(CRYSTAL_COLOR).getHex(),
+      linewidth: 3, // pixels (worldUnits off)
+      transparent: true, opacity: 0.95, depthWrite: false, depthTest: false,
     });
-    const elines = new THREE.LineSegments(lgeo, lmat);
+    lmat.resolution.set(W, H);
+    const elines = new LineSegments2(lgeo, lmat);
     elines.frustumCulled = false;
     elines.visible = false;
+    elines.renderOrder = 3; // draw over the land + points
     scene.add(elines);
     // Current land-height sampler, refreshed by applyFilter so crystal + line
     // endpoints sit on the land at the active timeline cutoff.
@@ -638,9 +650,7 @@ export default function KnowledgeTerrain({
         larr[j * 6 + 4] = hAtCurrent(wx, wz) + 1.6;
         larr[j * 6 + 5] = wz;
       }
-      lgeo.setDrawRange(0, n * 2);
-      lgeo.attributes.position.needsUpdate = true;
-      lgeo.boundingSphere = null;
+      if (n > 0) lgeo.setPositions(larr.subarray(0, n * 6));
       elines.visible = n > 0;
     };
     const pick = (ev: PointerEvent) => {
@@ -776,6 +786,7 @@ export default function KnowledgeTerrain({
       camera.updateProjectionMatrix();
       renderer.setSize(W, H);
       labelRenderer.setSize(W, H);
+      lmat.resolution.set(W, H); // fat lines scale in screen space
     });
     ro.observe(wrap);
 
