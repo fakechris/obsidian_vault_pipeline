@@ -255,6 +255,7 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.terrainFocusTheme': '只看这个主题并飞过去（再点一次取消）',
   'knowledge.terrainTagFilter': '按标签过滤（再点一次取消）',
   'knowledge.terrainCrystalEvidence': '{n} 篇来源 · 跨 {m} 个簇',
+  'knowledge.terrainHudClaims': '◆ {crystals} 个结晶浮在来源地貌上 · {themes} 个主题',
   'knowledge.terrainHeightBy': '山高代表什么',
   'knowledge.terrainHeightDensity': '山高：密度',
   'knowledge.terrainHeightRecency': '山高：新鲜度',

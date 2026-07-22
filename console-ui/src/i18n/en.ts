@@ -272,6 +272,7 @@ export const en = {
   'knowledge.terrainFocusTheme': 'Filter to this theme and fly to it (click again to clear)',
   'knowledge.terrainTagFilter': 'Filter by tag (click again to clear)',
   'knowledge.terrainCrystalEvidence': '{n} sources · spans {m} clusters',
+  'knowledge.terrainHudClaims': '◆ {crystals} crystals over the source land · {themes} themes',
   'knowledge.terrainHeightBy': 'What the mountain height encodes',
   'knowledge.terrainHeightDensity': 'Height: density',
   'knowledge.terrainHeightRecency': 'Height: recency',

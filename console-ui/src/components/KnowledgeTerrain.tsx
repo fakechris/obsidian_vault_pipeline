@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { STATIC_MODE, terrainUrl } from '../lib/api';
-import { activeClaims, sourcesByCase, themeRoute } from '../lib/derive';
+import { activeClaims, themeRoute } from '../lib/derive';
 import { useModel } from '../model';
 import type { IndexModel } from '../lib/types';
 import * as THREE from 'three';
@@ -57,8 +57,10 @@ type Metric = 'density' | 'recency' | 'influence';
  * source are dropped. */
 function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[] {
   if (!data || !model) return [];
-  const byCase = sourcesByCase(model);
-  const posBySha = new Map(data.points.map((p) => [p.sha, p]));
+  // Join claim sources to terrain points by case_id — `p.id` IS the case_id
+  // crystal-terrain emitted, and claims cite by case_id. A sha round-trip would
+  // collapse packs that share a content sha and drop legacy packs with no sha.
+  const posByCase = new Map(data.points.map((p) => [p.id, p]));
   const themeById = new Map(data.themes.map((th) => [th.id, th]));
   const [minx, miny, maxx, maxy] = data.bounds;
   const step = Math.max(maxx - minx, maxy - miny, 1e-6) * 0.012;
@@ -68,8 +70,7 @@ function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[]
   const out: TPoint[] = [];
   activeClaims(model.claims).forEach((c) => {
     const srcPts = c.sources
-      .map((caseId) => byCase.get(caseId)?.sha256)
-      .map((sha) => (sha ? posBySha.get(sha) : undefined))
+      .map((caseId) => posByCase.get(caseId))
       .filter((p): p is TPoint => !!p);
     if (srcPts.length === 0) return;
     // Dominant cluster = the real theme id contributing the most sources.
@@ -89,10 +90,18 @@ function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[]
     // (no island center to anchor to).
     const baseX = home ? home.cx : srcPts.reduce((s, p) => s + p.x, 0) / srcPts.length;
     const baseY = home ? home.cy : srcPts.reduce((s, p) => s + p.y, 0) / srcPts.length;
-    const k = homeSeen.get(domId) ?? 0;
-    homeSeen.set(domId, k + 1);
-    const rr = step * Math.sqrt(k); // 0 for the first, growing spiral after
-    const ang = k * GOLDEN;
+    // Spiral only crystals that share a REAL island home. Noise-dominated
+    // crystals have no shared anchor — each sits on its own evidence centroid, so
+    // sharing one counter would push later ones ever further from their evidence
+    // and off the land.
+    let rr = 0;
+    let ang = 0;
+    if (home) {
+      const k = homeSeen.get(domId) ?? 0;
+      homeSeen.set(domId, k + 1);
+      rr = step * Math.sqrt(k); // 0 for the first, growing spiral after
+      ang = k * GOLDEN;
+    }
     out.push({
       id: `claim:${c.claim_id}`,
       sha: '',
@@ -954,7 +963,10 @@ export default function KnowledgeTerrain({
       selTheme,
       persp === 'claim' ? null : selTag,
     );
-  }, [monthIdx, months, atLatest, selTheme, selTag, persp, metric]);
+    // `crystals`/`showCrystals` included: a model poll can rebuild the scene
+    // (which re-inits at FULL), so reapply the current cutoff or the slider and
+    // terrain would silently disagree.
+  }, [monthIdx, months, atLatest, selTheme, selTag, persp, metric, crystals, showCrystals]);
 
   // ---- play ----
   useEffect(() => {
@@ -1042,7 +1054,9 @@ export default function KnowledgeTerrain({
     >
       <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 2, color: 'rgba(233,230,224,0.6)', font: '12px system-ui', pointerEvents: 'none' }}>
         {render
-          ? t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
+          ? showCrystals
+            ? t('knowledge.terrainHudClaims', { crystals: crystals.length, themes: render.themes.length })
+            : t('knowledge.terrainHud', { notes: render.point_count, themes: render.themes.length })
           : t('knowledge.terrainLoading')}
       </div>
       {/* Clickable theme list — pick a cluster to FILTER the terrain to it and
