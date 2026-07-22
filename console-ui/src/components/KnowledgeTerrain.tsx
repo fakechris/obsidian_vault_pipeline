@@ -562,6 +562,10 @@ export default function KnowledgeTerrain({
       new THREE.PointsMaterial({ size: 11, map: crystalTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: new THREE.Color(CRYSTAL_COLOR) }),
     );
     cmark.visible = false;
+    // Never cull: the cached boundingSphere is from the marker's FIRST position,
+    // so after moving it (copyArray) a distant camera could wrongly cull the
+    // highlight. The single sprite is trivial to always-draw.
+    cmark.frustumCulled = false;
     scene.add(cmark);
 
     // Evidence lines: fat Line2 segments rewritten to the hovered crystal's
