@@ -24,7 +24,7 @@ use std::path::Path;
 use ovp_domain::VaultLayout;
 use ovp_embed::cache as embed_cache;
 use ovp_embed::{EMBED_DIM, EMBED_MODEL_ID};
-use ovp_index::PackRow;
+use ovp_index::{PackRow, SourceRow};
 use serde::Serialize;
 
 use crate::commands::crystal_themes::collect_docs;
@@ -55,6 +55,15 @@ struct TerrainPoint {
     theme_id: i64,
     x: f64,
     y: f64,
+    /// Canonical content tags of the SOURCE (frontmatter, alias-resolved),
+    /// joined from the index like `sha`. Serde-additive: absent on old files
+    /// and on points whose source isn't ledger-tracked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    /// Machine-inferred tags — kept apart from `tags` so the client can render
+    /// them visibly weaker (`~#tag`), same contract as the rest of the portal.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags_inferred: Vec<String>,
 }
 
 /// A community label, treating the unclassified bucket (negative id) as the
@@ -122,28 +131,47 @@ fn is_iso_date(b: &[u8]) -> bool {
         && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
-/// Map each reader-pack `case_id` (the `pack_dir` basename) → its SOURCE content
-/// sha256, from the index's pack list — the SAME join the portal's
-/// `sourcesByCase` uses. This is the sha `/library/:sha` serves; the
-/// embedding-cache key `collect_docs` uses to load vectors is a different hash.
-/// Packs the index has not recorded, and legacy packs with no source sha, are
-/// simply absent → the client renders an unlinked point (never a 404).
-fn source_shas_by_case(packs: &[PackRow]) -> BTreeMap<String, String> {
+/// What a terrain point borrows from its indexed source: the content sha (for
+/// `/library/:sha`) plus the source's tags (for the client's tag filter).
+#[derive(Clone, Default)]
+struct SourceJoin {
+    sha: String,
+    tags: Vec<String>,
+    tags_inferred: Vec<String>,
+}
+
+/// Map each reader-pack `case_id` (the `pack_dir` basename) → its SOURCE join
+/// data, from the index — the SAME join the portal's `sourcesByCase` uses. The
+/// sha is what `/library/:sha` serves; the embedding-cache key `collect_docs`
+/// uses to load vectors is a different hash. Packs the index has not recorded,
+/// and legacy packs with no source sha, are simply absent → the client renders
+/// an unlinked, untagged point (never a 404).
+fn source_join_by_case(packs: &[PackRow], sources: &[SourceRow]) -> BTreeMap<String, SourceJoin> {
+    let by_sha: BTreeMap<&str, &SourceRow> =
+        sources.iter().map(|s| (s.sha256.as_str(), s)).collect();
     let mut map = BTreeMap::new();
     for p in packs {
         let Some(sha) = &p.source_sha256 else { continue };
         if let Some(case_id) = Path::new(&p.pack_dir).file_name() {
-            map.insert(case_id.to_string_lossy().into_owned(), sha.clone());
+            let src = by_sha.get(sha.as_str());
+            map.insert(
+                case_id.to_string_lossy().into_owned(),
+                SourceJoin {
+                    sha: sha.clone(),
+                    tags: src.map(|s| s.tags.clone()).unwrap_or_default(),
+                    tags_inferred: src.map(|s| s.tags_inferred.clone()).unwrap_or_default(),
+                },
+            );
         }
     }
     map
 }
 
-/// Load the case_id → source-sha map from the vault's index. A missing or
+/// Load the case_id → source-join map from the vault's index. A missing or
 /// unreadable index yields an empty map (all points render unlinked, no 404s).
-fn load_source_shas(vault_root: &Path) -> BTreeMap<String, String> {
+fn load_source_join(vault_root: &Path) -> BTreeMap<String, SourceJoin> {
     ovp_index::read_index(vault_root)
-        .map(|idx| source_shas_by_case(&idx.packs))
+        .map(|idx| source_join_by_case(&idx.packs, &idx.sources))
         .unwrap_or_default()
 }
 
@@ -291,15 +319,22 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
         .map(|c| (c.id, c.label_zh.clone()))
         .collect();
 
-    // Link sha (for /library/:sha) is the source CONTENT sha, joined from the
-    // index by case_id — NOT `d.sha`, which is the embedding-cache key used to
-    // load the vector.
-    let source_shas = load_source_shas(&args.vault_root);
+    // Link sha (for /library/:sha) + source tags are joined from the index by
+    // case_id — NOT `d.sha`, which is the embedding-cache key used to load the
+    // vector.
+    let source_join = load_source_join(&args.vault_root);
 
     // Keep only packs that are themed AND have a cached vector (no model here).
+    struct PointMeta {
+        id: String,
+        join: SourceJoin,
+        title: String,
+        date: String,
+        community: i64,
+    }
     let docs = collect_docs(&reader_root)?;
     let mut vectors: Vec<Vec<f32>> = Vec::new();
-    let mut meta: Vec<(String, String, String, String, i64)> = Vec::new(); // id,link_sha,title,date,community
+    let mut meta: Vec<PointMeta> = Vec::new();
     for d in &docs {
         let Some(&community) = themes.packs.get(&d.case_id) else {
             continue;
@@ -308,13 +343,13 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             continue;
         };
         vectors.push(vec);
-        meta.push((
-            d.case_id.clone(),
-            source_shas.get(&d.case_id).cloned().unwrap_or_default(),
-            d.title.clone(),
-            date_from_case_id(&d.case_id),
+        meta.push(PointMeta {
+            id: d.case_id.clone(),
+            join: source_join.get(&d.case_id).cloned().unwrap_or_default(),
+            title: d.title.clone(),
+            date: date_from_case_id(&d.case_id),
             community,
-        ));
+        });
     }
     if vectors.is_empty() {
         println!(
@@ -335,11 +370,11 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
     // as low-density background so they never form an island.
     let mut by_comm: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     let mut noise: Vec<usize> = Vec::new();
-    for (i, (_, _, _, _, c)) in meta.iter().enumerate() {
-        if *c < 0 {
+    for (i, m) in meta.iter().enumerate() {
+        if m.community < 0 {
             noise.push(i);
         } else {
-            by_comm.entry(*c).or_default().push(i);
+            by_comm.entry(m.community).or_default().push(i);
         }
     }
     let comm_ids: Vec<i64> = by_comm.keys().copied().collect();
@@ -414,15 +449,17 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
     let points: Vec<TerrainPoint> = meta
         .iter()
         .zip(pos.iter())
-        .map(|((id, sha, title, date, community), (x, y))| TerrainPoint {
-            id: id.clone(),
-            sha: sha.clone(),
-            title: title.clone(),
-            date: date.clone(),
-            theme: theme_label(*community, &community_label, "Unclassified"),
-            theme_id: *community,
+        .map(|(m, (x, y))| TerrainPoint {
+            id: m.id.clone(),
+            sha: m.join.sha.clone(),
+            title: m.title.clone(),
+            date: m.date.clone(),
+            theme: theme_label(m.community, &community_label, "Unclassified"),
+            theme_id: m.community,
             x: *x,
             y: *y,
+            tags: m.join.tags.clone(),
+            tags_inferred: m.join.tags_inferred.clone(),
         })
         .collect();
     // Theme label anchor = the normalized island center.
@@ -518,8 +555,26 @@ mod tests {
         }
     }
 
+    fn source(sha: &str, tags: &[&str], inferred: &[&str]) -> SourceRow {
+        SourceRow {
+            sha256: sha.into(),
+            status: ovp_index::SourceStatus::Processed,
+            title: None,
+            url: None,
+            rel_path: None,
+            date: None,
+            last_run_id: None,
+            pack_dir: None,
+            fail_count: 0,
+            last_reason: None,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            tags_inferred: inferred.iter().map(|t| t.to_string()).collect(),
+            entities: Vec::new(),
+        }
+    }
+
     #[test]
-    fn source_shas_keyed_by_case_id_basename() {
+    fn source_join_keyed_by_case_id_basename_carries_tags() {
         let packs = vec![
             // Nested pack_dir → key is the basename (the case_id).
             pack("40-Resources/Reader/2026-05-07_a-1111", Some("sha_a")),
@@ -528,11 +583,32 @@ mod tests {
             // Legacy pack with no source sha → absent (renders unlinked).
             pack("40-Resources/Reader/2026-05-09_c-3333", None),
         ];
-        let map = source_shas_by_case(&packs);
-        assert_eq!(map.get("2026-05-07_a-1111").map(String::as_str), Some("sha_a"));
-        assert_eq!(map.get("2026-05-08_b-2222").map(String::as_str), Some("sha_b"));
+        let sources = vec![
+            source("sha_a", &["rust", "llm"], &[]),
+            source("sha_b", &[], &["agents"]),
+        ];
+        let map = source_join_by_case(&packs, &sources);
+        let a = map.get("2026-05-07_a-1111").unwrap();
+        assert_eq!(a.sha, "sha_a");
+        assert_eq!(a.tags, vec!["rust", "llm"]);
+        assert!(a.tags_inferred.is_empty());
+        let b = map.get("2026-05-08_b-2222").unwrap();
+        assert_eq!(b.sha, "sha_b");
+        assert!(b.tags.is_empty());
+        assert_eq!(b.tags_inferred, vec!["agents"]);
         assert!(!map.contains_key("2026-05-09_c-3333"));
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn source_join_tolerates_pack_sha_missing_from_sources() {
+        // A pack whose sha the index's source list doesn't know (partial
+        // rebuild) still links, with empty tags — never a panic or a drop.
+        let packs = vec![pack("2026-05-10_d-4444", Some("sha_unknown"))];
+        let map = source_join_by_case(&packs, &[]);
+        let d = map.get("2026-05-10_d-4444").unwrap();
+        assert_eq!(d.sha, "sha_unknown");
+        assert!(d.tags.is_empty() && d.tags_inferred.is_empty());
     }
 
     #[test]

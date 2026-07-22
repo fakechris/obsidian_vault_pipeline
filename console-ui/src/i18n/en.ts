@@ -269,7 +269,8 @@ export const en = {
   'knowledge.terrainNoWebgl':
     'This 3D view needs WebGL, which is unavailable in this browser. Try the List or Graph view.',
   'knowledge.terrainUnclassified': 'Unclassified',
-  'knowledge.terrainFocusTheme': 'Fly to this cluster',
+  'knowledge.terrainFocusTheme': 'Filter to this theme and fly to it (click again to clear)',
+  'knowledge.terrainTagFilter': 'Filter by tag (click again to clear)',
   'knowledge.empty':
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',
