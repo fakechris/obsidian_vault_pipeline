@@ -605,6 +605,15 @@ export default function KnowledgeTerrain({
     }
     return s;
   }, [render, cutoff]);
+  // A dataset switch (e.g. claim ⇄ source perspective on divergent data) can
+  // drop the selected theme entirely; clear the selection rather than leaving
+  // an empty terrain whose filter has no visible control to undo it.
+  useEffect(() => {
+    if (selTheme != null && render && !render.themes.some((th) => th.id === selTheme)) {
+      setSelTheme(null);
+    }
+  }, [render, selTheme]);
+
   useEffect(() => {
     // No months guard: theme/tag filters must apply even on an undated corpus
     // (months empty → atLatest → FULL cutoff).
@@ -647,6 +656,22 @@ export default function KnowledgeTerrain({
   // Top tags across the rendered points, for the filter chips. A tag that only
   // ever appears machine-inferred keeps the portal's "weak" treatment (~#tag,
   // dashed). Claim points carry no tags → no chips in that perspective.
+  // Legend rows: themes with visible points at the timeline cutoff, top-16 by
+  // size — but the SELECTED theme always keeps its row, even when the cutoff
+  // (or the cap) would drop it. Otherwise scrubbing to before the theme's
+  // first point leaves an empty terrain with no control to clear the filter.
+  const legendThemes = useMemo(() => {
+    if (!render) return [] as TTheme[];
+    const list = [...render.themes]
+      .filter((th) => activeThemeIds.has(th.id))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 16);
+    if (selTheme != null && !list.some((th) => th.id === selTheme)) {
+      const sel = render.themes.find((th) => th.id === selTheme);
+      if (sel) list.push(sel);
+    }
+    return list;
+  }, [render, activeThemeIds, selTheme]);
   const tagChips = useMemo(() => {
     const counts = new Map<string, { n: number; inferredOnly: boolean }>();
     for (const p of render?.points ?? []) {
@@ -701,11 +726,7 @@ export default function KnowledgeTerrain({
             background: 'rgba(14,18,24,0.5)', borderRadius: 8, padding: '5px 6px',
           }}
         >
-          {[...render.themes]
-            .filter((th) => activeThemeIds.has(th.id))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 16)
-            .map((th) => {
+          {legendThemes.map((th) => {
               const on = selTheme === th.id;
               return (
                 <button
