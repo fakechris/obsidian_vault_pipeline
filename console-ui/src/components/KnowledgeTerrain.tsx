@@ -251,7 +251,10 @@ export default function KnowledgeTerrain({
     () =>
       model
         ? activeClaims(model.claims)
-            .map((c) => `${c.claim_id}:${c.theme ?? ''}:${c.sources.join(',')}`)
+            // Include the claim TEXT: a rewrite can keep id/theme/sources yet
+            // change what the tooltip must show, and claim_id can collide across
+            // runs, so text is what makes the signature honest.
+            .map((c) => `${c.claim_id}:${c.theme ?? ''}:${c.claim}:${c.sources.join(',')}`)
             .join('|')
         : '',
     [model],
@@ -380,20 +383,17 @@ export default function KnowledgeTerrain({
       return 0.15 + 0.85 * ((asDay(p.date) - lo) / (hi - lo));
     };
     // Influence: how many active crystals cite each source. A source that feeds
-    // many durable claims rises; uncited stays flat. Terrain points carry `sha`;
-    // claims cite by case_id, so bridge sha->case_id through the index.
+    // many durable claims rises; uncited stays flat. A terrain point's `id` IS
+    // the case_id that crystal-terrain emitted, and claims cite by case_id — so
+    // key on `p.id` directly. (The old sha bridge zeroed legacy empty-sha points
+    // and collapsed distinct case_ids that share one source sha.)
     const citeByCase = new Map<string, number>();
-    const shaToCase = new Map<string, string>();
     if (model) {
-      for (const [caseId, src] of sourcesByCase(model)) shaToCase.set(src.sha256, caseId);
       for (const c of activeClaims(model.claims)) {
         for (const caseId of c.sources) citeByCase.set(caseId, (citeByCase.get(caseId) ?? 0) + 1);
       }
     }
-    const influenceW = (p: TPoint) => {
-      const caseId = shaToCase.get(p.sha);
-      return caseId ? (citeByCase.get(caseId) ?? 0) : 0;
-    };
+    const influenceW = (p: TPoint) => citeByCase.get(p.id) ?? 0;
     const weightOfFor = (metric: Metric): ((p: TPoint) => number) =>
       metric === 'recency' ? recencyW : metric === 'influence' ? influenceW : () => 1;
 
