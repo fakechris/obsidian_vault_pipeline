@@ -1525,6 +1525,14 @@ body {
   outline: none;
   border-color: var(--accent);
 }
+/* These two fields drop the outline on :focus (mouse = border tint only). For
+   KEYBOARD focus, restore the DS 3px accent ring — placed after both :focus
+   resets so it wins on equal specificity. */
+.omni-input:focus-visible,
+.ask-composer textarea:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
 .ask-composer textarea:disabled {
   opacity: 0.6;
 }
