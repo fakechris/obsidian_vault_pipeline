@@ -1238,7 +1238,9 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
             "run-now",
             "--vault-root",
             &vault_root.display().to_string(),
-            "--id",
+            // `<ID>` is a POSITIONAL arg on `schedule run-now`, not a `--id`
+            // flag — passing `--id` makes clap reject it. Keep this in sync with
+            // the CLI definition (see the run_now_args parse test in ovp-cli).
             &job_id,
             // Atomic with the dispatch lock in the child: skip when the job
             // (auto tick or another trigger) already ran moments ago — closes
