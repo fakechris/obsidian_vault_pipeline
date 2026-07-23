@@ -64,10 +64,11 @@
   --danger:        #b04545;  --danger-soft:  #fbe9e7;
   --info:          #2563bb;  --info-soft:    #dbe7f7;
 
-  /* OVP2 knowledge-truth states (semantic, not decorative) */
-  --durable:  #2f7d52;   /* claim backed by verbatim evidence  */
-  --caveated: #b8862e;   /* claim needs human review           */
-  --blocked:  #b04545;   /* source blocked / failed            */
+  /* OVP2 knowledge-truth states (semantic, not decorative). `blocked`
+     derives from --c-6 to match existing blocked pills (product-design §6). */
+  --durable:  #2f7d52;       /* claim backed by verbatim evidence */
+  --caveated: #b8862e;       /* claim needs human review          */
+  --blocked:  var(--c-6);    /* source blocked / failed           */
 
   --code-bg:   #f4f1ea;   /* warm parchment code fill */
   --code-text: #1f1a17;
@@ -136,7 +137,7 @@
 
   --durable:  #22c55e;
   --caveated: #eab308;
-  --blocked:  #f87171;
+  --blocked:  var(--c-6);   /* = #f472b6, matches existing blocked pills */
 
   --code-bg:   #0e1420;
   --code-text: #e6edf5;
@@ -250,6 +251,8 @@
 ::selection { background: var(--accent-soft); color: var(--text); }
 
 :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  /* Solid accent, per the DS spec ("3px accent outline at 2px offset") — a
+     translucent tint falls under the 3:1 non-text contrast bar. */
+  outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
