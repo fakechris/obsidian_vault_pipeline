@@ -484,7 +484,7 @@ pub fn run(args: TerrainArgs) -> Result<(), CliError> {
             }
         })
         .collect();
-    themes_out.sort_by(|a, b| b.count.cmp(&a.count));
+    themes_out.sort_by_key(|theme| std::cmp::Reverse(theme.count));
 
     let terrain = Terrain {
         schema: "ovp.crystal.terrain/v1",
