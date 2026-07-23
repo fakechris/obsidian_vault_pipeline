@@ -1,8 +1,19 @@
 /* ============================================================
-   OVP DESIGN SYSTEM — colors_and_type.css   (v2 · dual scheme)
-   Two equal-weight schemes:
-     - Light "Atelier"   : warm parchment + terracotta (origin)
-     - Dark  "Vault"     : near-black + deep blue + cyan (improvement)
+   LUMEN DESIGN SYSTEM — foundation tokens   (OVP2 adoption)
+   The unified token layer for the Lumen open-source app suite and
+   OVP2. OVP2 is the design foundation, so these values are the same
+   warm dual theme this portal already ran — now formalized with the
+   full Lumen vocabulary (serif reading face, 4px spacing grid, weight/
+   leading/tracking, motion + focus tokens, complete semantic status,
+   and knowledge-truth states as tokens).
+
+   Two equal-weight themes, switched by `data-theme` on <html>:
+     · Light "Atelier" — warm parchment + terracotta (default)
+     · Dark  "Vault"   — near-black + deep blue + cyan
+
+   Canonical tokens use BARE names (--bg, --surface, --text, --accent,
+   --text-xs, --radius-card…). The `--ovp-*` and legacy aliases at the
+   bottom keep the existing portal.css / components working unchanged.
    ============================================================ */
 
 /* IBM Plex — self-hosted, SIL OFL 1.1 (see fonts/LICENSE.txt) */
@@ -30,74 +41,106 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg:           #f7f6f2;
-  --bg-deep:      #efece5;       /* canvas behind shells, e.g. graph void */
-  --surface:      #fffdfa;
-  --surface-2:    #fbf7f0;       /* page-help, raised tier */
-  --border:       #e7e1d8;
-  --border-strong:#cdc4b6;
-  --text:         #1f1a17;
-  --text-soft:    #443a32;
-  --muted:        #71675d;
-  --accent:       #9f4f24;       /* terracotta */
-  --accent-soft:  #f4dfd2;
-  --accent-2:     #2563bb;       /* secondary accent — used in graph + charts */
-  --accent-2-soft:#dbe7f7;
+  --bg:            #f7f6f2;   /* warm parchment page */
+  --bg-deep:       #efece5;   /* canvas behind shells / graph void */
+  --surface:       #fffdfa;   /* cards, panels, raised UI */
+  --surface-2:     #fbf7f0;   /* raised tier, page-help, subtle fills */
+  --border:        #e7e1d8;   /* hairline 1px separators */
+  --border-strong: #cdc4b6;   /* input borders, emphasised edges */
+  --text:          #1f1a17;   /* primary ink */
+  --text-soft:     #443a32;   /* secondary ink */
+  --muted:         #71675d;   /* tertiary / metadata */
 
-  --warn-border:  #d48a2f;
-  --warn-bg:      #fff8ec;
-  --warn-text:    #a85e10;
+  --accent:        #9f4f24;   /* terracotta — primary brand accent */
+  --accent-soft:   #f4dfd2;   /* accent tint fill */
+  --accent-strong: #843c15;   /* accent hover / pressed */
+  --accent-2:      #2563bb;   /* secondary accent — links, charts, graph */
+  --accent-2-soft: #dbe7f7;
+  --on-accent:     #fffdfa;   /* text/icon on a filled accent surface */
 
-  --code-bg:      #f4f4f5;
-  --code-text:    #1f1a17;
+  /* semantic status (shared by all apps) */
+  --success:       #2f7d52;  --success-soft: #e4f0e8;
+  --warn:          #a85e10;  --warn-soft:    #fff8ec;  --warn-border: #d48a2f;
+  --danger:        #b04545;  --danger-soft:  #fbe9e7;
+  --info:          #2563bb;  --info-soft:    #dbe7f7;
 
-  /* graph-specific surface */
+  /* OVP2 knowledge-truth states (semantic, not decorative). `blocked`
+     derives from --c-6 to match existing blocked pills (product-design §6). */
+  --durable:  #2f7d52;       /* claim backed by verbatim evidence */
+  --caveated: #b8862e;       /* claim needs human review          */
+  --blocked:  var(--c-6);    /* source blocked / failed           */
+
+  --code-bg:   #f4f1ea;   /* warm parchment code fill */
+  --code-text: #1f1a17;
+
+  /* graph surface (OVP2 knowledge graph, shared with charts) */
   --graph-bg:        #efece5;
-  --graph-fog:       #efece5;
+  --graph-fog:       #efece5;   /* legacy alias for --bg-deep, read by graph JS */
   --graph-link:      rgba(31, 26, 23, 0.16);
   --graph-link-hi:   #9f4f24;
   --graph-hull:      rgba(159, 79, 36, 0.10);
   --graph-hull-edge: rgba(159, 79, 36, 0.55);
   --graph-grid:      rgba(31, 26, 23, 0.04);
 
-  /* community palette (8) — chosen to read on light bg */
-  --c-1: #9f4f24;  /* ai-research      — terracotta   */
-  --c-2: #2563bb;  /* tools            — deep blue    */
-  --c-3: #2f7d52;  /* programming      — moss green   */
-  --c-4: #b8862e;  /* investing        — gold ochre   */
-  --c-5: #6c4dab;  /* writing          — plum         */
-  --c-6: #b04545;  /* ops              — barn red     */
-  --c-7: #2d6e87;  /* research-method  — slate teal   */
-  --c-8: #645a52;  /* archive          — warm gray    */
+  /* categorical palette (8) — graph communities, speaker chips, tags */
+  --c-1: #9f4f24;  /* terracotta  — ai-research     */
+  --c-2: #2563bb;  /* deep blue   — tools           */
+  --c-3: #2f7d52;  /* moss green  — programming     */
+  --c-4: #b8862e;  /* gold ochre  — investing       */
+  --c-5: #6c4dab;  /* plum        — writing         */
+  --c-6: #b04545;  /* barn red    — ops             */
+  --c-7: #2d6e87;  /* slate teal  — research-method */
+  --c-8: #645a52;  /* warm gray   — archive         */
 
   --shadow-shell: 0 12px 36px rgba(31, 26, 23, 0.06);
   --shadow-pop:   0 16px 48px rgba(31, 26, 23, 0.12);
+
+  /* ---- Lumen-suite compatibility aliases (same values) ---- */
+  --surface-subtle: var(--surface-2);
+  --surface-hover:  #f2ede4;
+  --sidebar:        #efece5;
+  --text-secondary: var(--text-soft);
+  --text-tertiary:  var(--muted);
+  --accent-hover:   var(--accent-strong);
+  --shadow:         var(--shadow-shell);
+
+  /* ---- legacy warn aliases (portal.css uses --warn-bg / --warn-text) ---- */
+  --warn-bg:   var(--warn-soft);
+  --warn-text: var(--warn);
 }
 
-/* ===== DARK — "Vault" : deep blue tech ===== */
+/* ===== DARK — "Vault" ===== */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg:           #0a0e16;
-  --bg-deep:      #05080d;
-  --surface:      #11161f;
-  --surface-2:    #161c27;
-  --border:       #1f2937;
-  --border-strong:#2c3a4f;
-  --text:         #e6edf5;
-  --text-soft:    #c2cfde;
-  --muted:        #7d8aa0;
-  --accent:       #3b82f6;       /* deep blue */
-  --accent-soft:  rgba(59, 130, 246, 0.16);
-  --accent-2:     #06b6d4;       /* cyan */
-  --accent-2-soft:rgba(6, 182, 212, 0.16);
+  --bg:            #0a0e16;
+  --bg-deep:       #05080d;
+  --surface:       #11161f;
+  --surface-2:     #161c27;
+  --border:        #1f2937;
+  --border-strong: #2c3a4f;
+  --text:          #e6edf5;
+  --text-soft:     #c2cfde;
+  --muted:         #7d8aa0;
 
-  --warn-border:  #f59e0b;
-  --warn-bg:      rgba(245, 158, 11, 0.10);
-  --warn-text:    #fbbf24;
+  --accent:        #3b82f6;   /* deep blue */
+  --accent-soft:   rgba(59, 130, 246, 0.16);
+  --accent-strong: #5b98f8;
+  --accent-2:      #06b6d4;   /* cyan */
+  --accent-2-soft: rgba(6, 182, 212, 0.16);
+  --on-accent:     #081120;
 
-  --code-bg:      #0e1420;
-  --code-text:    #e6edf5;
+  --success:       #22c55e;  --success-soft: rgba(34, 197, 94, 0.15);
+  --warn:          #fbbf24;  --warn-soft:    rgba(245, 158, 11, 0.12); --warn-border: #f59e0b;
+  --danger:        #f472b6;  --danger-soft:  rgba(244, 114, 182, 0.14);
+  --info:          #06b6d4;  --info-soft:    rgba(6, 182, 212, 0.16);
+
+  --durable:  #22c55e;
+  --caveated: #eab308;
+  --blocked:  var(--c-6);   /* = #f472b6, matches existing blocked pills */
+
+  --code-bg:   #0e1420;
+  --code-text: #e6edf5;
 
   --graph-bg:        #05080d;
   --graph-fog:       #05080d;
@@ -107,36 +150,109 @@
   --graph-hull-edge: rgba(59, 130, 246, 0.55);
   --graph-grid:      rgba(255, 255, 255, 0.03);
 
-  /* community palette (dark) — neon-leaning, all readable on near-black */
-  --c-1: #3b82f6;  /* ai-research      — deep blue     */
-  --c-2: #06b6d4;  /* tools            — cyan          */
-  --c-3: #22c55e;  /* programming      — emerald       */
-  --c-4: #eab308;  /* investing        — amber         */
-  --c-5: #a78bfa;  /* writing          — violet        */
-  --c-6: #f472b6;  /* ops              — pink          */
-  --c-7: #14b8a6;  /* research-method  — teal          */
-  --c-8: #94a3b8;  /* archive          — slate         */
+  --c-1: #3b82f6;  --c-2: #06b6d4;  --c-3: #22c55e;  --c-4: #eab308;
+  --c-5: #a78bfa;  --c-6: #f472b6;  --c-7: #14b8a6;  --c-8: #94a3b8;
 
   --shadow-shell: 0 12px 36px rgba(0, 0, 0, 0.55);
   --shadow-pop:   0 18px 52px rgba(0, 0, 0, 0.7);
+
+  --surface-subtle: var(--surface-2);
+  --surface-hover:  #1c2432;
+  --sidebar:        #0c1119;
+  --text-secondary: var(--text-soft);
+  --text-tertiary:  var(--muted);
+  --accent-hover:   var(--accent-strong);
+  --shadow:         var(--shadow-shell);
+
+  --warn-bg:   var(--warn-soft);
+  --warn-text: var(--warn);
 }
 
-/* ===== TYPE ===== */
+/* ===== TYPOGRAPHY ===== */
 :root, [data-theme] {
-  --ovp-font-sans: 'IBM Plex Sans', 'IBM Plex Sans SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --ovp-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* families — Latin + 简体中文 share IBM Plex; a system serif drives
+     long-form reading (the .reading utility below). */
+  --font-sans:  'IBM Plex Sans', 'IBM Plex Sans SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:  'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-serif: 'Iowan Old Style', 'Songti SC', 'Source Han Serif SC', Georgia, 'Times New Roman', serif;
 
-  --ovp-text-xs:   0.78rem;
-  --ovp-text-sm:   0.92rem;
-  --ovp-text-base: 1rem;
-  --ovp-text-lg:   1.15rem;
-  --ovp-text-xl:   1.4rem;
-  --ovp-text-2xl:  1.75rem;
-  --ovp-text-3xl:  2.5rem;
+  /* type scale */
+  --text-xs:   0.78rem;
+  --text-sm:   0.92rem;
+  --text-base: 1rem;
+  --text-lg:   1.15rem;
+  --text-xl:   1.4rem;
+  --text-2xl:  1.75rem;
+  --text-3xl:  2.5rem;
 
-  --ovp-radius-input: 10px;
-  --ovp-radius-md:    12px;
-  --ovp-radius-card:  16px;
-  --ovp-radius-shell: 20px;
-  --ovp-radius-pill:  999px;
+  /* weights */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* line-heights */
+  --leading-tight:   1.1;
+  --leading-snug:    1.35;
+  --leading-normal:  1.55;
+  --leading-relaxed: 1.7;
+
+  /* tracking */
+  --tracking-tight:  -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.08em;
+
+  /* ===== SPACING · SHAPE · MOTION ===== */
+  --space-1:  4px;   --space-2:  8px;   --space-3:  12px;  --space-4:  16px;
+  --space-5:  20px;  --space-6:  24px;  --space-8:  32px;  --space-10: 40px;
+  --space-12: 48px;  --space-16: 64px;
+
+  --radius-input: 10px;   /* buttons, inputs, small controls */
+  --radius-md:    12px;   /* nested panels                   */
+  --radius-card:  16px;   /* cards                           */
+  --radius-shell: 20px;   /* outer app / portal shell        */
+  --radius-pill:  999px;  /* pills, badges, status dots      */
+  --border-width: 1px;
+
+  --ease:       cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast:   120ms;
+  --dur-normal: 180ms;
+  --focus-ring: 0 0 0 2px var(--accent-soft);
+
+  /* ---- --ovp-* aliases: existing portal.css / components use these ---- */
+  --ovp-font-sans: var(--font-sans);
+  --ovp-font-mono: var(--font-mono);
+  --ovp-text-xs:   var(--text-xs);
+  --ovp-text-sm:   var(--text-sm);
+  --ovp-text-base: var(--text-base);
+  --ovp-text-lg:   var(--text-lg);
+  --ovp-text-xl:   var(--text-xl);
+  --ovp-text-2xl:  var(--text-2xl);
+  --ovp-text-3xl:  var(--text-3xl);
+  --ovp-radius-sm:    8px;                /* was undefined; between input & none */
+  --ovp-radius-input: var(--radius-input);
+  --ovp-radius-md:    var(--radius-md);
+  --ovp-radius-card:  var(--radius-card);
+  --ovp-radius-shell: var(--radius-shell);
+  --ovp-radius-pill:  var(--radius-pill);
+}
+
+/* ===== BASE (additive only — portal.css owns the body/box-sizing reset) ===== */
+
+/* Long-form knowledge reading: theme-page prose, claim bodies, transcripts.
+   The one place across the family that runs to paragraphs uses the serif. */
+.reading {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
+  color: var(--text-soft);
+}
+
+::selection { background: var(--accent-soft); color: var(--text); }
+
+:focus-visible {
+  /* Solid accent, per the DS spec ("3px accent outline at 2px offset") — a
+     translucent tint falls under the 3:1 non-text contrast bar. */
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
