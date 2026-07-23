@@ -2347,3 +2347,63 @@ fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
 fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
+
+#[cfg(test)]
+mod arg_contract_tests {
+    use super::*;
+    use clap::Parser;
+
+    // The `Cli` enum is huge; clap's generated parser recurses deep enough to
+    // overflow the test harness's default 2 MB stack in an unoptimized build.
+    // Run each parse on a roomy stack (the release binary is fine).
+    fn on_big_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The EXACT argv the manual-run endpoint spawns (ovp-server
+    /// `handle_run_start`). `<ID>` is a POSITIONAL arg on `schedule run-now`,
+    /// so a `--id` flag is rejected. This guards that server↔CLI contract —
+    /// the endpoint returns 202 before the child parses, so only a test like
+    /// this catches an argv drift (the child failing at runtime otherwise).
+    #[test]
+    fn schedule_run_now_server_argv_parses() {
+        on_big_stack(|| {
+            let cli = Cli::try_parse_from([
+                "ovp2", "schedule", "run-now", "--vault-root", "/tmp/vault", "daily",
+                "--unless-ran-within-secs", "120",
+            ])
+            .expect("server's run-now argv must parse");
+            match cli.cmd {
+                Cmd::Schedule {
+                    action:
+                        ScheduleAction::RunNow {
+                            id,
+                            unless_ran_within_secs,
+                            vault_root,
+                        },
+                } => {
+                    assert_eq!(id, "daily");
+                    assert_eq!(unless_ran_within_secs, Some(120));
+                    assert_eq!(vault_root, PathBuf::from("/tmp/vault"));
+                }
+                _ => panic!("unexpected parse for run-now argv"),
+            }
+        });
+    }
+
+    /// The old bug: passing `--id` (flag) must FAIL, since id is positional.
+    #[test]
+    fn schedule_run_now_rejects_id_flag() {
+        on_big_stack(|| {
+            let parsed = Cli::try_parse_from([
+                "ovp2", "schedule", "run-now", "--vault-root", "/tmp/vault", "--id", "daily",
+            ]);
+            assert!(parsed.is_err(), "--id flag must be rejected (id is positional)");
+        });
+    }
+}

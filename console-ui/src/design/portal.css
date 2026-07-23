@@ -1682,6 +1682,36 @@ body {
   padding: 0.15rem 0;
 }
 
+/* Primary action button — Run today's job / Publish / Retry (used across the
+   System page and RunBanner). Was undefined, so these rendered as bare native
+   buttons; this is the DS filled-accent button. */
+.publish-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.2rem 0 0.4rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-input);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: var(--ovp-text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.publish-btn:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.publish-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* runs table: quiet 1px rules, numbers right-aligned */
 .runs-table {
   width: 100%;
