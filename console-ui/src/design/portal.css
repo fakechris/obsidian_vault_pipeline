@@ -1297,8 +1297,13 @@ body {
   margin-top: 1.25rem;
 }
 .topic-overview-section p {
+  /* Long-form knowledge reading = the family's serif face (Lumen DS
+     `.reading`). This is the one OVP surface that runs to paragraphs. */
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
   color: var(--text-soft);
-  line-height: 1.65;
+  max-width: 44rem; /* keep the reading measure ~720px */
 }
 .topic-overview-section p:last-child {
   margin-bottom: 0;
