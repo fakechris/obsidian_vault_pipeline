@@ -25,7 +25,7 @@ use ovp_llm::{
     ToolResultBlock,
 };
 
-use crate::agent_transcript::{SessionStore, StoreError, TranscriptEvent, TRANSCRIPT_SCHEMA};
+use crate::agent_transcript::{SessionStore, StoreError, TranscriptEvent};
 
 /// What a tool execution produced. `InvalidArgs` is distinguished because it
 /// feeds the circuit breaker; `Failed` is an execution error (fed back as
@@ -162,6 +162,10 @@ pub fn run_agent_turn(
     idempotency_key: Option<&str>,
     cfg: &AgentConfig,
 ) -> Result<AgentOutcome, AgentError> {
+    // The whole-turn budget starts NOW — refresh, lock acquisition, and
+    // compaction all spend from it (`deadline_authority` covers the turn,
+    // not just the loop).
+    let started = Instant::now();
     // Idempotent replay BEFORE locking: a completed turn answers retries even
     // while a different (new) turn holds the lock. Refresh the read-only view
     // first — a long-lived store must see keys committed by other processes.
@@ -210,12 +214,10 @@ pub fn run_agent_turn(
         });
     }
 
-    let started = Instant::now();
     let remaining = |started: Instant| cfg.deadline.saturating_sub(started.elapsed());
 
     let turn_id = store.next_turn_id();
     let mut events: Vec<TranscriptEvent> = vec![TranscriptEvent::TurnStarted {
-        schema: TRANSCRIPT_SCHEMA.to_string(),
         turn_id: turn_id.clone(),
         question: question.to_string(),
         idempotency_key: idempotency_key.map(str::to_string),
@@ -304,6 +306,29 @@ pub fn run_agent_turn(
             .unwrap_or_default();
 
         if calls.is_empty() {
+            // Fail closed on a CONTRADICTORY shape: tool_use blocks under a
+            // final stop reason (EndTurn/StopSequence). Treating it as Final
+            // would silently ignore the calls and deliver an incomplete
+            // answer as success.
+            let has_tool_blocks = reply
+                .blocks
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|b| matches!(b, ovp_llm::ReplyBlock::ToolUse { .. }));
+            if has_tool_blocks
+                && matches!(reply.stop_reason, StopReason::EndTurn | StopReason::StopSequence)
+            {
+                events.push(TranscriptEvent::ReplyDiscarded {
+                    turn_id: turn_id.clone(),
+                    round: rounds,
+                    reason: format!(
+                        "contradictory reply: tool_use blocks under stop_reason {:?}",
+                        reply.stop_reason
+                    ),
+                });
+                break 'turn StoppedReason::ModelError;
+            }
             // No executable tools → the reply is the turn's terminal state.
             // Record the terminal assistant text as a Message event: later
             // turns project THIS turn and must see its answer, or multi-turn
@@ -445,7 +470,14 @@ pub fn run_agent_turn(
                 tool: name.clone(),
                 tool_call_id: id.clone(),
                 is_error: is_error || finished_late,
-                summary: content.chars().take(120).collect(),
+                // Late data is AUDIT-ONLY: the caller-facing trail (and any
+                // idempotent replay built from it) gets the discard marker,
+                // never the content.
+                summary: if finished_late {
+                    "late: discarded (audit only)".to_string()
+                } else {
+                    content.chars().take(120).collect()
+                },
             });
             let (model_content, model_is_error) = if finished_late {
                 timed_out = true;
@@ -813,10 +845,12 @@ mod tests {
             text_reply("never reached"),
         ]);
         let mut tools =
-            MockTools::new(&[("slow", Behavior::Slow(Duration::from_millis(80)))]);
+            MockTools::new(&[("slow", Behavior::Slow(Duration::from_millis(600)))]);
         let mut st = store(dir.path());
         let mut c = cfg();
-        c.deadline = Duration::from_millis(40);
+        // Generous margins: the clock starts at function entry, so lock/fs
+        // preprocessing must fit well inside the deadline under parallel load.
+        c.deadline = Duration::from_millis(300);
         let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::Timeout);
         assert_eq!(client.requests.len(), 1, "no model call may START after the deadline");
@@ -999,23 +1033,16 @@ mod tests {
             let mut st = store(dir.path());
             run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
         }
-        // Simulate a crash mid-turn: append turn events WITHOUT TurnFinished.
+        // Simulate a crash mid-turn: append turn events WITHOUT TurnFinished
+        // (raw lines in the on-disk wrapper shape: schema + session_id + event).
         let path = dir.path().join("s1.jsonl");
-        let torn = format!(
-            "{}\n{}\n",
-            serde_json::to_string(&TranscriptEvent::TurnStarted {
-                schema: TRANSCRIPT_SCHEMA.into(),
-                turn_id: "t2".into(),
-                question: "torn".into(),
-                idempotency_key: None,
-            })
-            .unwrap(),
-            serde_json::to_string(&TranscriptEvent::Message {
-                turn_id: "t2".into(),
-                message: ModelMessage::User { content: "torn".into() },
-            })
-            .unwrap()
-        );
+        let torn = concat!(
+            r#"{"schema":"ovp.ask_transcript/v1","session_id":"s1","event":"turn_started","turn_id":"t2","question":"torn"}"#,
+            "\n",
+            r#"{"schema":"ovp.ask_transcript/v1","session_id":"s1","event":"message","turn_id":"t2","message":{"role":"user","content":"torn"}}"#,
+            "\n"
+        )
+        .to_string();
         use std::io::Write as _;
         std::fs::OpenOptions::new()
             .append(true)
@@ -1144,12 +1171,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut client = Scripted::new(vec![tool_reply(&[("c1", "slow"), ("c2", "fast")])]);
         let mut tools = MockTools::new(&[
-            ("slow", Behavior::Slow(Duration::from_millis(80))),
+            ("slow", Behavior::Slow(Duration::from_millis(600))),
             ("fast", Behavior::Ok("quick")),
         ]);
         let mut st = store(dir.path());
         let mut c = cfg();
-        c.deadline = Duration::from_millis(40);
+        c.deadline = Duration::from_millis(300);
         let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::Timeout);
         // Both calls answered — the skipped one as a timeout error.
@@ -1182,6 +1209,9 @@ mod tests {
             })
             .unwrap();
         assert_eq!(audit_raw, "slow done", "the late result survives in the audit");
+        // The caller-facing trail must NOT leak the late content.
+        assert!(out.tool_trace[0].summary.contains("discarded"));
+        assert!(!out.tool_trace[0].summary.contains("slow done"));
     }
 
     // MaxTokens without tools: a truncated answer must not present as Final.
@@ -1278,11 +1308,11 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let mut client = SlowClient(Duration::from_millis(60));
+        let mut client = SlowClient(Duration::from_millis(600));
         let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
         let mut st = store(dir.path());
         let mut c = cfg();
-        c.deadline = Duration::from_millis(25);
+        c.deadline = Duration::from_millis(300);
         let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::Timeout);
         assert!(out.answer.is_empty(), "a late reply is never delivered");
@@ -1321,6 +1351,56 @@ mod tests {
         assert!(out.idempotent_replay);
         assert_eq!(out.answer, "done elsewhere");
         assert!(client.requests.is_empty());
+    }
+
+    // Every on-disk line carries schema + session_id (audit rows must stay
+    // versioned/correlatable when separated from the filename).
+    #[test]
+    fn every_line_carries_schema_and_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Scripted::new(vec![text_reply("x")]);
+        let mut tools = MockTools::new(&[]);
+        let mut st = store(dir.path());
+        run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        let body = std::fs::read_to_string(dir.path().join("s1.jsonl")).unwrap();
+        for line in body.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(v["schema"], "ovp.ask_transcript/v1", "{line}");
+            assert_eq!(v["session_id"], "s1", "{line}");
+        }
+    }
+
+    // Contradictory reply shape (tool_use blocks under a final stop) fails
+    // closed instead of silently dropping the calls.
+    #[test]
+    fn tool_blocks_under_final_stop_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let contradictory = Ok(ModelReply {
+            model: "m".into(),
+            text: "looks done".into(),
+            stop_reason: StopReason::EndTurn,
+            usage: Usage { input_tokens: 1, output_tokens: 1 },
+            blocks: Some(vec![
+                ReplyBlock::Text { text: "looks done".into() },
+                ReplyBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "search".into(),
+                    input: serde_json::json!({}),
+                },
+            ]),
+            raw_stop_reason: None,
+        });
+        let mut client = Scripted::new(vec![contradictory]);
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
+        let mut st = store(dir.path());
+        let out =
+            run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        assert_eq!(out.stopped_reason, StoppedReason::ModelError);
+        assert!(tools.calls.is_empty());
+        assert!(st.events().iter().any(|e| matches!(
+            e,
+            TranscriptEvent::ReplyDiscarded { reason, .. } if reason.contains("contradictory")
+        )));
     }
 
     // An empty/unstamped lock file is conservatively BUSY — a racing creator

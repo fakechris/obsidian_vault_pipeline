@@ -28,13 +28,22 @@ use serde::{Deserialize, Serialize};
 
 pub const TRANSCRIPT_SCHEMA: &str = "ovp.ask_transcript/v1";
 
-/// One transcript line. `schema` is stamped on every event so a reader never
-/// needs file-level framing to know what it is looking at.
+/// The on-disk line shape: EVERY event row carries the schema version and its
+/// session id, so audit rows stay versioned and correlatable even when
+/// separated from their filename (turn ids restart per session).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct TranscriptLine {
+    schema: String,
+    session_id: String,
+    #[serde(flatten)]
+    event: TranscriptEvent,
+}
+
+/// One transcript event (the line wrapper above adds schema + session id).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum TranscriptEvent {
     TurnStarted {
-        schema: String,
         turn_id: String,
         question: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +195,7 @@ impl std::error::Error for StoreError {}
 pub struct SessionStore {
     path: PathBuf,
     lock_path: PathBuf,
+    session_id: String,
     /// Complete-turn events only (compaction dropped any torn tail).
     events: Vec<TranscriptEvent>,
 }
@@ -217,7 +227,8 @@ impl SessionStore {
             .map_err(|e| StoreError::Io(format!("create {}: {e}", sessions_dir.display())))?;
         let path = sessions_dir.join(format!("{session_id}.jsonl"));
         let lock_path = sessions_dir.join(format!("{session_id}.lock"));
-        let mut store = Self { path, lock_path, events: Vec::new() };
+        let mut store =
+            Self { path, lock_path, session_id: session_id.to_string(), events: Vec::new() };
         store.read_complete_events()?;
         Ok(store)
     }
@@ -232,11 +243,13 @@ impl SessionStore {
                 .map_err(|e| StoreError::Io(format!("read {}: {e}", self.path.display())))?;
             let mut parsed: Vec<TranscriptEvent> = Vec::new();
             for line in body.lines().filter(|l| !l.trim().is_empty()) {
-                match serde_json::from_str::<TranscriptEvent>(line) {
-                    Ok(ev) => parsed.push(ev),
-                    // A torn/corrupt line means everything from here on is
-                    // suspect; keep only what precedes it.
-                    Err(_) => {
+                match serde_json::from_str::<TranscriptLine>(line) {
+                    // A schema we don't understand is treated like a torn
+                    // line: conservative, never misread as current-schema.
+                    Ok(l) if l.schema == TRANSCRIPT_SCHEMA => parsed.push(l.event),
+                    // A torn/corrupt/foreign line means everything from here
+                    // on is suspect; keep only what precedes it.
+                    _ => {
                         torn_tail = true;
                         break;
                     }
@@ -275,14 +288,21 @@ impl SessionStore {
         Ok(())
     }
 
+    /// One on-disk line for `ev`: schema + session id + the event fields.
+    fn line_json(&self, ev: &TranscriptEvent) -> Result<String, StoreError> {
+        serde_json::to_string(&TranscriptLine {
+            schema: TRANSCRIPT_SCHEMA.to_string(),
+            session_id: self.session_id.clone(),
+            event: ev.clone(),
+        })
+        .map_err(|e| StoreError::Io(format!("serialize event: {e}")))
+    }
+
     /// Atomic whole-file rewrite (tmp + rename) — used only by compaction.
     fn rewrite(&self) -> Result<(), StoreError> {
         let mut body = String::new();
         for ev in &self.events {
-            body.push_str(
-                &serde_json::to_string(ev)
-                    .map_err(|e| StoreError::Io(format!("serialize event: {e}")))?,
-            );
+            body.push_str(&self.line_json(ev)?);
             body.push('\n');
         }
         let tmp = self.path.with_extension("jsonl.tmp");
@@ -464,10 +484,7 @@ impl SessionStore {
         }
         let mut body = String::new();
         for ev in &turn_events {
-            body.push_str(
-                &serde_json::to_string(ev)
-                    .map_err(|e| StoreError::Io(format!("serialize event: {e}")))?,
-            );
+            body.push_str(&self.line_json(ev)?);
             body.push('\n');
         }
         let mut f = fs::OpenOptions::new()
