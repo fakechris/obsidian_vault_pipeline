@@ -51,6 +51,8 @@ const MAX_CHUNK_LIMIT: usize = 20;
 const MAX_PASSAGE_BYTES: usize = 2 * 1024;
 const MAX_CLAIM_CHARS: usize = 500;
 const CURSOR_PREFIX: &str = "c1:";
+const FULLTEXT_CURSOR_PREFIX: &str = "f1:";
+const MAX_SEARCH_TERMS: usize = 8;
 /// Aggregate serialized-size budget for multi-hit results. Individually-capped
 /// items can still sum past the agent's per-result cap (20 near-2KiB passages
 /// ≈ 40 KiB) — which would get blindly truncated downstream into broken JSON
@@ -162,6 +164,7 @@ pub struct VaultTools {
     /// [`Self::with_result_cap`]); results over this are refused, never
     /// delivered for downstream blind truncation.
     serialized_cap: usize,
+    fulltext_corpus_scan_bytes: usize,
     index: Option<Result<Arc<IndexModel>, String>>,
     records: Option<Result<Arc<Vec<DurableRecord>>, String>>,
     coverage: Coverage,
@@ -180,6 +183,7 @@ impl VaultTools {
         Self {
             vault_root: vault_root.into(),
             serialized_cap: MAX_SERIALIZED_RESULT_BYTES,
+            fulltext_corpus_scan_bytes: MAX_FULLTEXT_CORPUS_SCAN_BYTES,
             index: None,
             records: None,
             coverage: Coverage::default(),
@@ -203,6 +207,12 @@ impl VaultTools {
     /// downstream blind-truncation this API exists to prevent.
     pub fn with_result_cap(mut self, serialized_cap: usize) -> Self {
         self.serialized_cap = serialized_cap;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_fulltext_corpus_scan_bytes(mut self, bytes: usize) -> Self {
+        self.fulltext_corpus_scan_bytes = bytes;
         self
     }
 
@@ -269,17 +279,23 @@ impl VaultTools {
                 })?;
                 Ok(search_evidence(&model, &query, limit))
             }
-            ParsedCall::SearchFulltext { query, limit } => {
+            ParsedCall::SearchFulltext {
+                query,
+                cursor,
+                limit,
+            } => {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("fulltext index unavailable: {e}"))
                 })?;
-                Ok(search_fulltext_at(
+                Ok(search_fulltext_at_with_budget(
                     &self.vault_root,
                     &model,
                     &query,
+                    cursor,
                     limit,
                     started,
                     remaining,
+                    self.fulltext_corpus_scan_bytes,
                 ))
             }
             ParsedCall::GetSource { source_id } => {
@@ -499,7 +515,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles. Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Does not search card bodies, units text, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -512,11 +528,12 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies corpus-wide with bounded streaming scans. Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies newest-first with bounded streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings and each hit reports matched_terms in walk order. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "minLength": 1},
+                    "cursor": {"type": "string", "minLength": 1},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT}
                 },
                 "required": ["query"],
@@ -678,46 +695,83 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
     json!({"hits": hits, "truncated": truncated})
 }
 
-/// Search the reader-pack catalog surface: pack titles plus card titles. Card
-/// title matches rank ahead of pack-title-only matches; source joins remain
-/// optional because pre-join packs can legitimately lack a source sha.
-pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
-    let query_lower = query.to_lowercase();
-    let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
-    let mut card_matches = Vec::new();
-    let mut title_only_matches = Vec::new();
+fn tokenize_search_terms(query: &str) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut terms = Vec::new();
+    for term in query.split_ascii_whitespace().map(str::to_lowercase) {
+        if !term.is_empty() && seen.insert(term.clone()) {
+            terms.push(term);
+        }
+    }
+    terms
+}
 
-    for pack in &model.packs {
+/// Search the reader-pack catalog surface: pack titles plus card titles. Packs
+/// rank by the number of distinct OR-matched terms, with original index order
+/// breaking ties; source joins remain optional because pre-join packs can
+/// legitimately lack a source sha.
+pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
+    let terms = tokenize_search_terms(query);
+    let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
+    let mut matches = Vec::new();
+
+    for (index, pack) in model.packs.iter().enumerate() {
+        let pack_title_lower = pack.title.to_lowercase();
+        let card_titles_lower = pack
+            .card_titles
+            .iter()
+            .map(|title| title.to_lowercase())
+            .collect::<Vec<_>>();
+        let matched_terms = terms
+            .iter()
+            .filter(|term| {
+                pack_title_lower.contains(term.as_str())
+                    || card_titles_lower
+                        .iter()
+                        .any(|title| title.contains(term.as_str()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if matched_terms.is_empty() {
+            continue;
+        }
         let matched_cards = pack
             .card_titles
             .iter()
-            .filter(|title| title.to_lowercase().contains(&query_lower))
-            .cloned()
+            .zip(&card_titles_lower)
+            .filter(|(_, title_lower)| {
+                terms
+                    .iter()
+                    .any(|term| title_lower.contains(term.as_str()))
+            })
+            .map(|(title, _)| title.clone())
             .collect::<Vec<_>>();
-        let card_title_matches = !matched_cards.is_empty();
-        let title_matches = pack.title.to_lowercase().contains(&query_lower);
-        if !card_title_matches && !title_matches {
-            continue;
-        }
+        let score = matched_terms.len();
 
         let mut hit = Map::new();
         hit.insert("pack_title".into(), json!(pack.title));
         hit.insert("matched_cards".into(), json!(matched_cards));
+        hit.insert("matched_terms".into(), json!(matched_terms));
         if let Some(source_id) = pack.source_sha256.as_deref() {
             hit.insert("source_id".into(), json!(source_id));
             hit.insert("open_ref".into(), json!(format!("/library/{source_id}")));
         }
         hit.insert("total_cards".into(), json!(pack.card_titles.len()));
-        if card_title_matches {
-            card_matches.push(Value::Object(hit));
-        } else {
-            title_only_matches.push(Value::Object(hit));
-        }
+        matches.push((score, index, Value::Object(hit)));
     }
 
-    card_matches.extend(title_only_matches);
-    let mut truncated = card_matches.len() > limit;
-    let mut hits = card_matches.into_iter().take(limit).collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let mut truncated = matches.len() > limit;
+    let mut hits = matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, hit)| hit)
+        .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut hits);
     json!({"hits": hits, "truncated": truncated})
 }
@@ -733,6 +787,7 @@ enum FulltextFileState {
 struct FulltextFileScan {
     state: FulltextFileState,
     bytes_scanned: usize,
+    matched_terms: Vec<String>,
     snippet: Option<String>,
 }
 
@@ -746,102 +801,164 @@ pub fn search_fulltext(
     limit: usize,
     remaining: Duration,
 ) -> Value {
-    search_fulltext_at(vault_root, model, query, limit, Instant::now(), remaining)
+    search_fulltext_at(
+        vault_root,
+        model,
+        query,
+        None,
+        limit,
+        Instant::now(),
+        remaining,
+    )
 }
 
 fn search_fulltext_at(
     vault_root: &Path,
     model: &IndexModel,
     query: &str,
+    cursor: Option<usize>,
     limit: usize,
     started: Instant,
     remaining: Duration,
 ) -> Value {
-    let query_lower = query.to_lowercase();
+    search_fulltext_at_with_budget(
+        vault_root,
+        model,
+        query,
+        cursor,
+        limit,
+        started,
+        remaining,
+        MAX_FULLTEXT_CORPUS_SCAN_BYTES,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_fulltext_at_with_budget(
+    vault_root: &Path,
+    model: &IndexModel,
+    query: &str,
+    cursor: Option<usize>,
+    limit: usize,
+    started: Instant,
+    remaining: Duration,
+    corpus_budget: usize,
+) -> Value {
+    let terms = tokenize_search_terms(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
-    let candidates = model
+    let mut candidates = model
         .sources
         .iter()
         .filter(|source| source.rel_path.is_some())
         .collect::<Vec<_>>();
+    candidates.sort_by(
+        |left, right| match (left.date.as_deref(), right.date.as_deref()) {
+            (Some(left), Some(right)) => right.cmp(left),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        },
+    );
     let total_sources = candidates.len();
+    let start_offset = cursor.unwrap_or(0);
     let scan_window = remaining.saturating_sub(FULLTEXT_DEADLINE_MARGIN);
     let mut hits = Vec::new();
     let mut scanned_sources = 0usize;
     let mut corpus_bytes = 0usize;
-    let mut truncated = false;
+    let mut next_offset = start_offset;
+    let mut stopped_before_end = false;
+    let mut incomplete_file = false;
+    let mut hit_limit_stop = false;
 
-    for (index, source) in candidates.iter().enumerate() {
+    for (index, source) in candidates.iter().enumerate().skip(start_offset) {
         // Deadline checks happen between files: an in-flight local file scan is
         // bounded by the 2 MiB cap, while the 250 ms margin leaves the agent
         // time to serialize and accept the result.
         if started.elapsed() >= scan_window {
-            truncated = true;
+            stopped_before_end = true;
+            next_offset = index;
             break;
         }
-        if corpus_bytes >= MAX_FULLTEXT_CORPUS_SCAN_BYTES {
-            truncated = true;
+        if corpus_bytes >= corpus_budget {
+            stopped_before_end = true;
+            next_offset = index;
             break;
         }
 
-        let corpus_remaining = MAX_FULLTEXT_CORPUS_SCAN_BYTES - corpus_bytes;
+        let corpus_remaining = corpus_budget - corpus_bytes;
         let file_allowance = corpus_remaining.min(MAX_FULLTEXT_FILE_SCAN_BYTES);
         let scan = match resolve_source_path(vault_root, model, &source.sha256) {
-            Ok((resolved, _)) => {
-                scan_fulltext_file(&resolved, &query_lower, query.len(), file_allowance)
-            }
+            Ok((resolved, _)) => scan_fulltext_file(&resolved, &terms, file_allowance),
             Err(_) => FulltextFileScan {
                 state: FulltextFileState::Unreadable,
                 bytes_scanned: 0,
+                matched_terms: Vec::new(),
                 snippet: None,
             },
         };
         corpus_bytes = corpus_bytes.saturating_add(scan.bytes_scanned);
 
-        if let Some(snippet) = scan.snippet {
+        if !scan.matched_terms.is_empty() {
             hits.push(json!({
                 "source_id": source.sha256,
                 "title": source.title.as_deref().unwrap_or("(untitled)"),
                 "open_ref": format!("/library/{}", source.sha256),
-                "snippet": snippet
+                "snippet": scan.snippet.unwrap_or_default(),
+                "matched_terms": scan.matched_terms
             }));
         }
         match scan.state {
             FulltextFileState::Complete => {
                 scanned_sources += 1;
+                next_offset = index + 1;
             }
-            FulltextFileState::Partial | FulltextFileState::Unreadable => {
-                truncated = true;
+            FulltextFileState::Partial => {
+                incomplete_file = true;
+                if file_allowance < MAX_FULLTEXT_FILE_SCAN_BYTES {
+                    // The corpus budget ended inside this file. Retry the same
+                    // source on the next call so its unread tail is not lost.
+                    next_offset = index;
+                    stopped_before_end = true;
+                    break;
+                }
+                next_offset = index + 1;
+            }
+            FulltextFileState::Unreadable => {
+                incomplete_file = true;
+                next_offset = index + 1;
             }
         }
 
-        if corpus_bytes >= MAX_FULLTEXT_CORPUS_SCAN_BYTES {
-            truncated = true;
+        if corpus_bytes >= corpus_budget && next_offset < total_sources {
+            stopped_before_end = true;
             break;
         }
         if hits.len() >= limit {
-            truncated |= index + 1 < total_sources;
+            hit_limit_stop = true;
+            stopped_before_end = next_offset < total_sources;
             break;
         }
     }
 
-    // Resolution/open/read failures and every early-stop path leave candidates
-    // unscanned; completeness must follow the executor's accounting, not just
-    // whether one of the named byte/deadline caps happened to fire.
-    truncated |= scanned_sources < total_sources;
-    truncated |= cap_aggregate(&mut hits);
-    json!({
-        "hits": hits,
-        "scanned_sources": scanned_sources,
-        "total_sources": total_sources,
-        "truncated": truncated
-    })
+    let aggregate_capped = cap_aggregate(&mut hits);
+    let truncated = stopped_before_end || incomplete_file || hit_limit_stop || aggregate_capped;
+    let mut out = Map::new();
+    out.insert("hits".into(), json!(hits));
+    out.insert("scanned_sources".into(), json!(scanned_sources));
+    out.insert("total_sources".into(), json!(total_sources));
+    out.insert("truncated".into(), json!(truncated));
+    if stopped_before_end {
+        out.insert(
+            "next_cursor".into(),
+            json!(format!("{FULLTEXT_CURSOR_PREFIX}{next_offset}")),
+        );
+    }
+    Value::Object(out)
 }
 
 fn scan_fulltext_file(
     path: &Path,
-    query_lower: &str,
-    query_bytes: usize,
+    terms: &[String],
     allowance: usize,
 ) -> FulltextFileScan {
     let file = match std::fs::File::open(path) {
@@ -850,36 +967,50 @@ fn scan_fulltext_file(
             return FulltextFileScan {
                 state: FulltextFileState::Unreadable,
                 bytes_scanned: 0,
+                matched_terms: Vec::new(),
                 snippet: None,
             };
         }
     };
     let mut reader = std::io::BufReader::with_capacity(FULLTEXT_SCAN_CHUNK_BYTES, file);
-    let carry_limit = query_bytes.saturating_sub(1).max(3);
-    let line_tail_limit = query_bytes
+    let max_term_bytes = terms.iter().map(String::len).max().unwrap_or(0);
+    let carry_limit = max_term_bytes.saturating_sub(1);
+    let line_tail_limit = max_term_bytes
         .saturating_add(MAX_FULLTEXT_SNIPPET_CHARS * 4)
         .saturating_add(FULLTEXT_MATCH_BLOCK_BYTES);
     let mut carry = Vec::new();
     let mut line_tail = Vec::new();
+    let mut matched = vec![false; terms.len()];
     let mut scanned = 0usize;
     let mut snippet = None;
 
     loop {
+        if !terms.is_empty() && matched.iter().all(|found| *found) {
+            return FulltextFileScan {
+                state: FulltextFileState::Complete,
+                bytes_scanned: scanned,
+                matched_terms: collect_matched_terms(terms, &matched),
+                snippet,
+            };
+        }
         if scanned >= allowance {
             return match std::io::BufRead::fill_buf(&mut reader) {
                 Ok([]) => FulltextFileScan {
                     state: FulltextFileState::Complete,
                     bytes_scanned: scanned,
+                    matched_terms: collect_matched_terms(terms, &matched),
                     snippet,
                 },
                 Ok(_) => FulltextFileScan {
                     state: FulltextFileState::Partial,
                     bytes_scanned: scanned,
+                    matched_terms: collect_matched_terms(terms, &matched),
                     snippet,
                 },
                 Err(_) => FulltextFileScan {
                     state: FulltextFileState::Unreadable,
                     bytes_scanned: scanned,
+                    matched_terms: collect_matched_terms(terms, &matched),
                     snippet,
                 },
             };
@@ -891,6 +1022,7 @@ fn scan_fulltext_file(
                 return FulltextFileScan {
                     state: FulltextFileState::Unreadable,
                     bytes_scanned: scanned,
+                    matched_terms: collect_matched_terms(terms, &matched),
                     snippet,
                 };
             }
@@ -899,35 +1031,47 @@ fn scan_fulltext_file(
             return FulltextFileScan {
                 state: FulltextFileState::Complete,
                 bytes_scanned: scanned,
+                matched_terms: collect_matched_terms(terms, &matched),
                 snippet,
             };
         }
 
         let allowed = (allowance - scanned).min(buf.len());
-        if snippet.is_none() {
-            snippet = scan_fulltext_block(
-                &buf[..allowed],
-                query_lower,
-                carry_limit,
-                line_tail_limit,
-                &mut carry,
-                &mut line_tail,
-            )
-            .map(|(_, snippet)| snippet);
-        }
+        scan_fulltext_block(
+            &buf[..allowed],
+            terms,
+            &mut matched,
+            carry_limit,
+            line_tail_limit,
+            &mut carry,
+            &mut line_tail,
+            &mut snippet,
+        );
         std::io::BufRead::consume(&mut reader, allowed);
         scanned += allowed;
     }
 }
 
+fn collect_matched_terms(terms: &[String], matched: &[bool]) -> Vec<String> {
+    terms
+        .iter()
+        .zip(matched)
+        .filter(|(_, found)| **found)
+        .map(|(term, _)| term.clone())
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn scan_fulltext_block(
     block: &[u8],
-    query_lower: &str,
+    terms: &[String],
+    matched: &mut [bool],
     carry_limit: usize,
     line_tail_limit: usize,
     carry: &mut Vec<u8>,
     line_tail: &mut Vec<u8>,
-) -> Option<(usize, String)> {
+    snippet: &mut Option<String>,
+) {
     let mut consumed = 0usize;
     while consumed < block.len() {
         if block[consumed] == b'\n' {
@@ -945,25 +1089,39 @@ fn scan_fulltext_block(
             let piece = &block[consumed..end];
             append_bounded_tail(line_tail, piece, line_tail_limit);
 
-            // Retain query.len()-1 raw bytes from the preceding sub-block (and
-            // at least three, so a four-byte UTF-8 scalar split at the boundary
-            // is reconstructed). Lowercasing `carry + piece` finds matches
-            // split across BufReader boundaries without retaining a whole line.
+            // Retain max(term.len())-1 raw bytes from the preceding sub-block.
+            // Lowercasing `carry + piece` finds every term split across reader
+            // boundaries without retaining a whole line.
             let mut window = Vec::with_capacity(carry.len() + piece.len());
             window.extend_from_slice(carry);
             window.extend_from_slice(piece);
-            if String::from_utf8_lossy(&window)
-                .to_lowercase()
-                .contains(query_lower)
-                && let Some(snippet) = snippet_containing_match(line_tail, query_lower)
+            let window_lower = String::from_utf8_lossy(&window).to_lowercase();
+            let mut first_new_match = None;
+            for (index, term) in terms.iter().enumerate() {
+                if !matched[index]
+                    && let Some(position) = window_lower.find(term)
+                {
+                    matched[index] = true;
+                    if first_new_match
+                        .as_ref()
+                        .is_none_or(|(_, first_position)| position < *first_position)
+                    {
+                        first_new_match = Some((index, position));
+                    }
+                }
+            }
+            if snippet.is_none()
+                && let Some((term_index, _)) = first_new_match
             {
-                return Some((end, snippet));
+                *snippet = snippet_containing_match(line_tail, &terms[term_index]);
             }
             replace_with_tail(carry, &window, carry_limit);
             consumed = end;
+            if !terms.is_empty() && matched.iter().all(|found| *found) {
+                return;
+            }
         }
     }
-    None
 }
 
 fn append_bounded_tail(target: &mut Vec<u8>, bytes: &[u8], limit: usize) {
@@ -1837,6 +1995,7 @@ enum ParsedCall {
     },
     SearchFulltext {
         query: String,
+        cursor: Option<usize>,
         limit: usize,
     },
     GetSource {
@@ -1882,8 +2041,9 @@ impl ParsedCall {
             }
             "search_evidence" => {
                 validate_keys(object, &["query", "limit"])?;
+                let query = required_search_query(object)?;
                 Ok(Self::SearchEvidence {
-                    query: required_string(object, "query")?,
+                    query,
                     limit: optional_limit(
                         object,
                         "limit",
@@ -1893,9 +2053,11 @@ impl ParsedCall {
                 })
             }
             "search_fulltext" => {
-                validate_keys(object, &["query", "limit"])?;
+                validate_keys(object, &["query", "cursor", "limit"])?;
+                let query = required_search_query(object)?;
                 Ok(Self::SearchFulltext {
-                    query: required_string(object, "query")?,
+                    query,
+                    cursor: optional_fulltext_cursor(object)?,
                     limit: optional_limit(object, "limit", DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT)?,
                 })
             }
@@ -1989,6 +2151,32 @@ fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, Str
         return Err(format!("`{key}` must not be empty"));
     }
     Ok(value.to_string())
+}
+
+fn required_search_query(object: &Map<String, Value>) -> Result<String, String> {
+    let query = required_string(object, "query")?;
+    let term_count = tokenize_search_terms(&query).len();
+    if term_count > MAX_SEARCH_TERMS {
+        return Err(format!(
+            "`query` must contain at most {MAX_SEARCH_TERMS} distinct terms"
+        ));
+    }
+    Ok(query)
+}
+
+fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<usize>, String> {
+    let Some(cursor) = optional_string(object, "cursor")? else {
+        return Ok(None);
+    };
+    let raw = cursor.strip_prefix(FULLTEXT_CURSOR_PREFIX).ok_or_else(|| {
+        format!("invalid cursor version; expected `{FULLTEXT_CURSOR_PREFIX}<source_offset>`")
+    })?;
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("invalid fulltext cursor source offset".into());
+    }
+    raw.parse::<usize>()
+        .map(Some)
+        .map_err(|_| "invalid fulltext cursor source offset".into())
 }
 
 fn optional_string(object: &Map<String, Value>, key: &str) -> Result<Option<String>, String> {
@@ -2311,7 +2499,16 @@ mod tests {
         assert!(sources.contains("search_evidence"));
         let evidence = description("search_evidence");
         assert!(evidence.contains("pack title and card titles"));
+        assert!(evidence.contains("OR-matched"));
+        assert!(evidence.contains("matched_terms"));
+        assert!(evidence.contains("1–3 distinctive terms"));
+        assert!(evidence.contains("English article will not match Chinese terms"));
         assert!(evidence.contains("Does not search card bodies, units text, or source bodies"));
+        let fulltext = description("search_fulltext");
+        assert!(fulltext.contains("newest-first"));
+        assert!(fulltext.contains("OR-matched"));
+        assert!(fulltext.contains("matched_terms"));
+        assert!(fulltext.contains("Pass next_cursor to continue scanning"));
         let claims = description("search_claims");
         assert!(claims.contains("crystallized-claims layer only"));
         assert!(claims.contains("claim text"));
@@ -2373,7 +2570,7 @@ mod tests {
     }
 
     #[test]
-    fn evidence_search_recovers_card_only_term_and_ranks_card_matches_first() {
+    fn evidence_or_terms_recover_card_only_match_and_rank_by_distinct_score() {
         let temp = tempfile::tempdir().expect("temp vault");
         fs::create_dir_all(temp.path().join("sources")).expect("source dir");
         fs::write(temp.path().join("sources/job.md"), "unrelated body").expect("source body");
@@ -2386,8 +2583,20 @@ mod tests {
             )],
             vec![
                 PackRow {
-                    pack_dir: "40-Resources/Reader/title-first".into(),
-                    title: "Ranking Needle overview".into(),
+                    pack_dir: "40-Resources/Reader/job".into(),
+                    title: "Practical Job Search".into(),
+                    date: Some("2026-07-24".into()),
+                    units: 3,
+                    cards: 1,
+                    json_repaired: false,
+                    card_titles: vec![
+                        "A transformer implementation should become muscle memory".into(),
+                    ],
+                    source_sha256: Some("sha-job".into()),
+                },
+                PackRow {
+                    pack_dir: "40-Resources/Reader/unrelated".into(),
+                    title: "Unrelated systems overview".into(),
                     date: None,
                     units: 0,
                     cards: 1,
@@ -2396,17 +2605,14 @@ mod tests {
                     source_sha256: None,
                 },
                 PackRow {
-                    pack_dir: "40-Resources/Reader/job".into(),
-                    title: "Practical Job Search".into(),
-                    date: Some("2026-07-24".into()),
-                    units: 3,
-                    cards: 2,
+                    pack_dir: "40-Resources/Reader/two-terms".into(),
+                    title: "Interview preparation".into(),
+                    date: None,
+                    units: 0,
+                    cards: 1,
                     json_repaired: false,
-                    card_titles: vec![
-                        "A Transformer-Based Resume Matcher".into(),
-                        "Ranking Needle in a card".into(),
-                    ],
-                    source_sha256: Some("sha-job".into()),
+                    card_titles: vec!["Transformer 面试 drills".into()],
+                    source_sha256: None,
                 },
             ],
             vec![],
@@ -2417,17 +2623,31 @@ mod tests {
         let evidence = ok_json(call(
             &mut tools,
             "search_evidence",
-            json!({"query": "TrAnSfOrMeR"}),
+            json!({"query": "Transformer 简历 面试 手写"}),
         ));
         assert_eq!(
-            evidence["hits"][0],
+            evidence["hits"][1],
             json!({
                 "pack_title": "Practical Job Search",
-                "matched_cards": ["A Transformer-Based Resume Matcher"],
+                "matched_cards": ["A transformer implementation should become muscle memory"],
+                "matched_terms": ["transformer"],
                 "source_id": "sha-job",
                 "open_ref": "/library/sha-job",
-                "total_cards": 2
+                "total_cards": 1
             })
+        );
+        assert_eq!(evidence["hits"][0]["pack_title"], "Interview preparation");
+        assert_eq!(
+            evidence["hits"][0]["matched_terms"],
+            json!(["transformer", "面试"])
+        );
+        assert_eq!(evidence["hits"].as_array().expect("hits").len(), 2);
+        assert!(
+            evidence["hits"]
+                .as_array()
+                .expect("hits")
+                .iter()
+                .all(|hit| hit["pack_title"] != "Unrelated systems overview")
         );
         assert_eq!(evidence["truncated"], false);
         assert_eq!(tools.coverage().evidence, LayerState::Complete);
@@ -2438,16 +2658,6 @@ mod tests {
             json!({"query": "transformer"}),
         ));
         assert_eq!(metadata["hits"], json!([]));
-
-        let ranked = ok_json(call(
-            &mut tools,
-            "search_evidence",
-            json!({"query": "ranking needle"}),
-        ));
-        assert_eq!(ranked["hits"][0]["pack_title"], "Practical Job Search");
-        assert_eq!(ranked["hits"][1]["pack_title"], "Ranking Needle overview");
-        assert!(ranked["hits"][1].get("source_id").is_none());
-        assert!(ranked["hits"][1].get("open_ref").is_none());
     }
 
     #[test]
@@ -2480,11 +2690,50 @@ mod tests {
     }
 
     #[test]
-    fn fulltext_match_spanning_reader_chunk_boundary_is_found() {
+    fn fulltext_live_regression_compound_mixed_language_queries_or_match_english_body() {
         let temp = tempfile::tempdir().expect("temp vault");
         fs::create_dir_all(temp.path().join("sources")).expect("source dir");
-        let query = "Transformer";
+        fs::write(
+            temp.path().join("sources/transformer.md"),
+            "I implemented a transformer twice while preparing this article.\n",
+        )
+        .expect("source body");
+        let model = fixture_model(
+            vec![source(
+                "sha-transformer",
+                "English Article",
+                Some("sources/transformer.md"),
+                Some("2026-06-20"),
+            )],
+            vec![],
+            vec![],
+        );
+        write_index(temp.path(), &model).expect("index fixture");
+        let mut tools = VaultTools::new(temp.path());
+
+        for query in [
+            "手写 transformer 笔记",
+            "Transformer from scratch notes interview",
+        ] {
+            let result = ok_json(call(
+                &mut tools,
+                "search_fulltext",
+                json!({"query": query}),
+            ));
+            assert_eq!(result["hits"][0]["source_id"], "sha-transformer");
+            assert_eq!(result["hits"][0]["matched_terms"], json!(["transformer"]));
+            assert_eq!(result["truncated"], false);
+        }
+    }
+
+    #[test]
+    fn fulltext_terms_of_different_lengths_span_reader_chunk_boundaries() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        fs::create_dir_all(temp.path().join("sources")).expect("source dir");
+        let query = "short transformer";
         let mut body = vec![b'x'; FULLTEXT_SCAN_CHUNK_BYTES - 4];
+        body.extend_from_slice(b"short");
+        body.resize(FULLTEXT_SCAN_CHUNK_BYTES * 2 - 6, b'x');
         body.extend_from_slice(b"TrAnSfOrMeR");
         body.extend_from_slice(b" with multibyte context \xE7\x95\x8C\xF0\x9F\x99\x82\n");
         fs::write(temp.path().join("sources/boundary.md"), body).expect("boundary body");
@@ -2503,46 +2752,145 @@ mod tests {
 
         let result = ok_json(call(&mut tools, "search_fulltext", json!({"query": query})));
         assert_eq!(result["hits"][0]["source_id"], "sha-boundary");
+        assert_eq!(
+            result["hits"][0]["matched_terms"],
+            json!(["short", "transformer"])
+        );
         let snippet = result["hits"][0]["snippet"].as_str().expect("snippet");
-        assert!(snippet.to_lowercase().contains(&query.to_lowercase()));
+        assert!(snippet.to_lowercase().contains("short"));
         assert!(snippet.chars().count() <= MAX_FULLTEXT_SNIPPET_CHARS);
         assert_eq!(result["truncated"], false);
     }
 
     #[test]
-    fn fulltext_total_budget_and_near_zero_deadline_stop_honestly() {
-        const FILE_BYTES: usize = 1024 * 1024;
+    fn fulltext_hits_follow_newest_first_date_order_with_none_last() {
         let temp = tempfile::tempdir().expect("temp vault");
         fs::create_dir_all(temp.path().join("sources")).expect("source dir");
-        let body = vec![b'x'; FILE_BYTES];
-        let mut sources = Vec::new();
-        for index in 0..49 {
-            let rel_path = format!("sources/budget-{index:02}.md");
-            fs::write(temp.path().join(&rel_path), &body).expect("budget body");
-            sources.push(source(
-                &format!("sha-budget-{index:02}"),
-                &format!("Budget Source {index:02}"),
-                Some(&rel_path),
-                Some("2026-07-24"),
-            ));
+        for name in ["undated", "old", "new"] {
+            fs::write(
+                temp.path().join(format!("sources/{name}.md")),
+                "ordering-term",
+            )
+            .expect("source body");
         }
-        write_index(temp.path(), &fixture_model(sources, vec![], vec![])).expect("index fixture");
-
-        let mut budget_tools = VaultTools::new(temp.path());
-        let budget = ok_json(budget_tools.execute(
-            "search_fulltext",
-            &json!({"query": "term-that-is-not-present"}),
-            Duration::from_secs(60),
-        ));
-        assert_eq!(budget["total_sources"], 49);
-        assert!(
-            budget["scanned_sources"].as_u64().expect("scanned sources")
-                < budget["total_sources"].as_u64().expect("total sources")
+        let model = fixture_model(
+            vec![
+                source(
+                    "sha-undated",
+                    "Undated",
+                    Some("sources/undated.md"),
+                    None,
+                ),
+                source(
+                    "sha-old",
+                    "January",
+                    Some("sources/old.md"),
+                    Some("2026-01-01"),
+                ),
+                source(
+                    "sha-new",
+                    "June",
+                    Some("sources/new.md"),
+                    Some("2026-06-01"),
+                ),
+            ],
+            vec![],
+            vec![],
         );
-        assert_eq!(budget["truncated"], true);
-        assert_eq!(budget_tools.coverage().fulltext, LayerState::Partial);
+        write_index(temp.path(), &model).expect("index fixture");
+        let mut tools = VaultTools::new(temp.path());
 
-        let mut deadline_tools = VaultTools::new(temp.path());
+        let result = ok_json(call(
+            &mut tools,
+            "search_fulltext",
+            json!({"query": "ordering-term"}),
+        ));
+        let hit_ids = result["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|hit| hit["source_id"].as_str().expect("source id"))
+            .collect::<Vec<_>>();
+        assert_eq!(hit_ids, vec!["sha-new", "sha-old", "sha-undated"]);
+        assert_eq!(result["scanned_sources"], 3);
+        assert_eq!(result["truncated"], false);
+    }
+
+    #[test]
+    fn fulltext_cursor_resumes_tiny_budget_and_finds_tail_hit() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        fs::create_dir_all(temp.path().join("sources")).expect("source dir");
+        for (name, body) in [
+            ("newest", "aaaaaaaa"),
+            ("middle", "bbbbbbbb"),
+            ("oldest", "tailterm"),
+        ] {
+            fs::write(temp.path().join(format!("sources/{name}.md")), body)
+                .expect("budget body");
+        }
+        let model = fixture_model(
+            vec![
+                source(
+                    "sha-newest",
+                    "Newest",
+                    Some("sources/newest.md"),
+                    Some("2026-06-03"),
+                ),
+                source(
+                    "sha-middle",
+                    "Middle",
+                    Some("sources/middle.md"),
+                    Some("2026-06-02"),
+                ),
+                source(
+                    "sha-oldest",
+                    "Oldest",
+                    Some("sources/oldest.md"),
+                    Some("2026-06-01"),
+                ),
+            ],
+            vec![],
+            vec![],
+        );
+        write_index(temp.path(), &model).expect("index fixture");
+
+        let mut first_tools =
+            VaultTools::new(temp.path()).with_fulltext_corpus_scan_bytes(16);
+        let first = ok_json(first_tools.execute(
+            "search_fulltext",
+            &json!({"query": "tailterm"}),
+            Duration::from_secs(10),
+        ));
+        assert_eq!(first["hits"], json!([]));
+        assert_eq!(first["scanned_sources"], 2);
+        assert_eq!(first["total_sources"], 3);
+        assert_eq!(first["next_cursor"], "f1:2");
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first_tools.coverage().fulltext, LayerState::Partial);
+
+        let mut second_tools =
+            VaultTools::new(temp.path()).with_fulltext_corpus_scan_bytes(16);
+        let second = ok_json(second_tools.execute(
+            "search_fulltext",
+            &json!({"query": "tailterm", "cursor": first["next_cursor"]}),
+            Duration::from_secs(10),
+        ));
+        assert_eq!(second["hits"][0]["source_id"], "sha-oldest");
+        assert_eq!(second["hits"][0]["matched_terms"], json!(["tailterm"]));
+        assert!(second.get("next_cursor").is_none());
+        assert_eq!(second["truncated"], false);
+        assert_eq!(second_tools.coverage().fulltext, LayerState::Complete);
+        assert_eq!(
+            first["scanned_sources"].as_u64().expect("first scanned")
+                + second["scanned_sources"].as_u64().expect("second scanned"),
+            first["total_sources"].as_u64().expect("total")
+        );
+    }
+
+    #[test]
+    fn fulltext_near_zero_deadline_stops_with_resumable_cursor() {
+        let fixture = Fixture::new();
+        let mut deadline_tools = fixture.tools();
         let deadline = ok_json(deadline_tools.execute(
             "search_fulltext",
             &json!({"query": "anything"}),
@@ -2550,9 +2898,39 @@ mod tests {
         ));
         assert_eq!(deadline["hits"], json!([]));
         assert_eq!(deadline["scanned_sources"], 0);
-        assert_eq!(deadline["total_sources"], 49);
+        assert_eq!(deadline["total_sources"], 2);
+        assert_eq!(deadline["next_cursor"], "f1:0");
         assert_eq!(deadline["truncated"], true);
         assert_eq!(deadline_tools.coverage().fulltext, LayerState::Partial);
+    }
+
+    #[test]
+    fn fulltext_cursor_validation_rejects_malformed_and_finishes_out_of_range() {
+        let fixture = Fixture::new();
+        let mut invalid_tools = fixture.tools();
+        for cursor in ["x1:3", "f1:abc"] {
+            assert!(matches!(
+                call(
+                    &mut invalid_tools,
+                    "search_fulltext",
+                    json!({"query": "anything", "cursor": cursor})
+                ),
+                ToolOutcome::InvalidArgs(_)
+            ));
+        }
+        assert_eq!(invalid_tools.coverage(), Coverage::default());
+
+        let done = ok_json(call(
+            &mut invalid_tools,
+            "search_fulltext",
+            json!({"query": "anything", "cursor": "f1:9999"}),
+        ));
+        assert_eq!(done["hits"], json!([]));
+        assert_eq!(done["scanned_sources"], 0);
+        assert_eq!(done["total_sources"], 2);
+        assert_eq!(done["truncated"], false);
+        assert!(done.get("next_cursor").is_none());
+        assert_eq!(invalid_tools.coverage().fulltext, LayerState::Complete);
     }
 
     #[test]
@@ -2593,12 +2971,13 @@ mod tests {
             Duration::from_secs(10),
         ));
         assert_eq!(early_hit["hits"][0]["source_id"], "sha-large");
-        assert_eq!(early_hit["scanned_sources"], 0);
-        assert_eq!(early_hit["truncated"], true);
+        assert_eq!(early_hit["hits"][0]["matched_terms"], json!(["xxx"]));
+        assert_eq!(early_hit["scanned_sources"], 1);
+        assert_eq!(early_hit["truncated"], false);
         assert_eq!(
             early_hit_tools.coverage().fulltext,
-            LayerState::Partial,
-            "an early match does not hide the remainder beyond the file cap"
+            LayerState::Complete,
+            "finding all terms makes the unread suffix irrelevant"
         );
     }
 
@@ -2738,8 +3117,24 @@ mod tests {
                 call(&mut invalid_tools, name, json!({"query": ""})),
                 ToolOutcome::InvalidArgs(_)
             ));
+            assert!(matches!(
+                call(
+                    &mut invalid_tools,
+                    name,
+                    json!({"query": "one two three four five six seven eight nine"})
+                ),
+                ToolOutcome::InvalidArgs(_)
+            ));
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
+
+        let mut dedupe_tools = VaultTools::new(temp.path());
+        let deduped = ok_json(call(
+            &mut dedupe_tools,
+            "search_fulltext",
+            json!({"query": "NEEDLE needle Needle"}),
+        ));
+        assert_eq!(deduped["hits"][0]["matched_terms"], json!(["needle"]));
     }
 
     #[test]
