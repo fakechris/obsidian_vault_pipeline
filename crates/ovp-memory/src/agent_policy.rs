@@ -53,9 +53,10 @@ as display text — that exact form is what makes the reference openable. Do \
 not decorate answers with citations for material you did not consult.
 - Distinguish claim strength when it matters: durable claims passed the \
 evidence gate and carry a claim_key to cite; caveated claims await review \
-and have NO claim_key — when you lean on one, say it is caveated and cite \
-its underlying source as [source:<source_id>] instead (follow up through \
-the claim's listed sources if needed).
+and have NO claim_key and no bracketed citation — when you lean on one, \
+label it clearly as a caveated claim pending review, and only add a \
+[source:<source_id>] reference if a search actually surfaced that source \
+with its id. Never fabricate a bracketed reference.
 - An honest miss beats a confident guess. If the vault does not contain the \
 answer, say what you searched and what would help narrow it (a URL, a date, \
 an author). Never present general knowledge as vault content.
@@ -90,7 +91,7 @@ mod tests {
             "read-only",           // tool boundary / no writes
             "[source:",            // openable source citation syntax
             "no tools at all",     // zero-call meta path (T5)
-            "have NO claim_key",   // caveated citation fallback path
+            "Never fabricate",     // caveated: label, never invent brackets
             "Cite what you used", // evidence receipts
             "caveated",           // strength honesty
             "honest miss",        // miss + follow-up over confident guess
