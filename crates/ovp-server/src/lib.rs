@@ -542,11 +542,15 @@ fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
 }
 
 
-/// One session's in-flight agent progress feed.
+/// One session's in-flight agent progress feed. `gen` ties the feed to the
+/// worker that ACQUIRED the session lock for this turn — cleanup and writes
+/// mutate the feed only while it still belongs to that worker (a newer turn
+/// on the same session replaces it with its own generation).
 #[derive(Default, Clone)]
 struct AskProgressFeed {
     events: Vec<serde_json::Value>,
     done: bool,
+    generation: u64,
 }
 
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
@@ -2125,12 +2129,21 @@ fn handle_ask(
     if state.ask_agent {
         // Client retry key (A0 §3.7): a resend after a dropped response or
         // 504 replays the completed turn instead of paying for a second one.
+        // Replay lookup is SESSION-LOCAL, so a key without a stable session
+        // could never be found again — require `chat` alongside the key (a
+        // chatless retry would silently bill a second turn otherwise).
         let idempotency_key = parsed
             .get("idempotency_key")
             .and_then(|k| k.as_str())
             .map(str::trim)
             .filter(|k| !k.is_empty() && k.len() <= 128)
             .map(str::to_string);
+        if idempotency_key.is_some() && chat.is_none() {
+            return json_response(
+                400,
+                r#"{"error":"idempotency_key requires a stable `chat` session id","code":"idempotency_needs_chat"}"#,
+            );
+        }
         return handle_ask_agent(
             state,
             question,
@@ -2241,27 +2254,15 @@ fn handle_ask_agent(
         }
     };
 
-    // Fresh progress feed for this turn (`progress_slot_bounded`) — but NEVER
-    // clobber a live feed: a concurrent request on a busy session must not
-    // wipe the running turn's events (its own 409 exits without feed
-    // ownership).
-    let owns_feed = {
-        let mut feeds = state.ask_progress.lock().unwrap();
-        match feeds.get(&session) {
-            Some(feed) if !feed.done => false,
-            _ => {
-                // Bounded retention: completed feeds are ephemeral UI state —
-                // evict them once the map grows past the cap so a long-lived
-                // server cannot accumulate one entry per conversation.
-                const MAX_RETAINED_FEEDS: usize = 64;
-                if feeds.len() >= MAX_RETAINED_FEEDS {
-                    feeds.retain(|_, f| !f.done);
-                }
-                feeds.insert(session.clone(), AskProgressFeed::default());
-                true
-            }
-        }
-    };
+    // Feed ownership belongs to the worker that actually ACQUIRES the session
+    // lock: the engine emits `Started` only after lock+reload, so the sink
+    // creates the feed there — a concurrent request that loses the lock never
+    // emits and never touches the feed (its 409 carries no feed side effects).
+    // The generation token guards the worker's final cleanup against a NEWER
+    // turn having replaced the feed meanwhile.
+    static FEED_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let generation =
+        FEED_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // Deadline strictly under the HTTP guard so the turn always CONCLUDES
     // (and commits its transcript) before the transport gives up. KNOWN
@@ -2340,17 +2341,39 @@ fn handle_ask_agent(
                         })
                     }
                 };
-                if !owns_feed {
-                    return; // a rejected concurrent request never writes
-                }
                 let mut feeds = progress_map.lock().unwrap();
-                if let Some(feed) = feeds.get_mut(&progress_session) {
-                    if feed.events.len() < MAX_PROGRESS_EVENTS {
-                        feed.events.push(json);
+                if matches!(ev, AgentProgress::Started { .. }) {
+                    // We hold the session lock (Started fires after
+                    // acquisition) — any existing feed is a finished or
+                    // stale turn's; replace it with this turn's. Bounded
+                    // retention: evict completed feeds past the cap first.
+                    const MAX_RETAINED_FEEDS: usize = 64;
+                    if feeds.len() >= MAX_RETAINED_FEEDS {
+                        feeds.retain(|_, f| !f.done);
                     }
-                    if matches!(ev, AgentProgress::Finished { .. }) {
-                        feed.done = true;
+                    feeds.insert(
+                        progress_session.clone(),
+                        AskProgressFeed { events: vec![json], done: false, generation },
+                    );
+                    return;
+                }
+                let Some(feed) = feeds.get_mut(&progress_session) else {
+                    return;
+                };
+                if feed.generation != generation {
+                    return; // a newer turn owns this feed now
+                }
+                let terminal = matches!(ev, AgentProgress::Finished { .. });
+                // The terminal event ALWAYS lands — nonterminal events keep
+                // one slot reserved for it.
+                if terminal {
+                    if feed.events.len() >= MAX_PROGRESS_EVENTS {
+                        feed.events.pop();
                     }
+                    feed.events.push(json);
+                    feed.done = true;
+                } else if feed.events.len() < MAX_PROGRESS_EVENTS - 1 {
+                    feed.events.push(json);
                 }
             };
             let outcome = run_agent_turn_with_progress(
@@ -2405,12 +2428,15 @@ fn handle_ask_agent(
                 },
             }))
         })();
-        // Whatever happened, the OWNED feed must not stay live forever —
-        // a rejected concurrent request (no ownership) leaves the running
-        // turn's feed untouched.
-        if owns_feed {
+        // Whatever happened, OUR turn's feed must not stay live forever —
+        // guarded by the generation token so a newer turn's feed (same
+        // session) is never stomped, and a lock-losing worker (never
+        // Started) touches nothing.
+        {
             let mut feeds = progress_map.lock().unwrap();
-            if let Some(feed) = feeds.get_mut(&progress_session) {
+            if let Some(feed) = feeds.get_mut(&progress_session)
+                && feed.generation == generation
+            {
                 feed.done = true;
                 if result.is_err() {
                     feed.events.push(serde_json::json!({"event": "error"}));
@@ -4982,6 +5008,22 @@ mod tests {
             serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
         assert_eq!(v["done"], true);
         assert_eq!(v["events"].as_array().unwrap().len(), 0);
+    }
+
+    /// A3b round-3 gate: an idempotency_key without a stable session is a
+    /// contract error (session-local replay could never find it — the retry
+    /// would silently bill a second turn).
+    #[test]
+    fn agent_ask_idempotency_requires_chat() {
+        let vault = portal_vault("agent-idemchat", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault, None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory("x", Duration::from_millis(5)));
+        let resp = ask(&st, r#"{"question":"q","idempotency_key":"k"}"#);
+        assert_eq!(resp.status_code(), 400);
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["code"], "idempotency_needs_chat");
     }
 
     /// A3b round-2 gate: a fresh/unindexed vault still serves a zero-tool
