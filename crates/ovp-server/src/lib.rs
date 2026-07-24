@@ -2414,6 +2414,11 @@ fn handle_ask_agent(
                 // a MaxTokens final reply surfaces as an honest model_error,
                 // so headroom here is product quality, not cosmetics.
                 max_tokens: 4096,
+                // Recall investigations legitimately chain search → get →
+                // read → verify; the engine default (6) ended a live turn
+                // mid-investigation as max_rounds. The wall-clock deadline
+                // stays the authority — rounds are the auxiliary bound.
+                max_rounds: 10,
                 deadline,
                 ..AgentConfig::default()
             };

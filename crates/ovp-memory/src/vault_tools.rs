@@ -515,7 +515,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -528,7 +528,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by how many DISTINCT terms each source matches (recency breaks ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms). Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by how many DISTINCT terms each source matches (recency breaks ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
@@ -701,6 +701,9 @@ fn tokenize_search_terms(query: &str) -> Vec<String> {
     for term in query.split_ascii_whitespace().map(str::to_lowercase) {
         if !term.is_empty() && seen.insert(term.clone()) {
             terms.push(term);
+            if terms.len() == MAX_SEARCH_TERMS {
+                break;
+            }
         }
     }
     terms
@@ -2166,14 +2169,11 @@ fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, Str
 }
 
 fn required_search_query(object: &Map<String, Value>) -> Result<String, String> {
-    let query = required_string(object, "query")?;
-    let term_count = tokenize_search_terms(&query).len();
-    if term_count > MAX_SEARCH_TERMS {
-        return Err(format!(
-            "`query` must contain at most {MAX_SEARCH_TERMS} distinct terms"
-        ));
-    }
-    Ok(query)
+    // Over-long term lists soft-truncate to the first MAX_SEARCH_TERMS
+    // distinct terms rather than rejecting: an invalid-args bounce costs a
+    // whole agent round (and feeds the breaker) for a fault the tool can
+    // resolve losslessly enough — matched_terms shows what actually ran.
+    required_string(object, "query")
 }
 
 fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<usize>, String> {
@@ -3187,16 +3187,19 @@ mod tests {
                 call(&mut invalid_tools, name, json!({"query": ""})),
                 ToolOutcome::InvalidArgs(_)
             ));
-            assert!(matches!(
-                call(
-                    &mut invalid_tools,
-                    name,
-                    json!({"query": "one two three four five six seven eight nine"})
-                ),
-                ToolOutcome::InvalidArgs(_)
-            ));
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
+        // Over-long term lists soft-truncate to the first 8 distinct terms —
+        // an invalid-args bounce would burn an agent round (and feed the
+        // breaker) for a fault the tool resolves losslessly enough. The ninth
+        // term does not match anything, and the run still succeeds.
+        let mut soft_tools = VaultTools::new(temp.path());
+        let soft = ok_json(soft_tools.execute(
+            "search_fulltext",
+            &json!({"query": "one two three four five six seven eight NEEDLE"}),
+            Duration::from_secs(10),
+        ));
+        assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
 
         let mut dedupe_tools = VaultTools::new(temp.path());
         let deduped = ok_json(call(
