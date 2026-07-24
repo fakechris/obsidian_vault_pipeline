@@ -31,6 +31,13 @@ const MAX_CHUNK_LIMIT: usize = 20;
 const MAX_PASSAGE_BYTES: usize = 2 * 1024;
 const MAX_CLAIM_CHARS: usize = 500;
 const CURSOR_PREFIX: &str = "c1:";
+/// Aggregate serialized-size budget for multi-hit results. Individually-capped
+/// items can still sum past the agent's per-result cap (20 near-2KiB passages
+/// ≈ 40 KiB) — which would get blindly truncated downstream into broken JSON
+/// with dishonest `truncated: false`. Trimming here keeps truncation explicit.
+const MAX_AGGREGATE_RESULT_BYTES: usize = 24 * 1024;
+/// Verbatim-quote cap inside a claim's evidence closure (chars, boundary-safe).
+const MAX_CITATION_QUOTE_CHARS: usize = 300;
 
 /// Runtime-computed state for one evidence layer (`coverage_five_state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +115,14 @@ pub struct VaultTools {
     index: Option<Result<Arc<IndexModel>, String>>,
     records: Option<Result<Arc<Vec<DurableRecord>>, String>>,
     coverage: Coverage,
+    /// Per-source body pagination progress: source_id → reached the terminal
+    /// page. `partial` means pagination UNFINISHED — a completed cursor walk
+    /// restores the layer to Complete (unlike sticky Failed/Unavailable).
+    body_reads: std::collections::BTreeMap<String, bool>,
+    /// A chunk result hit a size cap — sticky partiality for the body layer.
+    body_capped: bool,
+    /// Any successful body-layer activity happened at all.
+    body_activity: bool,
 }
 
 impl VaultTools {
@@ -117,11 +132,31 @@ impl VaultTools {
             index: None,
             records: None,
             coverage: Coverage::default(),
+            body_reads: std::collections::BTreeMap::new(),
+            body_capped: false,
+            body_activity: false,
         }
     }
 
+    /// Coverage with the body layer COMPUTED from pagination progress:
+    /// `partial` means unfinished (an in-flight cursor walk or a capped chunk
+    /// result); completing every started read restores Complete. Failed and
+    /// Unavailable stay sticky via the precedence merge.
     pub fn coverage(&self) -> Coverage {
-        self.coverage
+        let mut c = self.coverage;
+        c.body = match c.body {
+            LayerState::Failed | LayerState::Unavailable => c.body,
+            _ => {
+                if !self.body_activity {
+                    LayerState::NotQueried
+                } else if self.body_capped || self.body_reads.values().any(|done| !done) {
+                    LayerState::Partial
+                } else {
+                    LayerState::Complete
+                }
+            }
+        };
+        c
     }
 
     fn cached_index(&mut self) -> Result<Arc<IndexModel>, String> {
@@ -234,26 +269,55 @@ impl ToolExecutor for VaultTools {
         tool_definitions()
     }
 
-    fn execute(&mut self, name: &str, input: &Value, _remaining: Duration) -> ToolOutcome {
+    fn execute(&mut self, name: &str, input: &Value, remaining: Duration) -> ToolOutcome {
+        // `deadline_authority` at dispatch entry: never START an execution with
+        // an exhausted budget. Local reads are ms-scale, so an entry check (plus
+        // the A1b late-result rejection) bounds the practical overrun; a
+        // mid-read abort would need async IO for little real protection.
+        if remaining.is_zero() {
+            return ToolOutcome::Failed("turn deadline exhausted before execution".into());
+        }
         let call = match ParsedCall::parse(name, input) {
             Ok(call) => call,
             Err(detail) => return ToolOutcome::InvalidArgs(detail),
         };
         let layer = call.layer();
+        // Body pagination bookkeeping needs the read's identity BEFORE the
+        // call value is consumed (fix: partial-once-sticky contradicted
+        // "partial = pagination unfinished").
+        let body_read_source = match &call {
+            ParsedCall::ReadSourceBody { source_id, .. } => Some(source_id.clone()),
+            _ => None,
+        };
+        let is_chunk_search = matches!(&call, ParsedCall::SearchSourceChunks { .. });
 
         match self.dispatch(call) {
             Ok(value) => match serde_json::to_string(&value) {
                 Ok(body) => {
-                    let state = if value
+                    let truncated = value
                         .get("truncated")
                         .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        LayerState::Partial
+                        .unwrap_or(false);
+                    if matches!(layer, Layer::Body) {
+                        self.body_activity = true;
+                        if let Some(source_id) = body_read_source {
+                            // Terminal page ⇒ this read finished; a truncated
+                            // page leaves (or starts) an unfinished walk.
+                            let done = self.body_reads.entry(source_id).or_insert(false);
+                            if !truncated {
+                                *done = true;
+                            }
+                        } else if is_chunk_search && truncated {
+                            self.body_capped = true;
+                        }
                     } else {
-                        LayerState::Complete
-                    };
-                    self.merge_coverage(layer, state);
+                        let state = if truncated {
+                            LayerState::Partial
+                        } else {
+                            LayerState::Complete
+                        };
+                        self.merge_coverage(layer, state);
+                    }
                     ToolOutcome::Ok(body)
                 }
                 Err(e) => {
@@ -433,14 +497,30 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
         }
     }
 
-    let truncated = ids.len() > limit;
-    let hits = ids
+    let mut truncated = ids.len() > limit;
+    let mut hits = ids
         .into_iter()
         .take(limit)
         .filter_map(|id| model.sources.iter().find(|source| source.sha256 == id))
         .map(|source| source_search_hit(source, &query_lower))
         .collect::<Vec<_>>();
+    truncated |= cap_aggregate(&mut hits);
     json!({"hits": hits, "truncated": truncated})
+}
+
+/// Trim `items` from the end until their serialized sizes fit the aggregate
+/// budget. Returns whether anything was dropped (⇒ `truncated: true`).
+fn cap_aggregate(items: &mut Vec<Value>) -> bool {
+    let size = |v: &Value| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+    let mut total: usize = items.iter().map(size).sum();
+    let mut dropped = false;
+    while total > MAX_AGGREGATE_RESULT_BYTES && items.len() > 1 {
+        if let Some(last) = items.pop() {
+            total -= size(&last);
+            dropped = true;
+        }
+    }
+    dropped
 }
 
 /// Return one source's metadata and stable open/read capabilities.
@@ -492,9 +572,16 @@ pub fn read_source_body(
     let mut out = Map::new();
     out.insert("text".into(), json!(&text[offset..end]));
     out.insert("truncated".into(), json!(truncated));
-    if truncated {
-        out.insert("next_cursor".into(), json!(format!("{CURSOR_PREFIX}{end}")));
-    }
+    // Stable output shape: next_cursor is ALWAYS present — an explicit null on
+    // the terminal page, never a missing field consumers must special-case.
+    out.insert(
+        "next_cursor".into(),
+        if truncated {
+            json!(format!("{CURSOR_PREFIX}{end}"))
+        } else {
+            Value::Null
+        },
+    );
     out.insert("total_bytes".into(), json!(total_bytes));
     Ok(Value::Object(out))
 }
@@ -535,8 +622,8 @@ pub fn search_source_chunks(
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let limit = limit.clamp(1, MAX_CHUNK_LIMIT);
-    let truncated = passage_capped || matches.len() > limit;
-    let chunks = matches
+    let mut truncated = passage_capped || matches.len() > limit;
+    let mut chunks = matches
         .into_iter()
         .take(limit)
         .map(|(score, index, passage)| {
@@ -547,6 +634,7 @@ pub fn search_source_chunks(
             })
         })
         .collect::<Vec<_>>();
+    truncated |= cap_aggregate(&mut chunks);
     Ok(json!({"chunks": chunks, "truncated": truncated}))
 }
 
@@ -626,8 +714,9 @@ pub fn search_claims(
     }
 
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
-    let truncated = any_capped || hits.len() > limit;
+    let mut truncated = any_capped || hits.len() > limit;
     hits.truncate(limit);
+    truncated |= cap_aggregate(&mut hits);
     json!({"hits": hits, "truncated": truncated})
 }
 
@@ -697,6 +786,41 @@ pub fn get_claim(
         out.insert("theme".into(), json!(theme));
     }
     out.insert("sources".into(), json!(sources));
+    // The BOUNDED evidence closure (`shared_projection_api`: this must be able
+    // to stand in for the MCP claim tool): every citation's quote (capped),
+    // unit/line anchors, and the provenance verdicts — the chain the agent
+    // audits before trusting a claim.
+    let citations = record
+        .citations
+        .iter()
+        .map(|c| {
+            let (quote, quote_truncated) = cap_chars(&c.quote, MAX_CITATION_QUOTE_CHARS);
+            let mut row = Map::new();
+            row.insert("case_id".into(), json!(c.case_id));
+            row.insert("unit_id".into(), json!(c.unit_id));
+            row.insert("quote".into(), json!(quote));
+            if quote_truncated {
+                row.insert("quote_truncated".into(), json!(true));
+            }
+            if let Some(line) = c.resolved_line {
+                row.insert("line".into(), json!(line));
+            }
+            row.insert("source".into(), claim_source(model, &c.case_id));
+            Value::Object(row)
+        })
+        .collect::<Vec<_>>();
+    out.insert("citations".into(), json!(citations));
+    out.insert(
+        "provenance".into(),
+        json!({
+            "score": record.provenance_score,
+            "class": record.provenance_class,
+        }),
+    );
+    out.insert(
+        "strength_rationale".into(),
+        json!(record.strength_rationale),
+    );
     out.insert(
         "open_ref".into(),
         json!(format!("ovp://claim/{}", record.claim_key)),
@@ -1466,12 +1590,16 @@ mod tests {
                         .to_string(),
                 );
             } else {
-                assert!(page.get("next_cursor").is_none());
+                // Stable shape: the terminal page carries an EXPLICIT null.
+                assert!(page.get("next_cursor").is_some_and(Value::is_null));
                 break;
             }
         }
         assert!(saw_truncated);
         assert_eq!(assembled, CJK_BODY.as_bytes());
+        // COMPLETED cursor walk restores the body layer to Complete —
+        // `partial` means pagination UNFINISHED, not "was ever paginated".
+        assert_eq!(tools.coverage().body, LayerState::Complete);
 
         for cursor in ["raw:1", "c1:nope", "c1:999999", "c1:1"] {
             let outcome = call(
@@ -1484,8 +1612,18 @@ mod tests {
                 "{cursor}: {outcome:?}"
             );
         }
-        // Invalid arguments do not overwrite the partial pagination coverage.
-        assert_eq!(tools.coverage().body, LayerState::Partial);
+        // Invalid arguments touch no layer state.
+        assert_eq!(tools.coverage().body, LayerState::Complete);
+
+        // A FRESH walk left mid-flight reads Partial (unfinished pagination).
+        let mut mid = fixture.tools();
+        let first = ok_json(call(
+            &mut mid,
+            "read_source_body",
+            json!({"source_id": "sha-cjk", "limit": 5}),
+        ));
+        assert_eq!(first["truncated"], true);
+        assert_eq!(mid.coverage().body, LayerState::Partial);
     }
 
     #[test]
