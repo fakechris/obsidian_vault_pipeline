@@ -1,0 +1,35 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_agent-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.ask_agent",
+  "hypothesis": "RUNTIME surface only: a deadline-authoritative agent loop (model -> tool_calls? -> execute -> observe -> loop) over the A1a tool protocol, with a server-side structured transcript (JSONL, turn-atomic, idempotent, session-serialized) as the audit authority and a capped projection as the model context, makes multi-round tool conversations safe to run and replay WITHOUT wiring into any product path yet (POST /api/ask unchanged; the engine is called only by tests at this version). Predicted: every A0 §5.2 gate scenario (0/1/2-tool, unknown tool, timeout, max-rounds, concurrent submit, crash recovery, idempotent retry, invalid-args breaker) passes deterministically with a scripted model client and mock tools.",
+  "predicted_delta": {
+    "operational_reliability": "no unbounded loops: wall-clock deadline is the authoritative budget (max_rounds auxiliary); invalid-args circuit breaker stops unproductive retry storms; token usage recorded per model call",
+    "crystal_provenance": "no change (read-only engine, no product wiring at this version)"
+  },
+  "guardrails": {
+    "deadline_authority": "the turn has ONE authoritative wall-clock deadline; every model call and every tool execution receives only the REMAINING budget; when remaining cannot safely cover the next call the loop STOPS with stopped_reason=timeout — no call ever STARTS after the deadline",
+    "max_rounds_auxiliary": "max_rounds (default 6) is a secondary guard; exceeding it stops with stopped_reason=max_rounds; it never substitutes for the wall-clock budget",
+    "transcript_authority": "the JSONL transcript (schema ovp.ask_transcript/v1, session/turn/call ids) is the audit authority; the model context is a PROJECTION rebuilt from it under a hard char cap that trims whole turns oldest-first and never splits a tool_use/tool_result pair or orphans results",
+    "turn_atomicity_recovery": "a turn's events are committed as one append finalized by turn_finished; on store open, trailing events after the last turn_finished are dropped (compacted) — crash recovery lands on the last complete turn",
+    "idempotency": "a submit carrying an idempotency_key matching a COMPLETED turn replays that turn's outcome without running anything; matching an in-flight turn (locked session) is SessionBusy — retries never produce two user turns",
+    "session_serialization": "same-session turns are serialized by a pid lock file (stale pid stolen); a concurrent submit gets SessionBusy, never interleaved transcript writes",
+    "all_results_fed_back": "every tool_use id from the assistant turn gets exactly one tool_result fed back (failed executions as is_error) — enforced downstream by A1a's validate_tool_protocol, so a partial round is a loud Protocol error, never a silent drop",
+    "invalid_args_breaker": "a tool's Nth (default 2nd) CONSECUTIVE invalid-arguments failure stops the loop with stopped_reason=tool_error; the first failure is fed back once as a structured is_error result; success resets the counter",
+    "duplicate_ids_fail_closed": "a model reply carrying duplicate tool_use ids within one turn executes NOTHING and stops with stopped_reason=tool_error (the A1a request validator would reject the follow-up anyway — fail at the source)",
+    "unknown_stop_not_final": "StopReason::Unknown never produces a final-success outcome (stopped_reason=model_error, fail-closed); Refusal maps to stopped_reason=refusal",
+    "token_accounting": "every model call's {input_tokens, output_tokens} is recorded in the transcript event and summed into the turn outcome",
+    "nested_deadline_interface": "the engine takes the deadline as a caller-supplied budget parameter — a future MCP-embedded ask propagates its own remaining budget through the same interface, no second mechanism",
+    "no_product_wiring": "POST /api/ask and the ask.rs product path are byte-unchanged at this version; the engine is exercised only by its tests (rollout is A3d) — registry current_version stays none until the default switch"
+  },
+  "eval_plan": {
+    "replay_set": "deterministic in-crate tests with a scripted ModelClient + mock ToolExecutor: 0/1/2-tool success; unknown tool name; duplicate tool call ids; total timeout via short deadline + slow tool; max rounds via scripted infinite tool loop; concurrent same-session submit; crash recovery from a partial turn; repeated idempotency_key; invalid-args breaker; projection cap trimming whole turns",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "The engine is a new module with no product callers; rollback = stop calling it (delete or leave dormant). Transcript files live under .ovp/ask-sessions/ and are additive — no existing state is touched.",
+  "ablation_required": false
+}

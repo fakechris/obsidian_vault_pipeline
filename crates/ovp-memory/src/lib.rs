@@ -4,6 +4,8 @@
 //! Reads from the JSON index and Crystal store. **Never** writes to the Crystal
 //! ledger or drives projection — all outputs are derived, ephemeral views.
 
+pub mod agent;
+pub mod agent_transcript;
 pub mod ask;
 pub mod digest;
 pub mod intent;

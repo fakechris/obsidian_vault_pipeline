@@ -2906,6 +2906,7 @@ dependencies = [
  "ovp-llm",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
