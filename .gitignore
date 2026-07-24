@@ -41,3 +41,5 @@ console-ui/dist-static/
 IMPLEMENTATION_PLAN.md
 # Competitive-research process docs — local only, never commit (operator directive)
 docs/design/ask-vault-agent-nowledge-review.md
+# Research process docs — local only, never commit (operator directive)
+docs/research/
