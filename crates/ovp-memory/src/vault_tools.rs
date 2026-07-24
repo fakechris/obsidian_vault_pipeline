@@ -3342,6 +3342,27 @@ mod tests {
         assert_eq!(fulltext["hits"][0]["source_id"], "sha-moved");
     }
 
+    /// The live 51c47a5b failure: lifecycle archives by PROCESSED month, so a
+    /// source captured in June and processed in July lives under
+    /// 03-Processed/2026-07/ while the index still says 01-Raw/2026-06/. The
+    /// fallback must probe sibling month buckets, not just the capture month.
+    #[test]
+    fn lifecycle_moved_across_months_still_reads() {
+        let fixture = Fixture::new();
+        let layout = ovp_domain::vault_layout::VaultLayout::new();
+        let processed_dir = fixture.vault_root().join(layout.processed_dir("2026-07"));
+        std::fs::create_dir_all(&processed_dir).unwrap();
+        std::fs::write(processed_dir.join("cross-month.md"), "cross month body").unwrap();
+        let mut tools =
+            fixture.tools_with_source("sha-cross", "50-Inbox/01-Raw/2026-06/cross-month.md");
+        let page = ok_json(call(
+            &mut tools,
+            "read_source_body",
+            json!({"source_id": "sha-cross"}),
+        ));
+        assert_eq!(page["text"], "cross month body");
+    }
+
     /// A3b: search hits (durable AND caveated) carry resolved source_ids via
     /// the packs join — the followable citation path the A3a gate found
     /// missing for caveated claims.

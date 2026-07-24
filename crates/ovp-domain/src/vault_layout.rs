@@ -286,7 +286,24 @@ pub fn lifecycle_moved_path(
     let rest = rel.strip_prefix(&raw_prefix)?;
     let (month, file) = rest.split_once('/')?;
     let candidate = vault_root.join(layout.processed_dir(month)).join(file);
-    candidate.is_file().then_some(candidate)
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    // Lifecycle archives by PROCESSED month, not capture month: a source
+    // captured in 2026-06 but processed in July lives under
+    // 03-Processed/2026-07/. The filename is unique (date + title + sha
+    // stem), so probing the sibling month buckets is exact, bounded by the
+    // number of month dirs, and cannot cross-match.
+    let processed_root = vault_root.join(layout.processed_root());
+    let entries = std::fs::read_dir(&processed_root).ok()?;
+    let mut months: Vec<std::path::PathBuf> =
+        entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    months.sort();
+    months
+        .into_iter()
+        .rev() // newest bucket first — lifecycle moves land in recent months
+        .map(|dir| dir.join(file))
+        .find(|p| p.is_file())
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be
