@@ -398,10 +398,15 @@ fn open_external(url: String) -> Result<(), String> {
     let opener = "xdg-open";
     #[cfg(target_os = "windows")]
     let opener = "explorer";
-    std::process::Command::new(opener)
+    let mut child = std::process::Command::new(opener)
         .arg(&url)
         .spawn()
         .map_err(|e| format!("open failed: {e}"))?;
+    // Reap the short-lived opener: Rust doesn't wait on Child drop, so without
+    // this every link click would leave a zombie until the app exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
