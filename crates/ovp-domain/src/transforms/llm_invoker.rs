@@ -103,6 +103,7 @@ fn call_error_to_filter_error(err: CallError) -> FilterError {
         ),
         CallError::Transport { detail } => ("transform.llm_invoker.transport", detail),
         CallError::Decode { detail } => ("transform.llm_invoker.decode", detail),
+        CallError::Protocol { detail } => ("transform.llm_invoker.protocol", detail),
         CallError::BudgetExhausted { detail } => ("transform.llm_invoker.budget_exhausted", detail),
         CallError::Unexpected { detail } => ("transform.llm_invoker.unexpected", detail),
     };

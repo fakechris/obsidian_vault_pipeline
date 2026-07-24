@@ -19,10 +19,88 @@ use crate::request::{AssistantBlock, ModelMessage, ModelRequest};
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Enforce `tool_result_adjacency_all` BEFORE anything reaches the wire:
+/// every tool_use-bearing assistant turn must be immediately followed by a
+/// `ToolResults` turn answering exactly those ids (each exactly once — missing,
+/// duplicated, unknown, or delayed results are all violations), and
+/// `ToolResults` never appears without such a turn. Anthropic 4xxes these
+/// shapes; failing loudly here turns a silent invalid request into a caller
+/// bug with a precise message.
+fn validate_tool_protocol(messages: &[ModelMessage]) -> Result<(), CallError> {
+    let violation = |detail: String| CallError::Protocol { detail };
+    // ids emitted by the previous assistant turn, still awaiting results
+    let mut pending: Option<Vec<String>> = None;
+    for (i, m) in messages.iter().enumerate() {
+        match (pending.take(), m) {
+            (Some(ids), ModelMessage::ToolResults { results }) => {
+                let mut remaining = ids;
+                for r in results {
+                    match remaining.iter().position(|id| *id == r.tool_call_id) {
+                        Some(pos) => {
+                            remaining.remove(pos);
+                        }
+                        None => {
+                            return Err(violation(format!(
+                                "message {i}: tool_result for unknown or already-answered id `{}`",
+                                r.tool_call_id
+                            )));
+                        }
+                    }
+                }
+                if !remaining.is_empty() {
+                    return Err(violation(format!(
+                        "message {i}: missing tool_result(s) for id(s) {remaining:?}"
+                    )));
+                }
+            }
+            (Some(ids), _) => {
+                return Err(violation(format!(
+                    "message {i}: expected tool_results answering {ids:?} immediately \
+                     after the assistant tool_use turn"
+                )));
+            }
+            (None, ModelMessage::ToolResults { .. }) => {
+                return Err(violation(format!(
+                    "message {i}: tool_results without a preceding assistant tool_use turn"
+                )));
+            }
+            (None, _) => {}
+        }
+        if let ModelMessage::AssistantBlocks { blocks } = m {
+            let ids: Vec<String> = blocks
+                .iter()
+                .filter_map(|b| match b {
+                    AssistantBlock::ToolUse { id, .. } => Some(id.clone()),
+                    AssistantBlock::Text { .. } => None,
+                })
+                .collect();
+            for (n, id) in ids.iter().enumerate() {
+                if ids[..n].contains(id) {
+                    return Err(violation(format!(
+                        "message {i}: duplicate tool_use id `{id}` within one assistant turn"
+                    )));
+                }
+            }
+            if !ids.is_empty() {
+                pending = Some(ids);
+            }
+        }
+    }
+    if let Some(ids) = pending {
+        return Err(violation(format!(
+            "conversation ends with unanswered tool_use id(s) {ids:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Build the Anthropic Messages API request body from a provider-neutral
 /// `ModelRequest`. Pure — no I/O. `system` becomes a top-level field;
-/// messages map role-for-role.
-pub fn anthropic_request_body(req: &ModelRequest) -> serde_json::Value {
+/// messages map role-for-role. Errs with `CallError::Protocol` when the
+/// message sequence violates the tool-use contract (see
+/// [`validate_tool_protocol`]) — a caller bug, surfaced before the wire.
+pub fn anthropic_request_body(req: &ModelRequest) -> Result<serde_json::Value, CallError> {
+    validate_tool_protocol(&req.messages)?;
     let messages: Vec<serde_json::Value> = req
         .messages
         .iter()
@@ -94,7 +172,7 @@ pub fn anthropic_request_body(req: &ModelRequest) -> serde_json::Value {
                 .collect::<Vec<_>>()),
         );
     }
-    body
+    Ok(body)
 }
 
 /// Parse an Anthropic Messages API success response body into a
@@ -369,7 +447,7 @@ mod live {
 
     impl ModelClient for AnthropicBlockingClient {
         fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError> {
-            let mut body = anthropic_request_body(request);
+            let mut body = anthropic_request_body(request)?;
             if let Some(model) = &self.model_override {
                 body["model"] = serde_json::json!(model);
             }
@@ -430,7 +508,7 @@ mod tests {
 
     #[test]
     fn request_body_shape() {
-        let body = anthropic_request_body(&req());
+        let body = anthropic_request_body(&req()).unwrap();
         assert_eq!(body["model"], "claude-sonnet-4-6");
         assert_eq!(body["max_tokens"], 1024);
         assert_eq!(body["system"], "you are terse");
@@ -444,7 +522,7 @@ mod tests {
     fn request_body_includes_temperature_when_set() {
         let mut r = req();
         r.temperature = Some(0.5);
-        let body = anthropic_request_body(&r);
+        let body = anthropic_request_body(&r).unwrap();
         assert_eq!(body["temperature"], 0.5);
     }
 
@@ -462,7 +540,7 @@ mod tests {
             }),
         }]);
 
-        let body = anthropic_request_body(&r);
+        let body = anthropic_request_body(&r).unwrap();
         assert_eq!(body["tools"][0]["name"], "vault_search");
         assert_eq!(body["tools"][0]["description"], "Search indexed vault content");
         assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
@@ -470,6 +548,83 @@ mod tests {
             body["tools"][0].get("version").is_none(),
             "protocol version belongs to the request key, not the provider wire format"
         );
+    }
+
+    fn expect_protocol_violation(r: &ModelRequest, needle: &str) {
+        match anthropic_request_body(r) {
+            Err(CallError::Protocol { detail }) => {
+                assert!(detail.contains(needle), "detail `{detail}` missing `{needle}`");
+            }
+            other => panic!("expected Protocol violation containing `{needle}`, got {other:?}"),
+        }
+    }
+
+    fn tool_use(id: &str) -> AssistantBlock {
+        AssistantBlock::ToolUse {
+            id: id.into(),
+            name: "vault_search".into(),
+            input: json!({"query": "q"}),
+        }
+    }
+
+    fn result_for(id: &str) -> ToolResultBlock {
+        ToolResultBlock { tool_call_id: id.into(), content: "ok".into(), is_error: false }
+    }
+
+    /// `tool_result_adjacency_all`: every malformed continuation the runtime
+    /// could construct must fail loudly BEFORE the wire, not as a provider 4xx.
+    #[test]
+    fn tool_protocol_violations_fail_before_the_wire() {
+        // Missing one result of two.
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1"), tool_use("c2")] },
+            ModelMessage::ToolResults { results: vec![result_for("c1")] },
+        ];
+        expect_protocol_violation(&r, "missing tool_result");
+
+        // Result for an id the assistant never emitted.
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1")] },
+            ModelMessage::ToolResults { results: vec![result_for("ghost")] },
+        ];
+        expect_protocol_violation(&r, "unknown or already-answered");
+
+        // Duplicate result for the same id.
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1")] },
+            ModelMessage::ToolResults { results: vec![result_for("c1"), result_for("c1")] },
+        ];
+        expect_protocol_violation(&r, "unknown or already-answered");
+
+        // Delayed results: an unrelated user turn slips in between.
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1")] },
+            ModelMessage::User { content: "wait".into() },
+            ModelMessage::ToolResults { results: vec![result_for("c1")] },
+        ];
+        expect_protocol_violation(&r, "immediately");
+
+        // Results with no tool_use turn at all.
+        let mut r = req();
+        r.messages = vec![ModelMessage::ToolResults { results: vec![result_for("c1")] }];
+        expect_protocol_violation(&r, "without a preceding");
+
+        // Conversation ends with unanswered calls.
+        let mut r = req();
+        r.messages = vec![ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1")] }];
+        expect_protocol_violation(&r, "ends with unanswered");
+
+        // Duplicate ids within one assistant turn.
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks { blocks: vec![tool_use("c1"), tool_use("c1")] },
+            ModelMessage::ToolResults { results: vec![result_for("c1")] },
+        ];
+        expect_protocol_violation(&r, "duplicate tool_use id");
     }
 
     #[test]
@@ -516,7 +671,7 @@ mod tests {
             },
         ];
 
-        let body = anthropic_request_body(&r);
+        let body = anthropic_request_body(&r).unwrap();
         assert_eq!(body["messages"][0]["role"], "assistant");
         assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 3);
         assert_eq!(body["messages"][1]["role"], "user");

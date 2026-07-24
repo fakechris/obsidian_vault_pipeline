@@ -13,9 +13,11 @@ pub struct ModelReply {
     /// cassette replies, where `text` remains the compatibility surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<ReplyBlock>>,
-    /// Verbatim provider stop reason when it is not recognized. This
-    /// diagnostic is deliberately not part of persisted cassette JSON.
-    #[serde(default, skip)]
+    /// Verbatim provider stop reason when it is not recognized. PERSISTED in
+    /// cassette JSON (absent on legacy files → None): replay must reproduce
+    /// live behavior, so an unknown stop's diagnostic string survives the
+    /// disk round-trip instead of silently becoming None on replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_stop_reason: Option<String>,
 }
 
@@ -108,5 +110,29 @@ mod tests {
         assert_eq!(reply.blocks, None);
         assert_eq!(reply.raw_stop_reason, None);
         assert!(!reply.is_final_success());
+    }
+
+    /// Cassette replay must reproduce LIVE behavior: an unknown provider stop
+    /// reason's verbatim string survives the disk round-trip (it would
+    /// otherwise be Some(raw) live but None on replay — divergent runs).
+    #[test]
+    fn unknown_raw_stop_reason_survives_cassette_round_trip() {
+        let reply = ModelReply {
+            model: "m".into(),
+            text: "done".into(),
+            stop_reason: StopReason::Unknown,
+            usage: Usage { input_tokens: 1, output_tokens: 2 },
+            blocks: None,
+            raw_stop_reason: Some("banana".into()),
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(json.contains("\"raw_stop_reason\":\"banana\""), "{json}");
+        let replayed: ModelReply = serde_json::from_str(&json).unwrap();
+        assert_eq!(replayed.raw_stop_reason.as_deref(), Some("banana"));
+
+        // And when there is nothing to preserve, the field stays absent —
+        // legacy cassette bytes (and keys derived from reply JSON) unchanged.
+        let plain = ModelReply { raw_stop_reason: None, ..reply };
+        assert!(!serde_json::to_string(&plain).unwrap().contains("raw_stop_reason"));
     }
 }
