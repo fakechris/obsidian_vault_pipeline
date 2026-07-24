@@ -13,7 +13,14 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
-import { AskError, fetchChatMarkdown, fetchChats, postAsk } from '../lib/api';
+import {
+  AskError,
+  fetchAskProgress,
+  fetchChatMarkdown,
+  fetchChats,
+  postAsk,
+} from '../lib/api';
+import { useModel } from '../model';
 import {
   citationsInOrder,
   citeLinkTarget,
@@ -22,13 +29,23 @@ import {
 } from '../lib/chatTranscript';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type InlineMarker } from '../lib/markdown';
-import type { AskCitation, AskResponse, ChatEntry } from '../lib/types';
+import type {
+  AskCitation,
+  AskProgress,
+  AskProgressEvent,
+  AskResponse,
+  AskTraceEntry,
+  ChatEntry,
+} from '../lib/types';
 
 interface Turn {
   question: string;
   response: AskResponse | null;
   /** i18n key of the failure — a turn has either a response or an error. */
   errorKey: MsgKey | null;
+  /** Live-trail snapshot kept when an AGENT turn failed mid-flight, so the
+   * user still sees what ran before the error. */
+  progress?: AskProgressEvent[];
 }
 
 /** `[claim:…] [card:…] [unit:…]` tokens plus the bare `[ck-…]` form models
@@ -63,6 +80,185 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
       verified: true,
     };
   });
+}
+
+// ---- agent live trail + receipts (A3c) ----
+
+/** Session id the SPA mints for an agent conversation so it can poll the
+ * progress feed from turn 1 (charset must satisfy the server's
+ * session-id validation: alphanumeric + dash, ≤64). */
+function genChatId(): string {
+  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Narration verb for a tool name — display only, tools stay canonical. */
+function toolVerbKey(tool: string): MsgKey {
+  if (tool.startsWith('search')) return 'ask.trailSearching';
+  if (tool.startsWith('get') || tool.startsWith('read')) return 'ask.trailReading';
+  if (tool.startsWith('list')) return 'ask.trailListing';
+  return 'ask.trailRunning';
+}
+
+interface TrailStep {
+  tool: string;
+  args: string | null;
+  status: 'running' | 'ok' | 'err';
+  summary?: string;
+}
+
+/** Fold started/finished event pairs into per-call steps (order preserved). */
+function stepsFromEvents(events: AskProgressEvent[]): TrailStep[] {
+  const steps: TrailStep[] = [];
+  const open = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.event === 'tool_started' && ev.tool) {
+      if (ev.tool_call_id) open.set(ev.tool_call_id, steps.length);
+      steps.push({ tool: ev.tool, args: ev.args ?? null, status: 'running' });
+    } else if (ev.event === 'tool_finished' && ev.tool_call_id) {
+      const i = open.get(ev.tool_call_id);
+      if (i !== undefined) {
+        steps[i] = {
+          ...steps[i],
+          status: ev.ok === false ? 'err' : 'ok',
+          summary: ev.summary,
+        };
+      }
+    }
+  }
+  return steps;
+}
+
+function stepsFromTrace(trace: AskTraceEntry[]): TrailStep[] {
+  return trace.map((t) => ({
+    tool: t.tool,
+    args: null,
+    status: t.ok ? ('ok' as const) : ('err' as const),
+    summary: t.summary,
+  }));
+}
+
+/** What the agent is doing when no tool call is in flight. */
+type TrailPhase = 'connecting' | 'thinking' | 'composing' | null;
+
+function livePhase(progress: AskProgress, steps: TrailStep[]): TrailPhase {
+  if (!progress.started) return 'connecting';
+  if (steps.some((s) => s.status === 'running')) return null;
+  if (steps.length === 0) return 'thinking';
+  if (!progress.done) return 'composing';
+  return null;
+}
+
+function AgentTrail({
+  steps,
+  phase,
+}: {
+  steps: TrailStep[];
+  phase: TrailPhase;
+}) {
+  const { t } = useI18n();
+  const phaseKey: MsgKey | null =
+    phase === 'connecting'
+      ? 'ask.trailConnecting'
+      : phase === 'thinking'
+        ? 'ask.trailThinking'
+        : phase === 'composing'
+          ? 'ask.trailComposing'
+          : null;
+  return (
+    <div className="ask-trail">
+      {steps.map((s, i) => (
+        <div
+          key={`s${i}`}
+          className={`ask-step ${s.status}`}
+          title={s.summary || undefined}
+        >
+          <span className="ask-step-dot" aria-hidden />
+          <span>{t(toolVerbKey(s.tool))}</span>
+          <span className="mono ask-step-tool">{s.tool}</span>
+          {s.args && <span className="mono muted ask-step-args">{s.args}</span>}
+          {s.status === 'err' && (
+            <span className="pill failed">{t('ask.trailFailedStep')}</span>
+          )}
+        </div>
+      ))}
+      {phaseKey && (
+        <div className="ask-step running">
+          <span className="ask-step-dot" aria-hidden />
+          <span className="muted">{t(phaseKey)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const COV_LAYERS: [string, MsgKey][] = [
+  ['claims', 'ask.covClaims'],
+  ['sources', 'ask.covSources'],
+  ['body', 'ask.covBody'],
+];
+const COV_STATE: Record<string, MsgKey> = {
+  complete: 'ask.covComplete',
+  partial: 'ask.covPartial',
+  not_queried: 'ask.covNotQueried',
+  unavailable: 'ask.covUnavailable',
+  failed: 'ask.covFailed',
+};
+
+function CoverageBadges({ coverage }: { coverage: Record<string, string> }) {
+  const { t } = useI18n();
+  return (
+    <div className="ask-coverage">
+      <span className="tiny muted">{t('ask.coverageTitle')}</span>
+      {COV_LAYERS.map(([key, labelKey]) => {
+        const state = coverage[key];
+        if (!state) return null;
+        const stateKey = COV_STATE[state];
+        return (
+          <span key={key} className={`cov-pill ${state}`}>
+            {t(labelKey)} · {stateKey ? t(stateKey) : state}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Warning line for turns the agent could not finish cleanly. `final`,
+ * `need_user`, `refusal` speak for themselves in the answer text. */
+function stopNoticeKey(reason: string | undefined): MsgKey | null {
+  switch (reason) {
+    case 'timeout':
+      return 'ask.stopTimeout';
+    case 'tool_error':
+      return 'ask.stopToolError';
+    case 'model_error':
+      return 'ask.stopModelError';
+    case 'max_rounds':
+      return 'ask.stopMaxRounds';
+    default:
+      return null;
+  }
+}
+
+/** Receipts under an agent answer: stop notice, coverage, collapsed trail. */
+function AgentMeta({ response }: { response: AskResponse }) {
+  const { t } = useI18n();
+  const stopKey = stopNoticeKey(response.stopped_reason);
+  const trace = response.tool_trace ?? [];
+  return (
+    <div className="ask-agent-meta">
+      {stopKey && <div className="ask-stop-note">{t(stopKey)}</div>}
+      {response.coverage && <CoverageBadges coverage={response.coverage} />}
+      {trace.length > 0 && (
+        <details className="ask-trail-details">
+          <summary className="tiny muted">
+            {t('ask.trailTitle')} · {trace.length}
+          </summary>
+          <AgentTrail steps={stepsFromTrace(trace)} phase={null} />
+        </details>
+      )}
+    </div>
+  );
 }
 
 /** Answer body rendered as markdown with numbered citation markers. */
@@ -167,6 +363,7 @@ function CitationPanel({
 function ChatThread({
   turns,
   pending,
+  liveTrail,
   onHover,
   onOpen,
   threadRef,
@@ -174,6 +371,8 @@ function ChatThread({
 }: {
   turns: Turn[];
   pending: boolean;
+  /** Live agent activity rendered in place of the static pending text. */
+  liveTrail?: React.ReactNode;
   onHover: (id: string | null) => void;
   onOpen: (cit: AskCitation) => void;
   threadRef: React.RefObject<HTMLDivElement | null>;
@@ -206,16 +405,29 @@ function ChatThread({
                   })}
                 </div>
               )}
+              {turn.response.agent && <AgentMeta response={turn.response} />}
             </div>
           )}
           {turn.errorKey && (
-            <div className="chat-a chat-error">{t(turn.errorKey)}</div>
+            <div className="chat-a chat-error">
+              {turn.progress && turn.progress.length > 0 && (
+                <AgentTrail
+                  steps={stepsFromEvents(turn.progress)}
+                  phase={null}
+                />
+              )}
+              {t(turn.errorKey)}
+            </div>
           )}
           {!turn.response &&
             !turn.errorKey &&
             i === turns.length - 1 &&
             pending && (
-              <div className="chat-a chat-pending muted">{t('ask.pending')}</div>
+              <div className="chat-a chat-pending">
+                {liveTrail ?? (
+                  <span className="muted">{t('ask.pending')}</span>
+                )}
+              </div>
             )}
         </div>
       ))}
@@ -236,6 +448,15 @@ export default function AskPage() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   /** Stem of the live multi-turn session (first successful answer's `chat`). */
   const [sessionChat, setSessionChat] = useState<string | null>(null);
+
+  // Agent mode: the server advertises the tool-loop path via /api/model —
+  // the SPA then mints the session id itself and polls the live feed.
+  const { model } = useModel();
+  const agentMode = model?.ask_agent === true;
+  const [live, setLive] = useState<AskProgress | null>(null);
+  const liveRef = useRef<AskProgress | null>(null);
+  /** Session the CURRENT in-flight ask polls against (null = legacy path). */
+  const pollChatRef = useRef<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
   const [savedTurns, setSavedTurns] = useState<Turn[] | null>(null);
@@ -303,7 +524,7 @@ export default function AskPage() {
   // Keep the newest turn in view while a conversation grows.
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [turns, pending, savedTurns, openChat]);
+  }, [turns, pending, live, savedTurns, openChat]);
 
   const startNewConversation = () => {
     setTurns([]);
@@ -313,11 +534,47 @@ export default function AskPage() {
     composerRef.current?.focus();
   };
 
+  // Poll the progress feed while an agent ask is in flight — the live
+  // trail is the entire point of the wait.
+  useEffect(() => {
+    if (!pending) return;
+    const chat = pollChatRef.current;
+    if (!chat) return;
+    let cancelled = false;
+    const tick = () => {
+      fetchAskProgress(chat)
+        .then((p) => {
+          if (cancelled) return;
+          liveRef.current = p;
+          setLive(p);
+        })
+        .catch(() => {
+          /* transient poll failures never disturb the ask itself */
+        });
+    };
+    tick();
+    const id = window.setInterval(tick, 700);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [pending]);
+
   const submit = () => {
     const question = draft.trim();
     if (!question || pending || openChat) return;
     setDraft('');
     setPending(true);
+    // Agent path: mint the session id client-side so the progress feed is
+    // pollable from the FIRST turn (the server honors supplied ids).
+    let chat = sessionChat;
+    if (agentMode && !chat) {
+      chat = genChatId();
+      setSessionChat(chat);
+    }
+    pollChatRef.current = agentMode ? chat : null;
+    liveRef.current = null;
+    setLive(null);
     const history = turns
       .filter((t) => t.response?.answer)
       .map((t) => ({
@@ -325,7 +582,7 @@ export default function AskPage() {
         answer: t.response!.answer,
       }));
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
-    postAsk(question, { chat: sessionChat, history })
+    postAsk(question, { chat, history })
       .then((response) => {
         setTurns((prev) =>
           prev.map((turn, i) =>
@@ -339,9 +596,18 @@ export default function AskPage() {
       })
       .catch((err: unknown) => {
         const errorKey = errorKeyFor(err);
+        // Keep what the agent DID before failing — an honest partial trail
+        // beats a bare error line.
+        const trail = liveRef.current?.events;
         setTurns((prev) =>
           prev.map((turn, i) =>
-            i === prev.length - 1 ? { ...turn, errorKey } : turn,
+            i === prev.length - 1
+              ? {
+                  ...turn,
+                  errorKey,
+                  progress: trail && trail.length > 0 ? trail : undefined,
+                }
+              : turn,
           ),
         );
       })
@@ -377,6 +643,18 @@ export default function AskPage() {
     () => (openChat ? chats.find((c) => c.name === openChat) : undefined),
     [chats, openChat],
   );
+
+  // Live agent activity for the in-flight turn. Before the first poll lands
+  // (or on the legacy path) the thread falls back to the static pending text.
+  let liveTrail: React.ReactNode = null;
+  if (pending && agentMode) {
+    if (live) {
+      const steps = stepsFromEvents(live.events);
+      liveTrail = <AgentTrail steps={steps} phase={livePhase(live, steps)} />;
+    } else {
+      liveTrail = <AgentTrail steps={[]} phase="connecting" />;
+    }
+  }
 
   const displayTurns = openChat ? (savedTurns ?? []) : turns;
   const latest = [...displayTurns].reverse().find((turn) => turn.response);
@@ -474,6 +752,7 @@ export default function AskPage() {
               <ChatThread
                 turns={turns}
                 pending={pending}
+                liveTrail={liveTrail}
                 onHover={setHoverId}
                 onOpen={openCitation}
                 threadRef={threadRef}

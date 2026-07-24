@@ -1,4 +1,5 @@
 import type {
+  AskProgress,
   AskResponse,
   ChatEntry,
   ClaimDetail,
@@ -324,6 +325,14 @@ export async function postAsk(
     throw new AskError(res.status, message, code);
   }
   return res.json() as Promise<AskResponse>;
+}
+
+/** GET /api/ask/progress — live mid-turn feed for an agent ask. Unknown
+ * sessions answer an empty done feed, so polling is always safe. */
+export function fetchAskProgress(chat: string): Promise<AskProgress> {
+  return fetchJson<AskProgress>(
+    `/api/ask/progress?chat=${encodeURIComponent(chat)}`,
+  );
 }
 
 /** Saved ask transcripts, newest first. Empty on the published site. */

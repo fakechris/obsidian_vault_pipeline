@@ -365,6 +365,31 @@ export const en = {
   'ask.errTimeout':
     'No answer within the time limit. The request was not cancelled — if the model finishes, the saved transcript still appears in History.',
   'ask.errGeneric': 'Ask failed — is the server running against a vault?',
+  // agent live trail + receipts (A3c)
+  'ask.trailConnecting': 'Connecting to the vault agent…',
+  'ask.trailThinking': 'Thinking…',
+  'ask.trailComposing': 'Writing the answer…',
+  'ask.trailSearching': 'Searching',
+  'ask.trailReading': 'Reading',
+  'ask.trailListing': 'Listing',
+  'ask.trailRunning': 'Running',
+  'ask.trailTitle': 'Agent steps',
+  'ask.trailFailedStep': 'failed',
+  'ask.coverageTitle': 'Searched',
+  'ask.covClaims': 'conclusions',
+  'ask.covSources': 'sources',
+  'ask.covBody': 'full text',
+  'ask.covComplete': 'complete',
+  'ask.covPartial': 'partial',
+  'ask.covNotQueried': 'not searched',
+  'ask.covUnavailable': 'unavailable',
+  'ask.covFailed': 'failed',
+  'ask.stopTimeout':
+    'The agent ran out of time this turn — below is what it completed before stopping.',
+  'ask.stopToolError': 'A vault tool kept failing — the answer may be incomplete.',
+  'ask.stopModelError': 'The model call failed mid-turn — the answer may be incomplete.',
+  'ask.stopMaxRounds':
+    'The agent reached its round limit and answered with what it had.',
 
   // system page (B5)
   'system.help':

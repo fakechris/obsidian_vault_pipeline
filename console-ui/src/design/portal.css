@@ -1538,6 +1538,120 @@ body {
 .chat-a.chat-pending {
   font-size: var(--ovp-text-sm);
 }
+/* ---- agent live trail + receipts (A3c) ---- */
+.ask-trail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: var(--ovp-text-sm);
+}
+.ask-step {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.ask-step-dot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.ask-step.running .ask-step-dot {
+  background: var(--accent);
+  animation: ask-dot-pulse 1.1s ease-in-out infinite;
+}
+.ask-step.ok .ask-step-dot {
+  background: var(--success);
+}
+.ask-step.err .ask-step-dot {
+  background: var(--danger);
+}
+@keyframes ask-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-step.running .ask-step-dot {
+    animation: none;
+  }
+}
+.ask-step-tool {
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+}
+.ask-step-args {
+  font-size: var(--ovp-text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-agent-meta {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.ask-stop-note {
+  font-size: var(--ovp-text-sm);
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--ovp-radius-sm);
+  padding: 0.4rem 0.6rem;
+}
+.ask-coverage {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.cov-pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--ovp-radius-pill);
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+}
+.cov-pill.complete {
+  color: var(--success);
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.cov-pill.partial {
+  color: var(--c-4);
+  border-color: var(--c-4);
+  background: color-mix(in srgb, var(--c-4) 10%, transparent);
+}
+.cov-pill.unavailable,
+.cov-pill.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.ask-trail-details summary {
+  cursor: pointer;
+}
+.ask-trail-details[open] summary {
+  margin-bottom: 0.4rem;
+}
+.chat-error .ask-trail {
+  margin-bottom: 0.6rem;
+  color: var(--text);
+}
 /* Answer bodies render through the markdown reading view (gutterless) —
    the renderer owns whitespace, so no pre-wrap here. */
 .answer-text {

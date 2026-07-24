@@ -247,6 +247,46 @@ export interface AskResponse {
   intent?: string | null;
   /** Stem of the saved `.ovp/chats/<name>.md` transcript. */
   chat: string | null;
+  // ---- agent-path extras (OVP_ASK_AGENT=1; absent on the legacy path) ----
+  /** True when the answer came from the tool-loop agent. */
+  agent?: boolean;
+  /** Executor-computed per-layer coverage (claims/sources/body →
+   * not_queried|complete|partial|unavailable|failed). Null on an
+   * idempotent replay (coverage is an execution artifact). */
+  coverage?: Record<string, string> | null;
+  /** Compact per-call trail of what the agent actually executed. */
+  tool_trace?: AskTraceEntry[];
+  /** final | need_user | refusal | max_rounds | timeout | tool_error | model_error. */
+  stopped_reason?: string;
+  turn_id?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+}
+
+/** One executed tool call in an agent turn's caller-facing trail. */
+export interface AskTraceEntry {
+  tool: string;
+  summary: string;
+  ok: boolean;
+}
+
+/** One event from GET /api/ask/progress — the live mid-turn feed. */
+export interface AskProgressEvent {
+  event: string;
+  tool?: string;
+  tool_call_id?: string;
+  /** Display narration for tool_started ("query=… · limit=…"). */
+  args?: string | null;
+  summary?: string;
+  ok?: boolean;
+  turn_id?: string;
+  stopped_reason?: string;
+}
+
+export interface AskProgress {
+  events: AskProgressEvent[];
+  done: boolean;
+  /** False while the turn is still in admission (setup/lock phase). */
+  started: boolean;
 }
 
 /** /api/chats entry — `mtime` is unix seconds; the client formats it. */
@@ -402,6 +442,9 @@ export interface IndexModel {
   /** Live-server overlay: acknowledged attention items (hidden until the
    * source's status changes). Absent in static snapshots. */
   attention_acks?: { sha: string; status: string }[];
+  /** Live-server overlay: the tool-loop agent serves /api/ask. The SPA
+   * pre-generates a chat id and polls the progress feed from turn 1. */
+  ask_agent?: boolean;
   schema: string;
   date: string;
   /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the

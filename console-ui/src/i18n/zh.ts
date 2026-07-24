@@ -340,6 +340,29 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.errTimeout':
     '在时限内没有等到回答。请求并未被取消——如果模型最终完成，保存的会话仍会出现在历史中。',
   'ask.errGeneric': '提问失败——服务是否已连接 vault？',
+  // agent live trail + receipts (A3c)
+  'ask.trailConnecting': '正在连接 vault agent…',
+  'ask.trailThinking': '思考中…',
+  'ask.trailComposing': '正在组织答案…',
+  'ask.trailSearching': '正在检索',
+  'ask.trailReading': '正在读取',
+  'ask.trailListing': '正在列出',
+  'ask.trailRunning': '正在执行',
+  'ask.trailTitle': '执行轨迹',
+  'ask.trailFailedStep': '失败',
+  'ask.coverageTitle': '检索范围',
+  'ask.covClaims': '结论',
+  'ask.covSources': '来源',
+  'ask.covBody': '全文',
+  'ask.covComplete': '完整',
+  'ask.covPartial': '部分',
+  'ask.covNotQueried': '未检索',
+  'ask.covUnavailable': '不可用',
+  'ask.covFailed': '失败',
+  'ask.stopTimeout': '本轮时间用尽——以下是中止前已完成的部分。',
+  'ask.stopToolError': 'vault 工具连续失败——回答可能不完整。',
+  'ask.stopModelError': '模型调用中途失败——回答可能不完整。',
+  'ask.stopMaxRounds': 'agent 达到轮次上限，用已有信息作答。',
 
   // system page (B5)
   'system.help':
