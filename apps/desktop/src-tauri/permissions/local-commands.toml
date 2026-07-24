@@ -1,0 +1,8 @@
+# Defining ANY app-command ACL puts Tauri into allowlist mode for EVERY custom
+# command, so the splash's startup commands must be explicitly allowed too or
+# the app can't boot. These run only from the LOCAL splash page (see the
+# local `default` capability — no remote origin gets them).
+[[permission]]
+identifier = "allow-local-commands"
+description = "Splash/startup commands: pick a vault, boot the in-process portal, list recents."
+commands.allow = ["boot", "set_vault_and_start", "known_vaults"]

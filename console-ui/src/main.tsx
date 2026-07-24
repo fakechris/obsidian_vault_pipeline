@@ -4,9 +4,14 @@ import { BrowserRouter, HashRouter } from 'react-router-dom';
 import App from './App';
 import { I18nProvider } from './i18n';
 import { STATIC_MODE } from './lib/api';
+import { installDesktopExternalLinks } from './lib/desktopExternalLinks';
 import './design/colors_and_type.css';
 import './design/portal.css';
 import './styles/index.css';
+
+// In the Tauri desktop app, open external article links in the system browser
+// (WKWebView drops target="_blank"). No-op in a normal browser.
+installDesktopExternalLinks();
 
 // Published static site → HashRouter: deep links like `/#/knowledge` work on
 // any static host (GitHub Pages, object storage) with zero rewrite rules. The

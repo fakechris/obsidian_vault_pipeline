@@ -382,6 +382,34 @@ async fn known_vaults(app: AppHandle) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Open an external URL in the system browser. A WKWebView can't pop a browser
+/// itself — `target="_blank"` and external navigations are silently dropped —
+/// so the portal's external links (a source's original article URL, citations)
+/// call this instead. http/https ONLY: never hand an arbitrary scheme to the
+/// shell, and `.arg(&url)` passes the url as one argument (no shell parsing).
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("refusing to open non-http(s) url: {url}"));
+    }
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "linux")]
+    let opener = "xdg-open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    let mut child = std::process::Command::new(opener)
+        .arg(&url)
+        .spawn()
+        .map_err(|e| format!("open failed: {e}"))?;
+    // Reap the short-lived opener: Rust doesn't wait on Child drop, so without
+    // this every link click would leave a zombie until the app exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Vault menu — Obsidian-style switching. Every action is config + restart:
 // one mechanism, and the boot path (auto-open the persisted vault, else the
@@ -544,7 +572,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             set_vault_and_start,
-            known_vaults
+            known_vaults,
+            open_external
         ])
         .setup(|app| {
             rebuild_vault_menu(app.handle())?;

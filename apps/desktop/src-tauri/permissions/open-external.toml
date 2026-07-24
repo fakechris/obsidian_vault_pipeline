@@ -1,0 +1,8 @@
+# Authorizes the loopback portal (a REMOTE origin to Tauri, served from
+# http://127.0.0.1:<port>) to invoke the app's `open_external` command. Custom
+# commands are allowed by default for LOCAL webviews, but a remote origin needs
+# an explicit ACL permission listed in its capability.
+[[permission]]
+identifier = "allow-open-external"
+description = "Allow opening external http(s) URLs in the system browser (portal article + citation links)."
+commands.allow = ["open_external"]
