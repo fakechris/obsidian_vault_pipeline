@@ -142,6 +142,27 @@
       "quality_buckets": [
         "crystal_provenance"
       ]
+    },
+    {
+      "id": "model.ask_tool_protocol",
+      "surface": "model",
+      "current_version": "none",
+      "file": "crates/ovp-llm/src/request.rs",
+      "quality_buckets": [
+        "operational_reliability",
+        "cost_efficiency"
+      ]
+    },
+    {
+      "id": "runtime.ask_agent",
+      "surface": "runtime",
+      "current_version": "none",
+      "file": "crates/ovp-memory/src/ask.rs",
+      "quality_buckets": [
+        "coverage",
+        "operational_reliability",
+        "crystal_provenance"
+      ]
     }
   ]
 }

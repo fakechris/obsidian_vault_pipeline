@@ -1,0 +1,31 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_tool_protocol-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "model",
+  "component": "model.ask_tool_protocol",
+  "hypothesis": "MODEL surface only (ovp-llm request/reply/anthropic + fixture): extending ModelRequest/ModelReply with provider-neutral tool definitions, content blocks (text | tool_use), tool_result user blocks, and mapped stop reasons makes a tool-capable conversation representable and replayable WITHOUT any runtime loop change (ask still single-shot at this version). Predicted: all existing text-only cassettes replay byte-identical (request_key unchanged for tool-less requests), and the new protocol passes the full A1a gate matrix against recorded Anthropic tool-use fixtures. Corroboration: the Anthropic tool-use protocol is the industry convergence point for production agent runtimes (local competitive research, not committed).",
+  "predicted_delta": {
+    "operational_reliability": "tool-only replies parse as success (today anthropic.rs:90 treats empty text as decode error); unknown stop reasons never masquerade as final",
+    "cost_efficiency": "no change at this version (protocol only, no loop)"
+  },
+  "guardrails": {
+    "text_only_compat": "every existing cassette replays unchanged; request_key for a request WITHOUT tools is byte-identical to pre-change (tools field absent => key input unchanged)",
+    "request_key_policy": "tools enter the request_key as (tool name, protocol version) pairs only — NEVER the full JSON schema — so schema doc tweaks do not invalidate cassettes; schema changes bump model.ask_tool_protocol version instead",
+    "tool_call_id_determinism": "tool_use ids are provider-issued and preserved verbatim through ModelReply -> transcript -> next-request tool_result; the runtime NEVER generates its own ids (replay of a recorded session must reproduce identical follow-up request bodies)",
+    "tool_only_success": "a reply containing only tool_use blocks and no text is a SUCCESS, not a decode error",
+    "block_order": "text/tool_use blocks preserve provider order; multiple tool_use per assistant turn supported",
+    "tool_result_adjacency_all": "ALL tool_use ids from an assistant turn must be answered by tool_result blocks at the FRONT of the next user message — including failed executions (is_error: true); partial responding is a protocol violation the types make unrepresentable or the builder rejects",
+    "max_tokens_mid_tool": "stop_reason == max_tokens while a tool_use block is open/truncated => the tool call is INVALID: never executed, surfaced as a protocol error (retry-with-larger-budget is the caller's decision)",
+    "stop_reasons": "map at minimum ToolUse | EndTurn | MaxTokens | Refusal + Unknown(String); Unknown is never treated as final success",
+    "no_runtime_change": "ask.rs / server ask path untouched at this version — single Candidate, single surface"
+  },
+  "eval_plan": {
+    "replay_set": "all existing text-only cassettes (byte-identical replay) + new recorded Anthropic tool-use fixtures: tool-only reply; text+2 tool_use (order+ids); tool_result ok + is_error; 3 calls with 1 failed executor (all three results present, one is_error); max_tokens truncating a tool_use; unknown stop reason",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "The tools/content-block fields are additive Options on ModelRequest/ModelReply; revert = stop constructing them (no caller passes tools yet). Cassettes recorded without tools stay valid either way.",
+  "ablation_required": false
+}
