@@ -6,5 +6,6 @@
 
 pub mod ask;
 pub mod digest;
+pub mod intent;
 pub mod verify;
 pub mod working_memory;

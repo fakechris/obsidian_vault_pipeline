@@ -2230,6 +2230,7 @@ fn ask_response_json(model: &IndexModel, result: &AskResult) -> serde_json::Valu
         "citations": citations,
         "verified": result.verification,
         "context_hits": result.context_hits,
+        "intent": result.intent.as_str(),
         "chat": result
             .chat_file
             .as_deref()
@@ -2243,6 +2244,7 @@ fn kind_str(kind: EvidenceKind) -> &'static str {
         EvidenceKind::Unit => "unit",
         EvidenceKind::Card => "card",
         EvidenceKind::Claim => "claim",
+        EvidenceKind::Source => "source",
     }
 }
 
@@ -2302,6 +2304,14 @@ fn citation_link(
                 return None;
             }
             Some(format!("/knowledge#{anchor}"))
+        }
+        EvidenceKind::Source => {
+            // id is the source sha256 for find-source hits.
+            if item.id.trim().is_empty() {
+                None
+            } else {
+                Some(format!("/library/{}", item.id))
+            }
         }
         EvidenceKind::Card | EvidenceKind::Unit => {
             let pack_dir = item.path.as_deref()?.strip_suffix("/reader.md")?;

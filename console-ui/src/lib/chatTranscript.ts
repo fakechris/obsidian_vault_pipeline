@@ -12,7 +12,8 @@ export interface ChatTurn {
 
 /** Citation keys the answer text cites, in first-appearance order.
  * Mirrors the Ask page tokenizer (claim/card/unit + bare ck-). */
-const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
+const CITE_RE =
+  /\[\s*((?:claim|card|unit|source):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
 
 export function normalizeCiteToken(token: string): string {
   return token.startsWith('ck-') ? `claim:${token}` : token;
@@ -25,6 +26,10 @@ export function citeLinkTarget(id: string): string | null {
   if (id.startsWith('claim:')) {
     const key = id.slice('claim:'.length);
     return key ? `/knowledge#${encodeURIComponent(key)}` : null;
+  }
+  if (id.startsWith('source:')) {
+    const sha = id.slice('source:'.length);
+    return sha ? `/library/${encodeURIComponent(sha)}` : null;
   }
   return null;
 }

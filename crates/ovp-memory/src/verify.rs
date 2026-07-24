@@ -92,7 +92,7 @@ fn is_citation_candidate(candidate: &str) -> bool {
         && (candidate.starts_with("ck-")
             || matches!(
                 candidate.split_once(':').map(|(prefix, _)| prefix),
-                Some("unit" | "card" | "claim")
+                Some("unit" | "card" | "claim" | "source")
             ))
 }
 
@@ -118,6 +118,7 @@ fn kind_label(kind: EvidenceKind) -> &'static str {
         EvidenceKind::Unit => "unit",
         EvidenceKind::Card => "card",
         EvidenceKind::Claim => "claim",
+        EvidenceKind::Source => "source",
     }
 }
 
@@ -129,6 +130,8 @@ fn item_is_verifiable(item: &EvidenceItem) -> bool {
             .is_some_and(|quote| !quote.trim().is_empty()),
         EvidenceKind::Card => card_cites_unit(item),
         EvidenceKind::Claim => true,
+        // Library sources are verifiable by identity (sha) alone.
+        EvidenceKind::Source => !item.id.trim().is_empty(),
     }
 }
 
@@ -144,6 +147,7 @@ fn unverifiable_warning(citation: &str, kind: EvidenceKind) -> String {
         EvidenceKind::Unit => format!("unit_without_quote:{citation}"),
         EvidenceKind::Card => format!("card_without_cited_units:{citation}"),
         EvidenceKind::Claim => format!("claim_unverifiable:{citation}"),
+        EvidenceKind::Source => format!("source_unverifiable:{citation}"),
     }
 }
 

@@ -33,7 +33,8 @@ interface Turn {
 
 /** `[claim:…] [card:…] [unit:…]` tokens plus the bare `[ck-…]` form models
  * shorten claim keys to — mirrors the server tokenizer (ovp-memory::verify). */
-const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
+const CITE_RE =
+  /\[\s*((?:claim|card|unit|source):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
 
 function errorKeyFor(err: unknown): MsgKey {
   if (err instanceof AskError) {
