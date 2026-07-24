@@ -1,7 +1,8 @@
-//! `ask` — retrieval-augmented Q&A over OVP product state.
+//! `ask` — vault assistant over OVP product state.
 //!
-//! Pipeline: lexical retrieval over durable claims + reader cards + accepted
-//! units → context assembly with evidence ids → LLM → cited answer.
+//! Pipeline: **intent route** (find source / grounded Q&A / explore / meta) →
+//! retrieval surface matched to the job → LLM (or a fixed meta reply) →
+//! optional citation verify → chat transcript.
 //!
 //! Ephemeral reuse surface: answers are NOT durable truth, NOT in ledger.
 //! Optionally persisted to `.ovp/chats/<timestamp>.md` for session continuity.
@@ -15,6 +16,9 @@ use ovp_index::score::lexical_score;
 use ovp_llm::{ModelClient, ModelMessage, ModelRequest};
 use serde::{Deserialize, Serialize};
 
+use crate::intent::{
+    classify_intent, content_query_for_find, meta_capability_answer, AskIntent,
+};
 use crate::verify::{VerificationReport, verify_answer};
 
 /// One completed Q/A turn from the same conversation (not including the
@@ -64,6 +68,8 @@ pub enum EvidenceKind {
     Unit,
     Card,
     Claim,
+    /// A library source (sha256 id) — used by find-source routing.
+    Source,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +109,8 @@ pub struct AskResult {
     pub evidence: Vec<EvidenceItem>,
     pub verification: Option<VerificationReport>,
     pub chat_file: Option<PathBuf>,
+    /// Which job path ran for this turn (surfaced to clients for transparency).
+    pub intent: AskIntent,
 }
 
 pub fn ask(
@@ -131,33 +139,105 @@ pub fn ask_with_optional_evidence(
     args: &AskArgs,
     vault_root: &Path,
 ) -> Result<AskResult, String> {
-    let mut quotas = args.evidence_quotas;
-    if args.max_context_hits == 0 {
-        quotas.units = 0;
-        quotas.cards = 0;
-        quotas.claims = 0;
+    let intent = classify_intent(&args.question, &args.history);
+
+    // Meta: answer about Ask itself — no retrieval, no LLM (deterministic).
+    if intent == AskIntent::MetaCapability {
+        let answer = meta_capability_answer(&args.question);
+        let chat_file = if args.save_chat {
+            Some(save_or_append_chat(
+                vault_root,
+                args.chat.as_deref(),
+                &args.question,
+                &answer,
+                &[],
+                None,
+                0,
+            )?)
+        } else {
+            None
+        };
+        return Ok(AskResult {
+            answer,
+            context_hits: 0,
+            evidence: Vec::new(),
+            verification: None,
+            chat_file,
+            intent,
+        });
     }
-    let mut evidence_items = assemble_evidence(model, evidence, &args.question, quotas);
-    if args.max_context_hits > 0 && evidence_items.len() > args.max_context_hits {
-        evidence_items.truncate(args.max_context_hits);
-    }
+
+    let (evidence_items, system, user_prefix, temperature, verify) = match intent {
+        AskIntent::FindSource => {
+            let q = content_query_for_find(&args.question);
+            let search_q = if q.is_empty() {
+                args.question.as_str()
+            } else {
+                q.as_str()
+            };
+            // Merge history clues into the search string so follow-ups
+            // ("不记得了") still retrieve against the original hunt.
+            let mut hunt = search_q.to_string();
+            for turn in args.history.iter().rev().take(2) {
+                if looks_like_find_question(&turn.question) {
+                    let prior = content_query_for_find(&turn.question);
+                    if !prior.is_empty() {
+                        hunt = format!("{hunt} {prior}");
+                    }
+                }
+            }
+            let items = assemble_find_hits(model, evidence, &hunt, args.max_context_hits.max(24));
+            (
+                items,
+                FIND_SOURCE_SYSTEM.to_string(),
+                "Vault candidates (sources / packs / excerpts)",
+                0.3,
+                true, // verify source:/unit:/card: keys that appear
+            )
+        }
+        AskIntent::Explore => {
+            let mut quotas = explore_quotas(args.evidence_quotas);
+            if args.max_context_hits == 0 {
+                quotas.units = 0;
+                quotas.cards = 0;
+                quotas.claims = 0;
+            }
+            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            if args.max_context_hits > 0 && items.len() > args.max_context_hits {
+                items.truncate(args.max_context_hits);
+            }
+            (
+                items,
+                EXPLORE_SYSTEM.to_string(),
+                "Context from the vault (broad recall)",
+                0.55,
+                false,
+            )
+        }
+        AskIntent::GroundedQa | AskIntent::MetaCapability => {
+            let mut quotas = args.evidence_quotas;
+            if args.max_context_hits == 0 {
+                quotas.units = 0;
+                quotas.cards = 0;
+                quotas.claims = 0;
+            }
+            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            if args.max_context_hits > 0 && items.len() > args.max_context_hits {
+                items.truncate(args.max_context_hits);
+            }
+            (
+                items,
+                GROUNDED_QA_SYSTEM.to_string(),
+                "Context from OVP evidence index",
+                0.4,
+                args.verify_citations,
+            )
+        }
+    };
+
     let context_hits = evidence_items.len();
     let context = render_evidence_context(&evidence_items);
 
-    let system = "You are a knowledge assistant for OVP (Obsidian Vault Pipeline). \
-        Answer questions using ONLY the provided claim/card/unit evidence context. \
-        Cite evidence with the FULL bracketed key exactly as shown in the context \
-        (e.g. [claim:ck-1a2b3c4d], [card:…], [unit:…]) — never shorten or drop the \
-        kind prefix. \
-        Follow-up questions may refer to earlier turns in this conversation — use \
-        that dialogue for reference, but still ground factual claims in the \
-        evidence context for the CURRENT question. \
-        If evidence is insufficient, say what is missing. Do not invent citations."
-        .to_string();
-
-    // Prior turns as dialogue (no evidence re-injection — each turn retrieves
-    // fresh context for its own question). Latest user message carries the
-    // retrieved evidence for THIS question.
     let mut messages: Vec<ModelMessage> = Vec::with_capacity(args.history.len() * 2 + 1);
     for turn in &args.history {
         messages.push(ModelMessage::User {
@@ -169,7 +249,7 @@ pub fn ask_with_optional_evidence(
     }
     messages.push(ModelMessage::User {
         content: format!(
-            "Context from OVP evidence index ({context_hits} hits):\n\n{context}\n\n---\n\nQuestion: {}",
+            "{user_prefix} ({context_hits} hits):\n\n{context}\n\n---\n\nUser request: {}",
             args.question
         ),
     });
@@ -179,14 +259,13 @@ pub fn ask_with_optional_evidence(
         system: Some(system),
         messages,
         max_tokens: args.max_tokens,
-        temperature: Some(0.4),
-        // v3: stable ck- claim citation keys + verbatim-full-key prompt rule
-        // (evolution candidate ask_citation_keys-v3).
-        cache_namespace: Some("ask/v3".into()),
+        temperature: Some(temperature),
+        // v4: intent-routed assistant (find / qa / explore / meta).
+        cache_namespace: Some("ask/v4".into()),
     };
 
     let reply = client.call(&request).map_err(|e| format!("ask LLM: {e}"))?;
-    let verification = if args.verify_citations {
+    let verification = if verify {
         Some(verify_answer(&reply.text, &evidence_items))
     } else {
         None
@@ -212,7 +291,205 @@ pub fn ask_with_optional_evidence(
         evidence: evidence_items,
         verification,
         chat_file,
+        intent,
     })
+}
+
+const GROUNDED_QA_SYSTEM: &str = "You are a knowledge assistant for the user's OVP vault. \
+        Answer using ONLY the provided claim/card/unit evidence context. \
+        Cite evidence with the FULL bracketed key exactly as shown \
+        (e.g. [claim:ck-1a2b3c4d], [card:…], [unit:…]) — never shorten or drop the kind prefix. \
+        Follow-up questions may refer to earlier turns — use that dialogue for reference, \
+        but still ground factual claims in the CURRENT evidence context. \
+        If evidence is insufficient, say what is missing. Do not invent citations.";
+
+const FIND_SOURCE_SYSTEM: &str = "You help the user LOCATE material in their vault \
+        (articles, notes, web clippings, reader packs). \
+        You are NOT writing an academic evidence report. \
+        Given candidate sources/packs/excerpts: \
+        (1) pick the best matches and explain briefly why they fit the request; \
+        (2) cite matches with FULL keys as shown — [source:SHA256] for library sources, \
+        and [unit:…]/[card:…] when an excerpt supports the match; \
+        (3) if nothing fits, say so clearly and ask for better clues (title words, person name, \
+        date, URL fragment) — do NOT invent articles or titles not present in the candidates; \
+        (4) prefer concrete titles, paths, and openable sources over abstract claims. \
+        Use prior conversation turns as the hunt target when the latest message is a short follow-up.";
+
+const EXPLORE_SYSTEM: &str = "You are a conversational guide for the user's OVP vault. \
+        Use the provided context when helpful, but a warm, exploratory tone is OK. \
+        When you lean on a specific claim/card/unit, cite the FULL bracketed key. \
+        Uncertainty is fine — say what you're unsure about. Do not invent citations. \
+        Do not force an academic 'evidence insufficient' template when the user is just chatting.";
+
+fn looks_like_find_question(q: &str) -> bool {
+    crate::intent::classify_intent(q, &[]) == AskIntent::FindSource
+}
+
+fn explore_quotas(base: EvidenceQuotas) -> EvidenceQuotas {
+    EvidenceQuotas {
+        units: base.units.max(12),
+        cards: base.cards.max(6),
+        claims: base.claims.max(6),
+        max_chars: base.max_chars.max(32_000),
+    }
+}
+
+/// Source/pack-first retrieval for find-source jobs, with unit/card excerpts
+/// as supporting content (not claim-first academic ranking).
+pub fn assemble_find_hits(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    max_hits: usize,
+) -> Vec<EvidenceItem> {
+    let mut rows: Vec<ScoredEvidence> = Vec::new();
+
+    for s in &model.sources {
+        let title = s.title.as_deref().unwrap_or("(untitled)");
+        let url = s.url.as_deref().unwrap_or("");
+        let path = s.rel_path.as_deref().unwrap_or("");
+        let tags = s.tags.join(" ");
+        let score = lexical_score(question, &[title, url, path, &tags, &s.sha256]);
+        if score <= 0.0 {
+            continue;
+        }
+        // Prefer title/path hits over pure token noise.
+        let boost = if !title.is_empty() && score >= 10.0 {
+            5.0
+        } else {
+            0.0
+        };
+        rows.push(ScoredEvidence {
+            score: score + boost,
+            tier: 0,
+            item: EvidenceItem {
+                id: s.sha256.clone(),
+                kind: EvidenceKind::Source,
+                title: title.to_string(),
+                body: format!(
+                    "URL: {}\nPath: {}\nStatus: {:?}\nDate: {}",
+                    url,
+                    path,
+                    s.status,
+                    s.date.as_deref().unwrap_or("-")
+                ),
+                quote: None,
+                path: s.rel_path.clone(),
+            },
+        });
+    }
+
+    for p in &model.packs {
+        let cards_joined = p.card_titles.join(" | ");
+        let score = lexical_score(question, &[&p.title, &p.pack_dir, &cards_joined]);
+        if score <= 0.0 {
+            continue;
+        }
+        let sha = p.source_sha256.clone().unwrap_or_default();
+        // Surface pack as a source-shaped hit when we have a sha, else card path.
+        if !sha.is_empty() {
+            rows.push(ScoredEvidence {
+                score: score + 2.0,
+                tier: 1,
+                item: EvidenceItem {
+                    id: sha,
+                    kind: EvidenceKind::Source,
+                    title: p.title.clone(),
+                    body: format!(
+                        "Reader pack: {}\nCards: {}\nCard titles: {}",
+                        p.pack_dir, p.cards, cards_joined
+                    ),
+                    quote: None,
+                    path: Some(format!("{}/reader.md", p.pack_dir)),
+                },
+            });
+        } else {
+            rows.push(ScoredEvidence {
+                score,
+                tier: 1,
+                item: EvidenceItem {
+                    id: p.pack_dir.clone(),
+                    kind: EvidenceKind::Card,
+                    title: p.title.clone(),
+                    body: format!("Pack (no source sha): {cards_joined}"),
+                    quote: None,
+                    path: Some(format!("{}/reader.md", p.pack_dir)),
+                },
+            });
+        }
+    }
+
+    if let Some(evidence) = evidence {
+        for card in &evidence.cards {
+            let score = lexical_score(
+                question,
+                &[&card.id, &card.source_title, &card.title, &card.content],
+            );
+            if score <= 0.0 {
+                continue;
+            }
+            rows.push(ScoredEvidence {
+                score,
+                tier: 2,
+                item: EvidenceItem {
+                    id: card.id.clone(),
+                    kind: EvidenceKind::Card,
+                    title: format!("{} — {}", card.source_title, card.title),
+                    body: format!("Content: {}", clip_chars(&card.content, 1_200)),
+                    quote: None,
+                    path: Some(format!("{}/reader.md", card.pack_dir)),
+                },
+            });
+        }
+        for unit in &evidence.units {
+            let score = lexical_score(
+                question,
+                &[&unit.id, &unit.source_title, &unit.text, &unit.quote],
+            );
+            if score <= 0.0 {
+                continue;
+            }
+            rows.push(ScoredEvidence {
+                score,
+                tier: 3,
+                item: EvidenceItem {
+                    id: unit.id.clone(),
+                    kind: EvidenceKind::Unit,
+                    title: unit.source_title.clone(),
+                    body: format!("Text: {}", clip_chars(&unit.text, 800)),
+                    quote: if unit.quote.is_empty() {
+                        None
+                    } else {
+                        Some(unit.quote.clone())
+                    },
+                    path: Some(format!("{}/reader.md", unit.pack_dir)),
+                },
+            });
+        }
+    }
+
+    rows.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.tier.cmp(&b.tier))
+            .then_with(|| a.item.id.cmp(&b.item.id))
+    });
+
+    // Dedup sources by id (pack + source row may both contribute).
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for row in rows {
+        let key = format!("{:?}:{}", row.item.kind, row.item.id);
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(row.item);
+        if out.len() >= max_hits {
+            break;
+        }
+    }
+    out
 }
 
 /// Safe chat stem: single path component, same rules as GET /api/chats/:name.
@@ -494,6 +771,7 @@ fn evidence_kind_label(kind: EvidenceKind) -> &'static str {
         EvidenceKind::Unit => "unit",
         EvidenceKind::Card => "card",
         EvidenceKind::Claim => "claim",
+        EvidenceKind::Source => "source",
     }
 }
 
@@ -694,7 +972,7 @@ mod tests {
                     && item.id == "unit:40-Resources/Reader/memory:u-001")
         );
         let request = captured.lock().unwrap().clone().unwrap();
-        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v3"));
+        assert_eq!(request.cache_namespace.as_deref(), Some("ask/v4"));
         let user = match &request.messages[0] {
             ovp_llm::ModelMessage::User { content } => content,
             ovp_llm::ModelMessage::Assistant { .. } => panic!("expected user message"),

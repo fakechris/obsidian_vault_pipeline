@@ -328,7 +328,7 @@ export const en = {
   // ask page
   'ask.title': 'Ask',
   'ask.help':
-    'Ask questions in natural language; answers are grounded in your evidence index — crystal claims, reader cards and quoted units — with numbered citations you can verify. Follow-ups in the same thread keep context and stay one history session. Unverified citations are flagged.',
+    'Vault assistant: finds articles in your library, answers knowledge questions with checkable citations, or chats more openly. Follow-ups keep context in one session. Ask “what can you do?” for capability limits.',
   'ask.historyTitle': 'History',
   'ask.historyEmpty':
     'No saved chats yet — each conversation is saved here as one session.',

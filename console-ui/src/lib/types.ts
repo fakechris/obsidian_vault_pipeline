@@ -243,6 +243,8 @@ export interface AskResponse {
   citations: AskCitation[];
   verified: AskVerification | null;
   context_hits: number;
+  /** Job path for this turn: find_source | grounded_qa | explore | meta_capability. */
+  intent?: string | null;
   /** Stem of the saved `.ovp/chats/<name>.md` transcript. */
   chat: string | null;
 }
