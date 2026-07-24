@@ -163,6 +163,17 @@
         "operational_reliability",
         "crystal_provenance"
       ]
+    },
+    {
+      "id": "runtime.ask_vault_tools",
+      "surface": "runtime",
+      "current_version": "none",
+      "file": "crates/ovp-memory/src/vault_tools.rs",
+      "quality_buckets": [
+        "coverage",
+        "operational_reliability",
+        "crystal_provenance"
+      ]
     }
   ]
 }
