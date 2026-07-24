@@ -452,21 +452,28 @@ export default function AskPage() {
 
   // Agent mode: discovered via /api/ask/status (index-free, like the agent
   // path itself) with the /api/model overlay as fallback — the SPA then
-  // mints the session id itself and polls the live feed.
+  // mints the session id itself and polls the live feed. `submit` AWAITS
+  // the in-flight discovery, so a first ask racing it still gets a trail.
   const { model } = useModel();
   const [askStatus, setAskStatus] = useState<boolean | null>(null);
+  const askStatusPromise = useRef<Promise<boolean> | null>(null);
+  const modelAgent = model?.ask_agent === true;
   useEffect(() => {
-    fetchAskStatus()
-      .then((s) => setAskStatus(s.agent))
-      .catch(() => {
-        /* stay on the /api/model fallback */
-      });
+    askStatusPromise.current = fetchAskStatus()
+      .then((s) => {
+        setAskStatus(s.agent);
+        return s.agent;
+      })
+      .catch(() => modelAgent);
+    // Discovery runs once; the fallback reads whatever /api/model said by then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const agentMode = askStatus ?? model?.ask_agent === true;
   const [live, setLive] = useState<AskProgress | null>(null);
   const liveRef = useRef<AskProgress | null>(null);
-  /** Session the CURRENT in-flight ask polls against (null = legacy path). */
-  const pollChatRef = useRef<string | null>(null);
+  /** Session the CURRENT in-flight ask polls against (null = legacy path).
+   * State (not a ref) so the polling effect re-runs when a submission
+   * resolves agent mode asynchronously. */
+  const [pollChat, setPollChat] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
   const [savedTurns, setSavedTurns] = useState<Turn[] | null>(null);
@@ -548,7 +555,7 @@ export default function AskPage() {
   // trail is the entire point of the wait.
   useEffect(() => {
     if (!pending) return;
-    const chat = pollChatRef.current;
+    const chat = pollChat;
     if (!chat) return;
     let cancelled = false;
     // On turn N+1 the map may still hold turn N's COMPLETED feed until this
@@ -577,21 +584,14 @@ export default function AskPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [pending]);
+  }, [pending, pollChat]);
 
   const submit = () => {
     const question = draft.trim();
     if (!question || pending || openChat) return;
     setDraft('');
     setPending(true);
-    // Agent path: mint the session id client-side so the progress feed is
-    // pollable from the FIRST turn (the server honors supplied ids).
-    let chat = sessionChat;
-    if (agentMode && !chat) {
-      chat = genChatId();
-      setSessionChat(chat);
-    }
-    pollChatRef.current = agentMode ? chat : null;
+    setPollChat(null);
     liveRef.current = null;
     setLive(null);
     const history = turns
@@ -601,7 +601,23 @@ export default function AskPage() {
         answer: t.response!.answer,
       }));
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
-    postAsk(question, { chat, history })
+    void (async () => {
+      // Resolve agent mode BEFORE posting — a first ask that races the
+      // discovery fetch must still mint its chat id and get a live trail.
+      let agent = askStatus;
+      if (agent == null) {
+        agent = await (askStatusPromise.current ?? Promise.resolve(modelAgent));
+      }
+      // Agent path: mint the session id client-side so the progress feed
+      // is pollable from the FIRST turn (the server honors supplied ids).
+      let chat = sessionChat;
+      if (agent && !chat) {
+        chat = genChatId();
+        setSessionChat(chat);
+      }
+      setPollChat(agent ? chat : null);
+      return postAsk(question, { chat, history });
+    })()
       .then((response) => {
         setTurns((prev) =>
           prev.map((turn, i) =>
@@ -666,7 +682,7 @@ export default function AskPage() {
   // Live agent activity for the in-flight turn. Before the first poll lands
   // (or on the legacy path) the thread falls back to the static pending text.
   let liveTrail: React.ReactNode = null;
-  if (pending && agentMode) {
+  if (pending && pollChat) {
     if (live) {
       const steps = stepsFromEvents(live.events);
       liveTrail = <AgentTrail steps={steps} phase={livePhase(live, steps)} />;
