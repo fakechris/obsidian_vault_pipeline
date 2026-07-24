@@ -1,0 +1,32 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface only: a read-only vault tool registry (search_sources / get_source / search_source_chunks / read_source_body / search_claims / get_claim / list_recent_sources) implementing the A1b ToolExecutor over the EXISTING index/ledger readers, with opaque UTF-8-safe body pagination and a runtime-computed 5-state coverage tracker, gives the agent loop its real tool set WITHOUT wiring into any product path (POST /api/ask unchanged; only tests drive it). Data access lives in pure pub functions designed for the MCP projection to reuse — one registry, two projections, no duplicate evidence surface.",
+  "predicted_delta": {
+    "coverage": "the loop can search sources+claims, drill into chunk hits, and page through full bodies — the T3 'read the original' capability the single-shot ask never had",
+    "operational_reliability": "argument validation failures surface as InvalidArgs (feeding the A1b breaker); layer failures degrade to honest coverage states instead of silent empty results",
+    "crystal_provenance": "get_claim resolves by claim_key canonically; ambiguous legacy claim_ids degrade to an explicit candidate list, never a wrong closure"
+  },
+  "guardrails": {
+    "read_only_by_construction": "every tool in the registry is read-only; no tool writes vault state, spawns processes, or performs external actions — verified by a test asserting the vault tree is byte-identical after a full tool sweep",
+    "injection_boundary": "source body/chunk content is returned as DATA verbatim; content containing instructions ('ignore previous instructions', tool-call-looking JSON) must round-trip unchanged and drive no executor behavior — the executor never interprets result content",
+    "opaque_cursor_utf8": "read_source_body exposes ONLY an opaque cursor (versioned string, e.g. 'c1:<offset>'); decoding validates version+bounds; slices always end on UTF-8 char boundaries (CJK/emoji never split); truncated + next_cursor are always present and walking cursors to the end reassembles the exact file bytes",
+    "result_caps": "every body/chunk/search result has a hard size cap; truncation is explicit (truncated flag), never silent",
+    "claim_key_canonical": "get_claim resolves claim_key (ck-…) uniquely; a claim_id that matches multiple records returns an AMBIGUOUS result listing the candidate claim_keys and no closure; a claim_id matching exactly one record resolves normally",
+    "coverage_five_state": "a CoverageTracker owned by the executor computes {sources, claims, body} layer states from ACTUAL executions: not_queried (default) | complete | partial (truncated/capped results) | unavailable (index/ledger missing) | failed (execution error); the model never self-reports coverage",
+    "invalid_args_to_breaker": "malformed/missing tool arguments return ToolOutcome::InvalidArgs (never Failed), so the A1b invalid-args breaker semantics apply exactly",
+    "shared_projection_api": "data access is pure pub functions over (&vault_root, &IndexModel / loaded records) with no executor state, so ovp-mcp handlers can call the same functions in a follow-up without a second data path",
+    "no_product_wiring": "POST /api/ask, ask.rs, and ovp-mcp are byte-unchanged at this version; the registry is driven only by tests (rollout is A3)"
+  },
+  "eval_plan": {
+    "replay_set": "deterministic tempdir-vault tests: CJK/emoji pagination never splits a char and cursor-walk reassembles the file; truncated+next_cursor; missing source id; malicious source content round-trips verbatim with zero side effects (vault tree unchanged); missing index -> sources layer unavailable + honest coverage; execution failure -> failed; capped search -> partial; claim_key unique resolution, ambiguous claim_id degradation, single-match claim_id resolution; malformed args -> InvalidArgs for every tool; full sweep leaves coverage states consistent with what actually ran",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "New module with no product callers; rollback = stop constructing VaultTools (delete or leave dormant). No state formats introduced beyond reading existing index/ledger/source files.",
+  "ablation_required": false
+}

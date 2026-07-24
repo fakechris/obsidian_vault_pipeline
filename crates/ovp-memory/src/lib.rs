@@ -9,5 +9,6 @@ pub mod agent_transcript;
 pub mod ask;
 pub mod digest;
 pub mod intent;
+pub mod vault_tools;
 pub mod verify;
 pub mod working_memory;
