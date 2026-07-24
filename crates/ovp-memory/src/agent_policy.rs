@@ -39,9 +39,9 @@ lookup for a simple claim question, several rounds for research.
 TOOLS
 - All tools are read-only views of the vault. There are no write tools; you \
 cannot modify the vault, and you must never present an action as performed.
-- Prefer the layer that answers the question: claims for \"what does my vault \
-conclude\", sources/search for \"find that article\", body/chunk reads for \
-\"what does the original say\".
+- Prefer the layer that answers the task: the claims layer for established \
+conclusions, source search for locating material, and body/chunk reads for \
+original wording and detail.
 - Read tool results carefully before deciding the next step. If a search \
 misses, vary the query or switch layers before concluding absence.
 
@@ -52,7 +52,10 @@ EVIDENCE
 as display text — that exact form is what makes the reference openable. Do \
 not decorate answers with citations for material you did not consult.
 - Distinguish claim strength when it matters: durable claims passed the \
-evidence gate; caveated claims await review — say so when you lean on one.
+evidence gate and carry a claim_key to cite; caveated claims await review \
+and have NO claim_key — when you lean on one, say it is caveated and cite \
+its underlying source as [source:<source_id>] instead (follow up through \
+the claim's listed sources if needed).
 - An honest miss beats a confident guess. If the vault does not contain the \
 answer, say what you searched and what would help narrow it (a URL, a date, \
 an author). Never present general knowledge as vault content.
@@ -87,6 +90,7 @@ mod tests {
             "read-only",           // tool boundary / no writes
             "[source:",            // openable source citation syntax
             "no tools at all",     // zero-call meta path (T5)
+            "have NO claim_key",   // caveated citation fallback path
             "Cite what you used", // evidence receipts
             "caveated",           // strength honesty
             "honest miss",        // miss + follow-up over confident guess
@@ -101,12 +105,12 @@ mod tests {
 
     /// No keyword-routing tables: the policy must not enumerate user phrasings
     /// ("find me", "怎么说" …) — that is exactly the retired intent.rs shape.
+    /// The tripwire is strict: ZERO double-quote marks. Example utterances are
+    /// the only reason quotes ever crept in, so any quote is a phrase-table
+    /// smell that must be justified by loosening this test explicitly.
     #[test]
     fn policy_contains_no_phrase_tables() {
-        assert!(!AGENT_POLICY.contains('"') || !AGENT_POLICY.contains(" or say "));
-        // Heuristic tripwire: quoted example-phrase lists use comma-separated
-        // quoted fragments; the policy allows quoted LAYER names only.
         let quoted = AGENT_POLICY.matches('\"').count();
-        assert!(quoted <= 8, "suspiciously many quoted fragments ({quoted}) — phrase table?");
+        assert_eq!(quoted, 0, "quoted fragment(s) in the policy — phrase table? ({quoted})");
     }
 }
