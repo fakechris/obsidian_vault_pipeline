@@ -40,24 +40,21 @@ const NAV = STATIC_MODE
 
 /** Desktop-only browser chrome: back / forward / open-in-browser. The Tauri
  * webview has no chrome (only WKWebView's ugly native context menu), so the
- * portal supplies its own. Back/forward drive React Router history; the
- * enabled state reads React Router's `idx` in `history.state`. Inert in a real
- * browser (which already has this) via the `isDesktopApp()` guard. */
+ * portal supplies its own. `navigate(-1)/navigate(1)` delegate to
+ * `history.go()`, which steps across documents too (e.g. a legacy admin page
+ * back into the SPA) and is a harmless no-op at the ends — so the buttons stay
+ * always-enabled rather than mixing router-local `idx` with session-wide
+ * `history.length` (which disagree after a cross-document navigation). Inert in
+ * a real browser via `isDesktopApp()`. */
 function DesktopNav() {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const location = useLocation(); // re-render on navigation so idx refreshes
-  void location;
   if (!isDesktopApp()) return null;
-  const idx = (window.history.state?.idx as number | undefined) ?? 0;
-  const canBack = idx > 0;
-  const canForward = idx < window.history.length - 1;
   return (
     <span className="nav-history">
       <button
         type="button"
         className="navbtn"
-        disabled={!canBack}
         onClick={() => navigate(-1)}
         aria-label={t('nav.back')}
         title={t('nav.back')}
@@ -67,7 +64,6 @@ function DesktopNav() {
       <button
         type="button"
         className="navbtn"
-        disabled={!canForward}
         onClick={() => navigate(1)}
         aria-label={t('nav.forward')}
         title={t('nav.forward')}
