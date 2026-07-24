@@ -265,6 +265,8 @@ pub fn run_agent_turn(
             round: rounds,
             input_tokens: reply.usage.input_tokens,
             output_tokens: reply.usage.output_tokens,
+            src: cfg.model.clone(),
+            scope: "turn".into(),
         });
         in_total += reply.usage.input_tokens;
         out_total += reply.usage.output_tokens;
@@ -385,6 +387,11 @@ pub fn run_agent_turn(
                 // feeds back once and counts toward the breaker.
                 ToolOutcome::InvalidArgs(format!("unknown tool `{name}`"))
             };
+            // `deadline_authority` at the RESULT level too: a tool that
+            // overruns the remaining budget produced LATE data — audit it,
+            // but never feed it to the model as a success (A0 §5.2: late
+            // results are side-log material, not deliveries).
+            let finished_late = remaining(started).is_zero() && !timed_out;
             let (mut content, is_error, was_invalid_args) = match outcome {
                 ToolOutcome::Ok(body) => (body, false, false),
                 ToolOutcome::InvalidArgs(detail) => {
@@ -410,7 +417,7 @@ pub fn run_agent_turn(
                 turn_id: turn_id.clone(),
                 tool_call_id: id.clone(),
                 tool: name.clone(),
-                is_error,
+                is_error: is_error || finished_late,
                 result_bytes: raw_bytes,
                 content: content.clone(),
                 truncated,
@@ -418,14 +425,37 @@ pub fn run_agent_turn(
             trace.push(ToolTraceEntry {
                 tool: name.clone(),
                 tool_call_id: id.clone(),
-                is_error,
+                is_error: is_error || finished_late,
                 summary: content.chars().take(120).collect(),
             });
-            if truncated {
-                content.truncate(floor_char_boundary(&content, cfg.max_result_bytes));
-                content.push_str("\n[truncated]");
-            }
-            results.push(ToolResultBlock { tool_call_id: id.clone(), content, is_error });
+            let (model_content, model_is_error) = if finished_late {
+                timed_out = true;
+                (
+                    "tool result arrived after the turn deadline; discarded \
+                     (kept in the audit transcript only)"
+                        .to_string(),
+                    true,
+                )
+            } else {
+                if truncated {
+                    // The marker counts AGAINST the cap — the model-facing
+                    // copy must never exceed it.
+                    const MARKER: &str = "\n[truncated]";
+                    let keep = cfg.max_result_bytes.saturating_sub(MARKER.len());
+                    content.truncate(floor_char_boundary(&content, keep));
+                    content.push_str(MARKER);
+                    if content.len() > cfg.max_result_bytes {
+                        // Degenerate tiny caps: the marker alone overflows.
+                        content.truncate(floor_char_boundary(&content, cfg.max_result_bytes));
+                    }
+                }
+                (content, is_error)
+            };
+            results.push(ToolResultBlock {
+                tool_call_id: id.clone(),
+                content: model_content,
+                is_error: model_is_error,
+            });
         }
 
         // The COMPLETE batch is always recorded (adjacency), then a timeout
@@ -1108,9 +1138,24 @@ mod tests {
             })
             .expect("the batch must be recorded despite the timeout");
         assert_eq!(results_msg.len(), 2);
-        assert!(!results_msg[0].is_error);
+        // The slow tool FINISHED LATE: its data is discarded for the model
+        // (error result) but preserved raw in the audit row (A0: late results
+        // are side-log material, never deliveries).
+        assert!(results_msg[0].is_error, "late result must not be delivered as success");
+        assert!(results_msg[0].content.contains("after the turn deadline"));
         assert!(results_msg[1].is_error, "skipped call must be a timeout error result");
         assert!(results_msg[1].content.contains("deadline exhausted"));
+        let audit_raw = st
+            .events()
+            .iter()
+            .find_map(|e| match e {
+                TranscriptEvent::ToolCalled { tool, content, .. } if tool == "slow" => {
+                    Some(content.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(audit_raw, "slow done", "the late result survives in the audit");
     }
 
     // MaxTokens without tools: a truncated answer must not present as Final.

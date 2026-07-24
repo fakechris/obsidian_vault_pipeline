@@ -46,12 +46,20 @@ pub enum TranscriptEvent {
         turn_id: String,
         message: ModelMessage,
     },
-    /// One model call's cost (`token_accounting`).
+    /// One model call's cost (`token_accounting` — A0 §5.2 requires
+    /// {in, out, src, scope} so multi-client / nested-ask usage stays
+    /// attributable).
     ModelCalled {
         turn_id: String,
         round: usize,
         input_tokens: u32,
         output_tokens: u32,
+        /// Which model incurred the usage.
+        #[serde(default)]
+        src: String,
+        /// Budget scope — "turn" today; nested asks stamp their own.
+        #[serde(default)]
+        scope: String,
     },
     /// One tool execution's audit line. `content` is the FULL RAW result —
     /// the audit transcript is complete by contract; the adjacent
@@ -404,9 +412,11 @@ impl SessionStore {
                 }
             }
         }
+        // CHARS, not bytes: the budget is documented as characters, and CJK/
+        // emoji content would otherwise be charged 3-4x and dropped early.
         let turn_len = |msgs: &[ModelMessage]| -> usize {
             msgs.iter()
-                .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+                .map(|m| serde_json::to_string(m).map(|s| s.chars().count()).unwrap_or(0))
                 .sum()
         };
         // Keep newest-first until the cap, then restore order.
