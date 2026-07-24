@@ -54,6 +54,7 @@ pub fn unit_model_request(source: &SourceDoc) -> ModelRequest {
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: DEFAULT_UNIT_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(UNIT_PROMPT_ID.to_string()),
     }
 }

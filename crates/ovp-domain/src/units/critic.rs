@@ -136,6 +136,7 @@ pub fn critic_model_request(source: &SourceDoc, base_units: &[Unit]) -> ModelReq
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: DEFAULT_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(CRITIC_PROMPT_ID.to_string()),
     }
 }

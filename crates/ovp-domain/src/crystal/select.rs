@@ -122,6 +122,7 @@ pub fn cluster_select_request(
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: SELECT_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(CLUSTER_SELECT_PROMPT_ID.to_string()),
     }
 }

@@ -145,6 +145,7 @@ pub fn render_llm_digest(
         messages: vec![ModelMessage::User { content: prompt }],
         max_tokens,
         temperature: Some(0.3),
+        tools: None,
         cache_namespace: Some("digest/v1".into()),
     };
 

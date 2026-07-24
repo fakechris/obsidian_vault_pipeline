@@ -223,6 +223,7 @@ pub fn json_repair_request(broken_reply: &str) -> ModelRequest {
         }],
         max_tokens: 16384,
         temperature: None,
+        tools: None,
         cache_namespace: Some("json_repair/v1".to_string()),
     }
 }

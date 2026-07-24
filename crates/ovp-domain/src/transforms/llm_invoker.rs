@@ -54,6 +54,7 @@ impl EffectfulTransform<DomainBody> for LLMInvoker {
             messages: vec![ModelMessage::User { content: prompt.user.clone() }],
             max_tokens: prompt.max_tokens,
             temperature: None,
+            tools: None,
             cache_namespace: Some(prompt.prompt_id.as_str().to_string()),
         };
 
@@ -144,6 +145,8 @@ mod tests {
             text: text.into(),
             stop_reason: stop,
             usage: Usage { input_tokens: 10, output_tokens: 20 },
+            blocks: None,
+            raw_stop_reason: None,
         }
     }
 
@@ -157,6 +160,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "user".into() }],
             max_tokens: 100,
             temperature: None,
+            tools: None,
             cache_namespace: None,
         };
         f.insert(&req, reply);

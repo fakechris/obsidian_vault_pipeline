@@ -13,8 +13,8 @@
 use serde_json::json;
 
 use crate::client::CallError;
-use crate::reply::{ModelReply, StopReason, Usage};
-use crate::request::{ModelMessage, ModelRequest};
+use crate::reply::{ModelReply, ReplyBlock, StopReason, Usage};
+use crate::request::{AssistantBlock, ModelMessage, ModelRequest};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -31,6 +31,39 @@ pub fn anthropic_request_body(req: &ModelRequest) -> serde_json::Value {
             ModelMessage::Assistant { content } => {
                 json!({ "role": "assistant", "content": content })
             }
+            ModelMessage::AssistantBlocks { blocks } => {
+                let content: Vec<_> = blocks
+                    .iter()
+                    .map(|block| match block {
+                        AssistantBlock::Text { text } => {
+                            json!({ "type": "text", "text": text })
+                        }
+                        AssistantBlock::ToolUse { id, name, input } => json!({
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input,
+                        }),
+                    })
+                    .collect();
+                json!({ "role": "assistant", "content": content })
+            }
+            ModelMessage::ToolResults { results } => {
+                // This variant carries only results, so all tool_result blocks
+                // necessarily lead the user turn (`tool_result_adjacency_all`).
+                let content: Vec<_> = results
+                    .iter()
+                    .map(|result| {
+                        json!({
+                            "type": "tool_result",
+                            "tool_use_id": result.tool_call_id,
+                            "content": result.content,
+                            "is_error": result.is_error,
+                        })
+                    })
+                    .collect();
+                json!({ "role": "user", "content": content })
+            }
         })
         .collect();
 
@@ -45,6 +78,21 @@ pub fn anthropic_request_body(req: &ModelRequest) -> serde_json::Value {
     }
     if let Some(temp) = req.temperature {
         obj.insert("temperature".into(), json!(temp));
+    }
+    if let Some(tools) = &req.tools {
+        obj.insert(
+            "tools".into(),
+            json!(tools
+                .iter()
+                .map(|tool| {
+                    json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.input_schema,
+                    })
+                })
+                .collect::<Vec<_>>()),
+        );
     }
     body
 }
@@ -81,13 +129,45 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
         .and_then(|c| c.as_array())
         .ok_or_else(|| CallError::Decode { detail: "missing `content` array".into() })?;
     let mut text = String::new();
+    let mut blocks = Vec::new();
+    let mut has_tool_use = false;
     for block in content {
-        if block.get("type").and_then(|t| t.as_str()) == Some("text")
-            && let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                text.push_str(t);
+        match block.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                    text.push_str(t);
+                    blocks.push(ReplyBlock::Text { text: t.to_string() });
+                }
             }
+            Some("tool_use") => {
+                let id = block
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .ok_or_else(|| CallError::Decode {
+                        detail: "tool_use block missing string `id`".into(),
+                    })?
+                    .to_string();
+                let name = block
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .ok_or_else(|| CallError::Decode {
+                        detail: "tool_use block missing string `name`".into(),
+                    })?
+                    .to_string();
+                let input =
+                    block
+                        .get("input")
+                        .cloned()
+                        .ok_or_else(|| CallError::Decode {
+                            detail: "tool_use block missing `input`".into(),
+                        })?;
+                has_tool_use = true;
+                blocks.push(ReplyBlock::ToolUse { id, name, input });
+            }
+            _ => {}
+        }
     }
-    if text.is_empty() {
+    if text.is_empty() && !has_tool_use {
         // Diagnose the common reasoning-model case: the provider returned only
         // `thinking` blocks (and no `text`), typically because it exhausted the
         // token budget while thinking. Make this loud + actionable rather than
@@ -115,7 +195,8 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
         return Err(CallError::Decode { detail });
     }
 
-    let stop_reason = map_stop_reason(v.get("stop_reason").and_then(|s| s.as_str()));
+    let (stop_reason, raw_stop_reason) =
+        map_stop_reason(v.get("stop_reason").and_then(|s| s.as_str()));
 
     let input_tokens = v
         .pointer("/usage/input_tokens")
@@ -131,15 +212,20 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
         text,
         stop_reason,
         usage: Usage { input_tokens, output_tokens },
+        blocks: Some(blocks),
+        raw_stop_reason,
     })
 }
 
-fn map_stop_reason(s: Option<&str>) -> StopReason {
+fn map_stop_reason(s: Option<&str>) -> (StopReason, Option<String>) {
     match s {
-        Some("end_turn") => StopReason::EndTurn,
-        Some("max_tokens") => StopReason::MaxTokens,
-        Some("stop_sequence") => StopReason::StopSequence,
-        _ => StopReason::Unknown,
+        Some("end_turn") => (StopReason::EndTurn, None),
+        Some("max_tokens") => (StopReason::MaxTokens, None),
+        Some("stop_sequence") => (StopReason::StopSequence, None),
+        Some("tool_use") => (StopReason::ToolUse, None),
+        Some("refusal") => (StopReason::Refusal, None),
+        Some(other) => (StopReason::Unknown, Some(other.to_string())),
+        None => (StopReason::Unknown, None),
     }
 }
 
@@ -328,6 +414,7 @@ mod live {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::request::{ToolDef, ToolResultBlock};
 
     fn req() -> ModelRequest {
         ModelRequest {
@@ -336,6 +423,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "hi".into() }],
             max_tokens: 1024,
             temperature: None,
+            tools: None,
             cache_namespace: None,
         }
     }
@@ -361,6 +449,87 @@ mod tests {
     }
 
     #[test]
+    fn request_body_uses_in_memory_tool_schema_and_description() {
+        let mut r = req();
+        r.tools = Some(vec![ToolDef {
+            name: "vault_search".into(),
+            version: "v1".into(),
+            description: "Search indexed vault content".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+        }]);
+
+        let body = anthropic_request_body(&r);
+        assert_eq!(body["tools"][0]["name"], "vault_search");
+        assert_eq!(body["tools"][0]["description"], "Search indexed vault content");
+        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+        assert!(
+            body["tools"][0].get("version").is_none(),
+            "protocol version belongs to the request key, not the provider wire format"
+        );
+    }
+
+    #[test]
+    fn assistant_blocks_and_all_tool_results_map_to_adjacent_wire_turns() {
+        let mut r = req();
+        r.messages = vec![
+            ModelMessage::AssistantBlocks {
+                blocks: vec![
+                    AssistantBlock::ToolUse {
+                        id: "call-1".into(),
+                        name: "vault_search".into(),
+                        input: json!({"query": "one"}),
+                    },
+                    AssistantBlock::ToolUse {
+                        id: "call-2".into(),
+                        name: "vault_search".into(),
+                        input: json!({"query": "two"}),
+                    },
+                    AssistantBlock::ToolUse {
+                        id: "call-3".into(),
+                        name: "vault_search".into(),
+                        input: json!({"query": "three"}),
+                    },
+                ],
+            },
+            ModelMessage::ToolResults {
+                results: vec![
+                    ToolResultBlock {
+                        tool_call_id: "call-1".into(),
+                        content: "first".into(),
+                        is_error: false,
+                    },
+                    ToolResultBlock {
+                        tool_call_id: "call-2".into(),
+                        content: "failed".into(),
+                        is_error: true,
+                    },
+                    ToolResultBlock {
+                        tool_call_id: "call-3".into(),
+                        content: "third".into(),
+                        is_error: false,
+                    },
+                ],
+            },
+        ];
+
+        let body = anthropic_request_body(&r);
+        assert_eq!(body["messages"][0]["role"], "assistant");
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 3);
+        assert_eq!(body["messages"][1]["role"], "user");
+        let results = body["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|block| block["type"] == "tool_result"));
+        assert_eq!(results[0]["tool_use_id"], "call-1");
+        assert_eq!(results[1]["tool_use_id"], "call-2");
+        assert_eq!(results[1]["is_error"], true);
+        assert_eq!(results[2]["tool_use_id"], "call-3");
+    }
+
+    #[test]
     fn parse_success_reply() {
         let json = r#"{
             "model": "claude-sonnet-4-6",
@@ -377,10 +546,119 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_only_reply_is_success() {
+        let json = r#"{
+            "model": "claude-sonnet-4-6",
+            "content": [
+                {"type":"tool_use","id":"toolu_provider_01","name":"vault_search","input":{"query":"memory"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 12, "output_tokens": 34}
+        }"#;
+        let reply = parse_anthropic_reply(json).unwrap();
+
+        assert_eq!(reply.text, "");
+        assert_eq!(reply.stop_reason, StopReason::ToolUse);
+        assert_eq!(
+            reply.blocks,
+            Some(vec![ReplyBlock::ToolUse {
+                id: "toolu_provider_01".into(),
+                name: "vault_search".into(),
+                input: json!({"query": "memory"}),
+            }])
+        );
+        let calls = reply.executable_tool_calls().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_provider_01");
+    }
+
+    #[test]
+    fn parse_text_and_multiple_tool_uses_preserves_order_and_ids() {
+        let json = r#"{
+            "model": "claude-sonnet-4-6",
+            "content": [
+                {"type":"text","text":"I will check both. "},
+                {"type":"tool_use","id":"toolu_provider_A","name":"vault_search","input":{"query":"alpha"}},
+                {"type":"text","text":"Then compare. "},
+                {"type":"tool_use","id":"toolu_provider_B","name":"vault_search","input":{"query":"beta"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 20, "output_tokens": 40}
+        }"#;
+        let reply = parse_anthropic_reply(json).unwrap();
+
+        assert_eq!(reply.text, "I will check both. Then compare. ");
+        assert_eq!(
+            reply.blocks,
+            Some(vec![
+                ReplyBlock::Text { text: "I will check both. ".into() },
+                ReplyBlock::ToolUse {
+                    id: "toolu_provider_A".into(),
+                    name: "vault_search".into(),
+                    input: json!({"query": "alpha"}),
+                },
+                ReplyBlock::Text { text: "Then compare. ".into() },
+                ReplyBlock::ToolUse {
+                    id: "toolu_provider_B".into(),
+                    name: "vault_search".into(),
+                    input: json!({"query": "beta"}),
+                },
+            ])
+        );
+        let calls = reply.executable_tool_calls().unwrap();
+        assert_eq!(
+            calls.iter().map(|call| call.id).collect::<Vec<_>>(),
+            vec!["toolu_provider_A", "toolu_provider_B"]
+        );
+    }
+
+    #[test]
     fn parse_max_tokens_stop_reason() {
         let json = r#"{"model":"m","content":[{"type":"text","text":"x"}],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":2}}"#;
         let reply = parse_anthropic_reply(json).unwrap();
         assert_eq!(reply.stop_reason, StopReason::MaxTokens);
+    }
+
+    #[test]
+    fn max_tokens_tool_use_is_parsed_but_never_executable() {
+        let json = r#"{
+            "model":"m",
+            "content":[
+                {"type":"tool_use","id":"toolu_truncated","name":"vault_write","input":{"path":"note.md"}}
+            ],
+            "stop_reason":"max_tokens",
+            "usage":{"input_tokens":1,"output_tokens":2}
+        }"#;
+        let reply = parse_anthropic_reply(json).unwrap();
+
+        assert_eq!(reply.stop_reason, StopReason::MaxTokens);
+        assert!(matches!(
+            reply.blocks.as_deref(),
+            Some([ReplyBlock::ToolUse { id, .. }]) if id == "toolu_truncated"
+        ));
+        assert_eq!(reply.executable_tool_calls(), None);
+        assert!(!reply.is_final_success());
+    }
+
+    #[test]
+    fn unknown_stop_reason_is_preserved_and_not_final_success() {
+        let json = r#"{"model":"m","content":[{"type":"text","text":"x"}],"stop_reason":"banana","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        let reply = parse_anthropic_reply(json).unwrap();
+
+        assert_eq!(reply.stop_reason, StopReason::Unknown);
+        assert_eq!(reply.raw_stop_reason.as_deref(), Some("banana"));
+        assert!(!reply.is_final_success());
+        assert_eq!(reply.executable_tool_calls(), None);
+    }
+
+    #[test]
+    fn refusal_stop_reason_maps_without_becoming_success() {
+        let json = r#"{"model":"m","content":[{"type":"text","text":"I cannot do that."}],"stop_reason":"refusal","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        let reply = parse_anthropic_reply(json).unwrap();
+
+        assert_eq!(reply.stop_reason, StopReason::Refusal);
+        assert_eq!(reply.raw_stop_reason, None);
+        assert!(!reply.is_final_success());
     }
 
     #[test]

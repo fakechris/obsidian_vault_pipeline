@@ -260,6 +260,7 @@ pub fn ask_with_optional_evidence(
         messages,
         max_tokens: args.max_tokens,
         temperature: Some(temperature),
+        tools: None,
         // v4: intent-routed assistant (find / qa / explore / meta).
         cache_namespace: Some("ask/v4".into()),
     };
@@ -518,15 +519,15 @@ fn save_or_append_chat(
 
     let turn_block = format_chat_turn(question, answer, evidence, verification, context_hits);
 
-    if let Some(stem) = chat.map(str::trim).filter(|s| !s.is_empty()) {
-        if valid_chat_stem(stem) {
-            let path = chats_dir.join(format!("{stem}.md"));
-            if path.is_file() {
-                append_chat_turn(&path, &turn_block)?;
-                return Ok(path);
-            }
+    // Invalid name or missing file → fall through to a new session file.
+    if let Some(stem) = chat.map(str::trim).filter(|s| !s.is_empty())
+        && valid_chat_stem(stem)
+    {
+        let path = chats_dir.join(format!("{stem}.md"));
+        if path.is_file() {
+            append_chat_turn(&path, &turn_block)?;
+            return Ok(path);
         }
-        // Invalid name or missing file → fall through to a new session file.
     }
 
     let ts = chrono_like_timestamp();
@@ -859,6 +860,8 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 1,
                 },
+                blocks: None,
+                raw_stop_reason: None,
             })
         }
     }
@@ -975,7 +978,9 @@ mod tests {
         assert_eq!(request.cache_namespace.as_deref(), Some("ask/v4"));
         let user = match &request.messages[0] {
             ovp_llm::ModelMessage::User { content } => content,
-            ovp_llm::ModelMessage::Assistant { .. } => panic!("expected user message"),
+            ovp_llm::ModelMessage::Assistant { .. }
+            | ovp_llm::ModelMessage::AssistantBlocks { .. }
+            | ovp_llm::ModelMessage::ToolResults { .. } => panic!("expected user message"),
         };
 
         assert!(user.contains("[claim:claim-memory-1]"), "{user}");

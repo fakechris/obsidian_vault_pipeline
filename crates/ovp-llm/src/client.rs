@@ -211,6 +211,8 @@ mod retry_tests {
                 text: "ok".into(),
                 stop_reason: StopReason::EndTurn,
                 usage: Usage { input_tokens: 1, output_tokens: 1 },
+                blocks: None,
+                raw_stop_reason: None,
             }
         }
     }
@@ -233,6 +235,7 @@ mod retry_tests {
             messages: vec![],
             max_tokens: 16,
             temperature: None,
+            tools: None,
             cache_namespace: None,
         }
     }

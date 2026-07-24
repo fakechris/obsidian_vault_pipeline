@@ -399,6 +399,7 @@ fn synth_request_for_cases<'a>(
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: SYNTH_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(CRYSTAL_SYNTH_PROMPT_ID.to_string()),
     }
 }
@@ -625,6 +626,7 @@ pub fn strength_request(candidate: &CrystalCandidate, catalog: &UnitsCatalog) ->
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: STRENGTH_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(CRYSTAL_STRENGTH_PROMPT_ID.to_string()),
     }
 }

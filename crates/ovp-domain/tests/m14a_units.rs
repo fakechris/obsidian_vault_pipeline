@@ -18,6 +18,8 @@ impl ModelClient for FakeModel {
             text: self.reply.clone(),
             stop_reason: StopReason::EndTurn,
             usage: Usage { input_tokens: 1, output_tokens: 1 },
+            blocks: None,
+            raw_stop_reason: None,
         })
     }
 }

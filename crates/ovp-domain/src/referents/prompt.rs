@@ -58,6 +58,7 @@ pub fn referent_model_request(units: &[Unit], seeds: &[String]) -> ModelRequest 
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: DEFAULT_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(REFERENT_PROMPT_ID.to_string()),
     }
 }

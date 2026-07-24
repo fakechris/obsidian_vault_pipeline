@@ -307,6 +307,7 @@ pub fn theme_label_request(keywords: &[String], sample_titles: &[String]) -> Mod
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: LABEL_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(THEME_LABEL_PROMPT_ID.to_string()),
     }
 }

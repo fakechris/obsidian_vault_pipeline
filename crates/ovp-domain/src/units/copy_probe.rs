@@ -109,6 +109,7 @@ pub fn run_copy_probe(
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: 8192,
         temperature: None,
+        tools: None,
         cache_namespace: Some(COPY_PROBE_ID.to_string()),
     };
     let reply = client.call(&request)?;
