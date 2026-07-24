@@ -306,11 +306,12 @@ export const zh: Record<keyof typeof en, string> = {
   // ask page
   'ask.title': '对话',
   'ask.help':
-    '用自然语言提问；回答只依据你的证据索引——结晶主张、阅读卡片与带引文的单元——并附可核查的编号引用。每次回答都会保存到左侧历史。未通过校验的引用会被标注。',
+    '用自然语言提问；回答只依据你的证据索引——结晶主张、阅读卡片与带引文的单元——并附可核查的编号引用。同一线程里的追问会带上前文，并记为一条历史会话。未通过校验的引用会被标注。',
   'ask.historyTitle': '历史会话',
-  'ask.historyEmpty': '还没有保存的会话——每次回答都会自动保存到这里。',
+  'ask.historyEmpty': '还没有保存的会话——每段连续对话会作为一条会话保存在这里。',
   'ask.savedChat': '已保存会话',
   'ask.closeChat': '返回对话',
+  'ask.newConversation': '新对话',
   'ask.chatLoadError': '无法加载该会话——服务是否在运行？',
   'ask.citationsTitle': '引用',
   'ask.citationsEmpty':
@@ -331,7 +332,7 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.example2': '哪些来源讨论了上下文工程？它们的主张是什么？',
   'ask.example3': '关于检索质量，最有力的证据是什么？',
   'ask.errNotConfigured':
-    '服务端未配置 LLM——请设置 ANTHROPIC_API_KEY 并重启 `ovp2 serve`（构建时加 --features anthropic）。',
+    '尚未配置 LLM——打开「系统 → LLM 提供商」保存 API 密钥（及端点/模型），然后重新提问。无需重启。',
   'ask.errIndexUnavailable':
     '索引不可用——请对该 vault 运行 `ovp2 index`，并确认服务启动时的 --vault-root 指向正确。',
   'ask.errBusy': '对话繁忙——同时进行的回答已达上限，请稍候再试。',
@@ -391,7 +392,7 @@ export const zh: Record<keyof typeof en, string> = {
   'providers.apiKeyHint': '保持打码值 = 不修改现有密钥',
   'providers.noProxy': 'LLM 调用绕过系统代理',
   'providers.save': '保存',
-  'providers.saved': '已保存。定时任务立即生效；portal 内 ask 需重启应用/服务。',
+  'providers.saved': '已保存。对话（Ask）与定时任务立即生效，无需重启。',
   'providers.protocolNote':
     '所有预设均为 Anthropic Messages 兼容端点。OpenAI 兼容与 Gemini 原生协议暂未支持。',
   'system.publish': '发布',
@@ -420,9 +421,9 @@ export const zh: Record<keyof typeof en, string> = {
   'system.queuedLiveVsBuild': '{live} · 实时（投影 {build} @ {date}）',
   'system.noIndex': '索引未构建——运行 `ovp2 index`',
   'system.llm': 'LLM（对话）',
-  'system.llmOn': '已配置——POST /api/ask 可用',
+  'system.llmOn': '已配置——对话可用',
   'system.llmOff':
-    '未配置——对话返回 503。设置 ANTHROPIC_API_KEY 后重启 `ovp2 serve`（构建时加 --features anthropic）。',
+    '未配置——请在上方「LLM 提供商」中保存 API 密钥。保存后对话立即生效。',
   'system.askTimeout': '对话超时',
   'system.askTimeoutValue': '每问 {secs} 秒 · 并发上限 {cap}',
   'system.version': '服务端版本',

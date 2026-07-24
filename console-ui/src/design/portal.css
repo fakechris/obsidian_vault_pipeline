@@ -1304,6 +1304,28 @@ body {
 }
 
 /* ---------- theme detail: claim cards + anchor highlight (B3) ---------- */
+/* Topic overview + claims share the left column; theme graph sits in a
+   sticky right rail so both land on the first screen (design §3.3 / §4). */
+.theme-detail-layout {
+  margin-top: 1rem;
+}
+.theme-main .topic-overview {
+  margin-bottom: 1.25rem;
+}
+.theme-claims-meta {
+  margin-bottom: 0.9rem;
+}
+.theme-rail {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+}
+.theme-rail-card {
+  /* Keep the rail card from stretching taller than the viewport when the
+     left column is long; graph stays reachable without scrolling the page. */
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
 .claim-card {
   scroll-margin-top: 5rem;
   transition:
@@ -1338,7 +1360,8 @@ body {
   font-size: var(--text-lg);
   line-height: var(--leading-relaxed);
   color: var(--text-soft);
-  max-width: 44rem; /* keep the reading measure ~720px */
+  /* Reading measure is constrained by the left column of .grid.two-col
+     (~2.1fr of the 1180 page); no fixed max-width needed here. */
 }
 .topic-overview-section p:last-child {
   margin-bottom: 0;

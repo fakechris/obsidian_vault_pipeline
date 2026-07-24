@@ -10,6 +10,11 @@
  * the server already applied the sha-guard, a null link renders as text).
  * Citations the verifier could not back carry a warn pill.
  *
+ * Multi-turn: the live center thread is ONE session — follow-ups send prior
+ * Q/A as `history` and reuse the first response's `chat` stem so the left
+ * list stays one row that appends. Enter during IME composition does not
+ * submit (Chinese/Japanese candidate confirm).
+ *
  * The textarea sets `data-omnibox-suppress` so the Shell's global ⌘K
  * handler leaves it alone while composing. */
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
@@ -17,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import { AskError, fetchChatMarkdown, fetchChats, postAsk } from '../lib/api';
+import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type InlineMarker } from '../lib/markdown';
 import type { AskCitation, AskResponse, ChatEntry } from '../lib/types';
 
@@ -163,6 +169,8 @@ export default function AskPage() {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  /** Stem of the live multi-turn session (first successful answer's `chat`). */
+  const [sessionChat, setSessionChat] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
   const [openChat, setOpenChat] = useState<string | null>(null);
@@ -194,21 +202,40 @@ export default function AskPage() {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [turns, pending]);
 
+  const startNewConversation = () => {
+    setTurns([]);
+    setSessionChat(null);
+    setDraft('');
+    selectChat(null);
+    composerRef.current?.focus();
+  };
+
   const submit = () => {
     const question = draft.trim();
     if (!question || pending) return;
     selectChat(null);
     setDraft('');
     setPending(true);
+    // Prior completed turns only — the pending slot is not yet answered.
+    const history = turns
+      .filter((t) => t.response?.answer)
+      .map((t) => ({
+        question: t.question,
+        answer: t.response!.answer,
+      }));
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
-    postAsk(question)
+    postAsk(question, { chat: sessionChat, history })
       .then((response) => {
         setTurns((prev) =>
           prev.map((turn, i) =>
             i === prev.length - 1 ? { ...turn, response } : turn,
           ),
         );
-        refreshChats(); // the server saved the transcript
+        // Stick to the first successful chat stem for the whole live thread.
+        if (response.chat) {
+          setSessionChat((prev) => prev ?? response.chat);
+        }
+        refreshChats(); // same file appends; list still one row for this session
       })
       .catch((err: unknown) => {
         const errorKey = errorKeyFor(err);
@@ -222,6 +249,8 @@ export default function AskPage() {
   };
 
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME: Enter confirms a candidate, not the message (see lib/ime.ts).
+    if (isReactImeComposing(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -266,10 +295,20 @@ export default function AskPage() {
       <PageHelp>{t('ask.help')}</PageHelp>
 
       <div className="grid ask">
-        {/* left: saved chat history */}
+        {/* left: saved chat history — one row per conversation session */}
         <div>
           <div className="facet-group">
             <h3>{t('ask.historyTitle')}</h3>
+            {(turns.length > 0 || sessionChat) && !openChat && (
+              <button
+                type="button"
+                className="tiny"
+                style={{ marginBottom: '0.5rem' }}
+                onClick={startNewConversation}
+              >
+                {t('ask.newConversation')}
+              </button>
+            )}
             {chats.length === 0 ? (
               <p className="tiny muted">{t('ask.historyEmpty')}</p>
             ) : (
@@ -278,7 +317,11 @@ export default function AskPage() {
                   <li key={entry.name}>
                     <button
                       type="button"
-                      className={openChat === entry.name ? 'active' : ''}
+                      className={
+                        openChat === entry.name || sessionChat === entry.name
+                          ? 'active'
+                          : ''
+                      }
                       onClick={() => showChat(entry.name)}
                     >
                       <span className="chat-date">{chatDate(entry)}</span>

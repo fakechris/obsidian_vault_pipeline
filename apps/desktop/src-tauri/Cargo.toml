@@ -31,5 +31,7 @@ tauri-plugin-dialog = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 # In-process portal server (reused verbatim) + the vault layout for defaults.
-ovp-server = { path = "../../../crates/ovp-server" }
+# anthropic: product builds ship live Ask via System → LLM Provider
+# (.ovp/providers.toml), without set_var on the multi-threaded Tauri host.
+ovp-server = { path = "../../../crates/ovp-server", features = ["anthropic"] }
 ovp-domain = { path = "../../../crates/ovp-domain" }

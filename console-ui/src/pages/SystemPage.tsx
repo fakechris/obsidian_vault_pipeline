@@ -308,9 +308,9 @@ const PROVIDER_PRESETS: {
 
 /** LLM provider card — a GUI over `.ovp/providers.toml`. Reads the current
  * values back (secrets masked; a masked value round-tripped on save means
- * "unchanged"). Children (scheduled runs) pick changes up immediately; the
- * in-process ask needs an app/server restart. */
-function ProviderSection() {
+ * "unchanged"). Ask re-reads the file on each question; scheduled runs load
+ * it when their ovp2 child starts — no portal restart. */
+function ProviderSection({ onSaved }: { onSaved?: () => void }) {
   const { t } = useI18n();
   const [preset, setPreset] = useState('custom');
   const [baseUrl, setBaseUrl] = useState('');
@@ -363,7 +363,10 @@ function ProviderSection() {
       ANTHROPIC_API_KEY: apiKey,
       OVP_LLM_NO_PROXY: noProxy ? '1' : '',
     })
-      .then(() => setNote(t('providers.saved')))
+      .then(() => {
+        setNote(t('providers.saved'));
+        onSaved?.();
+      })
       .catch((e: Error) => setError(e.message));
   };
 
@@ -520,7 +523,7 @@ function PublishSection() {
   );
 }
 
-function SettingsSection() {
+function SettingsSection({ refreshKey = 0 }: { refreshKey?: number }) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [error, setError] = useState(false);
@@ -529,7 +532,10 @@ function SettingsSection() {
     let cancelled = false;
     fetchSettings()
       .then((s) => {
-        if (!cancelled) setSettings(s);
+        if (!cancelled) {
+          setSettings(s);
+          setError(false);
+        }
       })
       .catch(() => {
         if (!cancelled) setError(true);
@@ -537,7 +543,7 @@ function SettingsSection() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshKey]);
 
   return (
     <div className="section">
@@ -624,6 +630,9 @@ function SettingsSection() {
 export default function SystemPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
+  // Bump after LLM Provider save so Settings re-reads llm_configured without
+  // a full page reload (Ask already re-reads providers.toml per request).
+  const [settingsRefresh, setSettingsRefresh] = useState(0);
   // Only Runs/Attention need the index — Settings, concepts and the
   // pipeline links must render in exactly the missing-index state this
   // page helps diagnose (codex review P1). /api/settings returns null
@@ -648,8 +657,8 @@ export default function SystemPage() {
       <ConceptsSection />
       <RunNowSection />
       <PublishSection />
-      <ProviderSection />
-      <SettingsSection />
+      <ProviderSection onSaved={() => setSettingsRefresh((n) => n + 1)} />
+      <SettingsSection refreshKey={settingsRefresh} />
     </>
   );
 }

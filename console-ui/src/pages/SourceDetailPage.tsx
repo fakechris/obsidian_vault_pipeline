@@ -11,6 +11,7 @@ import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
 import { entityUrl, fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
+import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView } from '../lib/markdown';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
 
@@ -126,6 +127,8 @@ function SourceTags({
             placeholder={t('tags.addPlaceholder')}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              // IME: Enter confirms a candidate, not "add tag" (lib/ime.ts).
+              if (isReactImeComposing(e)) return;
               if (e.key === 'Enter' && draft.trim()) write([draft.trim()]);
             }}
           />

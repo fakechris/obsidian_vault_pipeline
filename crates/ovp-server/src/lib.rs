@@ -14,6 +14,11 @@
 // `graph::…` call sites in this file are unchanged.
 use ovp_api_projection::{bodies, graph, readers};
 
+mod ask_client;
+pub use ask_client::{
+    api_key_configured, providers_ask_client_factory, LLM_NOT_CONFIGURED,
+};
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
@@ -26,7 +31,10 @@ use ovp_index::{
     read_index, read_last_run_model,
 };
 use ovp_llm::ModelClient;
-use ovp_memory::ask::{AskArgs, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence};
+use ovp_memory::ask::{
+    AskArgs, AskHistoryTurn, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence,
+    valid_chat_stem,
+};
 use ovp_memory::verify::{citation_key, citations_in_order};
 use tiny_http::{Header, Method, Response, Server};
 
@@ -84,9 +92,11 @@ fn ask_guard(lookup: impl Fn(&str) -> Option<String>) -> Duration {
     Duration::from_secs(secs + ASK_GUARD_MARGIN_SECS)
 }
 
-/// Builds the LLM client for `POST /api/ask` on demand. Injected by the CLI,
-/// which owns the feature-gated live transport and the key check — the
-/// server itself stays transport-free. `None` = ask answers 503.
+/// Builds the LLM client for `POST /api/ask` on demand. Product hosts install
+/// [`providers_ask_client_factory`] (re-reads `.ovp/providers.toml` each call;
+/// no `set_var`). `None` = binary built without the `anthropic` feature — ask
+/// answers 503. A present factory that cannot resolve a key returns
+/// [`LLM_NOT_CONFIGURED`] (also mapped to 503).
 pub type AskClientFactory = Arc<dyn Fn() -> Result<Box<dyn ModelClient>, String> + Send + Sync>;
 
 pub struct ServeConfig {
@@ -1899,7 +1909,10 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // two legitimately differ mid-run. `queued_at_build` is null pre-index.
         "queued_live": state.live_queued_count(model.as_ref()),
         "queued_at_build": model.as_ref().map(|m| m.totals.queued),
-        "llm_configured": state.ask_client.is_some(),
+        // Factory present (anthropic feature) AND a non-empty key in env or
+        // providers.toml — matches when POST /api/ask will accept work.
+        "llm_configured": state.ask_client.is_some()
+            && api_key_configured(&state.vault_root),
         "ask_limits": {
             "timeout_secs": state.ask_timeout.as_secs(),
             "max_concurrent": state.ask_slots.max,
@@ -2040,6 +2053,37 @@ fn handle_ask(
             r#"{"error":"body must be {\"question\": \"<non-empty string>\"}"}"#,
         );
     }
+    // Optional session stem: continue an existing `.ovp/chats/<chat>.md`
+    // (append + multi-turn context). Invalid stems are ignored (new chat).
+    let chat = parsed
+        .get("chat")
+        .and_then(|c| c.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && valid_chat_stem(s))
+        .map(str::to_string);
+    // Prior turns for LLM continuity (client-owned live thread). Cap so a
+    // runaway body cannot blow the request.
+    const MAX_HISTORY_TURNS: usize = 32;
+    let history: Vec<AskHistoryTurn> = parsed
+        .get("history")
+        .and_then(|h| h.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let q = item.get("question")?.as_str()?.trim();
+                    let a = item.get("answer")?.as_str()?.trim();
+                    if q.is_empty() || a.is_empty() {
+                        return None;
+                    }
+                    Some(AskHistoryTurn {
+                        question: q.to_string(),
+                        answer: a.to_string(),
+                    })
+                })
+                .take(MAX_HISTORY_TURNS)
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Fail-loud config checks BEFORE spawning anything. The `code` field is
     // a stable machine-readable discriminator for the portal (the human
@@ -2069,12 +2113,27 @@ fn handle_ask(
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _slot = slot; // held for the WHOLE pipeline, freed on drop
-        let result = run_ask(&factory, &model, evidence.as_ref(), &question, &vault_root);
+        let result = run_ask(
+            &factory,
+            &model,
+            evidence.as_ref(),
+            &question,
+            chat.as_deref(),
+            &history,
+            &vault_root,
+        );
         let _ = tx.send(result);
     });
 
     match rx.recv_timeout(state.ask_timeout) {
         Ok(Ok(payload)) => json_response(200, &payload.to_string()),
+        Ok(Err(e)) if e == LLM_NOT_CONFIGURED => {
+            // Factory is installed (feature on) but no key in env / providers.toml.
+            json_response(
+                503,
+                r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+            )
+        }
         Ok(Err(e)) => {
             let body = serde_json::json!({ "error": e });
             json_response(502, &body.to_string())
@@ -2097,17 +2156,22 @@ fn handle_ask(
 
 /// The worker side of /api/ask: build the client, run the pipeline (chat
 /// always saved — parity with `ovp2 ask --save`), shape the JSON payload.
+/// `chat` + `history` continue a multi-turn session (one history entry).
 fn run_ask(
     factory: &AskClientFactory,
     model: &IndexModel,
     evidence: Option<&EvidenceModel>,
     question: &str,
+    chat: Option<&str>,
+    history: &[AskHistoryTurn],
     vault_root: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
     let mut client = factory()?;
     let args = AskArgs {
         question: question.to_string(),
         save_chat: true,
+        chat: chat.map(str::to_string),
+        history: history.to_vec(),
         ..Default::default()
     };
     let result = ask_with_optional_evidence(model, evidence, client.as_mut(), &args, vault_root)?;
@@ -3498,8 +3562,20 @@ mod tests {
         );
         assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
 
-        // With an ask client the flag flips.
+        // Factory alone is not enough — product surface needs a key in
+        // providers.toml (or env). Seed the file the System page writes.
         st.ask_client = Some(scripted_factory("answer", Duration::ZERO));
+        let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
+        assert_eq!(
+            v["llm_configured"], false,
+            "factory without key still reports unconfigured"
+        );
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nANTHROPIC_API_KEY = \"sk-test\"\n",
+        )
+        .unwrap();
         let v = body_json(dispatch(&st, Method::Get, "/api/settings", ""));
         assert_eq!(v["llm_configured"], true);
 
@@ -4195,6 +4271,36 @@ mod tests {
         detail.into_reader().read_to_string(&mut md).unwrap();
         assert!(md.contains("filesystem memory card unit text"));
         assert!(md.contains("[claim:c01]"));
+
+        // Multi-turn: continue the same chat → still one history entry.
+        st.ask_client = Some(scripted_factory("follow-up answer", Duration::ZERO));
+        let cont = serde_json::json!({
+            "question": "and the follow-up?",
+            "chat": chat,
+            "history": [{
+                "question": "filesystem memory card unit text",
+                "answer": answer,
+            }],
+        })
+        .to_string();
+        let resp2 = ask(&st, &cont);
+        assert_eq!(resp2.status_code(), 200);
+        let v2 = body_json(resp2);
+        assert_eq!(v2["chat"], chat.as_str());
+        assert_eq!(v2["answer"], "follow-up answer");
+        let list2 = body_json(dispatch(&st, Method::Get, "/api/chats", ""));
+        assert_eq!(
+            list2.as_array().unwrap().len(),
+            1,
+            "continued turns stay one history row"
+        );
+        let mut md2 = String::new();
+        dispatch(&st, Method::Get, &format!("/api/chats/{chat}"), "")
+            .into_reader()
+            .read_to_string(&mut md2)
+            .unwrap();
+        assert!(md2.contains("and the follow-up?"));
+        assert!(md2.contains("follow-up answer"));
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

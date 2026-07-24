@@ -17,6 +17,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::verify::{VerificationReport, verify_answer};
 
+/// One completed Q/A turn from the same conversation (not including the
+/// question currently being asked). Used for multi-turn continuity so
+/// follow-ups like "what about that claim?" resolve against prior dialogue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskHistoryTurn {
+    pub question: String,
+    pub answer: String,
+}
+
 pub struct AskArgs {
     pub question: String,
     pub max_context_hits: usize,
@@ -25,6 +34,12 @@ pub struct AskArgs {
     pub model_name: String,
     pub save_chat: bool,
     pub verify_citations: bool,
+    /// Prior turns in this conversation (oldest first). Empty = new session.
+    pub history: Vec<AskHistoryTurn>,
+    /// Stem of an existing `.ovp/chats/<chat>.md` to append to. `None` creates
+    /// a new file. Invalid / missing names fall back to creating a new chat
+    /// (never path-traverse).
+    pub chat: Option<String>,
 }
 
 impl Default for AskArgs {
@@ -37,6 +52,8 @@ impl Default for AskArgs {
             model_name: "claude-sonnet-4-20250514".into(),
             save_chat: false,
             verify_citations: true,
+            history: Vec::new(),
+            chat: None,
         }
     }
 }
@@ -132,18 +149,35 @@ pub fn ask_with_optional_evidence(
         Cite evidence with the FULL bracketed key exactly as shown in the context \
         (e.g. [claim:ck-1a2b3c4d], [card:…], [unit:…]) — never shorten or drop the \
         kind prefix. \
+        Follow-up questions may refer to earlier turns in this conversation — use \
+        that dialogue for reference, but still ground factual claims in the \
+        evidence context for the CURRENT question. \
         If evidence is insufficient, say what is missing. Do not invent citations."
         .to_string();
 
-    let user_msg = format!(
-        "Context from OVP evidence index ({context_hits} hits):\n\n{context}\n\n---\n\nQuestion: {}",
-        args.question
-    );
+    // Prior turns as dialogue (no evidence re-injection — each turn retrieves
+    // fresh context for its own question). Latest user message carries the
+    // retrieved evidence for THIS question.
+    let mut messages: Vec<ModelMessage> = Vec::with_capacity(args.history.len() * 2 + 1);
+    for turn in &args.history {
+        messages.push(ModelMessage::User {
+            content: turn.question.clone(),
+        });
+        messages.push(ModelMessage::Assistant {
+            content: turn.answer.clone(),
+        });
+    }
+    messages.push(ModelMessage::User {
+        content: format!(
+            "Context from OVP evidence index ({context_hits} hits):\n\n{context}\n\n---\n\nQuestion: {}",
+            args.question
+        ),
+    });
 
     let request = ModelRequest {
         model: args.model_name.clone(),
         system: Some(system),
-        messages: vec![ModelMessage::User { content: user_msg }],
+        messages,
         max_tokens: args.max_tokens,
         temperature: Some(0.4),
         // v3: stable ck- claim citation keys + verbatim-full-key prompt rule
@@ -159,18 +193,15 @@ pub fn ask_with_optional_evidence(
     };
 
     let chat_file = if args.save_chat {
-        let ts = chrono_like_timestamp();
-        let chats_dir = vault_root.join(".ovp").join("chats");
-        std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
-        let chat_content = format!(
-            "# Ask — {}\n\n**Q:** {}\n\n**A:** {}\n\n---\n\n## Evidence\n\n{}\n\n## Verification\n\n{}\n\nContext hits: {context_hits}\n",
-            ts,
-            args.question,
-            reply.text,
-            render_evidence_markdown(&evidence_items),
-            render_verification_markdown(verification.as_ref())
-        );
-        Some(write_unique_chat(&chats_dir, &ts, &chat_content)?)
+        Some(save_or_append_chat(
+            vault_root,
+            args.chat.as_deref(),
+            &args.question,
+            &reply.text,
+            &evidence_items,
+            verification.as_ref(),
+            context_hits,
+        )?)
     } else {
         None
     };
@@ -182,6 +213,73 @@ pub fn ask_with_optional_evidence(
         verification,
         chat_file,
     })
+}
+
+/// Safe chat stem: single path component, same rules as GET /api/chats/:name.
+pub fn valid_chat_stem(name: &str) -> bool {
+    let name = name.strip_suffix(".md").unwrap_or(name);
+    !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Create a new chat file, or append a turn to an existing one when `chat`
+/// names a valid existing stem. Always returns the path that was written.
+fn save_or_append_chat(
+    vault_root: &Path,
+    chat: Option<&str>,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    verification: Option<&VerificationReport>,
+    context_hits: usize,
+) -> Result<PathBuf, String> {
+    let chats_dir = vault_root.join(".ovp").join("chats");
+    std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
+
+    let turn_block = format_chat_turn(question, answer, evidence, verification, context_hits);
+
+    if let Some(stem) = chat.map(str::trim).filter(|s| !s.is_empty()) {
+        if valid_chat_stem(stem) {
+            let path = chats_dir.join(format!("{stem}.md"));
+            if path.is_file() {
+                append_chat_turn(&path, &turn_block)?;
+                return Ok(path);
+            }
+        }
+        // Invalid name or missing file → fall through to a new session file.
+    }
+
+    let ts = chrono_like_timestamp();
+    let chat_content = format!("# Ask — {ts}\n\n{turn_block}");
+    write_unique_chat(&chats_dir, &ts, &chat_content)
+}
+
+fn format_chat_turn(
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    verification: Option<&VerificationReport>,
+    context_hits: usize,
+) -> String {
+    format!(
+        "**Q:** {question}\n\n**A:** {answer}\n\n---\n\n## Evidence\n\n{}\n\n## Verification\n\n{}\n\nContext hits: {context_hits}\n",
+        render_evidence_markdown(evidence),
+        render_verification_markdown(verification)
+    )
+}
+
+fn append_chat_turn(path: &Path, turn_block: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open chat {}: {e}", path.display()))?;
+    // Separate turns with a blank line so the transcript stays readable.
+    write!(file, "\n---\n\n{turn_block}")
+        .map_err(|e| format!("append chat {}: {e}", path.display()))
 }
 
 #[derive(Debug)]
@@ -644,6 +742,90 @@ mod tests {
         assert_eq!(report.cited, 1);
         assert_eq!(report.verified, 1);
         assert!(report.missing.is_empty());
+    }
+
+    #[test]
+    fn continuing_a_chat_appends_to_the_same_file_and_passes_history() {
+        let vault = std::env::temp_dir().join(format!(
+            "ovp-memory-chat-continue-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&vault);
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let captured = Arc::new(Mutex::new(None));
+        let mut client = CapturingClient {
+            request: captured.clone(),
+            reply_text: "first answer".into(),
+        };
+        let first = ask_with_evidence(
+            &model(),
+            &evidence(),
+            &mut client,
+            &AskArgs {
+                question: "What is memory?".into(),
+                save_chat: true,
+                ..Default::default()
+            },
+            &vault,
+        )
+        .unwrap();
+        let stem = first
+            .chat_file
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap()
+            .to_string();
+
+        client.reply_text = "follow-up answer".into();
+        let second = ask_with_evidence(
+            &model(),
+            &evidence(),
+            &mut client,
+            &AskArgs {
+                question: "What about that claim?".into(),
+                save_chat: true,
+                chat: Some(stem.clone()),
+                history: vec![crate::ask::AskHistoryTurn {
+                    question: "What is memory?".into(),
+                    answer: "first answer".into(),
+                }],
+                ..Default::default()
+            },
+            &vault,
+        )
+        .unwrap();
+        assert_eq!(
+            second
+                .chat_file
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .and_then(|s| s.to_str()),
+            Some(stem.as_str()),
+            "follow-up must append to the same chat stem"
+        );
+        let md = std::fs::read_to_string(first.chat_file.as_ref().unwrap()).unwrap();
+        assert!(md.contains("What is memory?"));
+        assert!(md.contains("first answer"));
+        assert!(md.contains("What about that claim?"));
+        assert!(md.contains("follow-up answer"));
+
+        // LLM request carries prior dialogue + current evidence-grounded user turn.
+        let req = captured.lock().unwrap().clone().expect("request captured");
+        assert!(req.messages.len() >= 3, "history user+assistant + current user");
+        match &req.messages[0] {
+            ovp_llm::ModelMessage::User { content } => assert_eq!(content, "What is memory?"),
+            other => panic!("expected prior user turn, got {other:?}"),
+        }
+        match &req.messages[1] {
+            ovp_llm::ModelMessage::Assistant { content } => {
+                assert_eq!(content, "first answer")
+            }
+            other => panic!("expected prior assistant turn, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]

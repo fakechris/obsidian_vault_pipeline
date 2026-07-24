@@ -157,16 +157,14 @@ fn resolve_viz_dir(app: &AppHandle) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../console-ui/dist")
 }
 
-/// Start `ovp-server` in a background thread and return its loopback URL. Ask is
-/// left unconfigured for now (POST /api/ask answers 503) — read/query/portal all
-/// work; live ask is wired in a later stage.
+/// Start `ovp-server` in a background thread and return its loopback URL.
+///
+/// Ask uses [`ovp_server::providers_ask_client_factory`]: it re-reads
+/// `.ovp/providers.toml` on every question (env still wins when set) and never
+/// calls `set_var` — safe under Tauri's multi-threaded runtime. Scheduler
+/// children still exec the bundled `ovp2` sidecar, which loads providers.toml
+/// into their own env at process start.
 fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
-    // NOTE deliberately NO `providers::apply_providers_env` here: the Tauri
-    // runtime is multithreaded by the time any command handler runs, so the
-    // unsafe `set_var` contract cannot hold. The desktop process itself does
-    // not read provider env today (in-process ask stays unconfigured), and
-    // every scheduler job execs a fresh `ovp2` child whose own startup loads
-    // `.ovp/providers.toml` safely.
     // Retry a few times: free_port has a tiny TOCTOU window (another process
     // could grab the port between the probe and run_server binding it), so a
     // lost race just picks a new port rather than failing the launch.
@@ -179,12 +177,13 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
                 continue;
             }
         };
+        let ask_client = ovp_server::providers_ask_client_factory(vault.clone());
         let config = ovp_server::ServeConfig {
             vault_root: vault.clone(),
             host: "127.0.0.1".to_string(),
             port,
             viz_dir: Some(viz_dir.clone()),
-            ask_client: None,
+            ask_client,
             // Manual-run children must exec the bundled CLI sidecar — the
             // desktop's own current_exe is the GUI shell, not ovp2.
             ovp2_bin: resolve_ovp2_bin(),

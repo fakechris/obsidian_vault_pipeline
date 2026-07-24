@@ -6,6 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+# Live Anthropic-compatible transport for POST /api/ask (desktop + serve).
+# Off by default so the offline test gauntlet stays HTTP-free; product builds
+# enable it (dist-workspace, desktop app).
+anthropic = ["ovp-llm/anthropic"]
+
 [dependencies]
 ovp-api-projection = { path = "../ovp-api-projection" }
 ovp-index = { path = "../ovp-index" }

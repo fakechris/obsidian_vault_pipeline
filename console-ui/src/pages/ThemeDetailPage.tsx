@@ -1,11 +1,13 @@
 /** Theme detail `/knowledge/theme/:theme` — answers US3/US4 (design §3.3).
  *
- * Claims list (durable first, caveated marked) with a right-rail
- * KnowledgeGraph at theme scope. Every claim card carries id=<claim_id> so
- * /knowledge/theme/:t#<claim_id> scrolls to and highlights the card — the
- * same anchor pattern the source page uses for unit line anchors. Cited
- * sources link to /library/:sha; legacy case ids whose pack has no source
- * sha render as plain text (handoff note 5: never navigate to a 404). */
+ * Two-column layout so the theme graph stays on the first screen:
+ * left = Topic overview (when present) + claims list (durable first,
+ * caveated marked); right rail = KnowledgeGraph at theme scope (sticky).
+ * Every claim card carries id=<claim_id> so /knowledge/theme/:t#<claim_id>
+ * scrolls to and highlights the card — the same anchor pattern the source
+ * page uses for unit line anchors. Cited sources link to /library/:sha;
+ * legacy case ids whose pack has no source sha render as plain text
+ * (handoff note 5: never navigate to a 404). */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
@@ -243,42 +245,43 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
 
   const durable = claims.filter((c) => c.status === 'durable').length;
 
-  if (claims.length === 0) {
-    return (
-      <EmptyState>
-        <p>{t('theme.empty')}</p>
-        <Link className="tiny" to="/knowledge">
-          {t('theme.backToKnowledge')} →
-        </Link>
-      </EmptyState>
-    );
-  }
-
   return (
-    <div className="grid two-col">
-      <div>
-        <div className="claim-meta" style={{ marginBottom: '0.9rem' }}>
-          {t('theme.counts', {
-            durable,
-            caveated: claims.length - durable,
-          })}
-        </div>
-        {claims.map((c) => (
-          <ClaimCard
-            key={c.claim_id}
-            claim={c}
-            byCase={byCase}
-            highlighted={anchor === c.claim_id}
-          />
-        ))}
+    <div className="grid two-col theme-detail-layout">
+      <div className="theme-main">
+        <TopicOverview theme={theme} />
+        {claims.length === 0 ? (
+          <EmptyState>
+            <p>{t('theme.empty')}</p>
+            <Link className="tiny" to="/knowledge">
+              {t('theme.backToKnowledge')} →
+            </Link>
+          </EmptyState>
+        ) : (
+          <>
+            <div className="claim-meta theme-claims-meta">
+              {t('theme.counts', {
+                durable,
+                caveated: claims.length - durable,
+              })}
+            </div>
+            {claims.map((c) => (
+              <ClaimCard
+                key={c.claim_id}
+                claim={c}
+                byCase={byCase}
+                highlighted={anchor === c.claim_id}
+              />
+            ))}
+          </>
+        )}
       </div>
-      <div>
-        <div className="card">
+      <aside className="theme-rail">
+        <div className="card theme-rail-card">
           <h3 style={{ marginBottom: '0.6rem' }}>{t('theme.graph')}</h3>
           <KnowledgeGraph scope="theme" id={theme} height={360} />
           <div className="graph-caption">{t('theme.graphCaption')}</div>
         </div>
-      </div>
+      </aside>
     </div>
   );
 }
@@ -311,7 +314,6 @@ export default function ThemeDetailPage() {
               {t('theme.unclassifiedNote')}
             </p>
           )}
-          <TopicOverview theme={theme} />
           <ThemeBody model={model} theme={theme} />
         </>
       )}
