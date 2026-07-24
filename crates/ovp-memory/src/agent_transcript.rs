@@ -170,9 +170,13 @@ pub fn valid_session_id(id: &str) -> bool {
 }
 
 impl SessionStore {
-    /// Open (creating the dir if needed), COMPACTING any events after the
-    /// last `turn_finished` — the crash-recovery contract: a torn turn never
-    /// becomes visible state.
+    /// Open (creating the dir if needed) and take a READ-ONLY view: events
+    /// after the last `turn_finished` are ignored IN MEMORY, but the file is
+    /// never rewritten here — a concurrent turn may be mid-append, and a
+    /// pre-lock rewrite would race it (rename to the compacted copy while the
+    /// active writer finishes against the old inode, losing its turn).
+    /// Physical compaction happens only under the session lock, in
+    /// [`Self::reload_under_lock`].
     pub fn open(sessions_dir: &Path, session_id: &str) -> Result<Self, StoreError> {
         if !valid_session_id(session_id) {
             return Err(StoreError::Io(format!(
@@ -183,18 +187,25 @@ impl SessionStore {
             .map_err(|e| StoreError::Io(format!("create {}: {e}", sessions_dir.display())))?;
         let path = sessions_dir.join(format!("{session_id}.jsonl"));
         let lock_path = sessions_dir.join(format!("{session_id}.lock"));
+        let mut store = Self { path, lock_path, events: Vec::new() };
+        store.read_complete_events()?;
+        Ok(store)
+    }
 
+    /// (Re)read the file into `self.events`, truncating to the last complete
+    /// turn IN MEMORY. Returns whether the file had a torn/extra tail.
+    fn read_complete_events(&mut self) -> Result<bool, StoreError> {
         let mut events: Vec<TranscriptEvent> = Vec::new();
         let mut torn_tail = false;
-        if path.is_file() {
-            let body = fs::read_to_string(&path)
-                .map_err(|e| StoreError::Io(format!("read {}: {e}", path.display())))?;
+        if self.path.is_file() {
+            let body = fs::read_to_string(&self.path)
+                .map_err(|e| StoreError::Io(format!("read {}: {e}", self.path.display())))?;
             let mut parsed: Vec<TranscriptEvent> = Vec::new();
             for line in body.lines().filter(|l| !l.trim().is_empty()) {
                 match serde_json::from_str::<TranscriptEvent>(line) {
                     Ok(ev) => parsed.push(ev),
                     // A torn/corrupt line means everything from here on is
-                    // suspect; keep only what precedes it, then compact below.
+                    // suspect; keep only what precedes it.
                     Err(_) => {
                         torn_tail = true;
                         break;
@@ -210,12 +221,20 @@ impl SessionStore {
             parsed.truncate(last_complete);
             events = parsed;
         }
+        self.events = events;
+        Ok(torn_tail)
+    }
 
-        let store = Self { path, lock_path, events };
-        if torn_tail {
-            store.rewrite()?;
+    /// Under the session lock: re-read the file (the pre-lock view may be
+    /// stale — another turn can have committed between `open` and `lock`) and
+    /// physically COMPACT a crash-torn tail. Safe here and only here: the
+    /// lock guarantees no concurrent appender.
+    pub fn reload_under_lock(&mut self, _lock: &SessionLock) -> Result<(), StoreError> {
+        let torn = self.read_complete_events()?;
+        if torn {
+            self.rewrite()?;
         }
-        Ok(store)
+        Ok(())
     }
 
     /// Atomic whole-file rewrite (tmp + rename) — used only by compaction.
@@ -259,10 +278,25 @@ impl SessionStore {
                     if pid_alive(holder) {
                         return Err(StoreError::SessionBusy { holder_pid: holder });
                     }
-                    // Stale (dead pid / unreadable): reclaim once, retry create.
+                    // Stale (dead pid / unreadable). Reclaim must be ATOMIC:
+                    // a naive remove-then-create lets contender B delete the
+                    // lock contender A just created after the same removal.
+                    // rename() arbitrates — exactly one mover wins; the loser
+                    // gets NotFound and treats the session as busy (someone
+                    // else is mid-reclaim).
                     if attempt == 0 {
-                        let _ = fs::remove_file(&self.lock_path);
-                        continue;
+                        let grave = self
+                            .lock_path
+                            .with_extension(format!("stale-{}", std::process::id()));
+                        match fs::rename(&self.lock_path, &grave) {
+                            Ok(()) => {
+                                let _ = fs::remove_file(&grave);
+                                continue; // we won the reclaim — retry create_new
+                            }
+                            Err(_) => {
+                                return Err(StoreError::SessionBusy { holder_pid: holder });
+                            }
+                        }
                     }
                     return Err(StoreError::SessionBusy { holder_pid: holder });
                 }

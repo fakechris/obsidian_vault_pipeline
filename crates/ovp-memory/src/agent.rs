@@ -179,10 +179,32 @@ pub fn run_agent_turn(
         });
     }
 
-    let _lock = store.lock().map_err(|e| match e {
+    let lock = store.lock().map_err(|e| match e {
         StoreError::SessionBusy { .. } => AgentError::SessionBusy,
         StoreError::Io(d) => AgentError::Store(d),
     })?;
+    // Under the lock: refresh state (a turn may have committed since `open`,
+    // which would stale our turn id + projection) and physically compact any
+    // crash-torn tail — the only place a rewrite cannot race an appender.
+    store
+        .reload_under_lock(&lock)
+        .map_err(|e| AgentError::Store(e.to_string()))?;
+    // Re-check idempotency against the FRESH view (the same key may have
+    // completed between the pre-lock check and lock acquisition).
+    if let Some(key) = idempotency_key
+        && let Some(done) = store.completed_turn_for_key(key)
+    {
+        return Ok(AgentOutcome {
+            turn_id: done.turn_id,
+            answer: done.answer,
+            stopped_reason: parse_stopped(&done.stopped_reason),
+            rounds: done.rounds,
+            tool_trace: Vec::new(),
+            input_tokens_total: done.input_tokens_total,
+            output_tokens_total: done.output_tokens_total,
+            idempotent_replay: true,
+        });
+    }
 
     let started = Instant::now();
     let remaining = |started: Instant| cfg.deadline.saturating_sub(started.elapsed());
@@ -258,6 +280,17 @@ pub fn run_agent_turn(
 
         if calls.is_empty() {
             // No executable tools → the reply is the turn's terminal state.
+            // Record the terminal assistant text as a Message event: later
+            // turns project THIS turn and must see its answer, or multi-turn
+            // continuity breaks and the audit is incomplete.
+            if !reply.text.is_empty() {
+                let final_msg = ModelMessage::Assistant { content: reply.text.clone() };
+                messages.push(final_msg.clone());
+                events.push(TranscriptEvent::Message {
+                    turn_id: turn_id.clone(),
+                    message: final_msg,
+                });
+            }
             break 'turn match reply.stop_reason {
                 StopReason::Refusal => StoppedReason::Refusal,
                 // `unknown_stop_not_final`: fail-closed.
@@ -265,9 +298,12 @@ pub fn run_agent_turn(
                 // ToolUse with zero executable calls cannot happen (the parse
                 // layer rejects truncated tool turns); treat defensively.
                 StopReason::ToolUse => StoppedReason::ModelError,
-                StopReason::EndTurn | StopReason::StopSequence | StopReason::MaxTokens => {
-                    StoppedReason::Final
-                }
+                // A MaxTokens text answer is TRUNCATED — surfacing it as a
+                // clean Final would present an incomplete answer as success
+                // (`is_final_success` is false for MaxTokens). The partial
+                // text still reaches the caller via `answer`.
+                StopReason::MaxTokens => StoppedReason::ModelError,
+                StopReason::EndTurn | StopReason::StopSequence => StoppedReason::Final,
             };
         }
 
@@ -280,61 +316,76 @@ pub fn run_agent_turn(
             }
         }
 
-        // Record the assistant tool turn in the conversation + transcript.
+        // `max_rounds_auxiliary`: refuse the batch BEFORE recording the
+        // assistant tool turn — a recorded tool_use with no results would
+        // make every later projection protocol-invalid.
+        if rounds + 1 > cfg.max_rounds {
+            break 'turn StoppedReason::MaxRounds;
+        }
+        rounds += 1;
+
+        // Record the assistant tool turn VERBATIM from the provider blocks —
+        // interleaved text/tool_use order is part of the protocol and of
+        // deterministic replay (concatenating text would reorder it).
         let assistant_msg = ModelMessage::AssistantBlocks {
-            blocks: {
-                let mut blocks: Vec<AssistantBlock> = Vec::new();
-                if !reply.text.is_empty() {
-                    blocks.push(AssistantBlock::Text { text: reply.text.clone() });
-                }
-                blocks.extend(calls.iter().map(|(id, name, input)| AssistantBlock::ToolUse {
-                    id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                }));
-                blocks
-            },
+            blocks: reply
+                .blocks
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|b| match b {
+                    ovp_llm::ReplyBlock::Text { text } => {
+                        AssistantBlock::Text { text: text.clone() }
+                    }
+                    ovp_llm::ReplyBlock::ToolUse { id, name, input } => {
+                        AssistantBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        }
+                    }
+                })
+                .collect(),
         };
         messages.push(assistant_msg.clone());
         events.push(TranscriptEvent::Message { turn_id: turn_id.clone(), message: assistant_msg });
 
-        // `max_rounds_auxiliary`: cap tool-execution batches.
-        rounds += 1;
-        if rounds > cfg.max_rounds {
-            break 'turn StoppedReason::MaxRounds;
-        }
-
-        // Execute ALL calls — failed ones become is_error results so the
-        // round is always fully answered (`all_results_fed_back`).
+        // Execute the calls — failed ones become is_error results so the
+        // round is always fully answered (`all_results_fed_back`). A mid-
+        // batch deadline exhaustion fills the REMAINING calls with timeout
+        // error results: the recorded assistant turn must always get its
+        // complete, adjacent result batch or the transcript would be
+        // protocol-invalid for every later projection.
         let mut results: Vec<ToolResultBlock> = Vec::new();
         let mut breaker_tripped = false;
         let mut timed_out = false;
         for (id, name, input) in &calls {
             let left = remaining(started);
-            if left.is_zero() {
+            let outcome = if left.is_zero() || timed_out {
                 timed_out = true;
-                break;
-            }
-            let outcome = if tool_defs.iter().any(|d| &d.name == name) {
+                ToolOutcome::Failed("skipped: turn deadline exhausted".into())
+            } else if tool_defs.iter().any(|d| &d.name == name) {
                 tools.execute(name, input, left)
             } else {
                 // A hallucinated tool name is an arguments-class failure: it
                 // feeds back once and counts toward the breaker.
                 ToolOutcome::InvalidArgs(format!("unknown tool `{name}`"))
             };
-            let (mut content, is_error) = match outcome {
-                ToolOutcome::Ok(body) => (body, false),
+            let (mut content, is_error, was_invalid_args) = match outcome {
+                ToolOutcome::Ok(body) => (body, false, false),
                 ToolOutcome::InvalidArgs(detail) => {
                     let n = invalid_streak.entry(name.clone()).or_insert(0);
                     *n += 1;
                     if *n >= cfg.invalid_args_breaker {
                         breaker_tripped = true;
                     }
-                    (format!("invalid arguments: {detail}"), true)
+                    (format!("invalid arguments: {detail}"), true, true)
                 }
-                ToolOutcome::Failed(detail) => (format!("tool failed: {detail}"), true),
+                ToolOutcome::Failed(detail) => (format!("tool failed: {detail}"), true, false),
             };
-            if !is_error {
+            // The breaker counts CONSECUTIVE invalid-args per tool: any other
+            // outcome — success OR an execution failure — resets the streak.
+            if !was_invalid_args {
                 invalid_streak.remove(name);
             }
             if content.len() > cfg.max_result_bytes {
@@ -357,13 +408,15 @@ pub fn run_agent_turn(
             results.push(ToolResultBlock { tool_call_id: id.clone(), content, is_error });
         }
 
-        if timed_out {
-            break 'turn StoppedReason::Timeout;
-        }
-
+        // The COMPLETE batch is always recorded (adjacency), then a timeout
+        // ends the turn.
         let results_msg = ModelMessage::ToolResults { results };
         messages.push(results_msg.clone());
         events.push(TranscriptEvent::Message { turn_id: turn_id.clone(), message: results_msg });
+
+        if timed_out {
+            break 'turn StoppedReason::Timeout;
+        }
 
         if breaker_tripped {
             break 'turn StoppedReason::ToolError;
@@ -487,6 +540,8 @@ mod tests {
         Fail,
         Slow(Duration),
         Big(usize),
+        /// Per-call scripted outcomes (last one repeats).
+        Script(Vec<ToolOutcome>),
     }
 
     struct MockTools {
@@ -532,6 +587,10 @@ mod tests {
                     ToolOutcome::Ok("slow done".into())
                 }
                 Some(Behavior::Big(n)) => ToolOutcome::Ok("x".repeat(*n)),
+                Some(Behavior::Script(seq)) => {
+                    let n = self.calls.iter().filter(|c| c == &name).count() - 1;
+                    seq.get(n.min(seq.len() - 1)).cloned().unwrap_or(ToolOutcome::Failed("empty script".into()))
+                }
                 None => ToolOutcome::Failed("unrouted".into()),
             }
         }
@@ -696,7 +755,25 @@ mod tests {
         c.max_rounds = 3;
         let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::MaxRounds);
-        assert_eq!(out.rounds, 4, "stops when the cap is exceeded");
+        assert_eq!(out.rounds, 3, "the over-cap batch is refused BEFORE recording");
+        // The transcript must contain no unanswered tool_use: every recorded
+        // AssistantBlocks turn is followed by its ToolResults.
+        let msgs: Vec<_> = st
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::Message { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        for (i, m) in msgs.iter().enumerate() {
+            if matches!(m, ModelMessage::AssistantBlocks { .. }) {
+                assert!(
+                    matches!(msgs.get(i + 1), Some(ModelMessage::ToolResults { .. })),
+                    "tool turn at {i} lacks its adjacent results"
+                );
+            }
+        }
     }
 
     // Duplicate tool_use ids in ONE reply: nothing executes, fail-closed.
@@ -839,11 +916,24 @@ mod tests {
             .write_all(torn.as_bytes())
             .unwrap();
 
+        // A read-only open IGNORES the torn tail in memory but must NOT
+        // rewrite the file (it could race a concurrent appender).
         let st = store(dir.path());
-        assert_eq!(st.next_turn_id(), "t2", "torn turn compacted away");
+        assert_eq!(st.next_turn_id(), "t2", "torn turn ignored in memory");
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("torn"),
+            "open() must not rewrite pre-lock"
+        );
+        // Running a turn (which compacts UNDER THE LOCK) purges the torn tail.
+        let mut client = Scripted::new(vec![text_reply("fresh")]);
+        let mut tools = MockTools::new(&[]);
+        let mut st = store(dir.path());
+        let out =
+            run_agent_turn(&mut client, &mut tools, &mut st, "again?", None, &cfg()).unwrap();
+        assert_eq!(out.turn_id, "t2");
         assert!(
             !std::fs::read_to_string(&path).unwrap().contains("torn"),
-            "compaction rewrote the file without the torn tail"
+            "locked compaction removed the torn tail"
         );
     }
 
@@ -924,5 +1014,150 @@ mod tests {
         assert_eq!(out.stopped_reason, StoppedReason::ModelError);
         let st2 = store(dir.path());
         assert_eq!(st2.next_turn_id(), "t2", "failed turn is still a complete audit record");
+    }
+
+    // Mid-batch deadline exhaustion: remaining calls get timeout is_error
+    // results; the batch stays COMPLETE and adjacent, then the turn times out.
+    #[test]
+    fn mid_batch_timeout_completes_the_result_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Scripted::new(vec![tool_reply(&[("c1", "slow"), ("c2", "fast")])]);
+        let mut tools = MockTools::new(&[
+            ("slow", Behavior::Slow(Duration::from_millis(80))),
+            ("fast", Behavior::Ok("quick")),
+        ]);
+        let mut st = store(dir.path());
+        let mut c = cfg();
+        c.deadline = Duration::from_millis(40);
+        let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
+        assert_eq!(out.stopped_reason, StoppedReason::Timeout);
+        // Both calls answered — the skipped one as a timeout error.
+        let results_msg = st
+            .events()
+            .iter()
+            .find_map(|e| match e {
+                TranscriptEvent::Message { message: ModelMessage::ToolResults { results }, .. } => {
+                    Some(results.clone())
+                }
+                _ => None,
+            })
+            .expect("the batch must be recorded despite the timeout");
+        assert_eq!(results_msg.len(), 2);
+        assert!(!results_msg[0].is_error);
+        assert!(results_msg[1].is_error, "skipped call must be a timeout error result");
+        assert!(results_msg[1].content.contains("deadline exhausted"));
+    }
+
+    // MaxTokens without tools: a truncated answer must not present as Final.
+    #[test]
+    fn max_tokens_text_is_not_final() {
+        let dir = tempfile::tempdir().unwrap();
+        let truncated = Ok(ModelReply {
+            stop_reason: StopReason::MaxTokens,
+            ..text_reply("partial ans").unwrap()
+        });
+        let mut client = Scripted::new(vec![truncated]);
+        let mut tools = MockTools::new(&[]);
+        let mut st = store(dir.path());
+        let out =
+            run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        assert_eq!(out.stopped_reason, StoppedReason::ModelError);
+        assert_eq!(out.answer, "partial ans", "the partial text still reaches the caller");
+    }
+
+    // The terminal assistant answer is recorded — later turns project it.
+    #[test]
+    fn terminal_answer_recorded_for_next_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Scripted::new(vec![text_reply("the answer")]);
+        let mut tools = MockTools::new(&[]);
+        let mut st = store(dir.path());
+        run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        let proj = st.projection(1_000_000);
+        assert!(
+            proj.iter().any(|m| matches!(
+                m,
+                ModelMessage::Assistant { content } if content == "the answer"
+            )),
+            "multi-turn continuity requires the prior answer in the projection"
+        );
+    }
+
+    // Interleaved provider blocks survive verbatim into the recorded turn.
+    #[test]
+    fn assistant_block_order_preserved_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let interleaved = Ok(ModelReply {
+            model: "m".into(),
+            text: "a b".into(),
+            stop_reason: StopReason::ToolUse,
+            usage: Usage { input_tokens: 1, output_tokens: 1 },
+            blocks: Some(vec![
+                ReplyBlock::Text { text: "a".into() },
+                ReplyBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "search".into(),
+                    input: serde_json::json!({}),
+                },
+                ReplyBlock::Text { text: "b".into() },
+                ReplyBlock::ToolUse {
+                    id: "c2".into(),
+                    name: "search".into(),
+                    input: serde_json::json!({}),
+                },
+            ]),
+            raw_stop_reason: None,
+        });
+        let mut client = Scripted::new(vec![interleaved, text_reply("done")]);
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
+        let mut st = store(dir.path());
+        run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        let recorded = &client.requests[1].messages;
+        let blocks = recorded
+            .iter()
+            .find_map(|m| match m {
+                ModelMessage::AssistantBlocks { blocks } => Some(blocks.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let shape: Vec<&str> = blocks
+            .iter()
+            .map(|b| match b {
+                AssistantBlock::Text { .. } => "text",
+                AssistantBlock::ToolUse { .. } => "tool",
+            })
+            .collect();
+        assert_eq!(shape, vec!["text", "tool", "text", "tool"], "provider order is protocol");
+    }
+
+    // An execution failure BETWEEN invalid-args failures resets the streak:
+    // the breaker fires only on CONSECUTIVE invalid-args.
+    #[test]
+    fn execution_failure_resets_invalid_args_streak() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Scripted::new(vec![
+            tool_reply(&[("c1", "moody")]),
+            tool_reply(&[("c2", "moody")]),
+            tool_reply(&[("c3", "moody")]),
+            text_reply("survived"),
+        ]);
+        let mut tools = MockTools::new(&[(
+            "moody",
+            Behavior::Script(vec![
+                ToolOutcome::InvalidArgs("bad".into()),
+                ToolOutcome::Failed("boom".into()),
+                ToolOutcome::InvalidArgs("bad".into()),
+            ]),
+        )]);
+        let mut st = store(dir.path());
+        let mut c = cfg();
+        c.max_rounds = 10;
+        let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
+        assert_eq!(
+            out.stopped_reason,
+            StoppedReason::Final,
+            "invalid → failed → invalid is NOT consecutive; the loop survives"
+        );
+        assert_eq!(out.answer, "survived");
     }
 }
