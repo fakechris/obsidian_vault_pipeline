@@ -14,6 +14,19 @@ interface TauriGlobal {
   core?: { invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
 }
 
+/** True inside the Tauri desktop app (the global is injected there only). */
+export function isDesktopApp(): boolean {
+  return typeof window !== 'undefined' && !!(window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
+}
+
+/** Open a URL in the system browser via the app's `open_external` command.
+ * No-op outside the desktop app. Best-effort — never throws. */
+export function openInSystemBrowser(url: string): void {
+  const invoke = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__?.core?.invoke;
+  if (!invoke) return;
+  void invoke('open_external', { url }).catch(() => {});
+}
+
 export function installDesktopExternalLinks(): void {
   const tauri = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
   const invoke = tauri?.core?.invoke;

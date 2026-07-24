@@ -26,6 +26,9 @@ export const zh: Record<keyof typeof en, string> = {
   'nav.knowledge': '知识',
   'nav.ask': '对话',
   'nav.system': '系统',
+  'nav.back': '后退',
+  'nav.forward': '前进',
+  'nav.openInBrowser': '在浏览器中打开当前页',
 
   // status light
   'status.ok': '正常',
