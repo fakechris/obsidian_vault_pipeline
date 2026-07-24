@@ -2129,7 +2129,23 @@ fn handle_ask(
     // A3b (`ask_product_wiring-v1`): the FLAG-GATED agent path. The legacy
     // single-shot path below stays the byte-for-byte default until A3d.
     if state.ask_agent {
-        return handle_ask_agent(state, question, chat.as_deref(), slot, factory, model);
+        // Client retry key (A0 §3.7): a resend after a dropped response or
+        // 504 replays the completed turn instead of paying for a second one.
+        let idempotency_key = parsed
+            .get("idempotency_key")
+            .and_then(|k| k.as_str())
+            .map(str::trim)
+            .filter(|k| !k.is_empty() && k.len() <= 128)
+            .map(str::to_string);
+        return handle_ask_agent(
+            state,
+            question,
+            chat.as_deref(),
+            idempotency_key.as_deref(),
+            slot,
+            factory,
+            model,
+        );
     }
 
     // The slot was acquired at admission (before the body was even read —
@@ -2191,10 +2207,12 @@ fn handle_ask(
 /// audit authority (A1b). The agent deadline is derived UNDER the HTTP guard
 /// (`deadline_under_guard`): the loop's own timeout fires and the turn
 /// commits BEFORE the transport guard abandons the request.
+#[allow(clippy::too_many_arguments)]
 fn handle_ask_agent(
     state: &AppState,
     question: &str,
     chat: Option<&str>,
+    idempotency_key: Option<&str>,
     slot: AskSlot,
     factory: AskClientFactory,
     model: IndexModel,
@@ -2205,9 +2223,14 @@ fn handle_ask_agent(
     use ovp_memory::agent_transcript::{valid_session_id, SessionStore};
     use ovp_memory::vault_tools::VaultTools;
 
-    // Session id: the caller's (validated) or a generated timestamped one —
-    // returned in the response so the client can continue the session
-    // (`session_id_discipline`).
+    // Session id: the caller's (validated) or a generated one — returned in
+    // the response so the client can continue the session
+    // (`session_id_discipline`). A client that wants to POLL PROGRESS during
+    // its FIRST turn should supply its own fresh id (any [A-Za-z0-9_-]{1,64}
+    // string works; the store creates the session on first use) — the
+    // generated id is only knowable from the blocking response. The atomic
+    // counter makes same-millisecond generated ids collision-safe.
+    static SESSION_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let session = match chat {
         Some(c) if valid_session_id(c) => c.to_string(),
         Some(_) | None => {
@@ -2215,18 +2238,34 @@ fn handle_ask_agent(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
-            format!("agent-{now}")
+            let seq = SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("agent-{now}-{seq}")
         }
     };
 
-    // Fresh progress feed for this turn (`progress_slot_bounded`).
-    {
+    // Fresh progress feed for this turn (`progress_slot_bounded`) — but NEVER
+    // clobber a live feed: a concurrent request on a busy session must not
+    // wipe the running turn's events (its own 409 exits without feed
+    // ownership).
+    let owns_feed = {
         let mut feeds = state.ask_progress.lock().unwrap();
-        feeds.insert(session.clone(), AskProgressFeed::default());
-    }
+        match feeds.get(&session) {
+            Some(feed) if !feed.done => false,
+            _ => {
+                feeds.insert(session.clone(), AskProgressFeed::default());
+                true
+            }
+        }
+    };
 
     // Deadline strictly under the HTTP guard so the turn always CONCLUDES
-    // (and commits its transcript) before the transport gives up.
+    // (and commits its transcript) before the transport gives up. KNOWN
+    // BOUND (ask_agent-v1 `deferred_to_model_surface`): a blocking live
+    // model call cannot be interrupted mid-flight — transport retries can in
+    // the worst case outlive this guard; the engine then discards the late
+    // reply, commits an honest timeout turn, and releases the slot/lock when
+    // the call returns. Propagating the remaining budget INTO the transport
+    // is the ask_tool_protocol-v2 (model surface) work.
     let guard = state.ask_timeout;
     let deadline = guard
         .saturating_sub(Duration::from_secs(15))
@@ -2238,6 +2277,7 @@ fn handle_ask_agent(
     let progress_session = session.clone();
     let question = question.to_string();
     let response_session = session.clone();
+    let request_key = idempotency_key.map(str::to_string);
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -2277,6 +2317,9 @@ fn handle_ask_agent(
                         "stopped_reason": stopped_reason.as_str()
                     }),
                 };
+                if !owns_feed {
+                    return; // a rejected concurrent request never writes
+                }
                 let mut feeds = progress_map.lock().unwrap();
                 if let Some(feed) = feeds.get_mut(&progress_session) {
                     if feed.events.len() < MAX_PROGRESS_EVENTS {
@@ -2292,7 +2335,7 @@ fn handle_ask_agent(
                 &mut tools,
                 &mut store,
                 &question,
-                None,
+                request_key.as_deref(),
                 &cfg,
                 Some(&sink),
             )
@@ -2302,7 +2345,11 @@ fn handle_ask_agent(
             })?;
 
             let coverage = tools.coverage();
-            let citations = agent_citations(&outcome.answer, &model, &vault_root);
+            let records = ovp_api_projection::readers::load_active_records(
+                &vault_root,
+                &VaultLayout::new(),
+            );
+            let citations = agent_citations(&outcome.answer, &model, &records);
             let trace: Vec<serde_json::Value> = outcome
                 .tool_trace
                 .iter()
@@ -2327,8 +2374,10 @@ fn handle_ask_agent(
                 },
             }))
         })();
-        // Whatever happened, the feed must not stay live forever.
-        {
+        // Whatever happened, the OWNED feed must not stay live forever —
+        // a rejected concurrent request (no ownership) leaves the running
+        // turn's feed untouched.
+        if owns_feed {
             let mut feeds = progress_map.lock().unwrap();
             if let Some(feed) = feeds.get_mut(&progress_session) {
                 feed.done = true;
@@ -2379,9 +2428,8 @@ fn handle_ask_agent(
 fn agent_citations(
     answer: &str,
     model: &IndexModel,
-    vault_root: &std::path::Path,
+    records: &[ovp_domain::crystal::DurableRecord],
 ) -> Vec<serde_json::Value> {
-    let records = ovp_api_projection::readers::load_active_records(vault_root, &VaultLayout::new());
     citations_in_order(answer)
         .into_iter()
         .map(|key| {
@@ -2389,11 +2437,20 @@ fn agent_citations(
             match kind {
                 "claim" => {
                     let hit = records.iter().find(|r| r.claim_key == id);
+                    // Fail-closed anchor (same rule as the legacy citation
+                    // path): claim_ids can collide across runs, and a shared
+                    // anchor could open the WRONG claim — verified stays true
+                    // (the key resolved uniquely), the link is omitted.
+                    let link = hit.and_then(|r| {
+                        let same_id =
+                            records.iter().filter(|o| o.claim_id == r.claim_id).count();
+                        (same_id == 1).then(|| format!("/knowledge#{}", r.claim_id))
+                    });
                     serde_json::json!({
                         "id": key,
                         "kind": "claim",
                         "title": hit.map(|r| r.claim.chars().take(120).collect::<String>()),
-                        "link_target": hit.map(|r| format!("/knowledge#{}", r.claim_id)),
+                        "link_target": link,
                         "verified": hit.is_some(),
                     })
                 }
@@ -4760,6 +4817,78 @@ mod tests {
             .collect();
         assert_eq!(events.first().copied(), Some("started"));
         assert_eq!(events.last().copied(), Some("final"));
+    }
+
+    /// A3b round-1 gate: idempotent retries replay the completed turn (no
+    /// second paid call), generated session ids never collide, and ambiguous
+    /// legacy claim_ids get NO anchor link (fail-closed, legacy-path parity).
+    #[test]
+    fn agent_ask_idempotent_retry_and_collision_safe_ids() {
+        let vault = portal_vault("agent-idem", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault, None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory("first answer", Duration::from_millis(5)));
+        let resp = ask(
+            &st,
+            r#"{"question":"q","chat":"idem-s","idempotency_key":"key-1"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        let first: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        // Retry with the same key: same turn, no second model call (the
+        // scripted factory would answer differently is irrelevant — the
+        // replay never invokes it; assert the SAME turn id + answer).
+        let resp = ask(
+            &st,
+            r#"{"question":"q","chat":"idem-s","idempotency_key":"key-1"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        let retry: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(retry["turn_id"], first["turn_id"]);
+        assert_eq!(retry["answer"], "first answer");
+
+        // Two chat-less asks get DISTINCT generated session ids.
+        let r1 = ask(&st, r#"{"question":"a"}"#);
+        let r2 = ask(&st, r#"{"question":"b"}"#);
+        let v1: serde_json::Value =
+            serde_json::from_slice(r1.into_reader().get_ref()).unwrap();
+        let v2: serde_json::Value =
+            serde_json::from_slice(r2.into_reader().get_ref()).unwrap();
+        assert_ne!(v1["chat"], v2["chat"], "generated ids must never collide");
+    }
+
+    /// A3b round-1 gate: the ambiguity rule on claim anchors, unit-level.
+    #[test]
+    fn agent_citations_fail_closed_on_ambiguous_claim_ids() {
+        use ovp_domain::crystal::{
+            CrystalStatus, DurableRecord, FinalClass, ProvenanceClass, StrengthClass,
+        };
+        let record = |key: &str, id: &str| DurableRecord {
+            claim_key: key.into(),
+            claim_id: id.into(),
+            claim: "text".into(),
+            theme: String::new(),
+            source_cases: vec![],
+            citations: vec![],
+            provenance_score: 1.0,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: String::new(),
+            final_class: FinalClass::Durable,
+            run_id: "r".into(),
+            status: CrystalStatus::Active,
+        };
+        let records = vec![record("ck-a", "dup"), record("ck-b", "dup"), record("ck-c", "uniq")];
+        // A real (fixture-built) index: agent_citations only reads sources.
+        let vault = portal_vault("agent-ambig", "50-Inbox/03-Processed/good.md", "body\n");
+        let model = read_index(&vault).unwrap();
+        let cits = agent_citations("[claim:ck-a] [claim:ck-c]", &model, &records);
+        let a = &cits[0];
+        assert_eq!(a["verified"], true, "the key resolved uniquely");
+        assert!(a["link_target"].is_null(), "shared claim_id anchor must be omitted");
+        let c = &cits[1];
+        assert_eq!(c["link_target"], "/knowledge#uniq");
     }
 
     /// A3b: a busy session answers 409 without touching the model, and an
