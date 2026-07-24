@@ -139,6 +139,11 @@ impl std::error::Error for VaultToolError {}
 #[derive(Debug)]
 pub struct VaultTools {
     vault_root: PathBuf,
+    /// Serialized-result budget. MUST be coordinated with the driving
+    /// runtime's `AgentConfig.max_result_bytes` (A3 wiring passes it in via
+    /// [`Self::with_result_cap`]); results over this are refused, never
+    /// delivered for downstream blind truncation.
+    serialized_cap: usize,
     index: Option<Result<Arc<IndexModel>, String>>,
     records: Option<Result<Arc<Vec<DurableRecord>>, String>>,
     coverage: Coverage,
@@ -156,6 +161,7 @@ impl VaultTools {
     pub fn new(vault_root: impl Into<PathBuf>) -> Self {
         Self {
             vault_root: vault_root.into(),
+            serialized_cap: MAX_SERIALIZED_RESULT_BYTES,
             index: None,
             records: None,
             coverage: Coverage::default(),
@@ -163,6 +169,13 @@ impl VaultTools {
             body_capped: false,
             body_activity: false,
         }
+    }
+
+    /// Align the refusal budget with the driving runtime's per-result cap
+    /// (leave ~2 KiB headroom under `AgentConfig.max_result_bytes`).
+    pub fn with_result_cap(mut self, serialized_cap: usize) -> Self {
+        self.serialized_cap = serialized_cap.max(1024);
+        self
     }
 
     /// Coverage with the body layer COMPUTED from pagination progress:
@@ -281,11 +294,11 @@ impl VaultTools {
                 get_claim(&model, &records, claim_key.as_deref(), claim_id.as_deref())
                     .map_err(DispatchError::from)
             }
-            ParsedCall::ListRecentSources { n } => {
+            ParsedCall::ListRecentSources { n, date } => {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("source index unavailable: {e}"))
                 })?;
-                Ok(list_recent_sources(&model, n))
+                Ok(list_recent_sources(&model, n, date.as_deref()))
             }
         }
     }
@@ -313,7 +326,17 @@ impl ToolExecutor for VaultTools {
         // call value is consumed (fix: partial-once-sticky contradicted
         // "partial = pagination unfinished").
         let body_read_source = match &call {
-            ParsedCall::ReadSourceBody { source_id, .. } => Some(source_id.clone()),
+            ParsedCall::ReadSourceBody { source_id, cursor, .. } => Some((
+                source_id.clone(),
+                // Internal walk bookkeeping decodes the INPUT cursor — the
+                // response stays offset-free (`opaque_cursor_utf8`: no raw
+                // byte offsets as public API).
+                cursor
+                    .as_deref()
+                    .and_then(|c| c.strip_prefix(CURSOR_PREFIX))
+                    .and_then(|raw| raw.parse::<usize>().ok())
+                    .unwrap_or(0),
+            )),
             _ => None,
         };
         let is_chunk_search = matches!(&call, ParsedCall::SearchSourceChunks { .. });
@@ -324,7 +347,7 @@ impl ToolExecutor for VaultTools {
                 // the agent — its byte-truncation would hand the model broken
                 // JSON under a Complete coverage. A refusal with Partial
                 // coverage tells the model to narrow the query instead.
-                Ok(body) if body.len() > MAX_SERIALIZED_RESULT_BYTES => {
+                Ok(body) if body.len() > self.serialized_cap => {
                     self.merge_coverage(layer, LayerState::Partial);
                     ToolOutcome::Failed(format!(
                         "result too large to deliver intact ({} bytes serialized); \
@@ -339,16 +362,12 @@ impl ToolExecutor for VaultTools {
                         .unwrap_or(false);
                     if matches!(layer, Layer::Body) {
                         self.body_activity = true;
-                        if let Some(source_id) = body_read_source {
+                        if let Some((source_id, offset)) = body_read_source {
                             // Contiguity-verified progress: a page advances the
                             // walk only when it starts at the expected offset
                             // (restarts at 0 allowed); completion requires the
                             // contiguous chain to reach the terminal page.
                             // Jumping to an end offset yields no `done`.
-                            let offset = value
-                                .get("offset")
-                                .and_then(Value::as_u64)
-                                .unwrap_or(0) as usize;
                             let served = value
                                 .get("text")
                                 .and_then(Value::as_str)
@@ -488,7 +507,8 @@ pub fn tool_definitions() -> Vec<ToolDef> {
             json!({
                 "type": "object",
                 "properties": {
-                    "n": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT}
+                    "n": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT},
+                    "date": {"type": "string", "description": "Date prefix filter: 2026 | 2026-07 | 2026-07-24"}
                 },
                 "additionalProperties": false
             }),
@@ -649,7 +669,6 @@ pub fn read_source_body(
     }
     let truncated = end < total_bytes;
     let mut out = Map::new();
-    out.insert("offset".into(), json!(offset));
     out.insert("text".into(), json!(&text[offset..end]));
     out.insert("truncated".into(), json!(truncated));
     // Stable output shape: next_cursor is ALWAYS present — an explicit null on
@@ -694,26 +713,49 @@ pub fn search_source_chunks(
     let file = std::fs::File::open(&resolved).map_err(|e| {
         VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
     })?;
+    // BYTE-level bounded scan: no read_line (a single giant line would be
+    // allocated whole before any ceiling check). Retained memory ≤ the
+    // passage cap; transient memory = the BufReader block. Paragraph bytes
+    // are validated as UTF-8 only at flush — paragraph boundaries are
+    // newlines (single-byte, never mid-char); the passage cap may land
+    // mid-char, so the flush trims to the valid prefix.
     let mut reader = std::io::BufReader::new(file);
-    let mut matches = Vec::new();
+    let mut matches: Vec<(usize, usize, String)> = Vec::new();
     let mut passage_capped = false;
     let mut scan_capped = false;
     let mut scanned: usize = 0;
     let mut index: usize = 0;
-    let mut paragraph = String::new();
+    let mut paragraph: Vec<u8> = Vec::new();
     let mut paragraph_over_cap = false;
-    let mut line = String::new();
-    let flush = |paragraph: &mut String,
+    let mut line_blank = true;
+    let flush = |paragraph: &mut Vec<u8>,
                      over_cap: &mut bool,
                      index: &mut usize,
                      matches: &mut Vec<(usize, usize, String)>,
                      passage_capped: &mut bool| {
-        if !paragraph.trim().is_empty() {
-            let lower = paragraph.to_lowercase();
+        let text = match std::str::from_utf8(paragraph) {
+            Ok(s) => s,
+            // Cap landed mid-char: keep the valid prefix (flagged below).
+            Err(e) => std::str::from_utf8(&paragraph[..e.valid_up_to()]).unwrap_or(""),
+        };
+        if !text.trim().is_empty() {
+            let lower = text.to_lowercase();
             let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
             if score > 0 {
-                let (passage, capped) = cap_utf8_bytes(paragraph.trim_end(), MAX_PASSAGE_BYTES);
-                *passage_capped |= capped || *over_cap;
+                let trimmed = text.trim_end();
+                // A paragraph capped DURING accumulation already fits the
+                // byte budget — still mark it visibly (the same … marker a
+                // post-hoc cap would carry).
+                let (passage, capped) = if *over_cap {
+                    let cut = floor_char_boundary(
+                        trimmed,
+                        MAX_PASSAGE_BYTES.saturating_sub('…'.len_utf8()),
+                    );
+                    (format!("{}…", &trimmed[..cut]), true)
+                } else {
+                    cap_utf8_bytes(trimmed, MAX_PASSAGE_BYTES)
+                };
+                *passage_capped |= capped;
                 matches.push((score, *index, passage));
             }
             *index += 1;
@@ -721,31 +763,82 @@ pub fn search_source_chunks(
         paragraph.clear();
         *over_cap = false;
     };
-    loop {
-        line.clear();
-        let n = std::io::BufRead::read_line(&mut reader, &mut line).map_err(|e| {
-            VaultToolError::Failed(format!(
-                "source `{source_id}` at {rel_path} is not readable UTF-8: {e}"
-            ))
-        })?;
-        if n == 0 {
+    'scan: loop {
+        let buf = match std::io::BufRead::fill_buf(&mut reader) {
+            Ok(buf) => buf,
+            Err(e) => {
+                return Err(VaultToolError::Failed(format!(
+                    "reading source `{source_id}` at {rel_path}: {e}"
+                )));
+            }
+        };
+        if buf.is_empty() {
             break;
         }
-        scanned += n;
-        if line.trim().is_empty() {
-            flush(&mut paragraph, &mut paragraph_over_cap, &mut index, &mut matches, &mut passage_capped);
-        } else if paragraph.len() < MAX_PASSAGE_BYTES {
-            paragraph.push_str(&line);
-        } else {
-            // Bounded memory: score on the capped prefix; mark the passage.
-            paragraph_over_cap = true;
-        }
-        if scanned > MAX_CHUNK_SCAN_BYTES {
+        let allow = (MAX_CHUNK_SCAN_BYTES.saturating_sub(scanned)).min(buf.len());
+        if allow == 0 {
             scan_capped = true;
             break;
         }
+        // Process one buffered block; split on newlines (single-byte, so this
+        // is UTF-8 safe regardless of where the block boundary falls).
+        let mut consumed = 0;
+        while consumed < allow {
+            let chunk = &buf[consumed..allow];
+            match chunk.iter().position(|b| *b == b'\n') {
+                Some(nl) => {
+                    let line = &chunk[..nl];
+                    if line_blank && line.iter().all(|b| b.is_ascii_whitespace()) {
+                        flush(
+                            &mut paragraph,
+                            &mut paragraph_over_cap,
+                            &mut index,
+                            &mut matches,
+                            &mut passage_capped,
+                        );
+                    } else if paragraph.len() < MAX_PASSAGE_BYTES {
+                        let room = MAX_PASSAGE_BYTES - paragraph.len();
+                        let take = line.len().min(room);
+                        paragraph.extend_from_slice(&line[..take]);
+                        paragraph.push(b'\n');
+                        paragraph_over_cap |= take < line.len();
+                    } else {
+                        paragraph_over_cap = true;
+                    }
+                    line_blank = true;
+                    consumed += nl + 1;
+                }
+                None => {
+                    // Partial line (block boundary or giant line): append up
+                    // to the cap; the blank-line test only holds if every
+                    // byte seen so far was whitespace.
+                    line_blank &= chunk.iter().all(|b| b.is_ascii_whitespace());
+                    if paragraph.len() < MAX_PASSAGE_BYTES {
+                        let room = MAX_PASSAGE_BYTES - paragraph.len();
+                        let take = chunk.len().min(room);
+                        paragraph.extend_from_slice(&chunk[..take]);
+                        paragraph_over_cap |= take < chunk.len();
+                    } else {
+                        paragraph_over_cap = true;
+                    }
+                    consumed = allow;
+                }
+            }
+        }
+        scanned += consumed;
+        std::io::BufRead::consume(&mut reader, consumed);
+        if scanned >= MAX_CHUNK_SCAN_BYTES {
+            scan_capped = true;
+            break 'scan;
+        }
     }
-    flush(&mut paragraph, &mut paragraph_over_cap, &mut index, &mut matches, &mut passage_capped);
+    flush(
+        &mut paragraph,
+        &mut paragraph_over_cap,
+        &mut index,
+        &mut matches,
+        &mut passage_capped,
+    );
     passage_capped |= scan_capped;
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
@@ -968,9 +1061,17 @@ pub fn get_claim(
 }
 
 /// List recent sources, with ISO-like dates descending and undated rows last.
-pub fn list_recent_sources(model: &IndexModel, n: usize) -> Value {
-    let total = model.sources.len();
-    let mut sources = model.sources.iter().collect::<Vec<_>>();
+pub fn list_recent_sources(model: &IndexModel, n: usize, date: Option<&str>) -> Value {
+    let mut sources = model
+        .sources
+        .iter()
+        .filter(|s| match date {
+            // Prefix filter per the A2 catalog: "2026", "2026-07", "2026-07-24".
+            Some(prefix) => s.date.as_deref().is_some_and(|d| d.starts_with(prefix)),
+            None => true,
+        })
+        .collect::<Vec<_>>();
+    let total = sources.len();
     sources.sort_by(|a, b| {
         b.date
             .is_some()
@@ -1280,6 +1381,7 @@ enum ParsedCall {
     },
     ListRecentSources {
         n: usize,
+        date: Option<String>,
     },
 }
 
@@ -1346,9 +1448,10 @@ impl ParsedCall {
                 })
             }
             "list_recent_sources" => {
-                validate_keys(object, &["n"])?;
+                validate_keys(object, &["n", "date"])?;
                 Ok(Self::ListRecentSources {
                     n: optional_limit(object, "n", DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT)?,
+                    date: optional_string(object, "date")?,
                 })
             }
             _ => Err(format!("unknown tool `{name}`")),
@@ -1724,7 +1827,7 @@ mod tests {
             "ck-single"
         );
         assert_eq!(
-            list_recent_sources(&model, 10)["sources"][0]["source_id"],
+            list_recent_sources(&model, 10, None)["sources"][0]["source_id"],
             "sha-mal"
         );
     }
