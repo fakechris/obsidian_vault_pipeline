@@ -25,6 +25,17 @@ export function installDesktopExternalLinks(): void {
     });
   };
 
+  // External = an http(s) URL whose parsed ORIGIN differs from the portal's.
+  // A string-prefix check is wrong: port 1234 is a prefix of 12345.
+  const isExternalHttp = (raw: string): boolean => {
+    try {
+      const u = new URL(raw, location.href);
+      return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin !== location.origin;
+    } catch {
+      return false;
+    }
+  };
+
   // Capture phase so we decide before React Router's root listener — but we
   // only act on EXTERNAL links, leaving internal navigation to the router.
   document.addEventListener(
@@ -35,7 +46,7 @@ export function installDesktopExternalLinks(): void {
       const anchor = el?.closest?.('a[href]') as HTMLAnchorElement | null;
       if (!anchor) return;
       const href = anchor.href; // absolute, browser-resolved
-      if (/^https?:\/\//i.test(href) && !href.startsWith(location.origin)) {
+      if (isExternalHttp(href)) {
         e.preventDefault();
         openExternal(href);
       }
@@ -49,7 +60,7 @@ export function installDesktopExternalLinks(): void {
   const nativeOpen = window.open.bind(window);
   window.open = ((url?: string | URL, ...rest: unknown[]) => {
     const str = typeof url === 'string' ? url : url?.toString() ?? '';
-    if (/^https?:\/\//i.test(str) && !str.startsWith(location.origin)) {
+    if (isExternalHttp(str)) {
       openExternal(str);
       return null;
     }

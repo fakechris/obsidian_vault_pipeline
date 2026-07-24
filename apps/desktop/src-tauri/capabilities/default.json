@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "OVP2 desktop: boot the in-process portal and pick a vault.",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
     "dialog:default"
