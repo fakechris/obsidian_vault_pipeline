@@ -515,7 +515,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Does not search card bodies, units text, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -528,7 +528,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies newest-first with bounded streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings and each hit reports matched_terms in walk order. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms). Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by how many DISTINCT terms each source matches (recency breaks ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms). Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
@@ -862,13 +862,18 @@ fn search_fulltext_at_with_budget(
     let total_sources = candidates.len();
     let start_offset = cursor.unwrap_or(0);
     let scan_window = remaining.saturating_sub(FULLTEXT_DEADLINE_MARGIN);
-    let mut hits = Vec::new();
+    // (distinct-term score, walk position, hit) — the walk is NOT stopped by
+    // the hit limit: on a corpus where one query term is common (this vault:
+    // "transformer"), first-N-in-walk-order floods with popular-term matches
+    // and a multi-term target deeper in the walk never surfaces. Instead the
+    // walk runs to budget/deadline/end, then hits rank by score (recency
+    // breaks ties via walk position) and `limit` trims the RETURNED list.
+    let mut scored_hits: Vec<(usize, usize, Value)> = Vec::new();
     let mut scanned_sources = 0usize;
     let mut corpus_bytes = 0usize;
     let mut next_offset = start_offset;
     let mut stopped_before_end = false;
     let mut incomplete_file = false;
-    let mut hit_limit_stop = false;
 
     for (index, source) in candidates.iter().enumerate().skip(start_offset) {
         // Deadline checks happen between files: an in-flight local file scan is
@@ -899,13 +904,18 @@ fn search_fulltext_at_with_budget(
         corpus_bytes = corpus_bytes.saturating_add(scan.bytes_scanned);
 
         if !scan.matched_terms.is_empty() {
-            hits.push(json!({
-                "source_id": source.sha256,
-                "title": source.title.as_deref().unwrap_or("(untitled)"),
-                "open_ref": format!("/library/{}", source.sha256),
-                "snippet": scan.snippet.unwrap_or_default(),
-                "matched_terms": scan.matched_terms
-            }));
+            let score = scan.matched_terms.len();
+            scored_hits.push((
+                score,
+                index,
+                json!({
+                    "source_id": source.sha256,
+                    "title": source.title.as_deref().unwrap_or("(untitled)"),
+                    "open_ref": format!("/library/{}", source.sha256),
+                    "snippet": scan.snippet.unwrap_or_default(),
+                    "matched_terms": scan.matched_terms
+                }),
+            ));
         }
         match scan.state {
             FulltextFileState::Complete => {
@@ -933,15 +943,17 @@ fn search_fulltext_at_with_budget(
             stopped_before_end = true;
             break;
         }
-        if hits.len() >= limit {
-            hit_limit_stop = true;
-            stopped_before_end = next_offset < total_sources;
-            break;
-        }
     }
 
+    scored_hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let hit_limit_drop = scored_hits.len() > limit;
+    let mut hits: Vec<Value> = scored_hits
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, hit)| hit)
+        .collect();
     let aggregate_capped = cap_aggregate(&mut hits);
-    let truncated = stopped_before_end || incomplete_file || hit_limit_stop || aggregate_capped;
+    let truncated = stopped_before_end || incomplete_file || hit_limit_drop || aggregate_capped;
     let mut out = Map::new();
     out.insert("hits".into(), json!(hits));
     out.insert("scanned_sources".into(), json!(scanned_sources));
@@ -2814,6 +2826,64 @@ mod tests {
         assert_eq!(hit_ids, vec!["sha-new", "sha-old", "sha-undated"]);
         assert_eq!(result["scanned_sources"], 3);
         assert_eq!(result["truncated"], false);
+    }
+
+    /// The live 1281-source replay's remaining defect: a common single term
+    /// ("transformer" in an AI-heavy vault) floods first-N-in-walk-order and
+    /// an OLDER multi-term target never surfaces. Ranking is by distinct-term
+    /// score across the whole scanned walk; `limit` trims the RETURNED list
+    /// (still truncated=true so coverage stays honest).
+    #[test]
+    fn fulltext_multi_term_target_outranks_newer_popular_term_flood() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        fs::create_dir_all(temp.path().join("sources")).expect("source dir");
+        let mut sources = Vec::new();
+        // Five NEWER sources match only the popular term.
+        for i in 0..5 {
+            let rel = format!("sources/flood-{i}.md");
+            fs::write(temp.path().join(&rel), "transformer soup of the day")
+                .expect("body");
+            sources.push(source(
+                &format!("sha-flood-{i}"),
+                "Flood",
+                Some(&rel),
+                Some("2026-07-10"),
+            ));
+        }
+        // The OLDER target matches three distinct terms.
+        fs::write(
+            temp.path().join("sources/target.md"),
+            "implementing a transformer in interviews; see my notes",
+        )
+        .expect("body");
+        sources.push(source(
+            "sha-target",
+            "Job search notes",
+            Some("sources/target.md"),
+            Some("2026-06-22"),
+        ));
+        let model = fixture_model(sources, vec![], vec![]);
+        write_index(temp.path(), &model).expect("index fixture");
+        let mut tools = VaultTools::new(temp.path());
+
+        let result = ok_json(call(
+            &mut tools,
+            "search_fulltext",
+            json!({"query": "transformer interviews notes", "limit": 3}),
+        ));
+        let hits = result["hits"].as_array().expect("hits");
+        assert_eq!(hits[0]["source_id"], "sha-target", "{result}");
+        assert_eq!(
+            hits[0]["matched_terms"].as_array().expect("terms").len(),
+            3
+        );
+        // Newer single-term hits fill the remaining slots, recency-ordered.
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[1]["source_id"], "sha-flood-0");
+        // Six matches, three returned: the drop is an honest truncation.
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["scanned_sources"], 6);
+        assert!(result.get("next_cursor").is_none(), "walk DID finish");
     }
 
     #[test]
