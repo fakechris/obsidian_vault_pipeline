@@ -1,14 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "OVP2 desktop: boot the in-process portal and pick a vault.",
+  "description": "Local splash: pick a vault and boot the in-process portal. LOCAL content only — no remote origin gets these.",
   "windows": ["main"],
-  "remote": {
-    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
-  },
   "permissions": [
     "core:default",
     "dialog:default",
-    "allow-open-external"
+    "allow-local-commands"
   ]
 }

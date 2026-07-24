@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "portal",
+  "description": "The loopback portal (http://127.0.0.1:<port>) is a REMOTE origin. Grant it ONLY open_external — no core/dialog/window APIs — so a redirect to another localhost service can't reach more than opening a browser URL.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "allow-open-external"
+  ]
+}
