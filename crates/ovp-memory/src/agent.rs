@@ -21,7 +21,7 @@
 use std::time::{Duration, Instant};
 
 use ovp_llm::{
-    AssistantBlock, CallError, ModelClient, ModelMessage, ModelRequest, StopReason, ToolDef,
+    AssistantBlock, ModelClient, ModelMessage, ModelRequest, StopReason, ToolDef,
     ToolResultBlock,
 };
 
@@ -168,11 +168,11 @@ pub fn run_agent_turn(
         && let Some(done) = store.completed_turn_for_key(key)
     {
         return Ok(AgentOutcome {
+            tool_trace: replayed_trace(store, &done.turn_id),
             turn_id: done.turn_id,
             answer: done.answer,
             stopped_reason: parse_stopped(&done.stopped_reason),
             rounds: done.rounds,
-            tool_trace: Vec::new(),
             input_tokens_total: done.input_tokens_total,
             output_tokens_total: done.output_tokens_total,
             idempotent_replay: true,
@@ -195,11 +195,11 @@ pub fn run_agent_turn(
         && let Some(done) = store.completed_turn_for_key(key)
     {
         return Ok(AgentOutcome {
+            tool_trace: replayed_trace(store, &done.turn_id),
             turn_id: done.turn_id,
             answer: done.answer,
             stopped_reason: parse_stopped(&done.stopped_reason),
             rounds: done.rounds,
-            tool_trace: Vec::new(),
             input_tokens_total: done.input_tokens_total,
             output_tokens_total: done.output_tokens_total,
             idempotent_replay: true,
@@ -250,11 +250,15 @@ pub fn run_agent_turn(
         let reply = match client.call(&request) {
             Ok(r) => r,
             // Mid-turn model failure ends the turn with an honest reason —
-            // the audit trail still gets its TurnFinished.
-            Err(CallError::Provider { .. } | CallError::Transport { .. }) => {
+            // audited (`ModelFailed`), and the trail still gets TurnFinished.
+            Err(e) => {
+                events.push(TranscriptEvent::ModelFailed {
+                    turn_id: turn_id.clone(),
+                    round: rounds,
+                    detail: e.to_string(),
+                });
                 break 'turn StoppedReason::ModelError;
             }
-            Err(_) => break 'turn StoppedReason::ModelError,
         };
         events.push(TranscriptEvent::ModelCalled {
             turn_id: turn_id.clone(),
@@ -312,6 +316,11 @@ pub fn run_agent_turn(
         {
             let mut seen = std::collections::BTreeSet::new();
             if calls.iter().any(|(id, _, _)| !seen.insert(id.clone())) {
+                events.push(TranscriptEvent::ReplyDiscarded {
+                    turn_id: turn_id.clone(),
+                    round: rounds,
+                    reason: "duplicate tool_use ids within one reply".into(),
+                });
                 break 'turn StoppedReason::ToolError;
             }
         }
@@ -320,6 +329,11 @@ pub fn run_agent_turn(
         // assistant tool turn — a recorded tool_use with no results would
         // make every later projection protocol-invalid.
         if rounds + 1 > cfg.max_rounds {
+            events.push(TranscriptEvent::ReplyDiscarded {
+                turn_id: turn_id.clone(),
+                round: rounds,
+                reason: format!("tool batch refused: max_rounds ({}) reached", cfg.max_rounds),
+            });
             break 'turn StoppedReason::MaxRounds;
         }
         rounds += 1;
@@ -388,16 +402,18 @@ pub fn run_agent_turn(
             if !was_invalid_args {
                 invalid_streak.remove(name);
             }
-            if content.len() > cfg.max_result_bytes {
-                content.truncate(floor_char_boundary(&content, cfg.max_result_bytes));
-                content.push_str("\n[truncated]");
-            }
+            // Audit keeps the FULL RAW result (the transcript is complete by
+            // contract); only the model-facing copy is capped.
+            let raw_bytes = content.len();
+            let truncated = raw_bytes > cfg.max_result_bytes;
             events.push(TranscriptEvent::ToolCalled {
                 turn_id: turn_id.clone(),
                 tool_call_id: id.clone(),
                 tool: name.clone(),
                 is_error,
-                result_bytes: content.len(),
+                result_bytes: raw_bytes,
+                content: content.clone(),
+                truncated,
             });
             trace.push(ToolTraceEntry {
                 tool: name.clone(),
@@ -405,6 +421,10 @@ pub fn run_agent_turn(
                 is_error,
                 summary: content.chars().take(120).collect(),
             });
+            if truncated {
+                content.truncate(floor_char_boundary(&content, cfg.max_result_bytes));
+                content.push_str("\n[truncated]");
+            }
             results.push(ToolResultBlock { tool_call_id: id.clone(), content, is_error });
         }
 
@@ -449,6 +469,21 @@ pub fn run_agent_turn(
     })
 }
 
+/// Rebuild a replayed outcome's tool trace from the turn's audit rows — a
+/// retry must not lose the provenance trail the original response carried.
+fn replayed_trace(store: &SessionStore, turn_id: &str) -> Vec<ToolTraceEntry> {
+    store
+        .tool_calls_for_turn(turn_id)
+        .into_iter()
+        .map(|(tool, tool_call_id, is_error, summary)| ToolTraceEntry {
+            tool,
+            tool_call_id,
+            is_error,
+            summary,
+        })
+        .collect()
+}
+
 fn parse_stopped(s: &str) -> StoppedReason {
     match s {
         "final" => StoppedReason::Final,
@@ -477,7 +512,7 @@ fn floor_char_boundary(s: &str, max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ovp_llm::{ModelReply, ReplyBlock, Usage};
+    use ovp_llm::{CallError, ModelReply, ReplyBlock, Usage};
     use std::collections::VecDeque;
 
     // ---- scripted model client: replies served in order ----
@@ -788,6 +823,12 @@ mod tests {
             run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::ToolError);
         assert!(tools.calls.is_empty());
+        assert!(
+            st.events()
+                .iter()
+                .any(|e| matches!(e, TranscriptEvent::ReplyDiscarded { reason, .. } if reason.contains("duplicate"))),
+            "the discarded reply is audited"
+        );
     }
 
     // Refusal and unknown stop reasons: never final-success.
@@ -835,6 +876,20 @@ mod tests {
             }
             other => panic!("expected ToolResults, got {other:?}"),
         }
+        // The AUDIT row keeps the full raw result — only the model copy caps.
+        let audit = st
+            .events()
+            .iter()
+            .find_map(|e| match e {
+                TranscriptEvent::ToolCalled { content, truncated, result_bytes, .. } => {
+                    Some((content.len(), *truncated, *result_bytes))
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(audit.0, 100_000, "audit content is the raw result");
+        assert!(audit.1, "truncated flag marks the capped model copy");
+        assert_eq!(audit.2, 100_000);
     }
 
     // Concurrent same-session submit: the lock makes the second SessionBusy.
@@ -852,12 +907,14 @@ mod tests {
         assert!(client.requests.is_empty(), "busy session must run nothing");
     }
 
-    // Idempotency: same key replays the completed turn without running.
+    // Idempotency: same key replays the completed turn without running —
+    // INCLUDING its tool trace (a retry must not lose provenance).
     #[test]
     fn idempotent_retry_replays_without_running() {
         let dir = tempfile::tempdir().unwrap();
-        let mut client = Scripted::new(vec![text_reply("first")]);
-        let mut tools = MockTools::new(&[]);
+        let mut client =
+            Scripted::new(vec![tool_reply(&[("c1", "search")]), text_reply("first")]);
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
         let mut st = store(dir.path());
         let first =
             run_agent_turn(&mut client, &mut tools, &mut st, "q?", Some("k1"), &cfg())
@@ -872,6 +929,8 @@ mod tests {
         assert_eq!(replay.answer, "first");
         assert_eq!(replay.turn_id, first.turn_id);
         assert!(client2.requests.is_empty(), "retry must not produce a second turn");
+        assert_eq!(replay.tool_trace.len(), 1, "replay rebuilds the original trace");
+        assert_eq!(replay.tool_trace[0].tool, "search");
         // A DIFFERENT key runs normally.
         let mut client3 = Scripted::new(vec![text_reply("second")]);
         let out =
@@ -1014,6 +1073,12 @@ mod tests {
         assert_eq!(out.stopped_reason, StoppedReason::ModelError);
         let st2 = store(dir.path());
         assert_eq!(st2.next_turn_id(), "t2", "failed turn is still a complete audit record");
+        assert!(
+            st2.events()
+                .iter()
+                .any(|e| matches!(e, TranscriptEvent::ModelFailed { detail, .. } if detail.contains("conn reset"))),
+            "the failure reason is audited"
+        );
     }
 
     // Mid-batch deadline exhaustion: remaining calls get timeout is_error
@@ -1128,6 +1193,23 @@ mod tests {
             })
             .collect();
         assert_eq!(shape, vec!["text", "tool", "text", "tool"], "provider order is protocol");
+    }
+
+    // An empty/unstamped lock file is conservatively BUSY — a racing creator
+    // may sit between create_new and the pid write; stealing would let two
+    // turns run concurrently.
+    #[test]
+    fn unstamped_lock_is_busy_not_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = store(dir.path());
+        std::fs::write(dir.path().join("s1.lock"), "").unwrap();
+        match st.lock() {
+            Err(crate::agent_transcript::StoreError::SessionBusy { holder_pid }) => {
+                assert_eq!(holder_pid, 0)
+            }
+            Err(other) => panic!("expected SessionBusy, got {other:?}"),
+            Ok(_) => panic!("an unstamped lock must not be stolen"),
+        }
     }
 
     // An execution failure BETWEEN invalid-args failures resets the streak:

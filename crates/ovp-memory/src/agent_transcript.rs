@@ -53,14 +53,34 @@ pub enum TranscriptEvent {
         input_tokens: u32,
         output_tokens: u32,
     },
-    /// One tool execution's audit line (the result CONTENT lives in the
-    /// adjacent `Message`/`ToolResults` event; this row is the quick index).
+    /// One tool execution's audit line. `content` is the FULL RAW result —
+    /// the audit transcript is complete by contract; the adjacent
+    /// `ToolResults` message carries the CAPPED text the model actually saw
+    /// (that distinction is the audit-vs-projection split, A0 §3.5).
     ToolCalled {
         turn_id: String,
         tool_call_id: String,
         tool: String,
         is_error: bool,
+        /// Raw (pre-cap) result size in bytes.
         result_bytes: usize,
+        /// Full raw result content (audit-only; never projected).
+        content: String,
+        /// Whether the model-facing copy was truncated to the result cap.
+        truncated: bool,
+    },
+    /// A model call failed (audit-only; excluded from projection).
+    ModelFailed {
+        turn_id: String,
+        round: usize,
+        detail: String,
+    },
+    /// A model reply was rejected by the runtime without entering the
+    /// conversation (duplicate tool_use ids, over-cap round) — audit-only.
+    ReplyDiscarded {
+        turn_id: String,
+        round: usize,
+        reason: String,
     },
     TurnFinished {
         turn_id: String,
@@ -79,6 +99,8 @@ impl TranscriptEvent {
             | TranscriptEvent::Message { turn_id, .. }
             | TranscriptEvent::ModelCalled { turn_id, .. }
             | TranscriptEvent::ToolCalled { turn_id, .. }
+            | TranscriptEvent::ModelFailed { turn_id, .. }
+            | TranscriptEvent::ReplyDiscarded { turn_id, .. }
             | TranscriptEvent::TurnFinished { turn_id, .. } => turn_id,
         }
     }
@@ -262,14 +284,31 @@ impl SessionStore {
                 .open(&self.lock_path)
             {
                 Ok(mut f) => {
-                    let _ = write!(f, "{}", std::process::id());
+                    // The pid stamp must land: an unstamped lock reads as
+                    // invalid to other contenders (conservatively busy), and
+                    // holding one would wedge the session; on failure, release
+                    // and surface the IO error.
+                    if let Err(e) = write!(f, "{}", std::process::id()).and_then(|_| f.sync_data())
+                    {
+                        drop(f);
+                        let _ = fs::remove_file(&self.lock_path);
+                        return Err(StoreError::Io(format!("stamp lock: {e}")));
+                    }
                     return Ok(SessionLock { path: self.lock_path.clone() });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let holder: u32 = fs::read_to_string(&self.lock_path)
+                    // Missing/empty/invalid owner data is CONSERVATIVELY BUSY:
+                    // a racing creator may sit between create_new and the pid
+                    // write, and stealing its lock would let two turns run
+                    // concurrently. (The crashed-unstamped case is a
+                    // microsecond window; doctor can clean a wedged lock.)
+                    let Some(holder) = fs::read_to_string(&self.lock_path)
                         .ok()
-                        .and_then(|s| s.trim().parse().ok())
-                        .unwrap_or(0);
+                        .and_then(|s| s.trim().parse::<u32>().ok())
+                        .filter(|pid| *pid != 0)
+                    else {
+                        return Err(StoreError::SessionBusy { holder_pid: 0 });
+                    };
                     // A live holder is BUSY — including our own pid: two
                     // stores in one process (desktop in-process server
                     // threads) must serialize too, and a same-pid leak is
@@ -424,6 +463,28 @@ impl SessionStore {
             .map_err(|e| StoreError::Io(format!("fsync: {e}")))?;
         self.events.extend(turn_events);
         Ok(())
+    }
+
+    /// The audit ToolCalled rows of one turn — replayed outcomes rebuild
+    /// their tool_trace from these (a retry must not lose the provenance
+    /// trail the original response carried).
+    pub fn tool_calls_for_turn(&self, id: &str) -> Vec<(String, String, bool, String)> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::ToolCalled { turn_id, tool_call_id, tool, is_error, content, .. }
+                    if turn_id == id =>
+                {
+                    Some((
+                        tool.clone(),
+                        tool_call_id.clone(),
+                        *is_error,
+                        content.chars().take(120).collect(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// All complete-turn events (read-only view; tests + future exporters).
