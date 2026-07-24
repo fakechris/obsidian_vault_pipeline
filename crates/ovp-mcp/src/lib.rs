@@ -372,7 +372,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         return Err(RpcError {
             code: -32000,
             message: "ask is not configured — run ovp2 built with `--features anthropic` \
-                      and set ANTHROPIC_API_KEY in the MCP server's environment"
+                      and set an API key via System → LLM Provider (or ANTHROPIC_API_KEY)"
                 .into(),
         });
     };
@@ -411,9 +411,20 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             }
         }
     };
-    let mut client = factory().map_err(|e| RpcError {
-        code: -32000,
-        message: format!("ask client configuration invalid: {e}"),
+    let mut client = factory().map_err(|e| {
+        if e == "llm_not_configured" {
+            RpcError {
+                code: -32000,
+                message: "ask is not configured — set an API key via System → LLM Provider \
+                          (or ANTHROPIC_API_KEY); no restart needed after save"
+                    .into(),
+            }
+        } else {
+            RpcError {
+                code: -32000,
+                message: format!("ask client configuration invalid: {e}"),
+            }
+        }
     })?;
     let ask_args = ovp_memory::ask::AskArgs {
         question: question.to_string(),

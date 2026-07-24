@@ -328,11 +328,13 @@ export const en = {
   // ask page
   'ask.title': 'Ask',
   'ask.help':
-    'Ask questions in natural language; answers are grounded in your evidence index — crystal claims, reader cards and quoted units — with numbered citations you can verify. Every answer is saved to the history on the left. Unverified citations are flagged.',
+    'Ask questions in natural language; answers are grounded in your evidence index — crystal claims, reader cards and quoted units — with numbered citations you can verify. Follow-ups in the same thread keep context and stay one history session. Unverified citations are flagged.',
   'ask.historyTitle': 'History',
-  'ask.historyEmpty': 'No saved chats yet — every answer is saved here automatically.',
+  'ask.historyEmpty':
+    'No saved chats yet — each conversation is saved here as one session.',
   'ask.savedChat': 'Saved chat',
   'ask.closeChat': 'Back to conversation',
+  'ask.newConversation': 'New conversation',
   'ask.chatLoadError': 'Could not load this chat — is the server running?',
   'ask.citationsTitle': 'Citations',
   'ask.citationsEmpty':
@@ -353,7 +355,7 @@ export const en = {
   'ask.example2': 'Which sources discuss context engineering, and what do they claim?',
   'ask.example3': 'What is the strongest evidence about retrieval quality?',
   'ask.errNotConfigured':
-    'The server has no LLM configured — restart `ovp2 serve` with ANTHROPIC_API_KEY set (build with --features anthropic).',
+    'No LLM configured — open System → LLM Provider, save an API key (and endpoint/model if needed), then ask again. No restart required.',
   'ask.errIndexUnavailable':
     'The index is not available — run `ovp2 index` against this vault, and check the server was started with the right --vault-root.',
   'ask.errBusy':
@@ -418,7 +420,7 @@ export const en = {
   'providers.noProxy': 'Bypass system proxy for LLM calls',
   'providers.save': 'Save',
   'providers.saved':
-    'Saved. Scheduled runs pick this up immediately; restart the app/server for in-portal ask.',
+    'Saved. Ask and scheduled runs pick this up immediately — no restart needed.',
   'providers.protocolNote':
     'All presets use Anthropic-Messages-compatible endpoints. OpenAI-compatible and Gemini native protocols are not supported yet.',
   'system.publish': 'Publish',
@@ -448,9 +450,9 @@ export const en = {
   'system.queuedLiveVsBuild': '{live} · live (projection {build} @ {date})',
   'system.noIndex': 'no index built — run `ovp2 index`',
   'system.llm': 'LLM (Ask)',
-  'system.llmOn': 'configured — POST /api/ask is live',
+  'system.llmOn': 'configured — Ask is live',
   'system.llmOff':
-    'not configured — Ask answers 503. Set ANTHROPIC_API_KEY and restart `ovp2 serve` (built with --features anthropic).',
+    'not configured — set an API key under LLM Provider above. Ask picks it up as soon as you save.',
   'system.askTimeout': 'ask timeout',
   'system.askTimeoutValue': '{secs}s per question · up to {cap} concurrent',
   'system.version': 'server version',

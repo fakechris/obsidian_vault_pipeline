@@ -21,7 +21,7 @@ default = []
 # (via ovp-eval) links reqwest to reach the external Nowledge Mem service. That
 # HTTP is the M8 comparator's purpose, distinct from the gated LLM transport;
 # neither is exercised by a normal offline run.
-anthropic = ["ovp-llm/anthropic"]
+anthropic = ["ovp-llm/anthropic", "ovp-server/anthropic"]
 # Forwards to ovp-intake/pinboard-live: the live Pinboard HTTP fetch for
 # `pinboard-sync --live` / `daily --pinboard-live`. OFF by default — the
 # offline build only ever reads export files.

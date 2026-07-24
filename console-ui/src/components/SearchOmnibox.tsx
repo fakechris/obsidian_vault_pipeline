@@ -11,7 +11,8 @@
  * page. Packs whose source sha is unknown (legacy) render unlinked —
  * never navigate to a 404 (handoff note 5).
  *
- * Keyboard: ↑/↓ move, Enter opens, Esc closes the overlay. */
+ * Keyboard: ↑/↓ move, Enter opens, Esc closes the overlay. Enter/arrows are
+ * ignored while an IME is composing (CJK candidate selection). */
 import {
   useCallback,
   useEffect,
@@ -22,6 +23,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n, type MsgKey } from '../i18n';
 import { fetchSearchHits, fetchThemes } from '../lib/api';
+import { isReactImeComposing } from '../lib/ime';
 import { EmptyState } from './ui';
 import type { FindHit, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
@@ -246,6 +248,8 @@ export default function SearchOmnibox({ variant, onClose }: SearchOmniboxProps) 
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // IME: Enter/arrows during composition select candidates, not results.
+    if (isReactImeComposing(e)) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActive((a) => (results.length ? (a + 1) % results.length : 0));

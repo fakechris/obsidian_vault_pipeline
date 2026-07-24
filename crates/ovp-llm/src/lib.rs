@@ -14,6 +14,9 @@ pub mod key;
 pub mod reply;
 pub mod request;
 
+#[cfg(feature = "anthropic")]
+pub mod live;
+
 pub use cache::{CacheMode, CachedModelClient};
 pub use client::{
     is_transient, BudgetEscalatingModelClient, CallError, ModelClient, NeverCallsClient,
@@ -26,3 +29,7 @@ pub use request::{ModelMessage, ModelRequest};
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicBlockingClient;
+#[cfg(feature = "anthropic")]
+pub use live::{
+    build_recording_live_client, resolve_api_key, LiveClientConfig, LLM_NOT_CONFIGURED,
+};

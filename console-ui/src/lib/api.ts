@@ -279,16 +279,37 @@ export class AskError extends Error {
   }
 }
 
+/** Prior completed turns for multi-turn Ask continuity (oldest first). */
+export interface AskHistoryTurn {
+  question: string;
+  answer: string;
+}
+
+export interface PostAskOptions {
+  /** Stem of the live session's `.ovp/chats/<chat>.md` — continue that file. */
+  chat?: string | null;
+  /** Prior Q/A in this conversation so the model sees follow-up context. */
+  history?: AskHistoryTurn[];
+}
+
 /** POST /api/ask — cited answer over the grounded evidence index. The
- * server saves the transcript to `.ovp/chats/` as a side effect. */
-export async function postAsk(question: string): Promise<AskResponse> {
+ * server saves (or appends) the transcript to `.ovp/chats/` as a side effect.
+ * Pass `chat` + `history` to continue one conversation instead of opening a
+ * new history row per question. */
+export async function postAsk(
+  question: string,
+  opts: PostAskOptions = {},
+): Promise<AskResponse> {
   if (STATIC_MODE) {
     throw new AskError(501, 'Ask is not available on the published site.', 'static_site');
   }
+  const body: Record<string, unknown> = { question };
+  if (opts.chat) body.chat = opts.chat;
+  if (opts.history && opts.history.length > 0) body.history = opts.history;
   const res = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
