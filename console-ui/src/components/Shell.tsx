@@ -45,7 +45,9 @@ const NAV = STATIC_MODE
  * back into the SPA) and is a harmless no-op at the ends — so the buttons stay
  * always-enabled rather than mixing router-local `idx` with session-wide
  * `history.length` (which disagree after a cross-document navigation). Inert in
- * a real browser via `isDesktopApp()`. */
+ * a real browser via `isDesktopApp()`. The native History menu (⌘[ / ⌘]) is the
+ * persistent complement that also works on legacy full-document pages, where
+ * this in-SPA toolbar unmounts. */
 function DesktopNav() {
   const { t } = useI18n();
   const navigate = useNavigate();
