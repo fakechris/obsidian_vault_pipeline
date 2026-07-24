@@ -503,6 +503,7 @@ pub fn tag_classify_request(
         messages: vec![ovp_llm::ModelMessage::User { content: user }],
         max_tokens: TAG_CLASSIFY_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(TAG_CLASSIFY_PROMPT_ID.to_string()),
     }
 }

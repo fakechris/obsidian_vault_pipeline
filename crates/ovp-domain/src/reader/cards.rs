@@ -83,6 +83,7 @@ pub fn card_model_request(accepted_units: &[Unit]) -> ModelRequest {
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: DEFAULT_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(CARD_PROMPT_ID.to_string()),
     }
 }
@@ -222,6 +223,8 @@ mod tests {
                 text: self.0.clone(),
                 stop_reason: StopReason::EndTurn,
                 usage: Usage { input_tokens: 1, output_tokens: 1 },
+                blocks: None,
+                raw_stop_reason: None,
             })
         }
     }
@@ -289,7 +292,8 @@ mod tests {
             let text = self.replies.get(self.i).or_else(|| self.replies.last()).cloned().unwrap_or_default();
             self.i += 1;
             Ok(ModelReply { model: "scripted".into(), text, stop_reason: StopReason::EndTurn,
-                usage: Usage { input_tokens: 1, output_tokens: 1 } })
+                usage: Usage { input_tokens: 1, output_tokens: 1 },
+                blocks: None, raw_stop_reason: None })
         }
     }
 

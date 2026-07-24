@@ -24,8 +24,10 @@ pub use client::{
 };
 pub use fixture::FixtureModelClient;
 pub use key::request_key;
-pub use reply::{ModelReply, StopReason, Usage};
-pub use request::{ModelMessage, ModelRequest};
+pub use reply::{ExecutableToolCall, ModelReply, ReplyBlock, StopReason, Usage};
+pub use request::{
+    AssistantBlock, ModelMessage, ModelRequest, ToolDef, ToolResultBlock,
+};
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicBlockingClient;

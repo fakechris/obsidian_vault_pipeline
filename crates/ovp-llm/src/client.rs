@@ -20,6 +20,10 @@ pub enum CallError {
     Transport { detail: String },
     /// Response failed to parse into the wire `ModelReply` shape.
     Decode { detail: String },
+    /// The request violates the tool-use protocol (`tool_result_adjacency_all`):
+    /// e.g. a tool_use turn not answered by exactly its results. Caller bug —
+    /// failing loudly here beats a provider 4xx on an invalid request.
+    Protocol { detail: String },
     /// A reasoning/thinking model spent its whole `max_tokens` budget on a
     /// thinking block and emitted NO text block (`stop_reason=max_tokens`). NOT
     /// transient — retrying with the SAME budget won't help — but recoverable by
@@ -36,6 +40,7 @@ impl std::fmt::Display for CallError {
             CallError::Provider { code, detail } => write!(f, "provider error {code}: {detail}"),
             CallError::Transport { detail } => write!(f, "transport: {detail}"),
             CallError::Decode { detail } => write!(f, "decode: {detail}"),
+            CallError::Protocol { detail } => write!(f, "tool protocol violation: {detail}"),
             CallError::BudgetExhausted { detail } => write!(f, "budget exhausted: {detail}"),
             CallError::Unexpected { detail } => write!(f, "unexpected: {detail}"),
         }
@@ -95,8 +100,11 @@ pub fn is_transient(err: &CallError) -> bool {
                 c.contains("rate_limit") || c.contains("overloaded") || c.contains("unavailable")
             }
         }
+        // Protocol violations are caller bugs — retrying resends the same
+        // invalid message sequence.
         CallError::CacheMiss { .. }
         | CallError::Decode { .. }
+        | CallError::Protocol { .. }
         | CallError::BudgetExhausted { .. }
         | CallError::Unexpected { .. } => false,
     }
@@ -211,6 +219,8 @@ mod retry_tests {
                 text: "ok".into(),
                 stop_reason: StopReason::EndTurn,
                 usage: Usage { input_tokens: 1, output_tokens: 1 },
+                blocks: None,
+                raw_stop_reason: None,
             }
         }
     }
@@ -233,6 +243,7 @@ mod retry_tests {
             messages: vec![],
             max_tokens: 16,
             temperature: None,
+            tools: None,
             cache_namespace: None,
         }
     }

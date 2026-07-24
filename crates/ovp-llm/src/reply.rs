@@ -9,6 +9,47 @@ pub struct ModelReply {
     pub text: String,
     pub stop_reason: StopReason,
     pub usage: Usage,
+    /// Provider content blocks in their original order. Absent in legacy
+    /// cassette replies, where `text` remains the compatibility surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<ReplyBlock>>,
+    /// Verbatim provider stop reason when it is not recognized. PERSISTED in
+    /// cassette JSON (absent on legacy files → None): replay must reproduce
+    /// live behavior, so an unknown stop's diagnostic string survives the
+    /// disk round-trip instead of silently becoming None on replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_stop_reason: Option<String>,
+}
+
+impl ModelReply {
+    /// Return provider-issued tool calls only when the turn explicitly stopped
+    /// for tool use. In particular, `MaxTokens` makes every included call
+    /// non-executable (`max_tokens_mid_tool`); raising the budget and retrying
+    /// is the caller's decision.
+    pub fn executable_tool_calls(&self) -> Option<Vec<ExecutableToolCall<'_>>> {
+        if self.stop_reason != StopReason::ToolUse {
+            return None;
+        }
+
+        let calls: Vec<_> = self
+            .blocks
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|block| match block {
+                ReplyBlock::ToolUse { id, name, input } => {
+                    Some(ExecutableToolCall { id, name, input })
+                }
+                ReplyBlock::Text { .. } => None,
+            })
+            .collect();
+        (!calls.is_empty()).then_some(calls)
+    }
+
+    /// Whether this reply represents a completed successful answer.
+    pub fn is_final_success(&self) -> bool {
+        self.stop_reason.is_final_success()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,11 +58,81 @@ pub enum StopReason {
     EndTurn,
     MaxTokens,
     StopSequence,
+    ToolUse,
+    Refusal,
     Unknown,
+}
+
+impl StopReason {
+    /// Unknown, truncated, refused, and tool-intermediate turns are never final
+    /// successes. This keeps future provider stop strings fail-closed.
+    pub fn is_final_success(&self) -> bool {
+        matches!(self, Self::EndTurn | Self::StopSequence)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReplyBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExecutableToolCall<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub input: &'a serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_cassette_reply_without_protocol_fields_still_deserializes() {
+        let raw = r#"{"model":"m","text":"done","stop_reason":"unknown","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        let reply: ModelReply = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(reply.stop_reason, StopReason::Unknown);
+        assert_eq!(reply.blocks, None);
+        assert_eq!(reply.raw_stop_reason, None);
+        assert!(!reply.is_final_success());
+    }
+
+    /// Cassette replay must reproduce LIVE behavior: an unknown provider stop
+    /// reason's verbatim string survives the disk round-trip (it would
+    /// otherwise be Some(raw) live but None on replay — divergent runs).
+    #[test]
+    fn unknown_raw_stop_reason_survives_cassette_round_trip() {
+        let reply = ModelReply {
+            model: "m".into(),
+            text: "done".into(),
+            stop_reason: StopReason::Unknown,
+            usage: Usage { input_tokens: 1, output_tokens: 2 },
+            blocks: None,
+            raw_stop_reason: Some("banana".into()),
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(json.contains("\"raw_stop_reason\":\"banana\""), "{json}");
+        let replayed: ModelReply = serde_json::from_str(&json).unwrap();
+        assert_eq!(replayed.raw_stop_reason.as_deref(), Some("banana"));
+
+        // And when there is nothing to preserve, the field stays absent —
+        // legacy cassette bytes (and keys derived from reply JSON) unchanged.
+        let plain = ModelReply { raw_stop_reason: None, ..reply };
+        assert!(!serde_json::to_string(&plain).unwrap().contains("raw_stop_reason"));
+    }
 }

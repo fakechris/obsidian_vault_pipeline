@@ -152,6 +152,7 @@ pub fn theme_page_request(synth_theme: &str, claims: &[PageClaim]) -> ModelReque
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: PAGE_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(THEME_PAGE_PROMPT_ID.to_string()),
     }
 }
@@ -203,6 +204,7 @@ pub fn theme_page_repair_request(
         messages: vec![ModelMessage::User { content: user }],
         max_tokens: PAGE_MAX_TOKENS,
         temperature: None,
+        tools: None,
         cache_namespace: Some(THEME_PAGE_PROMPT_ID.to_string()),
     }
 }

@@ -24,7 +24,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::ModelMessage;
+    use crate::request::{ModelMessage, ToolDef};
+    use serde_json::json;
 
     fn req() -> ModelRequest {
         ModelRequest {
@@ -33,6 +34,7 @@ mod tests {
             messages: vec![ModelMessage::User { content: "hi".into() }],
             max_tokens: 100,
             temperature: None,
+            tools: None,
             cache_namespace: None,
         }
     }
@@ -66,5 +68,41 @@ mod tests {
         let k = request_key(&req());
         assert_eq!(k.len(), 64);
         assert!(k.chars().all(|c| c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_lowercase())));
+    }
+
+    #[test]
+    fn tool_less_key_matches_pre_protocol_request_json() {
+        assert_eq!(
+            request_key(&req()),
+            "5c9b43757b8975b8b1cc2f52ebf02d981c4665278eb24e71a2bc97efc8f2e558"
+        );
+    }
+
+    #[test]
+    fn tool_key_uses_only_name_and_version() {
+        let mut baseline = req();
+        baseline.tools = Some(vec![ToolDef {
+            name: "vault_search".into(),
+            version: "v1".into(),
+            description: "Search the vault".into(),
+            input_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+        }]);
+
+        let mut docs_changed = baseline.clone();
+        let tool = docs_changed.tools.as_mut().unwrap().first_mut().unwrap();
+        tool.description = "Search every indexed vault document".into();
+        tool.input_schema = json!({
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Search text"}}
+        });
+        assert_eq!(request_key(&baseline), request_key(&docs_changed));
+
+        let mut name_changed = baseline.clone();
+        name_changed.tools.as_mut().unwrap()[0].name = "vault_lookup".into();
+        assert_ne!(request_key(&baseline), request_key(&name_changed));
+
+        let mut version_changed = baseline.clone();
+        version_changed.tools.as_mut().unwrap()[0].version = "v2".into();
+        assert_ne!(request_key(&baseline), request_key(&version_changed));
     }
 }

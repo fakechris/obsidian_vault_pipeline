@@ -1398,6 +1398,8 @@ mod tests {
             text: r#"[{"claim_id":"c1r","strength":"supported","evidence_sufficient":true,"rationale":"both quotes state a scarce budget"}]"#.into(),
             stop_reason: ovp_llm::StopReason::EndTurn,
             usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+            blocks: None,
+            raw_stop_reason: None,
         };
         fs::write(
             dir.join(format!("{}.json", ovp_llm::request_key(&req))),

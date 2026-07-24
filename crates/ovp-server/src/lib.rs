@@ -2748,6 +2748,8 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 1,
                 },
+                blocks: None,
+                raw_stop_reason: None,
             })
         }
     }

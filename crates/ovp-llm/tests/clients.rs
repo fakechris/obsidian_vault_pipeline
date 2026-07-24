@@ -16,6 +16,7 @@ fn req(text: &str) -> ModelRequest {
         messages: vec![ModelMessage::User { content: text.into() }],
         max_tokens: 100,
         temperature: None,
+        tools: None,
         cache_namespace: None,
     }
 }
@@ -26,6 +27,8 @@ fn reply(text: &str) -> ModelReply {
         text: text.into(),
         stop_reason: StopReason::EndTurn,
         usage: Usage { input_tokens: 5, output_tokens: 10 },
+        blocks: None,
+        raw_stop_reason: None,
     }
 }
 

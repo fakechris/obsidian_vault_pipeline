@@ -63,7 +63,7 @@ pub fn classify_intent(question: &str, history: &[AskHistoryTurn]) -> AskIntent 
 
     // If the prior user turns were clearly "find that article" and this turn
     // is a short clarification, keep hunting.
-    if history.len() >= 1
+    if !history.is_empty()
         && q.chars().count() < 40
         && prior_was_find(history)
         && !looks_like_meta(&lower)
