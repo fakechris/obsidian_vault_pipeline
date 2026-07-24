@@ -456,17 +456,18 @@ export default function AskPage() {
   // the in-flight discovery, so a first ask racing it still gets a trail.
   const { model } = useModel();
   const [askStatus, setAskStatus] = useState<boolean | null>(null);
-  const askStatusPromise = useRef<Promise<boolean> | null>(null);
-  const modelAgent = model?.ask_agent === true;
+  // Ref, not a captured value: the /api/model overlay keeps polling, and a
+  // fallback taken later must read what the model says NOW.
+  const modelAgentRef = useRef(false);
   useEffect(() => {
-    askStatusPromise.current = fetchAskStatus()
-      .then((s) => {
-        setAskStatus(s.agent);
-        return s.agent;
-      })
-      .catch(() => modelAgent);
-    // Discovery runs once; the fallback reads whatever /api/model said by then.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    modelAgentRef.current = model?.ask_agent === true;
+  }, [model]);
+  useEffect(() => {
+    fetchAskStatus()
+      .then((s) => setAskStatus(s.agent))
+      .catch(() => {
+        /* warm-cache miss only — submit re-reads per submission */
+      });
   }, []);
   const [live, setLive] = useState<AskProgress | null>(null);
   const liveRef = useRef<AskProgress | null>(null);
@@ -610,11 +611,7 @@ export default function AskPage() {
           setAskStatus(s.agent);
           return s.agent;
         })
-        .catch(
-          async () =>
-            askStatus ??
-            (await (askStatusPromise.current ?? Promise.resolve(modelAgent))),
-        );
+        .catch(() => askStatus ?? modelAgentRef.current);
       // Agent path: mint the session id client-side so the progress feed
       // is pollable from the FIRST turn (the server honors supplied ids).
       let chat = sessionChat;
@@ -644,7 +641,8 @@ export default function AskPage() {
         // (validation) POST never owned the session, so any polled feed
         // belongs to a DIFFERENT turn and must not be attributed here.
         const admitted = !(
-          err instanceof AskError && (err.status === 429 || err.status === 400)
+          err instanceof AskError &&
+          (err.status === 429 || err.status === 409 || err.status === 400)
         );
         const trail = admitted ? liveRef.current?.events : undefined;
         setTurns((prev) =>
