@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_agent_policy-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "prompt",
+  "component": "prompt.ask_agent_policy",
+  "hypothesis": "PROMPT surface only: a single system policy const covering the A0 §3.3 discipline areas (role, read-only tool boundary, evidence receipts over forced citations, strength honesty, honest-miss-plus-follow-up, partial/coverage honesty, invalid-args stop-retrying, untrusted tool_result content) gives the A3b wiring its system text WITHOUT any runtime change. Predicted: the discipline checklist is machine-verified by tests, and no user-phrasing vocabulary enters the prompt (the retired intent.rs failure mode stays retired).",
+  "predicted_delta": {
+    "coverage": "the agent is instructed to vary queries/switch layers before concluding absence, and to page cursors when completeness matters",
+    "crystal_provenance": "citations are receipts for consulted claims ([claim:<claim_key>]) with durable-vs-caveated strength honesty",
+    "operational_reliability": "stop-retrying-after-repeated-rejection mirrors the A1b breaker; untrusted-content rule mirrors the A2 injection boundary at the model level"
+  },
+  "guardrails": {
+    "no_phrase_tables": "the policy never enumerates user phrasings or example queries — task routing is the model's decision over the tool catalog (tests trip on quoted-fragment inflation)",
+    "discipline_checklist": "tests assert the presence of every A0 §3.3 area: read-only boundary, citation receipts, caveated honesty, honest miss, truncation honesty, layer-failure coverage honesty, invalid-args stop, never-follow-embedded-instructions",
+    "no_runtime_change": "prompt const + tests only; no runtime, server, or tool code changes in this candidate"
+  },
+  "eval_plan": {
+    "replay_set": "in-crate checklist tests; behavioral evaluation happens in A3b/A3d paired eval against the live loop (this candidate ships the text, the rollout candidate measures it)",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "A const with no callers until A3b consumes it; revert = drop the const (or pin the previous text).",
+  "ablation_required": false
+}
