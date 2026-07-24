@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_answer_budget-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, single knob: the agent path's PER-CALL output-token budget (AgentConfig.max_tokens in the /api/ask wiring) rises 2048 → 4096 for EVERY model call in the turn — tool-selection rounds and the final answer alike (the engine reuses one config per request). The binding constraint in practice is the final synthesis reply: tool-selection rounds stop at tool_use blocks far below either cap, so the observable effect is answer headroom; live evidence: a real-vault turn produced a good 6105-char answer that hit MaxTokens at 2048 and honestly stopped model_error mid-answer. Predicted: cap-overflow model_error final replies disappear for typical synthesis answers while deadline/coverage/citation contracts stay byte-identical.",
+  "predicted_delta": {
+    "operational_reliability": "long synthesis turns finish with stopped_reason=final instead of an honest-but-avoidable model_error truncation at the answer step",
+    "cost_efficiency": "worst-case per-call output ceiling doubles for every round of the turn; in practice tool-selection rounds emit compact tool_use blocks (observed ≤~200 output tokens), so realized cost tracks answer length — verified via the per-call usage ledger, not assumed"
+  },
+  "guardrails": {
+    "single_knob": "the diff for this candidate is one field: max_tokens 2048 → 4096 in the agent branch's AgentConfig, applied per-call across all rounds of the turn; no prompt, tool, deadline, or protocol change rides along",
+    "truncation_still_honest": "a reply that hits even the raised cap still surfaces as model_error (A1b `max_tokens_text_is_not_final` stands unmodified) — the budget buys headroom, never silence",
+    "legacy_path_untouched": "the flag-off /api/ask path keeps AskArgs::default() (2048); only the agent branch reads the new value",
+    "cost_ceiling_observable": "the raised ceiling doubles the worst-case PER-CALL output cost for every round, not only the answer; per-call usage lands in the transcript ledger (A1b token accounting), so any tool-round cost drift is measurable in the paired eval rather than assumed away"
+  },
+  "eval_plan": {
+    "replay_set": "live paired evidence (real vault, 2026-07-24): pre-change turn = 6105-char answer, stopped_reason=model_error at 2048; post-change same-class question = 4839-char answer, usage.output_tokens=2195 (would truncate at 2048), stopped_reason=final, 34 citations / 31 verified. Deterministic contracts covered by the existing agent test suites, which pass unmodified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set the field back to 2048 — one-line revert, no data or transcript migration.",
+  "ablation_required": false
+}

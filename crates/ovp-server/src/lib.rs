@@ -723,6 +723,13 @@ fn dispatch(
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
             handle_ask_progress(state, url)
         }
+        // Agent-mode discovery MUST work index-free (the agent path itself
+        // does): /api/model 503s on an unindexed vault, so the SPA reads
+        // this instead before minting a session id and polling.
+        (Method::Get, "/api/ask/status") => json_response(
+            200,
+            &serde_json::json!({"agent": state.ask_agent}).to_string(),
+        ),
         (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
@@ -1666,6 +1673,9 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             "age_seconds".into(),
             serde_json::json!(age_seconds(model.built_at.as_deref())),
         );
+        // Agent-mode discovery: the SPA pre-generates a session id and polls
+        // /api/ask/progress from turn 1 only when the agent path is live.
+        obj.insert("ask_agent".into(), serde_json::json!(state.ask_agent));
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -2399,7 +2409,11 @@ fn handle_ask_agent(
             let cfg = AgentConfig {
                 model: ovp_memory::ask::AskArgs::default().model_name,
                 system: ovp_memory::agent_policy::AGENT_POLICY.to_string(),
-                max_tokens: 2048,
+                // Agent answers synthesize across layers (multi-section,
+                // bilingual) and routinely overflow the legacy 2048 cap —
+                // a MaxTokens final reply surfaces as an honest model_error,
+                // so headroom here is product quality, not cosmetics.
+                max_tokens: 4096,
                 deadline,
                 ..AgentConfig::default()
             };
@@ -2411,13 +2425,20 @@ fn handle_ask_agent(
                     AgentProgress::Started { turn_id } => {
                         serde_json::json!({"event": "started", "turn_id": turn_id})
                     }
-                    AgentProgress::ToolStarted { tool_call_id, tool } => serde_json::json!({
-                        "event": "tool_started", "tool": tool, "tool_call_id": tool_call_id
-                    }),
-                    AgentProgress::ToolFinished { tool_call_id, tool, is_error } => {
+                    AgentProgress::ToolStarted { tool_call_id, tool, arguments } => {
+                        serde_json::json!({
+                            "event": "tool_started", "tool": tool,
+                            "tool_call_id": tool_call_id,
+                            // Display-only narration ("what am I searching"),
+                            // derived server-side — never the raw args object.
+                            "args": args_brief(arguments),
+                        })
+                    }
+                    AgentProgress::ToolFinished { tool_call_id, tool, is_error, summary } => {
                         serde_json::json!({
                             "event": "tool_finished", "tool": tool,
-                            "tool_call_id": tool_call_id, "ok": !is_error
+                            "tool_call_id": tool_call_id, "ok": !is_error,
+                            "summary": summary,
                         })
                     }
                     // The advertised terminal protocol is final | error: a
@@ -2579,6 +2600,47 @@ fn handle_ask_agent(
 /// ledger records (link = the claim's knowledge anchor), [source:<id>]
 /// against the index (link = /library). Anything unresolvable is
 /// verified:false — surfaced, never silently dropped.
+/// Compact display line for a tool call's arguments ("query=agent memory ·
+/// limit=10") — narration for the live progress trail. Scalar fields only,
+/// well-known keys first, capped so a pathological argument can't flood the
+/// feed. Null when nothing scalar is present.
+fn args_brief(arguments: &serde_json::Value) -> serde_json::Value {
+    const PRIORITY: [&str; 6] = ["query", "claim_key", "claim_id", "source_id", "cursor", "limit"];
+    let Some(obj) = arguments.as_object() else {
+        return serde_json::Value::Null;
+    };
+    let render = |v: &serde_json::Value| match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for key in PRIORITY {
+        if let Some(v) = obj.get(key).and_then(&render) {
+            parts.push(format!("{key}={v}"));
+        }
+    }
+    for (key, value) in obj {
+        if parts.len() >= 3 {
+            break;
+        }
+        if !PRIORITY.contains(&key.as_str())
+            && let Some(v) = render(value)
+        {
+            parts.push(format!("{key}={v}"));
+        }
+    }
+    if parts.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let mut brief = parts.join(" · ");
+    if brief.chars().count() > 120 {
+        brief = brief.chars().take(119).collect::<String>() + "…";
+    }
+    serde_json::Value::String(brief)
+}
+
 fn agent_citations(
     answer: &str,
     model: &IndexModel,
@@ -5013,6 +5075,46 @@ mod tests {
             .collect();
         assert_eq!(events.first().copied(), Some("started"));
         assert_eq!(events.last().copied(), Some("final"));
+    }
+
+    /// A3c: /api/model advertises the agent flag so the SPA knows to mint a
+    /// session id and poll the live feed; args_brief narrates scalar
+    /// arguments (priority keys first) and never echoes nested structures.
+    #[test]
+    fn agent_mode_discovery_and_args_narration() {
+        let vault = portal_vault("agent-disc", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault, None);
+        st.ask_agent = true;
+        let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
+        assert_eq!(v["ask_agent"], true);
+        // The canonical discovery endpoint works WITHOUT an index (parity
+        // with the agent path itself — /api/model 503s on a fresh vault).
+        let v = body_json(dispatch(&st, Method::Get, "/api/ask/status", ""));
+        assert_eq!(v["agent"], true);
+        let bare = std::env::temp_dir()
+            .join(format!("ovp-server-test-{}-agent-disc-bare", std::process::id()));
+        std::fs::create_dir_all(&bare).unwrap();
+        let mut unindexed = state(bare, None);
+        unindexed.ask_agent = true;
+        let resp = dispatch(&unindexed, Method::Get, "/api/model", "");
+        assert_eq!(resp.status_code(), 503);
+        let resp = dispatch(&unindexed, Method::Get, "/api/ask/status", "");
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(body_json(resp)["agent"], true);
+        st.ask_agent = false;
+        let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
+        assert_eq!(v["ask_agent"], false);
+        let v = body_json(dispatch(&st, Method::Get, "/api/ask/status", ""));
+        assert_eq!(v["agent"], false);
+
+        let brief = args_brief(&serde_json::json!({
+            "limit": 10, "query": "agent memory", "filters": {"deep": true}
+        }));
+        assert_eq!(brief, "query=agent memory · limit=10");
+        assert_eq!(args_brief(&serde_json::json!({"nested": {"x": 1}})), serde_json::Value::Null);
+        assert_eq!(args_brief(&serde_json::json!("free text")), serde_json::Value::Null);
+        let long = args_brief(&serde_json::json!({"query": "q".repeat(300)}));
+        assert!(long.as_str().unwrap().chars().count() <= 120);
     }
 
     /// A3b round-1 gate: idempotent retries replay the completed turn (no

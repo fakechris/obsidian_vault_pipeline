@@ -156,8 +156,12 @@ impl std::error::Error for AgentError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProgress {
     Started { turn_id: String },
-    ToolStarted { tool_call_id: String, tool: String },
-    ToolFinished { tool_call_id: String, tool: String, is_error: bool },
+    /// `arguments` is the model's raw call input — consumers derive their own
+    /// display summary (e.g. the query term) and MUST NOT execute from it.
+    ToolStarted { tool_call_id: String, tool: String, arguments: serde_json::Value },
+    /// `summary` mirrors the caller-facing `ToolTraceEntry` summary: capped,
+    /// and the discard marker (never content) for late results.
+    ToolFinished { tool_call_id: String, tool: String, is_error: bool, summary: String },
     Finished { turn_id: String, stopped_reason: StoppedReason },
 }
 
@@ -455,6 +459,7 @@ pub fn run_agent_turn_with_progress(
             emit(AgentProgress::ToolStarted {
                 tool_call_id: id.clone(),
                 tool: name.clone(),
+                arguments: input.clone(),
             });
             let left = remaining(started);
             let outcome = if left.is_zero() || timed_out {
@@ -503,18 +508,19 @@ pub fn run_agent_turn_with_progress(
                 truncated,
                 late: finished_late,
             });
+            // Late data is AUDIT-ONLY: the caller-facing trail (and any
+            // idempotent replay built from it) gets the discard marker,
+            // never the content.
+            let trail_summary: String = if finished_late {
+                "late: discarded (audit only)".to_string()
+            } else {
+                content.chars().take(120).collect()
+            };
             trace.push(ToolTraceEntry {
                 tool: name.clone(),
                 tool_call_id: id.clone(),
                 is_error: is_error || finished_late,
-                // Late data is AUDIT-ONLY: the caller-facing trail (and any
-                // idempotent replay built from it) gets the discard marker,
-                // never the content.
-                summary: if finished_late {
-                    "late: discarded (audit only)".to_string()
-                } else {
-                    content.chars().take(120).collect()
-                },
+                summary: trail_summary.clone(),
             });
             let (model_content, model_is_error) = if finished_late {
                 timed_out = true;
@@ -543,6 +549,7 @@ pub fn run_agent_turn_with_progress(
                 tool_call_id: id.clone(),
                 tool: name.clone(),
                 is_error: model_is_error,
+                summary: trail_summary,
             });
             results.push(ToolResultBlock {
                 tool_call_id: id.clone(),
@@ -1511,10 +1518,17 @@ mod tests {
         .unwrap();
         let events = events.into_inner().unwrap();
         assert!(matches!(&events[0], AgentProgress::Started { turn_id } if turn_id == "t1"));
-        assert!(matches!(&events[1], AgentProgress::ToolStarted { tool, .. } if tool == "search"));
+        // The started event carries the RAW call arguments (narration data
+        // for consumers); the finished event mirrors the trace summary.
+        assert!(matches!(
+            &events[1],
+            AgentProgress::ToolStarted { tool, arguments, .. }
+                if tool == "search" && arguments == &serde_json::json!({"q": "x"})
+        ));
         assert!(matches!(
             &events[2],
-            AgentProgress::ToolFinished { tool, is_error: false, .. } if tool == "search"
+            AgentProgress::ToolFinished { tool, is_error: false, summary, .. }
+                if tool == "search" && summary == "hit"
         ));
         assert!(matches!(
             events.last().unwrap(),
