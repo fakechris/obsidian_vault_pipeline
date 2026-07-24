@@ -276,6 +276,22 @@ pub fn parse_anthropic_reply(json_body: &str) -> Result<ModelReply, CallError> {
     let (stop_reason, raw_stop_reason) =
         map_stop_reason(v.get("stop_reason").and_then(|s| s.as_str()));
 
+    // `max_tokens_mid_tool`: a tool_use emitted under stop_reason=max_tokens
+    // may be TRUNCATED (partial input) — it must never execute, and it must
+    // never be cached as a successful reply either (errors are not persisted;
+    // an Ok here would poison the cassette). BudgetExhausted, not Protocol:
+    // this is no caller bug — a higher-budget retry (the caller's decision,
+    // e.g. BudgetEscalatingModelClient) is the recovery path.
+    if stop_reason == StopReason::MaxTokens
+        && blocks.iter().any(|b| matches!(b, ReplyBlock::ToolUse { .. }))
+    {
+        let detail = "tool_use_truncated_by_max_tokens: the reply stopped at the token \
+                      budget while emitting tool_use block(s); the calls may be incomplete \
+                      and must not execute. Retry with a larger max_tokens."
+            .to_string();
+        return Err(CallError::BudgetExhausted { detail });
+    }
+
     let input_tokens = v
         .pointer("/usage/input_tokens")
         .and_then(|n| n.as_u64())
@@ -774,23 +790,46 @@ mod tests {
         assert_eq!(reply.stop_reason, StopReason::MaxTokens);
     }
 
+    /// `max_tokens_mid_tool`: a truncated tool call must be an ERROR, not a
+    /// parseable success — an Ok reply would be cached as a valid cassette
+    /// entry and its raw blocks would stay accessible to naive consumers.
+    /// BudgetExhausted (not Protocol) so the existing higher-budget retry
+    /// machinery is the recovery path.
     #[test]
-    fn max_tokens_tool_use_is_parsed_but_never_executable() {
+    fn max_tokens_tool_use_is_rejected_as_budget_exhausted() {
         let json = r#"{
             "model":"m",
             "content":[
+                {"type":"text","text":"partial"},
                 {"type":"tool_use","id":"toolu_truncated","name":"vault_write","input":{"path":"note.md"}}
             ],
             "stop_reason":"max_tokens",
             "usage":{"input_tokens":1,"output_tokens":2}
         }"#;
-        let reply = parse_anthropic_reply(json).unwrap();
+        match parse_anthropic_reply(json) {
+            Err(CallError::BudgetExhausted { detail }) => {
+                assert!(detail.contains("tool_use_truncated_by_max_tokens"), "{detail}");
+            }
+            other => panic!("expected BudgetExhausted, got {other:?}"),
+        }
+    }
 
-        assert_eq!(reply.stop_reason, StopReason::MaxTokens);
-        assert!(matches!(
-            reply.blocks.as_deref(),
-            Some([ReplyBlock::ToolUse { id, .. }]) if id == "toolu_truncated"
-        ));
+    /// Defense in depth for replies that reach a consumer anyway (e.g. an old
+    /// cassette recorded before this rejection): the accessor still refuses.
+    #[test]
+    fn executable_tool_calls_refuses_max_tokens_replies() {
+        let reply = ModelReply {
+            model: "m".into(),
+            text: String::new(),
+            stop_reason: StopReason::MaxTokens,
+            usage: Usage { input_tokens: 1, output_tokens: 2 },
+            blocks: Some(vec![ReplyBlock::ToolUse {
+                id: "toolu_truncated".into(),
+                name: "vault_write".into(),
+                input: serde_json::json!({"path": "note.md"}),
+            }]),
+            raw_stop_reason: None,
+        };
         assert_eq!(reply.executable_tool_calls(), None);
         assert!(!reply.is_final_success());
     }
