@@ -122,6 +122,11 @@ pub struct ServeConfig {
     /// Override the in-flight ask cap (tests). `None` =
     /// [`DEFAULT_MAX_CONCURRENT_ASKS`].
     pub max_concurrent_asks: Option<usize>,
+    /// FLAG-GATED agent path for `POST /api/ask` (candidate
+    /// `ask_product_wiring-v1`): when true, ask runs the A1b tool loop with
+    /// the A2 vault tools and the A3a policy. Default false — the legacy
+    /// single-shot path stays the product default until A3d flips it.
+    pub ask_agent: bool,
 }
 
 /// Counting semaphore for in-flight asks — no queue, `try_acquire` only.
@@ -292,6 +297,13 @@ struct AppState {
     ovp2_bin: Option<PathBuf>,
     /// Serializes attention-ack read-modify-writes.
     acks_write_lock: std::sync::Mutex<()>,
+    /// Agent-path flag (see [`ServeConfig::ask_agent`]).
+    ask_agent: bool,
+    /// Per-session agent progress feeds (`progress_slot_bounded`): replaced at
+    /// each turn start, marked done at turn end, polled by
+    /// `GET /api/ask/progress`. In-memory only — progress is ephemeral UI
+    /// state; the transcript is the durable audit.
+    ask_progress: Arc<std::sync::Mutex<HashMap<String, AskProgressFeed>>>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -529,6 +541,14 @@ fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
     };
 }
 
+
+/// One session's in-flight agent progress feed.
+#[derive(Default, Clone)]
+struct AskProgressFeed {
+    events: Vec<serde_json::Value>,
+    done: bool,
+}
+
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
     let bind = format!("{}:{}", config.host, config.port);
     let server = Server::http(&bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
@@ -553,6 +573,8 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         manual_run: Arc::new(std::sync::Mutex::new(ManualRun::default())),
         ovp2_bin: config.ovp2_bin,
         acks_write_lock: std::sync::Mutex::new(()),
+        ask_agent: config.ask_agent,
+        ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
     });
 
     // Pre-load model
@@ -690,6 +712,9 @@ fn dispatch(
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Get, p) if p.starts_with("/api/ask/progress") => {
+            handle_ask_progress(state, url)
+        }
         (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
@@ -2101,6 +2126,12 @@ fn handle_ask(
         );
     };
 
+    // A3b (`ask_product_wiring-v1`): the FLAG-GATED agent path. The legacy
+    // single-shot path below stays the byte-for-byte default until A3d.
+    if state.ask_agent {
+        return handle_ask_agent(state, question, chat.as_deref(), slot, factory, model);
+    }
+
     // The slot was acquired at admission (before the body was even read —
     // see serve_loop) and moves INTO the pipeline thread: even after the
     // guard 504s below, the still-running provider call keeps its slot
@@ -2152,6 +2183,261 @@ fn handle_ask(
             json_response(504, &body.to_string())
         }
     }
+}
+
+/// The agent-path worker for /api/ask (candidate `ask_product_wiring-v1`).
+///
+/// Sessions live under `<vault>/.ovp/ask-sessions/`; the transcript is the
+/// audit authority (A1b). The agent deadline is derived UNDER the HTTP guard
+/// (`deadline_under_guard`): the loop's own timeout fires and the turn
+/// commits BEFORE the transport guard abandons the request.
+fn handle_ask_agent(
+    state: &AppState,
+    question: &str,
+    chat: Option<&str>,
+    slot: AskSlot,
+    factory: AskClientFactory,
+    model: IndexModel,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    use ovp_memory::agent::{
+        run_agent_turn_with_progress, AgentConfig, AgentError, AgentProgress,
+    };
+    use ovp_memory::agent_transcript::{valid_session_id, SessionStore};
+    use ovp_memory::vault_tools::VaultTools;
+
+    // Session id: the caller's (validated) or a generated timestamped one —
+    // returned in the response so the client can continue the session
+    // (`session_id_discipline`).
+    let session = match chat {
+        Some(c) if valid_session_id(c) => c.to_string(),
+        Some(_) | None => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            format!("agent-{now}")
+        }
+    };
+
+    // Fresh progress feed for this turn (`progress_slot_bounded`).
+    {
+        let mut feeds = state.ask_progress.lock().unwrap();
+        feeds.insert(session.clone(), AskProgressFeed::default());
+    }
+
+    // Deadline strictly under the HTTP guard so the turn always CONCLUDES
+    // (and commits its transcript) before the transport gives up.
+    let guard = state.ask_timeout;
+    let deadline = guard
+        .saturating_sub(Duration::from_secs(15))
+        .max(Duration::from_secs(30));
+
+    let vault_root = state.vault_root.clone();
+    let sessions_dir = vault_root.join(".ovp/ask-sessions");
+    let progress_map = Arc::clone(&state.ask_progress);
+    let progress_session = session.clone();
+    let question = question.to_string();
+    let response_session = session.clone();
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _slot = slot; // held for the WHOLE turn, freed on drop
+        let result = (|| -> Result<serde_json::Value, String> {
+            let mut client = factory()?;
+            let mut store = SessionStore::open(&sessions_dir, &progress_session)
+                .map_err(|e| e.to_string())?;
+            // `coordinated cap`: the tools refuse anything the agent's
+            // per-result budget would blind-truncate.
+            let cfg = AgentConfig {
+                model: ovp_memory::ask::AskArgs::default().model_name,
+                system: ovp_memory::agent_policy::AGENT_POLICY.to_string(),
+                max_tokens: 2048,
+                deadline,
+                ..AgentConfig::default()
+            };
+            let mut tools = VaultTools::new(&vault_root)
+                .with_result_cap(cfg.max_result_bytes.saturating_sub(2 * 1024));
+            const MAX_PROGRESS_EVENTS: usize = 256;
+            let sink = |ev: AgentProgress| {
+                let json = match &ev {
+                    AgentProgress::Started { turn_id } => {
+                        serde_json::json!({"event": "started", "turn_id": turn_id})
+                    }
+                    AgentProgress::ToolStarted { tool_call_id, tool } => serde_json::json!({
+                        "event": "tool_started", "tool": tool, "tool_call_id": tool_call_id
+                    }),
+                    AgentProgress::ToolFinished { tool_call_id, tool, is_error } => {
+                        serde_json::json!({
+                            "event": "tool_finished", "tool": tool,
+                            "tool_call_id": tool_call_id, "ok": !is_error
+                        })
+                    }
+                    AgentProgress::Finished { turn_id, stopped_reason } => serde_json::json!({
+                        "event": "final", "turn_id": turn_id,
+                        "stopped_reason": stopped_reason.as_str()
+                    }),
+                };
+                let mut feeds = progress_map.lock().unwrap();
+                if let Some(feed) = feeds.get_mut(&progress_session) {
+                    if feed.events.len() < MAX_PROGRESS_EVENTS {
+                        feed.events.push(json);
+                    }
+                    if matches!(ev, AgentProgress::Finished { .. }) {
+                        feed.done = true;
+                    }
+                }
+            };
+            let outcome = run_agent_turn_with_progress(
+                client.as_mut(),
+                &mut tools,
+                &mut store,
+                &question,
+                None,
+                &cfg,
+                Some(&sink),
+            )
+            .map_err(|e| match e {
+                AgentError::SessionBusy => "session busy".to_string(),
+                AgentError::Store(d) => d,
+            })?;
+
+            let coverage = tools.coverage();
+            let citations = agent_citations(&outcome.answer, &model, &vault_root);
+            let trace: Vec<serde_json::Value> = outcome
+                .tool_trace
+                .iter()
+                .map(|t|
+
+                    serde_json::json!({
+                        "tool": t.tool, "summary": t.summary, "ok": !t.is_error
+                    }))
+                .collect();
+            Ok(serde_json::json!({
+                "agent": true,
+                "answer": outcome.answer,
+                "citations": citations,
+                "coverage": coverage,
+                "tool_trace": trace,
+                "chat": response_session,
+                "turn_id": outcome.turn_id,
+                "stopped_reason": outcome.stopped_reason.as_str(),
+                "usage": {
+                    "input_tokens": outcome.input_tokens_total,
+                    "output_tokens": outcome.output_tokens_total,
+                },
+            }))
+        })();
+        // Whatever happened, the feed must not stay live forever.
+        {
+            let mut feeds = progress_map.lock().unwrap();
+            if let Some(feed) = feeds.get_mut(&progress_session) {
+                feed.done = true;
+                if result.is_err() {
+                    feed.events.push(serde_json::json!({"event": "error"}));
+                }
+            }
+        }
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(state.ask_timeout) {
+        Ok(Ok(payload)) => json_response(200, &payload.to_string()),
+        Ok(Err(e)) if e == LLM_NOT_CONFIGURED => json_response(
+            503,
+            r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+        ),
+        Ok(Err(e)) if e == "session busy" => json_response(
+            409,
+            r#"{"error":"a turn is already running on this session","code":"ask_session_busy"}"#,
+        ),
+        Ok(Err(e)) => {
+            let body = serde_json::json!({ "error": e });
+            json_response(502, &body.to_string())
+        }
+        Err(_) => {
+            // The agent deadline sits under this guard, so reaching here means
+            // something pathological — the honest message matches the legacy
+            // path (the turn is not cancelled; the transcript still commits).
+            let body = serde_json::json!({
+                "error": format!(
+                    "no answer within {}s; the turn was not cancelled and its \
+                     transcript will still commit",
+                    state.ask_timeout.as_secs()
+                ),
+                "code": "ask_timeout",
+            });
+            json_response(504, &body.to_string())
+        }
+    }
+}
+
+/// Resolve the agent answer's citation markers into receipts
+/// (`citations_resolved_not_trusted`): [claim:<key>] against the ACTIVE
+/// ledger records (link = the claim's knowledge anchor), [source:<id>]
+/// against the index (link = /library). Anything unresolvable is
+/// verified:false — surfaced, never silently dropped.
+fn agent_citations(
+    answer: &str,
+    model: &IndexModel,
+    vault_root: &std::path::Path,
+) -> Vec<serde_json::Value> {
+    let records = ovp_api_projection::readers::load_active_records(vault_root, &VaultLayout::new());
+    citations_in_order(answer)
+        .into_iter()
+        .map(|key| {
+            let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            match kind {
+                "claim" => {
+                    let hit = records.iter().find(|r| r.claim_key == id);
+                    serde_json::json!({
+                        "id": key,
+                        "kind": "claim",
+                        "title": hit.map(|r| r.claim.chars().take(120).collect::<String>()),
+                        "link_target": hit.map(|r| format!("/knowledge#{}", r.claim_id)),
+                        "verified": hit.is_some(),
+                    })
+                }
+                "source" => {
+                    let hit = model.sources.iter().find(|s| s.sha256 == id);
+                    serde_json::json!({
+                        "id": key,
+                        "kind": "source",
+                        "title": hit.and_then(|s| s.title.clone()),
+                        "link_target": hit.map(|s| format!("/library/{}", s.sha256)),
+                        "verified": hit.is_some(),
+                    })
+                }
+                _ => serde_json::json!({
+                    "id": key,
+                    "kind": kind,
+                    "title": serde_json::Value::Null,
+                    "link_target": serde_json::Value::Null,
+                    "verified": false,
+                }),
+            }
+        })
+        .collect()
+}
+
+/// `GET /api/ask/progress?chat=<session>` — the minimal A0 §3.7 progress feed.
+/// Unknown or finished sessions answer an EMPTY done feed (no 404 fishing on
+/// session ids).
+fn handle_ask_progress(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let chat = url
+        .split_once('?')
+        .map(|(_, q)| q)
+        .and_then(|q| {
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("chat="))
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let feeds = state.ask_progress.lock().unwrap();
+    let body = match feeds.get(&chat) {
+        Some(feed) => serde_json::json!({"events": feed.events, "done": feed.done}),
+        None => serde_json::json!({"events": [], "done": true}),
+    };
+    json_response(200, &body.to_string())
 }
 
 /// The worker side of /api/ask: build the client, run the pipeline (chat
@@ -2715,6 +3001,8 @@ mod tests {
             manual_run: Arc::new(std::sync::Mutex::new(ManualRun::default())),
             ovp2_bin: None,
             acks_write_lock: std::sync::Mutex::new(()),
+            ask_agent: false,
+            ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -4416,6 +4704,103 @@ mod tests {
     /// AND a second ask — the GET must answer well before the first ask
     /// completes, and the second ask must be refused (429) immediately
     /// instead of queueing behind the paid call.
+    /// A3b: the flag-gated agent path serves a full turn — response shape,
+    /// resolved citations, executor coverage, durable transcript, progress
+    /// feed. The scripted client answers with no tool calls (0-tool final).
+    #[test]
+    fn agent_ask_serves_a_full_turn_with_receipts() {
+        let vault = portal_vault("agent-turn", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory(
+            // One resolvable source ref (fixture sha) + one fabricated claim
+            // key: the server must verify the first and flag the second.
+            "answer [source:aaaa1111] and [claim:ck-fabricated]",
+            Duration::from_millis(10),
+        ));
+        let resp = ask(&st, r#"{"question":"what do we know?"}"#);
+        assert_eq!(resp.status_code(), 200);
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["agent"], true);
+        assert_eq!(v["stopped_reason"], "final");
+        assert_eq!(v["turn_id"], "t1");
+        let chat = v["chat"].as_str().unwrap().to_string();
+        assert!(chat.starts_with("agent-"), "{chat}");
+        // 0-tool turn → every layer honestly not_queried, model never fills it.
+        assert_eq!(v["coverage"]["sources"], "not_queried");
+        assert_eq!(v["coverage"]["claims"], "not_queried");
+        assert_eq!(v["coverage"]["body"], "not_queried");
+        // Citations: resolved receipt vs flagged fabrication.
+        let cits = v["citations"].as_array().unwrap();
+        let src = cits.iter().find(|c| c["kind"] == "source").unwrap();
+        assert_eq!(src["verified"], true);
+        assert_eq!(src["link_target"], "/library/aaaa1111");
+        let claim = cits.iter().find(|c| c["kind"] == "claim").unwrap();
+        assert_eq!(claim["verified"], false);
+        // The transcript committed durably under .ovp/ask-sessions/.
+        let transcript = vault.join(format!(".ovp/ask-sessions/{chat}.jsonl"));
+        let body = std::fs::read_to_string(&transcript).unwrap();
+        assert!(body.contains("turn_finished"), "{body}");
+        // Progress feed: started + final, done.
+        let resp = dispatch(
+            &st,
+            Method::Get,
+            &format!("/api/ask/progress?chat={chat}"),
+            "",
+        );
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["done"], true);
+        let events: Vec<&str> = v["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["event"].as_str().unwrap())
+            .collect();
+        assert_eq!(events.first().copied(), Some("started"));
+        assert_eq!(events.last().copied(), Some("final"));
+    }
+
+    /// A3b: a busy session answers 409 without touching the model, and an
+    /// unknown session's progress is an empty done feed (no 404 fishing).
+    #[test]
+    fn agent_ask_busy_session_and_unknown_progress() {
+        let vault = portal_vault("agent-busy", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault.clone(), None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory("unused", Duration::from_millis(5)));
+        // Hold the session lock like an in-flight turn would.
+        let store = ovp_memory::agent_transcript::SessionStore::open(
+            &vault.join(".ovp/ask-sessions"),
+            "held",
+        )
+        .unwrap();
+        let _lock = store.lock().unwrap();
+        let resp = ask(&st, r#"{"question":"q","chat":"held"}"#);
+        assert_eq!(resp.status_code(), 409);
+
+        let resp = dispatch(&st, Method::Get, "/api/ask/progress?chat=nope", "");
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["done"], true);
+        assert_eq!(v["events"].as_array().unwrap().len(), 0);
+    }
+
+    /// A3b: flag OFF keeps the legacy path — the response carries the legacy
+    /// shape (no agent marker), proving the default is byte-compatible.
+    #[test]
+    fn agent_flag_off_serves_legacy_shape() {
+        let vault = portal_vault("agent-off", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault, None);
+        st.ask_client = Some(scripted_factory("plain answer", Duration::from_millis(5)));
+        let resp = ask(&st, r#"{"question":"q"}"#);
+        assert_eq!(resp.status_code(), 200);
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert!(v.get("agent").is_none(), "legacy path must not carry the agent marker");
+    }
+
     #[test]
     fn ask_does_not_block_the_accept_loop() {
         use std::io::{Read, Write};
