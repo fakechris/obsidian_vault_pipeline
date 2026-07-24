@@ -551,6 +551,10 @@ struct AskProgressFeed {
     events: Vec<serde_json::Value>,
     done: bool,
     generation: u64,
+    /// The engine's Started event arrived (the turn truly began). A PENDING
+    /// feed (started=false) is registered at admission so a poller during
+    /// client-build/lock-acquisition sees a live feed, not a stale done one.
+    started: bool,
 }
 
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
@@ -2127,17 +2131,38 @@ fn handle_ask(
     // index check: a zero-tool capability turn must work on a fresh/unindexed
     // vault (tools report the missing index as honest unavailable coverage).
     if state.ask_agent {
+        // The agent's session-id rules are STRICTER than the legacy chat-stem
+        // rules — a supplied-but-invalid id must fail loudly, not silently
+        // land in a fresh generated session (which would break replay).
+        if let Some(raw) = parsed.get("chat").and_then(|c| c.as_str()).map(str::trim)
+            && !raw.is_empty()
+            && !ovp_memory::agent_transcript::valid_session_id(raw)
+        {
+            return json_response(
+                400,
+                r#"{"error":"invalid chat session id (want [A-Za-z0-9_-]{1,64})","code":"invalid_chat"}"#,
+            );
+        }
         // Client retry key (A0 §3.7): a resend after a dropped response or
         // 504 replays the completed turn instead of paying for a second one.
         // Replay lookup is SESSION-LOCAL, so a key without a stable session
         // could never be found again — require `chat` alongside the key (a
-        // chatless retry would silently bill a second turn otherwise).
-        let idempotency_key = parsed
-            .get("idempotency_key")
+        // chatless retry would silently bill a second turn otherwise). A
+        // PRESENT but malformed key is a loud 400: silently dropping it would
+        // strip the caller's replay protection.
+        let raw_key = parsed.get("idempotency_key");
+        let idempotency_key = raw_key
             .and_then(|k| k.as_str())
             .map(str::trim)
             .filter(|k| !k.is_empty() && k.len() <= 128)
             .map(str::to_string);
+        if raw_key.is_some() && !raw_key.is_some_and(|k| k.is_null()) && idempotency_key.is_none()
+        {
+            return json_response(
+                400,
+                r#"{"error":"idempotency_key must be a non-empty string of at most 128 chars","code":"invalid_idempotency_key"}"#,
+            );
+        }
         if idempotency_key.is_some() && chat.is_none() {
             return json_response(
                 400,
@@ -2263,6 +2288,25 @@ fn handle_ask_agent(
     static FEED_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let generation =
         FEED_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // PENDING feed at admission: a poll during the pre-lock setup interval
+    // must see a live feed for this session (done:false), not a stale or
+    // missing one. Never touch a LIVE feed (a busy session's running turn
+    // owns it; our 409 exits without side effects — cleanup is
+    // generation-guarded).
+    {
+        let mut feeds = state.ask_progress.lock().unwrap();
+        let stale = feeds.get(&session).is_none_or(|f| f.done);
+        if stale {
+            const MAX_RETAINED_FEEDS: usize = 64;
+            if feeds.len() >= MAX_RETAINED_FEEDS {
+                feeds.retain(|_, f| !f.done);
+            }
+            feeds.insert(
+                session.clone(),
+                AskProgressFeed { events: vec![], done: false, generation, started: false },
+            );
+        }
+    }
 
     // Deadline strictly under the HTTP guard so the turn always CONCLUDES
     // (and commits its transcript) before the transport gives up. KNOWN
@@ -2287,9 +2331,48 @@ fn handle_ask_agent(
     std::thread::spawn(move || {
         let _slot = slot; // held for the WHOLE turn, freed on drop
         let result = (|| -> Result<serde_json::Value, String> {
-            let mut client = factory()?;
             let mut store = SessionStore::open(&sessions_dir, &progress_session)
                 .map_err(|e| e.to_string())?;
+            // Durable replay BEFORE building the model client: a keyed retry
+            // of a completed turn needs no provider access — it must succeed
+            // even after credentials were removed.
+            if let Some(key) = request_key.as_deref()
+                && let Some(done) = store.completed_turn_for_key(key)
+            {
+                let trace: Vec<serde_json::Value> = store
+                    .tool_calls_for_turn(&done.turn_id)
+                    .into_iter()
+                    .map(|(tool, _id, is_error, summary)| {
+                        serde_json::json!({"tool": tool, "summary": summary, "ok": !is_error})
+                    })
+                    .collect();
+                // Receipts recompute fine without a client (ledger + index
+                // reads only) — a replayed response keeps the full shape.
+                let records = ovp_api_projection::readers::load_active_records(
+                    &vault_root,
+                    &VaultLayout::new(),
+                );
+                let citations = match read_index(&vault_root).ok() {
+                    Some(m) => agent_citations(&done.answer, &m, &records),
+                    None => agent_citations_unindexed(&done.answer, &records),
+                };
+                return Ok(serde_json::json!({
+                    "agent": true,
+                    "answer": done.answer,
+                    "citations": citations,
+                    "coverage": ovp_memory::vault_tools::Coverage::default(),
+                    "tool_trace": trace,
+                    "chat": response_session,
+                    "turn_id": done.turn_id,
+                    "stopped_reason": done.stopped_reason,
+                    "idempotent_replay": true,
+                    "usage": {
+                        "input_tokens": done.input_tokens_total,
+                        "output_tokens": done.output_tokens_total,
+                    },
+                }));
+            }
+            let mut client = factory()?;
             // `coordinated cap`: the tools refuse anything the agent's
             // per-result budget would blind-truncate.
             // Deadline shares the ADMISSION clock with the HTTP guard: the
@@ -2344,16 +2427,18 @@ fn handle_ask_agent(
                 let mut feeds = progress_map.lock().unwrap();
                 if matches!(ev, AgentProgress::Started { .. }) {
                     // We hold the session lock (Started fires after
-                    // acquisition) — any existing feed is a finished or
-                    // stale turn's; replace it with this turn's. Bounded
-                    // retention: evict completed feeds past the cap first.
-                    const MAX_RETAINED_FEEDS: usize = 64;
-                    if feeds.len() >= MAX_RETAINED_FEEDS {
-                        feeds.retain(|_, f| !f.done);
-                    }
+                    // acquisition) — take over the feed: our own pending one,
+                    // another admission's pending one (it lost the lock), or
+                    // a finished turn's. A live STARTED feed cannot belong to
+                    // anyone else while we hold the lock.
                     feeds.insert(
                         progress_session.clone(),
-                        AskProgressFeed { events: vec![json], done: false, generation },
+                        AskProgressFeed {
+                            events: vec![json],
+                            done: false,
+                            generation,
+                            started: true,
+                        },
                     );
                     return;
                 }
@@ -5024,6 +5109,52 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
         assert_eq!(v["code"], "idempotency_needs_chat");
+    }
+
+    /// A3b round-4 gate: a keyed replay succeeds WITHOUT provider access
+    /// (credentials removed after the first turn), and malformed inputs are
+    /// loud 400s (invalid chat id; invalid idempotency key).
+    #[test]
+    fn agent_ask_replay_without_provider_and_strict_validation() {
+        let vault = portal_vault("agent-replay", "50-Inbox/03-Processed/good.md", "body\n");
+        let mut st = state(vault, None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory("paid answer", Duration::from_millis(5)));
+        let resp = ask(
+            &st,
+            r#"{"question":"q","chat":"replay-s","idempotency_key":"rk"}"#,
+        );
+        assert_eq!(resp.status_code(), 200);
+        // Credentials vanish: the factory now fails…
+        st.ask_client = Some(Arc::new(|| Err("no key".to_string())));
+        // …but the keyed retry replays the durable turn without a provider.
+        let resp = ask(
+            &st,
+            r#"{"question":"q","chat":"replay-s","idempotency_key":"rk"}"#,
+        );
+        assert_eq!(resp.status_code(), 200, "replay must not need the provider");
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["answer"], "paid answer");
+        assert_eq!(v["idempotent_replay"], true);
+
+        // Strict validation: a supplied-but-invalid chat id is a loud 400
+        // (silently regenerating would break replay)…
+        let resp = ask(&st, r#"{"question":"q","chat":"has.dots"}"#);
+        assert_eq!(resp.status_code(), 400);
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["code"], "invalid_chat");
+        // …and so is a present-but-malformed idempotency key.
+        let long_key = "k".repeat(200);
+        let body = format!(
+            r#"{{"question":"q","chat":"replay-s","idempotency_key":"{long_key}"}}"#
+        );
+        let resp = ask(&st, &body);
+        assert_eq!(resp.status_code(), 400);
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["code"], "invalid_idempotency_key");
     }
 
     /// A3b round-2 gate: a fresh/unindexed vault still serves a zero-tool
