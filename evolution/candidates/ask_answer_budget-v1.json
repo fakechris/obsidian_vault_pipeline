@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_answer_budget-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, single knob: the agent path's answer budget (AgentConfig.max_tokens in the /api/ask wiring) rises 2048 → 4096. Agent answers synthesize across layers (multi-section, bilingual) and demonstrably overflow the legacy 2048 cap: a live turn on the real vault produced a good 6105-char answer that hit MaxTokens and honestly stopped model_error mid-answer. Predicted: cap-overflow model_error final replies disappear for typical synthesis answers while tool-call budgets and every deadline/coverage/citation contract stay byte-identical.",
+  "predicted_delta": {
+    "operational_reliability": "long synthesis turns finish with stopped_reason=final instead of an honest-but-avoidable model_error truncation at the answer step",
+    "cost_efficiency": "output-token ceiling doubles ONLY when the model actually writes long answers; per-call usage stays in the transcript ledger, so the paired check is observable, not assumed"
+  },
+  "guardrails": {
+    "single_knob": "the diff for this candidate is one field: max_tokens 2048 → 4096 in the agent branch's AgentConfig; no prompt, tool, deadline, or protocol change rides along",
+    "truncation_still_honest": "a reply that hits even the raised cap still surfaces as model_error (A1b `max_tokens_text_is_not_final` stands unmodified) — the budget buys headroom, never silence",
+    "legacy_path_untouched": "the flag-off /api/ask path keeps AskArgs::default() (2048); only the agent branch reads the new value"
+  },
+  "eval_plan": {
+    "replay_set": "live paired evidence (real vault, 2026-07-24): pre-change turn = 6105-char answer, stopped_reason=model_error at 2048; post-change same-class question = 4839-char answer, usage.output_tokens=2195 (would truncate at 2048), stopped_reason=final, 34 citations / 31 verified. Deterministic contracts covered by the existing agent test suites, which pass unmodified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set the field back to 2048 — one-line revert, no data or transcript migration.",
+  "ablation_required": false
+}

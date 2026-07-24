@@ -327,6 +327,13 @@ export async function postAsk(
   return res.json() as Promise<AskResponse>;
 }
 
+/** GET /api/ask/status — agent-mode discovery. Unlike /api/model this
+ * never needs an index, matching the agent path itself. */
+export function fetchAskStatus(): Promise<{ agent: boolean }> {
+  if (STATIC_MODE) return Promise.resolve({ agent: false });
+  return fetchJson<{ agent: boolean }>('/api/ask/status');
+}
+
 /** GET /api/ask/progress — live mid-turn feed for an agent ask. Unknown
  * sessions answer an empty done feed, so polling is always safe. */
 export function fetchAskProgress(chat: string): Promise<AskProgress> {

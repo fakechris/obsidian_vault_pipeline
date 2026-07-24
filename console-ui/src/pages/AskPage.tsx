@@ -16,6 +16,7 @@ import { useI18n, type MsgKey } from '../i18n';
 import {
   AskError,
   fetchAskProgress,
+  fetchAskStatus,
   fetchChatMarkdown,
   fetchChats,
   postAsk,
@@ -449,10 +450,19 @@ export default function AskPage() {
   /** Stem of the live multi-turn session (first successful answer's `chat`). */
   const [sessionChat, setSessionChat] = useState<string | null>(null);
 
-  // Agent mode: the server advertises the tool-loop path via /api/model —
-  // the SPA then mints the session id itself and polls the live feed.
+  // Agent mode: discovered via /api/ask/status (index-free, like the agent
+  // path itself) with the /api/model overlay as fallback — the SPA then
+  // mints the session id itself and polls the live feed.
   const { model } = useModel();
-  const agentMode = model?.ask_agent === true;
+  const [askStatus, setAskStatus] = useState<boolean | null>(null);
+  useEffect(() => {
+    fetchAskStatus()
+      .then((s) => setAskStatus(s.agent))
+      .catch(() => {
+        /* stay on the /api/model fallback */
+      });
+  }, []);
+  const agentMode = askStatus ?? model?.ask_agent === true;
   const [live, setLive] = useState<AskProgress | null>(null);
   const liveRef = useRef<AskProgress | null>(null);
   /** Session the CURRENT in-flight ask polls against (null = legacy path). */
@@ -541,10 +551,19 @@ export default function AskPage() {
     const chat = pollChatRef.current;
     if (!chat) return;
     let cancelled = false;
+    // On turn N+1 the map may still hold turn N's COMPLETED feed until this
+    // turn's admission registers (or never, if the POST is rejected first).
+    // Accept nothing until a live (not-done) feed proves it is ours — a
+    // stale trail must never be attributed to this turn.
+    let seenLive = false;
     const tick = () => {
       fetchAskProgress(chat)
         .then((p) => {
           if (cancelled) return;
+          if (!seenLive) {
+            if (p.done) return;
+            seenLive = true;
+          }
           liveRef.current = p;
           setLive(p);
         })

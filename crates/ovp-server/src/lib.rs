@@ -723,6 +723,13 @@ fn dispatch(
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
             handle_ask_progress(state, url)
         }
+        // Agent-mode discovery MUST work index-free (the agent path itself
+        // does): /api/model 503s on an unindexed vault, so the SPA reads
+        // this instead before minting a session id and polling.
+        (Method::Get, "/api/ask/status") => json_response(
+            200,
+            &serde_json::json!({"agent": state.ask_agent}).to_string(),
+        ),
         (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
@@ -5080,9 +5087,25 @@ mod tests {
         st.ask_agent = true;
         let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
         assert_eq!(v["ask_agent"], true);
+        // The canonical discovery endpoint works WITHOUT an index (parity
+        // with the agent path itself — /api/model 503s on a fresh vault).
+        let v = body_json(dispatch(&st, Method::Get, "/api/ask/status", ""));
+        assert_eq!(v["agent"], true);
+        let bare = std::env::temp_dir()
+            .join(format!("ovp-server-test-{}-agent-disc-bare", std::process::id()));
+        std::fs::create_dir_all(&bare).unwrap();
+        let mut unindexed = state(bare, None);
+        unindexed.ask_agent = true;
+        let resp = dispatch(&unindexed, Method::Get, "/api/model", "");
+        assert_eq!(resp.status_code(), 503);
+        let resp = dispatch(&unindexed, Method::Get, "/api/ask/status", "");
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(body_json(resp)["agent"], true);
         st.ask_agent = false;
         let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
         assert_eq!(v["ask_agent"], false);
+        let v = body_json(dispatch(&st, Method::Get, "/api/ask/status", ""));
+        assert_eq!(v["agent"], false);
 
         let brief = args_brief(&serde_json::json!({
             "limit": 10, "query": "agent memory", "filters": {"deep": true}
