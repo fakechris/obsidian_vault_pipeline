@@ -602,12 +602,19 @@ export default function AskPage() {
       }));
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
     void (async () => {
-      // Resolve agent mode BEFORE posting — a first ask that races the
-      // discovery fetch must still mint its chat id and get a live trail.
-      let agent = askStatus;
-      if (agent == null) {
-        agent = await (askStatusPromise.current ?? Promise.resolve(modelAgent));
-      }
+      // Resolve agent mode PER SUBMISSION — a fresh read tracks server
+      // restarts with the flag flipped; the mount-time discovery and the
+      // /api/model overlay only serve as fallbacks when the read fails.
+      const agent = await fetchAskStatus()
+        .then((s) => {
+          setAskStatus(s.agent);
+          return s.agent;
+        })
+        .catch(
+          async () =>
+            askStatus ??
+            (await (askStatusPromise.current ?? Promise.resolve(modelAgent))),
+        );
       // Agent path: mint the session id client-side so the progress feed
       // is pollable from the FIRST turn (the server honors supplied ids).
       let chat = sessionChat;
@@ -632,8 +639,14 @@ export default function AskPage() {
       .catch((err: unknown) => {
         const errorKey = errorKeyFor(err);
         // Keep what the agent DID before failing — an honest partial trail
-        // beats a bare error line.
-        const trail = liveRef.current?.events;
+        // beats a bare error line. But ONLY when the failed request was
+        // actually admitted: a 429 (busy/admission-capped) or 400
+        // (validation) POST never owned the session, so any polled feed
+        // belongs to a DIFFERENT turn and must not be attributed here.
+        const admitted = !(
+          err instanceof AskError && (err.status === 429 || err.status === 400)
+        );
+        const trail = admitted ? liveRef.current?.events : undefined;
         setTurns((prev) =>
           prev.map((turn, i) =>
             i === prev.length - 1
