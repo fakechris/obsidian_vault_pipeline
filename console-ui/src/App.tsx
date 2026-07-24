@@ -92,6 +92,9 @@ export default function App() {
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
           {!STATIC_MODE && <Route path="/ask" element={<AskPage />} />}
+          {!STATIC_MODE && (
+            <Route path="/ask/chat/:chatId" element={<AskPage />} />
+          )}
           {!STATIC_MODE && <Route path="/system" element={<SystemPage />} />}
           {!STATIC_MODE && (
             <Route

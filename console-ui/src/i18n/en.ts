@@ -336,6 +336,8 @@ export const en = {
   'ask.closeChat': 'Back to conversation',
   'ask.newConversation': 'New conversation',
   'ask.chatLoadError': 'Could not load this chat — is the server running?',
+  'ask.chatParseEmpty':
+    'This saved transcript has no readable Q/A turns — the file may be corrupt or empty.',
   'ask.citationsTitle': 'Citations',
   'ask.citationsEmpty':
     'Citations for the latest answer land here — hover a [1] marker in the answer to highlight its evidence.',
