@@ -34,6 +34,11 @@ const MAX_BODY_LIMIT: usize = 24 * 1024;
 /// byte-truncates anything over its 32 KiB cap into broken JSON — so the page
 /// shrinks until the serialized form fits, with truncation kept honest.
 const MAX_SERIALIZED_PAGE_BYTES: usize = 28 * 1024;
+/// Absolute backstop on ANY serialized tool result handed to the agent (its
+/// per-result cap is 32 KiB; beyond this it would blind-truncate the JSON).
+const MAX_SERIALIZED_RESULT_BYTES: usize = 30 * 1024;
+/// Streaming chunk-scan ceiling — bounds one pass without a whole-file read.
+const MAX_CHUNK_SCAN_BYTES: usize = 32 * 1024 * 1024;
 /// Bounded citation closure size for get_claim (count cap, marked when hit).
 const MAX_CLAIM_CITATIONS: usize = 24;
 /// Whole-file ceiling for body reads: vault sources are markdown (typically
@@ -315,6 +320,18 @@ impl ToolExecutor for VaultTools {
 
         match self.dispatch(call) {
             Ok(value) => match serde_json::to_string(&value) {
+                // Honest backstop: nothing over the serialized bound may reach
+                // the agent — its byte-truncation would hand the model broken
+                // JSON under a Complete coverage. A refusal with Partial
+                // coverage tells the model to narrow the query instead.
+                Ok(body) if body.len() > MAX_SERIALIZED_RESULT_BYTES => {
+                    self.merge_coverage(layer, LayerState::Partial);
+                    ToolOutcome::Failed(format!(
+                        "result too large to deliver intact ({} bytes serialized); \
+                         narrow the query or lower the limit",
+                        body.len()
+                    ))
+                }
                 Ok(body) => {
                     let truncated = value
                         .get("truncated")
@@ -613,7 +630,6 @@ pub fn read_source_body(
     }
     // Escaping-aware sizing: shrink the slice until the SERIALIZED page fits
     // the bound (guaranteed progress: never below one char).
-    let mut end = end;
     loop {
         let serialized_len = serde_json::to_string(&json!(&text[offset..end]))
             .map(|s| s.len())
@@ -659,7 +675,6 @@ pub fn search_source_chunks(
     query: &str,
     limit: usize,
 ) -> Result<Value, VaultToolError> {
-    let text = read_source_text(vault_root, model, source_id)?;
     let terms: BTreeSet<String> = query
         .split_whitespace()
         .map(str::to_lowercase)
@@ -671,18 +686,67 @@ pub fn search_source_chunks(
         ));
     }
 
+    // STREAMING scan (unlike body reads, no whole-file ceiling): paragraphs
+    // are accumulated line-by-line with bounded memory, so chunk search stays
+    // usable on sources too large for paged body reads. A scan ceiling keeps
+    // the pass bounded; hitting it is explicit truncation.
+    let (resolved, rel_path) = resolve_source_path(vault_root, model, source_id)?;
+    let file = std::fs::File::open(&resolved).map_err(|e| {
+        VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
+    })?;
+    let mut reader = std::io::BufReader::new(file);
     let mut matches = Vec::new();
     let mut passage_capped = false;
-    for (index, passage) in blank_line_passages(&text) {
-        let lower = passage.to_lowercase();
-        let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
-        if score == 0 {
-            continue;
+    let mut scan_capped = false;
+    let mut scanned: usize = 0;
+    let mut index: usize = 0;
+    let mut paragraph = String::new();
+    let mut paragraph_over_cap = false;
+    let mut line = String::new();
+    let flush = |paragraph: &mut String,
+                     over_cap: &mut bool,
+                     index: &mut usize,
+                     matches: &mut Vec<(usize, usize, String)>,
+                     passage_capped: &mut bool| {
+        if !paragraph.trim().is_empty() {
+            let lower = paragraph.to_lowercase();
+            let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
+            if score > 0 {
+                let (passage, capped) = cap_utf8_bytes(paragraph.trim_end(), MAX_PASSAGE_BYTES);
+                *passage_capped |= capped || *over_cap;
+                matches.push((score, *index, passage));
+            }
+            *index += 1;
         }
-        let (passage, capped) = cap_utf8_bytes(passage, MAX_PASSAGE_BYTES);
-        passage_capped |= capped;
-        matches.push((score, index, passage));
+        paragraph.clear();
+        *over_cap = false;
+    };
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(&mut reader, &mut line).map_err(|e| {
+            VaultToolError::Failed(format!(
+                "source `{source_id}` at {rel_path} is not readable UTF-8: {e}"
+            ))
+        })?;
+        if n == 0 {
+            break;
+        }
+        scanned += n;
+        if line.trim().is_empty() {
+            flush(&mut paragraph, &mut paragraph_over_cap, &mut index, &mut matches, &mut passage_capped);
+        } else if paragraph.len() < MAX_PASSAGE_BYTES {
+            paragraph.push_str(&line);
+        } else {
+            // Bounded memory: score on the capped prefix; mark the passage.
+            paragraph_over_cap = true;
+        }
+        if scanned > MAX_CHUNK_SCAN_BYTES {
+            scan_capped = true;
+            break;
+        }
     }
+    flush(&mut paragraph, &mut paragraph_over_cap, &mut index, &mut matches, &mut passage_capped);
+    passage_capped |= scan_capped;
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let limit = limit.clamp(1, MAX_CHUNK_LIMIT);
@@ -742,6 +806,10 @@ pub fn search_claims(
                 hit.insert("theme".into(), json!(theme));
             }
             hit.insert("sources".into(), json!(record.source_cases));
+            hit.insert(
+                "provenance".into(),
+                json!({"score": record.provenance_score, "class": record.provenance_class}),
+            );
             hit.insert("status".into(), json!("durable"));
             hits.push(Value::Object(hit));
         }
@@ -978,13 +1046,17 @@ fn find_source<'a>(
         .ok_or_else(|| VaultToolError::Failed(format!("unknown source `{source_id}`")))
 }
 
-fn read_source_text(
+/// Resolve a source's on-disk file: index rel_path + the shared lifecycle
+/// fallback (rel_path is not rewritten when the daily lifecycle moves a
+/// processed note out of 50-Inbox/01-Raw), then a canonicalize +
+/// starts_with traversal guard. Shared by body reads and the streaming
+/// chunk scanner.
+fn resolve_source_path(
     vault_root: &Path,
     model: &IndexModel,
     source_id: &str,
-) -> Result<String, VaultToolError> {
+) -> Result<(PathBuf, String), VaultToolError> {
     let source = find_source(model, source_id)?;
-    // (size ceiling enforced after path resolution below)
     let rel_path = source.rel_path.as_deref().ok_or_else(|| {
         VaultToolError::Failed(format!("source `{source_id}` has no readable path"))
     })?;
@@ -994,10 +1066,6 @@ fn read_source_text(
             vault_root.display()
         ))
     })?;
-    // The index's rel_path is NOT rewritten when the daily lifecycle moves a
-    // processed note out of 50-Inbox/01-Raw — apply the shared fallback (the
-    // same helper the server and index builder use) BEFORE canonicalizing, or
-    // every processed source's body reads as missing.
     let layout = ovp_domain::vault_layout::VaultLayout::new();
     let mut joined = vault_root.join(rel_path);
     if !joined.is_file()
@@ -1014,6 +1082,15 @@ fn read_source_text(
             "source `{source_id}` path escapes the vault root: {rel_path}"
         )));
     }
+    Ok((resolved, rel_path.to_string()))
+}
+
+fn read_source_text(
+    vault_root: &Path,
+    model: &IndexModel,
+    source_id: &str,
+) -> Result<String, VaultToolError> {
+    let (resolved, rel_path) = resolve_source_path(vault_root, model, source_id)?;
     // Explicit ceiling instead of arbitrary per-page allocation: metadata is
     // checked BEFORE reading, so a huge file can neither exhaust memory nor
     // burn the turn deadline page after page.
@@ -1024,7 +1101,7 @@ fn read_source_text(
         .len() as usize;
     if file_bytes > MAX_BODY_FILE_BYTES {
         return Err(VaultToolError::Failed(format!(
-            "source `{source_id}` is {file_bytes} bytes — above the {MAX_BODY_FILE_BYTES}-byte              body-read ceiling; use search_source_chunks for targeted passages"
+            "source `{source_id}` is {file_bytes} bytes — above the {MAX_BODY_FILE_BYTES}-byte              body-read ceiling; use search_source_chunks (streaming) for targeted passages"
         )));
     }
     let bytes = std::fs::read(&resolved).map_err(|e| {
@@ -1085,33 +1162,6 @@ fn next_char_boundary(text: &str, offset: usize) -> usize {
     at
 }
 
-fn blank_line_passages(text: &str) -> Vec<(usize, &str)> {
-    let mut passages = Vec::new();
-    let mut start = 0;
-    let mut cursor = 0;
-    for line in text.split_inclusive('\n') {
-        let line_start = cursor;
-        cursor += line.len();
-        if !line.trim().is_empty() {
-            continue;
-        }
-        let mut end = line_start;
-        if end > start && text.as_bytes()[end - 1] == b'\n' {
-            end -= 1;
-            if end > start && text.as_bytes()[end - 1] == b'\r' {
-                end -= 1;
-            }
-        }
-        if end > start {
-            passages.push((passages.len(), &text[start..end]));
-        }
-        start = cursor;
-    }
-    if start < text.len() {
-        passages.push((passages.len(), &text[start..]));
-    }
-    passages
-}
 
 fn cap_utf8_bytes(text: &str, max_bytes: usize) -> (String, bool) {
     if text.len() <= max_bytes {
