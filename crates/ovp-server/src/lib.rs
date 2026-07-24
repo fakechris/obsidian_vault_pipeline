@@ -2119,15 +2119,9 @@ fn handle_ask(
             r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
         );
     };
-    let Some(model) = state.current_model() else {
-        return json_response(
-            503,
-            r#"{"error":"index not available","code":"index_unavailable"}"#,
-        );
-    };
-
-    // A3b (`ask_product_wiring-v1`): the FLAG-GATED agent path. The legacy
-    // single-shot path below stays the byte-for-byte default until A3d.
+    // A3b (`ask_product_wiring-v1`): the FLAG-GATED agent path — BEFORE the
+    // index check: a zero-tool capability turn must work on a fresh/unindexed
+    // vault (tools report the missing index as honest unavailable coverage).
     if state.ask_agent {
         // Client retry key (A0 §3.7): a resend after a dropped response or
         // 504 replays the completed turn instead of paying for a second one.
@@ -2144,9 +2138,14 @@ fn handle_ask(
             idempotency_key.as_deref(),
             slot,
             factory,
-            model,
         );
     }
+    let Some(model) = state.current_model() else {
+        return json_response(
+            503,
+            r#"{"error":"index not available","code":"index_unavailable"}"#,
+        );
+    };
 
     // The slot was acquired at admission (before the body was even read —
     // see serve_loop) and moves INTO the pipeline thread: even after the
@@ -2215,7 +2214,6 @@ fn handle_ask_agent(
     idempotency_key: Option<&str>,
     slot: AskSlot,
     factory: AskClientFactory,
-    model: IndexModel,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     use ovp_memory::agent::{
         run_agent_turn_with_progress, AgentConfig, AgentError, AgentProgress,
@@ -2252,6 +2250,13 @@ fn handle_ask_agent(
         match feeds.get(&session) {
             Some(feed) if !feed.done => false,
             _ => {
+                // Bounded retention: completed feeds are ephemeral UI state —
+                // evict them once the map grows past the cap so a long-lived
+                // server cannot accumulate one entry per conversation.
+                const MAX_RETAINED_FEEDS: usize = 64;
+                if feeds.len() >= MAX_RETAINED_FEEDS {
+                    feeds.retain(|_, f| !f.done);
+                }
                 feeds.insert(session.clone(), AskProgressFeed::default());
                 true
             }
@@ -2267,9 +2272,7 @@ fn handle_ask_agent(
     // the call returns. Propagating the remaining budget INTO the transport
     // is the ask_tool_protocol-v2 (model surface) work.
     let guard = state.ask_timeout;
-    let deadline = guard
-        .saturating_sub(Duration::from_secs(15))
-        .max(Duration::from_secs(30));
+    let admitted = std::time::Instant::now();
 
     let vault_root = state.vault_root.clone();
     let sessions_dir = vault_root.join(".ovp/ask-sessions");
@@ -2288,6 +2291,15 @@ fn handle_ask_agent(
                 .map_err(|e| e.to_string())?;
             // `coordinated cap`: the tools refuse anything the agent's
             // per-result budget would blind-truncate.
+            // Deadline shares the ADMISSION clock with the HTTP guard: the
+            // preprocessing above (client build, store open) already spent
+            // from it, so the loop's timeout still fires before the guard.
+            // No floor — a guard shorter than the margin yields a near-zero
+            // budget and an honest immediate timeout turn, never a 504
+            // before the commit.
+            let deadline = guard
+                .saturating_sub(Duration::from_secs(15))
+                .saturating_sub(admitted.elapsed());
             let cfg = AgentConfig {
                 model: ovp_memory::ask::AskArgs::default().model_name,
                 system: ovp_memory::agent_policy::AGENT_POLICY.to_string(),
@@ -2312,10 +2324,21 @@ fn handle_ask_agent(
                             "tool_call_id": tool_call_id, "ok": !is_error
                         })
                     }
-                    AgentProgress::Finished { turn_id, stopped_reason } => serde_json::json!({
-                        "event": "final", "turn_id": turn_id,
-                        "stopped_reason": stopped_reason.as_str()
-                    }),
+                    // The advertised terminal protocol is final | error: a
+                    // deliverable stop (final answer, refusal, best-effort
+                    // round cap) is `final`; runtime failures are `error` —
+                    // both carry stopped_reason for precise clients.
+                    AgentProgress::Finished { turn_id, stopped_reason } => {
+                        use ovp_memory::agent::StoppedReason as SR;
+                        let event = match stopped_reason {
+                            SR::Final | SR::NeedUser | SR::Refusal | SR::MaxRounds => "final",
+                            SR::Timeout | SR::ToolError | SR::ModelError => "error",
+                        };
+                        serde_json::json!({
+                            "event": event, "turn_id": turn_id,
+                            "stopped_reason": stopped_reason.as_str()
+                        })
+                    }
                 };
                 if !owns_feed {
                     return; // a rejected concurrent request never writes
@@ -2344,12 +2367,20 @@ fn handle_ask_agent(
                 AgentError::Store(d) => d,
             })?;
 
-            let coverage = tools.coverage();
             let records = ovp_api_projection::readers::load_active_records(
                 &vault_root,
                 &VaultLayout::new(),
             );
-            let citations = agent_citations(&outcome.answer, &model, &records);
+            // Verify against the SAME index snapshot the tools served from —
+            // a mid-turn rebuild must not let verification disagree with what
+            // the model actually saw. No snapshot (unindexed vault) → source
+            // citations resolve as unverified, honestly.
+            let snapshot = tools.index_snapshot();
+            let citations = match snapshot.as_deref() {
+                Some(m) => agent_citations(&outcome.answer, m, &records),
+                None => agent_citations_unindexed(&outcome.answer, &records),
+            };
+            let coverage = tools.coverage();
             let trace: Vec<serde_json::Value> = outcome
                 .tool_trace
                 .iter()
@@ -2471,6 +2502,43 @@ fn agent_citations(
                     "link_target": serde_json::Value::Null,
                     "verified": false,
                 }),
+            }
+        })
+        .collect()
+}
+
+/// [`agent_citations`] without an index snapshot (fresh/unindexed vault):
+/// claim receipts still resolve against the ledger; source references cannot
+/// be verified and honestly say so.
+fn agent_citations_unindexed(
+    answer: &str,
+    records: &[ovp_domain::crystal::DurableRecord],
+) -> Vec<serde_json::Value> {
+    citations_in_order(answer)
+        .into_iter()
+        .map(|key| {
+            let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            if kind == "claim" {
+                let hit = records.iter().find(|r| r.claim_key == id);
+                let link = hit.and_then(|r| {
+                    let same_id = records.iter().filter(|o| o.claim_id == r.claim_id).count();
+                    (same_id == 1).then(|| format!("/knowledge#{}", r.claim_id))
+                });
+                serde_json::json!({
+                    "id": key,
+                    "kind": "claim",
+                    "title": hit.map(|r| r.claim.chars().take(120).collect::<String>()),
+                    "link_target": link,
+                    "verified": hit.is_some(),
+                })
+            } else {
+                serde_json::json!({
+                    "id": key,
+                    "kind": kind,
+                    "title": serde_json::Value::Null,
+                    "link_target": serde_json::Value::Null,
+                    "verified": false,
+                })
             }
         })
         .collect()
@@ -4914,6 +4982,25 @@ mod tests {
             serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
         assert_eq!(v["done"], true);
         assert_eq!(v["events"].as_array().unwrap().len(), 0);
+    }
+
+    /// A3b round-2 gate: a fresh/unindexed vault still serves a zero-tool
+    /// agent turn (no 503), with coverage reporting the missing layers.
+    #[test]
+    fn agent_ask_works_without_an_index() {
+        let vault = temp_root("agent-noindex");
+        let mut st = state(vault, None);
+        st.ask_agent = true;
+        st.ask_client = Some(scripted_factory(
+            "I can search sources and claims.",
+            Duration::from_millis(5),
+        ));
+        let resp = ask(&st, r#"{"question":"what can you do?"}"#);
+        assert_eq!(resp.status_code(), 200, "capability turns must not need an index");
+        let v: serde_json::Value =
+            serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
+        assert_eq!(v["stopped_reason"], "final");
+        assert_eq!(v["coverage"]["sources"], "not_queried");
     }
 
     /// A3b: flag OFF keeps the legacy path — the response carries the legacy

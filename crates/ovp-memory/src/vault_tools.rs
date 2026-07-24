@@ -171,6 +171,14 @@ impl VaultTools {
         }
     }
 
+    /// The index snapshot THIS executor's tools actually saw (lazily loaded,
+    /// cached). Citation verification must use the same snapshot — a rebuild
+    /// mid-turn would otherwise let the answer cite a source the verifier's
+    /// older view marks unverified.
+    pub fn index_snapshot(&mut self) -> Option<Arc<IndexModel>> {
+        self.cached_index().ok()
+    }
+
     /// Align the refusal budget with the driving runtime's per-result cap
     /// (leave ~2 KiB headroom under `AgentConfig.max_result_bytes`). Taken
     /// VERBATIM — silently raising a small caller cap would recreate the
