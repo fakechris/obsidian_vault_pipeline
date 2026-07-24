@@ -1,0 +1,29 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface: two recall layers the v1 registry cannot reach, driven by a live operator miss (a remembered article whose distinguishing terms live ONLY in its body and its reader-pack cards — 20 honest tool calls, zero hits). (1) `search_evidence`: index-backed search over reader-pack titles and card titles (QueryKind::Packs), each hit joined to its source ids — the missed article's card title contained the exact query term. (2) `search_fulltext`: corpus-wide streaming scan over processed source BODIES with per-file and total byte budgets, deadline-aware early exit, and honest scanned/total accounting. Plus an honesty fix: v1 `search_sources`'s description let the model claim it had searched 正文 when it only searches metadata — descriptions now state reach explicitly. Predicted: the recorded miss becomes a hit via BOTH new tools; all v1 tool behaviors stay byte-identical.",
+  "predicted_delta": {
+    "coverage": "recall extends from metadata+claims to the evidence layer (cards) and raw bodies — the two layers the live miss proved unreachable; coverage() grows `evidence` and `fulltext` layers so the response reports them honestly",
+    "crystal_provenance": "evidence hits carry pack/source join ids, so answers can cite [source:<id>] receipts for card-level recall instead of unverifiable prose",
+    "operational_reliability": "the corpus scan is budgeted (per-file cap, total cap, deadline-aware) and reports truncation explicitly — a big vault degrades to an honest partial, never a hang or a silent miss"
+  },
+  "guardrails": {
+    "v1_tools_bytes_unchanged": "the seven v1 tools' inputs, outputs, and coverage semantics are untouched — existing tests pass unmodified except additions",
+    "descriptions_state_reach": "every search tool's description names what it does NOT search (search_sources: metadata only, not bodies) — the model must not be able to honestly claim coverage it never had",
+    "budgeted_scan": "search_fulltext enforces a per-file byte cap and a total corpus byte cap, checks the remaining deadline between files, and reports {scanned_sources, total_sources, truncated} — coverage `fulltext` is complete ONLY when every candidate body was fully scanned",
+    "coverage_from_executor_still": "the new `evidence`/`fulltext` coverage layers are computed from the executor's own accounting, never from model claims",
+    "no_new_write_paths": "both tools are read-only; path resolution reuses the v1 lifecycle_moved_path fallback and path-traversal guards",
+    "request_key_additive": "tools enter the request key as (name, version) only (A1a rule) — the new tools change keys for NEW requests; recorded v1 cassettes replay untouched"
+  },
+  "eval_plan": {
+    "replay_set": "regression fixture = the live miss (question about a job-search article whose only matching terms are body-and-card-level): deterministic tests seed a vault where the target term appears ONLY in a card title (search_evidence must hit, search_sources must stay empty) and ONLY in a body (search_fulltext must hit with a line snippet); budget tests: total-cap truncation reports truncated=true and coverage fulltext=partial; deadline-exhausted scan stops early and stays honest; UTF-8 boundary safety on snippet extraction; v1 suites unmodified",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Remove the two tool registrations — v1 surface is untouched underneath; no persisted state.",
+  "ablation_required": false
+}
