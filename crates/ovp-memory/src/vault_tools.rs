@@ -29,6 +29,11 @@ const DEFAULT_BODY_LIMIT: usize = 16 * 1024;
 // page = text + JSON overhead): a larger page would be blindly truncated
 // downstream into broken JSON.
 const MAX_BODY_LIMIT: usize = 24 * 1024;
+/// Bound on the SERIALIZED page result. JSON escaping can inflate text (a
+/// quote/newline-heavy 24 KiB slice serializes near 48 KiB), and the agent
+/// byte-truncates anything over its 32 KiB cap into broken JSON — so the page
+/// shrinks until the serialized form fits, with truncation kept honest.
+const MAX_SERIALIZED_PAGE_BYTES: usize = 28 * 1024;
 /// Bounded citation closure size for get_claim (count cap, marked when hit).
 const MAX_CLAIM_CITATIONS: usize = 24;
 /// Whole-file ceiling for body reads: vault sources are markdown (typically
@@ -334,7 +339,10 @@ impl ToolExecutor for VaultTools {
                                 .unwrap_or(0);
                             let walk = self.body_reads.entry(source_id).or_default();
                             if offset == 0 {
+                                // A restart begins a NEW walk: completion must
+                                // be re-earned by this chain, not inherited.
                                 walk.next = 0;
+                                walk.done = false;
                             }
                             if offset == walk.next {
                                 walk.next = offset + served;
@@ -602,6 +610,26 @@ pub fn read_source_body(
     // advance to the next boundary without ever exceeding one UTF-8 scalar.
     if end == offset && offset < total_bytes {
         end = next_char_boundary(&text, offset);
+    }
+    // Escaping-aware sizing: shrink the slice until the SERIALIZED page fits
+    // the bound (guaranteed progress: never below one char).
+    let mut end = end;
+    loop {
+        let serialized_len = serde_json::to_string(&json!(&text[offset..end]))
+            .map(|s| s.len())
+            .unwrap_or(usize::MAX);
+        if serialized_len + 128 <= MAX_SERIALIZED_PAGE_BYTES {
+            break;
+        }
+        let want = (end - offset) / 2;
+        let mut shrunk = floor_char_boundary(&text, offset + want.max(1));
+        if shrunk <= offset {
+            shrunk = next_char_boundary(&text, offset);
+        }
+        if shrunk >= end {
+            break; // single char cannot shrink further
+        }
+        end = shrunk;
     }
     let truncated = end < total_bytes;
     let mut out = Map::new();
@@ -966,7 +994,18 @@ fn read_source_text(
             vault_root.display()
         ))
     })?;
-    let joined = vault_root.join(rel_path);
+    // The index's rel_path is NOT rewritten when the daily lifecycle moves a
+    // processed note out of 50-Inbox/01-Raw — apply the shared fallback (the
+    // same helper the server and index builder use) BEFORE canonicalizing, or
+    // every processed source's body reads as missing.
+    let layout = ovp_domain::vault_layout::VaultLayout::new();
+    let mut joined = vault_root.join(rel_path);
+    if !joined.is_file()
+        && let Some(moved) =
+            ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel_path)
+    {
+        joined = moved;
+    }
     let resolved = std::fs::canonicalize(&joined).map_err(|e| {
         VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
     })?;
@@ -1423,6 +1462,22 @@ mod tests {
         fn tools(&self) -> VaultTools {
             VaultTools::new(&self.root)
         }
+
+        fn vault_root(&self) -> &Path {
+            &self.root
+        }
+
+        /// Rebuild the index with ONE extra source row (fresh Fixture per
+        /// test — clobbering the shared index is fine here).
+        fn tools_with_source(&self, sha: &str, rel_path: &str) -> VaultTools {
+            let model = fixture_model(
+                vec![source(sha, "Extra Source", Some(rel_path), Some("2026-07-24"))],
+                vec![],
+                vec![],
+            );
+            write_index(&self.root, &model).expect("extra-source index");
+            VaultTools::new(&self.root)
+        }
     }
 
     fn source(sha256: &str, title: &str, rel_path: Option<&str>, date: Option<&str>) -> SourceRow {
@@ -1707,6 +1762,51 @@ mod tests {
         ));
         assert_eq!(first["truncated"], true);
         assert_eq!(mid.coverage().body, LayerState::Partial);
+    }
+
+    // A quote/newline-heavy body must never serialize past the page bound —
+    // the agent would byte-truncate the JSON into garbage.
+    #[test]
+    fn escaping_heavy_page_stays_under_serialized_bound() {
+        let fixture = Fixture::new();
+        let heavy = "\"\n\\ \"quoted\"\n".repeat(4000); // escapes inflate ~2x
+        let raw_dir = fixture.vault_root().join("50-Inbox/01-Raw/2026-07");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::write(raw_dir.join("heavy.md"), &heavy).unwrap();
+        let mut tools = fixture.tools_with_source("sha-heavy", "50-Inbox/01-Raw/2026-07/heavy.md");
+        let page = ok_json(call(
+            &mut tools,
+            "read_source_body",
+            json!({"source_id": "sha-heavy", "limit": 24576}),
+        ));
+        let serialized = serde_json::to_string(&page).unwrap();
+        assert!(
+            serialized.len() <= 32 * 1024,
+            "serialized page {} bytes exceeds the agent result cap",
+            serialized.len()
+        );
+        assert_eq!(page["truncated"], true);
+    }
+
+    // The index rel_path still points at 01-Raw after the lifecycle moved the
+    // note to 03-Processed — the shared fallback must resolve it.
+    #[test]
+    fn lifecycle_moved_source_body_still_reads() {
+        let fixture = Fixture::new();
+        let layout = ovp_domain::vault_layout::VaultLayout::new();
+        let processed_dir = fixture.vault_root().join(layout.processed_dir("2026-07"));
+        std::fs::create_dir_all(&processed_dir).unwrap();
+        std::fs::write(processed_dir.join("moved.md"), "moved body").unwrap();
+        // Index row records the PRE-move raw path; the file only exists in
+        // 03-Processed.
+        let mut tools =
+            fixture.tools_with_source("sha-moved", "50-Inbox/01-Raw/2026-07/moved.md");
+        let page = ok_json(call(
+            &mut tools,
+            "read_source_body",
+            json!({"source_id": "sha-moved"}),
+        ));
+        assert_eq!(page["text"], "moved body");
     }
 
     #[test]
