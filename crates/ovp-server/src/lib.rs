@@ -2134,9 +2134,15 @@ fn handle_ask(
         // The agent's session-id rules are STRICTER than the legacy chat-stem
         // rules — a supplied-but-invalid id must fail loudly, not silently
         // land in a fresh generated session (which would break replay).
-        if let Some(raw) = parsed.get("chat").and_then(|c| c.as_str()).map(str::trim)
-            && !raw.is_empty()
-            && !ovp_memory::agent_transcript::valid_session_id(raw)
+        // ANY supplied non-null `chat` must be a valid session id — numbers,
+        // empty strings, and malformed ids all fail loudly (silently landing
+        // in a generated session would break continuation and replay).
+        if let Some(raw) = parsed.get("chat")
+            && !raw.is_null()
+            && !raw
+                .as_str()
+                .map(str::trim)
+                .is_some_and(ovp_memory::agent_transcript::valid_session_id)
         {
             return json_response(
                 400,
@@ -2275,7 +2281,9 @@ fn handle_ask_agent(
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
             let seq = SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            format!("agent-{now}-{seq}")
+            // pid entropy: two server processes on one vault must not mint
+            // the same id in the same millisecond.
+            format!("agent-{now}-{}-{seq}", std::process::id())
         }
     };
 
@@ -2356,11 +2364,15 @@ fn handle_ask_agent(
                     Some(m) => agent_citations(&done.answer, &m, &records),
                     None => agent_citations_unindexed(&done.answer, &records),
                 };
+                // Coverage is an EXECUTION artifact the transcript does not
+                // persist — a replay reports null (unknown), never a
+                // fabricated all-not_queried that would misdescribe the
+                // original turn.
                 return Ok(serde_json::json!({
                     "agent": true,
                     "answer": done.answer,
                     "citations": citations,
-                    "coverage": ovp_memory::vault_tools::Coverage::default(),
+                    "coverage": serde_json::Value::Null,
                     "tool_trace": trace,
                     "chat": response_session,
                     "turn_id": done.turn_id,
@@ -2670,8 +2682,13 @@ fn handle_ask_progress(state: &AppState, url: &str) -> Response<std::io::Cursor<
         .unwrap_or_default();
     let feeds = state.ask_progress.lock().unwrap();
     let body = match feeds.get(&chat) {
-        Some(feed) => serde_json::json!({"events": feed.events, "done": feed.done}),
-        None => serde_json::json!({"events": [], "done": true}),
+        // `started` distinguishes a PENDING admission (setup/lock phase)
+        // from a running turn — a poller can show "connecting…" vs live
+        // tool activity.
+        Some(feed) => serde_json::json!({
+            "events": feed.events, "done": feed.done, "started": feed.started
+        }),
+        None => serde_json::json!({"events": [], "done": true, "started": false}),
     };
     json_response(200, &body.to_string())
 }
