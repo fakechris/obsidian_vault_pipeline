@@ -25,7 +25,16 @@ use crate::agent::{ToolExecutor, ToolOutcome};
 const DEFAULT_SEARCH_LIMIT: usize = 10;
 const MAX_SEARCH_LIMIT: usize = 50;
 const DEFAULT_BODY_LIMIT: usize = 16 * 1024;
-const MAX_BODY_LIMIT: usize = 64 * 1024;
+// Must leave headroom under the AGENT's 32 KiB per-result cap (a serialized
+// page = text + JSON overhead): a larger page would be blindly truncated
+// downstream into broken JSON.
+const MAX_BODY_LIMIT: usize = 24 * 1024;
+/// Bounded citation closure size for get_claim (count cap, marked when hit).
+const MAX_CLAIM_CITATIONS: usize = 24;
+/// Whole-file ceiling for body reads: vault sources are markdown (typically
+/// well under 1 MiB); beyond this, point the model at search_source_chunks
+/// instead of allocating arbitrarily per page.
+const MAX_BODY_FILE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_CHUNK_LIMIT: usize = 5;
 const MAX_CHUNK_LIMIT: usize = 20;
 const MAX_PASSAGE_BYTES: usize = 2 * 1024;
@@ -68,6 +77,14 @@ impl LayerState {
             self
         }
     }
+}
+
+/// One source's body-pagination walk: `next` = the offset the next contiguous
+/// page must start at; `done` = a contiguous chain from 0 reached the end.
+#[derive(Debug, Clone, Copy, Default)]
+struct BodyWalk {
+    next: usize,
+    done: bool,
 }
 
 /// Coverage is executor-owned; tool/model output cannot forge it.
@@ -115,10 +132,10 @@ pub struct VaultTools {
     index: Option<Result<Arc<IndexModel>, String>>,
     records: Option<Result<Arc<Vec<DurableRecord>>, String>>,
     coverage: Coverage,
-    /// Per-source body pagination progress: source_id → reached the terminal
-    /// page. `partial` means pagination UNFINISHED — a completed cursor walk
-    /// restores the layer to Complete (unlike sticky Failed/Unavailable).
-    body_reads: std::collections::BTreeMap<String, bool>,
+    /// Per-source body pagination progress. A walk only counts as complete
+    /// when every page CONTINUED from the expected offset — jumping straight
+    /// to a terminal offset must not fake completion (`coverage_five_state`).
+    body_reads: std::collections::BTreeMap<String, BodyWalk>,
     /// A chunk result hit a size cap — sticky partiality for the body layer.
     body_capped: bool,
     /// Any successful body-layer activity happened at all.
@@ -149,7 +166,7 @@ impl VaultTools {
             _ => {
                 if !self.body_activity {
                     LayerState::NotQueried
-                } else if self.body_capped || self.body_reads.values().any(|done| !done) {
+                } else if self.body_capped || self.body_reads.values().any(|walk| !walk.done) {
                     LayerState::Partial
                 } else {
                     LayerState::Complete
@@ -301,11 +318,29 @@ impl ToolExecutor for VaultTools {
                     if matches!(layer, Layer::Body) {
                         self.body_activity = true;
                         if let Some(source_id) = body_read_source {
-                            // Terminal page ⇒ this read finished; a truncated
-                            // page leaves (or starts) an unfinished walk.
-                            let done = self.body_reads.entry(source_id).or_insert(false);
-                            if !truncated {
-                                *done = true;
+                            // Contiguity-verified progress: a page advances the
+                            // walk only when it starts at the expected offset
+                            // (restarts at 0 allowed); completion requires the
+                            // contiguous chain to reach the terminal page.
+                            // Jumping to an end offset yields no `done`.
+                            let offset = value
+                                .get("offset")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0) as usize;
+                            let served = value
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .map(|s| s.len())
+                                .unwrap_or(0);
+                            let walk = self.body_reads.entry(source_id).or_default();
+                            if offset == 0 {
+                                walk.next = 0;
+                            }
+                            if offset == walk.next {
+                                walk.next = offset + served;
+                                if !truncated {
+                                    walk.done = true;
+                                }
                             }
                         } else if is_chunk_search && truncated {
                             self.body_capped = true;
@@ -570,6 +605,7 @@ pub fn read_source_body(
     }
     let truncated = end < total_bytes;
     let mut out = Map::new();
+    out.insert("offset".into(), json!(offset));
     out.insert("text".into(), json!(&text[offset..end]));
     out.insert("truncated".into(), json!(truncated));
     // Stable output shape: next_cursor is ALWAYS present — an explicit null on
@@ -790,11 +826,14 @@ pub fn get_claim(
     // to stand in for the MCP claim tool): every citation's quote (capped),
     // unit/line anchors, and the provenance verdicts — the chain the agent
     // audits before trusting a claim.
+    let mut any_capped = false;
     let citations = record
         .citations
         .iter()
+        .take(MAX_CLAIM_CITATIONS)
         .map(|c| {
             let (quote, quote_truncated) = cap_chars(&c.quote, MAX_CITATION_QUOTE_CHARS);
+            any_capped |= quote_truncated;
             let mut row = Map::new();
             row.insert("case_id".into(), json!(c.case_id));
             row.insert("unit_id".into(), json!(c.unit_id));
@@ -809,7 +848,11 @@ pub fn get_claim(
             Value::Object(row)
         })
         .collect::<Vec<_>>();
+    any_capped |= record.citations.len() > MAX_CLAIM_CITATIONS;
     out.insert("citations".into(), json!(citations));
+    // Top-level truncation signal: nested quote_truncated/citation caps must
+    // surface where the coverage tracker (and the model) can see them.
+    out.insert("truncated".into(), json!(any_capped));
     out.insert(
         "provenance".into(),
         json!({
@@ -830,6 +873,7 @@ pub fn get_claim(
 
 /// List recent sources, with ISO-like dates descending and undated rows last.
 pub fn list_recent_sources(model: &IndexModel, n: usize) -> Value {
+    let total = model.sources.len();
     let mut sources = model.sources.iter().collect::<Vec<_>>();
     sources.sort_by(|a, b| {
         b.date
@@ -854,7 +898,9 @@ pub fn list_recent_sources(model: &IndexModel, n: usize) -> Value {
             Value::Object(out)
         })
         .collect::<Vec<_>>();
-    json!({"sources": sources})
+    // Dropped rows are a capped result — coverage must read Partial, not a
+    // silently-Complete prefix.
+    json!({"sources": sources, "truncated": total > n})
 }
 
 fn source_search_hit(source: &SourceRow, query_lower: &str) -> Value {
@@ -910,6 +956,7 @@ fn read_source_text(
     source_id: &str,
 ) -> Result<String, VaultToolError> {
     let source = find_source(model, source_id)?;
+    // (size ceiling enforced after path resolution below)
     let rel_path = source.rel_path.as_deref().ok_or_else(|| {
         VaultToolError::Failed(format!("source `{source_id}` has no readable path"))
     })?;
@@ -926,6 +973,19 @@ fn read_source_text(
     if !resolved.starts_with(&root) {
         return Err(VaultToolError::Failed(format!(
             "source `{source_id}` path escapes the vault root: {rel_path}"
+        )));
+    }
+    // Explicit ceiling instead of arbitrary per-page allocation: metadata is
+    // checked BEFORE reading, so a huge file can neither exhaust memory nor
+    // burn the turn deadline page after page.
+    let file_bytes = std::fs::metadata(&resolved)
+        .map_err(|e| {
+            VaultToolError::Failed(format!("stat source `{source_id}` at {rel_path}: {e}"))
+        })?
+        .len() as usize;
+    if file_bytes > MAX_BODY_FILE_BYTES {
+        return Err(VaultToolError::Failed(format!(
+            "source `{source_id}` is {file_bytes} bytes — above the {MAX_BODY_FILE_BYTES}-byte              body-read ceiling; use search_source_chunks for targeted passages"
         )));
     }
     let bytes = std::fs::read(&resolved).map_err(|e| {
@@ -1614,6 +1674,29 @@ mod tests {
         }
         // Invalid arguments touch no layer state.
         assert_eq!(tools.coverage().body, LayerState::Complete);
+
+        // Jumping straight to a terminal offset must NOT fake completion:
+        // only a CONTIGUOUS chain from 0 counts (`coverage_five_state`).
+        let mut jumper = fixture.tools();
+        let first = ok_json(call(
+            &mut jumper,
+            "read_source_body",
+            json!({"source_id": "sha-cjk", "limit": 5}),
+        ));
+        assert_eq!(first["truncated"], true);
+        let total = first["total_bytes"].as_u64().unwrap();
+        let end_cursor = format!("c1:{total}");
+        let terminal = ok_json(call(
+            &mut jumper,
+            "read_source_body",
+            json!({"source_id": "sha-cjk", "cursor": end_cursor, "limit": 5}),
+        ));
+        assert_eq!(terminal["truncated"], false);
+        assert_eq!(
+            jumper.coverage().body,
+            LayerState::Partial,
+            "a non-contiguous terminal page must not complete the walk"
+        );
 
         // A FRESH walk left mid-flight reads Partial (unfinished pagination).
         let mut mid = fixture.tools();
