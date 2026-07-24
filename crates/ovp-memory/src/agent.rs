@@ -150,6 +150,17 @@ impl std::fmt::Display for AgentError {
 
 impl std::error::Error for AgentError {}
 
+/// Minimal progress feed (A0 §3.7: started → tool_started → tool_finished →
+/// final|error) — the A3b product wiring surfaces these through a polling
+/// slot; token streaming is A5.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentProgress {
+    Started { turn_id: String },
+    ToolStarted { tool_call_id: String, tool: String },
+    ToolFinished { tool_call_id: String, tool: String, is_error: bool },
+    Finished { turn_id: String, stopped_reason: StoppedReason },
+}
+
 /// Run one agent turn on `store`'s session. Mid-turn failures (model errors,
 /// timeouts, breakers) are NOT `Err` — they complete the turn with the
 /// matching `stopped_reason` so the audit trail is always whole. `Err` is
@@ -162,6 +173,26 @@ pub fn run_agent_turn(
     idempotency_key: Option<&str>,
     cfg: &AgentConfig,
 ) -> Result<AgentOutcome, AgentError> {
+    run_agent_turn_with_progress(client, tools, store, question, idempotency_key, cfg, None)
+}
+
+/// [`run_agent_turn`] with an optional progress sink. Additive so every
+/// existing caller/test stays byte-compatible; an idempotent replay emits
+/// NO progress (nothing executes).
+pub fn run_agent_turn_with_progress(
+    client: &mut dyn ModelClient,
+    tools: &mut dyn ToolExecutor,
+    store: &mut SessionStore,
+    question: &str,
+    idempotency_key: Option<&str>,
+    cfg: &AgentConfig,
+    progress: Option<&(dyn Fn(AgentProgress) + Sync)>,
+) -> Result<AgentOutcome, AgentError> {
+    let emit = |ev: AgentProgress| {
+        if let Some(sink) = progress {
+            sink(ev);
+        }
+    };
     // The whole-turn budget starts NOW — refresh, lock acquisition, and
     // compaction all spend from it (`deadline_authority` covers the turn,
     // not just the loop).
@@ -217,6 +248,7 @@ pub fn run_agent_turn(
     let remaining = |started: Instant| cfg.deadline.saturating_sub(started.elapsed());
 
     let turn_id = store.next_turn_id();
+    emit(AgentProgress::Started { turn_id: turn_id.clone() });
     let mut events: Vec<TranscriptEvent> = vec![TranscriptEvent::TurnStarted {
         turn_id: turn_id.clone(),
         question: question.to_string(),
@@ -420,6 +452,10 @@ pub fn run_agent_turn(
         let mut breaker_tripped = false;
         let mut timed_out = false;
         for (id, name, input) in &calls {
+            emit(AgentProgress::ToolStarted {
+                tool_call_id: id.clone(),
+                tool: name.clone(),
+            });
             let left = remaining(started);
             let outcome = if left.is_zero() || timed_out {
                 timed_out = true;
@@ -503,6 +539,11 @@ pub fn run_agent_turn(
                 }
                 (content, is_error)
             };
+            emit(AgentProgress::ToolFinished {
+                tool_call_id: id.clone(),
+                tool: name.clone(),
+                is_error: model_is_error,
+            });
             results.push(ToolResultBlock {
                 tool_call_id: id.clone(),
                 content: model_content,
@@ -538,6 +579,8 @@ pub fn run_agent_turn(
     store
         .commit_turn(events)
         .map_err(|e| AgentError::Store(e.to_string()))?;
+    // Emitted AFTER the commit: "final" must mean the turn is durable.
+    emit(AgentProgress::Finished { turn_id: turn_id.clone(), stopped_reason: stopped });
 
     Ok(AgentOutcome {
         turn_id,
@@ -1443,6 +1486,41 @@ mod tests {
             e,
             TranscriptEvent::TurnFinished { answer, .. } if answer == "foreign"
         )));
+    }
+
+    // A3b progress hook: events arrive in the A0 order and the sink is
+    // OPTIONAL (run_agent_turn delegates None — all older tests cover that).
+    #[test]
+    fn progress_events_follow_the_a0_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client =
+            Scripted::new(vec![tool_reply(&[("c1", "search")]), text_reply("done")]);
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
+        let mut st = store(dir.path());
+        let events = std::sync::Mutex::new(Vec::new());
+        let sink = |ev: AgentProgress| events.lock().unwrap().push(ev);
+        let out = run_agent_turn_with_progress(
+            &mut client,
+            &mut tools,
+            &mut st,
+            "q?",
+            None,
+            &cfg(),
+            Some(&sink),
+        )
+        .unwrap();
+        let events = events.into_inner().unwrap();
+        assert!(matches!(&events[0], AgentProgress::Started { turn_id } if turn_id == "t1"));
+        assert!(matches!(&events[1], AgentProgress::ToolStarted { tool, .. } if tool == "search"));
+        assert!(matches!(
+            &events[2],
+            AgentProgress::ToolFinished { tool, is_error: false, .. } if tool == "search"
+        ));
+        assert!(matches!(
+            events.last().unwrap(),
+            AgentProgress::Finished { stopped_reason: StoppedReason::Final, .. }
+        ));
+        assert_eq!(out.stopped_reason, StoppedReason::Final);
     }
 
     // An empty/unstamped lock file is conservatively BUSY — a racing creator

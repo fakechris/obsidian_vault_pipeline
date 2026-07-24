@@ -1,0 +1,31 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_product_wiring-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface: a FLAG-GATED agent path inside POST /api/ask (ServeConfig.ask_agent, default OFF — the legacy single-shot path stays the default byte-for-byte) that runs the A1b loop with the A2 VaultTools and the A3a policy over the EXISTING AskClientFactory, returning the A0 §3.7 response shape (answer, resolved citations, runtime coverage, compact tool_trace, chat/turn ids, stopped_reason) plus a minimal polling progress feed (started → tool_started/tool_finished → final|error) from an in-memory per-session slot. Predicted: flag-off behavior is unchanged (existing ask tests untouched); flag-on serves a full agent turn against a scripted client in tests, with citations resolved against the real ledger/index and coverage computed by the executor, never the model.",
+  "predicted_delta": {
+    "coverage": "the product ask can now search, drill, and read originals in one turn; the response carries honest per-layer coverage instead of a bag-of-evidence guess",
+    "crystal_provenance": "citations are RESOLVED receipts: [claim:<key>] verified against active ledger records (link to the claim anchor), [source:<id>] against the index (link to /library) — unresolvable references surface as verified:false, never silently dropped",
+    "operational_reliability": "the agent deadline is derived UNDER the HTTP guard (guard minus margin), so a turn always concludes and commits its transcript before the guard 504s; progress is observable mid-turn via the slot"
+  },
+  "guardrails": {
+    "flag_off_bytes_unchanged": "with ask_agent=false (default), POST /api/ask takes the legacy path — existing ask tests pass unmodified; the agent path is reachable only via the explicit flag",
+    "deadline_under_guard": "AgentConfig.deadline = ask HTTP guard minus a safety margin (never below a floor), so the loop's timeout fires and the turn commits BEFORE the transport guard abandons the request — no orphaned in-flight turn behind a 504",
+    "citations_resolved_not_trusted": "the answer's [claim:…]/[source:…] markers are parsed and resolved against the ledger/index by the SERVER; resolution status (verified) and link targets come from runtime lookups, never model output",
+    "coverage_from_executor": "the response coverage field is VaultTools::coverage() — the model cannot self-report exhaustiveness",
+    "progress_slot_bounded": "the per-session progress slot is in-memory, capped in event count, replaced at each turn start, and marked done at turn end; an unknown session polls to an empty done feed (no 404 fishing)",
+    "session_id_discipline": "the chat id must pass the store's session-id validation; absent ids get a generated timestamped id returned in the response — the client can continue the session with it",
+    "caveated_source_ids": "search_claims hits (durable AND caveated) now carry resolved source_ids via the packs join (case_id → source sha), closing the A3a gate finding that caveated citations had no followable path — the policy upgrade to cite them is a later prompt candidate",
+    "progress_hook_additive": "the engine gains run_agent_turn_with_progress (optional sink, emitting started/tool_started/tool_finished/final) — run_agent_turn delegates with None; all existing engine tests pass unchanged"
+  },
+  "eval_plan": {
+    "replay_set": "server tests with a scripted ModelClient factory: flag-on 0-tool turn → 200 with answer/stopped_reason=final/coverage/turn_id and a committed transcript; tool turn → trace + coverage reflect execution; citation resolution (real key verified:true + linked, fake key verified:false); progress feed sequence + done; unknown-session progress = empty done; flag-off = legacy (existing tests). ovp-memory tests: progress event ordering; source_ids enrichment on durable + caveated hits",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Flip the flag off (default) — the legacy path never moved; the agent path additions are additive handlers + an engine hook with a None default.",
+  "ablation_required": false
+}

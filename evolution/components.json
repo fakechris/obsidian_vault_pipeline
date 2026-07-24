@@ -185,6 +185,17 @@
         "crystal_provenance",
         "operational_reliability"
       ]
+    },
+    {
+      "id": "runtime.ask_product_wiring",
+      "surface": "runtime",
+      "current_version": "none",
+      "file": "crates/ovp-server/src/lib.rs",
+      "quality_buckets": [
+        "coverage",
+        "operational_reliability",
+        "crystal_provenance"
+      ]
     }
   ]
 }

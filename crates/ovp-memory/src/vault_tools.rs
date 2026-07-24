@@ -171,6 +171,14 @@ impl VaultTools {
         }
     }
 
+    /// The index snapshot THIS executor's tools actually saw (lazily loaded,
+    /// cached). Citation verification must use the same snapshot — a rebuild
+    /// mid-turn would otherwise let the answer cite a source the verifier's
+    /// older view marks unverified.
+    pub fn index_snapshot(&mut self) -> Option<Arc<IndexModel>> {
+        self.cached_index().ok()
+    }
+
     /// Align the refusal budget with the driving runtime's per-result cap
     /// (leave ~2 KiB headroom under `AgentConfig.max_result_bytes`). Taken
     /// VERBATIM — silently raising a small caller cap would recreate the
@@ -921,6 +929,10 @@ pub fn search_claims(
             }
             hit.insert("sources".into(), json!(record.source_cases));
             hit.insert(
+                "source_ids".into(),
+                json!(resolved_source_ids(model, &record.source_cases)),
+            );
+            hit.insert(
                 "provenance".into(),
                 json!({"score": record.provenance_score, "class": record.provenance_class}),
             );
@@ -954,6 +966,10 @@ pub fn search_claims(
             insert_option(&mut hit, "strength", row.strength.as_deref());
             insert_option(&mut hit, "theme", row.theme.as_deref());
             hit.insert("sources".into(), json!(row.sources));
+            hit.insert(
+                "source_ids".into(),
+                json!(resolved_source_ids(model, &row.sources)),
+            );
             hit.insert("status".into(), json!("caveated"));
             hits.push(Value::Object(hit));
         }
@@ -1323,6 +1339,23 @@ fn strength_name(strength: StrengthClass) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".into())
+}
+
+/// Resolve case_ids to source shas via the packs join (pack_dir basename ==
+/// case_id). Misses are dropped — a citation path must never carry an id the
+/// index cannot open (A3a gate: caveated hits previously had NO followable
+/// source path at all).
+fn resolved_source_ids(model: &IndexModel, case_ids: &[String]) -> Vec<String> {
+    case_ids
+        .iter()
+        .filter_map(|case_id| {
+            model
+                .packs
+                .iter()
+                .find(|pack| pack.pack_dir.rsplit(['/', '\\']).next() == Some(case_id.as_str()))
+                .and_then(|pack| pack.source_sha256.clone())
+        })
+        .collect()
 }
 
 fn claim_source(model: &IndexModel, case_id: &str) -> Value {
@@ -1981,6 +2014,25 @@ mod tests {
             json!({"source_id": "sha-moved"}),
         ));
         assert_eq!(page["text"], "moved body");
+    }
+
+    /// A3b: search hits (durable AND caveated) carry resolved source_ids via
+    /// the packs join — the followable citation path the A3a gate found
+    /// missing for caveated claims.
+    #[test]
+    fn search_claims_hits_carry_resolved_source_ids() {
+        let fixture = Fixture::new();
+        let mut tools = fixture.tools();
+        let out = ok_json(call(
+            &mut tools,
+            "search_claims",
+            json!({"query": "Agent memory"}),
+        ));
+        let hits = out["hits"].as_array().unwrap();
+        let durable = hits.iter().find(|h| h["status"] == "durable").unwrap();
+        assert_eq!(durable["source_ids"][0], "sha-cjk", "case-a resolves via packs");
+        let caveated = hits.iter().find(|h| h["status"] == "caveated").unwrap();
+        assert_eq!(caveated["source_ids"][0], "sha-mal", "case-b resolves via packs");
     }
 
     #[test]
