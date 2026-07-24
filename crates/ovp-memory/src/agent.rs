@@ -465,6 +465,7 @@ pub fn run_agent_turn(
                 result_bytes: raw_bytes,
                 content: content.clone(),
                 truncated,
+                late: finished_late,
             });
             trace.push(ToolTraceEntry {
                 tool: name.clone(),
@@ -1177,7 +1178,7 @@ mod tests {
         let mut st = store(dir.path());
         let mut c = cfg();
         c.deadline = Duration::from_millis(300);
-        let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
+        let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", Some("mk"), &c).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::Timeout);
         // Both calls answered — the skipped one as a timeout error.
         let results_msg = st
@@ -1212,6 +1213,14 @@ mod tests {
         // The caller-facing trail must NOT leak the late content.
         assert!(out.tool_trace[0].summary.contains("discarded"));
         assert!(!out.tool_trace[0].summary.contains("slow done"));
+        // …and neither must an idempotent REPLAY of the same turn.
+        let mut client2 = Scripted::new(vec![]);
+        let mut tools2 = MockTools::new(&[]);
+        let replay =
+            run_agent_turn(&mut client2, &mut tools2, &mut st, "q?", Some("mk"), &c).unwrap();
+        assert!(replay.idempotent_replay);
+        assert!(replay.tool_trace[0].summary.contains("discarded"));
+        assert!(!replay.tool_trace[0].summary.contains("slow done"));
     }
 
     // MaxTokens without tools: a truncated answer must not present as Final.
@@ -1400,6 +1409,39 @@ mod tests {
         assert!(st.events().iter().any(|e| matches!(
             e,
             TranscriptEvent::ReplyDiscarded { reason, .. } if reason.contains("contradictory")
+        )));
+    }
+
+    // A row from ANOTHER session (renamed/copied file) reads as torn — it
+    // must never join projection/replay/turn numbering.
+    #[test]
+    fn foreign_session_rows_read_as_torn() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut client = Scripted::new(vec![text_reply("mine")]);
+            let mut tools = MockTools::new(&[]);
+            let mut st = store(dir.path());
+            run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
+        }
+        // Append a complete-looking turn stamped with a DIFFERENT session id.
+        use std::io::Write as _;
+        let foreign = concat!(
+            r#"{"schema":"ovp.ask_transcript/v1","session_id":"OTHER","event":"turn_started","turn_id":"t2","question":"foreign"}"#,
+            "\n",
+            r#"{"schema":"ovp.ask_transcript/v1","session_id":"OTHER","event":"turn_finished","turn_id":"t2","stopped_reason":"final","answer":"foreign","rounds":0,"input_tokens_total":0,"output_tokens_total":0}"#,
+            "\n"
+        );
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join("s1.jsonl"))
+            .unwrap()
+            .write_all(foreign.as_bytes())
+            .unwrap();
+        let st = store(dir.path());
+        assert_eq!(st.next_turn_id(), "t2", "foreign rows must not advance turn numbering");
+        assert!(st.events().iter().all(|e| !matches!(
+            e,
+            TranscriptEvent::TurnFinished { answer, .. } if answer == "foreign"
         )));
     }
 

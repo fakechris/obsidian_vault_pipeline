@@ -11,7 +11,7 @@
     "crystal_provenance": "no change (read-only engine, no product wiring at this version)"
   },
   "guardrails": {
-    "deadline_authority": "the turn has ONE authoritative wall-clock deadline; every model call and every tool execution receives only the REMAINING budget; when remaining cannot safely cover the next call the loop STOPS with stopped_reason=timeout — no call ever STARTS after the deadline",
+    "deadline_authority": "the turn has ONE authoritative wall-clock deadline started at function entry (refresh/lock/compaction spend from it); every tool execution receives only the REMAINING budget; a model or tool result that ARRIVES after the deadline is audited but never delivered/executed; when remaining cannot safely cover the next call the loop STOPS with stopped_reason=timeout — no call ever STARTS after the deadline",
     "max_rounds_auxiliary": "max_rounds (default 6) is a secondary guard; exceeding it stops with stopped_reason=max_rounds; it never substitutes for the wall-clock budget",
     "transcript_authority": "the JSONL transcript (schema ovp.ask_transcript/v1, session/turn/call ids) is the audit authority; the model context is a PROJECTION rebuilt from it under a hard char cap that trims whole turns oldest-first and never splits a tool_use/tool_result pair or orphans results",
     "turn_atomicity_recovery": "a turn's events are committed as one append finalized by turn_finished; on store open, trailing events after the last turn_finished are dropped (compacted) — crash recovery lands on the last complete turn",
@@ -23,7 +23,8 @@
     "unknown_stop_not_final": "StopReason::Unknown never produces a final-success outcome (stopped_reason=model_error, fail-closed); Refusal maps to stopped_reason=refusal",
     "token_accounting": "every model call's {input_tokens, output_tokens} is recorded in the transcript event and summed into the turn outcome",
     "nested_deadline_interface": "the engine takes the deadline as a caller-supplied budget parameter — a future MCP-embedded ask propagates its own remaining budget through the same interface, no second mechanism",
-    "no_product_wiring": "POST /api/ask and the ask.rs product path are byte-unchanged at this version; the engine is exercised only by its tests (rollout is A3d) — registry current_version stays none until the default switch"
+    "no_product_wiring": "POST /api/ask and the ask.rs product path are byte-unchanged at this version; the engine is exercised only by its tests (rollout is A3d) — registry current_version stays none until the default switch",
+    "deferred_to_model_surface": "DELIBERATE DEFERRALS (need a ModelClient trait change = model surface, i.e. ask_tool_protocol-v2 at live-client integration): (1) propagating the remaining budget INTO a blocking model call so the transport itself is bounded — at this version no live client attaches (no_product_wiring) and late replies are rejected post-call; (2) attempt-level usage propagation through retry/escalation wrappers (only the final reply's usage is visible at the client boundary today)"
   },
   "eval_plan": {
     "replay_set": "deterministic in-crate tests with a scripted ModelClient + mock ToolExecutor: 0/1/2-tool success; unknown tool name; duplicate tool call ids; total timeout via short deadline + slow tool; max rounds via scripted infinite tool loop; concurrent same-session submit; crash recovery from a partial turn; repeated idempotency_key; invalid-args breaker; projection cap trimming whole turns",

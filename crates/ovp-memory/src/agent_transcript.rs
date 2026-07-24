@@ -85,6 +85,10 @@ pub enum TranscriptEvent {
         content: String,
         /// Whether the model-facing copy was truncated to the result cap.
         truncated: bool,
+        /// The result arrived after the turn deadline: audit-only data the
+        /// model/caller never saw — replays must show the marker, not this.
+        #[serde(default)]
+        late: bool,
     },
     /// A model call failed (audit-only; excluded from projection).
     ModelFailed {
@@ -244,9 +248,14 @@ impl SessionStore {
             let mut parsed: Vec<TranscriptEvent> = Vec::new();
             for line in body.lines().filter(|l| !l.trim().is_empty()) {
                 match serde_json::from_str::<TranscriptLine>(line) {
-                    // A schema we don't understand is treated like a torn
-                    // line: conservative, never misread as current-schema.
-                    Ok(l) if l.schema == TRANSCRIPT_SCHEMA => parsed.push(l.event),
+                    // A schema we don't understand OR a row from another
+                    // session (renamed/copied file) is treated like a torn
+                    // line: conservative — foreign events must never join the
+                    // projection, replay, or turn numbering, and compaction
+                    // must not relabel them.
+                    Ok(l) if l.schema == TRANSCRIPT_SCHEMA && l.session_id == self.session_id => {
+                        parsed.push(l.event)
+                    }
                     // A torn/corrupt/foreign line means everything from here
                     // on is suspect; keep only what precedes it.
                     _ => {
@@ -507,16 +516,21 @@ impl SessionStore {
         self.events
             .iter()
             .filter_map(|e| match e {
-                TranscriptEvent::ToolCalled { turn_id, tool_call_id, tool, is_error, content, .. }
-                    if turn_id == id =>
-                {
-                    Some((
-                        tool.clone(),
-                        tool_call_id.clone(),
-                        *is_error,
-                        content.chars().take(120).collect(),
-                    ))
-                }
+                TranscriptEvent::ToolCalled {
+                    turn_id, tool_call_id, tool, is_error, content, late, ..
+                } if turn_id == id => Some((
+                    tool.clone(),
+                    tool_call_id.clone(),
+                    *is_error,
+                    // Late data is audit-only: the replayed trail shows the
+                    // same marker the ORIGINAL response carried, never the
+                    // withheld content.
+                    if *late {
+                        "late: discarded (audit only)".to_string()
+                    } else {
+                        content.chars().take(120).collect()
+                    },
+                )),
                 _ => None,
             })
             .collect()
