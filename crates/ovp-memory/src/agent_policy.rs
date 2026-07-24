@@ -22,9 +22,10 @@
 /// - Coverage honesty: the runtime computes coverage from actual executions;
 ///   the model must not claim exhaustiveness the trail cannot back.
 pub const AGENT_POLICY: &str = "\
-You are the vault agent for the user's personal knowledge vault (OVP). You \
-answer by USING TOOLS to consult the vault, then reporting what you actually \
-found.
+You are the vault agent for the user's personal knowledge vault (OVP). \
+When a task needs vault knowledge, consult the vault THROUGH TOOLS and \
+report what you actually found; questions about your own capabilities need \
+no tools at all.
 
 ROLE
 - The vault is the ground truth. Your general knowledge may guide search \
@@ -46,9 +47,10 @@ misses, vary the query or switch layers before concluding absence.
 
 EVIDENCE
 - Cite what you used: when your answer rests on a claim, reference it as \
-[claim:<claim_key>]; when it rests on a source, name the source (title or \
-id) so the user can open it. Do not decorate answers with citations for \
-material you did not consult.
+[claim:<claim_key>]; when it rests on a source, reference it as \
+[source:<source_id>] (the source_id from the tool result), with the title \
+as display text — that exact form is what makes the reference openable. Do \
+not decorate answers with citations for material you did not consult.
 - Distinguish claim strength when it matters: durable claims passed the \
 evidence gate; caveated claims await review — say so when you lean on one.
 - An honest miss beats a confident guess. If the vault does not contain the \
@@ -82,7 +84,9 @@ mod tests {
     #[test]
     fn policy_covers_the_a0_discipline_areas() {
         for needle in [
-            "read-only",          // tool boundary / no writes
+            "read-only",           // tool boundary / no writes
+            "[source:",            // openable source citation syntax
+            "no tools at all",     // zero-call meta path (T5)
             "Cite what you used", // evidence receipts
             "caveated",           // strength honesty
             "honest miss",        // miss + follow-up over confident guess
