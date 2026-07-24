@@ -505,10 +505,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 /// works on the SPA and on legacy full-document pages alike, and is a no-op at
 /// the ends.
 fn nav_history(app: &AppHandle, delta: i32) {
-    if let Some(win) = app.get_webview_window("main") {
-        if let Err(e) = win.eval(format!("window.history.go({delta})")) {
-            eprintln!("ovp2-desktop: history nav failed: {e}");
-        }
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(e) = win.eval(format!("window.history.go({delta})")) {
+        eprintln!("ovp2-desktop: history nav failed: {e}");
     }
 }
 
