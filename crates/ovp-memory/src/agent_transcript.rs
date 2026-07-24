@@ -255,6 +255,14 @@ impl SessionStore {
         Ok(torn_tail)
     }
 
+    /// Read-only refresh (no rewrite): update the in-memory complete-turn
+    /// view. Used before pre-lock idempotency lookups on long-lived stores —
+    /// a key committed by ANOTHER process must replay even while a different
+    /// turn holds the lock.
+    pub fn refresh_readonly(&mut self) -> Result<(), StoreError> {
+        self.read_complete_events().map(|_| ())
+    }
+
     /// Under the session lock: re-read the file (the pre-lock view may be
     /// stale — another turn can have committed between `open` and `lock`) and
     /// physically COMPACT a crash-torn tail. Safe here and only here: the

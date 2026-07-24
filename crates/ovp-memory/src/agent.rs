@@ -163,7 +163,11 @@ pub fn run_agent_turn(
     cfg: &AgentConfig,
 ) -> Result<AgentOutcome, AgentError> {
     // Idempotent replay BEFORE locking: a completed turn answers retries even
-    // while a different (new) turn holds the lock.
+    // while a different (new) turn holds the lock. Refresh the read-only view
+    // first — a long-lived store must see keys committed by other processes.
+    store
+        .refresh_readonly()
+        .map_err(|e| AgentError::Store(e.to_string()))?;
     if let Some(key) = idempotency_key
         && let Some(done) = store.completed_turn_for_key(key)
     {
@@ -265,11 +269,26 @@ pub fn run_agent_turn(
             round: rounds,
             input_tokens: reply.usage.input_tokens,
             output_tokens: reply.usage.output_tokens,
-            src: cfg.model.clone(),
+            // Attribute the spend to the model that actually replied — a
+            // client-side override can differ from cfg.model.
+            src: if reply.model.is_empty() { cfg.model.clone() } else { reply.model.clone() },
             scope: "turn".into(),
         });
         in_total += reply.usage.input_tokens;
         out_total += reply.usage.output_tokens;
+        // `deadline_authority` for the MODEL side too: the trait carries no
+        // per-call timeout (propagating remaining into the transport is the
+        // live-client integration's A1a-v2 concern), so a reply that lands
+        // after the deadline is LATE — audited, usage counted, never
+        // delivered as an answer or executed.
+        if remaining(started).is_zero() {
+            events.push(TranscriptEvent::ReplyDiscarded {
+                turn_id: turn_id.clone(),
+                round: rounds,
+                reason: "model reply arrived after the turn deadline".into(),
+            });
+            break 'turn StoppedReason::Timeout;
+        }
         if !reply.text.is_empty() {
             last_text = reply.text.clone();
         }
@@ -1080,13 +1099,20 @@ mod tests {
             run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
         assert_eq!(out.input_tokens_total, 30); // 20 (tool round) + 10 (final)
         assert_eq!(out.output_tokens_total, 13); // 8 + 5
-        // And the transcript carries per-call events.
-        let model_events = st
+        // And the transcript carries per-call events, attributed to the model
+        // that actually replied (reply.model = "m"), scoped to the turn.
+        let usage_rows: Vec<_> = st
             .events()
             .iter()
-            .filter(|e| matches!(e, TranscriptEvent::ModelCalled { .. }))
-            .count();
-        assert_eq!(model_events, 2);
+            .filter_map(|e| match e {
+                TranscriptEvent::ModelCalled { src, scope, .. } => {
+                    Some((src.clone(), scope.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(usage_rows.len(), 2);
+        assert!(usage_rows.iter().all(|(s, sc)| s == "m" && sc == "turn"));
     }
 
     // Model transport failure mid-turn: honest model_error, audited turn.
@@ -1238,6 +1264,63 @@ mod tests {
             })
             .collect();
         assert_eq!(shape, vec!["text", "tool", "text", "tool"], "provider order is protocol");
+    }
+
+    // A model reply that lands after the deadline is LATE: usage counted,
+    // discard audited, nothing delivered or executed.
+    #[test]
+    fn late_model_reply_is_discarded() {
+        struct SlowClient(Duration);
+        impl ModelClient for SlowClient {
+            fn call(&mut self, _r: &ModelRequest) -> Result<ModelReply, CallError> {
+                std::thread::sleep(self.0);
+                text_reply("too late")
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = SlowClient(Duration::from_millis(60));
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
+        let mut st = store(dir.path());
+        let mut c = cfg();
+        c.deadline = Duration::from_millis(25);
+        let out = run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &c).unwrap();
+        assert_eq!(out.stopped_reason, StoppedReason::Timeout);
+        assert!(out.answer.is_empty(), "a late reply is never delivered");
+        assert!(tools.calls.is_empty());
+        assert!(st.events().iter().any(|e| matches!(
+            e,
+            TranscriptEvent::ReplyDiscarded { reason, .. } if reason.contains("after the turn deadline")
+        )));
+        // The spend still happened and is accounted.
+        assert!(out.input_tokens_total > 0);
+    }
+
+    // A key completed by ANOTHER writer replays even while the session lock is
+    // held by someone else and our store was opened before the commit.
+    #[test]
+    fn stale_prelock_view_still_replays_completed_key() {
+        let dir = tempfile::tempdir().unwrap();
+        // Store A opened EARLY (stale view).
+        let mut stale = store(dir.path());
+        // Another store completes a turn with key K.
+        {
+            let mut client = Scripted::new(vec![text_reply("done elsewhere")]);
+            let mut tools = MockTools::new(&[]);
+            let mut other = store(dir.path());
+            run_agent_turn(&mut client, &mut tools, &mut other, "q?", Some("K"), &cfg())
+                .unwrap();
+        }
+        // A third party currently holds the lock.
+        let holder = store(dir.path());
+        let _held = holder.lock().unwrap();
+        // The stale store must REPLAY (refresh-before-lookup), not SessionBusy.
+        let mut client = Scripted::new(vec![text_reply("SHOULD NOT RUN")]);
+        let mut tools = MockTools::new(&[]);
+        let out = run_agent_turn(&mut client, &mut tools, &mut stale, "q?", Some("K"), &cfg())
+            .unwrap();
+        assert!(out.idempotent_replay);
+        assert_eq!(out.answer, "done elsewhere");
+        assert!(client.requests.is_empty());
     }
 
     // An empty/unstamped lock file is conservatively BUSY — a racing creator
