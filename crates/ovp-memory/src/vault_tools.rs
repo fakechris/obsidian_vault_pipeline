@@ -172,9 +172,11 @@ impl VaultTools {
     }
 
     /// Align the refusal budget with the driving runtime's per-result cap
-    /// (leave ~2 KiB headroom under `AgentConfig.max_result_bytes`).
+    /// (leave ~2 KiB headroom under `AgentConfig.max_result_bytes`). Taken
+    /// VERBATIM — silently raising a small caller cap would recreate the
+    /// downstream blind-truncation this API exists to prevent.
     pub fn with_result_cap(mut self, serialized_cap: usize) -> Self {
-        self.serialized_cap = serialized_cap.max(1024);
+        self.serialized_cap = serialized_cap;
         self
     }
 
@@ -348,6 +350,13 @@ impl ToolExecutor for VaultTools {
                 // JSON under a Complete coverage. A refusal with Partial
                 // coverage tells the model to narrow the query instead.
                 Ok(body) if body.len() > self.serialized_cap => {
+                    if matches!(layer, Layer::Body) {
+                        // The computed body view derives from activity flags —
+                        // a size-refused query DID run and must read Partial,
+                        // not NotQueried.
+                        self.body_activity = true;
+                        self.body_capped = true;
+                    }
                     self.merge_coverage(layer, LayerState::Partial);
                     ToolOutcome::Failed(format!(
                         "result too large to deliver intact ({} bytes serialized); \
@@ -622,9 +631,16 @@ pub fn get_source(model: &IndexModel, source_id: &str) -> Result<Value, VaultToo
         "open_ref".into(),
         json!(format!("/library/{}", source.sha256)),
     );
+    // Only advertise what this row can actually serve — a path-less source
+    // deterministically fails both body tools, and a hallucination-prone
+    // model will happily burn rounds on advertised-but-dead capabilities.
     out.insert(
         "capabilities".into(),
-        json!(["read_source_body", "search_source_chunks"]),
+        if source.rel_path.is_some() {
+            json!(["read_source_body", "search_source_chunks"])
+        } else {
+            json!([])
+        },
     );
     Ok(Value::Object(out))
 }
@@ -739,6 +755,11 @@ pub fn search_source_chunks(
             Err(e) => std::str::from_utf8(&paragraph[..e.valid_up_to()]).unwrap_or(""),
         };
         if !text.trim().is_empty() {
+            // Only the retained prefix is SEARCHED — an overflowing paragraph
+            // must therefore surface as truncation even with zero matches, or
+            // a query hitting only the discarded suffix would read as an
+            // honest miss with complete coverage.
+            *passage_capped |= *over_cap;
             let lower = text.to_lowercase();
             let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
             if score > 0 {
