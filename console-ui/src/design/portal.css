@@ -740,7 +740,8 @@ body {
 .facet-list li {
   margin: 0;
 }
-.facet-list button {
+.facet-list button,
+.facet-list a {
   display: flex;
   width: 100%;
   justify-content: space-between;
@@ -749,16 +750,20 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
+  font-weight: 500;
   text-align: left;
+  text-decoration: none;
   padding: 0.25rem 0.4rem;
   border-radius: var(--ovp-radius-input);
   cursor: pointer;
 }
-.facet-list button:hover {
+.facet-list button:hover,
+.facet-list a:hover {
   color: var(--text);
   text-decoration: underline;
 }
-.facet-list button.active {
+.facet-list button.active,
+.facet-list a.active {
   color: var(--accent);
   font-weight: 600;
   background: var(--accent-soft);

@@ -313,6 +313,7 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.closeChat': '返回对话',
   'ask.newConversation': '新对话',
   'ask.chatLoadError': '无法加载该会话——服务是否在运行？',
+  'ask.chatParseEmpty': '该会话没有可解析的问答内容——文件可能损坏或为空。',
   'ask.citationsTitle': '引用',
   'ask.citationsEmpty':
     '最新回答的引用会显示在这里——悬停回答中的 [1] 标记可高亮对应证据。',

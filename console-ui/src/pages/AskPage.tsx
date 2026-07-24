@@ -1,27 +1,25 @@
-/** Ask page `/ask` — answers US5 (design §3.5).
+/** Ask page `/ask` + saved chat `/ask/chat/:chatId` — answers US5 (design §3.5).
  *
- * Three columns: saved chat history (left, from /api/chats — click renders
- * the raw markdown read-only with the shared escape-first renderer), the
- * conversation thread + composer (center), and the citations panel for the
- * LATEST answer (right rail). The answer's `[kind:id]` citations become
- * numbered [1][2] markers in reading order (the same order the server
- * returns `citations` in); hovering a marker highlights the panel entry,
- * clicking deep-links (claims → /knowledge#id, sources → /library/:sha —
- * the server already applied the sha-guard, a null link renders as text).
- * Citations the verifier could not back carry a warn pill.
+ * Three columns: saved chat history (left), conversation thread + composer
+ * (center), citations for the latest answer (right rail).
  *
- * Multi-turn: the live center thread is ONE session — follow-ups send prior
- * Q/A as `history` and reuse the first response's `chat` stem so the left
- * list stays one row that appends. Enter during IME composition does not
- * submit (Chinese/Japanese candidate confirm).
+ * Live thread: multi-turn continuity via `history` + shared chat stem.
+ * Saved chat: same bubble layout as live (parsed from `.ovp/chats/*.md`),
+ * addressable as `/ask/chat/<stem>` so the browser can bookmark/share.
  *
  * The textarea sets `data-omnibox-suppress` so the Shell's global ⌘K
  * handler leaves it alone while composing. */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import { AskError, fetchChatMarkdown, fetchChats, postAsk } from '../lib/api';
+import {
+  citationsInOrder,
+  citeLinkTarget,
+  normalizeCiteToken,
+  parseChatTranscript,
+} from '../lib/chatTranscript';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type InlineMarker } from '../lib/markdown';
 import type { AskCitation, AskResponse, ChatEntry } from '../lib/types';
@@ -34,21 +32,12 @@ interface Turn {
 }
 
 /** `[claim:…] [card:…] [unit:…]` tokens plus the bare `[ck-…]` form models
- * shorten claim keys to — mirrors the server tokenizer (ovp-memory::verify),
- * which is the source of truth for what counts as a citation; anything this
- * regex misses simply stays plain text. */
+ * shorten claim keys to — mirrors the server tokenizer (ovp-memory::verify). */
 const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
-
-/** Same normalization as the server tokenizer: a bare ck- key is a claim
- * citation, so both bracket forms resolve to the same returned citation id. */
-function normalizeCiteToken(token: string): string {
-  return token.startsWith('ck-') ? `claim:${token}` : token;
-}
 
 function errorKeyFor(err: unknown): MsgKey {
   if (err instanceof AskError) {
     if (err.status === 503) {
-      // Same status, different remedies — branch on the stable code.
       return err.code === 'index_unavailable'
         ? 'ask.errIndexUnavailable'
         : 'ask.errNotConfigured';
@@ -59,11 +48,23 @@ function errorKeyFor(err: unknown): MsgKey {
   return 'ask.errGeneric';
 }
 
-/** Answer body rendered as markdown through the shared escape-first
- * renderer (no HTML pathway, design §0.5) with `[kind:id]` citations turned
- * into numbered markers via the renderer's inline marker hook — markers stay
- * clickable INSIDE paragraphs, lists and emphasis. Tokens the server did not
- * return as citations render as plain text (renderer default). */
+/** Build citation chips from answer text alone (saved-chat replay). */
+function citationsFromAnswerText(answer: string): AskCitation[] {
+  return citationsInOrder(answer).map((id) => {
+    const kind = id.includes(':') ? id.slice(0, id.indexOf(':')) : '';
+    return {
+      id,
+      kind,
+      title: id,
+      snippet: null,
+      link_target: citeLinkTarget(id),
+      // Saved transcript does not re-run the verifier; treat as known markers.
+      verified: true,
+    };
+  });
+}
+
+/** Answer body rendered as markdown with numbered citation markers. */
 function AnswerText({
   answer,
   citations,
@@ -80,7 +81,7 @@ function AnswerText({
     pattern: CITE_RE,
     render: (m, key) => {
       const i = index.get(normalizeCiteToken(m[1]));
-      if (i === undefined) return null; // not a returned citation — plain text
+      if (i === undefined) return null;
       const cit = citations[i];
       return (
         <button
@@ -161,9 +162,72 @@ function CitationPanel({
   );
 }
 
+/** Shared bubble thread used by live conversation and saved-chat replay. */
+function ChatThread({
+  turns,
+  pending,
+  onHover,
+  onOpen,
+  threadRef,
+  empty,
+}: {
+  turns: Turn[];
+  pending: boolean;
+  onHover: (id: string | null) => void;
+  onOpen: (cit: AskCitation) => void;
+  threadRef: React.RefObject<HTMLDivElement | null>;
+  empty: React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="chat-thread" ref={threadRef}>
+      {turns.length === 0 && empty}
+      {turns.map((turn, i) => (
+        <div key={`t${i}`} className="chat-turn">
+          <div className="chat-q">{turn.question}</div>
+          {turn.response && (
+            <div className="chat-a">
+              <AnswerText
+                answer={turn.response.answer}
+                citations={turn.response.citations}
+                onHover={onHover}
+                onOpen={onOpen}
+              />
+              {turn.response.verified && (
+                <div className="chat-verify mono tiny muted">
+                  {t('ask.verifiedLine', {
+                    verified: turn.response.verified.verified,
+                    cited: turn.response.verified.cited,
+                  })}
+                  {' · '}
+                  {t('ask.contextHits', {
+                    n: turn.response.context_hits,
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {turn.errorKey && (
+            <div className="chat-a chat-error">{t(turn.errorKey)}</div>
+          )}
+          {!turn.response &&
+            !turn.errorKey &&
+            i === turns.length - 1 &&
+            pending && (
+              <div className="chat-a chat-pending muted">{t('ask.pending')}</div>
+            )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function AskPage() {
   const { t, lang } = useI18n();
   const navigate = useNavigate();
+  const { chatId: routeChatId } = useParams<{ chatId?: string }>();
+  // URL is the source of truth for which saved chat is open (bookmarkable).
+  const openChat = routeChatId ?? null;
 
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState('');
@@ -173,50 +237,86 @@ export default function AskPage() {
   const [sessionChat, setSessionChat] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
-  const [openChat, setOpenChat] = useState<string | null>(null);
-  const [chatMd, setChatMd] = useState<string | null>(null);
-  // Mirrors openChat for async guards: a slow fetch for chat A must not
-  // render under chat B (or under the live thread) once the user moved on.
+  const [savedTurns, setSavedTurns] = useState<Turn[] | null>(null);
+  const [savedError, setSavedError] = useState<string | null>(null);
+  // Async guard: slow fetch for chat A must not paint under chat B.
   const openChatRef = useRef<string | null>(null);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  const selectChat = (name: string | null) => {
-    openChatRef.current = name;
-    setOpenChat(name);
-    setChatMd(null);
-  };
-
   const refreshChats = () => {
     fetchChats()
       .then(setChats)
       .catch(() => {
-        // History degrades to empty — the thread still works.
+        /* History degrades to empty — the thread still works. */
       });
   };
   useEffect(refreshChats, []);
 
+  // Load saved chat when the route points at one.
+  useEffect(() => {
+    openChatRef.current = openChat;
+    setSavedTurns(null);
+    setSavedError(null);
+    setHoverId(null);
+    if (!openChat) return;
+    let cancelled = false;
+    fetchChatMarkdown(openChat)
+      .then((md) => {
+        if (cancelled || openChatRef.current !== openChat) return;
+        const parsed = parseChatTranscript(md);
+        if (parsed.length === 0) {
+          setSavedError(t('ask.chatParseEmpty'));
+          setSavedTurns([]);
+          return;
+        }
+        setSavedTurns(
+          parsed.map((turn) => {
+            const citations = citationsFromAnswerText(turn.answer);
+            return {
+              question: turn.question,
+              errorKey: null,
+              response: {
+                answer: turn.answer,
+                citations,
+                verified: null,
+                context_hits: citations.length,
+                chat: openChat,
+              },
+            };
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled && openChatRef.current === openChat) {
+          setSavedError(t('ask.chatLoadError'));
+          setSavedTurns([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openChat, t]);
+
   // Keep the newest turn in view while a conversation grows.
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
-  }, [turns, pending]);
+  }, [turns, pending, savedTurns, openChat]);
 
   const startNewConversation = () => {
     setTurns([]);
     setSessionChat(null);
     setDraft('');
-    selectChat(null);
+    navigate('/ask');
     composerRef.current?.focus();
   };
 
   const submit = () => {
     const question = draft.trim();
-    if (!question || pending) return;
-    selectChat(null);
+    if (!question || pending || openChat) return;
     setDraft('');
     setPending(true);
-    // Prior completed turns only — the pending slot is not yet answered.
     const history = turns
       .filter((t) => t.response?.answer)
       .map((t) => ({
@@ -231,11 +331,10 @@ export default function AskPage() {
             i === prev.length - 1 ? { ...turn, response } : turn,
           ),
         );
-        // Stick to the first successful chat stem for the whole live thread.
         if (response.chat) {
           setSessionChat((prev) => prev ?? response.chat);
         }
-        refreshChats(); // same file appends; list still one row for this session
+        refreshChats();
       })
       .catch((err: unknown) => {
         const errorKey = errorKeyFor(err);
@@ -249,7 +348,6 @@ export default function AskPage() {
   };
 
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME: Enter confirms a candidate, not the message (see lib/ime.ts).
     if (isReactImeComposing(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -259,17 +357,6 @@ export default function AskPage() {
 
   const openCitation = (cit: AskCitation) => {
     if (cit.link_target) navigate(cit.link_target);
-  };
-
-  const showChat = (name: string) => {
-    selectChat(name);
-    fetchChatMarkdown(name)
-      .then((md) => {
-        if (openChatRef.current === name) setChatMd(md);
-      })
-      .catch(() => {
-        if (openChatRef.current === name) setChatMd(t('ask.chatLoadError'));
-      });
   };
 
   const applyExample = (text: string) => {
@@ -285,9 +372,16 @@ export default function AskPage() {
         )
       : entry.name;
 
-  const latest = [...turns].reverse().find((turn) => turn.response);
+  const openChatMeta = useMemo(
+    () => (openChat ? chats.find((c) => c.name === openChat) : undefined),
+    [chats, openChat],
+  );
+
+  const displayTurns = openChat ? (savedTurns ?? []) : turns;
+  const latest = [...displayTurns].reverse().find((turn) => turn.response);
   const citations = latest?.response?.citations ?? [];
   const examples: MsgKey[] = ['ask.example1', 'ask.example2', 'ask.example3'];
+  const viewingSaved = Boolean(openChat);
 
   return (
     <>
@@ -299,7 +393,7 @@ export default function AskPage() {
         <div>
           <div className="facet-group">
             <h3>{t('ask.historyTitle')}</h3>
-            {(turns.length > 0 || sessionChat) && !openChat && (
+            {(turns.length > 0 || sessionChat) && !viewingSaved && (
               <button
                 type="button"
                 className="tiny"
@@ -315,17 +409,17 @@ export default function AskPage() {
               <ul className="facet-list chat-list">
                 {chats.map((entry) => (
                   <li key={entry.name}>
-                    <button
-                      type="button"
+                    <Link
+                      to={`/ask/chat/${encodeURIComponent(entry.name)}`}
                       className={
-                        openChat === entry.name || sessionChat === entry.name
+                        openChat === entry.name ||
+                        (!viewingSaved && sessionChat === entry.name)
                           ? 'active'
-                          : ''
+                          : undefined
                       }
-                      onClick={() => showChat(entry.name)}
                     >
                       <span className="chat-date">{chatDate(entry)}</span>
-                    </button>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -333,32 +427,56 @@ export default function AskPage() {
           </div>
         </div>
 
-        {/* center: saved-chat reader OR the live thread + composer */}
+        {/* center: live thread or saved-chat replay (same bubble layout) */}
         <div className="ask-main">
-          {openChat ? (
+          {viewingSaved ? (
             <>
               <div className="chat-reader-head">
-                <span className="mono tiny muted">
-                  {t('ask.savedChat')} · {openChat}
+                <span className="tiny muted">
+                  {t('ask.savedChat')}
+                  {' · '}
+                  <span className="mono">
+                    {openChatMeta ? chatDate(openChatMeta) : openChat}
+                  </span>
                 </span>
                 <button
                   type="button"
                   className="tab-like"
-                  onClick={() => selectChat(null)}
+                  onClick={() => navigate('/ask')}
                 >
                   ← {t('ask.closeChat')}
                 </button>
               </div>
-              {chatMd == null ? (
+              {savedTurns == null ? (
                 <div className="portal-note">{t('common.loading')}</div>
+              ) : savedError && savedTurns.length === 0 ? (
+                <EmptyState>
+                  <p>{savedError}</p>
+                </EmptyState>
               ) : (
-                <MarkdownView markdown={chatMd} />
+                <ChatThread
+                  turns={displayTurns}
+                  pending={false}
+                  onHover={setHoverId}
+                  onOpen={openCitation}
+                  threadRef={threadRef}
+                  empty={
+                    <EmptyState>
+                      <p>{savedError ?? t('ask.chatParseEmpty')}</p>
+                    </EmptyState>
+                  }
+                />
               )}
             </>
           ) : (
             <>
-              <div className="chat-thread" ref={threadRef}>
-                {turns.length === 0 && (
+              <ChatThread
+                turns={turns}
+                pending={pending}
+                onHover={setHoverId}
+                onOpen={openCitation}
+                threadRef={threadRef}
+                empty={
                   <EmptyState>
                     <p>
                       <strong>{t('ask.emptyTitle')}</strong>
@@ -377,48 +495,8 @@ export default function AskPage() {
                       ))}
                     </ul>
                   </EmptyState>
-                )}
-                {turns.map((turn, i) => (
-                  <div key={`t${i}`} className="chat-turn">
-                    <div className="chat-q">{turn.question}</div>
-                    {turn.response && (
-                      <div className="chat-a">
-                        <AnswerText
-                          answer={turn.response.answer}
-                          citations={turn.response.citations}
-                          onHover={setHoverId}
-                          onOpen={openCitation}
-                        />
-                        {turn.response.verified && (
-                          <div className="chat-verify mono tiny muted">
-                            {t('ask.verifiedLine', {
-                              verified: turn.response.verified.verified,
-                              cited: turn.response.verified.cited,
-                            })}
-                            {' · '}
-                            {t('ask.contextHits', {
-                              n: turn.response.context_hits,
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {turn.errorKey && (
-                      <div className="chat-a chat-error">
-                        {t(turn.errorKey)}
-                      </div>
-                    )}
-                    {!turn.response &&
-                      !turn.errorKey &&
-                      i === turns.length - 1 &&
-                      pending && (
-                        <div className="chat-a chat-pending muted">
-                          {t('ask.pending')}
-                        </div>
-                      )}
-                  </div>
-                ))}
-              </div>
+                }
+              />
 
               <div className="ask-composer">
                 <textarea
@@ -447,7 +525,7 @@ export default function AskPage() {
           )}
         </div>
 
-        {/* right rail: citations for the latest answer */}
+        {/* right rail: citations for the latest answer (live or saved) */}
         <div>
           <div className="card">
             <h3 style={{ marginBottom: '0.6rem' }}>{t('ask.citationsTitle')}</h3>
