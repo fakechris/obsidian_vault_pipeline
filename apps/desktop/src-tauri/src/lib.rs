@@ -491,11 +491,25 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 Err(e) => eprintln!("ovp2-desktop: cannot read the page url: {e}"),
             }
         }
+        "history-back" => nav_history(app, -1),
+        "history-forward" => nav_history(app, 1),
         other => {
             if let Some(path) = other.strip_prefix("vault-open:") {
                 switch_to_vault(app, path);
             }
         }
+    }
+}
+
+/// Step the main webview's history — native Back/Forward (⌘[ / ⌘]). `history.go`
+/// works on the SPA and on legacy full-document pages alike, and is a no-op at
+/// the ends.
+fn nav_history(app: &AppHandle, delta: i32) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(e) = win.eval(format!("window.history.go({delta})")) {
+        eprintln!("ovp2-desktop: history nav failed: {e}");
     }
 }
 
@@ -550,6 +564,27 @@ fn rebuild_vault_menu(handle: &AppHandle) -> tauri::Result<()> {
         Some("CmdOrCtrl+Shift+O"),
     )?)?;
     menu.append(&page_menu)?;
+
+    // History: persistent native chrome so Back/Forward work everywhere — the
+    // in-webview toolbar unmounts on full-document navigations (legacy admin
+    // pages), and this survives them. Standard ⌘[ / ⌘] shortcuts.
+    let history_menu = Submenu::new(handle, "History", true)?;
+    history_menu.append(&MenuItem::with_id(
+        handle,
+        "history-back",
+        "Back",
+        true,
+        Some("CmdOrCtrl+["),
+    )?)?;
+    history_menu.append(&MenuItem::with_id(
+        handle,
+        "history-forward",
+        "Forward",
+        true,
+        Some("CmdOrCtrl+]"),
+    )?)?;
+    menu.append(&history_menu)?;
+
     handle.set_menu(menu)?;
     Ok(())
 }

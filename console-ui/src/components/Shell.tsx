@@ -7,13 +7,14 @@
  * button in the top bar) open the same SearchOmnibox the /search page
  * renders (design §3.4). */
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import { healthLevel } from '../lib/derive';
 import { useNowTick } from './RunBanner';
 import { useModel } from '../model';
 import { useTheme } from '../theme';
 import { STATIC_MODE } from '../lib/api';
+import { isDesktopApp, openInSystemBrowser } from '../lib/desktopExternalLinks';
 import RunBanner from './RunBanner';
 import SearchOmnibox from './SearchOmnibox';
 
@@ -36,6 +37,53 @@ const NAV = STATIC_MODE
       { to: '/ask', key: 'nav.ask', end: false },
       { to: '/system', key: 'nav.system', end: false },
     ] as const);
+
+/** Desktop-only browser chrome: back / forward / open-in-browser. The Tauri
+ * webview has no chrome (only WKWebView's ugly native context menu), so the
+ * portal supplies its own. `navigate(-1)/navigate(1)` delegate to
+ * `history.go()`, which steps across documents too (e.g. a legacy admin page
+ * back into the SPA) and is a harmless no-op at the ends — so the buttons stay
+ * always-enabled rather than mixing router-local `idx` with session-wide
+ * `history.length` (which disagree after a cross-document navigation). Inert in
+ * a real browser via `isDesktopApp()`. The native History menu (⌘[ / ⌘]) is the
+ * persistent complement that also works on legacy full-document pages, where
+ * this in-SPA toolbar unmounts. */
+function DesktopNav() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  if (!isDesktopApp()) return null;
+  return (
+    <span className="nav-history">
+      <button
+        type="button"
+        className="navbtn"
+        onClick={() => navigate(-1)}
+        aria-label={t('nav.back')}
+        title={t('nav.back')}
+      >
+        ‹
+      </button>
+      <button
+        type="button"
+        className="navbtn"
+        onClick={() => navigate(1)}
+        aria-label={t('nav.forward')}
+        title={t('nav.forward')}
+      >
+        ›
+      </button>
+      <button
+        type="button"
+        className="navbtn"
+        onClick={() => openInSystemBrowser(window.location.href)}
+        aria-label={t('nav.openInBrowser')}
+        title={t('nav.openInBrowser')}
+      >
+        ↗
+      </button>
+    </span>
+  );
+}
 
 function StatusLight() {
   const { t } = useI18n();
@@ -148,6 +196,7 @@ export default function Shell() {
               <span className="brand">
                 ovp2<span className="dot">.</span>
               </span>
+              <DesktopNav />
               {NAV.map((item) => (
                 <NavLink
                   key={item.to}

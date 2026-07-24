@@ -26,6 +26,9 @@ export const en = {
   'nav.knowledge': 'Knowledge',
   'nav.ask': 'Ask',
   'nav.system': 'System',
+  'nav.back': 'Back',
+  'nav.forward': 'Forward',
+  'nav.openInBrowser': 'Open this page in your browser',
 
   // status light
   'status.ok': 'ok',

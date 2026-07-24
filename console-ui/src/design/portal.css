@@ -131,6 +131,41 @@ body {
   gap: 0.75rem;
 }
 
+/* Desktop-only browser chrome: back / forward / open-in-browser. */
+.nav-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-right: 0.3rem;
+  align-self: center;
+}
+.nav-history .navbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.nav-history .navbtn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.nav-history .navbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ---------- status dot: ok / attention / failed ---------- */
 .status-light {
   display: inline-flex;
