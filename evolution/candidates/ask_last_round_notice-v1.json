@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_last_round_notice-v1",
+  "base_version": "v1",
+  "target_version": "v1.1",
+  "surface": "runtime",
+  "component": "runtime.ask_agent",
+  "hypothesis": "RUNTIME surface, one additive engine behavior: when a tool batch consumes the FINAL allowed round (the next batch would be refused by max_rounds), the model-facing copy of that batch's last result gains a runtime notice — tool budget exhausted, write your answer now from what you have. Live evidence (paired eval, real vault): a recall turn located BOTH target articles by round 6 of 10 and still ended max_rounds with a 184-char process narration instead of an answer — the model had no way to know the budget was gone. Same mechanism as the existing [truncated] marker: model-facing copy only, the audit ToolCalled event keeps the raw content. Predicted: max_rounds terminations become synthesized answers; turns that finish early are byte-identical (no notice below the final round).",
+  "predicted_delta": {
+    "operational_reliability": "investigation turns that exhaust rounds deliver their findings instead of a mid-flight narration; stopped_reason max_rounds becomes rare and, when it happens, still carries a real answer",
+    "coverage": "found-but-unsynthesized results stop being lost at the round boundary"
+  },
+  "guardrails": {
+    "audit_unchanged": "TranscriptEvent::ToolCalled keeps the raw result content — the notice exists ONLY in the model-facing ToolResults copy, exactly like the truncation marker (test asserts both sides)",
+    "below_budget_byte_identical": "rounds before the final one carry no notice; a turn that never reaches the cap is unchanged (test asserts round 1 of 2 is clean)",
+    "cap_respected": "the notice participates in the max_result_bytes cap (content shrinks to make room); degenerate caps smaller than the notice skip it rather than exceed the cap"
+  },
+  "eval_plan": {
+    "replay_set": "engine test: max_rounds=2 scripted turn — round-1 results clean, round-2 results carry content + notice, audit raw; live replay of the q1 recall eval question must end with a synthesized candidates answer rather than a process narration",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Delete the notice block — model-facing only, no persisted-state impact; old transcripts replay untouched (idempotent replay reads turn_finished, not result bytes).",
+  "ablation_required": false
+}
