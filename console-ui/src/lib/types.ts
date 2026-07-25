@@ -166,6 +166,9 @@ export type ClaimStatus = 'durable' | 'superseded' | 'retracted' | 'caveated';
 
 export interface ClaimRow {
   claim_id: string;
+  /** Stable ledger identity (ck-…) — claim_ids can collide across runs,
+   * claim_keys cannot. Absent on pre-key indexes. */
+  claim_key?: string;
   claim: string;
   theme?: string;
   status: ClaimStatus;

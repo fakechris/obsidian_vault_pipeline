@@ -2381,11 +2381,31 @@ fn handle_ask_agent(
                     Some(m) => agent_citations(&done.answer, &m, &records),
                     None => agent_citations_unindexed(&done.answer, &records),
                 };
+                // Export REPAIR: a committed turn whose chat save failed
+                // would otherwise stay missing from History forever — every
+                // keyed retry returns here, before the live path's save. If
+                // the surface has no file at all for this session, save now
+                // (same deliverable-only rule as the live path).
+                let mut replay_save_error = None;
+                if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
+                    && !done.answer.is_empty()
+                    && !ovp_memory::ask::agent_chat_exists(&vault_root, &response_session)
+                {
+                    let _save_guard = chat_saves.lock().unwrap();
+                    if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                        &vault_root,
+                        &response_session,
+                        &question,
+                        &done.answer,
+                    ) {
+                        replay_save_error = Some(e);
+                    }
+                }
                 // Coverage is an EXECUTION artifact the transcript does not
                 // persist — a replay reports null (unknown), never a
                 // fabricated all-not_queried that would misdescribe the
                 // original turn.
-                return Ok(serde_json::json!({
+                let mut body = serde_json::json!({
                     "agent": true,
                     "answer": done.answer,
                     "citations": citations,
@@ -2399,7 +2419,11 @@ fn handle_ask_agent(
                         "input_tokens": done.input_tokens_total,
                         "output_tokens": done.output_tokens_total,
                     },
-                }));
+                });
+                if let (Some(e), Some(obj)) = (replay_save_error, body.as_object_mut()) {
+                    obj.insert("chat_save_error".into(), serde_json::json!(e));
+                }
+                return Ok(body);
             }
             let mut client = factory()?;
             // `coordinated cap`: the tools refuse anything the agent's

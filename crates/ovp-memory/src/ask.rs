@@ -568,14 +568,40 @@ pub fn save_agent_chat_turn(
         return Err(format!("invalid chat stem `{chat}`"));
     }
     let path = chats_dir.join(format!("{chat}.md"));
-    if path.is_file() {
-        append_chat_turn(&path, &turn_block)?;
-        return Ok(path);
-    }
-    let ts = chrono_like_timestamp();
-    std::fs::write(&path, format!("# Ask — {ts}\n\n{turn_block}"))
-        .map_err(|e| format!("write chat {}: {e}", path.display()))?;
+    // Create-or-append through ONE append-mode handle: even with two server
+    // processes on the same vault racing this export, append never
+    // truncates — worst case is a duplicated header, never a lost turn.
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open chat {}: {e}", path.display()))?;
+    let empty = file
+        .metadata()
+        .map_err(|e| format!("stat chat {}: {e}", path.display()))?
+        .len()
+        == 0;
+    let payload = if empty {
+        format!("# Ask — {}\n\n{turn_block}", chrono_like_timestamp())
+    } else {
+        format!("\n---\n\n{turn_block}")
+    };
+    file.write_all(payload.as_bytes())
+        .map_err(|e| format!("append chat {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// True when the saved-chat surface already has a file for this session —
+/// the replay path uses this to REPAIR a turn whose transcript committed but
+/// whose export failed (the retry would otherwise skip every save forever).
+pub fn agent_chat_exists(vault_root: &Path, chat: &str) -> bool {
+    valid_chat_stem(chat)
+        && vault_root
+            .join(".ovp")
+            .join("chats")
+            .join(format!("{chat}.md"))
+            .is_file()
 }
 
 fn append_chat_turn(path: &Path, turn_block: &str) -> Result<(), String> {

@@ -223,10 +223,15 @@ export default function KnowledgePage() {
   // its (Unclassified) theme page via themeRoute rather than dead-ending here.
   const anchor = decodeURIComponent(location.hash.replace(/^#/, ''));
   if (anchor && model) {
-    const claim = model.claims.find((c) => c.claim_id === anchor);
+    // claim_id first; claim_key fallback (agent citations and replayed
+    // agent chats anchor by the stable ck-… key — theme pages anchor by
+    // claim_id, so forward with the RESOLVED id).
+    const claim =
+      model.claims.find((c) => c.claim_id === anchor) ??
+      model.claims.find((c) => c.claim_key === anchor);
     if (claim) {
       return (
-        <Navigate to={`${themeRoute(claim.theme)}#${anchor}`} replace />
+        <Navigate to={`${themeRoute(claim.theme)}#${claim.claim_id}`} replace />
       );
     }
   }
