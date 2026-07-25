@@ -195,6 +195,8 @@ function AgentTrail({
 const COV_LAYERS: [string, MsgKey][] = [
   ['claims', 'ask.covClaims'],
   ['sources', 'ask.covSources'],
+  ['evidence', 'ask.covEvidence'],
+  ['fulltext', 'ask.covFulltext'],
   ['body', 'ask.covBody'],
 ];
 const COV_STATE: Record<string, MsgKey> = {

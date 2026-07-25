@@ -1,0 +1,30 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface: two recall layers the v1 registry cannot reach, driven by a live operator miss (a remembered article whose distinguishing terms live ONLY in its body and its reader-pack cards — 20 honest tool calls, zero hits). (1) `search_evidence`: index-backed OR-term search over reader-pack titles and card titles, ranked by distinct matched query terms and joined to source ids. (2) `search_fulltext`: newest-first corpus-wide OR-term streaming scan over source BODIES with per-file and total byte budgets, deadline-aware early exit, resumable source cursors, and honest scanned/total accounting. A 1,281-source live replay proved exact compound-query matching could never hit an English article from mixed Chinese/English queries, while restarting every bounded walk left the same oldest 401 sources permanently blind. Plus an honesty fix: v1 `search_sources`'s description let the model claim it had searched 正文 when it only searches metadata — descriptions now state reach explicitly. Predicted: the recorded miss becomes a hit via the English `transformer` term through BOTH new tools, and repeated fulltext calls can cover the complete sorted walk; all seven v1 tool behaviors stay byte-identical.",
+  "predicted_delta": {
+    "coverage": "recall extends from metadata+claims to the evidence layer (cards) and raw bodies — the two layers the live miss proved unreachable; coverage() grows `evidence` and `fulltext` layers so the response reports them honestly",
+    "crystal_provenance": "evidence hits carry pack/source join ids, so answers can cite [source:<id>] receipts for card-level recall instead of unverifiable prose",
+    "operational_reliability": "the corpus scan is budgeted (per-file cap, total cap, deadline-aware), newest-first, and resumable with an opaque cursor — a big vault degrades to an honest partial whose next call continues at the unscanned tail, never a hang or a permanent blind spot"
+  },
+  "guardrails": {
+    "v1_tools_bytes_unchanged": "the seven v1 tools' inputs, outputs, and coverage semantics are untouched — existing tests pass unmodified except additions",
+    "descriptions_state_reach": "every search tool's description names what it does NOT search (search_sources: metadata only, not bodies) — the model must not be able to honestly claim coverage it never had",
+    "budgeted_scan": "search_fulltext enforces a per-file byte cap and a total corpus byte cap, counts but excludes leading YAML frontmatter from body matching, checks the remaining deadline between files, and reports {scanned_sources, total_sources, truncated, next_cursor?}; next_cursor uses query/index-bound `f1:<offset>:<fp>` so passing it resumes only the same newest-first walk and a mismatch must restart without a cursor — coverage `fulltext` is complete ONLY when the requested walk segment reaches the end with every candidate body fully scanned",
+    "bounded_or_terms": "search_evidence and search_fulltext lowercase, deduplicate, and keep the FIRST eight ASCII-whitespace-separated terms (extras drop silently — an invalid-args bounce would burn an agent round for a fault the tool resolves), match candidates containing any kept term, and return distinct matched_terms; both tools rank by distinct-term score (fulltext breaks ties by recency across the whole scanned walk — first-N-in-walk-order flooding by one common term was a live failure mode); each evidence hit lists at most eight matching card titles capped to 200 characters with nested and top-level truncation flags",
+    "coverage_from_executor_still": "the new `evidence`/`fulltext` coverage layers are computed from the executor's own accounting, never from model claims",
+    "no_new_write_paths": "both tools are read-only; the shared v1 lifecycle_moved_path fallback remains same-month-only for writer safety, while memory's read-only cross-month probe accepts only basenames ending in the indexed source's case-insensitive `-<sha8>` stem before applying the existing canonicalize + vault-root traversal guard",
+    "request_key_additive": "tools enter the request key as (name, version) only (A1a rule) — the new tools change keys for NEW requests; recorded v1 cassettes replay untouched"
+  },
+  "eval_plan": {
+    "replay_set": "regression fixture = the live miss: an English article containing only `transformer` must be recovered from mixed Chinese/English and compound English queries through OR-term matching in both card-title evidence and source fulltext. Deterministic tests also cover evidence score ordering, newest-first date ordering, cursor continuation across a tiny corpus budget, malformed and out-of-range cursors, different-length terms spanning scan boundaries, early exit after all terms, per-file and total-cap honesty, deadline exhaustion, UTF-8-safe snippets, and unchanged seven-tool v1 behavior",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Remove the two tool registrations — v1 surface is untouched underneath; no persisted state.",
+  "ablation_required": false
+}

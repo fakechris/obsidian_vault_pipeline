@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_round_budget-v1",
+  "base_version": "v1",
+  "target_version": "v1.1",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, single knob: the agent path's auxiliary round cap (AgentConfig.max_rounds in the /api/ask wiring) rises 6 → 10. Live evidence: a real recall investigation (find-an-article-from-a-vague-description) chained search_fulltext → get_source → read_source_body → verify across sources and hit max_rounds at 6 with the correct target ALREADY IDENTIFIED but the final synthesis unwritten — twice. The wall-clock deadline (guard minus margin, deadline_authority) remains the binding bound; rounds are auxiliary. Predicted: investigation-class turns finish with stopped_reason=final; simple turns are unaffected (they never approached 6).",
+  "predicted_delta": {
+    "coverage": "multi-hop investigations complete their read/verify chain instead of stopping mid-flight with an unsynthesized answer",
+    "cost_efficiency": "cost stays bounded by the SAME wall-clock deadline and per-call token caps; extra rounds only occur when the deadline still has budget — per-round usage lands in the transcript ledger for the paired check"
+  },
+  "guardrails": {
+    "single_knob": "the diff is one field: max_rounds 6 → 10 in the agent branch's AgentConfig; engine default and every other config stay untouched",
+    "deadline_still_authoritative": "the A1b deadline semantics are unchanged — a turn always concludes and commits before the HTTP guard regardless of rounds remaining",
+    "legacy_path_untouched": "the flag-off /api/ask path has no round concept; only the agent branch reads this value"
+  },
+  "eval_plan": {
+    "replay_set": "live paired evidence (real vault, 2026-07-24): the same recall question stopped max_rounds at 6 rounds in two consecutive replays (target found, answer unwritten); post-change replay must finish final with citations. Deterministic round-cap contracts covered by the existing A1b engine tests, unmodified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set the field back to 6 (or delete the override to inherit the engine default) — one line, no data migration.",
+  "ablation_required": false
+}
