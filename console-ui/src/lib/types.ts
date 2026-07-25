@@ -254,7 +254,8 @@ export interface AskResponse {
   intent?: string | null;
   /** Stem of the saved `.ovp/chats/<name>.md` transcript. */
   chat: string | null;
-  // ---- agent-path extras (OVP_ASK_AGENT=1; absent on the legacy path) ----
+  // ---- agent-path extras (the DEFAULT path since A3d; absent on the
+  // legacy pipeline reachable via the OVP_ASK_AGENT=0 rollback hatch) ----
   /** True when the answer came from the tool-loop agent. */
   agent?: boolean;
   /** Executor-computed per-layer coverage (claims/sources/body →

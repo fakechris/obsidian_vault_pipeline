@@ -190,8 +190,9 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
             ask_timeout: None,
             max_concurrent_asks: None,
             // Agent-path parity for the desktop lands with the A3d rollout.
-            // Parity with the CLI default (A3d): the agent path serves Ask.
-            ask_agent: true,
+            // Parity with the CLI default AND its rollback hatch (A3d):
+            // the agent path serves Ask unless OVP_ASK_AGENT=0.
+            ask_agent: std::env::var("OVP_ASK_AGENT").map(|v| v != "0").unwrap_or(true),
         };
         std::thread::spawn(move || {
             if let Err(e) = ovp_server::run_server(config) {
