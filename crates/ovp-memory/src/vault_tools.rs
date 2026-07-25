@@ -53,6 +53,8 @@ const MAX_CLAIM_CHARS: usize = 500;
 const CURSOR_PREFIX: &str = "c1:";
 const FULLTEXT_CURSOR_PREFIX: &str = "f1:";
 const MAX_SEARCH_TERMS: usize = 8;
+const MAX_MATCHED_CARDS_PER_HIT: usize = 8;
+const MAX_MATCHED_CARD_TITLE_CHARS: usize = 200;
 /// Aggregate serialized-size budget for multi-hit results. Individually-capped
 /// items can still sum past the agent's per-result cap (20 near-2KiB passages
 /// ≈ 40 KiB) — which would get blindly truncated downstream into broken JSON
@@ -287,6 +289,8 @@ impl VaultTools {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("fulltext index unavailable: {e}"))
                 })?;
+                let cursor = decode_fulltext_cursor(cursor.as_deref(), &query, &model)
+                    .map_err(DispatchError::InvalidArgs)?;
                 Ok(search_fulltext_at_with_budget(
                     &self.vault_root,
                     &model,
@@ -709,6 +713,107 @@ fn tokenize_search_terms(query: &str) -> Vec<String> {
     terms
 }
 
+fn update_fnv1a64(hash: &mut u64, bytes: &[u8]) {
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+fn fulltext_cursor_fingerprint(
+    terms: &[String],
+    model: &IndexModel,
+    candidate_count: usize,
+) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut sorted_terms = terms.to_vec();
+    sorted_terms.sort();
+    sorted_terms.dedup();
+
+    let mut hash = FNV_OFFSET_BASIS;
+    update_fnv1a64(&mut hash, sorted_terms.join("\n").as_bytes());
+    if let Some(run_id) = model.run_id.as_deref() {
+        update_fnv1a64(&mut hash, b"\nrun_id:");
+        update_fnv1a64(&mut hash, run_id.as_bytes());
+    }
+    if let Some(built_at) = model.built_at.as_deref() {
+        update_fnv1a64(&mut hash, b"\nbuilt_at:");
+        update_fnv1a64(&mut hash, built_at.as_bytes());
+    }
+    update_fnv1a64(&mut hash, b"\ncandidate_count:");
+    update_fnv1a64(&mut hash, candidate_count.to_string().as_bytes());
+    format!("{:08x}", hash as u32)
+}
+
+fn format_fulltext_cursor(
+    offset: usize,
+    terms: &[String],
+    model: &IndexModel,
+    candidate_count: usize,
+) -> String {
+    let fingerprint = fulltext_cursor_fingerprint(terms, model, candidate_count);
+    format!("{FULLTEXT_CURSOR_PREFIX}{offset}:{fingerprint}")
+}
+
+fn fulltext_candidate_count(model: &IndexModel) -> usize {
+    model
+        .sources
+        .iter()
+        .filter(|source| source.rel_path.is_some())
+        .count()
+}
+
+fn fulltext_cursor_parts(cursor: &str) -> Result<(&str, &str), String> {
+    let raw = cursor.strip_prefix(FULLTEXT_CURSOR_PREFIX).ok_or_else(|| {
+        format!(
+            "invalid cursor version; expected \
+             `{FULLTEXT_CURSOR_PREFIX}<source_offset>:<query_index_fingerprint>`"
+        )
+    })?;
+    let (offset, fingerprint) = raw.split_once(':').ok_or_else(|| {
+        format!(
+            "invalid fulltext cursor format; expected \
+             `{FULLTEXT_CURSOR_PREFIX}<source_offset>:<query_index_fingerprint>`"
+        )
+    })?;
+    if offset.is_empty() || !offset.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("invalid fulltext cursor source offset".into());
+    }
+    if fingerprint.len() != 8
+        || !fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid fulltext cursor fingerprint; expected 8 lowercase hex chars".into());
+    }
+    Ok((offset, fingerprint))
+}
+
+fn decode_fulltext_cursor(
+    cursor: Option<&str>,
+    query: &str,
+    model: &IndexModel,
+) -> Result<Option<usize>, String> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let (offset, fingerprint) = fulltext_cursor_parts(cursor)?;
+    let terms = tokenize_search_terms(query);
+    let expected =
+        fulltext_cursor_fingerprint(&terms, model, fulltext_candidate_count(model));
+    if fingerprint != expected {
+        return Err(
+            "fulltext cursor belongs to a different query or index; restart without a cursor"
+                .into(),
+        );
+    }
+    offset
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|_| "invalid fulltext cursor source offset".into())
+}
+
 /// Search the reader-pack catalog surface: pack titles plus card titles. Packs
 /// rank by the number of distinct OR-matched terms, with original index order
 /// breaking ties; source joins remain optional because pre-join packs can
@@ -717,6 +822,7 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
     let terms = tokenize_search_terms(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut matches = Vec::new();
+    let mut any_matched_cards_truncated = false;
 
     for (index, pack) in model.packs.iter().enumerate() {
         let pack_title_lower = pack.title.to_lowercase();
@@ -738,7 +844,7 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
         if matched_terms.is_empty() {
             continue;
         }
-        let matched_cards = pack
+        let matching_cards = pack
             .card_titles
             .iter()
             .zip(&card_titles_lower)
@@ -747,13 +853,28 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
                     .iter()
                     .any(|term| title_lower.contains(term.as_str()))
             })
-            .map(|(title, _)| title.clone())
+            .map(|(title, _)| title)
             .collect::<Vec<_>>();
+        let mut matched_cards_truncated = matching_cards.len() > MAX_MATCHED_CARDS_PER_HIT;
+        let matched_cards = matching_cards
+            .into_iter()
+            .take(MAX_MATCHED_CARDS_PER_HIT)
+            .map(|title| {
+                let (title, title_truncated) =
+                    cap_chars(title, MAX_MATCHED_CARD_TITLE_CHARS);
+                matched_cards_truncated |= title_truncated;
+                title
+            })
+            .collect::<Vec<_>>();
+        any_matched_cards_truncated |= matched_cards_truncated;
         let score = matched_terms.len();
 
         let mut hit = Map::new();
         hit.insert("pack_title".into(), json!(pack.title));
         hit.insert("matched_cards".into(), json!(matched_cards));
+        if matched_cards_truncated {
+            hit.insert("matched_cards_truncated".into(), json!(true));
+        }
         hit.insert("matched_terms".into(), json!(matched_terms));
         if let Some(source_id) = pack.source_sha256.as_deref() {
             hit.insert("source_id".into(), json!(source_id));
@@ -769,7 +890,7 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
             .cmp(&left.0)
             .then_with(|| left.1.cmp(&right.1))
     });
-    let mut truncated = matches.len() > limit;
+    let mut truncated = matches.len() > limit || any_matched_cards_truncated;
     let mut hits = matches
         .into_iter()
         .take(limit)
@@ -792,6 +913,13 @@ struct FulltextFileScan {
     bytes_scanned: usize,
     matched_terms: Vec<String>,
     snippet: Option<String>,
+}
+
+#[derive(Debug)]
+enum FulltextScanRegion {
+    DetectingFrontmatter(Vec<u8>),
+    Frontmatter(Vec<u8>),
+    Body,
 }
 
 /// Search every path-bearing source body with bounded streaming IO. The
@@ -965,7 +1093,12 @@ fn search_fulltext_at_with_budget(
     if stopped_before_end {
         out.insert(
             "next_cursor".into(),
-            json!(format!("{FULLTEXT_CURSOR_PREFIX}{next_offset}")),
+            json!(format_fulltext_cursor(
+                next_offset,
+                &terms,
+                model,
+                total_sources
+            )),
         );
     }
     Value::Object(out)
@@ -998,6 +1131,7 @@ fn scan_fulltext_file(
     let mut matched = vec![false; terms.len()];
     let mut scanned = 0usize;
     let mut snippet = None;
+    let mut region = FulltextScanRegion::DetectingFrontmatter(Vec::new());
 
     loop {
         if !terms.is_empty() && matched.iter().all(|found| *found) {
@@ -1010,12 +1144,24 @@ fn scan_fulltext_file(
         }
         if scanned >= allowance {
             return match std::io::BufRead::fill_buf(&mut reader) {
-                Ok([]) => FulltextFileScan {
-                    state: FulltextFileState::Complete,
-                    bytes_scanned: scanned,
-                    matched_terms: collect_matched_terms(terms, &matched),
-                    snippet,
-                },
+                Ok([]) => {
+                    finish_fulltext_region(
+                        &mut region,
+                        terms,
+                        &mut matched,
+                        carry_limit,
+                        line_tail_limit,
+                        &mut carry,
+                        &mut line_tail,
+                        &mut snippet,
+                    );
+                    FulltextFileScan {
+                        state: FulltextFileState::Complete,
+                        bytes_scanned: scanned,
+                        matched_terms: collect_matched_terms(terms, &matched),
+                        snippet,
+                    }
+                }
                 Ok(_) => FulltextFileScan {
                     state: FulltextFileState::Partial,
                     bytes_scanned: scanned,
@@ -1043,6 +1189,16 @@ fn scan_fulltext_file(
             }
         };
         if buf.is_empty() {
+            finish_fulltext_region(
+                &mut region,
+                terms,
+                &mut matched,
+                carry_limit,
+                line_tail_limit,
+                &mut carry,
+                &mut line_tail,
+                &mut snippet,
+            );
             return FulltextFileScan {
                 state: FulltextFileState::Complete,
                 bytes_scanned: scanned,
@@ -1052,8 +1208,9 @@ fn scan_fulltext_file(
         }
 
         let allowed = (allowance - scanned).min(buf.len());
-        scan_fulltext_block(
+        scan_searchable_fulltext_block(
             &buf[..allowed],
+            &mut region,
             terms,
             &mut matched,
             carry_limit,
@@ -1064,6 +1221,143 @@ fn scan_fulltext_file(
         );
         std::io::BufRead::consume(&mut reader, allowed);
         scanned += allowed;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_searchable_fulltext_block(
+    block: &[u8],
+    region: &mut FulltextScanRegion,
+    terms: &[String],
+    matched: &mut [bool],
+    carry_limit: usize,
+    line_tail_limit: usize,
+    carry: &mut Vec<u8>,
+    line_tail: &mut Vec<u8>,
+    snippet: &mut Option<String>,
+) {
+    let current = std::mem::replace(region, FulltextScanRegion::Body);
+    match current {
+        FulltextScanRegion::Body => scan_fulltext_block(
+            block,
+            terms,
+            matched,
+            carry_limit,
+            line_tail_limit,
+            carry,
+            line_tail,
+            snippet,
+        ),
+        FulltextScanRegion::DetectingFrontmatter(mut prefix) => {
+            prefix.extend_from_slice(block);
+            let header_len = if prefix.starts_with(b"---\n") {
+                Some(4)
+            } else if prefix.starts_with(b"---\r\n") {
+                Some(5)
+            } else {
+                None
+            };
+            if let Some(header_len) = header_len {
+                let mut delimiter_tail = vec![b'\n'];
+                if let Some(body_offset) =
+                    frontmatter_body_offset(&prefix[header_len..], &mut delimiter_tail)
+                {
+                    scan_fulltext_block(
+                        &prefix[header_len + body_offset..],
+                        terms,
+                        matched,
+                        carry_limit,
+                        line_tail_limit,
+                        carry,
+                        line_tail,
+                        snippet,
+                    );
+                } else {
+                    *region = FulltextScanRegion::Frontmatter(delimiter_tail);
+                }
+            } else if b"---\n".starts_with(&prefix) || b"---\r\n".starts_with(&prefix) {
+                *region = FulltextScanRegion::DetectingFrontmatter(prefix);
+            } else {
+                scan_fulltext_block(
+                    &prefix,
+                    terms,
+                    matched,
+                    carry_limit,
+                    line_tail_limit,
+                    carry,
+                    line_tail,
+                    snippet,
+                );
+            }
+        }
+        FulltextScanRegion::Frontmatter(mut delimiter_tail) => {
+            if let Some(body_offset) = frontmatter_body_offset(block, &mut delimiter_tail) {
+                scan_fulltext_block(
+                    &block[body_offset..],
+                    terms,
+                    matched,
+                    carry_limit,
+                    line_tail_limit,
+                    carry,
+                    line_tail,
+                    snippet,
+                );
+            } else {
+                *region = FulltextScanRegion::Frontmatter(delimiter_tail);
+            }
+        }
+    }
+}
+
+fn frontmatter_body_offset(block: &[u8], delimiter_tail: &mut Vec<u8>) -> Option<usize> {
+    const LF_DELIMITER: &[u8] = b"\n---\n";
+    const CRLF_DELIMITER: &[u8] = b"\n---\r\n";
+    const DELIMITER_CARRY_BYTES: usize = CRLF_DELIMITER.len() - 1;
+
+    let tail_len = delimiter_tail.len();
+    let mut window = Vec::with_capacity(tail_len + block.len());
+    window.extend_from_slice(delimiter_tail);
+    window.extend_from_slice(block);
+    let closing_end = [LF_DELIMITER, CRLF_DELIMITER]
+        .into_iter()
+        .filter_map(|delimiter| {
+            window
+                .windows(delimiter.len())
+                .position(|candidate| candidate == delimiter)
+                .map(|position| position + delimiter.len())
+        })
+        .min();
+    if let Some(closing_end) = closing_end {
+        return Some(closing_end.saturating_sub(tail_len));
+    }
+    replace_with_tail(delimiter_tail, &window, DELIMITER_CARRY_BYTES);
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_fulltext_region(
+    region: &mut FulltextScanRegion,
+    terms: &[String],
+    matched: &mut [bool],
+    carry_limit: usize,
+    line_tail_limit: usize,
+    carry: &mut Vec<u8>,
+    line_tail: &mut Vec<u8>,
+    snippet: &mut Option<String>,
+) {
+    if let FulltextScanRegion::DetectingFrontmatter(prefix) =
+        std::mem::replace(region, FulltextScanRegion::Body)
+    {
+        scan_fulltext_block(
+            &prefix,
+            terms,
+            matched,
+            carry_limit,
+            line_tail_limit,
+            carry,
+            line_tail,
+            snippet,
+        );
     }
 }
 
@@ -1776,11 +2070,53 @@ fn find_source<'a>(
         .ok_or_else(|| VaultToolError::Failed(format!("unknown source `{source_id}`")))
 }
 
-/// Resolve a source's on-disk file: index rel_path + the shared lifecycle
-/// fallback (rel_path is not rewritten when the daily lifecycle moves a
-/// processed note out of 50-Inbox/01-Raw), then a canonicalize +
-/// starts_with traversal guard. Shared by body reads and the streaming
-/// chunk scanner.
+/// Read-only cross-month lifecycle fallback. The shared domain helper stays
+/// same-month-only because it also serves write paths; here the source index
+/// supplies the sha256 needed to prove that a basename belongs to this row.
+fn identity_verified_cross_month_path(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    rel_path: &str,
+    sha256: &str,
+) -> Option<PathBuf> {
+    let raw_prefix = format!("{}/", layout.inbox_raw_dir());
+    let rest = rel_path.strip_prefix(&raw_prefix)?;
+    let (_, recorded_tail) = rest.split_once('/')?;
+    let basename = Path::new(recorded_tail).file_name()?.to_str()?;
+    let extension = Path::new(basename).extension()?.to_str()?;
+    if extension.is_empty() {
+        return None;
+    }
+    let stem = Path::new(basename).file_stem()?.to_str()?;
+    let sha8 = sha256.get(..8)?;
+    if !sha8.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let expected_suffix = format!("-{}", sha8.to_ascii_lowercase());
+    if !stem.to_ascii_lowercase().ends_with(&expected_suffix) {
+        return None;
+    }
+
+    let processed_root = vault_root.join(layout.processed_root());
+    let mut month_dirs = std::fs::read_dir(processed_root)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_type().ok()?.is_dir().then_some(entry.path())
+        })
+        .collect::<Vec<_>>();
+    month_dirs.sort();
+    month_dirs
+        .into_iter()
+        .rev()
+        .map(|month_dir| month_dir.join(basename))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Resolve a source's on-disk file: index rel_path + the shared same-month
+/// lifecycle fallback, then an identity-verified read-only cross-month probe,
+/// followed by the canonicalize + starts_with traversal guard. Shared by body
+/// reads and the streaming chunk scanner.
 fn resolve_source_path(
     vault_root: &Path,
     model: &IndexModel,
@@ -1801,6 +2137,16 @@ fn resolve_source_path(
     if !joined.is_file()
         && let Some(moved) =
             ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel_path)
+    {
+        joined = moved;
+    }
+    if !joined.is_file()
+        && let Some(moved) = identity_verified_cross_month_path(
+            vault_root,
+            &layout,
+            rel_path,
+            &source.sha256,
+        )
     {
         joined = moved;
     }
@@ -2010,7 +2356,7 @@ enum ParsedCall {
     },
     SearchFulltext {
         query: String,
-        cursor: Option<usize>,
+        cursor: Option<String>,
         limit: usize,
     },
     GetSource {
@@ -2176,19 +2522,12 @@ fn required_search_query(object: &Map<String, Value>) -> Result<String, String> 
     required_string(object, "query")
 }
 
-fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<usize>, String> {
+fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<String>, String> {
     let Some(cursor) = optional_string(object, "cursor")? else {
         return Ok(None);
     };
-    let raw = cursor.strip_prefix(FULLTEXT_CURSOR_PREFIX).ok_or_else(|| {
-        format!("invalid cursor version; expected `{FULLTEXT_CURSOR_PREFIX}<source_offset>`")
-    })?;
-    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("invalid fulltext cursor source offset".into());
-    }
-    raw.parse::<usize>()
-        .map(Some)
-        .map_err(|_| "invalid fulltext cursor source offset".into())
+    fulltext_cursor_parts(&cursor)?;
+    Ok(Some(cursor))
 }
 
 fn optional_string(object: &Map<String, Value>, key: &str) -> Result<Option<String>, String> {
@@ -2673,6 +3012,48 @@ mod tests {
     }
 
     #[test]
+    fn evidence_bounds_matching_card_titles_per_hit() {
+        let card_titles = (0..20)
+            .map(|index| format!("Needle card {index}: {}", "界".repeat(250)))
+            .collect::<Vec<_>>();
+        let model = fixture_model(
+            vec![],
+            vec![PackRow {
+                pack_dir: "40-Resources/Reader/oversized".into(),
+                title: "Oversized evidence pack".into(),
+                date: None,
+                units: 20,
+                cards: 20,
+                json_repaired: false,
+                card_titles,
+                source_sha256: None,
+            }],
+            vec![],
+        );
+
+        let result = search_evidence(&model, "needle", 20);
+        let serialized = serde_json::to_string(&result).expect("serialize evidence result");
+        assert!(
+            serialized.len() < MAX_SERIALIZED_RESULT_BYTES,
+            "{} bytes",
+            serialized.len()
+        );
+        let hit = &result["hits"][0];
+        let matched_cards = hit["matched_cards"].as_array().expect("matched cards");
+        assert_eq!(matched_cards.len(), MAX_MATCHED_CARDS_PER_HIT);
+        assert!(matched_cards.iter().all(|title| {
+            title
+                .as_str()
+                .expect("card title")
+                .chars()
+                .count()
+                <= MAX_MATCHED_CARD_TITLE_CHARS
+        }));
+        assert_eq!(hit["matched_cards_truncated"], true);
+        assert_eq!(result["truncated"], true);
+    }
+
+    #[test]
     fn fulltext_recovers_body_only_term_case_insensitively_with_utf8_safe_snippet() {
         let fixture = Fixture::new();
         let mut tools = fixture.tools();
@@ -2772,6 +3153,66 @@ mod tests {
         assert!(snippet.to_lowercase().contains("short"));
         assert!(snippet.chars().count() <= MAX_FULLTEXT_SNIPPET_CHARS);
         assert_eq!(result["truncated"], false);
+    }
+
+    #[test]
+    fn fulltext_skips_frontmatter_only_matches_and_unclosed_frontmatter() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let closed = temp.path().join("closed.md");
+        fs::write(&closed, "---\ntitle: needle\nurl: needle\n---\nplain body\n")
+            .expect("closed frontmatter");
+        let scan = scan_fulltext_file(&closed, &["needle".into()], usize::MAX);
+        assert!(matches!(scan.state, FulltextFileState::Complete));
+        assert!(scan.matched_terms.is_empty());
+        assert!(scan.snippet.is_none());
+
+        let unclosed = temp.path().join("unclosed.md");
+        fs::write(&unclosed, "---\r\ntitle: needle\r\nstill: frontmatter\r\n")
+            .expect("unclosed frontmatter");
+        let scan = scan_fulltext_file(&unclosed, &["needle".into()], usize::MAX);
+        assert!(matches!(scan.state, FulltextFileState::Complete));
+        assert!(scan.matched_terms.is_empty());
+        assert!(scan.snippet.is_none());
+    }
+
+    #[test]
+    fn fulltext_matches_body_after_frontmatter_with_body_snippet() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let path = temp.path().join("body.md");
+        fs::write(
+            &path,
+            "---\r\ntitle: needle in metadata\r\n---\r\nBODY needle context\r\n",
+        )
+        .expect("frontmatter and body");
+
+        let scan = scan_fulltext_file(&path, &["needle".into()], usize::MAX);
+        assert!(matches!(scan.state, FulltextFileState::Complete));
+        assert_eq!(scan.matched_terms, vec!["needle"]);
+        let snippet = scan.snippet.expect("body snippet");
+        assert!(snippet.contains("BODY needle"));
+        assert!(!snippet.contains("metadata"));
+    }
+
+    #[test]
+    fn fulltext_frontmatter_closing_delimiter_can_straddle_reader_boundary() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let path = temp.path().join("boundary-frontmatter.md");
+        let mut body = b"---\n".to_vec();
+        body.resize(FULLTEXT_SCAN_CHUNK_BYTES - 4, b'x');
+        body.extend_from_slice(b"\n---");
+        assert_eq!(body.len(), FULLTEXT_SCAN_CHUNK_BYTES);
+        body.extend_from_slice(b"\nBODY boundary-needle context\n");
+        fs::write(&path, body).expect("boundary frontmatter");
+
+        let scan =
+            scan_fulltext_file(&path, &["boundary-needle".into()], usize::MAX);
+        assert!(matches!(scan.state, FulltextFileState::Complete));
+        assert_eq!(scan.matched_terms, vec!["boundary-needle"]);
+        assert!(
+            scan.snippet
+                .as_deref()
+                .is_some_and(|snippet| snippet.contains("BODY boundary-needle"))
+        );
     }
 
     #[test]
@@ -2934,7 +3375,11 @@ mod tests {
         assert_eq!(first["hits"], json!([]));
         assert_eq!(first["scanned_sources"], 2);
         assert_eq!(first["total_sources"], 3);
-        assert_eq!(first["next_cursor"], "f1:2");
+        let first_cursor = first["next_cursor"].as_str().expect("next cursor");
+        let (offset, fingerprint) =
+            fulltext_cursor_parts(first_cursor).expect("versioned fulltext cursor");
+        assert_eq!(offset, "2");
+        assert_eq!(fingerprint.len(), 8);
         assert_eq!(first["truncated"], true);
         assert_eq!(first_tools.coverage().fulltext, LayerState::Partial);
 
@@ -2969,7 +3414,16 @@ mod tests {
         assert_eq!(deadline["hits"], json!([]));
         assert_eq!(deadline["scanned_sources"], 0);
         assert_eq!(deadline["total_sources"], 2);
-        assert_eq!(deadline["next_cursor"], "f1:0");
+        assert_eq!(
+            fulltext_cursor_parts(
+                deadline["next_cursor"]
+                    .as_str()
+                    .expect("deadline cursor")
+            )
+            .expect("versioned deadline cursor")
+            .0,
+            "0"
+        );
         assert_eq!(deadline["truncated"], true);
         assert_eq!(deadline_tools.coverage().fulltext, LayerState::Partial);
     }
@@ -2978,7 +3432,7 @@ mod tests {
     fn fulltext_cursor_validation_rejects_malformed_and_finishes_out_of_range() {
         let fixture = Fixture::new();
         let mut invalid_tools = fixture.tools();
-        for cursor in ["x1:3", "f1:abc"] {
+        for cursor in ["x1:3", "f1:abc", "f1:3:ABCDEF12"] {
             assert!(matches!(
                 call(
                     &mut invalid_tools,
@@ -2990,10 +3444,19 @@ mod tests {
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
 
+        let model = read_index(fixture.vault_root()).expect("fixture index");
+        let query = "anything";
+        let terms = tokenize_search_terms(query);
+        let out_of_range_cursor = format_fulltext_cursor(
+            9999,
+            &terms,
+            &model,
+            fulltext_candidate_count(&model),
+        );
         let done = ok_json(call(
             &mut invalid_tools,
             "search_fulltext",
-            json!({"query": "anything", "cursor": "f1:9999"}),
+            json!({"query": query, "cursor": out_of_range_cursor}),
         ));
         assert_eq!(done["hits"], json!([]));
         assert_eq!(done["scanned_sources"], 0);
@@ -3001,6 +3464,32 @@ mod tests {
         assert_eq!(done["truncated"], false);
         assert!(done.get("next_cursor").is_none());
         assert_eq!(invalid_tools.coverage().fulltext, LayerState::Complete);
+    }
+
+    #[test]
+    fn fulltext_cursor_rejects_reuse_with_a_different_query() {
+        let fixture = Fixture::new();
+        let mut first_tools = fixture.tools();
+        let first = ok_json(first_tools.execute(
+            "search_fulltext",
+            &json!({"query": "first query"}),
+            Duration::from_millis(1),
+        ));
+        let cursor = first["next_cursor"].clone();
+
+        let mut second_tools = fixture.tools();
+        let outcome = call(
+            &mut second_tools,
+            "search_fulltext",
+            json!({"query": "different query", "cursor": cursor}),
+        );
+        assert!(matches!(
+            outcome,
+            ToolOutcome::InvalidArgs(ref detail)
+                if detail.contains("different query or index")
+                    && detail.contains("restart without a cursor")
+        ));
+        assert_eq!(second_tools.coverage(), Coverage::default());
     }
 
     #[test]
@@ -3355,15 +3844,64 @@ mod tests {
         let layout = ovp_domain::vault_layout::VaultLayout::new();
         let processed_dir = fixture.vault_root().join(layout.processed_dir("2026-07"));
         std::fs::create_dir_all(&processed_dir).unwrap();
-        std::fs::write(processed_dir.join("cross-month.md"), "cross month body").unwrap();
-        let mut tools =
-            fixture.tools_with_source("sha-cross", "50-Inbox/01-Raw/2026-06/cross-month.md");
+        let sha = "51c47a5b00000000000000000000000000000000000000000000000000000000";
+        let basename = "cross-month-51c47a5b.md";
+        std::fs::write(processed_dir.join(basename), "cross month body").unwrap();
+        let mut tools = fixture.tools_with_source(
+            sha,
+            &format!("50-Inbox/01-Raw/2026-06/{basename}"),
+        );
         let page = ok_json(call(
             &mut tools,
             "read_source_body",
-            json!({"source_id": "sha-cross"}),
+            json!({"source_id": sha}),
         ));
         assert_eq!(page["text"], "cross month body");
+    }
+
+    #[test]
+    fn lifecycle_cross_month_does_not_probe_basename_without_sha_stem() {
+        let fixture = Fixture::new();
+        let layout = ovp_domain::vault_layout::VaultLayout::new();
+        for month in ["2026-07", "2026-08"] {
+            let processed_dir = fixture.vault_root().join(layout.processed_dir(month));
+            std::fs::create_dir_all(&processed_dir).unwrap();
+            std::fs::write(
+                processed_dir.join("collision.md"),
+                format!("unrelated {month}"),
+            )
+            .unwrap();
+        }
+        let sha = "aaaaaaaa00000000000000000000000000000000000000000000000000000000";
+        let mut tools =
+            fixture.tools_with_source(sha, "50-Inbox/01-Raw/2026-06/collision.md");
+        let outcome = call(
+            &mut tools,
+            "read_source_body",
+            json!({"source_id": sha}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
+    }
+
+    #[test]
+    fn lifecycle_cross_month_rejects_a_different_sha_stem() {
+        let fixture = Fixture::new();
+        let layout = ovp_domain::vault_layout::VaultLayout::new();
+        let processed_dir = fixture.vault_root().join(layout.processed_dir("2026-07"));
+        std::fs::create_dir_all(&processed_dir).unwrap();
+        let basename = "cross-month-bbbbbbbb.md";
+        std::fs::write(processed_dir.join(basename), "unrelated body").unwrap();
+        let sha = "aaaaaaaa00000000000000000000000000000000000000000000000000000000";
+        let mut tools = fixture.tools_with_source(
+            sha,
+            &format!("50-Inbox/01-Raw/2026-06/{basename}"),
+        );
+        let outcome = call(
+            &mut tools,
+            "read_source_body",
+            json!({"source_id": sha}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Failed(_)));
     }
 
     /// A3b: search hits (durable AND caveated) carry resolved source_ids via
