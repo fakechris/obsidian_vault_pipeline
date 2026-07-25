@@ -32,7 +32,7 @@ pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 /// - `OVP_LLM_NO_PROXY` — boolean; bypass ambient `HTTP(S)_PROXY` for the live
 ///   HTTP client ONLY.
 /// - `OVP_LLM_TIMEOUT_SECS` — non-negative integer request timeout.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LiveClientConfig {
     pub base_url: Option<String>,
     pub model: Option<String>,
@@ -185,6 +185,63 @@ pub fn build_recording_live_client(
     Ok(Box::new(cached))
 }
 
+/// [`build_recording_live_client`] with a HARD wall-clock posture for hosts
+/// that cannot tolerate long blocking calls (the synchronous MCP server):
+/// the per-request timeout is clamped to `timeout_cap_secs` (user config may
+/// lower it, never raise it) and transient-failure retries are capped at
+/// `max_retries` (0 = fail fast into the agent loop's honest ModelError).
+/// Budget escalation is ALSO dropped (it issues a second provider request
+/// on BudgetExhausted); cassette recording is identical.
+pub fn build_recording_live_client_bounded(
+    api_key: &str,
+    cfg: &LiveClientConfig,
+    cache_dir: &Path,
+    cache_namespace: &str,
+    timeout_cap_secs: u64,
+    max_retries: u32,
+) -> Result<Box<dyn ModelClient>, String> {
+    let mut bounded = cfg.clone();
+    bounded.timeout_secs = Some(clamp_timeout(cfg.timeout_secs, timeout_cap_secs));
+    if api_key.trim().is_empty() {
+        return Err(LLM_NOT_CONFIGURED.into());
+    }
+    let mut live = AnthropicBlockingClient::new(api_key);
+    if let Some(url) = bounded.base_url.as_ref() {
+        live = live.with_base_url(url.clone());
+    }
+    if let Some(model) = bounded.model.as_ref() {
+        live = live.with_model_override(model.clone());
+    }
+    if let Some(mt) = bounded.max_tokens {
+        live = live.with_max_tokens(mt);
+    }
+    if bounded.no_proxy {
+        live = live.with_no_proxy();
+    }
+    if let Some(secs) = bounded.timeout_secs {
+        live = live.with_timeout(secs);
+    }
+    let retrying = RetryingModelClient::new(live, max_retries, LIVE_RETRY_BACKOFF);
+    // NO budget escalation here: it silently issues a SECOND provider
+    // request on BudgetExhausted, doubling the blocking window the whole
+    // builder exists to bound. A truncated reply surfaces as the agent
+    // loop's honest model_error instead.
+    let cached = CachedModelClient::new(retrying, cache_dir, cache_namespace, CacheMode::Record)
+        .map_err(|e| format!("opening cache dir `{}`: {e}", cache_dir.display()))?;
+    Ok(Box::new(cached))
+}
+
+/// A user-configured timeout may SHORTEN the bound, never exceed or disable
+/// it: `0` means "no timeout" to the underlying HTTP client, which would
+/// defeat the hard wall-clock guarantee — it falls back to the cap.
+pub fn clamp_timeout(configured: Option<u64>, cap_secs: u64) -> u64 {
+    configured
+        .filter(|&t| t > 0)
+        .unwrap_or(cap_secs)
+        .min(cap_secs)
+        .max(1)
+}
+
 /// Resolve a non-empty API key from a lookup. Missing / blank → [`LLM_NOT_CONFIGURED`].
 pub fn resolve_api_key(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
     match lookup("ANTHROPIC_API_KEY")
@@ -235,6 +292,14 @@ mod tests {
         assert_eq!(c.max_tokens, Some(24000));
         assert!(c.no_proxy);
         assert_eq!(c.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn clamp_timeout_never_disables_and_never_exceeds() {
+        assert_eq!(clamp_timeout(None, 45), 45, "no config → cap");
+        assert_eq!(clamp_timeout(Some(10), 45), 10, "shorter is honored");
+        assert_eq!(clamp_timeout(Some(300), 45), 45, "longer is clamped");
+        assert_eq!(clamp_timeout(Some(0), 45), 45, "0 = no-timeout → cap");
     }
 
     #[test]

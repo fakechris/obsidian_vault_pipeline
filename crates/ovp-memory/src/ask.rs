@@ -592,16 +592,23 @@ pub fn save_agent_chat_turn(
     Ok(path)
 }
 
-/// True when the saved-chat surface already has a file for this session —
-/// the replay path uses this to REPAIR a turn whose transcript committed but
-/// whose export failed (the retry would otherwise skip every save forever).
-pub fn agent_chat_exists(vault_root: &Path, chat: &str) -> bool {
-    valid_chat_stem(chat)
-        && vault_root
-            .join(".ovp")
-            .join("chats")
-            .join(format!("{chat}.md"))
-            .is_file()
+/// True when this session's saved chat already records a turn with exactly
+/// this question — the replay path uses this to REPAIR a turn whose
+/// transcript committed but whose export failed (checking the FILE alone
+/// would skip repairs forever once any earlier turn had exported).
+pub fn agent_chat_contains_question(vault_root: &Path, chat: &str, question: &str) -> bool {
+    if !valid_chat_stem(chat) {
+        return false;
+    }
+    let path = vault_root.join(".ovp").join("chats").join(format!("{chat}.md"));
+    match std::fs::read_to_string(&path) {
+        // Exact-block match, not a substring: `**Q:** foo` must not read as
+        // present because `**Q:** foo bar` was exported. The saved block is
+        // always `**Q:** <question>\n\n**A:** `, so matching through the
+        // answer marker pins the question's full extent.
+        Ok(md) => md.contains(&format!("**Q:** {question}\n\n**A:** ")),
+        Err(_) => false,
+    }
 }
 
 fn append_chat_turn(path: &Path, turn_block: &str) -> Result<(), String> {

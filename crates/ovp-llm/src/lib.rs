@@ -33,5 +33,6 @@ pub use request::{
 pub use anthropic::AnthropicBlockingClient;
 #[cfg(feature = "anthropic")]
 pub use live::{
-    build_recording_live_client, resolve_api_key, LiveClientConfig, LLM_NOT_CONFIGURED,
+    build_recording_live_client, build_recording_live_client_bounded, resolve_api_key,
+    LiveClientConfig, LLM_NOT_CONFIGURED,
 };

@@ -1,0 +1,29 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_mcp_rewire-v1",
+  "base_version": "v2",
+  "target_version": "v2.1",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, the A0 'one tool registry, two projections' completion: the MCP `ask` tool retires its legacy single-shot pipeline (durable-claims-filtered retrieval + evidence sidecar) and runs the SAME agent loop as POST /api/ask — VaultTools + AGENT_POLICY + session transcripts, identical knobs (max_tokens 4096, max_rounds 10, 90s deadline). The reply carries the answer plus server-verified receipts (the shared ovp-memory::receipts resolver, moved out of ovp-server so both projections use one fail-closed implementation), per-layer coverage, a compact trail, and the session id — an optional `chat` argument continues a conversation, and deliverable turns land on the SAME .ovp/chats History surface as the portal, so MCP and portal conversations share one product record. Predicted: MCP answers gain body/evidence/fulltext reach and verified receipts; an unindexed vault now answers honestly instead of refusing up front.",
+  "predicted_delta": {
+    "coverage": "MCP ask reaches every layer the portal agent reaches (claims, sources, evidence cards, full bodies) instead of pre-retrieved durable-claims context",
+    "crystal_provenance": "receipts are the SHARED fail-closed resolver — fabricated references surface as UNVERIFIED in the reply text, never trusted",
+    "operational_reliability": "session busy/store failures are explicit RpcErrors; the turn always commits its transcript; History save failures are reported in-band"
+  },
+  "guardrails": {
+    "shared_resolver_single_impl": "ovp-memory::receipts is the ONE citation resolver — ovp-server delegates to it (its tests unchanged), MCP consumes it; no second implementation to drift",
+    "parity_knobs": "AgentConfig knobs match the HTTP wiring (4096/10 rounds); the MCP deadline is fixed at 90s (no HTTP guard to derive from) and the turn commits before returning",
+    "explicit_errors_stay": "no-client and client-construction failures keep their distinct, actionable messages (tests unchanged for the config gate)",
+    "history_shared_surface": "deliverable turns save to .ovp/chats under the same deliverable-only + append-only rules as the HTTP path",
+    "bounded_blocking": "the MCP factory clamps the per-request provider timeout to 45s and disables transient retries — the synchronous stdio host's worst-case blocking window is roughly ONE request, never timeout×retries; failures surface as the loop's honest model_error",
+    "retry_idempotency": "an explicit idempotency_key or (auto-derived on a CONTINUED chat) key makes host retries replay the completed turn provider-free — one transcript turn, one History block, no second paid call; a fresh generated session cannot collide and needs no key"
+  },
+  "eval_plan": {
+    "replay_set": "MCP tests: full scripted agent turn on an unindexed vault → answer + UNVERIFIED receipt flag + session id + coverage line + transcript AND History file on disk; config-gate errors unchanged. Live: one real `ask` through the MCP stdio binary against the real vault.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert tool_ask to the legacy pipeline call — the legacy ask machinery (ovp-memory::ask) is untouched and still serves the HTTP hatch.",
+  "ablation_required": false
+}
