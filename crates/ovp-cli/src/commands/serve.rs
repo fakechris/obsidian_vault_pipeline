@@ -53,7 +53,10 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         ask_timeout: None,
         // A3b flag: OVP_ASK_AGENT=1 routes POST /api/ask through the agent
         // loop (legacy single-shot stays the default until A3d).
-        ask_agent: std::env::var("OVP_ASK_AGENT").is_ok_and(|v| v == "1"),
+        // A3d rollout: the tool-loop agent IS the ask path (paired eval
+        // 2026-07-25, candidate ask_default_flip-v1). OVP_ASK_AGENT=0 is the
+        // rollback hatch to the legacy single-shot pipeline.
+        ask_agent: std::env::var("OVP_ASK_AGENT").map(|v| v != "0").unwrap_or(true),
         max_concurrent_asks: None,
     };
     run_server(config).map_err(CliError::Io)

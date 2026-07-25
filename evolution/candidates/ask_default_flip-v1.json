@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_default_flip-v1",
+  "base_version": "v1.2",
+  "target_version": "v2",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, the A3d acceptance act: the tool-loop agent becomes the DEFAULT /api/ask path (CLI: OVP_ASK_AGENT=0 is the rollback hatch to the legacy pipeline; desktop: parity true). Evidence = the A3d paired eval (8 questions x agent/legacy, real 1281-source vault, two fix rounds): agent wins recall outright (found + verified receipts where legacy returned prose with zero receipts), wins durable-claims QA 33/34 vs 4/4 verified receipts, wins cross-source synthesis (6/7 verified, stopped final), matches find/explore classes, and ends with ZERO hard failures (the initial tool_error/model_error modes were diagnosed and fixed: stale-cursor breaker class, receipt tolerance, length policy, last-round notice). Keyword intent routing (intent.rs) is hereby retired from the production main path — reachable only through the opt-out hatch until the legacy path is removed.",
+  "predicted_delta": {
+    "coverage": "the default ask can search evidence cards and full bodies, read originals, and report per-layer coverage — the legacy path answers only from pre-retrieved context",
+    "crystal_provenance": "every default-path answer carries server-resolved receipts (verified against ledger/index), not model-claimed citations",
+    "operational_reliability": "live progress feed + honest partial trails on failure; deadline-authoritative turns always commit a transcript"
+  },
+  "guardrails": {
+    "rollback_hatch_stays": "OVP_ASK_AGENT=0 serves the byte-identical legacy path (its tests are untouched); the hatch stays until the legacy path's removal is its own reviewed change",
+    "registry_flip_recorded": "components.json flips runtime.ask_agent/runtime.ask_vault_tools/prompt.ask_agent_policy/runtime.ask_product_wiring to their delivered versions in the same commit as the default change",
+    "eval_preregistered": "the paired-eval verdict rule (agent >= legacy on verified receipts for the majority of classes, zero hard failures) was fixed before the run; the two fix rounds are recorded in the candidate chain (ask_receipt_tolerance-v1, ask_agent_policy-v2, ask_last_round_notice-v1)"
+  },
+  "eval_plan": {
+    "replay_set": "the 8-question paired eval artifacts (.run/a3d-eval/, local): round-1 scoreboard, per-question diagnosis, round-2/3 fix verification (q1 final 3/3 verified with both candidates presented; q8 final 6/7; q3 2/2). Deterministic: full agent test suites + flag-off legacy tests pass unmodified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set OVP_ASK_AGENT=0 (CLI) / ask_agent: false (desktop) — the legacy path never moved.",
+  "ablation_required": false
+}
