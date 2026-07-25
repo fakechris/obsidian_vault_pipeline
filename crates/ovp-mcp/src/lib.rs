@@ -377,16 +377,6 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             code: -32602,
             message: "`question` is required".into(),
         })?;
-    // Explicit configuration error, never a silent degrade: an agent must be
-    // able to tell "no LLM wired" from "the vault has no answer".
-    let Some(factory) = &state.ask_client else {
-        return Err(RpcError {
-            code: -32000,
-            message: "ask is not configured — run ovp2 built with `--features anthropic` \
-                      and set an API key via System → LLM Provider (or ANTHROPIC_API_KEY)"
-                .into(),
-        });
-    };
     // A supplied `chat` continues that session; anything else (including an
     // invalid id) gets a fresh generated session — the reply always says
     // which id to use next, so continuity is one copy-paste away.
@@ -411,12 +401,19 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // (chat, question) so a host retry of a timed-out ask replays the
     // completed turn instead of paying for (and double-appending) a second
     // one. A fresh generated session cannot collide, so it needs no key.
-    let explicit_key = args
-        .get("idempotency_key")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let explicit_key = match args.get("idempotency_key") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        // A malformed supplied key must fail LOUD (HTTP-path parity):
+        // dropping it would silently lose paid-call idempotency, or worse,
+        // fall back to the auto-derived key and replay a different turn.
+        Some(_) => {
+            return Err(RpcError {
+                code: -32602,
+                message: "`idempotency_key` must be a non-empty string".into(),
+            });
+        }
+    };
     // Same rule as the HTTP path: a key is only useful on a STABLE session
     // (replay lookup is session-local) — a key on a generated session could
     // never replay and would silently re-run a paid turn on retry.
@@ -512,6 +509,17 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         }
         return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
     }
+    // Explicit configuration error, never a silent degrade — checked AFTER
+    // the replay preflight, so a keyed retry of a completed turn answers
+    // provider-free even when no LLM is configured (HTTP-path parity).
+    let Some(factory) = &state.ask_client else {
+        return Err(RpcError {
+            code: -32000,
+            message: "ask is not configured — run ovp2 built with `--features anthropic` \
+                      and set an API key via System → LLM Provider (or ANTHROPIC_API_KEY)"
+                .into(),
+        });
+    };
     let mut client = factory().map_err(|e| {
         if e == "llm_not_configured" {
             RpcError {
