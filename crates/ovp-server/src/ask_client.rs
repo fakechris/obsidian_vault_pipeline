@@ -57,7 +57,8 @@ pub fn providers_ask_client_factory(vault_root: PathBuf) -> Option<AskClientFact
 /// [`providers_ask_client_factory`] with a HARD wall-clock posture for
 /// synchronous single-request hosts (the MCP stdio server): per-request
 /// timeout clamped to `timeout_cap_secs` and NO transient retries — a slow
-/// provider call bounds the host's blocking window to roughly one request,
+/// provider call overruns the turn deadline by at most ONE request length
+/// (the deadline itself bounds the turn between calls),
 /// and failures surface as the agent loop's honest model_error instead of
 /// silently tripling the wait.
 pub fn providers_ask_client_factory_bounded(

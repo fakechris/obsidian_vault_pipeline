@@ -190,7 +190,8 @@ pub fn build_recording_live_client(
 /// the per-request timeout is clamped to `timeout_cap_secs` (user config may
 /// lower it, never raise it) and transient-failure retries are capped at
 /// `max_retries` (0 = fail fast into the agent loop's honest ModelError).
-/// Everything else — budget escalation, cassette recording — is identical.
+/// Budget escalation is ALSO dropped (it issues a second provider request
+/// on BudgetExhausted); cassette recording is identical.
 pub fn build_recording_live_client_bounded(
     api_key: &str,
     cfg: &LiveClientConfig,

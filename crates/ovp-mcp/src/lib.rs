@@ -380,11 +380,20 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // A supplied `chat` continues that session; anything else (including an
     // invalid id) gets a fresh generated session — the reply always says
     // which id to use next, so continuity is one copy-paste away.
-    let supplied_chat = args
-        .get("chat")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|id| valid_session_id(id));
+    let supplied_chat = match args.get("chat") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if valid_session_id(s.trim()) => Some(s.trim()),
+        // A malformed supplied chat fails LOUD (HTTP parity): silently
+        // minting a fresh session would break the continuity (and the
+        // replay contract) the caller asked for.
+        Some(_) => {
+            return Err(RpcError {
+                code: -32602,
+                message: "`chat` must be a valid session id ([A-Za-z0-9_-], ≤64 chars)"
+                    .into(),
+            });
+        }
+    };
     let session = match supplied_chat {
         Some(id) => id.to_string(),
         None => {
@@ -403,14 +412,16 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // one. A fresh generated session cannot collide, so it needs no key.
     let explicit_key = match args.get("idempotency_key") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::String(s)) if !s.trim().is_empty() && s.trim().len() <= 128 => {
+            Some(s.trim().to_string())
+        }
         // A malformed supplied key must fail LOUD (HTTP-path parity):
         // dropping it would silently lose paid-call idempotency, or worse,
         // fall back to the auto-derived key and replay a different turn.
         Some(_) => {
             return Err(RpcError {
                 code: -32602,
-                message: "`idempotency_key` must be a non-empty string".into(),
+                message: "`idempotency_key` must be a non-empty string of at most 128 chars".into(),
             });
         }
     };
