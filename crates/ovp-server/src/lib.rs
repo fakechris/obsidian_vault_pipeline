@@ -2536,7 +2536,13 @@ fn handle_ask_agent(
                         "tool": t.tool, "summary": t.summary, "ok": !t.is_error
                     }))
                 .collect();
-            Ok(serde_json::json!({
+            // History parity (A3d gate P1): the JSONL session transcript is
+            // the audit record, but /api/chats and the Ask history rail read
+            // `.ovp/chats/*.md` — an answered turn lands there too. Only a
+            // turn that actually RAN saves (the replay branch above returns
+            // earlier, so a keyed retry never double-appends). A save
+            // failure is reported, never silent and never fatal.
+            let mut body = serde_json::json!({
                 "agent": true,
                 "answer": outcome.answer,
                 "citations": citations,
@@ -2549,7 +2555,19 @@ fn handle_ask_agent(
                     "input_tokens": outcome.input_tokens_total,
                     "output_tokens": outcome.output_tokens_total,
                 },
-            }))
+            });
+            if !outcome.answer.is_empty()
+                && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                    &vault_root,
+                    &response_session,
+                    &question,
+                    &outcome.answer,
+                )
+                && let Some(obj) = body.as_object_mut()
+            {
+                obj.insert("chat_save_error".into(), serde_json::json!(e));
+            }
+            Ok(body)
         })();
         // Whatever happened, OUR turn's feed must not stay live forever —
         // guarded by the generation token so a newer turn's feed (same
@@ -5076,6 +5094,12 @@ mod tests {
         let transcript = vault.join(format!(".ovp/ask-sessions/{chat}.jsonl"));
         let body = std::fs::read_to_string(&transcript).unwrap();
         assert!(body.contains("turn_finished"), "{body}");
+        // History parity (A3d): the answered turn also lands on the saved-
+        // chat surface the /api/chats rail reads.
+        let chat_md = vault.join(format!(".ovp/chats/{chat}.md"));
+        let md = std::fs::read_to_string(&chat_md).unwrap();
+        assert!(md.contains("**Q:** what do we know?"), "{md}");
+        assert!(md.contains("**A:** answer"), "{md}");
         // Progress feed: started + final, done.
         let resp = dispatch(
             &st,

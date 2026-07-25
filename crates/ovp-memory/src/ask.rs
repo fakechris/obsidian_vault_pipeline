@@ -549,6 +549,35 @@ fn format_chat_turn(
     )
 }
 
+/// Persist one AGENT turn into the saved-chat surface
+/// (`.ovp/chats/<chat>.md`) so History (GET /api/chats and the Ask page's
+/// left rail) shows agent conversations too — the JSONL session transcript
+/// is the audit record, this is the product surface. Same stem rules and
+/// create-or-append semantics as the legacy path; the block is the minimal
+/// Q/A form the transcript parser needs.
+pub fn save_agent_chat_turn(
+    vault_root: &Path,
+    chat: &str,
+    question: &str,
+    answer: &str,
+) -> Result<PathBuf, String> {
+    let chats_dir = vault_root.join(".ovp").join("chats");
+    std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
+    let turn_block = format!("**Q:** {question}\n\n**A:** {answer}\n");
+    if !valid_chat_stem(chat) {
+        return Err(format!("invalid chat stem `{chat}`"));
+    }
+    let path = chats_dir.join(format!("{chat}.md"));
+    if path.is_file() {
+        append_chat_turn(&path, &turn_block)?;
+        return Ok(path);
+    }
+    let ts = chrono_like_timestamp();
+    std::fs::write(&path, format!("# Ask — {ts}\n\n{turn_block}"))
+        .map_err(|e| format!("write chat {}: {e}", path.display()))?;
+    Ok(path)
+}
+
 fn append_chat_turn(path: &Path, turn_block: &str) -> Result<(), String> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()

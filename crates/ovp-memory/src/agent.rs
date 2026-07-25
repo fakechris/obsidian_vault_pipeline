@@ -287,7 +287,9 @@ pub fn run_agent_turn_with_progress(
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
             tools: (!tool_defs.is_empty()).then(|| tool_defs.clone()),
-            cache_namespace: Some("ask_agent/v1".into()),
+            // Bumped with each ACCEPTED policy version (prompt-version
+            // isolation for recorded cassettes): v2 = ask_agent_policy-v2.
+            cache_namespace: Some("ask_agent/v2".into()),
         };
         let reply = match client.call(&request) {
             Ok(r) => r,
