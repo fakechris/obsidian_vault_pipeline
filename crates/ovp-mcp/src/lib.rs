@@ -290,11 +290,12 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             },
             {
                 "name": "ask",
-                "description": "Ask a question answered FROM THE VAULT'S EVIDENCE (active durable claims, cards, verbatim units). The answer carries inline citations and a deterministic report of how many citation IDs resolve against the supplied evidence (ID resolution — it does not prove every sentence is cited). Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool.",
+                "description": "Ask the VAULT AGENT: a tool-loop agent that searches claims, sources, evidence cards, and full article bodies, reads originals when needed, and answers with server-VERIFIED receipts ([claim:…]/[source:…] resolved against the ledger/index — fabricated references are flagged, never trusted) plus honest per-layer coverage. Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool. Pass the returned session id as `chat` to continue a conversation.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "question": { "type": "string", "description": "The question to answer from vault evidence" }
+                        "question": { "type": "string", "description": "The question for the vault agent" },
+                        "chat": { "type": "string", "description": "Session id from a prior ask — continues that conversation" }
                     },
                     "required": ["question"]
                 }
@@ -356,7 +357,16 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
     }
 }
 
+/// The MCP projection of the shared vault agent (A0: one tool registry, two
+/// projections). Runs the SAME loop/tools/policy as POST /api/ask; the reply
+/// is the answer plus server-verified receipts, per-layer coverage, and the
+/// session id for continuation. Deliverable turns also land on the saved-chat
+/// History surface, so portal and MCP conversations share one product record.
 fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    use ovp_memory::agent::{run_agent_turn, AgentConfig, AgentError, StoppedReason};
+    use ovp_memory::agent_transcript::{valid_session_id, SessionStore};
+    use ovp_memory::vault_tools::VaultTools;
+
     let question = args
         .get("question")
         .and_then(|v| v.as_str())
@@ -376,39 +386,19 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                 .into(),
         });
     };
-    let mut model = state.load_model().ok_or_else(|| RpcError {
-        code: -32000,
-        message: "Index not available — run `ovp2 index` first".into(),
-    })?;
-    // This tool promises answers grounded in DURABLE claims — caveated,
-    // superseded, and retracted rows must not be retrievable here (codex
-    // P1; they also could not be audited by the active-record `claim` tool).
-    model
-        .claims
-        .retain(|c| c.status == ovp_index::ClaimStatus::Durable);
-    // Missing evidence.json = a fresh/claims-only vault (fine, noted);
-    // a CORRUPT sidecar is surfaced, never silently downgraded to
-    // claims-only while the report implies full evidence (codex P2).
-    // Existence is checked BEFORE the read so a read failure on a present
-    // file is always classified as corruption, not misfiled as missing.
-    let (evidence, degraded_note) = if !ovp_index::evidence::evidence_path(&state.vault_root)
-        .exists()
-    {
-        (
-            None,
-            Some("note: no evidence sidecar — answer drawn from claims only (no cards/units)"),
-        )
-    } else {
-        match ovp_index::read_evidence(&state.vault_root) {
-            Ok(e) => (Some(e), None),
-            Err(e) => {
-                return Err(RpcError {
-                    code: -32000,
-                    message: format!(
-                        "evidence sidecar unreadable ({e}) — rebuild with `ovp2 index` before asking"
-                    ),
-                });
-            }
+    // A supplied `chat` continues that session; anything else (including an
+    // invalid id) gets a fresh generated session — the reply always says
+    // which id to use next, so continuity is one copy-paste away.
+    let session = match args.get("chat").and_then(|v| v.as_str()).map(str::trim) {
+        Some(id) if valid_session_id(id) => id.to_string(),
+        _ => {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            format!("mcp-{millis}-{}-{seq}", std::process::id())
         }
     };
     let mut client = factory().map_err(|e| {
@@ -426,49 +416,106 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             }
         }
     })?;
-    let ask_args = ovp_memory::ask::AskArgs {
-        question: question.to_string(),
-        verify_citations: true,
-        save_chat: false,
-        ..Default::default()
+    // Same knobs as the HTTP wiring (parity is the contract): the agent
+    // serves unindexed vaults too — tools report layer unavailability
+    // honestly instead of refusing the question up front.
+    let cfg = AgentConfig {
+        model: ovp_memory::ask::AskArgs::default().model_name,
+        system: ovp_memory::agent_policy::AGENT_POLICY.to_string(),
+        max_tokens: 4096,
+        max_rounds: 10,
+        deadline: std::time::Duration::from_secs(90),
+        ..AgentConfig::default()
     };
-    let result = ovp_memory::ask::ask_with_optional_evidence(
-        &model,
-        evidence.as_ref(),
-        client.as_mut(),
-        &ask_args,
-        &state.vault_root,
-    )
-    .map_err(|e| RpcError {
+    let mut tools = VaultTools::new(&state.vault_root)
+        .with_result_cap(cfg.max_result_bytes.saturating_sub(2 * 1024));
+    let sessions_dir = state.vault_root.join(".ovp").join("ask-sessions");
+    let mut store = SessionStore::open(&sessions_dir, &session).map_err(|e| RpcError {
         code: -32000,
-        message: format!("ask failed: {e}"),
+        message: format!("ask session store: {e}"),
     })?;
+    let outcome = run_agent_turn(client.as_mut(), &mut tools, &mut store, question, None, &cfg)
+        .map_err(|e| match e {
+            AgentError::SessionBusy => RpcError {
+                code: -32000,
+                message: format!(
+                    "session `{session}` has a turn in flight — retry shortly or start a new chat"
+                ),
+            },
+            AgentError::Store(d) => RpcError {
+                code: -32000,
+                message: format!("ask session store: {d}"),
+            },
+        })?;
 
-    // Answer first, then the deterministic verification report — the agent
-    // sees HOW grounded the answer is, not just the prose. The report checks
-    // that citation IDs resolve against the supplied evidence; it does NOT
-    // prove every sentence is cited (that gate exists only for theme pages).
-    let mut text = result.answer.trim().to_string();
-    if let Some(v) = &result.verification {
-        text.push_str(&format!(
-            "\n\n---\nverification (citation-ID resolution, not per-sentence): \
-             {} citation(s), {} resolved against supplied evidence",
-            v.cited, v.verified
-        ));
-        if !v.missing.is_empty() {
-            text.push_str(&format!("; UNRESOLVED: {}", v.missing.join(", ")));
-        }
-        if !v.warnings.is_empty() {
-            text.push_str(&format!("; warnings: {}", v.warnings.join(", ")));
-        }
-        text.push_str(
-            "\naudit any [claim:<key>] citation with the `claim` tool \
-             (accepts ck- claim keys, claim ids, and ovp://claim/ URIs)",
-        );
+    // Receipts verify against the SAME index snapshot the tools served from
+    // (or degrade honestly when the vault has no index).
+    let records = ovp_api_projection::readers::load_active_records(
+        &state.vault_root,
+        &ovp_domain::vault_layout::VaultLayout::new(),
+    );
+    let citations = match tools.index_snapshot().as_deref() {
+        Some(m) => ovp_memory::receipts::agent_citations(&outcome.answer, m, &records),
+        None => ovp_memory::receipts::agent_citations_unindexed(&outcome.answer, &records),
+    };
+    let coverage = tools.coverage();
+
+    let mut text = outcome.answer.trim().to_string();
+    text.push_str("\n\n---\n");
+    let verified = citations.iter().filter(|c| c["verified"] == true).count();
+    let unverified: Vec<&str> = citations
+        .iter()
+        .filter(|c| c["verified"] != true)
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    text.push_str(&format!(
+        "receipts: {} citation(s), {verified} verified against the vault",
+        citations.len()
+    ));
+    if !unverified.is_empty() {
+        text.push_str(&format!("; UNVERIFIED: {}", unverified.join(", ")));
     }
-    if let Some(note) = degraded_note {
-        text.push('\n');
-        text.push_str(note);
+    let cov = serde_json::to_value(coverage).unwrap_or_default();
+    if let Some(obj) = cov.as_object() {
+        let line = obj
+            .iter()
+            .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("?")))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        text.push_str(&format!("\ncoverage: {line}"));
+    }
+    if !outcome.tool_trace.is_empty() {
+        let trail = outcome
+            .tool_trace
+            .iter()
+            .map(|t| format!("{}{}", t.tool, if t.is_error { "✗" } else { "✓" }))
+            .collect::<Vec<_>>()
+            .join(", ");
+        text.push_str(&format!("\nagent trail: {trail}"));
+    }
+    if outcome.stopped_reason != StoppedReason::Final {
+        text.push_str(&format!(
+            "\nstopped: {} — the answer may be partial",
+            outcome.stopped_reason.as_str()
+        ));
+    }
+    text.push_str(&format!(
+        "\nsession: {session} (pass as `chat` to continue) — audit any [claim:<key>] \
+         citation with the `claim` tool"
+    ));
+
+    // History parity with the HTTP path: deliverable turns land on the
+    // saved-chat surface; a save failure is reported in-band, never silent.
+    let deliverable = matches!(
+        outcome.stopped_reason,
+        StoppedReason::Final | StoppedReason::NeedUser | StoppedReason::Refusal
+    );
+    if deliverable
+        && !outcome.answer.is_empty()
+        && let Err(e) =
+            ovp_memory::ask::save_agent_chat_turn(&state.vault_root, &session, question, &outcome.answer)
+    {
+        text.push_str(&format!("\nnote: chat history save failed: {e}"));
     }
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
@@ -1005,16 +1052,65 @@ mod tests {
         assert!(err.message.contains("ANTHROPIC_API_KEY"), "{}", err.message);
     }
 
+    /// A full agent turn through the MCP projection: 0-tool scripted reply
+    /// on an unindexed fixture vault — the reply carries the answer, honest
+    /// receipts (the fabricated key flagged UNVERIFIED), the session id for
+    /// continuation, and the deliverable turn lands on saved-chat History.
+    #[test]
+    fn ask_runs_a_full_agent_turn_with_receipts_and_history() {
+        struct Scripted;
+        impl ovp_llm::ModelClient for Scripted {
+            fn call(
+                &mut self,
+                request: &ovp_llm::ModelRequest,
+            ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+                Ok(ovp_llm::ModelReply {
+                    model: request.model.clone(),
+                    text: "answer [claim:ck-fabricated]".into(),
+                    stop_reason: ovp_llm::StopReason::EndTurn,
+                    usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+                    blocks: None,
+                    raw_stop_reason: None,
+                })
+            }
+        }
+        let (tmp, mut state) = fixture_vault();
+        state.ask_client = Some(std::sync::Arc::new(|| {
+            Ok(Box::new(Scripted) as Box<dyn ovp_llm::ModelClient>)
+        }));
+        let v = call(
+            &state,
+            "ask",
+            serde_json::json!({ "question": "q?", "chat": "mcp-turn-test" }),
+        )
+        .unwrap();
+        let text = v["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("answer"), "{text}");
+        assert!(text.contains("UNVERIFIED: claim:ck-fabricated"), "{text}");
+        assert!(text.contains("session: mcp-turn-test"), "{text}");
+        assert!(text.contains("coverage:"), "{text}");
+        // Transcript (audit) + saved chat (History product surface).
+        assert!(
+            tmp.path().join(".ovp/ask-sessions/mcp-turn-test.jsonl").is_file()
+        );
+        let md = std::fs::read_to_string(
+            tmp.path().join(".ovp/chats/mcp-turn-test.md"),
+        )
+        .unwrap();
+        assert!(md.contains("**Q:** q?"), "{md}");
+    }
+
     #[test]
     fn ask_with_a_client_reaches_past_the_config_gate() {
         let (_tmp, mut state) = fixture_vault();
         // A configured factory moves the failure past "not configured" — the
-        // fixture vault has no index, so the next honest error is index
-        // availability (the full pipeline is covered in ovp-memory).
+        // agent path serves unindexed vaults, so the next honest failure is
+        // the client construction itself (the loop/tools/receipts pipeline
+        // is covered in ovp-memory/ovp-server).
         state.ask_client = Some(std::sync::Arc::new(|| Err("never built".into())));
         let err = call(&state, "ask", serde_json::json!({ "question": "q" })).unwrap_err();
         assert!(
-            err.message.contains("Index not available"),
+            err.message.contains("ask client configuration invalid: never built"),
             "{}",
             err.message
         );
