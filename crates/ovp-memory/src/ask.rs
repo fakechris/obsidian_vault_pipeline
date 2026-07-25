@@ -602,7 +602,11 @@ pub fn agent_chat_contains_question(vault_root: &Path, chat: &str, question: &st
     }
     let path = vault_root.join(".ovp").join("chats").join(format!("{chat}.md"));
     match std::fs::read_to_string(&path) {
-        Ok(md) => md.contains(&format!("**Q:** {question}")),
+        // Exact-block match, not a substring: `**Q:** foo` must not read as
+        // present because `**Q:** foo bar` was exported. The saved block is
+        // always `**Q:** <question>\n\n**A:** `, so matching through the
+        // answer marker pins the question's full extent.
+        Ok(md) => md.contains(&format!("**Q:** {question}\n\n**A:** ")),
         Err(_) => false,
     }
 }

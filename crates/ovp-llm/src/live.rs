@@ -232,9 +232,15 @@ pub fn build_recording_live_client_bounded(
     Ok(Box::new(cached))
 }
 
-/// A user-configured timeout may SHORTEN the bound, never exceed it.
+/// A user-configured timeout may SHORTEN the bound, never exceed or disable
+/// it: `0` means "no timeout" to the underlying HTTP client, which would
+/// defeat the hard wall-clock guarantee — it falls back to the cap.
 pub fn clamp_timeout(configured: Option<u64>, cap_secs: u64) -> u64 {
-    configured.unwrap_or(cap_secs).min(cap_secs)
+    configured
+        .filter(|&t| t > 0)
+        .unwrap_or(cap_secs)
+        .min(cap_secs)
+        .max(1)
 }
 
 /// Resolve a non-empty API key from a lookup. Missing / blank → [`LLM_NOT_CONFIGURED`].
@@ -287,6 +293,14 @@ mod tests {
         assert_eq!(c.max_tokens, Some(24000));
         assert!(c.no_proxy);
         assert_eq!(c.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn clamp_timeout_never_disables_and_never_exceeds() {
+        assert_eq!(clamp_timeout(None, 45), 45, "no config → cap");
+        assert_eq!(clamp_timeout(Some(10), 45), 10, "shorter is honored");
+        assert_eq!(clamp_timeout(Some(300), 45), 45, "longer is clamped");
+        assert_eq!(clamp_timeout(Some(0), 45), 45, "0 = no-timeout → cap");
     }
 
     #[test]
