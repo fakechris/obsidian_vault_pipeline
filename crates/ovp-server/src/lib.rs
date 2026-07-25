@@ -2604,7 +2604,9 @@ fn handle_ask_agent(
                     | ovp_memory::agent::StoppedReason::NeedUser
                     | ovp_memory::agent::StoppedReason::Refusal
             );
-            if deliverable && !outcome.answer.is_empty() {
+            // An engine-level replay (a racing request completed this keyed
+            // turn mid-flight) ran nothing here — the racer owns the save.
+            if deliverable && !outcome.idempotent_replay && !outcome.answer.is_empty() {
                 let _save_guard = chat_saves.lock().unwrap();
                 if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
                     &vault_root,

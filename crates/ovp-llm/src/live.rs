@@ -221,13 +221,11 @@ pub fn build_recording_live_client_bounded(
         live = live.with_timeout(secs);
     }
     let retrying = RetryingModelClient::new(live, max_retries, LIVE_RETRY_BACKOFF);
-    let escalated = bounded
-        .max_tokens
-        .unwrap_or(LIVE_BUDGET_BASE_DEFAULT)
-        .saturating_mul(LIVE_BUDGET_ESCALATION_FACTOR)
-        .min(LIVE_BUDGET_ESCALATION_CAP);
-    let escalating = BudgetEscalatingModelClient::new(retrying, escalated);
-    let cached = CachedModelClient::new(escalating, cache_dir, cache_namespace, CacheMode::Record)
+    // NO budget escalation here: it silently issues a SECOND provider
+    // request on BudgetExhausted, doubling the blocking window the whole
+    // builder exists to bound. A truncated reply surfaces as the agent
+    // loop's honest model_error instead.
+    let cached = CachedModelClient::new(retrying, cache_dir, cache_namespace, CacheMode::Record)
         .map_err(|e| format!("opening cache dir `{}`: {e}", cache_dir.display()))?;
     Ok(Box::new(cached))
 }

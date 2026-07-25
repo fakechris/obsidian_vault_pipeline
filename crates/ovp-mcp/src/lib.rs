@@ -571,6 +571,32 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         Some(m) => ovp_memory::receipts::agent_citations(&outcome.answer, m, &records),
         None => ovp_memory::receipts::agent_citations_unindexed(&outcome.answer, &records),
     };
+    // A racing process completed this keyed turn between the preflight
+    // lookup and the engine's own replay check — nothing ran HERE, so this
+    // request's tools carry no coverage and no trail, and history was the
+    // racer's to save. Answer + receipts only, marked as a replay.
+    if outcome.idempotent_replay {
+        let verified = citations.iter().filter(|c| c["verified"] == true).count();
+        let unverified: Vec<&str> = citations
+            .iter()
+            .filter(|c| c["verified"] != true)
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        let mut text = outcome.answer.trim().to_string();
+        text.push_str(&format!(
+            "\n\n---\nreceipts: {} citation(s), {verified} verified against the vault",
+            citations.len()
+        ));
+        if !unverified.is_empty() {
+            text.push_str(&format!("; UNVERIFIED: {}", unverified.join(", ")));
+        }
+        text.push_str(&format!(
+            "\nidempotent replay of turn {} (completed by a concurrent request)\n\
+             session: {session} (pass as `chat` to continue)",
+            outcome.turn_id
+        ));
+        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
+    }
     let coverage = tools.coverage();
 
     let mut text = outcome.answer.trim().to_string();
