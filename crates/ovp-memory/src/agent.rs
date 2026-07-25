@@ -287,7 +287,9 @@ pub fn run_agent_turn_with_progress(
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
             tools: (!tool_defs.is_empty()).then(|| tool_defs.clone()),
-            cache_namespace: Some("ask_agent/v1".into()),
+            // Bumped with each ACCEPTED policy version (prompt-version
+            // isolation for recorded cassettes): v2 = ask_agent_policy-v2.
+            cache_namespace: Some("ask_agent/v2".into()),
         };
         let reply = match client.call(&request) {
             Ok(r) => r,
@@ -558,6 +560,34 @@ pub fn run_agent_turn_with_progress(
             });
         }
 
+        // A model that has FOUND its material can still burn the remaining
+        // rounds chasing a better match and end max_rounds with no synthesis
+        // (live eval: target located round 6 of 10, answer never written).
+        // When the NEXT batch would be refused, say so in the model-facing
+        // copy of the last result — same pattern as the truncation marker;
+        // the audit events above keep the raw content.
+        if rounds == cfg.max_rounds
+            && let Some(last) = results.last_mut()
+        {
+            const NOTICE: &str = "\n\n[runtime notice: tool budget exhausted — this was \
+                                  the final tool round; write your answer now from what \
+                                  you already have]";
+            // Degenerate tiny caps skip the notice rather than exceed them.
+            const TRUNC: &str = "\n[truncated]";
+            if cfg.max_result_bytes >= NOTICE.len() + TRUNC.len() {
+                if last.content.len() + NOTICE.len() > cfg.max_result_bytes {
+                    // Shrinking to fit the notice must not erase truncation
+                    // disclosure — the capped result's marker (or the one
+                    // this shrink itself creates) stays ahead of the notice.
+                    let keep = cfg
+                        .max_result_bytes
+                        .saturating_sub(NOTICE.len() + TRUNC.len());
+                    last.content.truncate(floor_char_boundary(&last.content, keep));
+                    last.content.push_str(TRUNC);
+                }
+                last.content.push_str(NOTICE);
+            }
+        }
         // The COMPLETE batch is always recorded (adjacency), then a timeout
         // ends the turn.
         let results_msg = ModelMessage::ToolResults { results };
@@ -769,6 +799,59 @@ mod tests {
 
     fn store(dir: &std::path::Path) -> SessionStore {
         SessionStore::open(dir, "s1").unwrap()
+    }
+
+    // The final allowed tool round's results carry the runtime notice (the
+    // model must synthesize now); earlier rounds never do, and the AUDIT
+    // record of the tool call keeps the raw content without the notice.
+    #[test]
+    fn last_round_results_carry_the_synthesize_now_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Scripted::new(vec![
+            tool_reply(&[("c1", "search")]),
+            tool_reply(&[("c2", "search")]),
+            text_reply("answer"),
+        ]);
+        let mut tools = MockTools::new(&[("search", Behavior::Ok("hit"))]);
+        let mut st = store(dir.path());
+        let out = run_agent_turn(
+            &mut client,
+            &mut tools,
+            &mut st,
+            "q?",
+            None,
+            &AgentConfig { max_rounds: 2, ..cfg() },
+        )
+        .unwrap();
+        assert_eq!(out.stopped_reason, StoppedReason::Final);
+        let result_bodies: Vec<String> = st
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::Message {
+                    message: ModelMessage::ToolResults { results },
+                    ..
+                } => Some(results[0].content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(result_bodies.len(), 2);
+        assert!(
+            !result_bodies[0].contains("[runtime notice"),
+            "round 1 of 2 must not carry the notice: {}",
+            result_bodies[0]
+        );
+        assert!(
+            result_bodies[1].contains("final tool round")
+                && result_bodies[1].starts_with("hit"),
+            "round 2 of 2 carries content + notice: {}",
+            result_bodies[1]
+        );
+        // Audit record of the call itself stays raw.
+        assert!(st.events().iter().any(|e| matches!(
+            e,
+            TranscriptEvent::ToolCalled { content, .. } if content == "hit"
+        )));
     }
 
     // 0-tool: model answers directly; single round-trip, transcript complete.

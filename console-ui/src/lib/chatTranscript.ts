@@ -80,7 +80,10 @@ export function parseChatTranscript(md: string): ChatTurn[] {
     // Also stop before a stray next Q if evidence markers were missing.
     const nextQ = answerPart.search(/\n\n\*\*Q:\*\*/);
     if (nextQ >= 0) answerPart = answerPart.slice(0, nextQ);
-    const answer = answerPart.trim();
+    // Agent turns are minimal Q/A blocks separated by bare `---` (no
+    // Evidence section) — a trailing separator is a delimiter, not answer.
+    let answer = answerPart.trim();
+    answer = answer.replace(/\n+---\s*$/, '').trim();
     if (question && answer) turns.push({ question, answer });
   }
   return turns;

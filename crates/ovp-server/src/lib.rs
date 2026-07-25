@@ -304,6 +304,11 @@ struct AppState {
     /// `GET /api/ask/progress`. In-memory only — progress is ephemeral UI
     /// state; the transcript is the durable audit.
     ask_progress: Arc<std::sync::Mutex<HashMap<String, AskProgressFeed>>>,
+    /// Serializes saved-chat markdown writes (A3d gate: the save happens
+    /// after the session lock releases; 409-busy admission makes a same-
+    /// session reorder window sub-millisecond, but the create-vs-append
+    /// file race needs real mutual exclusion).
+    chat_saves: Arc<std::sync::Mutex<()>>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -583,6 +588,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         acks_write_lock: std::sync::Mutex::new(()),
         ask_agent: config.ask_agent,
         ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        chat_saves: Arc::new(std::sync::Mutex::new(())),
     });
 
     // Pre-load model
@@ -2340,6 +2346,7 @@ fn handle_ask_agent(
     let vault_root = state.vault_root.clone();
     let sessions_dir = vault_root.join(".ovp/ask-sessions");
     let progress_map = Arc::clone(&state.ask_progress);
+    let chat_saves = Arc::clone(&state.chat_saves);
     let progress_session = session.clone();
     let question = question.to_string();
     let response_session = session.clone();
@@ -2374,11 +2381,31 @@ fn handle_ask_agent(
                     Some(m) => agent_citations(&done.answer, &m, &records),
                     None => agent_citations_unindexed(&done.answer, &records),
                 };
+                // Export REPAIR: a committed turn whose chat save failed
+                // would otherwise stay missing from History forever — every
+                // keyed retry returns here, before the live path's save. If
+                // the surface has no file at all for this session, save now
+                // (same deliverable-only rule as the live path).
+                let mut replay_save_error = None;
+                if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
+                    && !done.answer.is_empty()
+                    && !ovp_memory::ask::agent_chat_exists(&vault_root, &response_session)
+                {
+                    let _save_guard = chat_saves.lock().unwrap();
+                    if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                        &vault_root,
+                        &response_session,
+                        &question,
+                        &done.answer,
+                    ) {
+                        replay_save_error = Some(e);
+                    }
+                }
                 // Coverage is an EXECUTION artifact the transcript does not
                 // persist — a replay reports null (unknown), never a
                 // fabricated all-not_queried that would misdescribe the
                 // original turn.
-                return Ok(serde_json::json!({
+                let mut body = serde_json::json!({
                     "agent": true,
                     "answer": done.answer,
                     "citations": citations,
@@ -2392,7 +2419,11 @@ fn handle_ask_agent(
                         "input_tokens": done.input_tokens_total,
                         "output_tokens": done.output_tokens_total,
                     },
-                }));
+                });
+                if let (Some(e), Some(obj)) = (replay_save_error, body.as_object_mut()) {
+                    obj.insert("chat_save_error".into(), serde_json::json!(e));
+                }
+                return Ok(body);
             }
             let mut client = factory()?;
             // `coordinated cap`: the tools refuse anything the agent's
@@ -2536,7 +2567,13 @@ fn handle_ask_agent(
                         "tool": t.tool, "summary": t.summary, "ok": !t.is_error
                     }))
                 .collect();
-            Ok(serde_json::json!({
+            // History parity (A3d gate P1): the JSONL session transcript is
+            // the audit record, but /api/chats and the Ask history rail read
+            // `.ovp/chats/*.md` — an answered turn lands there too. Only a
+            // turn that actually RAN saves (the replay branch above returns
+            // earlier, so a keyed retry never double-appends). A save
+            // failure is reported, never silent and never fatal.
+            let mut body = serde_json::json!({
                 "agent": true,
                 "answer": outcome.answer,
                 "citations": citations,
@@ -2549,7 +2586,31 @@ fn handle_ask_agent(
                     "input_tokens": outcome.input_tokens_total,
                     "output_tokens": outcome.output_tokens_total,
                 },
-            }))
+            });
+            // Only DELIVERABLE outcomes enter saved history: replay cannot
+            // restore stopped_reason, so a timeout narration or truncated
+            // model_error text would read as a successful answer after
+            // refresh. Failed turns stay visible live (trail + stop note)
+            // and in the audit transcript.
+            let deliverable = matches!(
+                outcome.stopped_reason,
+                ovp_memory::agent::StoppedReason::Final
+                    | ovp_memory::agent::StoppedReason::NeedUser
+                    | ovp_memory::agent::StoppedReason::Refusal
+            );
+            if deliverable && !outcome.answer.is_empty() {
+                let _save_guard = chat_saves.lock().unwrap();
+                if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                    &vault_root,
+                    &response_session,
+                    &question,
+                    &outcome.answer,
+                ) && let Some(obj) = body.as_object_mut()
+                {
+                    obj.insert("chat_save_error".into(), serde_json::json!(e));
+                }
+            }
+            Ok(body)
         })();
         // Whatever happened, OUR turn's feed must not stay live forever —
         // guarded by the generation token so a newer turn's feed (same
@@ -2646,6 +2707,18 @@ fn args_brief(arguments: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::String(brief)
 }
 
+/// Models decorate citation ids in the wild — `[source:<sha> Some Title]`,
+/// `[source: <sha>]` — and exact-string matching then fails receipts the
+/// model clearly intended. Tolerant extraction: trim whitespace and angle
+/// brackets, keep the first whitespace-delimited token. RESOLUTION stays
+/// exact — a token that matches nothing is still verified:false.
+fn citation_id_token(id: &str) -> &str {
+    id.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c| c == '<' || c == '>')
+}
+
 fn agent_citations(
     answer: &str,
     model: &IndexModel,
@@ -2655,6 +2728,7 @@ fn agent_citations(
         .into_iter()
         .map(|key| {
             let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            let id = citation_id_token(id);
             match kind {
                 "claim" => {
                     let hit = records.iter().find(|r| r.claim_key == id);
@@ -2708,6 +2782,7 @@ fn agent_citations_unindexed(
         .into_iter()
         .map(|key| {
             let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            let id = citation_id_token(id);
             if kind == "claim" {
                 let hit = records.iter().find(|r| r.claim_key == id);
                 let link = hit.and_then(|r| {
@@ -3323,6 +3398,7 @@ mod tests {
             acks_write_lock: std::sync::Mutex::new(()),
             ask_agent: false,
             ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        chat_saves: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -5062,6 +5138,12 @@ mod tests {
         let transcript = vault.join(format!(".ovp/ask-sessions/{chat}.jsonl"));
         let body = std::fs::read_to_string(&transcript).unwrap();
         assert!(body.contains("turn_finished"), "{body}");
+        // History parity (A3d): the answered turn also lands on the saved-
+        // chat surface the /api/chats rail reads.
+        let chat_md = vault.join(format!(".ovp/chats/{chat}.md"));
+        let md = std::fs::read_to_string(&chat_md).unwrap();
+        assert!(md.contains("**Q:** what do we know?"), "{md}");
+        assert!(md.contains("**A:** answer"), "{md}");
         // Progress feed: started + final, done.
         let resp = dispatch(
             &st,
@@ -5192,6 +5274,21 @@ mod tests {
         assert!(a["link_target"].is_null(), "shared claim_id anchor must be omitted");
         let c = &cits[1];
         assert_eq!(c["link_target"], "/knowledge#uniq");
+
+        // Paired-eval finding: models decorate ids — titles after the sha,
+        // angle brackets, leading spaces. The verifier extracts the first
+        // bare token; RESOLUTION stays exact (garbage still fails).
+        let decorated = agent_citations(
+            "[source:aaaa1111 Some Article Title | Site] [source: <aaaa1111>] \
+             [claim: <ck-c> trailing words] [claim:xxxx]",
+            &model,
+            &records,
+        );
+        assert_eq!(decorated[0]["verified"], true, "title-decorated sha resolves");
+        assert_eq!(decorated[0]["link_target"], "/library/aaaa1111");
+        assert_eq!(decorated[1]["verified"], true, "angle-bracketed sha resolves");
+        assert_eq!(decorated[2]["verified"], true, "decorated claim key resolves");
+        assert_eq!(decorated[3]["verified"], false, "placeholder still fails");
     }
 
     /// A3b: a busy session answers 409 without touching the model, and an

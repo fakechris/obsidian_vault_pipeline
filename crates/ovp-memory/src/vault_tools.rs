@@ -290,7 +290,8 @@ impl VaultTools {
                     DispatchError::Unavailable(format!("fulltext index unavailable: {e}"))
                 })?;
                 let cursor = decode_fulltext_cursor(cursor.as_deref(), &query, &model)
-                    .map_err(DispatchError::InvalidArgs)?;
+                    .map_err(DispatchError::InvalidArgs)?
+                    .map_err(DispatchError::StaleState)?;
                 Ok(search_fulltext_at_with_budget(
                     &self.vault_root,
                     &model,
@@ -497,6 +498,7 @@ impl ToolExecutor for VaultTools {
                 self.merge_coverage(layer, LayerState::Failed);
                 ToolOutcome::Failed(detail)
             }
+            Err(DispatchError::StaleState(detail)) => ToolOutcome::Failed(detail),
         }
     }
 }
@@ -728,6 +730,7 @@ fn fulltext_cursor_fingerprint(
     terms: &[String],
     model: &IndexModel,
     candidate_count: usize,
+    offset: usize,
 ) -> String {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     let mut sorted_terms = terms.to_vec();
@@ -746,6 +749,8 @@ fn fulltext_cursor_fingerprint(
     }
     update_fnv1a64(&mut hash, b"\ncandidate_count:");
     update_fnv1a64(&mut hash, candidate_count.to_string().as_bytes());
+    update_fnv1a64(&mut hash, b"\noffset:");
+    update_fnv1a64(&mut hash, offset.to_string().as_bytes());
     format!("{:08x}", hash as u32)
 }
 
@@ -755,7 +760,7 @@ fn format_fulltext_cursor(
     model: &IndexModel,
     candidate_count: usize,
 ) -> String {
-    let fingerprint = fulltext_cursor_fingerprint(terms, model, candidate_count);
+    let fingerprint = fulltext_cursor_fingerprint(terms, model, candidate_count, offset);
     format!("{FULLTEXT_CURSOR_PREFIX}{offset}:{fingerprint}")
 }
 
@@ -793,28 +798,36 @@ fn fulltext_cursor_parts(cursor: &str) -> Result<(&str, &str), String> {
     Ok((offset, fingerprint))
 }
 
+/// `Ok(Err(_))` = a syntactically valid cursor that does not belong to this
+/// (query, index, offset) — a STALE-STATE failure, not malformed arguments:
+/// the caller maps it to a plain tool failure so it never feeds the
+/// invalid-args breaker (a live turn was killed by exactly that).
 fn decode_fulltext_cursor(
     cursor: Option<&str>,
     query: &str,
     model: &IndexModel,
-) -> Result<Option<usize>, String> {
+) -> Result<Result<Option<usize>, String>, String> {
     let Some(cursor) = cursor else {
-        return Ok(None);
+        return Ok(Ok(None));
     };
     let (offset, fingerprint) = fulltext_cursor_parts(cursor)?;
+    let offset: usize = offset
+        .parse()
+        .map_err(|_| "invalid fulltext cursor source offset".to_string())?;
     let terms = tokenize_search_terms(query);
+    // The offset is BOUND into the fingerprint: only cursors this executor
+    // actually issued verify, so an edited offset cannot silently skip a
+    // walk segment while coverage still reports Complete.
     let expected =
-        fulltext_cursor_fingerprint(&terms, model, fulltext_candidate_count(model));
+        fulltext_cursor_fingerprint(&terms, model, fulltext_candidate_count(model), offset);
     if fingerprint != expected {
-        return Err(
-            "fulltext cursor belongs to a different query or index; restart without a cursor"
+        return Ok(Err(
+            "fulltext cursor belongs to a different query, index, or position; \
+             restart without a cursor"
                 .into(),
-        );
+        ));
     }
-    offset
-        .parse::<usize>()
-        .map(Some)
-        .map_err(|_| "invalid fulltext cursor source offset".into())
+    Ok(Ok(Some(offset)))
 }
 
 /// Search the reader-pack catalog surface: pack titles plus card titles. Packs
@@ -2336,6 +2349,11 @@ enum DispatchError {
     InvalidArgs(String),
     Unavailable(String),
     Failed(String),
+    /// A recoverable stale-state fault (e.g. a cursor from a different
+    /// query/index/position): surfaces as a failed call for the model to
+    /// retry WITHOUT a cursor, but touches neither the invalid-args breaker
+    /// nor the layer's coverage — nothing about the LAYER failed.
+    StaleState(String),
 }
 
 impl From<VaultToolError> for DispatchError {
@@ -3486,13 +3504,37 @@ mod tests {
             "search_fulltext",
             json!({"query": "different query", "cursor": cursor}),
         );
+        // A stale cursor is a FAILED tool run, not invalid-args: two of these
+        // in a row must never trip the invalid-args breaker (a live eval turn
+        // died exactly that way after the model reformulated its query).
         assert!(matches!(
             outcome,
-            ToolOutcome::InvalidArgs(ref detail)
-                if detail.contains("different query or index")
+            ToolOutcome::Failed(ref detail)
+                if detail.contains("different query, index, or position")
                     && detail.contains("restart without a cursor")
         ));
+        // ...and it leaves coverage untouched: nothing about the LAYER
+        // failed, and worst-observed merging would otherwise pin the whole
+        // turn's fulltext coverage at failed after one stale cursor.
         assert_eq!(second_tools.coverage(), Coverage::default());
+
+        // Offset-bound fingerprint: editing the offset digits invalidates the
+        // cursor (an edited cursor could otherwise skip a walk segment while
+        // coverage still reported Complete).
+        let issued = cursor.as_str().expect("cursor string").to_string();
+        let (prefix_and_offset, fp) = issued.rsplit_once(':').expect("cursor shape");
+        let mut digits_bumped = prefix_and_offset.to_string();
+        digits_bumped.replace_range(3.., "9999");
+        let forged = format!("{digits_bumped}:{fp}");
+        let mut forged_tools = fixture.tools();
+        assert!(matches!(
+            call(
+                &mut forged_tools,
+                "search_fulltext",
+                json!({"query": "first query", "cursor": forged})
+            ),
+            ToolOutcome::Failed(_)
+        ));
     }
 
     #[test]

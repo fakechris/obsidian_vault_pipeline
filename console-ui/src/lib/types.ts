@@ -166,6 +166,9 @@ export type ClaimStatus = 'durable' | 'superseded' | 'retracted' | 'caveated';
 
 export interface ClaimRow {
   claim_id: string;
+  /** Stable ledger identity (ck-…) — claim_ids can collide across runs,
+   * claim_keys cannot. Absent on pre-key indexes. */
+  claim_key?: string;
   claim: string;
   theme?: string;
   status: ClaimStatus;
@@ -228,7 +231,11 @@ export interface AskCitation {
   title: string | null;
   snippet: string | null;
   link_target: string | null;
-  verified: boolean;
+  /** True/false = the server's verifier ruling. Null = UNKNOWN — a saved
+   * transcript replayed without re-verification must claim neither
+   * (previously replay upgraded every marker, fabricated ones included,
+   * to verified). Only `false` renders warnings. */
+  verified: boolean | null;
 }
 
 export interface AskVerification {
@@ -247,7 +254,8 @@ export interface AskResponse {
   intent?: string | null;
   /** Stem of the saved `.ovp/chats/<name>.md` transcript. */
   chat: string | null;
-  // ---- agent-path extras (OVP_ASK_AGENT=1; absent on the legacy path) ----
+  // ---- agent-path extras (the DEFAULT path since A3d; absent on the
+  // legacy pipeline reachable via the OVP_ASK_AGENT=0 rollback hatch) ----
   /** True when the answer came from the tool-loop agent. */
   agent?: boolean;
   /** Executor-computed per-layer coverage (claims/sources/body →
