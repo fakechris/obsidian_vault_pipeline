@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_agent_policy-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "prompt",
+  "component": "prompt.ask_agent_policy",
+  "hypothesis": "PROMPT surface, driven by four live paired-eval failure modes (real vault, 2026-07-25): (1) the model wrote placeholder citations ([claim:xxxx]) on a meta question and decorated real ids with titles/angle brackets inside the brackets — receipts failed verification wholesale; (2) a 9k-char answer overran the output budget and stopped model_error; (3) a reused cursor after query reformulation burned rounds; (4) a vague recall with two plausible articles silently committed to one. Four additive policy blocks: bare-key-only citation form + never-placeholder, hard length discipline (lead with the finding, shortest complete answer), cursor-belongs-to-its-query, and present-all-candidates for ambiguous recall. Predicted: verified-citation rate on source-citing questions rises materially and cap-overflow model_error final replies disappear, with zero-call meta behavior unchanged.",
+  "predicted_delta": {
+    "crystal_provenance": "receipts survive verification because the model emits the exact resolvable form; placeholders vanish (fail-closed already caught them — now they are not produced)",
+    "coverage": "ambiguous recall presents every plausible candidate with distinguishing evidence instead of a silent best guess",
+    "operational_reliability": "answers fit the output budget; stale-cursor round burns stop"
+  },
+  "guardrails": {
+    "additive_blocks_only": "existing policy sections keep their text; the four fixes add sentences/blocks without weakening any A3a discipline (checklist tests keep passing unmodified)",
+    "zero_call_meta_unchanged": "capability questions still require zero tool calls (T5 discipline untouched)",
+    "fail_closed_stays": "the server verifier remains fail-closed regardless — policy reduces malformed citations, it is not the enforcement layer"
+  },
+  "eval_plan": {
+    "replay_set": "the four failing paired-eval questions replayed live post-change: q4-meta must emit no placeholder brackets; q8-cross-source must finish stopped_reason=final with a majority of citations verified; q1-recall must not burn rounds on stale cursors; recall-with-two-candidates presents both. Deterministic: agent_policy checklist + zero-quote tripwire tests pass unmodified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert the const string to the v1 text — no state, no data migration.",
+  "ablation_required": false
+}

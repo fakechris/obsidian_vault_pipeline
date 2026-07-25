@@ -2646,6 +2646,18 @@ fn args_brief(arguments: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::String(brief)
 }
 
+/// Models decorate citation ids in the wild — `[source:<sha> Some Title]`,
+/// `[source: <sha>]` — and exact-string matching then fails receipts the
+/// model clearly intended. Tolerant extraction: trim whitespace and angle
+/// brackets, keep the first whitespace-delimited token. RESOLUTION stays
+/// exact — a token that matches nothing is still verified:false.
+fn citation_id_token(id: &str) -> &str {
+    id.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c| c == '<' || c == '>')
+}
+
 fn agent_citations(
     answer: &str,
     model: &IndexModel,
@@ -2655,6 +2667,7 @@ fn agent_citations(
         .into_iter()
         .map(|key| {
             let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            let id = citation_id_token(id);
             match kind {
                 "claim" => {
                     let hit = records.iter().find(|r| r.claim_key == id);
@@ -2708,6 +2721,7 @@ fn agent_citations_unindexed(
         .into_iter()
         .map(|key| {
             let (kind, id) = key.split_once(':').unwrap_or(("", key.as_str()));
+            let id = citation_id_token(id);
             if kind == "claim" {
                 let hit = records.iter().find(|r| r.claim_key == id);
                 let link = hit.and_then(|r| {
@@ -5192,6 +5206,21 @@ mod tests {
         assert!(a["link_target"].is_null(), "shared claim_id anchor must be omitted");
         let c = &cits[1];
         assert_eq!(c["link_target"], "/knowledge#uniq");
+
+        // Paired-eval finding: models decorate ids — titles after the sha,
+        // angle brackets, leading spaces. The verifier extracts the first
+        // bare token; RESOLUTION stays exact (garbage still fails).
+        let decorated = agent_citations(
+            "[source:aaaa1111 Some Article Title | Site] [source: <aaaa1111>] \
+             [claim: <ck-c> trailing words] [claim:xxxx]",
+            &model,
+            &records,
+        );
+        assert_eq!(decorated[0]["verified"], true, "title-decorated sha resolves");
+        assert_eq!(decorated[0]["link_target"], "/library/aaaa1111");
+        assert_eq!(decorated[1]["verified"], true, "angle-bracketed sha resolves");
+        assert_eq!(decorated[2]["verified"], true, "decorated claim key resolves");
+        assert_eq!(decorated[3]["verified"], false, "placeholder still fails");
     }
 
     /// A3b: a busy session answers 409 without touching the model, and an

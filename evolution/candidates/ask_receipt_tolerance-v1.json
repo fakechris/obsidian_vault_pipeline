@@ -1,0 +1,23 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_receipt_tolerance-v1",
+  "base_version": "v1",
+  "target_version": "v1.2",
+  "surface": "runtime",
+  "component": "runtime.ask_product_wiring",
+  "hypothesis": "RUNTIME surface, single verifier refinement: the server citation verifier extracts the first whitespace-delimited token (trimmed of angle brackets) from a citation's id segment before resolving. Live paired-eval evidence: models decorate ids in the wild — [source:<sha> Title | Site], [source: <sha>] — and exact-string matching failed 9/9 receipts on a cross-source answer whose shas were all real and resolvable. Resolution stays exact: the extracted token must still match a ledger claim_key or index sha256 verbatim, so fabricated keys and placeholders still verify false. Predicted: verified rate on source-citing answers rises to match the model's actual grounding; no false positives are introduced (garbage tokens resolve to nothing).",
+  "predicted_delta": {
+    "crystal_provenance": "receipts reflect actual grounding instead of penalizing citation formatting; fail-closed semantics (fabrication → verified:false, ambiguous claim anchors → no link) unchanged"
+  },
+  "guardrails": {
+    "exact_resolution_unchanged": "tolerance applies ONLY to token extraction; the resolved token must equal a claim_key / sha256 exactly — placeholder and fabricated ids still fail, covered by test",
+    "legacy_verifier_untouched": "the legacy ask path's verifier is not modified; this touches only the agent-path receipt builder"
+  },
+  "eval_plan": {
+    "replay_set": "server test: decorated forms ([source:<sha> Title], [source: <sha>], [claim: <key> words]) verify true with correct links; [claim:xxxx] stays false. Live: re-run of the failing paired-eval question must show most source receipts verified.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Remove the token-extraction helper — one function, no persisted state.",
+  "ablation_required": false
+}
