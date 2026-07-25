@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use ovp_server::{providers_ask_client_factory, LLM_NOT_CONFIGURED};
+use ovp_server::{providers_ask_client_factory_bounded, LLM_NOT_CONFIGURED};
 use ovp_mcp::{McpConfig, run_mcp};
 
 use crate::CliError;
@@ -14,7 +14,11 @@ pub struct McpArgs {
 pub fn run(args: McpArgs) -> Result<(), CliError> {
     // Same providers-aware factory as `serve` / desktop: re-reads
     // `.ovp/providers.toml` each ask; no set_var.
-    let ask_client = providers_ask_client_factory(args.vault_root.clone());
+    // Bounded posture for the synchronous stdio host: one slow provider
+    // call blocks EVERY MCP request, so the per-request timeout is clamped
+    // and transient retries are off (the agent loop reports an honest
+    // model_error instead of silently tripling the wait).
+    let ask_client = providers_ask_client_factory_bounded(args.vault_root.clone(), 45);
     // stdout is the JSON-RPC channel — operator-facing notes go to stderr.
     match &ask_client {
         None => eprintln!(

@@ -54,6 +54,53 @@ pub fn providers_ask_client_factory(vault_root: PathBuf) -> Option<AskClientFact
     }
 }
 
+/// [`providers_ask_client_factory`] with a HARD wall-clock posture for
+/// synchronous single-request hosts (the MCP stdio server): per-request
+/// timeout clamped to `timeout_cap_secs` and NO transient retries — a slow
+/// provider call bounds the host's blocking window to roughly one request,
+/// and failures surface as the agent loop's honest model_error instead of
+/// silently tripling the wait.
+pub fn providers_ask_client_factory_bounded(
+    vault_root: PathBuf,
+    timeout_cap_secs: u64,
+) -> Option<AskClientFactory> {
+    #[cfg(feature = "anthropic")]
+    {
+        use std::sync::Arc;
+        Some(Arc::new(move || {
+            build_ask_client_bounded(&vault_root, timeout_cap_secs)
+        }))
+    }
+    #[cfg(not(feature = "anthropic"))]
+    {
+        let _ = (vault_root, timeout_cap_secs);
+        None
+    }
+}
+
+#[cfg(feature = "anthropic")]
+fn build_ask_client_bounded(
+    vault_root: &Path,
+    timeout_cap_secs: u64,
+) -> Result<Box<dyn ovp_llm::ModelClient>, String> {
+    use ovp_domain::ARTICLE_PROMPT_ID;
+    use ovp_llm::{build_recording_live_client_bounded, resolve_api_key, LiveClientConfig};
+
+    let file = ovp_domain::providers::read_providers_file(vault_root)?;
+    let lookup = provider_lookup(&file);
+    let key = resolve_api_key(&lookup)?;
+    let cfg = LiveClientConfig::from_lookup(&lookup)?;
+    let cache_dir = vault_root.join(".ovp/cassettes/ask");
+    build_recording_live_client_bounded(
+        &key,
+        &cfg,
+        &cache_dir,
+        ARTICLE_PROMPT_ID,
+        timeout_cap_secs,
+        0,
+    )
+}
+
 /// Env-over-file lookup matching `apply_providers_env` semantics without
 /// mutating the process environment.
 #[cfg(feature = "anthropic")]

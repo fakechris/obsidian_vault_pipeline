@@ -295,7 +295,8 @@ fn handle_tools_list() -> Result<Value, RpcError> {
                     "type": "object",
                     "properties": {
                         "question": { "type": "string", "description": "The question for the vault agent" },
-                        "chat": { "type": "string", "description": "Session id from a prior ask — continues that conversation" }
+                        "chat": { "type": "string", "description": "Session id from a prior ask — continues that conversation. Retrying the SAME question on the same chat replays the completed turn (no second model call)." },
+                        "idempotency_key": { "type": "string", "description": "Optional stable retry key — a retry with the same key replays the completed turn instead of running a new one" }
                     },
                     "required": ["question"]
                 }
@@ -389,9 +390,14 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // A supplied `chat` continues that session; anything else (including an
     // invalid id) gets a fresh generated session — the reply always says
     // which id to use next, so continuity is one copy-paste away.
-    let session = match args.get("chat").and_then(|v| v.as_str()).map(str::trim) {
-        Some(id) if valid_session_id(id) => id.to_string(),
-        _ => {
+    let supplied_chat = args
+        .get("chat")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|id| valid_session_id(id));
+    let session = match supplied_chat {
+        Some(id) => id.to_string(),
+        None => {
             static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let millis = std::time::SystemTime::now()
@@ -401,6 +407,69 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             format!("mcp-{millis}-{}-{seq}", std::process::id())
         }
     };
+    // Idempotency: explicit key wins; a CONTINUED session derives one from
+    // (chat, question) so a host retry of a timed-out ask replays the
+    // completed turn instead of paying for (and double-appending) a second
+    // one. A fresh generated session cannot collide, so it needs no key.
+    let idem_key = args
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            supplied_chat.map(|chat| {
+                let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+                for byte in chat.bytes().chain([0u8]).chain(question.bytes()) {
+                    hash ^= u64::from(byte);
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                format!("mcp-auto-{hash:016x}")
+            })
+        });
+    // Provider-free replay parity with the HTTP path: a keyed retry of a
+    // completed turn answers from the transcript BEFORE building a client.
+    let sessions_dir = state.vault_root.join(".ovp").join("ask-sessions");
+    let mut store = SessionStore::open(&sessions_dir, &session).map_err(|e| RpcError {
+        code: -32000,
+        message: format!("ask session store: {e}"),
+    })?;
+    if let Some(key) = idem_key.as_deref()
+        && let Some(done) = store.completed_turn_for_key(key)
+    {
+        let records = ovp_api_projection::readers::load_active_records(
+            &state.vault_root,
+            &ovp_domain::vault_layout::VaultLayout::new(),
+        );
+        let citations = match read_index(&state.vault_root).ok() {
+            Some(m) => ovp_memory::receipts::agent_citations(&done.answer, &m, &records),
+            None => ovp_memory::receipts::agent_citations_unindexed(&done.answer, &records),
+        };
+        let verified = citations.iter().filter(|c| c["verified"] == true).count();
+        let mut text = done.answer.trim().to_string();
+        text.push_str(&format!(
+            "\n\n---\nreceipts: {} citation(s), {verified} verified against the vault\n\
+             idempotent replay of turn {} (no new model call)\nsession: {session} \
+             (pass as `chat` to continue)",
+            citations.len(),
+            done.turn_id
+        ));
+        // History repair: a committed turn whose export failed must not stay
+        // missing forever (same rule as the HTTP replay path).
+        if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
+            && !done.answer.is_empty()
+            && !ovp_memory::ask::agent_chat_exists(&state.vault_root, &session)
+            && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                &state.vault_root,
+                &session,
+                question,
+                &done.answer,
+            )
+        {
+            text.push_str(&format!("\nnote: chat history save failed: {e}"));
+        }
+        return Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }));
+    }
     let mut client = factory().map_err(|e| {
         if e == "llm_not_configured" {
             RpcError {
@@ -429,12 +498,14 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     };
     let mut tools = VaultTools::new(&state.vault_root)
         .with_result_cap(cfg.max_result_bytes.saturating_sub(2 * 1024));
-    let sessions_dir = state.vault_root.join(".ovp").join("ask-sessions");
-    let mut store = SessionStore::open(&sessions_dir, &session).map_err(|e| RpcError {
-        code: -32000,
-        message: format!("ask session store: {e}"),
-    })?;
-    let outcome = run_agent_turn(client.as_mut(), &mut tools, &mut store, question, None, &cfg)
+    let outcome = run_agent_turn(
+        client.as_mut(),
+        &mut tools,
+        &mut store,
+        question,
+        idem_key.as_deref(),
+        &cfg,
+    )
         .map_err(|e| match e {
             AgentError::SessionBusy => RpcError {
                 code: -32000,
@@ -1098,6 +1169,50 @@ mod tests {
         )
         .unwrap();
         assert!(md.contains("**Q:** q?"), "{md}");
+    }
+
+    /// A host retry (same chat + same question) replays the completed turn:
+    /// one transcript turn, one History block, no second model call.
+    #[test]
+    fn ask_retry_on_same_chat_replays_without_a_second_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        struct Counting;
+        impl ovp_llm::ModelClient for Counting {
+            fn call(
+                &mut self,
+                request: &ovp_llm::ModelRequest,
+            ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                Ok(ovp_llm::ModelReply {
+                    model: request.model.clone(),
+                    text: "stable answer".into(),
+                    stop_reason: ovp_llm::StopReason::EndTurn,
+                    usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+                    blocks: None,
+                    raw_stop_reason: None,
+                })
+            }
+        }
+        let (tmp, mut state) = fixture_vault();
+        state.ask_client = Some(std::sync::Arc::new(|| {
+            Ok(Box::new(Counting) as Box<dyn ovp_llm::ModelClient>)
+        }));
+        let args = serde_json::json!({ "question": "same q", "chat": "mcp-retry-test" });
+        let first = call(&state, "ask", args.clone()).unwrap();
+        assert!(first["content"][0]["text"].as_str().unwrap().starts_with("stable answer"));
+        let retry = call(&state, "ask", args).unwrap();
+        let text = retry["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("idempotent replay"), "{text}");
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1, "no second paid model call");
+        let transcript = std::fs::read_to_string(
+            tmp.path().join(".ovp/ask-sessions/mcp-retry-test.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(transcript.matches("turn_finished").count(), 1);
+        let md =
+            std::fs::read_to_string(tmp.path().join(".ovp/chats/mcp-retry-test.md")).unwrap();
+        assert_eq!(md.matches("**Q:** same q").count(), 1, "{md}");
     }
 
     #[test]

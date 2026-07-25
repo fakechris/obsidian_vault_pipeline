@@ -32,7 +32,7 @@ pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 /// - `OVP_LLM_NO_PROXY` — boolean; bypass ambient `HTTP(S)_PROXY` for the live
 ///   HTTP client ONLY.
 /// - `OVP_LLM_TIMEOUT_SECS` — non-negative integer request timeout.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LiveClientConfig {
     pub base_url: Option<String>,
     pub model: Option<String>,
@@ -183,6 +183,58 @@ pub fn build_recording_live_client(
     let cached = CachedModelClient::new(escalating, cache_dir, cache_namespace, CacheMode::Record)
         .map_err(|e| format!("opening cache dir `{}`: {e}", cache_dir.display()))?;
     Ok(Box::new(cached))
+}
+
+/// [`build_recording_live_client`] with a HARD wall-clock posture for hosts
+/// that cannot tolerate long blocking calls (the synchronous MCP server):
+/// the per-request timeout is clamped to `timeout_cap_secs` (user config may
+/// lower it, never raise it) and transient-failure retries are capped at
+/// `max_retries` (0 = fail fast into the agent loop's honest ModelError).
+/// Everything else — budget escalation, cassette recording — is identical.
+pub fn build_recording_live_client_bounded(
+    api_key: &str,
+    cfg: &LiveClientConfig,
+    cache_dir: &Path,
+    cache_namespace: &str,
+    timeout_cap_secs: u64,
+    max_retries: u32,
+) -> Result<Box<dyn ModelClient>, String> {
+    let mut bounded = cfg.clone();
+    bounded.timeout_secs = Some(clamp_timeout(cfg.timeout_secs, timeout_cap_secs));
+    if api_key.trim().is_empty() {
+        return Err(LLM_NOT_CONFIGURED.into());
+    }
+    let mut live = AnthropicBlockingClient::new(api_key);
+    if let Some(url) = bounded.base_url.as_ref() {
+        live = live.with_base_url(url.clone());
+    }
+    if let Some(model) = bounded.model.as_ref() {
+        live = live.with_model_override(model.clone());
+    }
+    if let Some(mt) = bounded.max_tokens {
+        live = live.with_max_tokens(mt);
+    }
+    if bounded.no_proxy {
+        live = live.with_no_proxy();
+    }
+    if let Some(secs) = bounded.timeout_secs {
+        live = live.with_timeout(secs);
+    }
+    let retrying = RetryingModelClient::new(live, max_retries, LIVE_RETRY_BACKOFF);
+    let escalated = bounded
+        .max_tokens
+        .unwrap_or(LIVE_BUDGET_BASE_DEFAULT)
+        .saturating_mul(LIVE_BUDGET_ESCALATION_FACTOR)
+        .min(LIVE_BUDGET_ESCALATION_CAP);
+    let escalating = BudgetEscalatingModelClient::new(retrying, escalated);
+    let cached = CachedModelClient::new(escalating, cache_dir, cache_namespace, CacheMode::Record)
+        .map_err(|e| format!("opening cache dir `{}`: {e}", cache_dir.display()))?;
+    Ok(Box::new(cached))
+}
+
+/// A user-configured timeout may SHORTEN the bound, never exceed it.
+pub fn clamp_timeout(configured: Option<u64>, cap_secs: u64) -> u64 {
+    configured.unwrap_or(cap_secs).min(cap_secs)
 }
 
 /// Resolve a non-empty API key from a lookup. Missing / blank → [`LLM_NOT_CONFIGURED`].

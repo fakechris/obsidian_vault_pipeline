@@ -16,7 +16,8 @@ use ovp_api_projection::{bodies, graph, readers};
 
 mod ask_client;
 pub use ask_client::{
-    api_key_configured, providers_ask_client_factory, LLM_NOT_CONFIGURED,
+    api_key_configured, providers_ask_client_factory, providers_ask_client_factory_bounded,
+    LLM_NOT_CONFIGURED,
 };
 
 use std::collections::{HashMap, HashSet};

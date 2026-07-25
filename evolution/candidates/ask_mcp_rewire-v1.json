@@ -15,7 +15,9 @@
     "shared_resolver_single_impl": "ovp-memory::receipts is the ONE citation resolver — ovp-server delegates to it (its tests unchanged), MCP consumes it; no second implementation to drift",
     "parity_knobs": "AgentConfig knobs match the HTTP wiring (4096/10 rounds); the MCP deadline is fixed at 90s (no HTTP guard to derive from) and the turn commits before returning",
     "explicit_errors_stay": "no-client and client-construction failures keep their distinct, actionable messages (tests unchanged for the config gate)",
-    "history_shared_surface": "deliverable turns save to .ovp/chats under the same deliverable-only + append-only rules as the HTTP path"
+    "history_shared_surface": "deliverable turns save to .ovp/chats under the same deliverable-only + append-only rules as the HTTP path",
+    "bounded_blocking": "the MCP factory clamps the per-request provider timeout to 45s and disables transient retries — the synchronous stdio host's worst-case blocking window is roughly ONE request, never timeout×retries; failures surface as the loop's honest model_error",
+    "retry_idempotency": "an explicit idempotency_key or (auto-derived on a CONTINUED chat) key makes host retries replay the completed turn provider-free — one transcript turn, one History block, no second paid call; a fresh generated session cannot collide and needs no key"
   },
   "eval_plan": {
     "replay_set": "MCP tests: full scripted agent turn on an unindexed vault → answer + UNVERIFIED receipt flag + session id + coverage line + transcript AND History file on disk; config-gate errors unchanged. Live: one real `ask` through the MCP stdio binary against the real vault.",
