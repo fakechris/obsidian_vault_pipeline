@@ -411,12 +411,24 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // (chat, question) so a host retry of a timed-out ask replays the
     // completed turn instead of paying for (and double-appending) a second
     // one. A fresh generated session cannot collide, so it needs no key.
-    let idem_key = args
+    let explicit_key = args
         .get("idempotency_key")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(str::to_string);
+    // Same rule as the HTTP path: a key is only useful on a STABLE session
+    // (replay lookup is session-local) — a key on a generated session could
+    // never replay and would silently re-run a paid turn on retry.
+    if explicit_key.is_some() && supplied_chat.is_none() {
+        return Err(RpcError {
+            code: -32602,
+            message: "`idempotency_key` requires a stable `chat` — a generated \
+                      session cannot replay a retried turn"
+                .into(),
+        });
+    }
+    let idem_key = explicit_key
         .or_else(|| {
             supplied_chat.map(|chat| {
                 let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -446,19 +458,49 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             None => ovp_memory::receipts::agent_citations_unindexed(&done.answer, &records),
         };
         let verified = citations.iter().filter(|c| c["verified"] == true).count();
+        let unverified: Vec<&str> = citations
+            .iter()
+            .filter(|c| c["verified"] != true)
+            .filter_map(|c| c["id"].as_str())
+            .collect();
         let mut text = done.answer.trim().to_string();
         text.push_str(&format!(
-            "\n\n---\nreceipts: {} citation(s), {verified} verified against the vault\n\
-             idempotent replay of turn {} (no new model call)\nsession: {session} \
+            "\n\n---\nreceipts: {} citation(s), {verified} verified against the vault",
+            citations.len()
+        ));
+        if !unverified.is_empty() {
+            text.push_str(&format!("; UNVERIFIED: {}", unverified.join(", ")));
+        }
+        // Tool provenance survives the replay — rebuilt from the transcript,
+        // exactly like the HTTP replay path.
+        let trail: Vec<String> = store
+            .tool_calls_for_turn(&done.turn_id)
+            .into_iter()
+            .map(|(tool, _id, is_error, _summary)| {
+                format!("{tool}{}", if is_error { "✗" } else { "✓" })
+            })
+            .collect();
+        if !trail.is_empty() {
+            text.push_str(&format!("\nagent trail: {}", trail.join(", ")));
+        }
+        text.push_str(&format!(
+            "\nidempotent replay of turn {} (no new model call)\nsession: {session} \
              (pass as `chat` to continue)",
-            citations.len(),
             done.turn_id
         ));
-        // History repair: a committed turn whose export failed must not stay
-        // missing forever (same rule as the HTTP replay path).
+        // History repair, PER TURN: the export may have failed after earlier
+        // turns landed, so file existence is not enough — repair when this
+        // turn's Q line is absent. (An identical question asked twice in one
+        // session skips the repair; the retry contract makes that turn a
+        // replay of the first anyway.)
+        let this_turn_missing = !ovp_memory::ask::agent_chat_contains_question(
+            &state.vault_root,
+            &session,
+            question,
+        );
         if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
             && !done.answer.is_empty()
-            && !ovp_memory::ask::agent_chat_exists(&state.vault_root, &session)
+            && this_turn_missing
             && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
                 &state.vault_root,
                 &session,

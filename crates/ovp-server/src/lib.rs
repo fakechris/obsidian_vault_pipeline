@@ -2391,7 +2391,11 @@ fn handle_ask_agent(
                 let mut replay_save_error = None;
                 if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
                     && !done.answer.is_empty()
-                    && !ovp_memory::ask::agent_chat_exists(&vault_root, &response_session)
+                    && !ovp_memory::ask::agent_chat_contains_question(
+                        &vault_root,
+                        &response_session,
+                        &question,
+                    )
                 {
                     let _save_guard = chat_saves.lock().unwrap();
                     if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
