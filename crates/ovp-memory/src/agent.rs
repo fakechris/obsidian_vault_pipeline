@@ -573,10 +573,17 @@ pub fn run_agent_turn_with_progress(
                                   the final tool round; write your answer now from what \
                                   you already have]";
             // Degenerate tiny caps skip the notice rather than exceed them.
-            if cfg.max_result_bytes >= NOTICE.len() {
+            const TRUNC: &str = "\n[truncated]";
+            if cfg.max_result_bytes >= NOTICE.len() + TRUNC.len() {
                 if last.content.len() + NOTICE.len() > cfg.max_result_bytes {
-                    let keep = cfg.max_result_bytes.saturating_sub(NOTICE.len());
+                    // Shrinking to fit the notice must not erase truncation
+                    // disclosure — the capped result's marker (or the one
+                    // this shrink itself creates) stays ahead of the notice.
+                    let keep = cfg
+                        .max_result_bytes
+                        .saturating_sub(NOTICE.len() + TRUNC.len());
                     last.content.truncate(floor_char_boundary(&last.content, keep));
+                    last.content.push_str(TRUNC);
                 }
                 last.content.push_str(NOTICE);
             }

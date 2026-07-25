@@ -71,12 +71,19 @@ function errorKeyFor(err: unknown): MsgKey {
 function citationsFromAnswerText(answer: string): AskCitation[] {
   return citationsInOrder(answer).map((id) => {
     const kind = id.includes(':') ? id.slice(0, id.indexOf(':')) : '';
+    // Mirror the server's tolerant token extraction: decorated markers
+    // ([source:<sha> Some Title]) keep the RAW id for marker matching but
+    // link/display through the bare first token — otherwise replay builds
+    // /library/<sha>%20Some%20Title.
+    const rest = kind ? id.slice(id.indexOf(':') + 1) : id;
+    const token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
+    const canonical = kind ? `${kind}:${token}` : token;
     return {
       id,
       kind,
-      title: id,
+      title: canonical,
       snippet: null,
-      link_target: citeLinkTarget(id),
+      link_target: citeLinkTarget(canonical),
       // Saved transcript does not re-run the verifier — verification state
       // is UNKNOWN, and claiming either way would misrepresent receipts
       // (a fabricated marker must not come back "verified" after refresh).

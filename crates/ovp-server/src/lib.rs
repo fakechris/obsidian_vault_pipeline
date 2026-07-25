@@ -2563,7 +2563,18 @@ fn handle_ask_agent(
                     "output_tokens": outcome.output_tokens_total,
                 },
             });
-            if !outcome.answer.is_empty() {
+            // Only DELIVERABLE outcomes enter saved history: replay cannot
+            // restore stopped_reason, so a timeout narration or truncated
+            // model_error text would read as a successful answer after
+            // refresh. Failed turns stay visible live (trail + stop note)
+            // and in the audit transcript.
+            let deliverable = matches!(
+                outcome.stopped_reason,
+                ovp_memory::agent::StoppedReason::Final
+                    | ovp_memory::agent::StoppedReason::NeedUser
+                    | ovp_memory::agent::StoppedReason::Refusal
+            );
+            if deliverable && !outcome.answer.is_empty() {
                 let _save_guard = chat_saves.lock().unwrap();
                 if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
                     &vault_root,
