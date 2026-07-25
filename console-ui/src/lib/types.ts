@@ -228,7 +228,11 @@ export interface AskCitation {
   title: string | null;
   snippet: string | null;
   link_target: string | null;
-  verified: boolean;
+  /** True/false = the server's verifier ruling. Null = UNKNOWN — a saved
+   * transcript replayed without re-verification must claim neither
+   * (previously replay upgraded every marker, fabricated ones included,
+   * to verified). Only `false` renders warnings. */
+  verified: boolean | null;
 }
 
 export interface AskVerification {

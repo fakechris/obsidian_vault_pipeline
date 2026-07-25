@@ -304,6 +304,11 @@ struct AppState {
     /// `GET /api/ask/progress`. In-memory only — progress is ephemeral UI
     /// state; the transcript is the durable audit.
     ask_progress: Arc<std::sync::Mutex<HashMap<String, AskProgressFeed>>>,
+    /// Serializes saved-chat markdown writes (A3d gate: the save happens
+    /// after the session lock releases; 409-busy admission makes a same-
+    /// session reorder window sub-millisecond, but the create-vs-append
+    /// file race needs real mutual exclusion).
+    chat_saves: Arc<std::sync::Mutex<()>>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -583,6 +588,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         acks_write_lock: std::sync::Mutex::new(()),
         ask_agent: config.ask_agent,
         ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        chat_saves: Arc::new(std::sync::Mutex::new(())),
     });
 
     // Pre-load model
@@ -2340,6 +2346,7 @@ fn handle_ask_agent(
     let vault_root = state.vault_root.clone();
     let sessions_dir = vault_root.join(".ovp/ask-sessions");
     let progress_map = Arc::clone(&state.ask_progress);
+    let chat_saves = Arc::clone(&state.chat_saves);
     let progress_session = session.clone();
     let question = question.to_string();
     let response_session = session.clone();
@@ -2556,16 +2563,17 @@ fn handle_ask_agent(
                     "output_tokens": outcome.output_tokens_total,
                 },
             });
-            if !outcome.answer.is_empty()
-                && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+            if !outcome.answer.is_empty() {
+                let _save_guard = chat_saves.lock().unwrap();
+                if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
                     &vault_root,
                     &response_session,
                     &question,
                     &outcome.answer,
-                )
-                && let Some(obj) = body.as_object_mut()
-            {
-                obj.insert("chat_save_error".into(), serde_json::json!(e));
+                ) && let Some(obj) = body.as_object_mut()
+                {
+                    obj.insert("chat_save_error".into(), serde_json::json!(e));
+                }
             }
             Ok(body)
         })();
@@ -3355,6 +3363,7 @@ mod tests {
             acks_write_lock: std::sync::Mutex::new(()),
             ask_agent: false,
             ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        chat_saves: Arc::new(std::sync::Mutex::new(())),
         }
     }
 

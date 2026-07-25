@@ -77,8 +77,10 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
       title: id,
       snippet: null,
       link_target: citeLinkTarget(id),
-      // Saved transcript does not re-run the verifier; treat as known markers.
-      verified: true,
+      // Saved transcript does not re-run the verifier — verification state
+      // is UNKNOWN, and claiming either way would misrepresent receipts
+      // (a fabricated marker must not come back "verified" after refresh).
+      verified: null,
     };
   });
 }
@@ -287,7 +289,7 @@ function AnswerText({
         <button
           key={key}
           type="button"
-          className={`cite-marker${cit.verified ? '' : ' warn'}`}
+          className={`cite-marker${cit.verified === false ? ' warn' : ''}`}
           onMouseEnter={() => onHover(cit.id)}
           onMouseLeave={() => onHover(null)}
           onFocus={() => onHover(cit.id)}
@@ -338,7 +340,7 @@ function CitationPanel({
               <span className="pill" title={kindTip ? t(kindTip) : undefined}>
                 {c.kind}
               </span>
-              {!c.verified && (
+              {c.verified === false && (
                 <span className="pill unverified">{t('ask.unverified')}</span>
               )}
             </div>
