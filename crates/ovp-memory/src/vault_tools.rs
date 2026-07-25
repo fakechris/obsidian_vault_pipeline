@@ -702,7 +702,10 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
 fn tokenize_search_terms(query: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut terms = Vec::new();
-    for term in query.split_ascii_whitespace().map(str::to_lowercase) {
+    // Unicode-aware split: CJK IME input separates terms with U+3000
+    // ideographic spaces, which split_ascii_whitespace would glue into one
+    // unmatchable token (parity with search_source_chunks).
+    for term in query.split_whitespace().map(str::to_lowercase) {
         if !term.is_empty() && seen.insert(term.clone()) {
             terms.push(term);
             if terms.len() == MAX_SEARCH_TERMS {
@@ -3689,6 +3692,11 @@ mod tests {
             Duration::from_secs(10),
         ));
         assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
+
+        // CJK IME queries separate terms with U+3000 ideographic spaces -
+        // the tokenizer must split on Unicode whitespace, not ASCII only.
+        let ideographic = tokenize_search_terms("\u{624b}\u{5199}\u{3000}transformer\u{3000}\u{7b14}\u{8bb0}");
+        assert_eq!(ideographic, vec!["\u{624b}\u{5199}", "transformer", "\u{7b14}\u{8bb0}"]);
 
         let mut dedupe_tools = VaultTools::new(temp.path());
         let deduped = ok_json(call(
