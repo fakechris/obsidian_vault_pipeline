@@ -327,8 +327,8 @@ pub fn run_agent_turn_with_progress(
             temperature: cfg.temperature,
             tools: (!tool_defs.is_empty()).then(|| tool_defs.clone()),
             // Bumped with each ACCEPTED policy version (prompt-version
-            // isolation for recorded cassettes): v2 = ask_agent_policy-v2.
-            cache_namespace: Some("ask_agent/v2".into()),
+            // isolation for recorded cassettes): v3 = ask_agent_policy-v3.
+            cache_namespace: Some("ask_agent/v3".into()),
         };
         let reply = match client.call(&request) {
             Ok(r) => r,

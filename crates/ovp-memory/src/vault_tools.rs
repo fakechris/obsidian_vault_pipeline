@@ -521,7 +521,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -534,7 +534,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by how many DISTINCT terms each source matches (recency breaks ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; score = best group's matched fraction; total matched then recency break ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
