@@ -612,6 +612,25 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         if !unverified.is_empty() {
             text.push_str(&format!("; UNVERIFIED: {}", unverified.join(", ")));
         }
+        // The trail IS available — reconstructed from the committed
+        // transcript by the engine's replay — and a racing retry deserves
+        // the same 复盘 detail as any other reply.
+        if !outcome.tool_trace.is_empty() {
+            text.push_str("\nagent trail:");
+            for t2 in &outcome.tool_trace {
+                let mark = if t2.is_error { "✗" } else { "✓" };
+                let args = match ovp_memory::receipts::args_brief(&t2.arguments) {
+                    Value::String(s) => format!(" {s}"),
+                    _ => String::new(),
+                };
+                let note = t2
+                    .result_note
+                    .as_deref()
+                    .map(|n| format!(" → {n}"))
+                    .unwrap_or_default();
+                text.push_str(&format!("\n  {}{mark}{args}{note}", t2.tool));
+            }
+        }
         text.push_str(&format!(
             "\nidempotent replay of turn {} (completed by a concurrent request)\n\
              session: {session} (pass as `chat` to continue)",
