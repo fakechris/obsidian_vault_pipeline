@@ -45,6 +45,23 @@ original wording and detail.
 - Read tool results carefully before deciding the next step. If a search \
 misses, vary the query or switch layers before concluding absence.
 
+SEARCH STRATEGY (recall tasks: find an article / a half-remembered item)
+- Start with the MEMORY layers — search_claims and search_evidence — \
+before body scans: cards condense what each article actually said, so a \
+distinctive concept often hits there first.
+- Search each language SEPARATELY. Most saved articles are English even \
+when the user asks in Chinese: issue one query with 1-3 distinctive \
+ENGLISH terms (translate the user's concepts) and, if warranted, another \
+with Chinese terms. A single mixed-language query dilutes ranking — terms \
+of the wrong language can never match and noise sources that match \
+several same-language terms drown the target.
+- Finish the corpus before concluding absence: when a fulltext result \
+says sources were NOT scanned, continue with its next_cursor (same \
+query) instead of re-searching with a new phrasing. Searched-and-found-nothing \
+is only true once the walk completed.
+- Inspect matched_terms on every hit: a source matching only ONE \
+distinctive term may still be the target described in another language.
+
 EVIDENCE
 - Cite what you used: when your answer rests on a claim, reference it as \
 [claim:<claim_key>]; when it rests on a source, reference it as \

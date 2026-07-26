@@ -108,3 +108,44 @@ pub fn agent_citations_unindexed(
         })
         .collect()
 }
+
+/// Compact display line for a tool call's arguments ("query=agent memory ·
+/// limit=10") — narration for the live progress trail. Scalar fields only,
+/// well-known keys first, capped so a pathological argument can't flood the
+/// feed. Null when nothing scalar is present.
+pub fn args_brief(arguments: &serde_json::Value) -> serde_json::Value {
+    const PRIORITY: [&str; 6] = ["query", "claim_key", "claim_id", "source_id", "cursor", "limit"];
+    let Some(obj) = arguments.as_object() else {
+        return serde_json::Value::Null;
+    };
+    let render = |v: &serde_json::Value| match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for key in PRIORITY {
+        if let Some(v) = obj.get(key).and_then(&render) {
+            parts.push(format!("{key}={v}"));
+        }
+    }
+    for (key, value) in obj {
+        if parts.len() >= 3 {
+            break;
+        }
+        if !PRIORITY.contains(&key.as_str())
+            && let Some(v) = render(value)
+        {
+            parts.push(format!("{key}={v}"));
+        }
+    }
+    if parts.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let mut brief = parts.join(" · ");
+    if brief.chars().count() > 120 {
+        brief = brief.chars().take(119).collect::<String>() + "…";
+    }
+    serde_json::Value::String(brief)
+}

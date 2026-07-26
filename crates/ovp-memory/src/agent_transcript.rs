@@ -512,6 +512,56 @@ impl SessionStore {
     /// The audit ToolCalled rows of one turn — replayed outcomes rebuild
     /// their tool_trace from these (a retry must not lose the provenance
     /// trail the original response carried).
+    /// [`Self::tool_calls_for_turn`] plus the narration fields a replayed
+    /// trail needs for 复盘: the model's call ARGUMENTS (from the recorded
+    /// assistant blocks) and a result-stats note (from the full audit
+    /// content; late results narrate nothing, matching the original reply).
+    pub fn tool_trail_for_turn(
+        &self,
+        id: &str,
+    ) -> Vec<(String, String, bool, String, serde_json::Value, Option<String>)> {
+        let mut args_by_call: std::collections::HashMap<&str, &serde_json::Value> =
+            std::collections::HashMap::new();
+        for e in &self.events {
+            if let TranscriptEvent::Message {
+                turn_id,
+                message: ovp_llm::ModelMessage::AssistantBlocks { blocks },
+            } = e
+                && turn_id == id
+            {
+                for b in blocks {
+                    if let ovp_llm::AssistantBlock::ToolUse { id: call_id, input, .. } = b {
+                        args_by_call.insert(call_id.as_str(), input);
+                    }
+                }
+            }
+        }
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::ToolCalled {
+                    turn_id, tool_call_id, tool, is_error, content, late, ..
+                } if turn_id == id => Some((
+                    tool.clone(),
+                    tool_call_id.clone(),
+                    *is_error,
+                    if *late {
+                        "late: discarded (audit only)".to_string()
+                    } else {
+                        content.chars().take(120).collect()
+                    },
+                    args_by_call
+                        .get(tool_call_id.as_str())
+                        .cloned()
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    if *late { None } else { crate::agent::tool_result_note(content) },
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn tool_calls_for_turn(&self, id: &str) -> Vec<(String, String, bool, String)> {
         self.events
             .iter()

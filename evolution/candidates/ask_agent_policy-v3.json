@@ -1,0 +1,23 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_agent_policy-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "prompt",
+  "component": "prompt.ask_agent_policy",
+  "hypothesis": "PROMPT surface, one additive SEARCH STRATEGY block for recall tasks, from the same live failure: the model searched memory layers once with one mixed query, issued five Chinese-dominant fulltext scans, ignored the cursor every time, and concluded absence at round 3 of 10. The block teaches: memory layers (claims+evidence) first; search each language SEPARATELY (translate the user's concepts to English — most saved articles are English even when asked in Chinese); finish the corpus via next_cursor before concluding absence; inspect matched_terms before dismissing single-term hits. Predicted: recall turns issue at least one English-term query and continue truncated walks; non-recall behavior unchanged (block scoped to recall tasks).",
+  "predicted_delta": {
+    "coverage": "recall searches stop being monolingual and stop concluding absence with a third of the corpus unscanned"
+  },
+  "guardrails": {
+    "additive_only": "every existing policy section keeps its text; A3a/v2 checklist and tripwire tests pass unmodified",
+    "tool_layer_backstop": "the tool-side fixes (language-grouped ranking, continuation note) do not depend on the model following this guidance — policy reduces wasted rounds, tools guarantee ranking"
+  },
+  "eval_plan": {
+    "replay_set": "live replay of the failed question must issue an English-term query and/or cursor continuation and recover the target; deterministic policy checklist tests pass unmodified",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert the const to v2 text.",
+  "ablation_required": false
+}

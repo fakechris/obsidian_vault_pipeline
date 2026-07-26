@@ -114,6 +114,8 @@ interface TrailStep {
   args: string | null;
   status: 'running' | 'ok' | 'err';
   summary?: string;
+  /** Result stats ("3 hit(s) · scanned 918/1281 · truncated"). */
+  note?: string | null;
 }
 
 /** Fold started/finished event pairs into per-call steps (order preserved). */
@@ -131,6 +133,7 @@ function stepsFromEvents(events: AskProgressEvent[]): TrailStep[] {
           ...steps[i],
           status: ev.ok === false ? 'err' : 'ok',
           summary: ev.summary,
+          note: ev.note ?? null,
         };
       }
     }
@@ -141,9 +144,10 @@ function stepsFromEvents(events: AskProgressEvent[]): TrailStep[] {
 function stepsFromTrace(trace: AskTraceEntry[]): TrailStep[] {
   return trace.map((t) => ({
     tool: t.tool,
-    args: null,
+    args: t.args ?? null,
     status: t.ok ? ('ok' as const) : ('err' as const),
     summary: t.summary,
+    note: t.note ?? null,
   }));
 }
 
@@ -186,6 +190,7 @@ function AgentTrail({
           <span>{t(toolVerbKey(s.tool))}</span>
           <span className="mono ask-step-tool">{s.tool}</span>
           {s.args && <span className="mono muted ask-step-args">{s.args}</span>}
+          {s.note && <span className="tiny muted ask-step-note">→ {s.note}</span>}
           {s.status === 'err' && (
             <span className="pill failed">{t('ask.trailFailedStep')}</span>
           )}

@@ -481,15 +481,18 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         }
         // Tool provenance survives the replay — rebuilt from the transcript,
         // exactly like the HTTP replay path.
-        let trail: Vec<String> = store
-            .tool_calls_for_turn(&done.turn_id)
-            .into_iter()
-            .map(|(tool, _id, is_error, _summary)| {
-                format!("{tool}{}", if is_error { "✗" } else { "✓" })
-            })
-            .collect();
+        let trail = store.tool_trail_for_turn(&done.turn_id);
         if !trail.is_empty() {
-            text.push_str(&format!("\nagent trail: {}", trail.join(", ")));
+            text.push_str("\nagent trail:");
+            for (tool, _id, is_error, _summary, arguments, note) in trail {
+                let mark = if is_error { "✗" } else { "✓" };
+                let args = match ovp_memory::receipts::args_brief(&arguments) {
+                    Value::String(s) => format!(" {s}"),
+                    _ => String::new(),
+                };
+                let note = note.map(|n| format!(" → {n}")).unwrap_or_default();
+                text.push_str(&format!("\n  {tool}{mark}{args}{note}"));
+            }
         }
         text.push_str(&format!(
             "\nidempotent replay of turn {} (no new model call)\nsession: {session} \
@@ -643,13 +646,21 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         text.push_str(&format!("\ncoverage: {line}"));
     }
     if !outcome.tool_trace.is_empty() {
-        let trail = outcome
-            .tool_trace
-            .iter()
-            .map(|t| format!("{}{}", t.tool, if t.is_error { "✗" } else { "✓" }))
-            .collect::<Vec<_>>()
-            .join(", ");
-        text.push_str(&format!("\nagent trail: {trail}"));
+        // One line per call, 复盘-grade: what was asked, what came back.
+        text.push_str("\nagent trail:");
+        for t in &outcome.tool_trace {
+            let mark = if t.is_error { "✗" } else { "✓" };
+            let args = match ovp_memory::receipts::args_brief(&t.arguments) {
+                Value::String(s) => format!(" {s}"),
+                _ => String::new(),
+            };
+            let note = t
+                .result_note
+                .as_deref()
+                .map(|n| format!(" → {n}"))
+                .unwrap_or_default();
+            text.push_str(&format!("\n  {}{mark}{args}{note}", t.tool));
+        }
     }
     if outcome.stopped_reason != StoppedReason::Final {
         text.push_str(&format!(

@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, two recall fixes from a verbatim live failure (2026-07-26, the SAME article the v2 regression had recovered): the model issued five Chinese-dominant mixed queries; the English target matched only `transformer` (1 distinct term) and was outranked by newer Chinese sources matching 2-3 Chinese terms, while every scan stopped at 918/1281 and the model ignored next_cursor five times. (1) LANGUAGE-GROUPED RANKING: query terms split by script (CJK vs Latin); a candidate scores the best group fraction in permille — fully matching one language's terms (1/1 Latin) now outranks partially matching the other's (2/3 CJK); total matched terms breaks ties before recency. Applies to search_evidence and search_fulltext. (2) CONTINUATION NOTE: a truncated walk's result carries a note naming the unscanned remainder and telling the model to pass next_cursor with the same query. Predicted: the recorded failure replays to a hit; all-one-language queries rank exactly as before (single group).",
+  "predicted_delta": {
+    "coverage": "cross-language recall stops being structurally impossible for mixed queries; truncated walks become continuable instead of a permanent blind tail",
+    "operational_reliability": "self-documenting truncation reduces wasted re-scans (five identical 918-source scans in one live turn)"
+  },
+  "guardrails": {
+    "single_language_unchanged": "queries whose terms are all one script have one group — ranking is the same fraction ordering as v2's distinct-term counts (existing ranking tests pass unmodified)",
+    "honesty_unchanged": "scoring changes ORDER only; matched_terms, scanned/total accounting, truncated flags, and coverage semantics are untouched",
+    "note_is_display": "the continuation note is narration in the result payload — cursors, fingerprints, and walk semantics are byte-identical"
+  },
+  "eval_plan": {
+    "replay_set": "the live failure verbatim: query 手写 Transformer 求职 笔记 against an English target (matches only `transformer`) plus newer Chinese noise (matches 2/3 CJK terms) → target ranks first; truncated-walk note presence test; all prior v2 fixtures (flood ranking, cursor, budgets, frontmatter) pass unmodified",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert language_grouped_score to matched_terms.len() and drop the note field — ranking-only change, no persisted state.",
+  "ablation_required": false
+}

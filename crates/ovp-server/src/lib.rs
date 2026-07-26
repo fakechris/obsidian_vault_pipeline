@@ -36,7 +36,7 @@ use ovp_memory::ask::{
     AskArgs, AskHistoryTurn, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence,
     valid_chat_stem,
 };
-use ovp_memory::receipts::{agent_citations, agent_citations_unindexed};
+use ovp_memory::receipts::{agent_citations, agent_citations_unindexed, args_brief};
 use ovp_memory::verify::{citation_key, citations_in_order};
 use tiny_http::{Header, Method, Response, Server};
 
@@ -2367,10 +2367,13 @@ fn handle_ask_agent(
                 && let Some(done) = store.completed_turn_for_key(key)
             {
                 let trace: Vec<serde_json::Value> = store
-                    .tool_calls_for_turn(&done.turn_id)
+                    .tool_trail_for_turn(&done.turn_id)
                     .into_iter()
-                    .map(|(tool, _id, is_error, summary)| {
-                        serde_json::json!({"tool": tool, "summary": summary, "ok": !is_error})
+                    .map(|(tool, _id, is_error, summary, arguments, note)| {
+                        serde_json::json!({
+                            "tool": tool, "summary": summary, "ok": !is_error,
+                            "args": args_brief(&arguments), "note": note,
+                        })
                     })
                     .collect();
                 // Receipts recompute fine without a client (ledger + index
@@ -2476,11 +2479,11 @@ fn handle_ask_agent(
                             "args": args_brief(arguments),
                         })
                     }
-                    AgentProgress::ToolFinished { tool_call_id, tool, is_error, summary } => {
+                    AgentProgress::ToolFinished { tool_call_id, tool, is_error, summary, note } => {
                         serde_json::json!({
                             "event": "tool_finished", "tool": tool,
                             "tool_call_id": tool_call_id, "ok": !is_error,
-                            "summary": summary,
+                            "summary": summary, "note": note,
                         })
                     }
                     // The advertised terminal protocol is final | error: a
@@ -2567,11 +2570,15 @@ fn handle_ask_agent(
             let trace: Vec<serde_json::Value> = outcome
                 .tool_trace
                 .iter()
-                .map(|t|
-
+                .map(|t| {
                     serde_json::json!({
-                        "tool": t.tool, "summary": t.summary, "ok": !t.is_error
-                    }))
+                        "tool": t.tool, "summary": t.summary, "ok": !t.is_error,
+                        // 复盘 detail: what was asked, what came back — the
+                        // post-answer trail must not degrade to bare names.
+                        "args": args_brief(&t.arguments),
+                        "note": t.result_note,
+                    })
+                })
                 .collect();
             // History parity (A3d gate P1): the JSONL session transcript is
             // the audit record, but /api/chats and the Ask history rail read
@@ -2667,52 +2674,6 @@ fn handle_ask_agent(
             json_response(504, &body.to_string())
         }
     }
-}
-
-/// Resolve the agent answer's citation markers into receipts
-/// (`citations_resolved_not_trusted`): [claim:<key>] against the ACTIVE
-/// ledger records (link = the claim's knowledge anchor), [source:<id>]
-/// against the index (link = /library). Anything unresolvable is
-/// verified:false — surfaced, never silently dropped.
-/// Compact display line for a tool call's arguments ("query=agent memory ·
-/// limit=10") — narration for the live progress trail. Scalar fields only,
-/// well-known keys first, capped so a pathological argument can't flood the
-/// feed. Null when nothing scalar is present.
-fn args_brief(arguments: &serde_json::Value) -> serde_json::Value {
-    const PRIORITY: [&str; 6] = ["query", "claim_key", "claim_id", "source_id", "cursor", "limit"];
-    let Some(obj) = arguments.as_object() else {
-        return serde_json::Value::Null;
-    };
-    let render = |v: &serde_json::Value| match v {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        serde_json::Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    };
-    let mut parts: Vec<String> = Vec::new();
-    for key in PRIORITY {
-        if let Some(v) = obj.get(key).and_then(&render) {
-            parts.push(format!("{key}={v}"));
-        }
-    }
-    for (key, value) in obj {
-        if parts.len() >= 3 {
-            break;
-        }
-        if !PRIORITY.contains(&key.as_str())
-            && let Some(v) = render(value)
-        {
-            parts.push(format!("{key}={v}"));
-        }
-    }
-    if parts.is_empty() {
-        return serde_json::Value::Null;
-    }
-    let mut brief = parts.join(" · ");
-    if brief.chars().count() > 120 {
-        brief = brief.chars().take(119).collect::<String>() + "…";
-    }
-    serde_json::Value::String(brief)
 }
 
 /// `GET /api/ask/progress?chat=<session>` — the minimal A0 §3.7 progress feed.

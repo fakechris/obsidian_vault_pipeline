@@ -275,6 +275,10 @@ export interface AskTraceEntry {
   tool: string;
   summary: string;
   ok: boolean;
+  /** Display narration of the call arguments ("query=… · limit=…"). */
+  args?: string | null;
+  /** Parsed result stats ("3 hit(s) · scanned 918/1281 · truncated"). */
+  note?: string | null;
 }
 
 /** One event from GET /api/ask/progress — the live mid-turn feed. */
@@ -285,6 +289,8 @@ export interface AskProgressEvent {
   /** Display narration for tool_started ("query=… · limit=…"). */
   args?: string | null;
   summary?: string;
+  /** Parsed result stats for tool_finished events. */
+  note?: string | null;
   ok?: boolean;
   turn_id?: string;
   stopped_reason?: string;

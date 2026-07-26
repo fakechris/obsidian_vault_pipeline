@@ -1,0 +1,24 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_trail_detail-v1",
+  "base_version": "v1.1",
+  "target_version": "v1.2",
+  "surface": "runtime",
+  "component": "runtime.ask_agent",
+  "hypothesis": "RUNTIME surface, additive trail enrichment for 复盘 (operator finding: the post-answer trail showed seven bare tool names — what was searched and what came back was invisible, unlike grok's reviewable per-query trail). ToolTraceEntry gains the call's raw arguments and a result-stats note parsed from the FULL result (hits count, scanned/total, truncated) — computed before model-facing truncation, absent (never guessed) for late or non-JSON results. The transcript store gains tool_trail_for_turn so REPLAYED turns reconstruct the same detail (arguments recovered from the recorded assistant blocks). Product surfaces render it: portal trail steps show query + stats persistently (live and post-answer), MCP replies list one call per line with args and stats. Predicted: a failed recall is diagnosable from the UI alone — which queries ran, in which language, how much corpus was covered.",
+  "predicted_delta": {
+    "operational_reliability": "failed searches become reviewable artifacts instead of opaque tool-name lists; the 复盘 that previously required reading the JSONL transcript happens in the product"
+  },
+  "guardrails": {
+    "audit_unchanged": "the transcript schema is untouched — arguments were already recorded in assistant blocks, notes derive from already-recorded content",
+    "late_stays_discarded": "late results narrate nothing (no stats leak past the discard marker)",
+    "additive_shape": "trace JSON gains keys; existing consumers reading tool/summary/ok are unaffected"
+  },
+  "eval_plan": {
+    "replay_set": "engine tests: trace entries carry arguments + parsed notes; transcript reconstruction returns arguments from assistant blocks; server tests: trace JSON carries args/note on live and replayed turns; UI builds",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Drop the two ToolTraceEntry fields and the accessor — additive, no persisted state.",
+  "ablation_required": false
+}
