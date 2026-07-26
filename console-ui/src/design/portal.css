@@ -1593,6 +1593,13 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ask-step-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ask-agent-meta {
   margin-top: 0.7rem;
   padding-top: 0.6rem;

@@ -83,6 +83,38 @@ pub struct ToolTraceEntry {
     pub tool_call_id: String,
     pub is_error: bool,
     pub summary: String,
+    /// The model's raw call input — replay/UI narration ("what did I search"),
+    /// never re-executed.
+    pub arguments: serde_json::Value,
+    /// Compact stats parsed from the FULL result ("3 hits · scanned 918/1281 ·
+    /// truncated") — the trail must support post-hoc 复盘, not just names.
+    pub result_note: Option<String>,
+}
+
+/// Generic result introspection for the trail: hits/scanned/truncated are the
+/// shared vocabulary of every search-shaped tool result. Non-JSON or
+/// keyless results narrate nothing (None), never a guess.
+pub fn tool_result_note(content: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    let obj = v.as_object()?;
+    let mut parts = Vec::new();
+    if let Some(hits) = obj.get("hits").and_then(|h| h.as_array()) {
+        parts.push(format!("{} hit(s)", hits.len()));
+    }
+    if let (Some(s), Some(t)) = (
+        obj.get("scanned_sources").and_then(|v| v.as_u64()),
+        obj.get("total_sources").and_then(|v| v.as_u64()),
+    ) {
+        parts.push(format!("scanned {s}/{t}"));
+    }
+    if obj.get("truncated").and_then(|v| v.as_bool()) == Some(true) {
+        parts.push("truncated".into());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,8 +192,15 @@ pub enum AgentProgress {
     /// display summary (e.g. the query term) and MUST NOT execute from it.
     ToolStarted { tool_call_id: String, tool: String, arguments: serde_json::Value },
     /// `summary` mirrors the caller-facing `ToolTraceEntry` summary: capped,
-    /// and the discard marker (never content) for late results.
-    ToolFinished { tool_call_id: String, tool: String, is_error: bool, summary: String },
+    /// and the discard marker (never content) for late results. `note` is the
+    /// parsed result-stats line ("3 hit(s) · scanned 918/1281 · truncated").
+    ToolFinished {
+        tool_call_id: String,
+        tool: String,
+        is_error: bool,
+        summary: String,
+        note: Option<String>,
+    },
     Finished { turn_id: String, stopped_reason: StoppedReason },
 }
 
@@ -288,8 +327,8 @@ pub fn run_agent_turn_with_progress(
             temperature: cfg.temperature,
             tools: (!tool_defs.is_empty()).then(|| tool_defs.clone()),
             // Bumped with each ACCEPTED policy version (prompt-version
-            // isolation for recorded cassettes): v2 = ask_agent_policy-v2.
-            cache_namespace: Some("ask_agent/v2".into()),
+            // isolation for recorded cassettes): v3 = ask_agent_policy-v3.
+            cache_namespace: Some("ask_agent/v3".into()),
         };
         let reply = match client.call(&request) {
             Ok(r) => r,
@@ -523,6 +562,9 @@ pub fn run_agent_turn_with_progress(
                 tool_call_id: id.clone(),
                 is_error: is_error || finished_late,
                 summary: trail_summary.clone(),
+                arguments: input.clone(),
+                // Late data stays discarded — no stats leak either.
+                result_note: if finished_late { None } else { tool_result_note(&content) },
             });
             let (model_content, model_is_error) = if finished_late {
                 timed_out = true;
@@ -552,6 +594,7 @@ pub fn run_agent_turn_with_progress(
                 tool: name.clone(),
                 is_error: model_is_error,
                 summary: trail_summary,
+                note: trace.last().and_then(|t| t.result_note.clone()),
             });
             results.push(ToolResultBlock {
                 tool_call_id: id.clone(),
@@ -635,14 +678,18 @@ pub fn run_agent_turn_with_progress(
 /// retry must not lose the provenance trail the original response carried.
 fn replayed_trace(store: &SessionStore, turn_id: &str) -> Vec<ToolTraceEntry> {
     store
-        .tool_calls_for_turn(turn_id)
+        .tool_trail_for_turn(turn_id)
         .into_iter()
-        .map(|(tool, tool_call_id, is_error, summary)| ToolTraceEntry {
-            tool,
-            tool_call_id,
-            is_error,
-            summary,
-        })
+        .map(
+            |(tool, tool_call_id, is_error, summary, arguments, result_note)| ToolTraceEntry {
+                tool,
+                tool_call_id,
+                is_error,
+                summary,
+                arguments,
+                result_note,
+            },
+        )
         .collect()
 }
 

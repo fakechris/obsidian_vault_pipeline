@@ -521,7 +521,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by distinct-term score and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -534,7 +534,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits are ranked by how many DISTINCT terms each source matches (recency breaks ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; score = best group's matched fraction; total matched then recency break ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
@@ -822,8 +822,9 @@ fn decode_fulltext_cursor(
         fulltext_cursor_fingerprint(&terms, model, fulltext_candidate_count(model), offset);
     if fingerprint != expected {
         return Ok(Err(
-            "fulltext cursor belongs to a different query, index, or position; \
-             restart without a cursor"
+            "fulltext cursor belongs to a different query, index, or position — \
+             a cursor only continues the EXACT query that returned it: repeat \
+             that query with this cursor, or drop the cursor to start fresh"
                 .into(),
         ));
     }
@@ -834,6 +835,29 @@ fn decode_fulltext_cursor(
 /// rank by the number of distinct OR-matched terms, with original index order
 /// breaking ties; source joins remain optional because pre-join packs can
 /// legitimately lack a source sha.
+/// Mixed-language queries are inherently biased: an English article can never
+/// match Chinese terms, so raw distinct-term counts drown it under noise
+/// sources matching several terms of the query's dominant language (live
+/// failure: `手写 Transformer 求职 笔记` ranked Chinese note-taking articles
+/// above the English target that matched only `transformer`). Terms are
+/// grouped by script (CJK-range vs everything else) and a candidate scores
+/// the BEST group fraction in permille — fully matching one language's terms
+/// beats partially matching the other's. Total matched terms breaks ties
+/// before recency/index order.
+fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) {
+    let is_cjk = |t: &str| t.chars().any(|c| (c as u32) >= 0x2E80);
+    let mut best = 0u32;
+    for want_cjk in [false, true] {
+        let group: Vec<&String> = terms.iter().filter(|t| is_cjk(t) == want_cjk).collect();
+        if group.is_empty() {
+            continue;
+        }
+        let hit = group.iter().filter(|t| matched.iter().any(|m| m == **t)).count();
+        best = best.max((hit * 1000 / group.len()) as u32);
+    }
+    (best, matched.len())
+}
+
 pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
     let terms = tokenize_search_terms(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
@@ -883,7 +907,7 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
             })
             .collect::<Vec<_>>();
         any_matched_cards_truncated |= matched_cards_truncated;
-        let score = matched_terms.len();
+        let score = language_grouped_score(&terms, &matched_terms);
 
         let mut hit = Map::new();
         hit.insert("pack_title".into(), json!(pack.title));
@@ -1015,7 +1039,7 @@ fn search_fulltext_at_with_budget(
     // and a multi-term target deeper in the walk never surfaces. Instead the
     // walk runs to budget/deadline/end, then hits rank by score (recency
     // breaks ties via walk position) and `limit` trims the RETURNED list.
-    let mut scored_hits: Vec<(usize, usize, Value)> = Vec::new();
+    let mut scored_hits: Vec<((u32, usize), usize, Value)> = Vec::new();
     let mut scanned_sources = 0usize;
     let mut corpus_bytes = 0usize;
     let mut next_offset = start_offset;
@@ -1051,7 +1075,7 @@ fn search_fulltext_at_with_budget(
         corpus_bytes = corpus_bytes.saturating_add(scan.bytes_scanned);
 
         if !scan.matched_terms.is_empty() {
-            let score = scan.matched_terms.len();
+            let score = language_grouped_score(&terms, &scan.matched_terms);
             scored_hits.push((
                 score,
                 index,
@@ -1114,6 +1138,17 @@ fn search_fulltext_at_with_budget(
                 &terms,
                 model,
                 total_sources
+            )),
+        );
+        // Self-documenting continuation: a live turn issued FIVE fresh scans
+        // and ignored the cursor every time — the unscanned tail was a
+        // permanent blind spot the model never knew it had.
+        out.insert(
+            "note".into(),
+            json!(format!(
+                "{} of {total_sources} sources NOT scanned yet — pass next_cursor as \
+                 `cursor` (same query) to continue instead of re-searching",
+                total_sources.saturating_sub(next_offset)
             )),
         );
     }
@@ -3290,6 +3325,82 @@ mod tests {
         assert_eq!(result["truncated"], false);
     }
 
+    /// The 2026-07-26 live failure, verbatim: a mixed-language query
+    /// (手写 Transformer 求职 笔记) must rank the ENGLISH target that fully
+    /// matches its only Latin term above NEWER Chinese sources matching 2 of
+    /// 3 Chinese terms — raw distinct-term counting drowned it.
+    #[test]
+    fn fulltext_language_groups_rescue_cross_language_recall() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        fs::create_dir_all(temp.path().join("sources")).expect("source dir");
+        let mut sources = Vec::new();
+        for i in 0..3 {
+            let rel = format!("sources/zh-{i}.md");
+            fs::write(
+                temp.path().join(&rel),
+                "\u{624b}\u{5199}\u{7b14}\u{8bb0}\u{8f6f}\u{4ef6}\u{6bd4}\u{8f83}",
+            )
+            .expect("body");
+            sources.push(source(
+                &format!("sha-zh-{i}"),
+                "Chinese notes app",
+                Some(&rel),
+                Some("2026-07-20"),
+            ));
+        }
+        fs::write(
+            temp.path().join("sources/target.md"),
+            "implementing a transformer comes up so often in interviews",
+        )
+        .expect("body");
+        sources.push(source(
+            "sha-en-target",
+            "Notes on the Industry Job Search",
+            Some("sources/target.md"),
+            Some("2026-06-22"),
+        ));
+        let model = fixture_model(sources, vec![], vec![]);
+        write_index(temp.path(), &model).expect("index fixture");
+        let mut tools = VaultTools::new(temp.path());
+        let result = ok_json(call(
+            &mut tools,
+            "search_fulltext",
+            json!({"query": "\u{624b}\u{5199} transformer \u{6c42}\u{804c} \u{7b14}\u{8bb0}"}),
+        ));
+        let hits = result["hits"].as_array().expect("hits");
+        assert_eq!(
+            hits[0]["source_id"], "sha-en-target",
+            "full Latin-group match (1/1) outranks newer 2-of-3 CJK matches: {result}"
+        );
+    }
+
+    /// Truncated walks tell the model HOW to continue — the note names the
+    /// unscanned remainder and the cursor mechanism.
+    #[test]
+    fn fulltext_truncated_walk_carries_a_continuation_note() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        fs::create_dir_all(temp.path().join("sources")).expect("source dir");
+        let mut sources = Vec::new();
+        for i in 0..4 {
+            let rel = format!("sources/f-{i}.md");
+            fs::write(temp.path().join(&rel), "needle body padding padding").expect("body");
+            sources.push(source(&format!("sha-f-{i}"), "F", Some(&rel), Some("2026-07-01")));
+        }
+        let model = fixture_model(sources, vec![], vec![]);
+        write_index(temp.path(), &model).expect("index fixture");
+        let mut tools = VaultTools::new(temp.path()).with_fulltext_corpus_scan_bytes(30);
+        let result = ok_json(call(
+            &mut tools,
+            "search_fulltext",
+            json!({"query": "needle"}),
+        ));
+        assert_eq!(result["truncated"], true);
+        assert!(result.get("next_cursor").is_some(), "{result}");
+        let note = result["note"].as_str().expect("note");
+        assert!(note.contains("NOT scanned yet"), "{note}");
+        assert!(note.contains("next_cursor"), "{note}");
+    }
+
     /// The live 1281-source replay's remaining defect: a common single term
     /// ("transformer" in an AI-heavy vault) floods first-N-in-walk-order and
     /// an OLDER multi-term target never surfaces. Ranking is by distinct-term
@@ -3511,7 +3622,7 @@ mod tests {
             outcome,
             ToolOutcome::Failed(ref detail)
                 if detail.contains("different query, index, or position")
-                    && detail.contains("restart without a cursor")
+                    && detail.contains("drop the cursor to start fresh")
         ));
         // ...and it leaves coverage untouched: nothing about the LAYER
         // failed, and worst-observed merging would otherwise pin the whole

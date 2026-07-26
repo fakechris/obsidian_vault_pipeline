@@ -156,7 +156,7 @@
   {
    "id": "runtime.ask_agent",
    "surface": "runtime",
-   "current_version": "v1.1",
+   "current_version": "v1.2",
    "file": "crates/ovp-memory/src/ask.rs",
    "quality_buckets": [
     "coverage",
@@ -167,7 +167,7 @@
   {
    "id": "runtime.ask_vault_tools",
    "surface": "runtime",
-   "current_version": "v2",
+   "current_version": "v3",
    "file": "crates/ovp-memory/src/vault_tools.rs",
    "quality_buckets": [
     "coverage",
@@ -178,7 +178,7 @@
   {
    "id": "prompt.ask_agent_policy",
    "surface": "prompt",
-   "current_version": "v2",
+   "current_version": "v3",
    "file": "crates/ovp-memory/src/agent_policy.rs",
    "quality_buckets": [
     "coverage",
