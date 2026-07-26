@@ -822,8 +822,9 @@ fn decode_fulltext_cursor(
         fulltext_cursor_fingerprint(&terms, model, fulltext_candidate_count(model), offset);
     if fingerprint != expected {
         return Ok(Err(
-            "fulltext cursor belongs to a different query, index, or position; \
-             restart without a cursor"
+            "fulltext cursor belongs to a different query, index, or position — \
+             a cursor only continues the EXACT query that returned it: repeat \
+             that query with this cursor, or drop the cursor to start fresh"
                 .into(),
         ));
     }
@@ -3621,7 +3622,7 @@ mod tests {
             outcome,
             ToolOutcome::Failed(ref detail)
                 if detail.contains("different query, index, or position")
-                    && detail.contains("restart without a cursor")
+                    && detail.contains("drop the cursor to start fresh")
         ));
         // ...and it leaves coverage untouched: nothing about the LAYER
         // failed, and worst-observed merging would otherwise pin the whole
