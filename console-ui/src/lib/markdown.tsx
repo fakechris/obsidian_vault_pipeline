@@ -200,6 +200,7 @@ export function renderInline(
   text: string,
   keyPrefix = 'i',
   marker?: InlineMarker,
+  autolink = true,
 ): ReactNode[] {
   const out: ReactNode[] = [];
   let rest = text;
@@ -208,15 +209,35 @@ export function renderInline(
   // them without markdown syntax, and a dead-text GitHub URL in an answer is
   // a product failure. Trailing punctuation stays text; the href is the
   // matched URL verbatim (still only http/https — no scheme smuggling).
-  const AUTOLINK = /https?:\/\/[^\s<>"'`\])}]+/g;
+  const AUTOLINK = /https?:\/\/[^\s<>"'`\]}]+/g;
   const pushText = (chunk: string) => {
     if (chunk === '') return;
+    if (!autolink) {
+      out.push(chunk);
+      return;
+    }
     let last = 0;
     for (const m of chunk.matchAll(AUTOLINK)) {
       const at = m.index ?? 0;
       let url = m[0];
-      // Common trailing punctuation is sentence-ware, not URL.
-      while (/[.,;:!?、。,;)]$/.test(url)) url = url.slice(0, -1);
+      // Common trailing punctuation is sentence-ware, not URL — but a
+      // closing paren stays when the URL contains its opening half
+      // (https://en.wikipedia.org/wiki/Foo_(bar)).
+      for (;;) {
+        const last = url.slice(-1);
+        if (/[.,;:!?、。,;]/.test(last)) {
+          url = url.slice(0, -1);
+          continue;
+        }
+        if (
+          last === ')' &&
+          (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)
+        ) {
+          url = url.slice(0, -1);
+          continue;
+        }
+        break;
+      }
       if (url.length === 0) continue;
       if (at > last) out.push(chunk.slice(last, at));
       out.push(
@@ -283,7 +304,7 @@ export function renderInline(
         // text and the <a> keeps single-navigation semantics.
         out.push(
           <a key={key} href={href} target="_blank" rel="noreferrer">
-            {renderInline(label, key)}
+            {renderInline(label, key, undefined, false)}
           </a>,
         );
       } else {

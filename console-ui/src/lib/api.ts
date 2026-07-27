@@ -1,6 +1,7 @@
 import type {
   AskProgress,
   AskResponse,
+  AskSessionTurn,
   ChatEntry,
   ClaimDetail,
   ClaimRow,
@@ -332,6 +333,15 @@ export async function postAsk(
 export function fetchAskStatus(): Promise<{ agent: boolean }> {
   if (STATIC_MODE) return Promise.resolve({ agent: false });
   return fetchJson<{ agent: boolean }>('/api/ask/status');
+}
+
+/** GET /api/ask/session/<chat> — completed turns with full trails from the
+ * audit transcript. Empty turns = a legacy markdown-only chat. */
+export function fetchAskSession(chat: string): Promise<{ turns: AskSessionTurn[] }> {
+  if (STATIC_MODE) return Promise.resolve({ turns: [] });
+  return fetchJson<{ turns: AskSessionTurn[] }>(
+    `/api/ask/session/${encodeURIComponent(chat)}`,
+  );
 }
 
 /** GET /api/ask/progress — live mid-turn feed for an agent ask. Unknown

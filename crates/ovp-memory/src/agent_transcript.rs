@@ -516,6 +516,33 @@ impl SessionStore {
     /// trail needs for 复盘: the model's call ARGUMENTS (from the recorded
     /// assistant blocks) and a result-stats note (from the full audit
     /// content; late results narrate nothing, matching the original reply).
+    /// Every COMPLETED turn in transcript order — (turn_id, question,
+    /// answer, stopped_reason). The saved-chat surface uses this to marry
+    /// the product History with the audit trail's per-turn detail.
+    pub fn completed_turns(&self) -> Vec<(String, String, String, String)> {
+        let mut questions: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::new();
+        for e in &self.events {
+            if let TranscriptEvent::TurnStarted { turn_id, question, .. } = e {
+                questions.insert(turn_id.as_str(), question.as_str());
+            }
+        }
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::TurnFinished { turn_id, answer, stopped_reason, .. } => {
+                    Some((
+                        turn_id.clone(),
+                        questions.get(turn_id.as_str()).copied().unwrap_or("").to_string(),
+                        answer.clone(),
+                        stopped_reason.clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn tool_trail_for_turn(
         &self,
         id: &str,

@@ -733,11 +733,20 @@ fn dispatch(
         }
         // Agent-mode discovery MUST work index-free (the agent path itself
         // does): /api/model 503s on an unindexed vault, so the SPA reads
-        // this instead before minting a session id and polling.
+        // this instead before minting a session id and polling. Carries the
+        // server's version identity — the first question when anything looks
+        // stale is "which build am I talking to?".
         (Method::Get, "/api/ask/status") => json_response(
             200,
-            &serde_json::json!({"agent": state.ask_agent}).to_string(),
+            &serde_json::json!({
+                "agent": state.ask_agent,
+                "version": server_version(),
+            })
+            .to_string(),
         ),
+        (Method::Get, p) if p.starts_with("/api/ask/session/") => {
+            handle_ask_session(state, p)
+        }
         (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
@@ -977,9 +986,12 @@ fn handle_source_tags_post(
     let recorded = state.vault_root.join(&rel);
     let note_path = if recorded.is_file() {
         recorded
-    } else if let Some(moved) =
-        ovp_api_projection::readers::lifecycle_moved_path(&state.vault_root, &state.layout, &rel)
-    {
+    } else if let Some(moved) = ovp_api_projection::readers::lifecycle_moved_path(
+        &state.vault_root,
+        &state.layout,
+        &rel,
+        Some(sha),
+    ) {
         moved
     } else {
         // Recorded path gone and no lifecycle candidate: a stale row, not a
@@ -1903,6 +1915,7 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
                 &state.vault_root,
                 &state.layout,
                 source.rel_path.as_deref(),
+                Some(&source.sha256),
             );
             bodies::SourceDoc {
                 markdown,
@@ -1974,7 +1987,9 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // stale "running"). Null on a fresh vault. The client derives age from
         // started_at/ended_at + now — the server ships no `minutes_since`.
         "last_run": state.current_last_run(),
-        "version": env!("CARGO_PKG_VERSION"),
+        // Build identity (operator finding: stale builds were undiagnosable):
+        // was a bare package version; now version+git+built.
+        "version": server_version(),
     });
     json_stamped(200, &body.to_string(), model.as_ref())
 }
@@ -2674,6 +2689,73 @@ fn handle_ask_agent(
             json_response(504, &body.to_string())
         }
     }
+}
+
+/// The server's build identity: package version + git hash (+dirty) + build
+/// instant, stamped by build.rs. Every surface that wonders "am I stale?"
+/// reads this — /api/ask/status (index-free) and /api/settings both carry it.
+fn server_version() -> serde_json::Value {
+    serde_json::json!({
+        "server": env!("CARGO_PKG_VERSION"),
+        "git": env!("OVP_GIT_HASH"),
+        "built": env!("OVP_BUILD_TIME"),
+    })
+}
+
+/// `GET /api/ask/session/<chat>` — the saved-chat surface's bridge to the
+/// AUDIT transcript: every completed turn with its question, answer, stop
+/// status, and per-call trail (args narration + result stats). History
+/// replay renders agent conversations from this instead of the minimal
+/// markdown, so the 复盘 detail survives a reload. Unknown/legacy chats
+/// answer empty turns (the UI falls back to markdown parsing).
+fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    // Session ids are [A-Za-z0-9_-] — nothing to percent-decode.
+    let chat = path.trim_start_matches("/api/ask/session/").to_string();
+    if !ovp_memory::agent_transcript::valid_session_id(&chat) {
+        return json_response(
+            400,
+            r#"{"error":"invalid chat session id","code":"invalid_chat"}"#,
+        );
+    }
+    let sessions_dir = state.vault_root.join(".ovp").join("ask-sessions");
+    // No session file = a legacy (markdown-only) chat — an empty reply, not
+    // an error, and nothing is created on disk for a read.
+    if !sessions_dir.join(format!("{chat}.jsonl")).is_file() {
+        return json_response(200, r#"{"turns":[]}"#);
+    }
+    let store = match ovp_memory::agent_transcript::SessionStore::open(&sessions_dir, &chat) {
+        Ok(s) => s,
+        Err(e) => {
+            return json_response(
+                500,
+                &format!(r#"{{"error":{}}}"#, json_str(&format!("session read: {e}"))),
+            );
+        }
+    };
+    let turns: Vec<serde_json::Value> = store
+        .completed_turns()
+        .into_iter()
+        .map(|(turn_id, question, answer, stopped_reason)| {
+            let trail: Vec<serde_json::Value> = store
+                .tool_trail_for_turn(&turn_id)
+                .into_iter()
+                .map(|(tool, _id, is_error, summary, arguments, note)| {
+                    serde_json::json!({
+                        "tool": tool, "ok": !is_error, "summary": summary,
+                        "args": args_brief(&arguments), "note": note,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "turn_id": turn_id,
+                "question": question,
+                "answer": answer,
+                "stopped_reason": stopped_reason,
+                "tool_trace": trail,
+            })
+        })
+        .collect();
+    json_response(200, &serde_json::json!({"turns": turns}).to_string())
 }
 
 /// `GET /api/ask/progress?chat=<session>` — the minimal A0 §3.7 progress feed.
@@ -4123,7 +4205,9 @@ mod tests {
             v["ask_limits"]["max_concurrent"],
             DEFAULT_MAX_CONCURRENT_ASKS
         );
-        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(v["version"]["server"], env!("CARGO_PKG_VERSION"));
+        assert!(v["version"]["git"].is_string());
+        assert!(v["version"]["built"].is_string());
 
         // Factory alone is not enough — product surface needs a key in
         // providers.toml (or env). Seed the file the System page writes.

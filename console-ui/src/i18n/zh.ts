@@ -452,6 +452,7 @@ export const zh: Record<keyof typeof en, string> = {
     '未配置——请在上方「LLM 提供商」中保存 API 密钥。保存后对话立即生效。',
   'system.askTimeout': '对话超时',
   'system.askTimeoutValue': '每问 {secs} 秒 · 并发上限 {cap}',
+  'system.uiBuild': '前端构建',
   'system.version': '服务端版本',
   'system.togglesNote':
     '主题与语言在顶栏切换（LIGHT/DARK · EN/中）——按浏览器持久化，每页可用。',

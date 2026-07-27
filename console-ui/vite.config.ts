@@ -1,7 +1,20 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+// UI build identity (operator finding: stale builds were undiagnosable).
+function uiBuildStamp(): string {
+  let git = 'unknown';
+  try {
+    git = execSync('git rev-parse --short=9 HEAD').toString().trim();
+  } catch {
+    /* tarball builds */
+  }
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  return `${git} · ${now}`;
+}
 
 // Single-entry React SPA — the OVP2 portal (portal v2, B1). Served at the
 // site root: ovp-server serves dist/index.html for `/` and every client
@@ -12,6 +25,9 @@ import tailwindcss from '@tailwindcss/vite';
 // (e.g. '/blog/') so the SPA and its `<base>/api/*.json` fetches resolve under
 // a GitHub-Pages sub-path.
 export default defineConfig({
+  define: {
+    __OVP_UI_BUILD__: JSON.stringify(uiBuildStamp()),
+  },
   base: process.env.VITE_OVP_BASE ?? '/',
   plugins: [react(), tailwindcss()],
   build: {

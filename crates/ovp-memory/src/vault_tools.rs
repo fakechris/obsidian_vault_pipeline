@@ -2144,33 +2144,16 @@ fn resolve_source_path(
     let layout = ovp_domain::vault_layout::VaultLayout::new();
     let mut joined = vault_root.join(rel_path);
     if !joined.is_file()
-        && let Some(moved) =
-            ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel_path)
+        && let Some(moved) = ovp_domain::vault_layout::lifecycle_moved_path(
+            vault_root,
+            &layout,
+            rel_path,
+            // Cross-month candidates must carry THIS source's own sha stem —
+            // a poisoned index row cannot read another source's file.
+            Some(&source.sha256),
+        )
     {
-        // The shared fallback probes the SAME month permissively (the
-        // original contract) and other months by exact stem-carrying
-        // basename. The TOOLS layer holds cross-month candidates to a
-        // stricter bar: the stem must be THIS source's own sha8 — a
-        // poisoned index row whose recorded name embeds a different
-        // source's stem must not read another source's file.
-        let recorded_month = rel_path
-            .strip_prefix(&format!("{}/", layout.inbox_raw_dir()))
-            .and_then(|rest| rest.split_once('/'))
-            .map(|(month, _)| month);
-        let candidate_month = moved
-            .parent()
-            .and_then(|d| d.file_name())
-            .and_then(|n| n.to_str());
-        let same_month = recorded_month.is_some() && recorded_month == candidate_month;
-        let stem_is_own_sha = moved
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.rsplit('-').next())
-            .zip(source.sha256.get(..8))
-            .is_some_and(|(stem, sha8)| stem.eq_ignore_ascii_case(sha8));
-        if same_month || stem_is_own_sha {
-            joined = moved;
-        }
+        joined = moved;
     }
     let resolved = std::fs::canonicalize(&joined).map_err(|e| {
         VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
