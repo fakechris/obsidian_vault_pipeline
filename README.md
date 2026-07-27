@@ -1,192 +1,190 @@
-# Obsidian Vault Pipeline (OVP2)
+# OVP2 — grounded knowledge for your Obsidian vault
 
-A local-first knowledge runtime for Obsidian vaults. OVP2 turns the articles,
-clippings, and bookmarks you capture into a grounded, auditable knowledge base
-— and every statement it keeps can be traced back to verbatim source lines.
+**Turn the articles you save into a knowledge base you can ask — and every answer cites a real line in a real source.**
 
-[简体中文](README.zh-CN.md)
+OVP2 is a local-first app for Obsidian vaults. It reads what you capture, extracts grounded memory, crystallizes durable claims, and gives you a portal to browse, search, and ask — without inventing citations.
 
-## What this is
+[简体中文](README.zh-CN.md) · [Install details](docs/install.md) · [Operator runbook](docs/operator-runbook.md)
 
-OVP2 organizes a vault into three layers:
+<p align="center">
+  <img src="docs/images/05-knowledge-graph.png" alt="OVP2 Knowledge graph — themes as a force-directed map" width="900" />
+</p>
 
-| Layer | 中文 | Contents |
+<p align="center"><em>Knowledge graph: themes and claims from a real dogfood vault.</em></p>
+
+---
+
+## Why OVP2
+
+Most note tools store text. OVP2 keeps a **truth layer**:
+
+| Layer | What you see | Rule |
 |---|---|---|
-| Source | 原文 | The captured material itself: web clippings, Pinboard bookmarks, manual drops. Never rewritten. |
-| Memory | 记忆 | Per-source grounded **Units** (verbatim quotes with line numbers) and readable **Cards** built only from those Units. |
-| Knowledge | 结晶 | Cross-source **Claims**, each classified **durable** or **caveated**, each citation resolving to a Unit, a quote, and a source line. |
+| **Source** | Original clippings & bookmarks | Never rewritten |
+| **Memory** | Cards & units per article | Every unit ties to a verbatim quote + line |
+| **Knowledge** | Cross-source claims | No claim persists without grounded citations |
 
-The truth layer is the product. A claim that cannot cite verbatim evidence
-does not persist: mechanical gates check every citation against the accepted
-Units before anything is written, and all durable state lives in append-only
-ledgers inside the vault (`.ovp/`). Everything else — the search index, the
-web portal, the theme views — is a projection that can be deleted and rebuilt
-from those ledgers at any time.
+If a statement cannot point at evidence in your vault, it does not become durable knowledge. Search, the graph, and Ask are projections of that ledger — rebuildable anytime.
 
-## From OVP to OVP2
+---
 
-OVP2 is a ground-up Rust rewrite of the Python OVP (six-stage pipeline,
-`knowledge.db`, Evergreen/MOC notes, `ovp`/`ovp-autopilot`/`ovp-ui`). The
-rewrite changed the direction, not just the language: eager concept-map and
-canonical-ontology extraction failed validation on real data, and the system
-was rebuilt around a grounded reader trunk and a gated crystal truth layer.
-The full decision story, a command mapping, and migration notes for existing
-vaults are in [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md).
+## The portal
+
+`ovp2 serve` (or the **OVP2 desktop app**) opens a localhost portal over your vault.
+
+### Today — what changed
+
+A morning dashboard: captures, reads, new claims, and items that need attention.
+
+<p align="center">
+  <img src="docs/images/01-today.png" alt="Today page with capture / read / claims stats and attention list" width="900" />
+</p>
+
+### Library — everything you captured
+
+Browse by collection and month. Open any source for **memory cards**, the original markdown, and claims that cite it — with a neighborhood graph on the side.
+
+<p align="center">
+  <img src="docs/images/02-library.png" alt="Library list of processed sources with tags and status" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/images/03-source-detail.png" alt="Source detail with memory cards and units" width="900" />
+</p>
+
+### Knowledge — themes & claims
+
+Durable vs caveated claims, grouped by theme. Switch **List / Graph / Terrain** when you want structure instead of a spreadsheet of notes.
+
+<p align="center">
+  <img src="docs/images/04-knowledge.png" alt="Knowledge themes as cards with durable/caveated bars" width="900" />
+</p>
+
+### Ask — answers with receipts
+
+Ask in natural language. The agent searches claims, sources, and evidence cards; the **Process** panel shows what it touched; the answer carries **numbered citations** you can open.
+
+<p align="center">
+  <img src="docs/images/06-ask.png" alt="Ask page with example questions and process panel" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/images/07-ask-history.png" alt="Ask history with cited answer and process graph of sources and memory" width="900" />
+</p>
+
+### Search — one box
+
+Sources, claims, packs, themes — `⌘K` / `Ctrl+K` from anywhere.
+
+<p align="center">
+  <img src="docs/images/08-search.png" alt="Search results for agent memory across claims" width="900" />
+</p>
+
+Also in the portal: **Tags**, **Entities**, **System** (runs, doctor, LLM settings, schedule). Light *Atelier* and dark *Vault* themes; English and 简体中文.
+
+---
+
+## What you run day to day
+
+| You want… | Do this |
+|---|---|
+| Ingest bookmarks / clippings on a schedule | `ovp2 schedule install` then fill `<vault>/.ovp/daily.env` |
+| Process the vault once | `ovp2 daily --vault-root ~/path/to/vault --client live` |
+| Open the UI | `ovp2 serve --vault-root ~/path/to/vault` → open the printed URL |
+| Desktop app | [OVP2.app releases](https://github.com/fakechris/obsidian_vault_pipeline/releases) (macOS) |
+| Ask from the CLI | `ovp2 ask --vault-root … "your question"` |
+| Agent tools in an editor | `ovp2 mcp` (stdio MCP: find / search / ask / doctor …) |
+
+The daily loop: capture sweep → grounded read per new source → ledgers → rebuild the read model. Crystal synthesis turns reader packs into cross-source claims behind mechanical gates.
+
+---
 
 ## Install
 
-Prebuilt binaries for macOS (arm64/x64) and Linux (x64); no Rust toolchain
-required. Current release: **v0.23.0**. Both channels are verified end-to-end.
+Prebuilt **CLI** for macOS arm64 and Linux x64 (current line: **v2.0.1**). No Rust toolchain required.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
 ```
 
-or via Homebrew:
+or:
 
 ```sh
 brew install fakechris/ovp2/ovp2
 ```
 
-Check the install with `ovp2 --version`. Details, the release process, and a
-proxy note for `brew` are in [`docs/install.md`](docs/install.md).
+```sh
+ovp2 --version
+```
 
-## Quick start
+Full channels, desktop DMG, and rollback notes: [`docs/install.md`](docs/install.md).
 
-1. **Configure the LLM** for live runs — in your shell profile or a private
-   `.env` you `source` (never in the repo or the vault):
+### Quick start
+
+1. **LLM credentials** (for live reads / Ask) — private shell env or vault-side provider config, never committed:
 
    ```sh
    export ANTHROPIC_API_KEY=sk-ant-...
-   export OVP_LLM_TIMEOUT_SECS=480   # required for live runs; the 180s default mis-kills slow responses
-   # optional: ANTHROPIC_BASE_URL, OVP_LLM_MODEL, OVP_LLM_MAX_TOKENS, OVP_LLM_NO_PROXY=1
+   export OVP_LLM_TIMEOUT_SECS=480
    ```
 
-2. **Run the daily loop** against your vault (`--dry-run` first shows the plan
-   without writing anything):
+2. **One daily pass** (try `--dry-run` first):
 
    ```sh
    ovp2 daily --vault-root ~/Documents/my-vault --client live
    ```
 
-   One run sweeps captures into a normalized queue (URL + content dedup),
-   reads each new source through the grounded reader trunk, writes reader
-   packs into the vault, records every attempt in append-only ledgers, and
-   rebuilds the read model.
-
-3. **Put it on a schedule** — never think about the heartbeat again:
+3. **Schedule** (optional):
 
    ```sh
    ovp2 schedule install --vault-root ~/Documents/my-vault
    ```
 
-   Installs an OS-level job (launchd on macOS, systemd user timer on Linux)
-   that runs `ovp2 daily` every day at 09:00 (`--time HH:MM` to change).
-   Credentials go in the generated `<vault>/.ovp/daily.env` (chmod 600) —
-   `install` prints what to fill in. Check with `ovp2 schedule status`,
-   remove with `ovp2 schedule uninstall`.
-
-4. **Open the portal**:
+4. **Portal**:
 
    ```sh
    ovp2 serve --vault-root ~/Documents/my-vault
    ```
 
-   then open the printed URL (default `http://127.0.0.1:3141`).
+5. **Pinboard** (optional): `PINBOARD_TOKEN=user:TOKEN` then  
+   `ovp2 pinboard-sync --vault-root … --live --max 200`
 
-5. **Optional — Pinboard capture**:
-
-   ```sh
-   ovp2 pinboard-sync --vault-root ~/Documents/my-vault --live --max 200
-   ```
-
-   Needs `PINBOARD_TOKEN` (`username:TOKEN`; never stored, never logged). The
-   Pinboard API returns your entire bookmark history, so a first sync is
-   guarded: without `--since`/`--max`, a run that would create more than 500
-   new notes aborts before writing anything. `--max 200` takes the newest 200
-   and lets older bookmarks drain on later runs.
-
-## The portal
-
-`ovp2 serve` hosts a single-page portal over the vault's read model, with six
-destinations:
-
-| Page | Answers |
-|---|---|
-| Today | What came in, what was read, what crystallized, what needs attention |
-| Library | Every captured source by collection, month, and status, with a three-layer source detail view (memory / original / claims) |
-| Search | One box over sources, cards, units, claims, and themes (`⌘K` anywhere) |
-| Knowledge | Themes and Claims, durable/caveated status, evidence drill-down, scoped graph views |
-| Ask | Cited Q&A over the vault's evidence; citations are verified against the index |
-| System | Runs, blocked sources, `doctor` results, settings, concept reference |
-
-Two equal-weight themes — light "Atelier" (warm parchment + terracotta) and
-dark "Vault" (near-black + deep blue + cyan) — and an EN-default interface
-with a full 简体中文 translation, both switchable in the UI.
-
-## Core commands
-
-Every CLI verb is labeled PRODUCT / DIAGNOSTIC / DEMOTED in `--help`. The
-product surface:
-
-| Command | Does |
-|---|---|
-| `ovp2 daily` | The blessed daily loop: capture sweep → grounded reader trunk per new source → lifecycle → ledgers + report → read model + console refresh |
-| `ovp2 schedule` | Install/uninstall/inspect the OS-level daily schedule (launchd / systemd user timer) — `install` once and the loop runs itself |
-| `ovp2 serve` | Start the localhost portal server: `.ovp/console/` pages + JSON API (`/api/find`, `/api/search`, `/api/ask`, …) |
-| `ovp2 ask` | Retrieval-augmented Q&A over product state; prints a cited answer with deterministic citation verification |
-| `ovp2 pinboard-sync` | Materialize Pinboard bookmarks as inbox notes, URL-deduped, with the first-sync flood guard |
-| `ovp2 crystal-synth` | Turnkey Crystal synthesis: reader packs → cross-source claims → grounded filter → strength gate → durable write |
-| `ovp2 crystal-review-session` | Prepare a bounded human review session over caveated claims (sheet + decisions template) |
-| `ovp2 index` | Rebuild the read model (`.ovp/index/index.json`); always a full deterministic rebuild |
-| `ovp2 find` | Query the read model: sources, packs, claims, runs, cards, units — by term, kind, status, date |
-| `ovp2 doctor` | Health checks over vault state; `--fix` applies safe repairs, never deletes |
-| `ovp2 digest` | Daily digest (`.ovp/digests/<date>.md`); ephemeral reuse surface, never enters a ledger |
-| `ovp2 project` | Projection Lanes: view claims by lane, or write durable claims as vault notes (`--write` / `--rebuild`) |
-| `ovp2 mcp` | MCP stdio server exposing find/search/status/doctor tools to MCP-compatible editors |
+---
 
 ## Privacy & trust
 
-OVP2 is local-first. Everything it knows lives as plain files inside your
-vault (`.ovp/` ledgers and projections plus the notes themselves); there is no
-cloud component, no account, and **no telemetry**. The only things that ever
-leave your machine, each under your explicit configuration:
+Local-first: product state is plain files under your vault (`.ovp/` ledgers + notes). No account, **no telemetry**.
 
-- **LLM calls** — during `daily`, `ask`, and `crystal-synth` (and the portal's
-  Ask page), article/bookmark text is sent to the LLM provider **you**
-  configure via environment keys (`ANTHROPIC_API_KEY`, optional
-  `ANTHROPIC_BASE_URL`). No key, no calls: the default run is offline/replay.
-- **Pinboard sync** — `pinboard-sync --live` talks to pinboard.in with your
-  `PINBOARD_TOKEN` (never stored, never logged).
-- **Web/GitHub enrichment** — enrichment fetches the URLs you bookmarked
-  (plus GitHub API metadata for repo links) to capture their content.
-- **`compare-run` (diagnostic, manual)** — the external comparator sends the
-  source path/URL and queries to the Nowledge Mem HTTP service you point it
-  at. It never runs as part of `daily`; skip the command and nothing is sent.
+Only leave the machine when **you** configure them:
 
-Nothing else is transmitted.
+- **LLM calls** — text you process is sent to the provider behind your API key (or local endpoint). No key → offline/replay only.
+- **Pinboard** — only with `--live` and your token (never logged).
+- **Web / GitHub enrichment** — fetches bookmarked URLs (and repo metadata for GitHub links) when enabled.
+- **Manual diagnostic compare** — only if you run the compare command against an external service you choose; not part of `daily`.
 
-## Documentation
+---
 
-| Doc | Contents |
+## More documentation
+
+| Doc | For |
 |---|---|
-| [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md) | The OVP → OVP2 story: what changed, why, and how to migrate ([中文](docs/ovp-to-ovp2.zh-CN.md)) |
-| [`docs/install.md`](docs/install.md) | Install channels and the maintainer release process |
-| [`docs/operator-runbook.md`](docs/operator-runbook.md) | Day-to-day operation on a real vault: daily loop, failures, review sessions, recovery |
-| [`docs/architecture.md`](docs/architecture.md) | Crate map, dataflow, invariants, portal and evolution kernel |
-| [`docs/product-state-layout.md`](docs/product-state-layout.md) | Where product state lives; authoritative vs derived |
-| [`docs/invariants.md`](docs/invariants.md) | The architecture invariants, CI-gated where possible |
+| [`docs/install.md`](docs/install.md) | Installers, desktop, versions |
+| [`docs/operator-runbook.md`](docs/operator-runbook.md) | Real-vault operation, failures, recovery |
+| [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md) | Story of the rewrite & migration ([中文](docs/ovp-to-ovp2.zh-CN.md)) |
+| [`docs/architecture.md`](docs/architecture.md) | Crate map & dataflow (engineers) |
+| [`docs/product-state-layout.md`](docs/product-state-layout.md) | Where state lives on disk |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
+
+Screenshots in [`docs/images/`](docs/images/) were taken from a local dogfood vault (public tech clippings). Re-capture anytime with the portal running; review for secrets before publishing.
+
+---
 
 ## Status
 
-The workspace is 22 Rust crates; 780 tests pass (1 ignored) plus binary-level
-end-to-end coverage. The daily loop, portal, Crystal synthesis, and review
-flow run on a real vault today. Release v0.23.0 continues the repository's
-release lineage (v0.22.0 was the last Python-era release); v2.0.0 is reserved
-for the merge-to-main / Python-retirement milestone. In flight: real-vault
-dogfooding and semantic theme projection. Historical stage records live in
-`docs/stage-*.md`; release history is in [`CHANGELOG.md`](CHANGELOG.md).
+Rust workspace (CLI + portal + optional desktop). The daily loop, crystal synthesis, Ask agent, and portal run on real vaults today. See [releases](https://github.com/fakechris/obsidian_vault_pipeline/releases) for the latest artifacts.
+
+---
 
 ## License
 
