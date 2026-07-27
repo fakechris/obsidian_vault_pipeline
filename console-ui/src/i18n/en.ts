@@ -105,11 +105,15 @@ export const en = {
 
   // today page
   'today.title': 'Today',
+  'today.dayTitle': 'Day {day}',
   'today.help':
-    'Every day OVP2 captures your clippings and bookmarks, reads them into grounded memory, and crystallizes cross-source knowledge. This page shows what changed today.',
+    'Pick a day on the calendar to see captures, reads, reader packs, and crystal claims with a date-bearing run. The default is the projection build day; Attention is the live operator queue for that build.',
   'today.captured': 'Captured',
   'today.read': 'Read',
   'today.claims': 'Claims',
+  'today.dayClaims': 'Crystal',
+  'today.dayPacks': 'Packs',
+  'today.daySourcesDated': '{n} sources dated',
   'today.attention': 'Attention',
   'today.pinboard': 'pinboard',
   'today.unitsCards': '{units} units · {cards} cards',
@@ -125,17 +129,36 @@ export const en = {
   'today.claimsSample': 'From the crystal store',
   'today.claimsSampleNote':
     'A durable-first sample — the crystal ledger records no dates, so per-day attribution is not derivable yet.',
+  'today.crystalTitle': 'Crystal that day',
+  'today.crystalNote':
+    'Claims whose run id embeds this calendar day (for example a daily or full-crystal run). Claims without a date-bearing run id are omitted.',
+  'today.crystalEmpty': 'No date-linked claims for this day.',
   'today.claimSources': 'Sources',
   'today.strength': 'strength',
   'today.readToday': 'Read today',
-  'today.readEmpty': 'Nothing read yet today — the daily run has not produced new packs.',
-  'today.capturedEmpty': 'no capture runs today',
+  'today.readTitle': 'Read that day',
+  'today.readEmpty':
+    'Nothing processed on this day — no finished sources for its daily run(s).',
+  'today.packsTitle': 'Reader packs',
+  'today.packsEmpty': 'No reader packs dated this day.',
+  'today.sourcesDatedTitle': 'Sources dated this day',
+  'today.sourcesDatedEmpty': 'No sources carry this calendar date.',
+  'today.runsTitle': 'Pipeline runs',
+  'today.runLine': 'ok {ok} · fail {fail} · in {ingested} · blocked {blocked}',
+  'today.capturedEmpty': 'no intake that day',
   'today.timeline': 'Timeline',
   'today.timelineRead': 'read {n}',
   'today.timelineCaptured': 'captured {n}',
   'today.timelineAll': '→ System: all runs',
   'today.noRunsToday':
     'No runs recorded for today yet — stats show 0 until the daily run lands.',
+  'today.noActivityDay':
+    'No runs, packs, or date-linked claims recorded for this day in the current index.',
+  'today.calPrevMonth': 'Previous month',
+  'today.calNextMonth': 'Next month',
+  'today.calJumpToday': 'Jump to projection day',
+  'today.calLegend':
+    'Dots mark days with vault activity (runs, dated sources/packs, or date-linked claims).',
 
   // library page
   'library.title': 'Library',

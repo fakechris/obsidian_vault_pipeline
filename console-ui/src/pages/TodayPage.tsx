@@ -1,75 +1,182 @@
-/** Today `/` — answers US1/US6 (design §3.1): what came in, what was read,
- * what crystallized, what needs me. All numbers derive from /api/model for
- * model.date.
+/** Today `/` — day browser: calendar + multi-dimension view of a chosen day
+ * (captures, reads/packs, crystal claims with date-bearing runs, run rows).
  *
- * B1 deviation (documented): per-day claim attribution is not derivable
- * from ClaimRow (no date; run_id namespace differs from RunRow), so the
- * crystallized section renders as "Recent claims" — see lib/derive.ts. */
-import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+ * Default day is the projection's `model.date`. `?day=YYYY-MM-DD` selects a
+ * past day (bookmarkable). Attention stays on the projection day only —
+ * blocked/needs-content is a live operator queue, not a historical ledger.
+ */
+import { useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
-import { AgeLabel, ClaimPill, EmptyState, ModelGate, PageHelp } from '../components/ui';
+import DayCalendar from '../components/DayCalendar';
+import {
+  AgeLabel,
+  ClaimPill,
+  EmptyState,
+  ModelGate,
+  PageHelp,
+} from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   attentionSources,
+  dayView,
+  isIsoDay,
   isMiscTheme,
-  readToday,
-  claimsSample,
-  timeline,
-  todayStats,
+  monthHeat,
+  monthStart,
+  type DayView,
 } from '../lib/derive';
-import type { TodayStats } from '../lib/derive';
-import type { IndexModel } from '../lib/types';
+import type { IndexModel, RunRow } from '../lib/types';
 import { useModel } from '../model';
 
-const RECENT_CLAIMS = 3;
-const TIMELINE_DAYS = 7;
+const LIST_CAP = 12;
 
-function Stats({ model, stats: s }: { model: IndexModel; stats: TodayStats }) {
+function DayStats({ view }: { view: DayView }) {
   const { t } = useI18n();
-  const { totals } = model;
   return (
     <div className="grid stats">
       <div className="card">
         <div className="metric-label">{t('today.captured')}</div>
-        <div className="metric-num">{s.captured}</div>
+        <div className="metric-num">{view.captured}</div>
         <div className="metric-sub">
-          {s.todayRuns.length === 0
+          {view.runs.length === 0 && view.captured === 0
             ? t('today.capturedEmpty')
-            : `${t('today.pinboard')} ${s.capturedPinboard}`}
+            : `${t('today.pinboard')} ${view.capturedPinboard}`}
         </div>
       </div>
       <div className="card">
         <div className="metric-label">{t('today.read')}</div>
-        <div className="metric-num">{s.read}</div>
+        <div className="metric-num">{view.read}</div>
         <div className="metric-sub">
-          {t('today.unitsCards', { units: s.readUnits, cards: s.readCards })}
+          {t('today.unitsCards', {
+            units: view.readUnits,
+            cards: view.readCards,
+          })}
         </div>
       </div>
       <div className="card">
-        <div className="metric-label">{t('today.claims')}</div>
-        <div className="metric-num">
-          {totals.claims_durable + totals.claims_caveated}
-        </div>
+        <div className="metric-label">{t('today.dayClaims')}</div>
+        <div className="metric-num">{view.claims.length}</div>
         <div className="metric-sub">
           {t('today.durableCaveated', {
-            durable: totals.claims_durable,
-            caveated: totals.claims_caveated,
+            durable: view.claimsDurable,
+            caveated: view.claimsCaveated,
           })}
         </div>
       </div>
       <div className="card">
-        <div className="metric-label">{t('today.attention')}</div>
-        <div className={s.attention > 0 ? 'metric-num warn' : 'metric-num'}>
-          {s.attention}
-        </div>
+        <div className="metric-label">{t('today.dayPacks')}</div>
+        <div className="metric-num">{view.packs.length}</div>
         <div className="metric-sub">
-          {t('today.blockedNeeds', {
-            blocked: totals.blocked,
-            needs: totals.needs_content,
-          })}
+          {t('today.daySourcesDated', { n: view.sourcesDated.length })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RunsThatDay({ runs }: { runs: RunRow[] }) {
+  const { t } = useI18n();
+  if (runs.length === 0) return null;
+  return (
+    <div className="section">
+      <h2>{t('today.runsTitle')}</h2>
+      <div className="row-list">
+        {runs.map((r, i) => (
+          <div className="row" key={`${r.run_id}-${i}`}>
+            <span className="mono">{r.run_id}</span>
+            <span className="meta">
+              {t('today.runLine', {
+                ok: r.succeeded,
+                fail: r.failed,
+                ingested: r.ingested,
+                blocked: r.blocked,
+              })}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SourceList({
+  title,
+  empty,
+  items,
+}: {
+  title: string;
+  empty: string;
+  items: { sha: string; title: string; meta?: string }[];
+}) {
+  const shown = items.slice(0, LIST_CAP);
+  const more = items.length - shown.length;
+  return (
+    <div className="section">
+      <h2>{title}</h2>
+      {items.length === 0 ? (
+        <EmptyState>
+          <p>{empty}</p>
+        </EmptyState>
+      ) : (
+        <div className="row-list">
+          {shown.map((it) => (
+            <div className="row" key={it.sha}>
+              <Link to={`/library/${it.sha}`}>{it.title}</Link>
+              {it.meta && <span className="meta">{it.meta}</span>}
+            </div>
+          ))}
+          {more > 0 && (
+            <p className="tiny muted">
+              +{more}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClaimsThatDay({ view }: { view: DayView }) {
+  const { t } = useI18n();
+  const shown = view.claims.slice(0, LIST_CAP);
+  const more = view.claims.length - shown.length;
+  return (
+    <div className="section">
+      <h2>{t('today.crystalTitle')}</h2>
+      <p className="muted tiny">{t('today.crystalNote')}</p>
+      {view.claims.length === 0 ? (
+        <EmptyState>
+          <p>{t('today.crystalEmpty')}</p>
+        </EmptyState>
+      ) : (
+        <>
+          {shown.map((c) => (
+            <div className="card" key={c.claim_id}>
+              <div className="claim-top">
+                {(c.status === 'durable' || c.status === 'caveated') && (
+                  <ClaimPill status={c.status} />
+                )}
+                {c.strength && (
+                  <span className="claim-meta">
+                    {t('today.strength')}: {c.strength}
+                  </span>
+                )}
+                {c.run_id && (
+                  <span className="claim-meta mono tiny">{c.run_id}</span>
+                )}
+              </div>
+              <p className="claim-text">{c.claim}</p>
+              {c.theme && (
+                <div className="claim-meta">
+                  {isMiscTheme(c.theme) ? t('theme.unclassified') : c.theme}
+                </div>
+              )}
+            </div>
+          ))}
+          {more > 0 && <p className="tiny muted">+{more}</p>}
+        </>
+      )}
     </div>
   );
 }
@@ -88,125 +195,160 @@ function Attention({ model }: { model: IndexModel }) {
   );
 }
 
-function RecentClaims({ model }: { model: IndexModel }) {
+function DayBody({
+  model,
+  view,
+}: {
+  model: IndexModel;
+  view: DayView;
+}) {
   const { t } = useI18n();
-  const claims = claimsSample(model, RECENT_CLAIMS);
-  if (claims.length === 0) return null;
+  const readItems = view.sourcesRead.map(({ source, pack }) => ({
+    sha: source.sha256,
+    title: source.title ?? source.sha256,
+    meta: pack
+      ? t('today.unitsCards', { units: pack.units, cards: pack.cards })
+      : undefined,
+  }));
+  const datedItems = view.sourcesDated.map((s) => ({
+    sha: s.sha256,
+    title: s.title ?? s.sha256,
+    meta: s.status,
+  }));
+  const packItems = view.packs.map((p) => ({
+    sha: p.source_sha256 ?? p.pack_dir,
+    title: p.title,
+    meta: t('today.unitsCards', { units: p.units, cards: p.cards }),
+    href: p.source_sha256 ? `/library/${p.source_sha256}` : null,
+  }));
+
   return (
-    <div className="section">
-      <h2>{t('today.claimsSample')}</h2>
-      <p className="muted tiny">{t('today.claimsSampleNote')}</p>
-      {claims.map((c) => (
-        <div className="card" key={c.claim_id}>
-          <div className="claim-top">
-            {(c.status === 'durable' || c.status === 'caveated') && (
-              <ClaimPill status={c.status} />
-            )}
-            {c.strength && (
-              <span className="claim-meta">
-                {t('today.strength')}: {c.strength}
-              </span>
-            )}
+    <>
+      <DayStats view={view} />
+      {view.isProjectionDay && <Attention model={model} />}
+      <RunsThatDay runs={view.runs} />
+      <SourceList
+        title={t('today.readTitle')}
+        empty={t('today.readEmpty')}
+        items={readItems}
+      />
+      <div className="section">
+        <h2>{t('today.packsTitle')}</h2>
+        {packItems.length === 0 ? (
+          <EmptyState>
+            <p>{t('today.packsEmpty')}</p>
+          </EmptyState>
+        ) : (
+          <div className="row-list">
+            {packItems.slice(0, LIST_CAP).map((it) => (
+              <div className="row" key={it.sha}>
+                {it.href ? (
+                  <Link to={it.href}>{it.title}</Link>
+                ) : (
+                  <span>{it.title}</span>
+                )}
+                {it.meta && <span className="meta">{it.meta}</span>}
+              </div>
+            ))}
           </div>
-          <p className="claim-text">{c.claim}</p>
-          {c.theme && (
-            <div className="claim-meta">
-              {isMiscTheme(c.theme) ? t('theme.unclassified') : c.theme}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ReadToday({ model }: { model: IndexModel }) {
-  const { t } = useI18n();
-  const reads = readToday(model);
-  return (
-    <div className="section">
-      <h2>{t('today.readToday')}</h2>
-      {reads.length === 0 ? (
-        <EmptyState>
-          <p>{t('today.readEmpty')}</p>
-        </EmptyState>
-      ) : (
-        <div className="row-list">
-          {reads.map(({ source, pack }) => (
-            <div className="row" key={source.sha256}>
-              <Link to={`/library/${source.sha256}`}>
-                {source.title ?? source.sha256}
-              </Link>
-              {pack && (
-                <span className="meta">
-                  {t('today.unitsCards', {
-                    units: pack.units,
-                    cards: pack.cards,
-                  })}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Timeline({ model }: { model: IndexModel }) {
-  const { t } = useI18n();
-  const days = timeline(model, TIMELINE_DAYS);
-  if (days.length === 0) return null;
-  return (
-    <div className="foot">
-      {t('today.timeline')}:{' '}
-      {days.map((d) => (
-        <span key={d.date}>
-          <span className="mono">{d.date.slice(5)}</span>{' '}
-          {t('today.timelineRead', { n: d.read })}
-          {d.captured > 0 && (
-            <> · {t('today.timelineCaptured', { n: d.captured })}</>
-          )}
-          {' · '}
-        </span>
-      ))}
-      <Link to="/system">{t('today.timelineAll')}</Link>
-    </div>
+        )}
+      </div>
+      <SourceList
+        title={t('today.sourcesDatedTitle')}
+        empty={t('today.sourcesDatedEmpty')}
+        items={datedItems}
+      />
+      <ClaimsThatDay view={view} />
+    </>
   );
 }
 
 export default function TodayPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
-  // todayStats walks every run/pack row — compute once per model, not on
-  // every render and not once per consumer below.
-  const stats = useMemo(() => (model ? todayStats(model) : null), [model]);
+  const [params, setParams] = useSearchParams();
+  const paramDay = params.get('day');
+
+  // Month cursor for the calendar (independent of selection while browsing).
+  const [monthCursor, setMonthCursor] = useState<string | null>(null);
+
+  const selected = useMemo(() => {
+    if (!model) return null;
+    if (isIsoDay(paramDay)) return paramDay;
+    return model.date;
+  }, [model, paramDay]);
+
+  const view = useMemo(
+    () => (model && selected ? dayView(model, selected) : null),
+    [model, selected],
+  );
+
+  const heat = useMemo(() => {
+    if (!model || !selected) return new Map<string, 0 | 1 | 2 | 3>();
+    const cursor = monthCursor ?? monthStart(selected);
+    return monthHeat(model, cursor);
+  }, [model, selected, monthCursor]);
+
+  const setDay = (day: string) => {
+    const next = new URLSearchParams(params);
+    if (model && day === model.date) next.delete('day');
+    else next.set('day', day);
+    setParams(next, { replace: true });
+    setMonthCursor(monthStart(day));
+  };
+
   return (
     <ModelGate loading={loading} error={error}>
-      {model && stats && (
+      {model && selected && view && (
         <>
-          <h1 style={{ marginTop: '1rem' }}>{t('today.title')}</h1>
-          <p className="muted sm" style={{ marginTop: '-2px' }}>
-            <span className="mono">{model.date}</span>
-            {stats.dogfoodDay > 0 && (
-              <> · {t('common.day')} {stats.dogfoodDay}</>
-            )}
-            {' · '}
-            {/* P1: the build INSTANT + age, so three runs one day differ and a
-                stale count never reads like a fresh one. */}
-            <AgeLabel builtAt={model.built_at} />
-          </p>
-          <PageHelp>{t('today.help')}</PageHelp>
-          {stats.todayRuns.length === 0 && (
-            <p className="muted tiny" style={{ marginTop: '-0.5rem' }}>
-              {t('today.noRunsToday')}
-            </p>
-          )}
-          <Stats model={model} stats={stats} />
-          <Attention model={model} />
-          <RecentClaims model={model} />
-          <ReadToday model={model} />
-          <Timeline model={model} />
+          <div className="today-layout">
+            <div className="today-main">
+              <h1 style={{ marginTop: '1rem' }}>
+                {view.isProjectionDay
+                  ? t('today.title')
+                  : t('today.dayTitle', { day: selected })}
+              </h1>
+              <p className="muted sm" style={{ marginTop: '-2px' }}>
+                <span className="mono">{selected}</span>
+                {view.isProjectionDay && (
+                  <>
+                    {' · '}
+                    <AgeLabel builtAt={model.built_at} />
+                  </>
+                )}
+                {!view.isProjectionDay && (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="tiny linkish"
+                      onClick={() => setDay(model.date)}
+                    >
+                      {t('today.calJumpToday')}
+                    </button>
+                  </>
+                )}
+              </p>
+              <PageHelp>{t('today.help')}</PageHelp>
+              {view.runs.length === 0 && view.heat === 0 && (
+                <p className="muted tiny" style={{ marginTop: '-0.5rem' }}>
+                  {t('today.noActivityDay')}
+                </p>
+              )}
+              <DayBody model={model} view={view} />
+            </div>
+            <aside className="today-aside">
+              <DayCalendar
+                selected={selected}
+                monthCursor={monthCursor ?? monthStart(selected)}
+                heat={heat}
+                projectionDay={model.date}
+                onSelect={setDay}
+                onMonthChange={setMonthCursor}
+              />
+              <p className="tiny muted day-cal-legend">{t('today.calLegend')}</p>
+            </aside>
+          </div>
         </>
       )}
     </ModelGate>

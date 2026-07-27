@@ -317,6 +317,184 @@ export function timeline(model: IndexModel, days: number): TimelineDay[] {
     .slice(0, days);
 }
 
+// --------------------------------------------------------------- day browser
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** True when `s` is a calendar day `YYYY-MM-DD`. */
+export function isIsoDay(s: string | null | undefined): s is string {
+  return typeof s === 'string' && ISO_DAY.test(s);
+}
+
+/** Best pack activity day: explicit field, else first `YYYY-MM-DD` in pack_dir. */
+export function packActivityDate(pack: PackRow): string | null {
+  if (isIsoDay(pack.date)) return pack.date;
+  const m = pack.pack_dir.match(/(20\d{2}-\d{2}-\d{2})/);
+  return m?.[1] ?? null;
+}
+
+/**
+ * Best-effort day a claim was produced. The crystal ledger has no written-at;
+ * when `run_id` embeds a date (`daily-2026-07-26`, `crystal-full-20260709`)
+ * we surface it. Otherwise null — never invent.
+ */
+export function claimActivityDate(claim: ClaimRow): string | null {
+  const rid = claim.run_id ?? '';
+  const dashed = rid.match(/(20\d{2}-\d{2}-\d{2})/);
+  if (dashed) return dashed[1];
+  const compact = rid.match(/(20\d{6})/);
+  if (compact) {
+    const s = compact[1];
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  return null;
+}
+
+/** All ISO days that have any known vault activity (for calendar dots). */
+export function activityDates(model: IndexModel): Set<string> {
+  const days = new Set<string>();
+  for (const r of model.runs) {
+    if (isIsoDay(r.date)) days.add(r.date);
+  }
+  for (const s of model.sources) {
+    if (isIsoDay(s.date)) days.add(s.date);
+  }
+  for (const p of model.packs) {
+    const d = packActivityDate(p);
+    if (d) days.add(d);
+  }
+  for (const c of model.claims) {
+    const d = claimActivityDate(c);
+    if (d) days.add(d);
+  }
+  if (isIsoDay(model.date)) days.add(model.date);
+  return days;
+}
+
+/** Shift an ISO day by `delta` calendar days (local arithmetic on Y-M-D). */
+export function shiftIsoDay(day: string, delta: number): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + delta));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** First day of the month containing `day` (YYYY-MM-01). */
+export function monthStart(day: string): string {
+  return `${day.slice(0, 7)}-01`;
+}
+
+export interface DayView {
+  date: string;
+  /** True when `date === model.date` (the projection's build day). */
+  isProjectionDay: boolean;
+  runs: RunRow[];
+  captured: number;
+  capturedPinboard: number;
+  read: number;
+  readUnits: number;
+  readCards: number;
+  /** Sources whose recorded date is this day (clipping/publish date). */
+  sourcesDated: SourceRow[];
+  /** Sources processed by a run that ran on this day. */
+  sourcesRead: ReadSource[];
+  /** Reader packs whose activity date is this day. */
+  packs: PackRow[];
+  /** Claims with a date-bearing run_id for this day. */
+  claims: ClaimRow[];
+  claimsDurable: number;
+  claimsCaveated: number;
+  /** Intensity 0–3 for calendar heat (none / light / med / heavy). */
+  heat: 0 | 1 | 2 | 3;
+}
+
+function dayHeat(captured: number, read: number, claims: number): 0 | 1 | 2 | 3 {
+  const n = captured + read + claims;
+  if (n <= 0) return 0;
+  if (n < 5) return 1;
+  if (n < 20) return 2;
+  return 3;
+}
+
+/** Full multi-dimension view of one calendar day from the index projection. */
+export function dayView(model: IndexModel, date: string): DayView {
+  const day = isIsoDay(date) ? date : model.date;
+  const runs = model.runs.filter((r) => r.date === day);
+  const runIds = new Set(runs.map((r) => r.run_id));
+  const packByDir = new Map(model.packs.map((p) => [p.pack_dir, p]));
+
+  const sourcesDated = model.sources
+    .filter((s) => s.date === day)
+    .sort((a, b) => (a.title ?? '').localeCompare(b.title ?? ''));
+
+  const sourcesRead = model.sources
+    .filter(
+      (s) =>
+        s.status === 'processed' &&
+        s.last_run_id != null &&
+        runIds.has(s.last_run_id),
+    )
+    .map((source) => ({
+      source,
+      pack: source.pack_dir ? packByDir.get(source.pack_dir) : undefined,
+    }))
+    .sort((a, b) => (a.source.title ?? '').localeCompare(b.source.title ?? ''));
+
+  const packs = model.packs
+    .filter((p) => packActivityDate(p) === day)
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  const claims = model.claims
+    .filter((c) => claimActivityDate(c) === day)
+    .filter((c) => c.status === 'durable' || c.status === 'caveated')
+    .sort((a, b) => {
+      const ra = a.status === 'durable' ? 0 : 1;
+      const rb = b.status === 'durable' ? 0 : 1;
+      return ra - rb || a.claim.localeCompare(b.claim);
+    });
+
+  const captured = runs.reduce((n, r) => n + r.ingested, 0);
+  const capturedPinboard = runs.reduce((n, r) => n + r.pinboard_new, 0);
+  // Prefer run counters when present; fall back to source lists so a day
+  // with dated packs still shows activity without a run row.
+  const readFromRuns = runs.reduce((n, r) => n + r.succeeded, 0);
+  const read = readFromRuns > 0 ? readFromRuns : sourcesRead.length;
+
+  return {
+    date: day,
+    isProjectionDay: day === model.date,
+    runs,
+    captured,
+    capturedPinboard,
+    read,
+    readUnits: sourcesRead.reduce((n, s) => n + (s.pack?.units ?? 0), 0),
+    readCards: sourcesRead.reduce((n, s) => n + (s.pack?.cards ?? 0), 0),
+    sourcesDated,
+    sourcesRead,
+    packs,
+    claims,
+    claimsDurable: claims.filter((c) => c.status === 'durable').length,
+    claimsCaveated: claims.filter((c) => c.status === 'caveated').length,
+    heat: dayHeat(captured, read, claims.length),
+  };
+}
+
+/** Heat map for every day in a calendar month (`YYYY-MM`). */
+export function monthHeat(
+  model: IndexModel,
+  yearMonth: string,
+): Map<string, 0 | 1 | 2 | 3> {
+  const out = new Map<string, 0 | 1 | 2 | 3>();
+  const prefix = yearMonth.slice(0, 7);
+  for (const day of activityDates(model)) {
+    if (!day.startsWith(prefix)) continue;
+    out.set(day, dayView(model, day).heat);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ library
 
 export type Collection = 'clippings' | 'pinboard' | 'capture';
