@@ -291,6 +291,19 @@ pub fn lifecycle_moved_path(
     let raw_prefix = format!("{}/", layout.inbox_raw_dir());
     let rest = rel.strip_prefix(&raw_prefix)?;
     let (month, file) = rest.split_once('/')?;
+    // Single plain components only: a multi-segment or dot-dot "file" (a
+    // poisoned rel_path) could join OUTSIDE the month bucket — the whole
+    // point of exact-basename isolation.
+    if file.is_empty()
+        || file.contains('/')
+        || file == "."
+        || file == ".."
+        || month.is_empty()
+        || month.contains('/')
+        || month.starts_with('.')
+    {
+        return None;
+    }
     let candidate = vault_root.join(layout.processed_dir(month)).join(file);
     if candidate.is_file() {
         return Some(candidate);

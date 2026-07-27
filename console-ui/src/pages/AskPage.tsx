@@ -523,6 +523,9 @@ export default function AskPage() {
     // survive a reload — operator finding: History lost the 复盘 detail);
     // legacy chats keep the markdown parse.
     fetchAskSession(openChat)
+      // An older server (no session endpoint) or a replay-read failure must
+      // not kill the page — markdown replay still works.
+      .catch(() => ({ turns: [] }))
       .then((session) => {
         if (cancelled || openChatRef.current !== openChat) return null;
         if (session.turns.length === 0) return fetchChatMarkdown(openChat);

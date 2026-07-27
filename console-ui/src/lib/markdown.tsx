@@ -225,7 +225,7 @@ export function renderInline(
       // (https://en.wikipedia.org/wiki/Foo_(bar)).
       for (;;) {
         const last = url.slice(-1);
-        if (/[.,;:!?、。,;]/.test(last)) {
+        if (/[.,;:!?、。,;!?:]/.test(last)) {
           url = url.slice(0, -1);
           continue;
         }

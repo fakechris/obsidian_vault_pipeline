@@ -520,27 +520,28 @@ impl SessionStore {
     /// answer, stopped_reason). The saved-chat surface uses this to marry
     /// the product History with the audit trail's per-turn detail.
     pub fn completed_turns(&self) -> Vec<(String, String, String, String)> {
+        // One chronological pass: a finish pairs only with a start already
+        // SEEN — an orphaned finish never borrows a later turn's question.
         let mut questions: std::collections::HashMap<&str, &str> =
             std::collections::HashMap::new();
+        let mut out = Vec::new();
         for e in &self.events {
-            if let TranscriptEvent::TurnStarted { turn_id, question, .. } = e {
-                questions.insert(turn_id.as_str(), question.as_str());
-            }
-        }
-        self.events
-            .iter()
-            .filter_map(|e| match e {
+            match e {
+                TranscriptEvent::TurnStarted { turn_id, question, .. } => {
+                    questions.insert(turn_id.as_str(), question.as_str());
+                }
                 TranscriptEvent::TurnFinished { turn_id, answer, stopped_reason, .. } => {
-                    Some((
+                    out.push((
                         turn_id.clone(),
                         questions.get(turn_id.as_str()).copied().unwrap_or("").to_string(),
                         answer.clone(),
                         stopped_reason.clone(),
-                    ))
+                    ));
                 }
-                _ => None,
-            })
-            .collect()
+                _ => {}
+            }
+        }
+        out
     }
 
     pub fn tool_trail_for_turn(
