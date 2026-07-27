@@ -2504,7 +2504,7 @@ fn handle_ask_agent(
                         hits,
                     } => {
                         // Compact involved-entity nodes for the live process
-                        // graph (KMEM-style explainability during search).
+                        // graph during search.
                         serde_json::json!({
                             "event": "tool_finished", "tool": tool,
                             "tool_call_id": tool_call_id, "ok": !is_error,

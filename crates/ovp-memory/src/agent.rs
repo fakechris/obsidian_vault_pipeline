@@ -121,9 +121,8 @@ pub fn tool_result_note(content: &str) -> Option<String> {
 }
 
 /// One involved vault entity surfaced mid-turn for process visualization
-/// (KMEM live-preview pattern: memory / source / claim nodes the agent
-/// actually touched). Labels are operator-facing; ids are stable for
-/// graph node identity and deep links.
+/// (memory / source / claim nodes the agent actually touched). Labels are
+/// operator-facing; ids are stable for graph node identity and deep links.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgressHit {
     pub kind: String,
