@@ -133,13 +133,56 @@ fn free_port() -> Result<u16, String> {
 }
 
 fn wait_until_up(port: u16) -> Result<(), String> {
-    for _ in 0..100 {
+    // ~10s: cold start can include providers.toml + schedule init logs on
+    // the same process, and a slow disk vault should still clear this.
+    for _ in 0..200 {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     Err("portal server did not come up in time".into())
+}
+
+/// Probe that the accept loop is serving HTTP, not just that the port is open.
+fn wait_until_http(port: u16) -> Result<(), String> {
+    wait_until_up(port)?;
+    let req = format!(
+        "GET / HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    for _ in 0..40 {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            use std::io::{Read, Write};
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+            if stream.write_all(req.as_bytes()).is_ok() {
+                let mut buf = [0u8; 32];
+                if let Ok(n) = stream.read(&mut buf) {
+                    let head = std::str::from_utf8(&buf[..n]).unwrap_or("");
+                    if head.starts_with("HTTP/1.") && head.contains(" 200") {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("portal server accepted TCP but did not answer HTTP 200".into())
+}
+
+/// Drive the main webview to the loopback portal. Prefer this over the
+/// splash's `location.replace`: leaving the asset-protocol origin from JS is
+/// flaky on some WKWebView builds and leaves the splash stuck on
+/// "Opening portal…".
+fn navigate_main_to_portal(app: &AppHandle, url: &str) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is missing".to_string())?;
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| format!("invalid portal url {url:?}: {e}"))?;
+    win.navigate(parsed)
+        .map_err(|e| format!("navigate to portal failed: {e}"))
 }
 
 /// The `console-ui/dist` SPA build the server falls back to: bundled resource in
@@ -199,7 +242,7 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
                 eprintln!("ovp2-desktop: portal server exited: {e}");
             }
         });
-        match wait_until_up(port) {
+        match wait_until_http(port) {
             Ok(()) => return Ok(format!("http://127.0.0.1:{port}/")),
             Err(e) => last_err = e,
         }
@@ -208,11 +251,19 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
 }
 
 fn ensure_server(app: &AppHandle, state: &AppState, vault: &Path) -> Result<String, String> {
-    let mut guard = state.server_url.lock().unwrap();
-    if let Some(url) = guard.as_ref() {
-        return Ok(url.clone());
+    // Do not hold the mutex across start_server — wait_until_http can take
+    // seconds and must never block other boot paths on the same lock.
+    {
+        let guard = state.server_url.lock().unwrap();
+        if let Some(url) = guard.as_ref() {
+            return Ok(url.clone());
+        }
     }
     let url = start_server(vault.to_path_buf(), resolve_viz_dir(app))?;
+    let mut guard = state.server_url.lock().unwrap();
+    if let Some(existing) = guard.as_ref() {
+        return Ok(existing.clone());
+    }
     *guard = Some(url.clone());
     Ok(url)
 }
@@ -341,6 +392,11 @@ async fn boot(app: AppHandle, state: State<'_, AppState>) -> Result<BootState, S
             match ensure_server(&app, &state, &v) {
                 Ok(url) => {
                     start_scheduler(&state, &v);
+                    // Navigate from Rust so the splash cannot get stuck after
+                    // Ready (JS location.replace is a best-effort fallback).
+                    if let Err(e) = navigate_main_to_portal(&app, &url) {
+                        eprintln!("ovp2-desktop: {e}");
+                    }
                     BootState::Ready { url }
                 }
                 Err(message) => BootState::Error { message },
@@ -371,6 +427,10 @@ async fn set_vault_and_start(
     let v = PathBuf::from(&vault);
     let url = ensure_server(&app, &state, &v)?;
     start_scheduler(&state, &v);
+    if let Err(e) = navigate_main_to_portal(&app, &url) {
+        eprintln!("ovp2-desktop: {e}");
+        // Fall through — splash JS still has location.replace as backup.
+    }
     Ok(url)
 }
 
