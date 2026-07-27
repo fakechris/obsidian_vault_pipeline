@@ -16,6 +16,7 @@ import { useI18n, type MsgKey } from '../i18n';
 import {
   AskError,
   fetchAskProgress,
+  fetchAskSession,
   fetchAskStatus,
   fetchChatMarkdown,
   fetchChats,
@@ -518,9 +519,37 @@ export default function AskPage() {
     setHoverId(null);
     if (!openChat) return;
     let cancelled = false;
-    fetchChatMarkdown(openChat)
+    // Agent chats replay from the AUDIT transcript (full per-turn trails
+    // survive a reload — operator finding: History lost the 复盘 detail);
+    // legacy chats keep the markdown parse.
+    fetchAskSession(openChat)
+      // An older server (no session endpoint) or a replay-read failure must
+      // not kill the page — markdown replay still works.
+      .catch(() => ({ turns: [] }))
+      .then((session) => {
+        if (cancelled || openChatRef.current !== openChat) return null;
+        if (session.turns.length === 0) return fetchChatMarkdown(openChat);
+        setSavedTurns(
+          session.turns.map((turn) => ({
+            question: turn.question,
+            errorKey: null,
+            response: {
+              answer: turn.answer,
+              citations: citationsFromAnswerText(turn.answer),
+              verified: null,
+              context_hits: 0,
+              chat: openChat,
+              agent: true,
+              stopped_reason: turn.stopped_reason,
+              turn_id: turn.turn_id,
+              tool_trace: turn.tool_trace,
+            },
+          })),
+        );
+        return null;
+      })
       .then((md) => {
-        if (cancelled || openChatRef.current !== openChat) return;
+        if (md == null || cancelled || openChatRef.current !== openChat) return;
         const parsed = parseChatTranscript(md);
         if (parsed.length === 0) {
           setSavedError(t('ask.chatParseEmpty'));

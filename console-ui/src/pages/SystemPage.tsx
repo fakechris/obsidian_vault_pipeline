@@ -616,7 +616,13 @@ function SettingsSection({ refreshKey = 0 }: { refreshKey?: number }) {
             })}
           </dd>
           <dt>{t('system.version')}</dt>
-          <dd className="mono tiny">{settings.version}</dd>
+          <dd className="mono tiny">
+            {typeof settings.version === 'string'
+              ? settings.version
+              : `v${settings.version.server} · ${settings.version.git} · ${settings.version.built}`}
+          </dd>
+          <dt>{t('system.uiBuild')}</dt>
+          <dd className="mono tiny">{__OVP_UI_BUILD__}</dd>
         </dl>
       )}
       {/* The toggles themselves stay in the shell top bar (design §0.6:

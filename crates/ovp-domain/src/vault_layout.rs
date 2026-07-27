@@ -277,16 +277,69 @@ pub fn pack_case_id(pack_dir: &str) -> &str {
 /// subpath. When the recorded path misses and sits under the raw inbox dir,
 /// return the processed-dir candidate iff it exists. One implementation for
 /// every reader/writer (`rel` must already be traversal-checked).
+/// `expected_sha256`: when the caller knows WHICH source this path belongs
+/// to, cross-month candidates are accepted only if the basename's
+/// content-hash stem matches that sha's first 8 hex chars — a poisoned
+/// index row naming another source's file resolves to nothing (write
+/// safety: the tag endpoint mutates whatever this returns).
 pub fn lifecycle_moved_path(
     vault_root: &std::path::Path,
     layout: &VaultLayout,
     rel: &str,
+    expected_sha256: Option<&str>,
 ) -> Option<std::path::PathBuf> {
     let raw_prefix = format!("{}/", layout.inbox_raw_dir());
     let rest = rel.strip_prefix(&raw_prefix)?;
     let (month, file) = rest.split_once('/')?;
+    // Single plain components only: a multi-segment or dot-dot "file" (a
+    // poisoned rel_path) could join OUTSIDE the month bucket — the whole
+    // point of exact-basename isolation.
+    if file.is_empty()
+        || file.contains('/')
+        || file == "."
+        || file == ".."
+        || month.is_empty()
+        || month.contains('/')
+        || month.starts_with('.')
+    {
+        return None;
+    }
     let candidate = vault_root.join(layout.processed_dir(month)).join(file);
-    candidate.is_file().then_some(candidate)
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    // Lifecycle archives by PROCESSED month, not capture month: a June
+    // capture processed in July lives under 03-Processed/2026-07/ while the
+    // index still records 01-Raw/2026-06/ (live bug: the portal's source
+    // detail showed no 原文 for exactly such rows). Cross-month probing is
+    // identity-safe for readers AND writers because it requires the
+    // recorded basename to embed its content-hash stem (`-<hex8>` before
+    // the extension, the normalized-source naming contract) and matches
+    // that EXACT basename: a colliding name would mean the same content
+    // hash, and safe_move's collision suffixes never match.
+    let stem = std::path::Path::new(file).file_stem()?.to_str()?;
+    let hash8 = stem.rsplit('-').next()?;
+    if hash8.len() != 8 || !hash8.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    if let Some(expected) = expected_sha256
+        && !expected.get(..8).is_some_and(|e| e.eq_ignore_ascii_case(hash8))
+    {
+        return None;
+    }
+    let entries = std::fs::read_dir(vault_root.join(layout.processed_root())).ok()?;
+    let mut months: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            e.file_type().ok()?.is_dir().then_some(e.path())
+        })
+        .collect();
+    months.sort();
+    months
+        .into_iter()
+        .rev() // newest bucket first — lifecycle moves land in recent months
+        .map(|dir| dir.join(file))
+        .find(|p| p.is_file())
 }
 
 /// Truncate to at most `max` characters on a char boundary (titles can be

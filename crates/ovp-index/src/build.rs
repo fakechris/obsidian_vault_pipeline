@@ -379,7 +379,12 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         let path = if recorded.is_file() {
             recorded
         } else if let Some(moved) =
-            ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel)
+            ovp_domain::vault_layout::lifecycle_moved_path(
+                vault_root,
+                &layout,
+                rel,
+                Some(&row.sha256),
+            )
         {
             moved
         } else {

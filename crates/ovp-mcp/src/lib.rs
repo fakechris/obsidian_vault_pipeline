@@ -1027,8 +1027,12 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
                     code: -32602,
                     message: format!("No source with sha256 `{sha}`"),
                 })?;
-            let (doc, truncated, err) =
-                readers::read_source_doc(&state.vault_root, &state.layout, src.rel_path.as_deref());
+            let (doc, truncated, err) = readers::read_source_doc(
+                &state.vault_root,
+                &state.layout,
+                src.rel_path.as_deref(),
+                Some(&src.sha256),
+            );
             let json = serde_json::to_string(&serde_json::json!({
                 "uri": uri,
                 "source": src,

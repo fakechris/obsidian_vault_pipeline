@@ -2121,48 +2121,6 @@ fn find_source<'a>(
         .ok_or_else(|| VaultToolError::Failed(format!("unknown source `{source_id}`")))
 }
 
-/// Read-only cross-month lifecycle fallback. The shared domain helper stays
-/// same-month-only because it also serves write paths; here the source index
-/// supplies the sha256 needed to prove that a basename belongs to this row.
-fn identity_verified_cross_month_path(
-    vault_root: &Path,
-    layout: &VaultLayout,
-    rel_path: &str,
-    sha256: &str,
-) -> Option<PathBuf> {
-    let raw_prefix = format!("{}/", layout.inbox_raw_dir());
-    let rest = rel_path.strip_prefix(&raw_prefix)?;
-    let (_, recorded_tail) = rest.split_once('/')?;
-    let basename = Path::new(recorded_tail).file_name()?.to_str()?;
-    let extension = Path::new(basename).extension()?.to_str()?;
-    if extension.is_empty() {
-        return None;
-    }
-    let stem = Path::new(basename).file_stem()?.to_str()?;
-    let sha8 = sha256.get(..8)?;
-    if !sha8.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let expected_suffix = format!("-{}", sha8.to_ascii_lowercase());
-    if !stem.to_ascii_lowercase().ends_with(&expected_suffix) {
-        return None;
-    }
-
-    let processed_root = vault_root.join(layout.processed_root());
-    let mut month_dirs = std::fs::read_dir(processed_root)
-        .ok()?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            entry.file_type().ok()?.is_dir().then_some(entry.path())
-        })
-        .collect::<Vec<_>>();
-    month_dirs.sort();
-    month_dirs
-        .into_iter()
-        .rev()
-        .map(|month_dir| month_dir.join(basename))
-        .find(|candidate| candidate.is_file())
-}
 
 /// Resolve a source's on-disk file: index rel_path + the shared same-month
 /// lifecycle fallback, then an identity-verified read-only cross-month probe,
@@ -2186,17 +2144,13 @@ fn resolve_source_path(
     let layout = ovp_domain::vault_layout::VaultLayout::new();
     let mut joined = vault_root.join(rel_path);
     if !joined.is_file()
-        && let Some(moved) =
-            ovp_domain::vault_layout::lifecycle_moved_path(vault_root, &layout, rel_path)
-    {
-        joined = moved;
-    }
-    if !joined.is_file()
-        && let Some(moved) = identity_verified_cross_month_path(
+        && let Some(moved) = ovp_domain::vault_layout::lifecycle_moved_path(
             vault_root,
             &layout,
             rel_path,
-            &source.sha256,
+            // Cross-month candidates must carry THIS source's own sha stem —
+            // a poisoned index row cannot read another source's file.
+            Some(&source.sha256),
         )
     {
         joined = moved;

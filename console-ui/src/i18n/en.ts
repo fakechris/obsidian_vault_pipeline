@@ -484,6 +484,7 @@ export const en = {
     'not configured — set an API key under LLM Provider above. Ask picks it up as soon as you save.',
   'system.askTimeout': 'ask timeout',
   'system.askTimeoutValue': '{secs}s per question · up to {cap} concurrent',
+  'system.uiBuild': 'UI build',
   'system.version': 'server version',
   'system.togglesNote':
     'Theme and language switch in the top bar (LIGHT/DARK · EN/中) — persisted per browser, on every page.',

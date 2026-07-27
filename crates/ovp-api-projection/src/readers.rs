@@ -63,6 +63,7 @@ pub fn read_source_doc(
     vault_root: &Path,
     layout: &VaultLayout,
     rel_path: Option<&str>,
+    sha256: Option<&str>,
 ) -> (Option<String>, bool, Option<String>) {
     let Some(rel) = rel_path else {
         return (None, false, None);
@@ -73,7 +74,7 @@ pub fn read_source_doc(
     let recorded = vault_root.join(rel);
     let path = if recorded.is_file() {
         recorded
-    } else if let Some(moved) = lifecycle_moved_path(vault_root, layout, rel) {
+    } else if let Some(moved) = lifecycle_moved_path(vault_root, layout, rel, sha256) {
         moved
     } else {
         recorded
@@ -97,6 +98,11 @@ pub fn read_source_doc(
 /// Lifecycle-move fallback — delegates to the shared implementation in
 /// `ovp_domain::vault_layout` so every reader AND writer resolves the same
 /// candidate. Kept as a re-export shim for existing callers.
-pub fn lifecycle_moved_path(vault_root: &Path, layout: &VaultLayout, rel: &str) -> Option<PathBuf> {
-    ovp_domain::vault_layout::lifecycle_moved_path(vault_root, layout, rel)
+pub fn lifecycle_moved_path(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    rel: &str,
+    expected_sha256: Option<&str>,
+) -> Option<PathBuf> {
+    ovp_domain::vault_layout::lifecycle_moved_path(vault_root, layout, rel, expected_sha256)
 }

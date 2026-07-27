@@ -296,6 +296,16 @@ export interface AskProgressEvent {
   stopped_reason?: string;
 }
 
+/** One completed turn from GET /api/ask/session/<chat> — the saved-chat
+ * bridge to the audit transcript (History replay with full trails). */
+export interface AskSessionTurn {
+  turn_id: string;
+  question: string;
+  answer: string;
+  stopped_reason: string;
+  tool_trace: AskTraceEntry[];
+}
+
 export interface AskProgress {
   events: AskProgressEvent[];
   done: boolean;
@@ -325,6 +335,14 @@ export interface AskLimits {
 
 /** Read-only server/vault configuration. Index-derived fields are null when
  * the vault has no index projection yet. */
+/** Server build identity — package version + git hash (+dirty) + build
+ * instant. The stale-build diagnosis surface. */
+export interface ServerVersion {
+  server: string;
+  git: string;
+  built: string;
+}
+
 export interface SettingsPayload {
   vault_root: string;
   schema_version: string | null;
@@ -347,7 +365,8 @@ export interface SettingsPayload {
   /** Run-liveness heartbeat block (OVP2 observability P0); null on a fresh
    * vault / pre-P0 index. Mirrors `model.ops.last_run`. */
   last_run: LastRunModel | null;
-  version: string;
+  /** Server build identity (was a bare package-version string pre-#379). */
+  version: ServerVersion;
 }
 
 export interface BlockedSource {
