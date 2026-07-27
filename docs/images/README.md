@@ -15,11 +15,15 @@ vault has changed.
 | `07-ask-history.png` | Ask history + process graph |
 | `08-search.png` | Search results |
 
-Recapture (portal must be running):
+### Capture notes
 
-```sh
-# example with agent-browser or any headless browser
-# open http://127.0.0.1:7777/… and save into this directory
-```
+Prefer **light theme** (`data-theme=light`) and **EN** UI for README consistency.
 
-Prefer light theme for README consistency (`data-theme=light`).
+Do **not** ship raw infinite-scroll full pages (Library can be 70k+ CSS px).
+Use either:
+
+1. `fullPage: true` with a CSS max-height on `body` (and hide list rows after ~8), or  
+2. post-crop the top band to ~1600–2000 CSS px (≈3200–4000 device px at 2×).
+
+Portal must be running (e.g. `ovp2 serve … --port 7777`). Re-audit for secrets
+before publishing if the dogfood vault has changed.
