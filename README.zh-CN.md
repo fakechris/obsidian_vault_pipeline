@@ -1,85 +1,145 @@
-# Obsidian Vault Pipeline (OVP2)
+# OVP2 — 为 Obsidian vault 做的「有据可查」知识库
 
-面向 Obsidian vault 的本地优先知识运行时。OVP2 把你捕获的文章、剪藏和书签
-编译成一个可核查、有据可依的知识库——它保留的每一句结论都能追溯到原文的
-逐字引文和行号。
+**把你收藏的文章变成可以提问的知识库——答案里的每一条引用，都能点回原文的真实行号。**
 
-[English](README.md)
+OVP2 是面向 Obsidian vault 的本地优先应用：读取你捕获的内容、提取接地记忆、结晶可核查的主张，并提供门户用于浏览、搜索与对话——不编造引用。
 
-## 这是什么
+[English](README.md) · [安装说明](docs/install.md) · [运维手册](docs/operator-runbook.md)
 
-OVP2 把一个 vault 组织成三层：
+<p align="center">
+  <img src="docs/images/05-knowledge-graph.png" alt="OVP2 知识图谱" width="900" />
+</p>
 
-| 层 | English | 内容 |
+<p align="center"><em>知识图谱：真实 dogfood vault 中的主题与主张。</em></p>
+
+---
+
+## 为什么是 OVP2
+
+多数笔记工具只存文本。OVP2 维护一层 **真相层**：
+
+| 层 | 你看到什么 | 规则 |
 |---|---|---|
-| 原文 | Source | 捕获的资料本身：网页剪藏、Pinboard 书签、手动投放的文件。永不改写。 |
-| 记忆 | Memory | 每个源的接地 **Unit**（带行号的逐字引文）和只由这些 Unit 构成的可读 **Card**。 |
-| 结晶 | Knowledge | 跨源 **Claim**，每条标注 **durable** 或 **caveated**，每个引用都能解析到 Unit、引文和原文行号。 |
+| **原文 Source** | 剪藏、书签、投放的文件 | 永不改写 |
+| **记忆 Memory** | 每篇文章的卡片与单元 | 单元必须对应逐字引文 + 行号 |
+| **知识 Knowledge** | 跨源主张（claim） | 没有接地引用，就不能成为 durable |
 
-真相层就是产品。不能引用逐字证据的主张不会被持久化：机械化的 gate 在写入前
-把每个引用核对到已接受的 Unit；所有持久状态都存放在 vault 内的 append-only
-账本（`.ovp/`）中。其余一切——搜索索引、web 门户、主题视图——都是投影，
-随时可以删除并从账本完整重建。
+不能指向 vault 内证据的句子，不会变成持久知识。搜索、图谱与对话都是账本之上的投影——随时可删、可重建。
 
-## 从 OVP 到 OVP2
+---
 
-OVP2 是 Python 版 OVP（六阶段管线、`knowledge.db`、Evergreen/MOC 笔记、
-`ovp`/`ovp-autopilot`/`ovp-ui`）的 Rust 全量重写。重写改变的不只是语言，
-更是方向：急切的概念图谱与 canonical 本体抽取在真实数据上验证失败，系统围绕
-接地阅读主干（grounded reader trunk）和带 gate 的结晶真相层重建。完整的
-决策叙事、命令映射和现有 vault 的迁移说明见
-[`docs/ovp-to-ovp2.zh-CN.md`](docs/ovp-to-ovp2.zh-CN.md)。
+## 门户界面
+
+`ovp2 serve`（或 **OVP2 桌面应用**）在本地打开 vault 的读模型门户。
+
+### 今天 Today — 发生了什么
+
+晨间看板：捕获、阅读、新增主张，以及需要处理的事项。
+
+<p align="center">
+  <img src="docs/images/01-today.png" alt="Today 页面：统计与 Attention 列表" width="900" />
+</p>
+
+### 资料 Library — 全部收藏
+
+按集合与月份浏览。打开任一来源，可见 **记忆卡片**、原文 markdown、引用该源的主张，以及邻域图谱。
+
+<p align="center">
+  <img src="docs/images/02-library.png" alt="Library 来源列表" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/images/03-source-detail.png" alt="来源详情：记忆卡片与单元" width="900" />
+</p>
+
+### 知识 Knowledge — 主题与主张
+
+durable / caveated 主张按主题分组。需要结构时切换 **列表 / 图谱 / 地形**。
+
+<p align="center">
+  <img src="docs/images/04-knowledge.png" alt="Knowledge 主题卡片" width="900" />
+</p>
+
+### 对话 Ask — 带回执的回答
+
+自然语言提问。Agent 检索主张、来源与证据卡片；右侧 **过程图** 展示触及了什么；答案带 **可点开的编号引用**。
+
+<p align="center">
+  <img src="docs/images/06-ask.png" alt="Ask 空态与示例问题" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/images/07-ask-history.png" alt="Ask 历史：带引用的回答与过程图" width="900" />
+</p>
+
+### 搜索 Search — 一个输入框
+
+源、主张、pack、主题——任意页面 `⌘K` / `Ctrl+K`。
+
+<p align="center">
+  <img src="docs/images/08-search.png" alt="搜索 agent memory 的主张结果" width="900" />
+</p>
+
+另有 **标签 Tags**、**实体 Entities**、**系统 System**（运行记录、doctor、LLM 设置、日程）。浅色 Atelier / 深色 Vault 两套主题；界面支持 English 与简体中文。
+
+---
+
+## 日常怎么用
+
+| 想做什么 | 怎么做 |
+|---|---|
+| 定时消化书签 / 剪藏 | `ovp2 schedule install`，再填写 `<vault>/.ovp/daily.env` |
+| 跑一遍日循环 | `ovp2 daily --vault-root ~/path/to/vault --client live` |
+| 打开界面 | `ovp2 serve --vault-root ~/path/to/vault` → 打开打印的 URL |
+| 桌面端 | [OVP2.app 发布页](https://github.com/fakechris/obsidian_vault_pipeline/releases)（macOS） |
+| 命令行提问 | `ovp2 ask --vault-root … "你的问题"` |
+| 编辑器里当工具 | `ovp2 mcp`（stdio MCP） |
+
+日循环：捕获清扫 → 新源接地阅读 → 账本 → 重建读模型。结晶合成把 reader pack 变成跨源主张，并由机械 gate 把关。
+
+---
 
 ## 安装
 
-macOS（arm64/x64）和 Linux（x64）的预编译二进制；不需要 Rust 工具链。
-当前版本：**v0.23.0**。两个渠道都经过端到端验证。
+macOS arm64 与 Linux x64 的预编译 **CLI**（当前线：**v2.0.1**），无需 Rust 工具链。
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
 ```
 
-或使用 Homebrew：
+或：
 
 ```sh
 brew install fakechris/ovp2/ovp2
 ```
 
-用 `ovp2 --version` 确认安装成功。细节、发布流程以及 `brew` 的代理注意事项
-见 [`docs/install.md`](docs/install.md)。
+```sh
+ovp2 --version
+```
 
-## 快速开始
+渠道、桌面 DMG、回滚：[`docs/install.md`](docs/install.md)。
 
-1. **配置 LLM**（live 运行需要）——写在 shell profile 或私有 `.env` 中
-   （永远不要放进仓库或 vault）：
+### 快速开始
+
+1. **LLM 凭证**（live 阅读 / 对话需要）——放在私有 shell 或 vault 侧配置，不要提交进仓库：
 
    ```sh
    export ANTHROPIC_API_KEY=sk-ant-...
-   export OVP_LLM_TIMEOUT_SECS=480   # live 运行必需；默认 180s 会误杀慢响应
-   # 可选：ANTHROPIC_BASE_URL、OVP_LLM_MODEL、OVP_LLM_MAX_TOKENS、OVP_LLM_NO_PROXY=1
+   export OVP_LLM_TIMEOUT_SECS=480
    ```
 
-2. **对你的 vault 跑每日循环**（先用 `--dry-run` 查看计划，不写任何东西）：
+2. **跑一次日循环**（可先 `--dry-run`）：
 
    ```sh
    ovp2 daily --vault-root ~/Documents/my-vault --client live
    ```
 
-   一次运行会把捕获物归一化进队列（URL + 内容去重）、让每个新源走一遍接地
-   阅读主干、把 reader pack 写进 vault、把每次尝试记录进 append-only 账本，
-   并重建读模型。
-
-3. **装上日程**——从此不用惦记流水线心跳：
+3. **装日程**（可选）：
 
    ```sh
    ovp2 schedule install --vault-root ~/Documents/my-vault
    ```
-
-   安装一个操作系统级定时任务（macOS 用 launchd，Linux 用 systemd 用户
-   timer），每天 09:00 自动运行 `ovp2 daily`（`--time HH:MM` 可改）。凭证
-   填进生成的 `<vault>/.ovp/daily.env`（chmod 600），`install` 会打印需要
-   填什么。用 `ovp2 schedule status` 查看，`ovp2 schedule uninstall` 移除。
 
 4. **打开门户**：
 
@@ -87,104 +147,52 @@ brew install fakechris/ovp2/ovp2
    ovp2 serve --vault-root ~/Documents/my-vault
    ```
 
-   然后在浏览器打开打印出的 URL（默认 `http://127.0.0.1:3141`）。
+5. **Pinboard**（可选）：`PINBOARD_TOKEN=user:TOKEN`，再  
+   `ovp2 pinboard-sync --vault-root … --live --max 200`
 
-5. **可选——Pinboard 捕获**：
-
-   ```sh
-   ovp2 pinboard-sync --vault-root ~/Documents/my-vault --live --max 200
-   ```
-
-   需要 `PINBOARD_TOKEN`（`username:TOKEN`；不落盘、不进日志）。Pinboard API
-   会返回账户的全部历史，因此首次同步有防洪保护：不带 `--since`/`--max` 时，
-   任何将创建超过 500 条新笔记的运行都会在写入前中止。`--max 200` 只取最新
-   200 条，更早的书签在后续运行中逐步补齐。
-
-## 门户
-
-`ovp2 serve` 在 vault 的读模型之上提供一个单页门户，共六个一级页面：
-
-| 页面 | 回答的问题 |
-|---|---|
-| 今天 Today | 今天进来了什么、读完了什么、结晶了什么、有什么需要处理 |
-| 资料 Library | 按集合、月份、状态浏览全部源；源详情页三层钻取（记忆 / 原文 / 主张） |
-| 搜索 Search | 一个输入框搜源、卡片、单元、主张、主题（任何页面 `⌘K` 唤起） |
-| 知识 Knowledge | 主题与主张、durable/caveated 状态、证据钻取、带作用域的图谱视图 |
-| 对话 Ask | 基于 vault 证据的带引用问答；引用经过索引校验 |
-| 系统 System | 运行记录、阻塞的源、`doctor` 结果、设置、概念说明 |
-
-两套平权主题——浅色 "Atelier"（暖羊皮纸 + 赤陶土）与深色 "Vault"（近黑 +
-深蓝 + 青）——界面默认英文，内置完整简体中文翻译，均可在 UI 中切换。
-
-## 核心命令
-
-每个 CLI 动词都在 `--help` 里标注 PRODUCT / DIAGNOSTIC / DEMOTED。产品面：
-
-| 命令 | 作用 |
-|---|---|
-| `ovp2 daily` | 每日主循环：捕获清扫 → 每个新源走接地阅读主干 → 生命周期流转 → 账本 + 报告 → 读模型与控制台刷新 |
-| `ovp2 schedule` | 安装/移除/查看操作系统级每日定时任务（launchd / systemd 用户 timer）——`install` 一次，循环自己跑 |
-| `ovp2 serve` | 启动本机门户服务：`.ovp/console/` 页面 + JSON API（`/api/find`、`/api/search`、`/api/ask` 等） |
-| `ovp2 ask` | 对产品状态做检索增强问答；输出带引用的回答，并做确定性引用校验 |
-| `ovp2 pinboard-sync` | 把 Pinboard 书签物化为收件箱笔记，URL 去重，带首次同步防洪保护 |
-| `ovp2 crystal-synth` | 一键 Crystal 合成：reader pack → 跨源主张 → 接地过滤 → 强度 gate → durable 写入 |
-| `ovp2 crystal-review-session` | 为 caveated 主张准备一个有界的人工复核会话（复核单 + 决策模板） |
-| `ovp2 index` | 重建读模型（`.ovp/index/index.json`）；永远是全量确定性重建 |
-| `ovp2 find` | 查询读模型：源、pack、主张、运行、卡片、单元——按关键词、类型、状态、日期 |
-| `ovp2 doctor` | vault 状态健康检查；`--fix` 只做安全修复，永不删除 |
-| `ovp2 digest` | 每日摘要（`.ovp/digests/<date>.md`）；短暂复用面，不进账本 |
-| `ovp2 project` | Projection Lanes：按 lane 查看主张，或把 durable 主张写成 vault 笔记（`--write` / `--rebuild`） |
-| `ovp2 mcp` | MCP stdio 服务，向 MCP 兼容编辑器暴露 find/search/status/doctor 工具 |
+---
 
 ## 隐私与信任
 
-OVP2 是本地优先的。它知道的一切都以纯文件形式存放在你的 vault 内（`.ovp/`
-账本与投影，加上笔记本身）；没有云端组件、没有账号，也**没有任何遥测**。
-只有以下三类数据会离开你的机器，且每一类都由你显式配置：
+本地优先：产品状态是 vault 内的普通文件（`.ovp/` 账本 + 笔记）。无账号，**无遥测**。
 
-- **LLM 调用** —— 在 `daily`、`ask`、`crystal-synth`（以及门户的 Ask 页面）
-  期间，文章/书签文本会发送给**你自己**通过环境变量配置的 LLM 服务商
-  （`ANTHROPIC_API_KEY`，可选 `ANTHROPIC_BASE_URL`）。不配置 key 就没有任何
-  调用：默认运行是离线/回放模式。
-- **Pinboard 同步** —— `pinboard-sync --live` 使用你的 `PINBOARD_TOKEN`
-  与 pinboard.in 通信（token 不落盘、不进日志）。
-- **Web/GitHub 补全** —— 补全功能会抓取你收藏的 URL 本身（GitHub 仓库链接
-  还会请求 GitHub API 元数据）以获得正文内容。
-- **`compare-run`（诊断用，手动触发）** —— 外部对照器会把源路径/URL 与查询发给你
-  指定的 Nowledge Mem HTTP 服务。它不属于 `daily` 流程；不执行该命令就不会有发送。
+只有你**主动配置**时才会出网：
 
-除此之外，不传输任何东西。
+- **LLM 调用** — 处理的文本发往你配置的 API Key / 本地端点。无 Key 则仅离线 / 回放。
+- **Pinboard** — 仅 `--live` + 你的 token（不写日志）。
+- **网页 / GitHub  enrichment** — 在启用时抓取你书签的 URL（及 GitHub 元数据）。
+- **手动诊断对比** — 仅在你主动跑 compare 命令、并指向自选外部服务时；不是 `daily` 的一部分。
 
-## 文档
+---
 
-| 文档 | 内容 |
+## 更多文档
+
+| 文档 | 用途 |
 |---|---|
-| [`docs/ovp-to-ovp2.zh-CN.md`](docs/ovp-to-ovp2.zh-CN.md) | OVP → OVP2 的完整故事：改了什么、为什么、如何迁移（[English](docs/ovp-to-ovp2.md)） |
-| [`docs/install.md`](docs/install.md) | 安装渠道与维护者发布流程 |
-| [`docs/operator-runbook.md`](docs/operator-runbook.md) | 真实 vault 的日常操作：每日循环、故障处理、复核会话、恢复 |
-| [`docs/architecture.md`](docs/architecture.md) | crate 地图、数据流、不变量、门户与演化内核 |
-| [`docs/product-state-layout.md`](docs/product-state-layout.md) | 产品状态的存放位置；权威态 vs 派生态 |
-| [`docs/invariants.md`](docs/invariants.md) | 架构不变量，尽可能由 CI 把关 |
+| [`docs/install.md`](docs/install.md) | 安装、桌面端、版本 |
+| [`docs/operator-runbook.md`](docs/operator-runbook.md) | 真实 vault 运维与恢复 |
+| [`docs/ovp-to-ovp2.zh-CN.md`](docs/ovp-to-ovp2.zh-CN.md) | 重写叙事与迁移（[EN](docs/ovp-to-ovp2.md)） |
+| [`docs/architecture.md`](docs/architecture.md) | 架构（给工程师） |
+| [`docs/product-state-layout.md`](docs/product-state-layout.md) | 磁盘上的产品状态 |
+| [`CHANGELOG.md`](CHANGELOG.md) | 发布历史 |
+
+[`docs/images/`](docs/images/) 中的截图来自本地 dogfood vault（公开技术剪藏）。门户运行时即可重拍；发布前请再扫一眼是否含密钥或私密内容。
+
+---
 
 ## 状态
 
-工作区共 22 个 Rust crate；780 个测试通过（1 个忽略），另有二进制级端到端
-覆盖。每日循环、门户、Crystal 合成与复核流程已在真实 vault 上运行。发布
-v0.23.0 延续仓库的发布谱系（v0.22.0 是最后一个 Python 时代版本）；v2.0.0
-保留给合并主干 / Python 退役里程碑。进行中：真实 vault 的持续 dogfood 与
-语义主题投影。历史阶段记录见 `docs/stage-*.md`；版本历史见
-[`CHANGELOG.md`](CHANGELOG.md)。
+Rust 工作区（CLI + 门户 + 可选桌面端）。日循环、结晶合成、Ask agent 与门户已在真实 vault 上使用。产物见 [releases](https://github.com/fakechris/obsidian_vault_pipeline/releases)。
+
+---
 
 ## 许可证
 
-本项目采用双许可证，二选一：
+双许可，任选其一：
 
-- MIT 许可证（[LICENSE-MIT](LICENSE-MIT)）
-- Apache 许可证 2.0 版（[LICENSE-APACHE](LICENSE-APACHE)）
+- MIT（[LICENSE-MIT](LICENSE-MIT)）
+- Apache License 2.0（[LICENSE-APACHE](LICENSE-APACHE)）
 
-除非你另有明确声明，你有意提交并纳入本项目的任何贡献（按 Apache-2.0 许可证
-的定义），都将按上述双许可证授权，不附加任何额外条款。
+除非另有明确说明，你有意提交纳入本作品的贡献（定义见 Apache-2.0）将按上述双许可授权。
 
-例外：随仓库分发的 IBM Plex 网页字体（`console-ui/src/design/fonts/`）
-仍遵循 SIL Open Font License 1.1 ——见
-[`console-ui/src/design/fonts/LICENSE.txt`](console-ui/src/design/fonts/LICENSE.txt)。
+例外：随附的 IBM Plex 网页字体（`console-ui/src/design/fonts/`）仍为 SIL Open Font License 1.1 —— 见 [`console-ui/src/design/fonts/LICENSE.txt`](console-ui/src/design/fonts/LICENSE.txt)。
