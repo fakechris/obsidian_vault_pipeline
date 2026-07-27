@@ -1,4 +1,4 @@
-/** Live process graph for Ask — KMEM-style explainability during search.
+/** Live process graph for Ask.
  *
  * As the agent touches claims / sources / memory cards, nodes accumulate
  * into a small force graph so the operator sees *what* entered the answer
