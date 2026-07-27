@@ -341,6 +341,14 @@ export const en = {
   'ask.citationsTitle': 'Citations',
   'ask.citationsEmpty':
     'Citations for the latest answer land here — hover a [1] marker in the answer to highlight its evidence.',
+  'ask.processTitle': 'Process',
+  'ask.processHelp':
+    'Entities the agent touched while searching — claims, sources, and memory cards grow into the graph live.',
+  'ask.processEmpty':
+    'Nodes appear here as the agent searches claims, sources, and evidence.',
+  'ask.processClaims': '{n} claims',
+  'ask.processSources': '{n} sources',
+  'ask.processMemory': '{n} memory',
   'ask.unverified': 'unverified',
   'ask.openCitation': 'Open',
   'ask.noLink': 'No detail page in this vault.',

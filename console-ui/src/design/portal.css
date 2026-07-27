@@ -1746,6 +1746,67 @@ body {
   opacity: 0.45;
   cursor: default;
 }
+/* right rail: process graph + citations */
+.ask-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.ask-process-card {
+  overflow: hidden;
+}
+.ask-process-help {
+  margin: 0 0 0.5rem;
+  line-height: 1.4;
+}
+.ask-process {
+  min-height: 4rem;
+}
+.ask-process.empty {
+  padding: 0.2rem 0 0;
+}
+.ask-process-empty-msg {
+  margin: 0;
+  padding: 1.25rem 0.75rem;
+  text-align: center;
+  line-height: 1.45;
+}
+.ask-process-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.85rem;
+  margin-bottom: 0.35rem;
+  align-items: center;
+}
+.ask-process-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.ask-process-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.ask-process-swatch.claim {
+  background: var(--c-3);
+}
+.ask-process-swatch.source {
+  background: var(--c-1);
+}
+.ask-process-swatch.card {
+  background: var(--c-2);
+}
+.ask-process-canvas {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md);
+  background: var(--graph-bg, var(--surface-2));
+  overflow: hidden;
+}
 /* citations panel (right rail) */
 .cite-entry {
   border: 1px solid var(--border);
@@ -1778,7 +1839,15 @@ body {
   font-weight: 600;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.15rem;
+}
+.cite-id {
+  margin-bottom: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  opacity: 0.75;
 }
 .cite-entry blockquote {
   margin: 0 0 0.35rem;

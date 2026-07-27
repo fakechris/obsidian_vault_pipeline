@@ -89,6 +89,9 @@ pub struct ToolTraceEntry {
     /// Compact stats parsed from the FULL result ("3 hits · scanned 918/1281 ·
     /// truncated") — the trail must support post-hoc 复盘, not just names.
     pub result_note: Option<String>,
+    /// Involved entities from this call (process graph). Empty on errors /
+    /// late-discarded results.
+    pub hits: Vec<ProgressHit>,
 }
 
 /// Generic result introspection for the trail: hits/scanned/truncated are the
@@ -115,6 +118,130 @@ pub fn tool_result_note(content: &str) -> Option<String> {
     } else {
         Some(parts.join(" · "))
     }
+}
+
+/// One involved vault entity surfaced mid-turn for process visualization
+/// (KMEM live-preview pattern: memory / source / claim nodes the agent
+/// actually touched). Labels are operator-facing; ids are stable for
+/// graph node identity and deep links.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressHit {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+    pub source_id: Option<String>,
+}
+
+/// Compact involved-entity list from a tool result — drives the live ask
+/// process graph. Cap is intentional (UI graph stays scannable; full hits
+/// still reach the model via the tool result itself).
+const MAX_PROGRESS_HITS: usize = 12;
+
+pub fn tool_result_hits(content: &str) -> Vec<ProgressHit> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    let Some(hits) = v.get("hits").and_then(|h| h.as_array()) else {
+        // Single-entity reads (get_claim / get_source / …) may return an
+        // object without a hits array — still surface them as one node.
+        return single_entity_hit(&v).into_iter().collect();
+    };
+    let mut out = Vec::new();
+    for hit in hits {
+        if out.len() >= MAX_PROGRESS_HITS {
+            break;
+        }
+        if let Some(n) = hit_to_progress(hit) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn single_entity_hit(v: &serde_json::Value) -> Option<ProgressHit> {
+    hit_to_progress(v)
+}
+
+fn clip_label(s: &str, max: usize) -> String {
+    let t = s.trim();
+    if t.chars().count() <= max {
+        t.to_string()
+    } else {
+        t.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+    }
+}
+
+fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
+    // Claims (search_claims / get_claim)
+    if let Some(key) = hit
+        .get("claim_key")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        let claim = hit
+            .get("claim")
+            .and_then(|v| v.as_str())
+            .unwrap_or(key);
+        let source_id = hit
+            .get("source_ids")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        return Some(ProgressHit {
+            kind: "claim".into(),
+            id: key.to_string(),
+            label: clip_label(claim, 80),
+            source_id,
+        });
+    }
+    // Sources (search_sources / fulltext / chunks)
+    if let Some(sid) = hit
+        .get("source_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        // Evidence packs also carry source_id — prefer memory/card when a
+        // pack title or matched cards are present.
+        if let Some(pack) = hit.get("pack_title").and_then(|v| v.as_str()) {
+            let card = hit
+                .get("matched_cards")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str());
+            let label = card.unwrap_or(pack);
+            return Some(ProgressHit {
+                kind: "card".into(),
+                id: format!("card:{sid}:{}", clip_label(label, 40)),
+                label: clip_label(label, 80),
+                source_id: Some(sid.to_string()),
+            });
+        }
+        let title = hit
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty() && *s != "(untitled)")
+            .or_else(|| hit.get("rel_path").and_then(|v| v.as_str()))
+            .unwrap_or(sid);
+        return Some(ProgressHit {
+            kind: "source".into(),
+            id: sid.to_string(),
+            label: clip_label(title, 80),
+            source_id: Some(sid.to_string()),
+        });
+    }
+    // Cards without source_id (rare)
+    if let Some(title) = hit.get("title").and_then(|v| v.as_str()) {
+        if hit.get("content").is_some() || hit.get("matched_cards").is_some() {
+            return Some(ProgressHit {
+                kind: "card".into(),
+                id: format!("card:{}", clip_label(title, 40)),
+                label: clip_label(title, 80),
+                source_id: None,
+            });
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,12 +321,14 @@ pub enum AgentProgress {
     /// `summary` mirrors the caller-facing `ToolTraceEntry` summary: capped,
     /// and the discard marker (never content) for late results. `note` is the
     /// parsed result-stats line ("3 hit(s) · scanned 918/1281 · truncated").
+    /// `hits` is a compact involved-entity list for process visualization.
     ToolFinished {
         tool_call_id: String,
         tool: String,
         is_error: bool,
         summary: String,
         note: Option<String>,
+        hits: Vec<ProgressHit>,
     },
     Finished { turn_id: String, stopped_reason: StoppedReason },
 }
@@ -557,15 +686,19 @@ pub fn run_agent_turn_with_progress(
             } else {
                 content.chars().take(120).collect()
             };
-            trace.push(ToolTraceEntry {
-                tool: name.clone(),
-                tool_call_id: id.clone(),
-                is_error: is_error || finished_late,
-                summary: trail_summary.clone(),
-                arguments: input.clone(),
-                // Late data stays discarded — no stats leak either.
-                result_note: if finished_late { None } else { tool_result_note(&content) },
-            });
+            // Stats from the full raw body (before model-facing truncation).
+            let result_note = if finished_late {
+                None
+            } else {
+                tool_result_note(&content)
+            };
+            // Process-viz hits from the raw body too (same hit set the model
+            // saw, minus late discards). Cap is enforced inside extraction.
+            let hits = if is_error || finished_late {
+                Vec::new()
+            } else {
+                tool_result_hits(&content)
+            };
             let (model_content, model_is_error) = if finished_late {
                 timed_out = true;
                 (
@@ -589,12 +722,22 @@ pub fn run_agent_turn_with_progress(
                 }
                 (content, is_error)
             };
+            trace.push(ToolTraceEntry {
+                tool: name.clone(),
+                tool_call_id: id.clone(),
+                is_error: is_error || finished_late,
+                summary: trail_summary.clone(),
+                arguments: input.clone(),
+                result_note: result_note.clone(),
+                hits: hits.clone(),
+            });
             emit(AgentProgress::ToolFinished {
                 tool_call_id: id.clone(),
                 tool: name.clone(),
                 is_error: model_is_error,
                 summary: trail_summary,
-                note: trace.last().and_then(|t| t.result_note.clone()),
+                note: result_note,
+                hits,
             });
             results.push(ToolResultBlock {
                 tool_call_id: id.clone(),
@@ -681,15 +824,32 @@ fn replayed_trace(store: &SessionStore, turn_id: &str) -> Vec<ToolTraceEntry> {
         .tool_trail_for_turn(turn_id)
         .into_iter()
         .map(
-            |(tool, tool_call_id, is_error, summary, arguments, result_note)| ToolTraceEntry {
-                tool,
-                tool_call_id,
-                is_error,
-                summary,
-                arguments,
-                result_note,
+            |(tool, tool_call_id, is_error, summary, arguments, result_note, hits)| {
+                ToolTraceEntry {
+                    tool,
+                    tool_call_id,
+                    is_error,
+                    summary,
+                    arguments,
+                    result_note,
+                    hits,
+                }
             },
         )
+        .collect()
+}
+
+/// Serialize process-viz hits for HTTP progress/tool_trace payloads.
+pub fn progress_hits_json(hits: &[ProgressHit]) -> Vec<serde_json::Value> {
+    hits.iter()
+        .map(|h| {
+            serde_json::json!({
+                "kind": h.kind,
+                "id": h.id,
+                "label": h.label,
+                "source_id": h.source_id,
+            })
+        })
         .collect()
 }
 
@@ -1665,6 +1825,31 @@ mod tests {
             AgentProgress::Finished { stopped_reason: StoppedReason::Final, .. }
         ));
         assert_eq!(out.stopped_reason, StoppedReason::Final);
+    }
+
+    #[test]
+    fn tool_result_hits_extract_claim_source_and_card() {
+        let claims = r#"{"hits":[{"claim_key":"ck-abc","claim":"Governed forgetting is necessary.","source_ids":["sha1"]}]}"#;
+        let h = tool_result_hits(claims);
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].kind, "claim");
+        assert_eq!(h[0].id, "ck-abc");
+        assert!(h[0].label.contains("forgetting"));
+        assert_eq!(h[0].source_id.as_deref(), Some("sha1"));
+
+        let sources = r#"{"hits":[{"source_id":"deadbeef","title":"Agent Memory Systems"}]}"#;
+        let h = tool_result_hits(sources);
+        assert_eq!(h[0].kind, "source");
+        assert_eq!(h[0].label, "Agent Memory Systems");
+
+        let evidence = r#"{"hits":[{"pack_title":"Pack","matched_cards":["Memory as state"],"source_id":"s2"}]}"#;
+        let h = tool_result_hits(evidence);
+        assert_eq!(h[0].kind, "card");
+        assert_eq!(h[0].label, "Memory as state");
+        assert_eq!(h[0].source_id.as_deref(), Some("s2"));
+
+        assert!(tool_result_hits("not-json").is_empty());
+        assert!(tool_result_hits(r#"{"ok":true}"#).is_empty());
     }
 
     // An empty/unstamped lock file is conservatively BUSY — a racing creator
