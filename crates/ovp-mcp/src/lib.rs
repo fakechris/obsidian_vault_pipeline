@@ -484,7 +484,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         let trail = store.tool_trail_for_turn(&done.turn_id);
         if !trail.is_empty() {
             text.push_str("\nagent trail:");
-            for (tool, _id, is_error, _summary, arguments, note) in trail {
+            for (tool, _id, is_error, _summary, arguments, note, _hits) in trail {
                 let mark = if is_error { "✗" } else { "✓" };
                 let args = match ovp_memory::receipts::args_brief(&arguments) {
                     Value::String(s) => format!(" {s}"),

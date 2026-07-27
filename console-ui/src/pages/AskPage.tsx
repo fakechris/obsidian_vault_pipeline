@@ -11,6 +11,7 @@
  * handler leaves it alone while composing. */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import AskProcessGraph from '../components/AskProcessGraph';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -68,6 +69,24 @@ function errorKeyFor(err: unknown): MsgKey {
   return 'ask.errGeneric';
 }
 
+/** Human title the model wrote after a bare id — `[source:<sha> Some Title]`. */
+function decoratedTitle(rest: string): string | null {
+  const parts = rest.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const title = parts
+    .slice(1)
+    .join(' ')
+    .replace(/^[<>|]+|[<>|]+$/g, '')
+    .trim();
+  return title || null;
+}
+
+/** Short operator-facing fallback when only a hash is known. */
+function shortSourceLabel(token: string): string {
+  const short = token.slice(0, 12);
+  return short.length < token.length ? `source ${short}…` : `source ${token}`;
+}
+
 /** Build citation chips from answer text alone (saved-chat replay). */
 function citationsFromAnswerText(answer: string): AskCitation[] {
   return citationsInOrder(answer).map((id) => {
@@ -79,10 +98,13 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
     const rest = kind ? id.slice(id.indexOf(':') + 1) : id;
     const token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
     const canonical = kind ? `${kind}:${token}` : token;
+    const title =
+      decoratedTitle(rest) ??
+      (kind === 'source' ? shortSourceLabel(token) : canonical);
     return {
-      id,
+      id: canonical,
       kind,
-      title: canonical,
+      title,
       snippet: null,
       link_target: citeLinkTarget(canonical),
       // Saved transcript does not re-run the verifier — verification state
@@ -91,6 +113,16 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
       verified: null,
     };
   });
+}
+
+/** Primary line for a citation panel entry — never a bare 64-char hash. */
+function citationTitle(c: AskCitation): string {
+  if (c.title && c.title.trim() && c.title !== c.id) return c.title;
+  if (c.kind === 'source' || c.id.startsWith('source:')) {
+    const token = c.id.includes(':') ? c.id.slice(c.id.indexOf(':') + 1) : c.id;
+    return shortSourceLabel(token.split(/\s+/)[0] ?? token);
+  }
+  return c.title ?? c.id;
 }
 
 // ---- agent live trail + receipts (A3c) ----
@@ -279,6 +311,17 @@ function AgentMeta({ response }: { response: AskResponse }) {
   );
 }
 
+/** Stable `kind:token` key for marker ↔ panel matching. Strips model
+ * decoration (`[source:<sha> Title]`) so the answer token and the receipt
+ * id always land on the same map entry. */
+function citationLookupKey(id: string): string {
+  const norm = normalizeCiteToken(id);
+  const kind = norm.includes(':') ? norm.slice(0, norm.indexOf(':')) : '';
+  const rest = kind ? norm.slice(norm.indexOf(':') + 1) : norm;
+  const token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
+  return kind ? `${kind}:${token}` : token;
+}
+
 /** Answer body rendered as markdown with numbered citation markers. */
 function AnswerText({
   answer,
@@ -291,11 +334,11 @@ function AnswerText({
   onHover: (id: string | null) => void;
   onOpen: (cit: AskCitation) => void;
 }) {
-  const index = new Map(citations.map((c, i) => [c.id, i]));
+  const index = new Map(citations.map((c, i) => [citationLookupKey(c.id), i]));
   const marker: InlineMarker = {
     pattern: CITE_RE,
     render: (m, key) => {
-      const i = index.get(normalizeCiteToken(m[1]));
+      const i = index.get(citationLookupKey(m[1]));
       if (i === undefined) return null;
       const cit = citations[i];
       return (
@@ -308,7 +351,7 @@ function AnswerText({
           onFocus={() => onHover(cit.id)}
           onBlur={() => onHover(null)}
           onClick={() => onOpen(cit)}
-          title={cit.title ?? cit.id}
+          title={citationTitle(cit)}
         >
           [{i + 1}]
         </button>
@@ -343,10 +386,13 @@ function CitationPanel({
     <div>
       {citations.map((c, i) => {
         const kindTip = conceptTipKey(c.kind);
+        const hit =
+          hoverId != null &&
+          citationLookupKey(hoverId) === citationLookupKey(c.id);
         return (
           <div
             key={c.id}
-            className={`cite-entry${hoverId === c.id ? ' hover-hit' : ''}`}
+            className={`cite-entry${hit ? ' hover-hit' : ''}`}
           >
             <div className="cite-entry-top">
               <span className="cite-num mono">[{i + 1}]</span>
@@ -357,7 +403,12 @@ function CitationPanel({
                 <span className="pill unverified">{t('ask.unverified')}</span>
               )}
             </div>
-            <div className="cite-title">{c.title ?? c.id}</div>
+            <div className="cite-title">{citationTitle(c)}</div>
+            {c.id && citationTitle(c) !== c.id && (
+              <div className="cite-id mono tiny muted" title={c.id}>
+                {c.id}
+              </div>
+            )}
             {c.snippet && <blockquote>“{c.snippet}”</blockquote>}
             {c.link_target ? (
               <button
@@ -749,7 +800,21 @@ export default function AskPage() {
 
   const displayTurns = openChat ? (savedTurns ?? []) : turns;
   const latest = [...displayTurns].reverse().find((turn) => turn.response);
+  // Failed mid-flight turns keep a progress snapshot but no response —
+  // still surface their process graph in the rail.
+  const latestAny = [...displayTurns].reverse().find(
+    (turn) => turn.response || (turn.progress && turn.progress.length > 0),
+  );
   const citations = latest?.response?.citations ?? [];
+  // Live turn: only current progress events (never a prior turn's trail).
+  // Settled turn: tool_trace + citations (and error progress if any).
+  const processEvents = pending
+    ? live?.events
+    : latestAny?.progress;
+  const processTrace = pending
+    ? undefined
+    : latestAny?.response?.tool_trace;
+  const processCitations = pending ? [] : citations;
   const examples: MsgKey[] = ['ask.example1', 'ask.example2', 'ask.example3'];
   const viewingSaved = Boolean(openChat);
 
@@ -896,8 +961,19 @@ export default function AskPage() {
           )}
         </div>
 
-        {/* right rail: citations for the latest answer (live or saved) */}
-        <div>
+        {/* right rail: process graph + citations for the latest answer */}
+        <div className="ask-rail">
+          <div className="card ask-process-card">
+            <h3 style={{ marginBottom: '0.4rem' }}>{t('ask.processTitle')}</h3>
+            <p className="tiny muted ask-process-help">{t('ask.processHelp')}</p>
+            <AskProcessGraph
+              events={processEvents}
+              toolTrace={processTrace}
+              citations={processCitations}
+              hoverId={hoverId}
+              height={220}
+            />
+          </div>
           <div className="card">
             <h3 style={{ marginBottom: '0.6rem' }}>{t('ask.citationsTitle')}</h3>
             <CitationPanel

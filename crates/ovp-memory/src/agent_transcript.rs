@@ -547,7 +547,15 @@ impl SessionStore {
     pub fn tool_trail_for_turn(
         &self,
         id: &str,
-    ) -> Vec<(String, String, bool, String, serde_json::Value, Option<String>)> {
+    ) -> Vec<(
+        String,
+        String,
+        bool,
+        String,
+        serde_json::Value,
+        Option<String>,
+        Vec<crate::agent::ProgressHit>,
+    )> {
         let mut args_by_call: std::collections::HashMap<&str, &serde_json::Value> =
             std::collections::HashMap::new();
         for e in &self.events {
@@ -584,6 +592,14 @@ impl SessionStore {
                         .cloned()
                         .unwrap_or(serde_json::Value::Null),
                     if *late { None } else { crate::agent::tool_result_note(content) },
+                    // Rebuild process-viz hits from the durable audit body
+                    // so History/session replay keeps the same graph the
+                    // live turn painted.
+                    if *late || *is_error {
+                        Vec::new()
+                    } else {
+                        crate::agent::tool_result_hits(content)
+                    },
                 )),
                 _ => None,
             })

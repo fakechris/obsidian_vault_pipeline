@@ -270,6 +270,14 @@ export interface AskResponse {
   usage?: { input_tokens: number; output_tokens: number };
 }
 
+/** Compact involved-entity node from a tool result (process graph). */
+export interface AskProgressHit {
+  kind: string;
+  id: string;
+  label: string;
+  source_id?: string | null;
+}
+
 /** One executed tool call in an agent turn's caller-facing trail. */
 export interface AskTraceEntry {
   tool: string;
@@ -279,6 +287,8 @@ export interface AskTraceEntry {
   args?: string | null;
   /** Parsed result stats ("3 hit(s) · scanned 918/1281 · truncated"). */
   note?: string | null;
+  /** Involved entities for process visualization (claims/sources/cards). */
+  hits?: AskProgressHit[];
 }
 
 /** One event from GET /api/ask/progress — the live mid-turn feed. */
@@ -291,6 +301,8 @@ export interface AskProgressEvent {
   summary?: string;
   /** Parsed result stats for tool_finished events. */
   note?: string | null;
+  /** Involved entities painted into the live process graph. */
+  hits?: AskProgressHit[];
   ok?: boolean;
   turn_id?: string;
   stopped_reason?: string;

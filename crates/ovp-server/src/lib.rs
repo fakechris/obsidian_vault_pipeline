@@ -2384,10 +2384,11 @@ fn handle_ask_agent(
                 let trace: Vec<serde_json::Value> = store
                     .tool_trail_for_turn(&done.turn_id)
                     .into_iter()
-                    .map(|(tool, _id, is_error, summary, arguments, note)| {
+                    .map(|(tool, _id, is_error, summary, arguments, note, hits)| {
                         serde_json::json!({
                             "tool": tool, "summary": summary, "ok": !is_error,
                             "args": args_brief(&arguments), "note": note,
+                            "hits": ovp_memory::agent::progress_hits_json(&hits),
                         })
                     })
                     .collect();
@@ -2494,11 +2495,21 @@ fn handle_ask_agent(
                             "args": args_brief(arguments),
                         })
                     }
-                    AgentProgress::ToolFinished { tool_call_id, tool, is_error, summary, note } => {
+                    AgentProgress::ToolFinished {
+                        tool_call_id,
+                        tool,
+                        is_error,
+                        summary,
+                        note,
+                        hits,
+                    } => {
+                        // Compact involved-entity nodes for the live process
+                        // graph (KMEM-style explainability during search).
                         serde_json::json!({
                             "event": "tool_finished", "tool": tool,
                             "tool_call_id": tool_call_id, "ok": !is_error,
                             "summary": summary, "note": note,
+                            "hits": ovp_memory::agent::progress_hits_json(hits),
                         })
                     }
                     // The advertised terminal protocol is final | error: a
@@ -2592,6 +2603,7 @@ fn handle_ask_agent(
                         // post-answer trail must not degrade to bare names.
                         "args": args_brief(&t.arguments),
                         "note": t.result_note,
+                        "hits": ovp_memory::agent::progress_hits_json(&t.hits),
                     })
                 })
                 .collect();
@@ -2739,10 +2751,11 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
             let trail: Vec<serde_json::Value> = store
                 .tool_trail_for_turn(&turn_id)
                 .into_iter()
-                .map(|(tool, _id, is_error, summary, arguments, note)| {
+                .map(|(tool, _id, is_error, summary, arguments, note, hits)| {
                     serde_json::json!({
                         "tool": tool, "ok": !is_error, "summary": summary,
                         "args": args_brief(&arguments), "note": note,
+                        "hits": ovp_memory::agent::progress_hits_json(&hits),
                     })
                 })
                 .collect();
@@ -5237,6 +5250,14 @@ mod tests {
         );
         assert_eq!(decorated[0]["verified"], true, "title-decorated sha resolves");
         assert_eq!(decorated[0]["link_target"], "/library/aaaa1111");
+        assert_eq!(decorated[0]["id"], "source:aaaa1111", "stable bare id for UI match");
+        // Prefer index title; when missing, fall back to the model decoration
+        // so the citations rail never shows only a raw hash.
+        let title0 = decorated[0]["title"].as_str().unwrap_or("");
+        assert!(
+            !title0.is_empty() && !title0.starts_with("source:aaaa"),
+            "operator-facing title, got {title0:?}"
+        );
         assert_eq!(decorated[1]["verified"], true, "angle-bracketed sha resolves");
         assert_eq!(decorated[2]["verified"], true, "decorated claim key resolves");
         assert_eq!(decorated[3]["verified"], false, "placeholder still fails");
