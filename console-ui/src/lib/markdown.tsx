@@ -204,10 +204,40 @@ export function renderInline(
   const out: ReactNode[] = [];
   let rest = text;
   let k = 0;
+  // Bare http(s) URLs in prose become links too — models (and humans) write
+  // them without markdown syntax, and a dead-text GitHub URL in an answer is
+  // a product failure. Trailing punctuation stays text; the href is the
+  // matched URL verbatim (still only http/https — no scheme smuggling).
+  const AUTOLINK = /https?:\/\/[^\s<>"'`\])}]+/g;
+  const pushText = (chunk: string) => {
+    if (chunk === '') return;
+    let last = 0;
+    for (const m of chunk.matchAll(AUTOLINK)) {
+      const at = m.index ?? 0;
+      let url = m[0];
+      // Common trailing punctuation is sentence-ware, not URL.
+      while (/[.,;:!?、。,;)]$/.test(url)) url = url.slice(0, -1);
+      if (url.length === 0) continue;
+      if (at > last) out.push(chunk.slice(last, at));
+      out.push(
+        <a
+          key={`${keyPrefix}-al${k}`}
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {url}
+        </a>,
+      );
+      k += 1;
+      last = at + url.length;
+    }
+    if (last < chunk.length) out.push(chunk.slice(last));
+  };
   const pushPlain = (chunk: string) => {
     if (chunk === '') return;
     if (!marker) {
-      out.push(chunk);
+      pushText(chunk);
       return;
     }
     let last = 0;
@@ -216,12 +246,12 @@ export function renderInline(
       const at = m.index ?? 0;
       const node = marker.render(m, `${keyPrefix}-mk${k}`);
       if (node == null) continue;
-      if (at > last) out.push(chunk.slice(last, at));
+      if (at > last) pushText(chunk.slice(last, at));
       out.push(node);
       k += 1;
       last = at + m[0].length;
     }
-    if (last < chunk.length) out.push(chunk.slice(last));
+    if (last < chunk.length) pushText(chunk.slice(last));
   };
   while (rest.length > 0) {
     const m = INLINE.exec(rest);
