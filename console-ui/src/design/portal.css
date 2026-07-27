@@ -1961,6 +1961,10 @@ body {
 .auto-job-tab:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
+.auto-job-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .auto-job-tab--active {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
@@ -2031,13 +2035,20 @@ body {
 .auto-arrow-fill-off {
   fill: color-mix(in srgb, var(--muted) 50%, transparent);
 }
-.auto-node {
+.auto-node-cell {
   position: absolute;
+  display: flex;
+  flex-direction: column;
+}
+.auto-node {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
   gap: 0.15rem;
+  width: 100%;
+  height: 100%;
   padding: 0.55rem 0.65rem;
   border: 1.5px solid var(--border);
   border-radius: 12px;
@@ -2052,6 +2063,10 @@ body {
 .auto-node:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.auto-node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .auto-node--selected {
   border-color: var(--accent);
@@ -2100,8 +2115,9 @@ body {
 }
 .auto-node-switch {
   position: absolute;
-  top: 0.4rem;
-  right: 0.45rem;
+  top: 0.35rem;
+  right: 0.4rem;
+  z-index: 1;
 }
 .auto-switch {
   position: relative;
@@ -2142,6 +2158,10 @@ body {
 }
 .auto-switch input:disabled + .auto-switch-ui {
   opacity: 0.5;
+}
+.auto-switch input:focus-visible + .auto-switch-ui {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .auto-detail {
   border: 1px solid var(--border);

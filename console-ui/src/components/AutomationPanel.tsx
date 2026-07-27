@@ -248,7 +248,7 @@ function PipelineGraph({
       <div
         className="auto-canvas"
         style={{ width, minHeight: height }}
-        role="img"
+        role="group"
         aria-label={t('auto.pipelineAria')}
       >
         <svg
@@ -304,50 +304,48 @@ function PipelineGraph({
           const top = PAD + (node.row - 1) * (CELL_H + GAP_Y);
           const selected = selectedId === node.id;
           return (
-            <button
+            <div
               key={node.id}
-              type="button"
-              className={[
-                'auto-node',
-                `auto-node--${node.state}`,
-                selected ? 'auto-node--selected' : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
+              className="auto-node-cell"
               style={{ left, top, width: CELL_W, height: CELL_H - 8 }}
-              onClick={() => onSelect(node.id)}
-              aria-pressed={selected}
             >
-              <span className="auto-node-icon" aria-hidden>
-                <Icon size={18} strokeWidth={2} />
-              </span>
-              <span className="auto-node-title">{title}</span>
-              <span className="auto-node-flag">
-                {node.state === 'off'
-                  ? t('auto.stageOff')
-                  : node.state === 'on'
-                    ? t('auto.stageOn')
-                    : t('auto.stageAlways')}
-              </span>
-              {node.toggle === 'pinboard' && onTogglePinboard && (
-                <span
-                  className="auto-node-switch"
-                  onClick={(ev) => ev.stopPropagation()}
-                  onKeyDown={(ev) => ev.stopPropagation()}
-                >
-                  <label className="auto-switch">
-                    <input
-                      type="checkbox"
-                      checked={node.state !== 'off'}
-                      disabled={busy}
-                      onChange={(e) => onTogglePinboard(e.target.checked)}
-                      aria-label={t('auto.toggle.pinboard')}
-                    />
-                    <span className="auto-switch-ui" />
-                  </label>
+              <button
+                type="button"
+                className={[
+                  'auto-node',
+                  `auto-node--${node.state}`,
+                  selected ? 'auto-node--selected' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => onSelect(node.id)}
+                aria-pressed={selected}
+              >
+                <span className="auto-node-icon" aria-hidden>
+                  <Icon size={18} strokeWidth={2} />
                 </span>
+                <span className="auto-node-title">{title}</span>
+                <span className="auto-node-flag">
+                  {node.state === 'off'
+                    ? t('auto.stageOff')
+                    : node.state === 'on'
+                      ? t('auto.stageOn')
+                      : t('auto.stageAlways')}
+                </span>
+              </button>
+              {node.toggle === 'pinboard' && onTogglePinboard && (
+                <label className="auto-switch auto-node-switch">
+                  <input
+                    type="checkbox"
+                    checked={node.state !== 'off'}
+                    disabled={busy}
+                    onChange={(e) => onTogglePinboard(e.target.checked)}
+                    aria-label={t('auto.toggle.pinboard')}
+                  />
+                  <span className="auto-switch-ui" />
+                </label>
               )}
-            </button>
+            </div>
           );
         })}
       </div>
@@ -441,14 +439,24 @@ export default function AutomationPanel() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<StageId | null>('intake');
+  const [selectedNode, setSelectedNode] = useState<StageId | null>(null);
+
+  const selectJob = (job: ScheduleJob | undefined) => {
+    if (!job) {
+      setActiveJobId(null);
+      setSelectedNode(null);
+      return;
+    }
+    setActiveJobId(job.id);
+    setSelectedNode(graphFor(job).nodes[0]?.id ?? null);
+  };
 
   const reload = () =>
     fetchSchedule()
       .then((s) => {
         setData(s);
         if (s.jobs.length && !s.jobs.some((j) => j.id === activeJobId)) {
-          setActiveJobId(s.jobs[0]?.id ?? null);
+          selectJob(s.jobs[0]);
         }
       })
       .catch((e: Error) => setError(e.message));
@@ -460,7 +468,7 @@ export default function AutomationPanel() {
       .then((s) => {
         if (cancelled) return;
         setData(s);
-        setActiveJobId(s.jobs[0]?.id ?? null);
+        selectJob(s.jobs[0]);
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);
@@ -514,10 +522,7 @@ export default function AutomationPanel() {
           <JobStrip
             jobs={data.jobs}
             activeId={activeJob.id}
-            onSelect={(id) => {
-              setActiveJobId(id);
-              setSelectedNode(id === 'crystallize' ? 'crystal' : 'intake');
-            }}
+            onSelect={(id) => selectJob(data.jobs.find((j) => j.id === id))}
           />
 
           <div className="auto-graph-row">

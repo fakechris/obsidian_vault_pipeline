@@ -471,13 +471,15 @@ export function dayView(model: IndexModel, date: string): DayView {
     })
     .sort((a, b) => (a.title ?? '').localeCompare(b.title ?? ''));
 
+  // Axis B: prefer explicit pipeline day; also accept last_run_id ∈ day's
+  // runs (covers pre-axis indexes). Corpus backfills have processed_on from
+  // the pack dir and no last_run_id.
   const sourcesRead = model.sources
-    .filter(
-      (s) =>
-        s.status === 'processed' &&
-        s.last_run_id != null &&
-        runIds.has(s.last_run_id),
-    )
+    .filter((s) => {
+      if (s.status !== 'processed') return false;
+      if (sourcePipelineDate(s) === day) return true;
+      return s.last_run_id != null && runIds.has(s.last_run_id);
+    })
     .map((source) => ({
       source,
       pack: source.pack_dir ? packByDir.get(source.pack_dir) : undefined,

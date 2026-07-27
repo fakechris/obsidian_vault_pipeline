@@ -221,12 +221,16 @@ fn build_sources(
         {
             continue;
         }
+        // First intake day wins for `captured_on` (axis B start) — later
+        // re-ingest records for the same hash must not move the capture day.
+        let prior_captured = rows
+            .get(&rec.sha256)
+            .and_then(|r| r.captured_on.clone());
         let mut row = SourceRow::blank(rec.sha256.clone(), status);
         row.title = rec.title.clone();
         row.url = rec.url.clone();
         row.rel_path = rec.to.clone().or_else(|| Some(rec.from.clone()));
-        // B: intake day. Filename / published day is filled later as content_date (A).
-        row.captured_on = Some(rec.date.clone());
+        row.captured_on = prior_captured.or_else(|| Some(rec.date.clone()));
         row.last_run_id = Some(rec.run_id.clone());
         // Heuristic A from capture path (pinboard/clip names often start with the day).
         row.content_date = first_iso_day_in(row.rel_path.as_deref().unwrap_or(&rec.from));
@@ -725,9 +729,12 @@ fn backfill_corpus_packs(
                     if row.title.is_none() {
                         row.title = Some(packs[i].title.clone());
                     }
-                    if row.date.is_none() {
-                        row.date = corpus_date(&packs[i].pack_dir);
+                    // Explicit B axis (not only legacy date) so Today does not
+                    // treat the promoted row as a pre-axis source.
+                    if row.processed_on.is_none() {
+                        row.processed_on = corpus_date(&packs[i].pack_dir);
                     }
+                    row.sync_legacy_date();
                     changed = true;
                 }
             }

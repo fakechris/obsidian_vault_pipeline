@@ -1404,9 +1404,17 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
 /// vault still renders the explainer with empty state.
 fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let now = chrono::Local::now().naive_local();
-    let runs = ovp_scheduler::load_state(&state.vault_root)
-        .map(|st| st.runs)
-        .unwrap_or_default();
+    // Missing state → empty default (never run). Corrupt/unreadable state
+    // must 500 — not silently look like a fresh install.
+    let runs = match ovp_scheduler::load_state(&state.vault_root) {
+        Ok(st) => st.runs,
+        Err(e) => {
+            return json_response(
+                500,
+                &serde_json::json!({ "error": format!("schedule state: {e}") }).to_string(),
+            );
+        }
+    };
     match ovp_scheduler::load_registry(&state.vault_root) {
         Ok(Some(reg)) => {
             let jobs: Vec<serde_json::Value> = reg
