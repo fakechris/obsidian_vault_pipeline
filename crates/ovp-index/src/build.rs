@@ -24,8 +24,9 @@ use ovp_intake::{IntakeAction, read_intake_ledger};
 use serde::Deserialize;
 
 use crate::model::{
-    BlockedSource, ClaimRow, ClaimStatus, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState,
-    PackRow, RecentSourceModel, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
+    first_iso_day_in, is_iso_day, run_date_from_run_id, BlockedSource, ClaimRow, ClaimStatus,
+    INDEX_SCHEMA, IndexModel, LastRunModel, OpsState, PackRow, RecentSourceModel, RunRow, RunStats,
+    SourceRow, SourceStatus, StuckSource, Totals,
 };
 
 /// UTC wall-clock instant as RFC3339 — the `built_at` stamp. The one
@@ -220,24 +221,21 @@ fn build_sources(
         {
             continue;
         }
-        rows.insert(
-            rec.sha256.clone(),
-            SourceRow {
-                sha256: rec.sha256.clone(),
-                status,
-                title: rec.title.clone(),
-                url: rec.url.clone(),
-                rel_path: rec.to.clone().or_else(|| Some(rec.from.clone())),
-                date: Some(rec.date.clone()),
-                last_run_id: Some(rec.run_id.clone()),
-                pack_dir: None,
-                fail_count: 0,
-                last_reason: rec.note.clone(),
-                tags: Vec::new(),
-                tags_inferred: Vec::new(),
-                entities: Vec::new(),
-            },
-        );
+        // First intake day wins for `captured_on` (axis B start) — later
+        // re-ingest records for the same hash must not move the capture day.
+        let prior_captured = rows
+            .get(&rec.sha256)
+            .and_then(|r| r.captured_on.clone());
+        let mut row = SourceRow::blank(rec.sha256.clone(), status);
+        row.title = rec.title.clone();
+        row.url = rec.url.clone();
+        row.rel_path = rec.to.clone().or_else(|| Some(rec.from.clone()));
+        row.captured_on = prior_captured.or_else(|| Some(rec.date.clone()));
+        row.last_run_id = Some(rec.run_id.clone());
+        // Heuristic A from capture path (pinboard/clip names often start with the day).
+        row.content_date = first_iso_day_in(row.rel_path.as_deref().unwrap_or(&rec.from));
+        row.sync_legacy_date();
+        rows.insert(rec.sha256.clone(), row);
     }
 
     // Daily attempts override intake state (later lifecycle stage). Records
@@ -246,23 +244,16 @@ fn build_sources(
     for rec in &daily {
         let entry = rows
             .entry(rec.source_sha256.clone())
-            .or_insert_with(|| SourceRow {
-                sha256: rec.source_sha256.clone(),
-                status: SourceStatus::Queued,
-                title: None,
-                url: None,
-                rel_path: None,
-                date: None,
-                last_run_id: None,
-                pack_dir: None,
-                fail_count: 0,
-                last_reason: None,
-                tags: Vec::new(),
-                tags_inferred: Vec::new(),
-                entities: Vec::new(),
+            .or_insert_with(|| {
+                let mut r = SourceRow::blank(rec.source_sha256.clone(), SourceStatus::Queued);
+                r.rel_path = Some(rec.source_path.clone());
+                r.content_date = first_iso_day_in(&rec.source_path);
+                r
             });
-        entry.date = Some(rec.date.clone());
+        // B: last daily attempt day (success or fail).
+        entry.processed_on = Some(rec.date.clone());
         entry.last_run_id = Some(rec.run_id.clone());
+        entry.sync_legacy_date();
         match rec.status {
             RunStatus::Succeeded => {
                 entry.status = SourceStatus::Processed;
@@ -312,21 +303,13 @@ fn build_sources(
                     ),
                     Err(_) => (None, None),
                 };
-                SourceRow {
-                    sha256: sha,
-                    status: SourceStatus::Queued,
-                    title,
-                    url,
-                    rel_path: Some(rel_to(vault_root, &path)),
-                    date: None,
-                    last_run_id: None,
-                    pack_dir: None,
-                    fail_count: 0,
-                    last_reason: None,
-                    tags: Vec::new(),
-                    tags_inferred: Vec::new(),
-                    entities: Vec::new(),
-                }
+                let rel = rel_to(vault_root, &path);
+                let mut row = SourceRow::blank(sha, SourceStatus::Queued);
+                row.title = title;
+                row.url = url;
+                row.rel_path = Some(rel.clone());
+                row.content_date = first_iso_day_in(&rel);
+                row
             });
         }
     }
@@ -403,6 +386,20 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
             // later merge also heals stale inference output.
             let names: Vec<&str> = voted.iter().map(|t| t.tag.as_str()).collect();
             row.tags_inferred = canonical_tags(&names, &aliases);
+        }
+        // Axis A: prefer frontmatter `published` (bookmark day / article day)
+        // over the filename heuristic filled earlier. Never invent.
+        if let Some(pub_day) = doc
+            .published
+            .as_deref()
+            .and_then(|p| {
+                let d = p.get(..10).unwrap_or(p);
+                is_iso_day(d).then(|| d.to_string())
+            })
+        {
+            row.content_date = Some(pub_day);
+        } else if row.content_date.is_none() {
+            row.content_date = first_iso_day_in(rel);
         }
         // Tier-0 URL entities from the SAME per-source read (no extra I/O):
         // the reverse index (entity → sources) is derived on demand from
@@ -700,21 +697,17 @@ fn backfill_corpus_packs(
         packs[i].source_sha256 = Some(sha256.clone());
         match by_sha.get(sha256).copied() {
             None => {
-                sources.push(SourceRow {
-                    sha256: sha256.clone(),
-                    status: SourceStatus::Processed,
-                    title: Some(packs[i].title.clone()),
-                    url: None,
-                    rel_path: Some(rel_path.clone()),
-                    date: corpus_date(&packs[i].pack_dir),
-                    last_run_id: None, // no ledger record — the backfill provenance marker
-                    pack_dir: Some(packs[i].pack_dir.clone()),
-                    fail_count: 0,
-                    last_reason: None,
-                    tags: Vec::new(),
-                    tags_inferred: Vec::new(),
-                    entities: Vec::new(),
-                });
+                let pack_day = corpus_date(&packs[i].pack_dir);
+                let mut row = SourceRow::blank(sha256.clone(), SourceStatus::Processed);
+                row.title = Some(packs[i].title.clone());
+                row.rel_path = Some(rel_path.clone());
+                // Corpus-only: pack dir day is B (when a pack was written), not A.
+                row.processed_on = pack_day.clone();
+                row.content_date = first_iso_day_in(rel_path);
+                row.last_run_id = None; // no ledger record — the backfill provenance marker
+                row.pack_dir = Some(packs[i].pack_dir.clone());
+                row.sync_legacy_date();
+                sources.push(row);
                 by_sha.insert(sha256.clone(), sources.len() - 1);
                 changed = true;
             }
@@ -736,9 +729,12 @@ fn backfill_corpus_packs(
                     if row.title.is_none() {
                         row.title = Some(packs[i].title.clone());
                     }
-                    if row.date.is_none() {
-                        row.date = corpus_date(&packs[i].pack_dir);
+                    // Explicit B axis (not only legacy date) so Today does not
+                    // treat the promoted row as a pre-axis source.
+                    if row.processed_on.is_none() {
+                        row.processed_on = corpus_date(&packs[i].pack_dir);
                     }
+                    row.sync_legacy_date();
                     changed = true;
                 }
             }
@@ -852,6 +848,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             sources: rec.source_cases.clone(),
             strength: enum_str(&rec.strength),
             run_id: Some(rec.run_id.clone()),
+            run_date: run_date_from_run_id(&rec.run_id),
             lane: None,
         });
     }
@@ -882,6 +879,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 sources,
                 strength: enum_str(&entry.strength),
                 run_id: None,
+                run_date: None,
                 lane: enum_str(&entry.lane),
             });
         }
@@ -1243,20 +1241,14 @@ mod tests {
 
     #[test]
     fn ops_state_ages_blocked_and_needs_content() {
-        let src = |sha: &str, status: SourceStatus, date: &str| SourceRow {
-            sha256: sha.into(),
-            status,
-            title: Some(format!("t-{sha}")),
-            url: None,
-            rel_path: None,
-            date: Some(date.into()),
-            last_run_id: None,
-            pack_dir: None,
-            fail_count: 3,
-            last_reason: Some("boom".into()),
-            tags: Vec::new(),
-            tags_inferred: Vec::new(),
-            entities: Vec::new(),
+        let src = |sha: &str, status: SourceStatus, date: &str| {
+            let mut r = SourceRow::blank(sha, status);
+            r.title = Some(format!("t-{sha}"));
+            r.processed_on = Some(date.into());
+            r.fail_count = 3;
+            r.last_reason = Some("boom".into());
+            r.sync_legacy_date();
+            r
         };
         let sources = vec![
             src("aaaa", SourceStatus::Blocked, "2026-06-30"), // 8 days stuck

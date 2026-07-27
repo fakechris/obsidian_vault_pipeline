@@ -135,6 +135,9 @@ mod tests {
             url: Some("https://example.com".into()),
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
             date: Some("2026-07-01".into()),
+            content_date: None,
+            captured_on: None,
+            processed_on: None,
             last_run_id: Some("r9".into()),
             pack_dir: Some("40-Resources/Reader/case".into()),
             fail_count: 3,
@@ -155,6 +158,7 @@ mod tests {
             sources: vec!["case".into()],
             strength: Some("supported".into()),
             run_id: Some("r9".into()),
+            run_date: None,
             lane: None,
         }
     }

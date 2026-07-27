@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
+import AutomationPanel from '../components/AutomationPanel';
 import { RunActivitySection } from '../components/RunActivity';
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -659,9 +660,13 @@ export default function SystemPage() {
           </>
         )}
       </ModelGate>
+      {/* Schedule explainer first among settings-ish sections: answers
+          "what does the timer do / how does the pipeline run" before the
+          manual Run now control. Does not need the index model. */}
+      <AutomationPanel />
+      <RunNowSection />
       <SurfacesSection />
       <ConceptsSection />
-      <RunNowSection />
       <PublishSection />
       <ProviderSection onSaved={() => setSettingsRefresh((n) => n + 1)} />
       <SettingsSection refreshKey={settingsRefresh} />

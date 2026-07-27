@@ -159,6 +159,55 @@ export interface RunNowStatus {
 export function fetchRunNowStatus(): Promise<RunNowStatus> {
   return fetchJson<RunNowStatus>('/api/schedule/run/status');
 }
+
+/** Product-facing schedule registry (`GET /api/schedule`) for the System
+ * automation explainer — jobs, cadence, last/next run, argv-derived flags. */
+export interface ScheduleJobFeatures {
+  pinboard_live: boolean;
+  web_fetch_live: boolean;
+  github_live: boolean;
+  max_sources: number | null;
+}
+export interface ScheduleJob {
+  id: string;
+  cadence: string;
+  enabled: boolean;
+  description: string;
+  argv: string[];
+  last_run: string;
+  last_status: string;
+  next_run: string | null;
+  due: boolean;
+  features: ScheduleJobFeatures;
+}
+export interface SchedulePayload {
+  present: boolean;
+  registry_rel: string;
+  jobs: ScheduleJob[];
+}
+export function fetchSchedule(): Promise<SchedulePayload> {
+  return fetchJson<SchedulePayload>('/api/schedule');
+}
+
+/** Toggle daily argv features (today: pinboard_live) in `.ovp/schedule.json`. */
+export async function setScheduleFeatures(opts: {
+  job?: string;
+  pinboard_live: boolean;
+}): Promise<{ ok: boolean; features: ScheduleJobFeatures }> {
+  const resp = await fetch('/api/schedule/features', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      job: opts.job ?? 'daily',
+      pinboard_live: opts.pinboard_live,
+    }),
+  });
+  if (!resp.ok) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `schedule features failed (${resp.status})`);
+  }
+  return resp.json() as Promise<{ ok: boolean; features: ScheduleJobFeatures }>;
+}
 export async function startRunNow(job: string): Promise<void> {
   const resp = await fetch('/api/schedule/run', {
     method: 'POST',

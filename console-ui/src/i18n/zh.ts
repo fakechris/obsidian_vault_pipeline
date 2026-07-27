@@ -99,13 +99,13 @@ export const zh: Record<keyof typeof en, string> = {
   'today.title': '今天',
   'today.dayTitle': '{day}',
   'today.help':
-    '在日历上选一天，查看当天的捕获、阅读、阅读包，以及 run id 带日期的结晶主张。默认是投影构建日；「需要你」始终是当前构建的实时待办队列。',
-  'today.captured': '进来',
-  'today.read': '读完',
+    '在日历上选一天，看两条时间轴：内容日（发表/书签日）与管线日（daily/reader 实际跑的那天）。主题期（文章「关于」哪段时期）尚未入库。「需要你」是当前构建的实时待办。',
+  'today.captured': '当日 intake',
+  'today.read': '读完（管线）',
   'today.claims': '结晶',
   'today.dayClaims': '结晶',
   'today.dayPacks': '阅读包',
-  'today.daySourcesDated': '日期为当日的源 {n}',
+  'today.daySourcesDated': '内容日 {n}',
   'today.attention': '待处理',
   'today.pinboard': '书签',
   'today.unitsCards': '{units} 单元 · {cards} 卡片',
@@ -128,12 +128,13 @@ export const zh: Record<keyof typeof en, string> = {
   'today.claimSources': '来源',
   'today.strength': '强度',
   'today.readToday': '今日读完',
-  'today.readTitle': '当日读完',
-  'today.readEmpty': '这一天没有处理完成的源——对应 daily 运行没有成功产出。',
-  'today.packsTitle': '阅读包',
-  'today.packsEmpty': '这一天没有标注日期的阅读包。',
-  'today.sourcesDatedTitle': '日期为当日的源',
-  'today.sourcesDatedEmpty': '没有源的日期字段落在这一天。',
+  'today.readTitle': '当日处理完（管线）',
+  'today.readEmpty': '这一天没有管线处理完成的源——对应 daily 运行没有成功产出。',
+  'today.packsTitle': '阅读包（管线日）',
+  'today.packsEmpty': '这一天没有写入的阅读包（按管线日）。',
+  'today.sourcesDatedTitle': '内容日（捕获 / 发表）',
+  'today.sourcesDatedEmpty':
+    '没有源的内容日（published / 书签日 / 文件名日）落在这一天。',
   'today.runsTitle': '管线运行',
   'today.runLine': '成功 {ok} · 失败 {fail} · 入库 {ingested} · 阻塞 {blocked}',
   'today.capturedEmpty': '这一天没有捕获',
@@ -395,9 +396,75 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.stopModelError': '模型调用中途失败——回答可能不完整。',
   'ask.stopMaxRounds': 'agent 达到轮次上限，用已有信息作答。',
 
+  // automation / schedule explainer (System)
+  'auto.title': '自动化',
+  'auto.help':
+    '定时在跑什么，用节点图看——选任务，从左到右跟箭头。变灰的是关闭的阶段；点节点看简短说明。',
+  'auto.detailHint': '点左侧节点，查看该阶段在做什么。',
+  'auto.jobsAria': '定时任务',
+  'auto.toggle.pinboard': 'Pinboard live 同步',
+  'auto.toggle.pinboardHint':
+    '在 Pinboard 节点上开关。需在 .ovp/daily.env 配置 PINBOARD_TOKEN。',
+  'auto.clock':
+    '时钟：桌面 App 在打开期间约每 10 分钟检查一次到点任务。关掉 App 后自动跑会暂停（除非你还用 `ovp2 schedule install` 装了系统定时）。',
+  'auto.loading': '加载定时配置…',
+  'auto.error': '无法加载定时配置',
+  'auto.missing':
+    '还没有定时注册表（{path}）。打开桌面 App 会写入默认任务（每日 + 每周结晶），或运行 `ovp2 schedule init`。',
+  'auto.empty': '定时注册表为空——没有配置任务。',
+  'auto.configHint': '配置真相源：vault 的 {path}。历史流量：',
+  'auto.flowLink': '管线 Flow →',
+  'auto.cadence': '何时',
+  'auto.lastRun': '上次运行',
+  'auto.nextRun': '下次到点',
+  'auto.never': '尚未运行',
+  'auto.paused': '已暂停（关闭）',
+  'auto.pipelineAria': '此任务的管线阶段',
+  'auto.stageOn': '开启',
+  'auto.stageOff': '关闭',
+  'auto.stageAlways': '固定',
+  'auto.status.ok': '正常',
+  'auto.status.error': '失败',
+  'auto.status.seeded': '等待首次运行',
+  'auto.status.due': '已到点',
+  'auto.status.disabled': '已关闭',
+  'auto.status.idle': '空闲',
+  'auto.job.daily': '每日摄入 + 阅读',
+  'auto.job.crystallize': '每周结晶',
+  'auto.job.other': '任务：{id}',
+  'auto.job.noDesc': '无描述。',
+  'auto.stage.pinboard': 'Pinboard 抓取',
+  'auto.stage.pinboard.body':
+    '从 Pinboard 拉取新书签到 50-Inbox/02-Pinboard。默认关闭——只有你要在 daily 里 live 同步时才打开。',
+  'auto.stage.intake': 'Intake 扫荡',
+  'auto.stage.intake.body':
+    '从 Clippings/、00-Capture/、02-Pinboard/ 收集笔记到 50-Inbox/01-Raw（去重 + 规范化）。',
+  'auto.stage.web': '网页补全',
+  'auto.stage.web.body':
+    '对 needs-content 的 URL 抓取正文，让 reader 有内容可处理。',
+  'auto.stage.github': 'GitHub 补全',
+  'auto.stage.github.body':
+    '为 needs-content 里的 GitHub 仓库 URL 补元数据。',
+  'auto.stage.reader': '计划 + Reader',
+  'auto.stage.reader.body':
+    '对每篇新源：按内容哈希去重，跑 reader 主干（卡片 + 引文单元），写出 Reader pack。',
+  'auto.stage.reader.bodyMax':
+    '对每篇新源（每次最多 {n} 篇）：按内容哈希去重，跑 reader 主干（卡片 + 引文单元），写出 Reader pack。',
+  'auto.stage.lifecycle': '归档 + 报告',
+  'auto.stage.lifecycle.body':
+    '成功源移到 03-Processed/YYYY-MM/，并在 .ovp/reports/ 写持久运行报告。',
+  'auto.stage.index': '索引刷新',
+  'auto.stage.index.body':
+    '重建读模型，让 Today、Ask、搜索能看到本轮产出。',
+  'auto.stage.crystal': '跨源结晶',
+  'auto.stage.crystal.body':
+    '跨多源合成 durable crystal 主张（成本高；默认每周一次）。',
+  'auto.stage.custom': '命令：{id}',
+  'auto.stage.custom.body': '自定义定时 argv——标志见注册表。',
+
   // system page (B5)
   'system.help':
-    '机房页：全部运行记录、需要你处理的源、管线管理视图、三层模型说明，以及服务端配置（只读）。',
+    '机房页：定时自动化（定时在跑什么）、全部运行记录、需要你处理的源、管线管理视图、三层模型说明，以及服务端配置（只读）。',
   'system.runs': '运行记录',
   'system.runsEmpty': '还没有运行记录——对该 vault 运行 `ovp2 daily`。',
   'system.runDate': '日期',
