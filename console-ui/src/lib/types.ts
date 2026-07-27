@@ -129,13 +129,26 @@ export type SourceStatus =
   | 'processed'
   | 'duplicate';
 
+/**
+ * Timeline axes (do not collapse):
+ * - A content: `content_date` — bookmark/published/filename day
+ * - B pipeline: `captured_on` / `processed_on` / `last_run_id` / legacy `date`
+ * - C subject: not stored yet
+ */
 export interface SourceRow {
   sha256: string;
   status: SourceStatus;
   title?: string;
   url?: string;
   rel_path?: string;
+  /** Legacy B: last pipeline activity (`processed_on ?? captured_on`). */
   date?: string;
+  /** A: content/capture day when known. */
+  content_date?: string;
+  /** B: intake ledger day. */
+  captured_on?: string;
+  /** B: last daily-run ledger day. */
+  processed_on?: string;
   last_run_id?: string;
   pack_dir?: string;
   fail_count: number;
@@ -154,6 +167,7 @@ export interface SourceRow {
 export interface PackRow {
   pack_dir: string;
   title: string;
+  /** B: pipeline day the pack was written (dir prefix). */
   date?: string;
   units: number;
   cards: number;
@@ -175,6 +189,8 @@ export interface ClaimRow {
   sources: string[];
   strength?: string;
   run_id?: string;
+  /** B: day embedded in run_id when present. */
+  run_date?: string;
   lane?: string;
 }
 

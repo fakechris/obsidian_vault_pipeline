@@ -334,11 +334,11 @@ export function packActivityDate(pack: PackRow): string | null {
 }
 
 /**
- * Best-effort day a claim was produced. The crystal ledger has no written-at;
- * when `run_id` embeds a date (`daily-2026-07-26`, `crystal-full-20260709`)
- * we surface it. Otherwise null — never invent.
+ * Best-effort day a claim was produced (axis B). Prefer explicit `run_date`;
+ * else parse `run_id`. Never invent.
  */
 export function claimActivityDate(claim: ClaimRow): string | null {
+  if (isIsoDay(claim.run_date)) return claim.run_date;
   const rid = claim.run_id ?? '';
   const dashed = rid.match(/(20\d{2}-\d{2}-\d{2})/);
   if (dashed) return dashed[1];
@@ -350,6 +350,27 @@ export function claimActivityDate(claim: ClaimRow): string | null {
   return null;
 }
 
+/** Axis A: content/capture day for a source (published / bookmark / filename). */
+export function sourceContentDate(s: {
+  content_date?: string;
+  date?: string;
+}): string | null {
+  if (isIsoDay(s.content_date)) return s.content_date;
+  return null;
+}
+
+/** Axis B: last pipeline day for a source (processed → captured → legacy date). */
+export function sourcePipelineDate(s: {
+  processed_on?: string;
+  captured_on?: string;
+  date?: string;
+}): string | null {
+  if (isIsoDay(s.processed_on)) return s.processed_on;
+  if (isIsoDay(s.captured_on)) return s.captured_on;
+  if (isIsoDay(s.date)) return s.date;
+  return null;
+}
+
 /** All ISO days that have any known vault activity (for calendar dots). */
 export function activityDates(model: IndexModel): Set<string> {
   const days = new Set<string>();
@@ -357,7 +378,10 @@ export function activityDates(model: IndexModel): Set<string> {
     if (isIsoDay(r.date)) days.add(r.date);
   }
   for (const s of model.sources) {
-    if (isIsoDay(s.date)) days.add(s.date);
+    const a = sourceContentDate(s);
+    if (a) days.add(a);
+    const b = sourcePipelineDate(s);
+    if (b) days.add(b);
   }
   for (const p of model.packs) {
     const d = packActivityDate(p);
@@ -396,13 +420,19 @@ export interface DayView {
   read: number;
   readUnits: number;
   readCards: number;
-  /** Sources whose recorded date is this day (clipping/publish date). */
+  /**
+   * Axis A — sources whose **content** day is this day
+   * (`content_date`: published / bookmark / filename).
+   */
   sourcesDated: SourceRow[];
-  /** Sources processed by a run that ran on this day. */
+  /**
+   * Axis B — sources **processed by a pipeline run** that ran on this day
+   * (run date via `last_run_id` ∈ day's runs).
+   */
   sourcesRead: ReadSource[];
-  /** Reader packs whose activity date is this day. */
+  /** Reader packs whose pipeline day is this day (pack dir / pack.date = B). */
   packs: PackRow[];
-  /** Claims with a date-bearing run_id for this day. */
+  /** Claims with axis-B run day for this day. */
   claims: ClaimRow[];
   claimsDurable: number;
   claimsCaveated: number;
@@ -425,8 +455,20 @@ export function dayView(model: IndexModel, date: string): DayView {
   const runIds = new Set(runs.map((r) => r.run_id));
   const packByDir = new Map(model.packs.map((p) => [p.pack_dir, p]));
 
+  // Axis A: content day. Fall back to legacy `date` only when content_date is
+  // absent AND the source was never processed (legacy indexes mixed A into
+  // date via intake path names). Prefer null over inventing for processed
+  // rows — their legacy date is B.
   const sourcesDated = model.sources
-    .filter((s) => s.date === day)
+    .filter((s) => {
+      const a = sourceContentDate(s);
+      if (a) return a === day;
+      // Pre-axis indexes: only use legacy date when no processed_on signal.
+      if (!s.processed_on && !s.captured_on && isIsoDay(s.date)) {
+        return s.date === day;
+      }
+      return false;
+    })
     .sort((a, b) => (a.title ?? '').localeCompare(b.title ?? ''));
 
   const sourcesRead = model.sources

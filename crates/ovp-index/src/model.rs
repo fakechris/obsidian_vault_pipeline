@@ -27,6 +27,17 @@ pub enum SourceStatus {
     Duplicate,
 }
 
+/// Timeline axes for a source (do not collapse these into one field):
+///
+/// | Axis | Field(s) | Meaning |
+/// |------|----------|---------|
+/// | **A content** | [`SourceRow::content_date`] | When the *content* is dated (bookmark `posted_at` / FM `published` / filename day). |
+/// | **B pipeline** | [`SourceRow::captured_on`], [`SourceRow::processed_on`], [`SourceRow::last_run_id`] | When *our* pipeline touched it (intake day, last daily day). |
+/// | **C subject** | *(not stored yet)* | What period the content is *about* (e.g. FY2025 Q2). Never invent from A/B. |
+///
+/// [`SourceRow::date`] is a **legacy alias** of the latest B activity
+/// (`processed_on ?? captured_on`) kept so old clients and fixtures keep
+/// working. Prefer the explicit fields in new UI/code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceRow {
     pub sha256: String,
@@ -38,9 +49,24 @@ pub struct SourceRow {
     /// Current best-known vault-relative location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
-    /// Date of the last recorded activity for this source.
+    /// **Legacy B (pipeline):** last recorded pipeline activity day. Prefer
+    /// [`Self::processed_on`] / [`Self::captured_on`]. Still written on every
+    /// build so pre-explicit clients keep a sensible calendar signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    /// **A (content/capture):** published / bookmark / filename day when known.
+    /// Independent of when we later ran the reader. Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_date: Option<String>,
+    /// **B (pipeline):** intake ledger day — when this content first entered
+    /// the vault lifecycle (sweep into 01-Raw / flag). Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_on: Option<String>,
+    /// **B (pipeline):** last daily-run ledger day for this source (success or
+    /// fail). Pack production day is this when status is processed.
+    /// Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,12 +96,105 @@ pub struct SourceRow {
     pub entities: Vec<String>,
 }
 
+impl SourceRow {
+    /// Minimal row for tests / fold seeds — all optional axes empty.
+    pub fn blank(sha256: impl Into<String>, status: SourceStatus) -> Self {
+        Self {
+            sha256: sha256.into(),
+            status,
+            title: None,
+            url: None,
+            rel_path: None,
+            date: None,
+            content_date: None,
+            captured_on: None,
+            processed_on: None,
+            last_run_id: None,
+            pack_dir: None,
+            fail_count: 0,
+            last_reason: None,
+            tags: Vec::new(),
+            tags_inferred: Vec::new(),
+            entities: Vec::new(),
+        }
+    }
+
+    /// Refresh legacy [`Self::date`] from the explicit B fields.
+    pub fn sync_legacy_date(&mut self) {
+        self.date = self
+            .processed_on
+            .clone()
+            .or_else(|| self.captured_on.clone())
+            .or_else(|| self.date.clone());
+    }
+}
+
+/// Best-effort calendar day from a `run_id` (`daily-2026-07-26`,
+/// `crystal-full-20260709`). Pure; never invents a day when none is present.
+pub fn run_date_from_run_id(run_id: &str) -> Option<String> {
+    // Prefer dashed ISO so we don't mis-read other digit runs.
+    if let Some(i) = run_id.find("20") {
+        let slice = &run_id[i..];
+        if slice.len() >= 10 {
+            let cand = &slice[..10];
+            if is_iso_day(cand) {
+                return Some(cand.to_string());
+            }
+        }
+        if slice.len() >= 8 {
+            let cand = &slice[..8];
+            if cand.bytes().all(|b| b.is_ascii_digit()) {
+                return Some(format!(
+                    "{}-{}-{}",
+                    &cand[..4],
+                    &cand[4..6],
+                    &cand[6..8]
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// True when `s` is `YYYY-MM-DD` with zero-padded month/day digits.
+pub fn is_iso_day(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => true,
+            _ => c.is_ascii_digit(),
+        })
+}
+
+/// First `YYYY-MM-DD` substring in a path or title (filename-day heuristic for A).
+/// Char-boundary safe — vault paths often contain CJK titles.
+pub fn first_iso_day_in(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return None;
+    }
+    for i in 0..=bytes.len() - 10 {
+        if !s.is_char_boundary(i) || !s.is_char_boundary(i + 10) {
+            continue;
+        }
+        let cand = &s[i..i + 10];
+        if is_iso_day(cand) {
+            return Some(cand.to_string());
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackRow {
     /// Vault-relative pack directory (contains reader.html / reader.md).
     pub pack_dir: String,
     pub title: String,
-    /// Date prefix of the pack directory name.
+    /// **B (pipeline):** day prefix of the pack directory name — when the
+    /// reader run wrote this pack (`cfg.date` of that daily), not the
+    /// article's publish day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     pub units: usize,
@@ -120,6 +239,12 @@ pub struct ClaimRow {
     pub strength: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// **B (pipeline):** calendar day of the run that produced this claim,
+    /// when derivable from `run_id` (`daily-YYYY-MM-DD` / compact forms).
+    /// Crystal ledger has no written-at; this is the only honest B signal.
+    /// Serde-additive. Axis C (subject period) is not stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_date: Option<String>,
     /// Review lane for caveated claims (`review` | `source_insight`).
     /// None for durable/superseded/retracted rows and pre-M35 indexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,4 +441,53 @@ pub struct IndexModel {
     pub runs: Vec<RunRow>,
     #[serde(default)]
     pub ops: OpsState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_date_from_run_id_parses_dashed_and_compact() {
+        assert_eq!(
+            run_date_from_run_id("daily-2026-07-26"),
+            Some("2026-07-26".into())
+        );
+        assert_eq!(
+            run_date_from_run_id("crystal-full-20260709"),
+            Some("2026-07-09".into())
+        );
+        assert_eq!(run_date_from_run_id("ck-abcdef"), None);
+    }
+
+    #[test]
+    fn first_iso_day_in_path_and_is_iso_day() {
+        assert!(is_iso_day("2026-05-17"));
+        assert!(!is_iso_day("2026-5-17"));
+        assert_eq!(
+            first_iso_day_in("50-Inbox/02-Pinboard/2026-05-17_Title-ab12.md"),
+            Some("2026-05-17".into())
+        );
+        assert_eq!(first_iso_day_in("no-date-here.md"), None);
+        // Month-only folder is not a full ISO day; CJK titles must not panic.
+        assert_eq!(
+            first_iso_day_in("50-Inbox/03-Processed/2026-04/你不知道的 Agent.md"),
+            None
+        );
+        assert_eq!(
+            first_iso_day_in("50-Inbox/03-Processed/2026-04/2026-04-15_你不知道的.md"),
+            Some("2026-04-15".into())
+        );
+    }
+
+    #[test]
+    fn sync_legacy_date_prefers_processed_then_captured() {
+        let mut r = SourceRow::blank("x", SourceStatus::Queued);
+        r.captured_on = Some("2026-01-01".into());
+        r.sync_legacy_date();
+        assert_eq!(r.date.as_deref(), Some("2026-01-01"));
+        r.processed_on = Some("2026-02-02".into());
+        r.sync_legacy_date();
+        assert_eq!(r.date.as_deref(), Some("2026-02-02"));
+    }
 }

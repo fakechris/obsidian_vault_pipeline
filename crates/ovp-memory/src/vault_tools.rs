@@ -2655,6 +2655,7 @@ mod tests {
                         sources: vec!["case-b".into()],
                         strength: Some("overreach".into()),
                         run_id: None,
+                        run_date: None,
                         lane: Some("review".into()),
                     },
                 ],
@@ -2698,6 +2699,9 @@ mod tests {
             url: Some(format!("https://example.test/{sha256}")),
             rel_path: rel_path.map(str::to_string),
             date: date.map(str::to_string),
+            content_date: None,
+            captured_on: None,
+            processed_on: None,
             last_run_id: None,
             pack_dir: None,
             fail_count: 0,
@@ -2718,6 +2722,7 @@ mod tests {
             sources: vec!["case-a".into()],
             strength: Some("supported".into()),
             run_id: Some("run-1".into()),
+            run_date: None,
             lane: None,
         }
     }

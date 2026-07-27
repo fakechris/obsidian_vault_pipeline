@@ -5,8 +5,9 @@
 //! the `--viz-dir` overlay; see `resolve_static` for the precedence rule),
 //! legacy generated console pages by exact filename, and JSON API endpoints
 //! (`/api/find`, `/api/search`, `/api/graph`, `/api/claim/:id`,
-//! `/api/source/:sha`, `/api/flow`, `/api/settings`, `POST /api/ask`,
-//! `/api/chats`). Uses `tiny_http` to avoid any async runtime dependency.
+//! `/api/source/:sha`, `/api/flow`, `/api/settings`, `GET /api/schedule`,
+//! `POST /api/ask`, `/api/chats`). Uses `tiny_http` to avoid any async
+//! runtime dependency.
 
 // Read-only `/api/*` body builders + graph assembly + fs readers live in the
 // shared `ovp-api-projection` crate so the live server and the static publisher
@@ -663,6 +664,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             if p == "/api/tags/decision"
                 || p == "/api/publish"
                 || p == "/api/schedule/run"
+                || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
@@ -728,6 +730,8 @@ fn dispatch(
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Get, "/api/schedule") => handle_schedule(state),
+        (Method::Post, "/api/schedule/features") => handle_schedule_features(state, body),
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
             handle_ask_progress(state, url)
         }
@@ -1378,6 +1382,211 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
         slot.last = Some(outcome);
     });
     json_response(202, r#"{"started":true}"#)
+}
+
+/// `GET /api/schedule` — product-facing schedule registry + last-run state
+/// so System can explain *what* the timer does (jobs, cadence, argv-derived
+/// features) without the operator opening `.ovp/schedule.json`.
+///
+/// Shape:
+/// ```json
+/// {
+///   "present": true,
+///   "registry_rel": ".ovp/schedule.json",
+///   "jobs": [{
+///     "id", "cadence", "enabled", "description", "argv",
+///     "last_run", "last_status", "next_run", "due",
+///     "features": { "pinboard_live", "web_fetch_live", "github_live", "max_sources" }
+///   }]
+/// }
+/// ```
+/// Missing registry → `present: false, jobs: []` (200, not 404) so a fresh
+/// vault still renders the explainer with empty state.
+fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let now = chrono::Local::now().naive_local();
+    let runs = ovp_scheduler::load_state(&state.vault_root)
+        .map(|st| st.runs)
+        .unwrap_or_default();
+    match ovp_scheduler::load_registry(&state.vault_root) {
+        Ok(Some(reg)) => {
+            let jobs: Vec<serde_json::Value> = reg
+                .jobs
+                .iter()
+                .map(|job| {
+                    let run = runs.get(&job.id);
+                    let last_run = run.map(|r| r.last_run.clone()).unwrap_or_default();
+                    let last_status = run.map(|r| r.last_status.clone()).unwrap_or_default();
+                    // "seeded" is an install placeholder — treat as never ran so
+                    // next_run / due match tick semantics (first fire at NEXT
+                    // occurrence, not immediately).
+                    let last_for_due = run.and_then(|r| {
+                        if r.last_status == "seeded" {
+                            None
+                        } else {
+                            chrono::NaiveDateTime::parse_from_str(
+                                &r.last_run,
+                                "%Y-%m-%dT%H:%M:%S",
+                            )
+                            .ok()
+                        }
+                    });
+                    let (next_run, due) = match job.parsed_cadence() {
+                        Ok(c) => {
+                            let next = c.next_occurrence(now);
+                            let due = job.enabled
+                                && ovp_scheduler::is_due(c, last_for_due, now);
+                            (Some(next.format("%Y-%m-%dT%H:%M:%S").to_string()), due)
+                        }
+                        Err(_) => (None, false),
+                    };
+                    serde_json::json!({
+                        "id": job.id,
+                        "cadence": job.cadence,
+                        "enabled": job.enabled,
+                        "description": job.description,
+                        "argv": job.argv,
+                        "last_run": last_run,
+                        "last_status": last_status,
+                        "next_run": next_run,
+                        "due": due,
+                        "features": job_features_from_argv(&job.argv),
+                    })
+                })
+                .collect();
+            json_response(
+                200,
+                &serde_json::json!({
+                    "present": true,
+                    "registry_rel": ovp_scheduler::REGISTRY_REL,
+                    "jobs": jobs,
+                })
+                .to_string(),
+            )
+        }
+        Ok(None) => json_response(
+            200,
+            &serde_json::json!({
+                "present": false,
+                "registry_rel": ovp_scheduler::REGISTRY_REL,
+                "jobs": [],
+            })
+            .to_string(),
+        ),
+        Err(e) => json_response(
+            500,
+            &serde_json::json!({ "error": format!("schedule registry: {e}") }).to_string(),
+        ),
+    }
+}
+
+/// Derive product-facing capability flags from a job's argv (the only place
+/// the scheduled daily command records pinboard/web/github/max-sources).
+fn job_features_from_argv(argv: &[String]) -> serde_json::Value {
+    let has = |flag: &str| argv.iter().any(|a| a == flag);
+    let max_sources = argv
+        .windows(2)
+        .find(|w| w[0] == "--max-sources")
+        .and_then(|w| w[1].parse::<u64>().ok());
+    serde_json::json!({
+        "pinboard_live": has("--pinboard-live"),
+        "web_fetch_live": has("--web-fetch-live"),
+        "github_live": has("--github-live"),
+        "max_sources": max_sources,
+    })
+}
+
+/// Add or remove a bare flag in a job argv (e.g. `--pinboard-live`).
+fn set_argv_flag(argv: &mut Vec<String>, flag: &str, on: bool) {
+    let present = argv.iter().any(|a| a == flag);
+    if on && !present {
+        argv.push(flag.to_string());
+    } else if !on && present {
+        argv.retain(|a| a != flag);
+    }
+}
+
+/// `POST /api/schedule/features` — toggle daily capability flags that live in
+/// the job argv (today: `pinboard_live`). Writes `.ovp/schedule.json` so the
+/// next tick / run-now picks the change up with no restart.
+///
+/// Body: `{ "job": "daily", "pinboard_live": true }` (`job` defaults to daily).
+fn handle_schedule_features(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"body must be JSON","code":"bad_json"}"#),
+    };
+    let job_id = v
+        .get("job")
+        .and_then(|j| j.as_str())
+        .unwrap_or("daily");
+    if job_id != "daily" {
+        return json_response(
+            400,
+            &serde_json::json!({
+                "error": "only the daily job supports feature toggles in v1",
+                "code": "unsupported_job",
+            })
+            .to_string(),
+        );
+    }
+    let Some(pinboard) = v.get("pinboard_live").and_then(|x| x.as_bool()) else {
+        return json_response(
+            400,
+            r#"{"error":"pinboard_live (bool) is required","code":"missing_field"}"#,
+        );
+    };
+
+    let mut reg = match ovp_scheduler::load_registry(&state.vault_root) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return json_response(
+                404,
+                &serde_json::json!({
+                    "error": "no schedule registry — open the desktop app or run `ovp2 schedule init`",
+                    "code": "no_registry",
+                })
+                .to_string(),
+            );
+        }
+        Err(e) => {
+            return json_response(
+                500,
+                &serde_json::json!({ "error": format!("load registry: {e}") }).to_string(),
+            );
+        }
+    };
+    {
+        let Some(job) = reg.get_mut(job_id) else {
+            return json_response(
+                404,
+                &serde_json::json!({
+                    "error": format!("job `{job_id}` not in registry"),
+                    "code": "unknown_job",
+                })
+                .to_string(),
+            );
+        };
+        set_argv_flag(&mut job.argv, "--pinboard-live", pinboard);
+    }
+    if let Err(e) = ovp_scheduler::save_registry(&state.vault_root, &reg) {
+        return json_response(
+            500,
+            &serde_json::json!({ "error": format!("save registry: {e}") }).to_string(),
+        );
+    }
+    let features = reg
+        .get(job_id)
+        .map(|j| job_features_from_argv(&j.argv))
+        .unwrap_or_else(|| serde_json::json!({}));
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "job": job_id,
+            "features": features,
+        })
+        .to_string(),
+    )
 }
 
 /// `GET /api/schedule/run/status` — `{running, heartbeat_running, last,
@@ -3592,6 +3801,9 @@ mod tests {
                 url: Some("https://example.com/good".into()),
                 rel_path: Some(rel_path.into()),
                 date: Some("2026-07-09".into()),
+                content_date: None,
+                captured_on: None,
+                processed_on: None,
                 last_run_id: None,
                 pack_dir: Some("40-Resources/Reader/good".into()),
                 fail_count: 0,
@@ -3619,6 +3831,7 @@ mod tests {
                 sources: vec!["good".into()],
                 strength: Some("supported".into()),
                 run_id: None,
+                run_date: None,
                 lane: None,
             }],
             runs: vec![],
@@ -3934,6 +4147,49 @@ mod tests {
             !saved.contains_key("ANTHROPIC_BASE_URL"),
             "empty value removes the key"
         );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn schedule_endpoint_lists_registry_jobs_and_features() {
+        let vault = portal_vault("sched-list", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+
+        // Missing registry → present:false, empty jobs (still 200).
+        let v = body_json(dispatch(&st, Method::Get, "/api/schedule", ""));
+        assert_eq!(v["present"], false);
+        assert_eq!(v["jobs"].as_array().unwrap().len(), 0);
+        assert_eq!(v["registry_rel"], ".ovp/schedule.json");
+
+        // Seed a daily job with enrich flags + a crystallize job, and a
+        // seeded last-run so due/next_run stay well-defined.
+        let reg = ovp_scheduler::default_registry("live", (9, 0), true, Some(40));
+        ovp_scheduler::save_registry(&vault, &reg).unwrap();
+        let mut state_file = ovp_scheduler::State::default();
+        state_file.record(
+            "daily",
+            chrono::NaiveDateTime::parse_from_str("2026-07-01T09:00:00", "%Y-%m-%dT%H:%M:%S")
+                .unwrap(),
+            "seeded",
+        );
+        ovp_scheduler::save_state(&vault, &state_file).unwrap();
+
+        let v = body_json(dispatch(&st, Method::Get, "/api/schedule", ""));
+        assert_eq!(v["present"], true);
+        let jobs = v["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 2);
+        let daily = jobs.iter().find(|j| j["id"] == "daily").unwrap();
+        assert_eq!(daily["cadence"], "daily 09:00");
+        assert_eq!(daily["enabled"], true);
+        assert_eq!(daily["features"]["web_fetch_live"], true);
+        assert_eq!(daily["features"]["github_live"], true);
+        assert_eq!(daily["features"]["pinboard_live"], false);
+        assert_eq!(daily["features"]["max_sources"], 40);
+        assert_eq!(daily["last_status"], "seeded");
+        assert!(daily["next_run"].as_str().unwrap().contains("T09:00:00"));
+        let crystal = jobs.iter().find(|j| j["id"] == "crystallize").unwrap();
+        assert_eq!(crystal["cadence"], "weekly Sun 10:00");
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
@@ -4365,6 +4621,9 @@ mod tests {
             url: None,
             rel_path: Some(format!("50-Inbox/01-Raw/2026-07/{file}")),
             date: None,
+            content_date: None,
+            captured_on: None,
+            processed_on: None,
             last_run_id: None,
             pack_dir: None,
             fail_count: 0,

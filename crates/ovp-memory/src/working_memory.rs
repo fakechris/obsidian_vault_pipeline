@@ -149,6 +149,7 @@ mod tests {
                 sources: vec!["case-a".into()],
                 strength: Some("supported".into()),
                 run_id: None,
+                run_date: None,
                 lane: None,
             })
             .collect();

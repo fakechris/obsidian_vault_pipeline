@@ -107,13 +107,13 @@ export const en = {
   'today.title': 'Today',
   'today.dayTitle': 'Day {day}',
   'today.help':
-    'Pick a day on the calendar to see captures, reads, reader packs, and crystal claims with a date-bearing run. The default is the projection build day; Attention is the live operator queue for that build.',
-  'today.captured': 'Captured',
-  'today.read': 'Read',
+    'Pick a day to see two timelines: content day (when a note was published/bookmarked) vs pipeline day (when daily/reader ran). Subject period (what the article is about) is not stored yet. Attention is the live operator queue.',
+  'today.captured': 'Intake that day',
+  'today.read': 'Read (pipeline)',
   'today.claims': 'Claims',
   'today.dayClaims': 'Crystal',
   'today.dayPacks': 'Packs',
-  'today.daySourcesDated': '{n} sources dated',
+  'today.daySourcesDated': '{n} content-day',
   'today.attention': 'Attention',
   'today.pinboard': 'pinboard',
   'today.unitsCards': '{units} units · {cards} cards',
@@ -136,13 +136,14 @@ export const en = {
   'today.claimSources': 'Sources',
   'today.strength': 'strength',
   'today.readToday': 'Read today',
-  'today.readTitle': 'Read that day',
+  'today.readTitle': 'Processed that day (pipeline)',
   'today.readEmpty':
-    'Nothing processed on this day — no finished sources for its daily run(s).',
-  'today.packsTitle': 'Reader packs',
-  'today.packsEmpty': 'No reader packs dated this day.',
-  'today.sourcesDatedTitle': 'Sources dated this day',
-  'today.sourcesDatedEmpty': 'No sources carry this calendar date.',
+    'Nothing finished on this pipeline day — no successful daily sources for its run(s).',
+  'today.packsTitle': 'Reader packs (pipeline day)',
+  'today.packsEmpty': 'No reader packs written on this pipeline day.',
+  'today.sourcesDatedTitle': 'Content day (capture / publish)',
+  'today.sourcesDatedEmpty':
+    'No sources have a content day (published / bookmark / filename) on this date.',
   'today.runsTitle': 'Pipeline runs',
   'today.runLine': 'ok {ok} · fail {fail} · in {ingested} · blocked {blocked}',
   'today.capturedEmpty': 'no intake that day',
@@ -424,9 +425,75 @@ export const en = {
   'ask.stopMaxRounds':
     'The agent reached its round limit and answered with what it had.',
 
+  // automation / schedule explainer (System)
+  'auto.title': 'Automation',
+  'auto.help':
+    'A map of what the timer runs — pick a job, follow the nodes left to right. Dimmed nodes are off; click a node for a short explanation.',
+  'auto.detailHint': 'Click a node on the left to see what that stage does.',
+  'auto.jobsAria': 'Scheduled jobs',
+  'auto.toggle.pinboard': 'Pinboard live sync',
+  'auto.toggle.pinboardHint':
+    'Toggle on the Pinboard node (or here). Needs PINBOARD_TOKEN in .ovp/daily.env.',
+  'auto.clock':
+    'Clock: the desktop app ticks every ~10 minutes while it is open. Closing the app pauses automatic runs (unless you also installed an OS schedule with `ovp2 schedule install`).',
+  'auto.loading': 'Loading schedule…',
+  'auto.error': 'Could not load schedule',
+  'auto.missing':
+    'No schedule registry yet ({path}). Opening the desktop app seeds defaults (daily + weekly crystallize), or run `ovp2 schedule init`.',
+  'auto.empty': 'Schedule registry is empty — no jobs configured.',
+  'auto.configHint': 'Source of truth: vault {path}. Historical volume:',
+  'auto.flowLink': 'Pipeline flow →',
+  'auto.cadence': 'When',
+  'auto.lastRun': 'Last run',
+  'auto.nextRun': 'Next due',
+  'auto.never': 'Never',
+  'auto.paused': 'Paused (disabled)',
+  'auto.pipelineAria': 'Pipeline stages for this job',
+  'auto.stageOn': 'On',
+  'auto.stageOff': 'Off',
+  'auto.stageAlways': 'Always',
+  'auto.status.ok': 'OK',
+  'auto.status.error': 'Error',
+  'auto.status.seeded': 'Waiting first run',
+  'auto.status.due': 'Due now',
+  'auto.status.disabled': 'Disabled',
+  'auto.status.idle': 'Idle',
+  'auto.job.daily': 'Daily intake + reader',
+  'auto.job.crystallize': 'Weekly crystallize',
+  'auto.job.other': 'Job: {id}',
+  'auto.job.noDesc': 'No description.',
+  'auto.stage.pinboard': 'Pinboard capture',
+  'auto.stage.pinboard.body':
+    'Pull new bookmarks from Pinboard into 50-Inbox/02-Pinboard. Off by default — enable only when you want live Pinboard sync in the daily job.',
+  'auto.stage.intake': 'Intake sweep',
+  'auto.stage.intake.body':
+    'Collect notes from Clippings/, 00-Capture/, and 02-Pinboard/ into 50-Inbox/01-Raw (dedupe + normalize).',
+  'auto.stage.web': 'Web enrich',
+  'auto.stage.web.body':
+    'Fetch full article text for needs-content URLs so the reader has a body to work on.',
+  'auto.stage.github': 'GitHub enrich',
+  'auto.stage.github.body':
+    'Fill in metadata for GitHub repository URLs among needs-content sources.',
+  'auto.stage.reader': 'Plan + reader',
+  'auto.stage.reader.body':
+    'For each new source: dedupe by content hash, run the reader trunk (cards + quoted units), write a Reader pack.',
+  'auto.stage.reader.bodyMax':
+    'For each new source (up to {n} per run): dedupe by content hash, run the reader trunk (cards + quoted units), write a Reader pack.',
+  'auto.stage.lifecycle': 'Archive + report',
+  'auto.stage.lifecycle.body':
+    'Move succeeded sources to 03-Processed/YYYY-MM/ and write the durable run report under .ovp/reports/.',
+  'auto.stage.index': 'Index refresh',
+  'auto.stage.index.body':
+    'Rebuild the read model so Today, Ask, and search see what this run produced.',
+  'auto.stage.crystal': 'Cross-source crystallize',
+  'auto.stage.crystal.body':
+    'Synthesize durable crystal claims across sources (expensive; weekly by default).',
+  'auto.stage.custom': 'Command: {id}',
+  'auto.stage.custom.body': 'Custom scheduled argv — see registry for flags.',
+
   // system page (B5)
   'system.help':
-    'The engine room: every recorded run, sources waiting on you, the pipeline admin views, what the three layers mean, and the server configuration (read-only).',
+    'The engine room: scheduled automation (what the timer runs), every recorded run, sources waiting on you, pipeline admin views, the three layers, and server configuration (read-only).',
   'system.runs': 'Runs',
   'system.runsEmpty':
     'No runs recorded yet — run `ovp2 daily` against this vault.',
