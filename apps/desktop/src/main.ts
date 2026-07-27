@@ -21,8 +21,26 @@ function showStarting(text: string) {
 
 function goto(url: string) {
   msg.textContent = "Opening portal…";
-  // Same webview, normal navigation to the loopback server → the real portal.
-  window.location.replace(url);
+  // Rust boot already tries WebviewWindow::navigate. Keep location.replace
+  // as a fallback when the command returned Ready without navigating (or
+  // when an older binary is in use). Retry once if we're still on the
+  // splash after a beat — WKWebView sometimes drops the first navigation.
+  try {
+    window.location.replace(url);
+  } catch {
+    /* ignore */
+  }
+  window.setTimeout(() => {
+    // Still on the splash mark? force another replace.
+    if (document.getElementById("boot")) {
+      try {
+        window.location.href = url;
+      } catch {
+        msg.textContent = `Portal is running at ${url} but the window could not open it. Use Page → Open Page in Browser, or open that URL manually.`;
+        spinner.classList.add("hidden");
+      }
+    }
+  }, 1500);
 }
 
 function showOnboard(text: string) {
