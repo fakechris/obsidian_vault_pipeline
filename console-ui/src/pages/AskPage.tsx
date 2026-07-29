@@ -129,30 +129,99 @@ function shortSourceLabel(token: string): string {
   return short.length < token.length ? `source ${short}…` : `source ${token}`;
 }
 
-/** Resolves a citation id to a human title from the loaded index — the
- * replay/recovery paths build citations from answer text alone (no server
- * receipts), so without this the right rail degrades to truncated hashes. */
-export type CitationTitleLookup = (kind: string, token: string) => string | null;
+/** Resolves a citation id from the loaded index — the replay/recovery
+ * paths build citations from answer text alone (no server receipts), so
+ * without this the right rail degrades to truncated hashes. */
+export interface CitationResolution {
+  title?: string | null;
+  link?: string | null;
+}
+export type CitationTitleLookup = (
+  kind: string,
+  token: string,
+) => CitationResolution | null;
+
+/** Models sometimes elide long ids ("…b9539c3ec5d2cce4f9c1" written as
+ * "…b9539c9c1"). When the head is intact (>=24 hex chars) and exactly one
+ * index sha shares it, resolution is safe: 96 bits of intact prefix make a
+ * wrong match practically impossible, and no match just falls back. */
+const SHA_HEAD = 24;
+
+/** Legacy card/unit markers carry a vault path + trailing suffix
+ * (":0", ":u-034-…"). The path part identifies the source note. */
+function legacyPathBody(token: string): string {
+  const i = token.lastIndexOf(':');
+  return i > 0 ? token.slice(0, i) : token;
+}
+
+/** Reader notes sanitize titles into filenames ("4b1d798e-2026-03-29_
+ * Working_with_evals___") — undo that for a readable fallback title. */
+function humanizeLegacyPath(path: string): string | null {
+  const base = path.split('/').pop() ?? path;
+  const text = base
+    .replace(/^[0-9a-f]{8}-/i, '')
+    .replace(/^\d{4}-\d{2}-\d{2}_/, '')
+    .replace(/_+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length >= 3 && !/^[.\s]+$/.test(text) ? text : null;
+}
 
 export function makeCitationTitleLookup(
-  model: { sources: { sha256: string; title?: string }[]; claims: { claim_key?: string; claim: string }[] } | null,
+  model: {
+    sources: { sha256: string; title?: string; rel_path?: string }[];
+    claims: { claim_key?: string; claim: string }[];
+  } | null,
 ): CitationTitleLookup {
-  const sources = new Map(
-    (model?.sources ?? [])
-      .filter((s) => s.title && s.title.trim())
-      .map((s) => [s.sha256, s.title as string]),
+  const rows = model?.sources ?? [];
+  const bySha = new Map(rows.map((s) => [s.sha256, s]));
+  const byPath = new Map(
+    rows
+      .filter((s) => s.rel_path)
+      .map((s) => [(s.rel_path as string).replace(/\.md$/, ''), s]),
   );
   const claims = new Map(
     (model?.claims ?? [])
       .filter((c) => c.claim_key)
       .map((c) => [c.claim_key as string, c.claim]),
   );
-  return (kind, token) =>
-    kind === 'source'
-      ? sources.get(token) ?? null
-      : kind === 'claim'
-        ? claims.get(token) ?? null
+  const sourceRow = (token: string) => {
+    const exact = bySha.get(token);
+    if (exact) return exact;
+    if (!/^[0-9a-f]{24,}$/i.test(token)) return undefined;
+    const head = token.slice(0, SHA_HEAD);
+    const cands = rows.filter(
+      (s) => s.sha256.startsWith(token) || s.sha256.startsWith(head),
+    );
+    return cands.length === 1 ? cands[0] : undefined;
+  };
+  return (kind, rawToken) => {
+    // Legacy answers doubled the kind: "card:card:<path>:0".
+    const token =
+      (kind === 'card' || kind === 'unit') && rawToken.startsWith(`${kind}:`)
+        ? rawToken.slice(kind.length + 1)
+        : rawToken;
+    if (kind === 'source') {
+      const hit = sourceRow(token);
+      return hit
+        ? { title: hit.title || null, link: `/library/${hit.sha256}` }
         : null;
+    }
+    if (kind === 'claim') {
+      const text = claims.get(token);
+      return text ? { title: text } : null;
+    }
+    if (kind === 'card' || kind === 'unit') {
+      const body = legacyPathBody(token);
+      const hit = byPath.get(body);
+      if (hit) {
+        return { title: hit.title || null, link: `/library/${hit.sha256}` };
+      }
+      const human = humanizeLegacyPath(body);
+      return human ? { title: human } : null;
+    }
+    return null;
+  };
 }
 
 /** Build citation chips from answer text alone (saved-chat replay). */
@@ -167,20 +236,36 @@ export function citationsFromAnswerText(
     // link/display through the bare first token — otherwise replay builds
     // /library/<sha>%20Some%20Title.
     const rest = kind ? id.slice(id.indexOf(':') + 1) : id;
-    const token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
+    let token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
+    // Legacy answers doubled the kind ("card:card:<path>:0") — collapse so
+    // stored ids and lookups see the clean form.
+    if (kind && token.startsWith(`${kind}:`)) {
+      token = token.slice(kind.length + 1);
+    }
     const canonical = kind ? `${kind}:${token}` : token;
+    const isLegacy = kind === 'card' || kind === 'unit';
+    const res = lookup?.(kind, token);
     // Canonical index title first (the vault's own display title), then any
-    // title the model decorated into the marker, then the hash fallback.
+    // title the model decorated into the marker, then humanized legacy
+    // paths, then the hash fallback.
     const title =
-      lookup?.(kind, token) ??
+      res?.title ??
       decoratedTitle(rest) ??
-      (kind === 'source' ? shortSourceLabel(token) : canonical);
+      (kind === 'source'
+        ? shortSourceLabel(token)
+        : isLegacy
+          ? humanizeLegacyPath(legacyPathBody(token)) ?? canonical
+          : canonical);
     return {
       id: canonical,
       kind,
       title,
       snippet: null,
-      link_target: citeLinkTarget(canonical),
+      // Sources link fail-closed once the index was consulted: an unknown
+      // (stale/mangled) id must not produce a /library link that 404s.
+      link_target:
+        res?.link ??
+        (kind === 'source' && lookup ? null : citeLinkTarget(canonical)),
       // Saved transcript does not re-run the verifier — verification state
       // is UNKNOWN, and claiming either way would misrepresent receipts
       // (a fabricated marker must not come back "verified" after refresh).
@@ -198,10 +283,13 @@ function citationTitle(c: AskCitation, lookup?: CitationTitleLookup): string {
   const token = (c.id.includes(':') ? c.id.slice(c.id.indexOf(':') + 1) : c.id)
     .split(/\s+/)[0] ?? c.id;
   const fromIndex = lookup?.(kind, token);
-  if (fromIndex) return fromIndex;
+  if (fromIndex?.title) return fromIndex.title;
   if (c.title && c.title.trim() && c.title !== c.id) return c.title;
   if (kind === 'source') {
     return shortSourceLabel(token);
+  }
+  if (kind === 'card' || kind === 'unit') {
+    return humanizeLegacyPath(legacyPathBody(token)) ?? c.title ?? c.id;
   }
   return c.title ?? c.id;
 }
