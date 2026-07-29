@@ -61,6 +61,11 @@ pub struct SweepOutcome {
     /// Files whose hash was already flagged needs_content/unparseable on an
     /// earlier sweep — still sitting in a capture dir, skipped quietly.
     pub already_flagged: usize,
+    /// The already-flagged files as `(from, url)` pairs, so the enrichment
+    /// phases can RETRY them (a fetch that failed on an earlier run, or a
+    /// sweep that ran outside `daily`, must not strand a capture forever).
+    /// Best-effort: a file that no longer parses carries `None` as its URL.
+    pub flagged_pending: Vec<(String, Option<String>)>,
     pub dry_run: bool,
 }
 
@@ -104,6 +109,13 @@ pub fn sweep_intake(
 
             if flagged.contains_key(&sha256) {
                 outcome.already_flagged += 1;
+                // Parse best-effort for the URL so enrichment can retry this
+                // previously-flagged capture (it is still pending, not done).
+                let url = read_source_from_path(&path)
+                    .ok()
+                    .filter(|s| !s.source_url.is_empty())
+                    .map(|s| s.source_url);
+                outcome.flagged_pending.push((from.clone(), url));
                 continue;
             }
             if known_hashes.contains(&sha256) {

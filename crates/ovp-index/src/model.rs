@@ -46,6 +46,14 @@ pub struct SourceRow {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Capture-origin facet: which capture mechanism brought this content in
+    /// (`"pinboard"` today, matched by URL against the pinboard-sync ledger
+    /// at build time). URL is the join key because it survives both the
+    /// enrichment re-hash and lifecycle moves — matching by the note's
+    /// current path loses every source the sweep moves out of `02-Pinboard`.
+    /// Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     /// Current best-known vault-relative location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
@@ -104,6 +112,7 @@ impl SourceRow {
             status,
             title: None,
             url: None,
+            origin: None,
             rel_path: None,
             date: None,
             content_date: None,

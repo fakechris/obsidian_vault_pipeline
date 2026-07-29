@@ -26,9 +26,11 @@ pub use ledger::{
     IntakeAction, IntakeRecord, INTAKE_SCHEMA,
 };
 pub use pinboard::{
-    read_pinboard_ledger, sync_pinboard, synced_urls, FixturePinboardFetch, PinboardFetch,
-    PinboardPost, PinboardSyncOptions, PinboardSyncOutcome, PinboardSyncRecord,
-    FIRST_SYNC_GUARD_MAX_NEW, PINBOARD_SCHEMA,
+    auto_since, coverage_floor, plan_backfill_window, posted_day, read_pinboard_backfill_ledger,
+    read_pinboard_ledger, shift_days, sync_pinboard, sync_pinboard_backfill, synced_urls,
+    watermark_high, watermark_low, BackfillWindow, FixturePinboardFetch, PinboardBackfillOutcome,
+    PinboardBackfillRecord, PinboardFetch, PinboardPost, PinboardSyncOptions, PinboardSyncOutcome,
+    PinboardSyncRecord, FIRST_SYNC_GUARD_MAX_NEW, PINBOARD_BACKFILL_SCHEMA, PINBOARD_SCHEMA,
 };
 #[cfg(feature = "pinboard-live")]
 pub use pinboard::LivePinboardFetch;

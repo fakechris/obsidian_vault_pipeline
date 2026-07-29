@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   closureNodeIds,
+  collectionOf,
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
@@ -10,7 +11,7 @@ import {
   runActivity,
   STALE_AFTER_MS,
 } from './derive';
-import type { IndexModel, LastRunModel, RecentSource } from './types';
+import type { IndexModel, LastRunModel, RecentSource, SourceRow } from './types';
 
 const NOW = Date.parse('2026-07-12T12:00:00Z');
 
@@ -369,5 +370,31 @@ describe('closureNodeIds (VZ1 evidence closure)', () => {
   it('always contains the claim itself, even with nothing else', () => {
     const out = closureNodeIds('claim:ck-x', [], () => false, new Map());
     expect([...out]).toEqual(['claim:ck-x']);
+  });
+});
+
+describe('collectionOf', () => {
+  const row = (over: Partial<SourceRow>): SourceRow => ({
+    sha256: 's',
+    status: 'processed',
+    fail_count: 0,
+    ...over,
+  });
+
+  it('origin beats the current path: a swept + processed pinboard note stays pinboard', () => {
+    expect(
+      collectionOf(
+        row({ origin: 'pinboard', rel_path: '50-Inbox/03-Processed/2026-07/a.md' }),
+      ),
+    ).toBe('pinboard');
+  });
+
+  it('falls back to the path heuristic when origin is absent', () => {
+    expect(collectionOf(row({ rel_path: '50-Inbox/02-Pinboard/b.md' }))).toBe('pinboard');
+    expect(collectionOf(row({ rel_path: '50-Inbox/00-Capture/c.md' }))).toBe('capture');
+    expect(collectionOf(row({ rel_path: '50-Inbox/03-Processed/2026-07/d.md' }))).toBe(
+      'clippings',
+    );
+    expect(collectionOf(row({}))).toBe('clippings');
   });
 });

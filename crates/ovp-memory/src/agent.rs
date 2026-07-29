@@ -230,15 +230,15 @@ fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
         });
     }
     // Cards without source_id (rare)
-    if let Some(title) = hit.get("title").and_then(|v| v.as_str()) {
-        if hit.get("content").is_some() || hit.get("matched_cards").is_some() {
-            return Some(ProgressHit {
-                kind: "card".into(),
-                id: format!("card:{}", clip_label(title, 40)),
-                label: clip_label(title, 80),
-                source_id: None,
-            });
-        }
+    if let Some(title) = hit.get("title").and_then(|v| v.as_str())
+        && (hit.get("content").is_some() || hit.get("matched_cards").is_some())
+    {
+        return Some(ProgressHit {
+            kind: "card".into(),
+            id: format!("card:{}", clip_label(title, 40)),
+            label: clip_label(title, 80),
+            source_id: None,
+        });
     }
     None
 }

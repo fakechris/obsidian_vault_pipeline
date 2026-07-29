@@ -2697,6 +2697,7 @@ mod tests {
             status: SourceStatus::Processed,
             title: Some(title.into()),
             url: Some(format!("https://example.test/{sha256}")),
+            origin: None,
             rel_path: rel_path.map(str::to_string),
             date: date.map(str::to_string),
             content_date: None,

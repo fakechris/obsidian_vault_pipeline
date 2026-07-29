@@ -1500,13 +1500,33 @@ body {
   font-family: var(--ovp-font-mono);
   font-size: var(--ovp-text-xs);
 }
+/* Center column fills the viewport: the thread scrolls internally while the
+ * composer stays pinned on screen (60vh thread forced constant paging). */
+.ask-main {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 7rem);
+}
 .chat-thread {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
-  max-height: 60vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 0.25rem;
+}
+.ask-composer {
+  flex: none;
+}
+/* Collapsed (single-column) layout: no fixed height, the page scrolls. */
+@media (max-width: 900px) {
+  .ask-main {
+    height: auto;
+  }
+  .ask-main .chat-thread {
+    max-height: 60vh;
+  }
 }
 .chat-turn {
   display: flex;

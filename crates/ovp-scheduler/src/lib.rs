@@ -272,6 +272,15 @@ pub fn default_registry(
         VAULT_PLACEHOLDER.to_string(),
         "--client".to_string(),
         client.to_string(),
+        // Pinboard capture is ON by default in the scheduled daily loop:
+        // `--pinboard-since auto` resumes from the last sync's bookmark-day
+        // watermark. Both failure modes a fresh/unconfigured vault hits are
+        // GRACEFUL skips in `daily` (warn + continue), never a failed run:
+        // no PINBOARD_TOKEN → capture skipped; no watermark yet → skipped
+        // with seeding guidance (`pinboard-sync --since <d>` once).
+        "--pinboard-live".to_string(),
+        "--pinboard-since".to_string(),
+        "auto".to_string(),
     ];
     if let Some(n) = max_sources {
         daily_argv.push("--max-sources".to_string());
@@ -687,6 +696,10 @@ mod tests {
         assert_eq!(daily.cadence, "daily 09:00");
         assert!(daily.argv.contains(&VAULT_PLACEHOLDER.to_string()));
         assert!(daily.argv.contains(&"--web-fetch-live".to_string()));
+        // Pinboard capture is on by default in the scheduled loop, following
+        // the sync watermark (graceful skip without a token / watermark).
+        assert!(daily.argv.contains(&"--pinboard-live".to_string()));
+        assert!(daily.argv.contains(&"auto".to_string()));
         assert!(daily.argv.contains(&"--max-sources".to_string()));
         assert!(daily.argv.contains(&"40".to_string()));
         let cry = reg.get("crystallize").unwrap();

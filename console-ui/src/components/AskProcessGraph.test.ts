@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProcessGraph } from './AskProcessGraph';
+import { buildProcessGraph, preservePhysics, type ProcessNode } from './AskProcessGraph';
 
 describe('buildProcessGraph', () => {
   it('replays a dense history trail (many sources + memory cards)', () => {
@@ -93,5 +93,39 @@ describe('buildProcessGraph', () => {
     });
     expect(nodes.some((n) => n.kind === 'card')).toBe(true);
     expect(nodes.some((n) => n.id === 'source:s1')).toBe(true);
+  });
+});
+
+describe('preservePhysics', () => {
+  const settled: ProcessNode[] = [
+    { id: 'source:a', kind: 'source', label: 'A', x: 10, y: 20, vx: 0.1, vy: -0.2 },
+    { id: 'claim:c1', kind: 'claim', label: 'C1', x: -5, y: 8, vx: 0, vy: 0 },
+  ];
+
+  it('carries settled positions onto refreshed nodes matched by id', () => {
+    const fresh: ProcessNode[] = [
+      { id: 'source:a', kind: 'source', label: 'A better label' },
+      { id: 'claim:c1', kind: 'claim', label: 'C1' },
+    ];
+    const out = preservePhysics(fresh, settled);
+    expect(out[0]).toMatchObject({ x: 10, y: 20, vx: 0.1, vy: -0.2, label: 'A better label' });
+    expect(out[1]).toMatchObject({ x: -5, y: 8 });
+    // Engine owns the copies it mutates — our inputs stay untouched.
+    expect(fresh[0].x).toBeUndefined();
+  });
+
+  it('leaves genuinely new nodes positionless so only they pop in', () => {
+    const fresh: ProcessNode[] = [
+      { id: 'source:a', kind: 'source', label: 'A' },
+      { id: 'card:new', kind: 'card', label: 'New' },
+    ];
+    const out = preservePhysics(fresh, settled);
+    expect(out[0].x).toBe(10);
+    expect(out[1].x).toBeUndefined();
+  });
+
+  it('first render (no previous nodes) starts everyone unsettled', () => {
+    const out = preservePhysics([{ id: 'source:a', kind: 'source', label: 'A' }], []);
+    expect(out[0].x).toBeUndefined();
   });
 });
