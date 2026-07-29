@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "web_fetch_xquik_status-v1",
+  "base_version": "v1.1",
+  "target_version": "v1.2",
+  "surface": "runtime",
+  "component": "runtime.web_fetch",
+  "hypothesis": "Resolving X/Twitter status bookmarks through Xquik when XQUIK_API_KEY is configured recovers readable tweet text and linked article URLs that generic HTML fetching cannot reliably extract, while bounded response reads prevent oversized bodies from being allocated in memory. Predicted: supported status URLs enrich successfully with readable text and source links; unconfigured and non-status URL behavior remains unchanged; bodies above the configured limit fail after reading at most limit plus one byte.",
+  "predicted_delta": {
+    "x_status_bookmarks_with_configured_key": "readable content instead of an HTML fetch failure or low-value shell",
+    "linked_source_discovery": "expanded non-X URLs remain available to the existing source resolver",
+    "maximum_buffered_response": "max_content_bytes + 1",
+    "unconfigured_web_fetch": "unchanged"
+  },
+  "guardrails": {
+    "strict_status_host_allowlist": true,
+    "api_key_never_persisted_or_logged": true,
+    "existing_source_resolution_untouched": true,
+    "oversized_bodies_rejected": true
+  },
+  "eval_plan": {
+    "replay_set": "unit tests in crates/ovp-enrich/src/web_fetch.rs covering strict URL parsing, payload conversion, linked sources, missing content, bounded reads, invalid UTF-8, and both feature configurations",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Remove the optional Xquik status branch and restore the existing generic fetch path. Enrichment output is rebuildable, the key is read only from the environment, and no persisted schema depends on this integration.",
+  "ablation_required": false
+}
