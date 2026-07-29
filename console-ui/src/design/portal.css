@@ -1006,6 +1006,66 @@ body {
 .md-block pre.md-frontmatter {
   color: var(--muted);
 }
+/* Collapsed provenance block (replaces the raw YAML wall). */
+.md-block details.md-frontmatter {
+  margin: 0 0 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-input);
+  background: var(--surface-2);
+}
+.md-block details.md-frontmatter summary {
+  cursor: pointer;
+  padding: 0.35rem 0.7rem;
+  font-size: var(--ovp-text-xs);
+  color: var(--muted);
+  user-select: none;
+}
+.md-block details.md-frontmatter pre {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  max-height: 16rem;
+  overflow-y: auto;
+}
+/* GFM tables */
+.md-block table {
+  border-collapse: collapse;
+  margin: 0 0 0.9rem;
+  font-size: var(--ovp-text-sm);
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.md-block th,
+.md-block td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.65rem;
+  vertical-align: top;
+}
+.md-block th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+/* Obsidian callouts: "> [!note] …" renders with a type label. */
+.md-block blockquote.md-callout {
+  border-left-color: var(--accent);
+}
+.md-block .md-callout-tag {
+  display: inline-block;
+  font-size: var(--ovp-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  margin-bottom: 0.15rem;
+}
+.md-block mark {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 0.1em;
+}
 .md-block code {
   font-family: var(--ovp-font-mono);
   font-size: 0.9em;

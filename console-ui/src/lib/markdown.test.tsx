@@ -4,7 +4,7 @@
  * is invalid markup with two competing navigations). */
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import { renderInline, type InlineMarker } from './markdown';
+import { parseMarkdown, renderInline, type InlineMarker } from './markdown';
 
 /** Mirror of the Ask page tokenizer (requires the literal brackets). */
 const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?)\s*\]/g;
@@ -108,5 +108,83 @@ describe('renderInline marker hook', () => {
   it('renders unchanged when no marker is supplied', () => {
     const out = renderInline('plain [claim:c01] text', 'k');
     expect(text(out)).toBe('plain [claim:c01] text');
+  });
+});
+
+/** Clipping-body rendering (Source tab): badge links, escapes, wiki-links,
+ * highlights — the mini renderer must not leak raw syntax to the page. */
+describe('renderInline clipping syntax', () => {
+  it('renders a badge [![alt](img)](href) as ONE anchor, no dangling parens', () => {
+    const out = renderInline(
+      '[![CI](https://img.shields.io/ci.svg)](https://example.com/ci)',
+      'k',
+    );
+    const anchors = flatten(out).filter(
+      (n): n is ReactElement => isValidElement(n) && n.type === 'a',
+    );
+    expect(anchors).toHaveLength(1);
+    expect((anchors[0] as ReactElement<{ href: string }>).props.href).toBe(
+      'https://example.com/ci',
+    );
+    expect(text(out)).toBe('[image: CI]');
+  });
+
+  it('makes a bare image a clickable chip without remote loading', () => {
+    const out = renderInline('![alt](https://img.example/x.png)', 'k');
+    const anchors = flatten(out).filter(
+      (n): n is ReactElement => isValidElement(n) && n.type === 'a',
+    );
+    expect(anchors).toHaveLength(1);
+    expect(tags(out)).not.toContain('img');
+    expect(text(out)).toBe('[image: alt]');
+  });
+
+  it('unescapes clipper backslashes ("1\\. Codex")', () => {
+    const out = renderInline('1\\. Codex \\| a\\_b', 'k');
+    expect(text(out)).toBe('1. Codex | a_b');
+  });
+
+  it('renders wiki-links as their display text', () => {
+    expect(text(renderInline('see [[Ray Dalio]] here', 'k'))).toBe(
+      'see Ray Dalio here',
+    );
+    expect(text(renderInline('[[Note|Alias]]', 'k'))).toBe('Alias');
+  });
+
+  it('renders ==highlights== as mark', () => {
+    const out = renderInline('a ==key phrase== b', 'k');
+    expect(tags(out)).toContain('mark');
+    expect(text(out)).toBe('a key phrase b');
+  });
+});
+
+describe('parseMarkdown tables', () => {
+  it('parses a GFM table with alignment', () => {
+    const blocks = parseMarkdown(
+      ['| Name | Cost |', '| :--- | ---: |', '| a | 1 |', '| b | 2 |', '', 'after'].join('\n'),
+    );
+    const table = blocks.find((b) => b.kind === 'table');
+    expect(table).toBeDefined();
+    if (table?.kind !== 'table') return;
+    expect(table.header).toEqual(['Name', 'Cost']);
+    expect(table.aligns).toEqual(['left', 'right']);
+    expect(table.rows.map((r) => r.cells)).toEqual([
+      ['a', '1'],
+      ['b', '2'],
+    ]);
+    // The trailing paragraph is its own block, not absorbed into the table.
+    expect(blocks[blocks.length - 1]).toMatchObject({ kind: 'para' });
+  });
+
+  it('does not treat a pipe line without a separator as a table', () => {
+    const blocks = parseMarkdown('a | b\nno separator here\n');
+    expect(blocks.every((b) => b.kind !== 'table')).toBe(true);
+  });
+
+  it('keeps escaped pipes inside cells', () => {
+    const blocks = parseMarkdown('| a \\| b | c |\n| --- | --- |\n| d | e |\n');
+    const table = blocks[0];
+    if (table.kind !== 'table') throw new Error('expected table');
+    expect(table.header).toEqual(['a | b', 'c']);
   });
 });
