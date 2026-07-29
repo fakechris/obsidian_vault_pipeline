@@ -54,3 +54,77 @@ describe('citationsFromAnswerText with an index lookup', () => {
     expect(c.title).toMatch(/^source 6dc988d1d27/);
   });
 });
+
+describe('tolerant + legacy citation resolution', () => {
+  const REAL_SHA =
+    '979d7ea1381359b259a4d78a0b13a032f24272c77980b9539c3ec5d2cce4f9c1';
+  const legacy = {
+    sources: [
+      { sha256: REAL_SHA, title: 'Digital Human Production' },
+      {
+        sha256: 'ab'.repeat(32),
+        title: 'Working with evals (OpenAI API)',
+        rel_path:
+          '40-Resources/Reader/4b1d798e-2026-03-29_Working_with_evals_OpenAI_API________.md',
+      },
+    ],
+    claims: [],
+  };
+
+  it('resolves a model-mangled sha when the head is intact and unique', () => {
+    // The model elided the middle of the id (real: …b9539c3ec5d2cce4f9c1).
+    const mangled = '979d7ea1381359b259a4d78a0b13a032f24272c77980b9539c9c1';
+    const [c] = citationsFromAnswerText(
+      `see [source:${mangled}]`,
+      makeCitationTitleLookup(legacy),
+    );
+    expect(c.title).toBe('Digital Human Production');
+    expect(c.link_target).toBe(`/library/${REAL_SHA}`);
+  });
+
+  it('refuses to guess when the head prefix is ambiguous', () => {
+    const two = {
+      sources: [
+        { sha256: `${'a'.repeat(24)}${'0'.repeat(40)}`, title: 'One' },
+        { sha256: `${'a'.repeat(24)}${'1'.repeat(40)}`, title: 'Two' },
+      ],
+      claims: [],
+    };
+    const [c] = citationsFromAnswerText(
+      `see [source:${'a'.repeat(30)}]`,
+      makeCitationTitleLookup(two),
+    );
+    expect(c.title).toMatch(/^source aaaa/);
+    expect(c.link_target).toBeNull();
+  });
+
+  it('collapses doubled kind prefixes and resolves legacy card paths', () => {
+    const [c] = citationsFromAnswerText(
+      'per [card:card:40-Resources/Reader/4b1d798e-2026-03-29_Working_with_evals_OpenAI_API________:0]',
+      makeCitationTitleLookup(legacy),
+    );
+    expect(c.id).toBe(
+      'card:40-Resources/Reader/4b1d798e-2026-03-29_Working_with_evals_OpenAI_API________:0',
+    );
+    expect(c.title).toBe('Working with evals (OpenAI API)');
+    expect(c.link_target).toBe(`/library/${'ab'.repeat(32)}`);
+  });
+
+  it('humanizes legacy unit paths not present in the index', () => {
+    const [c] = citationsFromAnswerText(
+      'see [unit:unit:40-Resources/Reader/024fa72c-2026-04-01_Agentic_RAG_notes____:u-034-0e0d496f]',
+      makeCitationTitleLookup(legacy),
+    );
+    expect(c.title).toBe('Agentic RAG notes');
+    expect(c.link_target).toBeNull();
+  });
+
+  it('keeps degenerate ellipsis markers honest', () => {
+    const [c] = citationsFromAnswerText(
+      'see [card:card:...:0]',
+      makeCitationTitleLookup(legacy),
+    );
+    expect(c.title).toBe('card:...:0');
+    expect(c.link_target).toBeNull();
+  });
+});
