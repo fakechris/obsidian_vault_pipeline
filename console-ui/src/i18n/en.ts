@@ -221,6 +221,7 @@ export const en = {
   'source.tabMemory': 'Memory',
   'source.tabMemoryCounts': '{cards} cards · {units} units',
   'source.tabSource': 'Source',
+  'source.frontmatter': 'Properties (frontmatter)',
   'source.cardsTitle': 'Cards',
   'source.cardsHint':
     'Readable distillations of this source — every statement traceable to a grounded unit below.',

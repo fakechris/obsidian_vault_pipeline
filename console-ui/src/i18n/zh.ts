@@ -211,6 +211,7 @@ export const zh: Record<keyof typeof en, string> = {
   'source.tabMemory': '记忆',
   'source.tabMemoryCounts': '{cards} 卡片 · {units} 单元',
   'source.tabSource': '原文',
+  'source.frontmatter': '属性（frontmatter）',
   'source.cardsTitle': '卡片',
   'source.cardsHint': '本源的可读提炼——每句话都可追溯到下方的接地单元。',
   'source.groundedUnits': '接地单元',

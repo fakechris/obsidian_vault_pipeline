@@ -177,15 +177,16 @@ export default function SourceDetailPage() {
   // Bumped after a tag write so the detail (and its rebuilt tags) reloads.
   const [version, setVersion] = useState(0);
   const { detail, status } = useSourceDetail(sha, version);
-  // Tab is URL-parameterized (?tab=source) — shareable deep links, same
-  // rule as the Library facets (design §5).
+  // Tab is URL-parameterized (?tab=memory) — shareable deep links, same
+  // rule as the Library facets (design §5). Default is the full SOURCE
+  // rendering (operator finding: the memory tab alone reads as excerpts).
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: Tab = searchParams.get('tab') === 'source' ? 'source' : 'memory';
+  const tab: Tab = searchParams.get('tab') === 'memory' ? 'memory' : 'source';
   const setTab = (next: Tab) => {
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (next === 'source') p.set('tab', 'source');
+        if (next === 'memory') p.set('tab', 'memory');
         else p.delete('tab');
         return p;
       },
@@ -363,6 +364,13 @@ export default function SourceDetailPage() {
           <div className="tab-row">
             <button
               type="button"
+              className={tab === 'source' ? 'active' : ''}
+              onClick={() => setTab('source')}
+            >
+              {t('source.tabSource')} <span className="mono muted tiny">md</span>
+            </button>
+            <button
+              type="button"
               className={tab === 'memory' ? 'active' : ''}
               onClick={() => setTab('memory')}
             >
@@ -375,13 +383,6 @@ export default function SourceDetailPage() {
                 })}
                 )
               </span>
-            </button>
-            <button
-              type="button"
-              className={tab === 'source' ? 'active' : ''}
-              onClick={() => setTab('source')}
-            >
-              {t('source.tabSource')} <span className="mono muted tiny">md</span>
             </button>
           </div>
 
@@ -453,6 +454,7 @@ export default function SourceDetailPage() {
                     markdown={doc.markdown}
                     anchoredLines={anchoredLines}
                     highlightLine={highlightLine}
+                    frontmatterLabel={t('source.frontmatter')}
                   />
                   {doc.truncated && (
                     <div className="doc-note tiny muted">

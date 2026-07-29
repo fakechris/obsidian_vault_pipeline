@@ -34,10 +34,62 @@ export type MdBlock =
       items: { line: number; text: string }[];
     }
   | { kind: 'hr'; line: number; end: number }
+  | {
+      kind: 'table';
+      line: number;
+      end: number;
+      header: string[];
+      aligns: ('left' | 'center' | 'right' | null)[];
+      rows: { line: number; cells: string[] }[];
+    }
   | { kind: 'frontmatter'; line: number; end: number; text: string };
 
 const LIST_ITEM = /^\s{0,3}(?:([-*+])|(\d{1,9})[.)])\s+(.*)$/;
 const HR = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+// --- GFM tables: header row + |---|---| separator, rows until a blank or
+// non-table line. Cells split on unescaped pipes.
+const TABLE_SEP = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+
+function splitTableRow(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '';
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '\\' && line[i + 1] === '|') {
+      cur += '|';
+      i += 1;
+    } else if (ch === '|') {
+      cells.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  if (cells.length > 0 && cells[0].trim() === '') cells.shift();
+  if (cells.length > 0 && cells[cells.length - 1].trim() === '') cells.pop();
+  return cells.map((c) => c.trim());
+}
+
+function tableAligns(sep: string): ('left' | 'center' | 'right' | null)[] {
+  return splitTableRow(sep).map((cell) => {
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return null;
+  });
+}
+
+/** A table starts here when this line holds a pipe and the NEXT line is the
+ * separator row (GFM requires both). */
+function tableStart(lines: string[], i: number): boolean {
+  return (
+    i + 1 < lines.length && lines[i].includes('|') && TABLE_SEP.test(lines[i + 1])
+  );
+}
 
 /** `## Title` → level 2. ATX only, requires the space (v1 parity). */
 function heading(line: string): { level: number; text: string } | null {
@@ -129,6 +181,20 @@ export function parseMarkdown(md: string): MdBlock[] {
       continue;
     }
 
+    if (tableStart(lines, i)) {
+      const header = splitTableRow(lines[i]);
+      const aligns = tableAligns(lines[i + 1]);
+      const rows: { line: number; cells: string[] }[] = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].trim() !== '' && lines[j].includes('|')) {
+        rows.push({ line: j + 1, cells: splitTableRow(lines[j]) });
+        j += 1;
+      }
+      blocks.push({ kind: 'table', line: lineNo, end: j, header, aligns, rows });
+      i = j;
+      continue;
+    }
+
     const li = LIST_ITEM.exec(line);
     if (li) {
       const ordered = li[2] !== undefined;
@@ -155,7 +221,8 @@ export function parseMarkdown(md: string): MdBlock[] {
       !heading(lines[j]) &&
       !lines[j].startsWith('>') &&
       !LIST_ITEM.test(lines[j]) &&
-      !HR.test(lines[j])
+      !HR.test(lines[j]) &&
+      !tableStart(lines, j)
     ) {
       body.push(lines[j]);
       j += 1;
@@ -179,8 +246,15 @@ export function safeLinkHref(url: string): string | null {
   return null;
 }
 
+// Token order matters: linked image (badge) before image before wikilink
+// before plain link — the longer bracket patterns must win.
 const INLINE =
-  /(!\[[^\]]*\]\([^)]*\))|(\[[^\]]+\]\([^)]*\))|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)/;
+  /(\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\))|(!\[[^\]]*\]\([^)]*\))|(\[\[[^\]\n]+\]\])|(\[[^\]]+\]\([^)]*\))|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(==[^=\n]+==)/;
+
+/** Clippers escape markdown punctuation literally ("1\. Codex") — strip the
+ * backslash for the punctuation set CommonMark allows. Code spans never
+ * pass through here (they tokenize first), so `\` inside code survives. */
+const UNESCAPE = /\\([\\`*_[\]{}()#+.!|>~-])/g;
 
 /** Marker hook for the inline pass: plain-text runs are additionally split
  * on `pattern` (which MUST carry the `g` flag) and each match is handed to
@@ -210,8 +284,9 @@ export function renderInline(
   // a product failure. Trailing punctuation stays text; the href is the
   // matched URL verbatim (still only http/https — no scheme smuggling).
   const AUTOLINK = /https?:\/\/[^\s<>"'`\]}]+/g;
-  const pushText = (chunk: string) => {
-    if (chunk === '') return;
+  const pushText = (raw: string) => {
+    if (raw === '') return;
+    const chunk = raw.replace(UNESCAPE, '$1');
     if (!autolink) {
       out.push(chunk);
       return;
@@ -286,14 +361,47 @@ export function renderInline(
     k += 1;
 
     if (m[1]) {
-      // Image → alt-text placeholder; no remote loading in B2.
-      const alt = /^!\[([^\]]*)\]/.exec(token)?.[1] ?? '';
+      // Linked image (badges: [![alt](src)](href)) — one anchor, the image
+      // stays an alt-text chip (no remote loading, B2), no dangling "(url)".
+      const parts = /^\[!\[([^\]]*)\]\(([^)]*)\)\]\(([^)]*)\)$/.exec(token);
+      const alt = parts?.[1] ?? '';
+      const href = safeLinkHref(parts?.[3] ?? '');
+      const chip = `[image${alt ? `: ${alt}` : ''}]`;
       out.push(
-        <span key={key} className="md-img-placeholder">
-          [image{alt ? `: ${alt}` : ''}]
-        </span>,
+        href ? (
+          <a key={key} href={href} target="_blank" rel="noreferrer">
+            <span className="md-img-placeholder">{chip}</span>
+          </a>
+        ) : (
+          <span key={key} className="md-img-placeholder">
+            {chip}
+          </span>
+        ),
       );
     } else if (m[2]) {
+      // Image → CLICKABLE alt-text chip; still no remote loading in B2.
+      const im = /^!\[([^\]]*)\]\(([^)]*)\)$/.exec(token);
+      const alt = im?.[1] ?? '';
+      const src = safeLinkHref(im?.[2] ?? '');
+      const chip = `[image${alt ? `: ${alt}` : ''}]`;
+      out.push(
+        src ? (
+          <a key={key} href={src} target="_blank" rel="noreferrer">
+            <span className="md-img-placeholder">{chip}</span>
+          </a>
+        ) : (
+          <span key={key} className="md-img-placeholder">
+            {chip}
+          </span>
+        ),
+      );
+    } else if (m[3]) {
+      // Obsidian wiki-link: [[Note]] / [[Note|Alias]] → plain text (the
+      // portal can't resolve vault-internal targets).
+      const body = token.slice(2, -2);
+      const pipe = body.indexOf('|');
+      out.push(pipe >= 0 ? body.slice(pipe + 1) : body);
+    } else if (m[4]) {
       const lm = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token);
       const label = lm?.[1] ?? token;
       const href = safeLinkHref(lm?.[2] ?? '');
@@ -310,15 +418,19 @@ export function renderInline(
       } else {
         out.push(label);
       }
-    } else if (m[3]) {
+    } else if (m[5]) {
       out.push(<code key={key}>{token.slice(1, -1)}</code>);
-    } else if (m[4]) {
+    } else if (m[6]) {
       out.push(
         <strong key={key}>{renderInline(token.slice(2, -2), key, marker)}</strong>,
       );
-    } else {
+    } else if (m[7]) {
       out.push(
         <em key={key}>{renderInline(token.slice(1, -1), key, marker)}</em>,
+      );
+    } else {
+      out.push(
+        <mark key={key}>{renderInline(token.slice(2, -2), key, marker)}</mark>,
       );
     }
     rest = rest.slice(m.index + token.length);
@@ -328,7 +440,12 @@ export function renderInline(
 
 // ---------------------------------------------------------------- renderer
 
-function blockBody(block: MdBlock, key: string, marker?: InlineMarker): ReactNode {
+function blockBody(
+  block: MdBlock,
+  key: string,
+  marker?: InlineMarker,
+  frontmatterLabel = 'metadata',
+): ReactNode {
   switch (block.kind) {
     case 'heading': {
       const inner = renderInline(block.text, key, marker);
@@ -354,16 +471,50 @@ function blockBody(block: MdBlock, key: string, marker?: InlineMarker): ReactNod
           <code>{block.text}</code>
         </pre>
       );
-    case 'quote':
+    case 'quote': {
+      // Obsidian callout: "> [!note] Title" — lift the marker into a small
+      // type label instead of leaking the bracket syntax into the text.
+      const cm = /^\[!(\w+)\][+-]?\s*(.*)$/.exec(block.lines[0] ?? '');
+      const lines = cm ? [cm[2], ...block.lines.slice(1)] : block.lines;
       return (
-        <blockquote>
-          {block.lines.map((l, n) => (
+        <blockquote
+          className={cm ? 'md-callout' : undefined}
+          data-callout={cm ? cm[1].toLowerCase() : undefined}
+        >
+          {cm && <span className="md-callout-tag">{cm[1].toLowerCase()}</span>}
+          {lines.map((l, n) => (
             <span key={`${key}-q${n}`}>
               {n > 0 && <br />}
               {renderInline(l, `${key}-q${n}`, marker)}
             </span>
           ))}
         </blockquote>
+      );
+    }
+    case 'table':
+      return (
+        <table>
+          <thead>
+            <tr>
+              {block.header.map((cell, n) => (
+                <th key={`${key}-h${n}`} style={{ textAlign: block.aligns[n] ?? undefined }}>
+                  {renderInline(cell, `${key}-h${n}`, marker)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, r) => (
+              <tr key={`${key}-r${r}`}>
+                {row.cells.map((cell, n) => (
+                  <td key={`${key}-r${r}c${n}`} style={{ textAlign: block.aligns[n] ?? undefined }}>
+                    {renderInline(cell, `${key}-r${r}c${n}`, marker)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       );
     case 'list': {
       const items = block.items.map((it, n) => (
@@ -376,10 +527,16 @@ function blockBody(block: MdBlock, key: string, marker?: InlineMarker): ReactNod
     case 'hr':
       return <hr />;
     case 'frontmatter':
+      // Collapsed by default — clipping frontmatter is provenance metadata,
+      // not prose; a wall of YAML above every article read as broken
+      // rendering to the operator.
       return (
-        <pre className="md-frontmatter">
-          <code>{block.text}</code>
-        </pre>
+        <details className="md-frontmatter">
+          <summary>{frontmatterLabel}</summary>
+          <pre>
+            <code>{block.text}</code>
+          </pre>
+        </details>
       );
   }
 }
@@ -395,6 +552,8 @@ export interface MarkdownViewProps {
   gutter?: boolean;
   /** Inline marker hook — see InlineMarker (Ask citation markers). */
   marker?: InlineMarker;
+  /** Summary label for the collapsed frontmatter block (localized). */
+  frontmatterLabel?: string;
 }
 
 /** The ~720px-measure reading view with a line-number gutter. Blocks whose
@@ -406,6 +565,7 @@ export function MarkdownView({
   highlightLine,
   gutter = true,
   marker,
+  frontmatterLabel,
 }: MarkdownViewProps) {
   // Parsing walks the whole document — memoize per markdown string so
   // unrelated re-renders (highlight changes, anchor sets) don't re-parse.
@@ -449,7 +609,9 @@ export function MarkdownView({
             {gutter && (
               <span className="gut">{anchor != null ? `L${anchor}` : ''}</span>
             )}
-            <div className="md-block">{blockBody(b, `b${b.line}`, marker)}</div>
+            <div className="md-block">
+              {blockBody(b, `b${b.line}`, marker, frontmatterLabel)}
+            </div>
           </div>
         );
       })}
