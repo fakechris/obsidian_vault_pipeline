@@ -543,8 +543,12 @@ export function monthHeat(
 
 export type Collection = 'clippings' | 'pinboard' | 'capture';
 
-/** Collection = where the source lives in the vault (design §3.2). */
+/** Collection = capture origin when the index knows it (URL-matched against
+ * the pinboard ledger at build, so enrichment re-hashes and lifecycle moves
+ * can't hide a source); falls back to the vault-path heuristic for rows the
+ * ledger doesn't know (design §3.2). */
 export function collectionOf(source: SourceRow): Collection {
+  if (source.origin === 'pinboard') return 'pinboard';
   const path = source.rel_path ?? '';
   if (path.includes('02-Pinboard')) return 'pinboard';
   if (path.includes('00-Capture')) return 'capture';

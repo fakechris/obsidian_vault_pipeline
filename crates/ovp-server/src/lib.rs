@@ -1632,11 +1632,24 @@ fn handle_run_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 // ---------------------------------------------------------------------------
-// Attention acknowledgements — `.ovp/attention-acks.json`. Keyed by
+// Attention acknowledgements — append-only `.ovp/attention-acks/`, ONE FILE
+// per (sha,status) ack, created once and never rewritten. Keyed by
 // (sha, status): an acknowledged needs-content source stays hidden until its
 // STATUS changes (e.g. it later blocks), which re-surfaces it.
+//
+// Why not a single read-modify-write JSON: the vault is written by BOTH
+// terminal-spawned CLI/server processes AND the desktop app. macOS Sonoma
+// binds every created file to its creator app (`com.apple.provenance`,
+// unremovable) and EPERMs any OTHER app that modifies it
+// (kTCCServiceSystemPolicyAppData) — so a shared `attention-acks.json` breaks
+// for whichever app did not create it. Creating NEW files is always allowed,
+// hence one create-once file per ack. Reads merge the dir with the legacy
+// single file (read-only; no migration write is ever attempted).
 // ---------------------------------------------------------------------------
 
+const ATTENTION_ACKS_DIR_REL: &str = ".ovp/attention-acks";
+/// Legacy single-file store. READ-ONLY going forward: older binaries may
+/// still append to it, so the read path folds it in.
 const ATTENTION_ACKS_REL: &str = ".ovp/attention-acks.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -1653,12 +1666,37 @@ struct AttentionAcksFile {
     acks: Vec<AttentionAck>,
 }
 
+/// Every ack: the append-only dir first, then legacy-file entries, deduped
+/// by (sha,status). Unreadable/malformed entries are skipped (the overlay is
+/// advisory state, never worth 500-ing the whole model payload over).
 fn read_attention_acks(vault_root: &Path) -> AttentionAcksFile {
-    let path = vault_root.join(ATTENTION_ACKS_REL);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+    let mut acks: Vec<AttentionAck> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(vault_root.join(ATTENTION_ACKS_DIR_REL)) {
+        for entry in entries.flatten() {
+            let Ok(raw) = std::fs::read_to_string(entry.path()) else { continue };
+            if let Ok(ack) = serde_json::from_str::<AttentionAck>(&raw) {
+                acks.push(ack);
+            }
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(vault_root.join(ATTENTION_ACKS_REL))
+        && let Ok(file) = serde_json::from_str::<AttentionAcksFile>(&raw)
+    {
+        acks.extend(file.acks);
+    }
+    let mut seen = std::collections::HashSet::new();
+    acks.retain(|a| seen.insert((a.sha.clone(), a.status.clone())));
+    acks.sort_by(|a, b| (&a.sha, &a.status).cmp(&(&b.sha, &b.status)));
+    AttentionAcksFile { acks }
+}
+
+/// Filename for one ack record: `<sha>-<sanitized status>.json`.
+fn attention_ack_path(dir: &Path, sha: &str, status: &str) -> std::path::PathBuf {
+    let safe: String = status
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .collect();
+    dir.join(format!("{sha}-{safe}.json"))
 }
 
 fn handle_attention_ack(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -1687,26 +1725,40 @@ fn handle_attention_ack(state: &AppState, body: &str) -> Response<std::io::Curso
         .acks_write_lock
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let mut file = read_attention_acks(&state.vault_root);
     let ack = AttentionAck {
         sha: sha.to_string(),
         status: status.to_string(),
         acked_at: Some(ovp_index::now_rfc3339()),
     };
-    file.acks
-        .retain(|a| !(a.sha == ack.sha && a.status == ack.status));
-    file.acks.push(ack);
-    let path = state.vault_root.join(ATTENTION_ACKS_REL);
-    let body_json = match serde_json::to_string_pretty(&file) {
+    let body_json = match serde_json::to_string_pretty(&ack) {
         Ok(b) => b,
         Err(e) => {
-            let b = serde_json::json!({ "error": format!("serialize acks: {e}") });
+            let b = serde_json::json!({ "error": format!("serialize ack: {e}") });
             return json_response(500, &b.to_string());
         }
     };
-    if let Err(e) = std::fs::write(&path, format!("{body_json}\n")) {
-        let b = serde_json::json!({ "error": format!("write {}: {e}", path.display()) });
+    let dir = state.vault_root.join(ATTENTION_ACKS_DIR_REL);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        let b = serde_json::json!({ "error": format!("mkdir {}: {e}", dir.display()) });
         return json_response(500, &b.to_string());
+    }
+    let path = attention_ack_path(&dir, &ack.sha, &ack.status);
+    // CREATE-NEW only — never modify an existing file (another app may own
+    // it). A pre-existing record means this (sha,status) is already acked:
+    // report success, touch nothing.
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => {
+            use std::io::Write as _;
+            if let Err(e) = writeln!(f, "{body_json}") {
+                let b = serde_json::json!({ "error": format!("write {}: {e}", path.display()) });
+                return json_response(500, &b.to_string());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            let b = serde_json::json!({ "error": format!("write {}: {e}", path.display()) });
+            return json_response(500, &b.to_string());
+        }
     }
     json_response(200, r#"{"acked":true}"#)
 }
@@ -3807,6 +3859,7 @@ mod tests {
                 status: SourceStatus::Processed,
                 title: Some("Good Article".into()),
                 url: Some("https://example.com/good".into()),
+                origin: None,
                 rel_path: Some(rel_path.into()),
                 date: Some("2026-07-09".into()),
                 content_date: None,
@@ -4109,6 +4162,60 @@ mod tests {
         assert_eq!(acks[0]["sha"], sha.as_str());
         assert_eq!(acks[0]["status"], "needs_content");
 
+        // Append-only storage: ONE create-once file per (sha,status) ack.
+        let ack_file = vault
+            .join(".ovp/attention-acks")
+            .join(format!("{sha}-needs_content.json"));
+        assert!(ack_file.exists(), "per-ack file must exist");
+        let written = std::fs::read_to_string(&ack_file).unwrap();
+
+        // Re-ack is idempotent: still 200, still one overlay entry, and the
+        // existing file is NOT modified (another app's file must never be
+        // opened for writing — macOS provenance protection EPERMs that).
+        let resp = dispatch(
+            &st,
+            Method::Post,
+            "/api/attention/ack",
+            &format!(r#"{{"sha":"{sha}","status":"needs_content"}}"#),
+        );
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(std::fs::read_to_string(&ack_file).unwrap(), written);
+        let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
+        assert_eq!(v["attention_acks"].as_array().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn attention_acks_merge_the_legacy_single_file_read_only() {
+        let vault = portal_vault("attn-ack-legacy", "50-Inbox/03-Processed/good.md", "body\n");
+        // A legacy `attention-acks.json` written by an older binary: folded
+        // into the read model, NEVER modified or migrated.
+        let legacy_path = vault.join(".ovp/attention-acks.json");
+        let legacy = r#"{"acks":[{"sha":"abc123","status":"needs_content","acked_at":"2026-07-20T00:00:00Z"}]}"#;
+        std::fs::write(&legacy_path, legacy).unwrap();
+
+        let acks = read_attention_acks(&vault);
+        assert_eq!(acks.acks.len(), 1);
+        assert_eq!(acks.acks[0].sha, "abc123");
+        assert_eq!(acks.acks[0].status, "needs_content");
+        assert_eq!(
+            std::fs::read_to_string(&legacy_path).unwrap(),
+            legacy,
+            "the legacy file must be left byte-for-byte untouched"
+        );
+
+        // A dir ack for the same (sha,status) dedupes against the legacy entry.
+        let dir = vault.join(".ovp/attention-acks");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("abc123-needs_content.json"),
+            r#"{"sha":"abc123","status":"needs_content","acked_at":"2026-07-21T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let acks = read_attention_acks(&vault);
+        assert_eq!(acks.acks.len(), 1, "dir + legacy duplicates must collapse");
+
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
 
@@ -4192,7 +4299,7 @@ mod tests {
         assert_eq!(daily["enabled"], true);
         assert_eq!(daily["features"]["web_fetch_live"], true);
         assert_eq!(daily["features"]["github_live"], true);
-        assert_eq!(daily["features"]["pinboard_live"], false);
+        assert_eq!(daily["features"]["pinboard_live"], true);
         assert_eq!(daily["features"]["max_sources"], 40);
         assert_eq!(daily["last_status"], "seeded");
         assert!(daily["next_run"].as_str().unwrap().contains("T09:00:00"));
@@ -4627,6 +4734,7 @@ mod tests {
             status,
             title: None,
             url: None,
+            origin: None,
             rel_path: Some(format!("50-Inbox/01-Raw/2026-07/{file}")),
             date: None,
             content_date: None,

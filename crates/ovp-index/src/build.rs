@@ -10,7 +10,7 @@
 //! - `.ovp/crystal/` (ledger.jsonl + review.json)
 //! - `.ovp/reports/*.json`
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
@@ -20,7 +20,7 @@ use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::read_source_from_path;
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
-use ovp_intake::{IntakeAction, read_intake_ledger};
+use ovp_intake::{IntakeAction, read_intake_ledger, read_pinboard_ledger};
 use serde::Deserialize;
 
 use crate::model::{
@@ -110,6 +110,8 @@ pub fn build_index_at_with_progress(
     enrich_titles_from_packs(&mut sources, &packs);
     let tagged = attach_tags(vault_root, &mut sources)?;
     on_phase(&format!("tagged {tagged} source(s)"));
+    let originated = attach_origins(vault_root, &layout, &mut sources)?;
+    on_phase(&format!("origins on {originated} source(s)"));
     let claims = build_claims(vault_root, &layout)?;
     on_phase(&format!("folded {} claim(s)", claims.len()));
 
@@ -338,6 +340,35 @@ fn build_sources(
         .collect();
     sort_sources(&mut out);
     Ok(out)
+}
+
+/// Attach the capture-origin facet: a source is `"pinboard"` when its URL
+/// appears in the pinboard-sync ledger. URL is the join key because it
+/// survives both the enrichment re-hash (which changes the note's sha) and
+/// lifecycle moves (which change its path) — the two ways the Library's old
+/// path heuristic (`02-Pinboard` in `rel_path`) silently lost pinboard
+/// sources. Exact string match is safe: sync writes the note's `source:`
+/// frontmatter from the same href it records in the ledger.
+fn attach_origins(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    rows: &mut [SourceRow],
+) -> Result<usize, String> {
+    let urls: HashSet<String> = read_pinboard_ledger(&vault_root.join(layout.pinboard_ledger()))?
+        .into_iter()
+        .map(|r| r.url)
+        .collect();
+    if urls.is_empty() {
+        return Ok(0);
+    }
+    let mut n = 0;
+    for row in rows.iter_mut() {
+        if row.url.as_ref().is_some_and(|u| urls.contains(u)) {
+            row.origin = Some("pinboard".to_string());
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// Re-read each row's note frontmatter and attach canonical tags. The note's
@@ -1217,6 +1248,48 @@ fn is_leap(y: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attach_origins_marks_pinboard_by_url_not_path_or_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let layout = VaultLayout::new();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        // Two synced bookmarks; the first note was enriched (re-hashed) and
+        // moved to 03-Processed — only the URL still links it to pinboard.
+        std::fs::write(
+            vault.join(layout.pinboard_ledger()),
+            concat!(
+                r#"{"schema":"ovp.pinboard/v1","run_id":"r1","date":"2026-07-09","url":"https://e.x/a","to":"50-Inbox/02-Pinboard/a.md","title":"A","posted_at":"2026-07-08T10:00:00Z"}"#,
+                "\n",
+                r#"{"schema":"ovp.pinboard/v1","run_id":"r1","date":"2026-07-09","url":"https://e.x/b","to":"50-Inbox/02-Pinboard/b.md","title":"B","posted_at":"2026-07-08T11:00:00Z"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let mut enriched_moved = SourceRow::blank("newsha", SourceStatus::Processed);
+        enriched_moved.url = Some("https://e.x/a".to_string());
+        enriched_moved.rel_path = Some("50-Inbox/03-Processed/2026-07/a.md".to_string());
+        let mut stuck = SourceRow::blank("sha-b", SourceStatus::NeedsContent);
+        stuck.url = Some("https://e.x/b".to_string());
+        stuck.rel_path = Some("50-Inbox/02-Pinboard/b.md".to_string());
+        let mut plain_clip = SourceRow::blank("sha-c", SourceStatus::Queued);
+        plain_clip.url = Some("https://e.x/c".to_string());
+        let no_url = SourceRow::blank("sha-d", SourceStatus::Queued);
+        let mut rows = vec![enriched_moved, stuck, plain_clip, no_url];
+
+        let n = attach_origins(vault, &layout, &mut rows).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(rows[0].origin.as_deref(), Some("pinboard"), "URL match survives re-hash + move");
+        assert_eq!(rows[1].origin.as_deref(), Some("pinboard"));
+        assert_eq!(rows[2].origin, None, "non-pinboard URL untouched");
+        assert_eq!(rows[3].origin, None, "no URL → no origin");
+
+        // Empty/absent ledger is a no-op, not an error.
+        let tmp2 = tempfile::tempdir().unwrap();
+        assert_eq!(attach_origins(tmp2.path(), &layout, &mut rows).unwrap(), 0);
+    }
 
     #[test]
     fn days_between_counts_whole_days() {

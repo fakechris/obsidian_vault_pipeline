@@ -66,10 +66,25 @@ fn sweep_ingests_dedups_flags_and_is_idempotent() {
     assert!(log.contains("intake_move") && log.contains("intake_duplicate_move"));
     assert!(log.contains("\"event_type\""), "legacy-compatible key");
 
-    // Re-run: nothing new (flagged files skipped quietly, moved files gone).
+    // Re-run: nothing new (flagged files skipped quietly, moved files gone) —
+    // but the previously-flagged captures surface in `flagged_pending` with
+    // their URLs so the enrichment phases can retry them.
     let out2 = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
     assert_eq!(out2.total_new_records(), 0, "{out2:?}");
     assert_eq!(out2.already_flagged, 2);
+    assert_eq!(out2.flagged_pending.len(), 2);
+    let thin = out2
+        .flagged_pending
+        .iter()
+        .find(|(from, _)| from.ends_with("thin.md"))
+        .expect("thin.md is pending");
+    assert_eq!(thin.1.as_deref(), Some("https://e.x/thin"));
+    let broken = out2
+        .flagged_pending
+        .iter()
+        .find(|(from, _)| from.ends_with("broken.md"))
+        .expect("broken.md is pending");
+    assert_eq!(broken.1, None, "unparseable capture carries no URL");
     assert_eq!(read_intake_ledger(&root.join(".ovp/intake.jsonl")).unwrap().len(), 4);
 
     // Editing the thin file (adding content) re-evaluates it by hash.

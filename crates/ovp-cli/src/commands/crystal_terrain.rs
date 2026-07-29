@@ -561,6 +561,7 @@ mod tests {
             status: ovp_index::SourceStatus::Processed,
             title: None,
             url: None,
+            origin: None,
             rel_path: None,
             date: None,
             content_date: None,

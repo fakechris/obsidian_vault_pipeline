@@ -533,6 +533,7 @@ mod tests {
             status,
             title: Some(format!("Src {sha}")),
             url: Some(format!("https://ex.com/{sha}")),
+            origin: None,
             rel_path: Some("50-Inbox/01-Raw/x.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,

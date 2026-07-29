@@ -155,13 +155,50 @@ fn run_inner(
     // Phase 1 — pinboard capture (optional). Inherits the first-sync flood
     // guard: an unfiltered sync with >500 NEW bookmarks fails this phase
     // loudly (no --yes-all here; a deliberate full sync is `ovp2
-    // pinboard-sync --yes-all`).
-    if args.pinboard_fixture.is_some() || args.pinboard_live {
+    // pinboard-sync --yes-all`). Two GRACEFUL skips keep the unattended loop
+    // green on vaults the phase is not (yet) usable for — a missing
+    // PINBOARD_TOKEN with --pinboard-live, and `--pinboard-since auto`
+    // before any watermark exists (the desktop scheduler enables both by
+    // default; an explicit `pinboard-sync` invocation errors instead).
+    let pinboard_skip = if args.pinboard_live
+        && args.pinboard_fixture.is_none()
+        && std::env::var("PINBOARD_TOKEN").ok().filter(|t| !t.trim().is_empty()).is_none()
+    {
+        Some("PINBOARD_TOKEN is not set (add it to .ovp/daily.env to enable live capture)".to_string())
+    } else {
+        None
+    };
+    // `--pinboard-since auto` resolves against the ledger watermark; `Ok(None)`
+    // = no watermark yet → skip with seeding guidance.
+    let mut auto_skip = None;
+    let pinboard_since = match args.pinboard_since.as_deref() {
+        Some(s) if s.eq_ignore_ascii_case("auto") => {
+            match ovp_intake::auto_since(&args.vault_root).map_err(CliError::Io)? {
+                Some(w) => Some(w),
+                None => {
+                    auto_skip = Some(
+                        "no sync watermark yet — seed once with `ovp2 pinboard-sync --live \
+                         --since <YYYY-MM-DD>`, then `auto` follows the newest bookmark day"
+                            .to_string(),
+                    );
+                    None
+                }
+            }
+        }
+        other => other.map(str::to_string),
+    };
+    let pinboard_skip = pinboard_skip.or(auto_skip);
+    if (args.pinboard_fixture.is_some() || args.pinboard_live)
+        && let Some(reason) = pinboard_skip
+    {
+        sayln!("  pinboard: skipped ({reason})");
+    } else if args.pinboard_fixture.is_some() || args.pinboard_live {
         let mut fetch = build_pinboard_fetch(&args)?;
         let opts = ovp_intake::PinboardSyncOptions {
-            since: args.pinboard_since.clone(),
+            since: pinboard_since,
             max: args.pinboard_max,
             yes_all: false,
+            ..Default::default()
         };
         let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts)
             .map_err(CliError::Io)?;
@@ -184,6 +221,7 @@ fn run_inner(
     // Phase 2 — intake sweep (capture dirs → 01-Raw).
     let mut dry_run_pending_ingest = 0usize;
     let mut sweep_needs_content = Vec::new();
+    let mut sweep_flagged_pending: Vec<(String, Option<String>)> = Vec::new();
     if !args.no_intake {
         let done = succeeded_hashes(&read_daily_ledger(&ledger_path).map_err(CliError::Io)?);
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
@@ -200,19 +238,29 @@ fn run_inner(
         );
         dry_run_pending_ingest = if args.dry_run { sweep.ingested.len() } else { 0 };
         sweep_needs_content = sweep.needs_content.clone();
+        // Previously-flagged captures (earlier failed fetches, or a sweep run
+        // outside `daily`) stay pending — the enrichment phases below retry
+        // them alongside this run's freshly-flagged ones.
+        sweep_flagged_pending = sweep.flagged_pending.clone();
         report.intake = Some((&sweep).into());
     }
 
     // Phase 2.5 — web fetch enrichment (optional).
-    // Enriches needs-content sources (from the intake sweep) by fetching their
-    // URLs. Successfully enriched files get enough body for plan_daily to pick
-    // them up as reader candidates.
+    // Enriches needs-content sources (from the intake sweep, PLUS any
+    // previously-flagged captures still pending) by fetching their URLs.
+    // Successfully enriched files get enough body for plan_daily to pick them
+    // up as reader candidates on the NEXT sweep.
     if (args.web_fetch_fixture.is_some() || args.web_fetch_live) && !args.dry_run {
         let needs_content_items: Vec<(String, String)> = sweep_needs_content
             .iter()
             .filter_map(|rec| {
                 rec.url.as_ref().map(|u| (rec.from.clone(), u.clone()))
             })
+            .chain(
+                sweep_flagged_pending
+                    .iter()
+                    .filter_map(|(from, url)| url.clone().map(|u| (from.clone(), u))),
+            )
             .collect();
         if !needs_content_items.is_empty() {
             let mut fetcher = build_web_fetcher(&args)?;
@@ -237,7 +285,8 @@ fn run_inner(
     }
 
     // Phase 2.6 — GitHub enrichment (optional).
-    // Enriches needs-content sources whose URLs point to GitHub repos.
+    // Enriches needs-content sources whose URLs point to GitHub repos —
+    // this run's freshly-flagged AND previously-flagged pending captures.
     if (args.github_fixture.is_some() || args.github_live) && !args.dry_run {
         let github_items: Vec<(String, String)> = sweep_needs_content
             .iter()
@@ -246,6 +295,11 @@ fn run_inner(
                     parse_github_repo_url(u).map(|_| (rec.from.clone(), u.clone()))
                 })
             })
+            .chain(sweep_flagged_pending.iter().filter_map(|(from, url)| {
+                url.as_ref()
+                    .and_then(|u| parse_github_repo_url(u))
+                    .map(|_| (from.clone(), url.clone().unwrap()))
+            }))
             .collect();
         if !github_items.is_empty() {
             let mut fetcher = build_github_fetcher(&args)?;

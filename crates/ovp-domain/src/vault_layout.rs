@@ -191,6 +191,13 @@ impl VaultLayout {
         ".ovp/pinboard-sync.jsonl"
     }
 
+    /// Durable pinboard-BACKFILL ledger (vault-relative, append-only JSONL):
+    /// one record per completed day-window; the axis-A coverage floor the
+    /// next backfill run walks down from.
+    pub fn pinboard_backfill_ledger(&self) -> &'static str {
+        ".ovp/pinboard-backfill.jsonl"
+    }
+
     /// Per-run durable report directory (`<run_id>.json`, M31).
     pub fn reports_dir(&self) -> &'static str {
         ".ovp/reports"

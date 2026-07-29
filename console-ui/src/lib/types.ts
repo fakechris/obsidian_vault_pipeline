@@ -140,6 +140,10 @@ export interface SourceRow {
   status: SourceStatus;
   title?: string;
   url?: string;
+  /** Capture-origin facet (`"pinboard"`), URL-matched against the
+   * pinboard-sync ledger at index build. Survives enrichment re-hashes and
+   * lifecycle moves — unlike the note's current path. */
+  origin?: string;
   rel_path?: string;
   /** Legacy B: last pipeline activity (`processed_on ?? captured_on`). */
   date?: string;

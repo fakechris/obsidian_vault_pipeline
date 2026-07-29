@@ -69,6 +69,48 @@ function errorKeyFor(err: unknown): MsgKey {
   return 'ask.errGeneric';
 }
 
+/** The ask POST is one long blocking request: when the webview kills the
+ * fetch mid-turn (long agent investigations outlive the browser's request
+ * tolerance), the server still finishes the turn and commits the audit
+ * transcript — the answer EXISTS, only the response was lost. Recover it
+ * from the session bridge instead of showing a failure: poll the committed
+ * turns until ours lands (deliverable stop) or proves genuinely failed
+ * (timeout/model error), else give up after the guard window. */
+async function recoverCommittedTurn(
+  chat: string,
+  question: string,
+  lookup?: CitationTitleLookup,
+): Promise<AskResponse | null> {
+  const deadline = Date.now() + 4 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    let turns;
+    try {
+      turns = (await fetchAskSession(chat)).turns;
+    } catch {
+      continue; // server briefly unreachable — keep waiting
+    }
+    const mine = [...turns].reverse().find((t) => t.question === question);
+    if (!mine) continue; // turn not committed yet
+    if (!['final', 'need_user', 'refusal'].includes(mine.stopped_reason)) {
+      return null; // honest engine failure — fall through to the error UI
+    }
+    if (!mine.answer) return null;
+    return {
+      answer: mine.answer,
+      citations: citationsFromAnswerText(mine.answer, lookup),
+      verified: null,
+      context_hits: 0,
+      chat,
+      agent: true,
+      stopped_reason: mine.stopped_reason,
+      turn_id: mine.turn_id,
+      tool_trace: mine.tool_trace,
+    };
+  }
+  return null;
+}
+
 /** Human title the model wrote after a bare id — `[source:<sha> Some Title]`. */
 function decoratedTitle(rest: string): string | null {
   const parts = rest.trim().split(/\s+/);
@@ -87,8 +129,37 @@ function shortSourceLabel(token: string): string {
   return short.length < token.length ? `source ${short}…` : `source ${token}`;
 }
 
+/** Resolves a citation id to a human title from the loaded index — the
+ * replay/recovery paths build citations from answer text alone (no server
+ * receipts), so without this the right rail degrades to truncated hashes. */
+export type CitationTitleLookup = (kind: string, token: string) => string | null;
+
+export function makeCitationTitleLookup(
+  model: { sources: { sha256: string; title?: string }[]; claims: { claim_key?: string; claim: string }[] } | null,
+): CitationTitleLookup {
+  const sources = new Map(
+    (model?.sources ?? [])
+      .filter((s) => s.title && s.title.trim())
+      .map((s) => [s.sha256, s.title as string]),
+  );
+  const claims = new Map(
+    (model?.claims ?? [])
+      .filter((c) => c.claim_key)
+      .map((c) => [c.claim_key as string, c.claim]),
+  );
+  return (kind, token) =>
+    kind === 'source'
+      ? sources.get(token) ?? null
+      : kind === 'claim'
+        ? claims.get(token) ?? null
+        : null;
+}
+
 /** Build citation chips from answer text alone (saved-chat replay). */
-function citationsFromAnswerText(answer: string): AskCitation[] {
+export function citationsFromAnswerText(
+  answer: string,
+  lookup?: CitationTitleLookup,
+): AskCitation[] {
   return citationsInOrder(answer).map((id) => {
     const kind = id.includes(':') ? id.slice(0, id.indexOf(':')) : '';
     // Mirror the server's tolerant token extraction: decorated markers
@@ -98,7 +169,10 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
     const rest = kind ? id.slice(id.indexOf(':') + 1) : id;
     const token = (rest.trim().split(/\s+/)[0] ?? '').replace(/^<|>$/g, '');
     const canonical = kind ? `${kind}:${token}` : token;
+    // Canonical index title first (the vault's own display title), then any
+    // title the model decorated into the marker, then the hash fallback.
     const title =
+      lookup?.(kind, token) ??
       decoratedTitle(rest) ??
       (kind === 'source' ? shortSourceLabel(token) : canonical);
     return {
@@ -115,12 +189,19 @@ function citationsFromAnswerText(answer: string): AskCitation[] {
   });
 }
 
-/** Primary line for a citation panel entry — never a bare 64-char hash. */
-function citationTitle(c: AskCitation): string {
+/** Primary line for a citation panel entry — never a bare 64-char hash.
+ * The index lookup wins over a stored fallback label so replayed chats
+ * self-heal once the model loads (server receipts already carry titles;
+ * replay/recovery paths may have been built before the model arrived). */
+function citationTitle(c: AskCitation, lookup?: CitationTitleLookup): string {
+  const kind = c.kind || (c.id.includes(':') ? c.id.slice(0, c.id.indexOf(':')) : '');
+  const token = (c.id.includes(':') ? c.id.slice(c.id.indexOf(':') + 1) : c.id)
+    .split(/\s+/)[0] ?? c.id;
+  const fromIndex = lookup?.(kind, token);
+  if (fromIndex) return fromIndex;
   if (c.title && c.title.trim() && c.title !== c.id) return c.title;
-  if (c.kind === 'source' || c.id.startsWith('source:')) {
-    const token = c.id.includes(':') ? c.id.slice(c.id.indexOf(':') + 1) : c.id;
-    return shortSourceLabel(token.split(/\s+/)[0] ?? token);
+  if (kind === 'source') {
+    return shortSourceLabel(token);
   }
   return c.title ?? c.id;
 }
@@ -369,10 +450,12 @@ function CitationPanel({
   citations,
   hoverId,
   onOpen,
+  lookup,
 }: {
   citations: AskCitation[];
   hoverId: string | null;
   onOpen: (cit: AskCitation) => void;
+  lookup?: CitationTitleLookup;
 }) {
   const { t } = useI18n();
   if (citations.length === 0) {
@@ -403,8 +486,8 @@ function CitationPanel({
                 <span className="pill unverified">{t('ask.unverified')}</span>
               )}
             </div>
-            <div className="cite-title">{citationTitle(c)}</div>
-            {c.id && citationTitle(c) !== c.id && (
+            <div className="cite-title">{citationTitle(c, lookup)}</div>
+            {c.id && citationTitle(c, lookup) !== c.id && (
               <div className="cite-id mono tiny muted" title={c.id}>
                 {c.id}
               </div>
@@ -523,6 +606,14 @@ export default function AskPage() {
   // mints the session id itself and polls the live feed. `submit` AWAITS
   // the in-flight discovery, so a first ask racing it still gets a trail.
   const { model } = useModel();
+  // Index-backed citation titles (sha → source title, claim key → claim).
+  // The ref lets load-once effects read the LATEST lookup without re-running
+  // (a model arriving mid-session must not refetch the saved chat).
+  const citeTitleLookup = useMemo(() => makeCitationTitleLookup(model), [model]);
+  const citeLookupRef = useRef(citeTitleLookup);
+  useEffect(() => {
+    citeLookupRef.current = citeTitleLookup;
+  }, [citeTitleLookup]);
   const [askStatus, setAskStatus] = useState<boolean | null>(null);
   // Ref, not a captured value: the /api/model overlay keeps polling, and a
   // fallback taken later must read what the model says NOW.
@@ -586,7 +677,7 @@ export default function AskPage() {
             errorKey: null,
             response: {
               answer: turn.answer,
-              citations: citationsFromAnswerText(turn.answer),
+              citations: citationsFromAnswerText(turn.answer, citeLookupRef.current),
               verified: null,
               context_hits: 0,
               chat: openChat,
@@ -609,7 +700,7 @@ export default function AskPage() {
         }
         setSavedTurns(
           parsed.map((turn) => {
-            const citations = citationsFromAnswerText(turn.answer);
+            const citations = citationsFromAnswerText(turn.answer, citeLookupRef.current);
             return {
               question: turn.question,
               errorKey: null,
@@ -698,11 +789,26 @@ export default function AskPage() {
         answer: t.response!.answer,
       }));
     setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
+    const applyResponse = (response: AskResponse) => {
+      setTurns((prev) =>
+        prev.map((turn, i) =>
+          i === prev.length - 1 ? { ...turn, response } : turn,
+        ),
+      );
+      if (response.chat) {
+        setSessionChat((prev) => prev ?? response.chat);
+      }
+      refreshChats();
+    };
+    // Hoisted so the catch path can attempt transcript recovery with the
+    // SAME session id the POST used.
+    let agent = false;
+    let chat = sessionChat;
     void (async () => {
       // Resolve agent mode PER SUBMISSION — a fresh read tracks server
       // restarts with the flag flipped; the mount-time discovery and the
       // /api/model overlay only serve as fallbacks when the read fails.
-      const agent = await fetchAskStatus()
+      agent = await fetchAskStatus()
         .then((s) => {
           setAskStatus(s.agent);
           return s.agent;
@@ -710,7 +816,6 @@ export default function AskPage() {
         .catch(() => askStatus ?? modelAgentRef.current);
       // Agent path: mint the session id client-side so the progress feed
       // is pollable from the FIRST turn (the server honors supplied ids).
-      let chat = sessionChat;
       if (agent && !chat) {
         chat = genChatId();
         setSessionChat(chat);
@@ -718,18 +823,17 @@ export default function AskPage() {
       setPollChat(agent ? chat : null);
       return postAsk(question, { chat, history });
     })()
-      .then((response) => {
-        setTurns((prev) =>
-          prev.map((turn, i) =>
-            i === prev.length - 1 ? { ...turn, response } : turn,
-          ),
-        );
-        if (response.chat) {
-          setSessionChat((prev) => prev ?? response.chat);
+      .then(applyResponse)
+      .catch(async (err: unknown) => {
+        // A lost response is not a lost turn: when the agent path knows the
+        // session, the committed transcript may still hold the answer.
+        if (agent && chat) {
+          const recovered = await recoverCommittedTurn(chat, question, citeLookupRef.current);
+          if (recovered) {
+            applyResponse(recovered);
+            return;
+          }
         }
-        refreshChats();
-      })
-      .catch((err: unknown) => {
         const errorKey = errorKeyFor(err);
         // Keep what the agent DID before failing — an honest partial trail
         // beats a bare error line. But ONLY when the failed request was
@@ -980,6 +1084,7 @@ export default function AskPage() {
               citations={citations}
               hoverId={hoverId}
               onOpen={openCitation}
+              lookup={citeTitleLookup}
             />
           </div>
         </div>

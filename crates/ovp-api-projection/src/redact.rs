@@ -133,6 +133,7 @@ mod tests {
             status,
             title: Some("t".into()),
             url: Some("https://example.com".into()),
+            origin: None,
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,

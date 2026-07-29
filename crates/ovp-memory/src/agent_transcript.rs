@@ -127,6 +127,18 @@ impl TranscriptEvent {
     }
 }
 
+/// One tool call in a turn's trail: `(call_id, tool_name, is_error, rendered
+/// summary, raw input, text output, progress hits)`.
+pub type ToolTrailEntry = (
+    String,
+    String,
+    bool,
+    String,
+    serde_json::Value,
+    Option<String>,
+    Vec<crate::agent::ProgressHit>,
+);
+
 /// A previously COMPLETED turn's outcome, replayable for idempotent retries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletedTurn {
@@ -544,18 +556,7 @@ impl SessionStore {
         out
     }
 
-    pub fn tool_trail_for_turn(
-        &self,
-        id: &str,
-    ) -> Vec<(
-        String,
-        String,
-        bool,
-        String,
-        serde_json::Value,
-        Option<String>,
-        Vec<crate::agent::ProgressHit>,
-    )> {
+    pub fn tool_trail_for_turn(&self, id: &str) -> Vec<ToolTrailEntry> {
         let mut args_by_call: std::collections::HashMap<&str, &serde_json::Value> =
             std::collections::HashMap::new();
         for e in &self.events {

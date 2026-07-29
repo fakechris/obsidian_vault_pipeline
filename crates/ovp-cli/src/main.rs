@@ -189,9 +189,12 @@ enum Cmd {
         #[arg(long)]
         pinboard_live: bool,
         /// Pinboard capture: only materialize bookmarks posted on/after this
-        /// date (YYYY-MM-DD). The Pinboard API returns the account's ENTIRE
-        /// history, so a first sync can flood the vault with tens of
-        /// thousands of notes; this narrows it to recent bookmarks.
+        /// date (YYYY-MM-DD), or `auto` to resume from the last sync's high
+        /// watermark (the newest bookmark day already materialized). With no
+        /// watermark yet, `auto` skips the phase with guidance — seed once
+        /// via `ovp2 pinboard-sync --since <YYYY-MM-DD>`. The Pinboard API
+        /// returns the account's ENTIRE history, so a first sync can flood
+        /// the vault with tens of thousands of notes.
         #[arg(long)]
         pinboard_since: Option<String>,
         /// Pinboard capture: materialize at most N of the NEWEST new
@@ -271,21 +274,39 @@ enum Cmd {
         run_id: Option<String>,
         #[arg(long)]
         dry_run: bool,
-        /// Only materialize bookmarks posted on/after this date (YYYY-MM-DD).
-        /// The API returns the account's ENTIRE history, so a first sync
-        /// against an old account otherwise floods the vault with tens of
-        /// thousands of notes.
+        /// Only materialize bookmarks posted on/after this date (YYYY-MM-DD),
+        /// or `auto` to resume from the last sync's high watermark (the
+        /// newest bookmark day in `.ovp/pinboard-sync.jsonl`). The API returns
+        /// the account's ENTIRE history, so a first sync against an old
+        /// account otherwise floods the vault with tens of thousands of
+        /// notes.
         #[arg(long)]
         since: Option<String>,
+        /// Only materialize bookmarks posted on/before this date
+        /// (YYYY-MM-DD). With --since this makes an explicit day window.
+        #[arg(long)]
+        until: Option<String>,
         /// Materialize at most N of the NEWEST new bookmarks; older ones wait
         /// for later runs (first-sync flood guard).
         #[arg(long)]
         max: Option<usize>,
-        /// Deliberately materialize EVERYTHING. Without --since/--max, a run
-        /// that would create more than 500 new notes aborts before writing
-        /// anything (first-sync flood guard); this flag overrides the guard.
+        /// Deliberately materialize EVERYTHING. Without --since/--until/--max,
+        /// a run that would create more than 500 new notes aborts before
+        /// writing anything (first-sync flood guard); this flag overrides the
+        /// guard.
         #[arg(long)]
         yes_all: bool,
+        /// Backfill ONE day-window below the coverage floor (the lowest day
+        /// already materialized), then record the window in
+        /// `.ovp/pinboard-backfill.jsonl`. Repeat to walk history down day by
+        /// day; empty days advance the floor, a --max-truncated window does
+        /// not (it is retried instead). Requires an existing sync watermark —
+        /// seed one with an explicit --since (or --max) run first.
+        #[arg(long, conflicts_with_all = ["since", "until", "yes_all"])]
+        backfill: bool,
+        /// Days per backfill window (default 1).
+        #[arg(long, default_value_t = 1, requires = "backfill")]
+        backfill_days: u32,
     },
     /// PRODUCT — rebuild the persistent read model
     /// (`.ovp/index/index.json`) from the ledgers, reader packs, crystal
@@ -1487,8 +1508,11 @@ fn main() -> ExitCode {
             run_id,
             dry_run,
             since,
+            until,
             max,
             yes_all,
+            backfill,
+            backfill_days,
         } => {
             let date = date.unwrap_or_else(today_iso);
             let run_id = run_id.unwrap_or_else(|| format!("pinboard-{date}"));
@@ -1500,8 +1524,11 @@ fn main() -> ExitCode {
                 run_id,
                 dry_run,
                 since,
+                until,
                 max,
                 yes_all,
+                backfill,
+                backfill_days,
             })
         }
         Cmd::Index { vault_root, date } => {

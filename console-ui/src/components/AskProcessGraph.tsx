@@ -150,6 +150,25 @@ function addEdge(
   edges.push({ source, target, type });
 }
 
+/** Carry physics state (x/y/vx/vy) from the previously rendered nodes onto
+ * the freshly built ones, matched by id. The force engine MUTATES the node
+ * objects it is given, so the previous render's objects are the only place
+ * settled positions live; without this hand-over every data refresh resets
+ * all nodes to the origin and the pop-apart animation replays from zero.
+ * New nodes (no prior entry) stay positionless and get placed by the
+ * engine — that is the only moment a "pop" should happen. */
+export function preservePhysics(
+  nodes: ProcessNode[],
+  prevNodes: ProcessNode[],
+): ProcessNode[] {
+  if (prevNodes.length === 0) return nodes.map((n) => ({ ...n }));
+  const prevById = new Map(prevNodes.map((n) => [n.id, n]));
+  return nodes.map((n) => {
+    const p = prevById.get(n.id);
+    return p ? { ...n, x: p.x, y: p.y, vx: p.vx, vy: p.vy } : { ...n };
+  });
+}
+
 /** Fold progress hits + tool_trace + citations into graph data. */
 export function buildProcessGraph(opts: {
   events?: AskProgressEvent[];
@@ -235,14 +254,32 @@ export default function AskProcessGraph({
     [events, toolTrace, citations],
   );
 
-  // Fresh objects so force-graph can own physics without mutating our memo.
-  const graphData = useMemo(
-    () => ({
-      nodes: data.nodes.map((n) => ({ ...n })),
-      links: data.edges.map((e) => ({ ...e })),
-    }),
-    [data],
-  );
+  // Fresh objects so force-graph can own physics without mutating our memo —
+  // but positions/velocities carry over from the LAST render's nodes (the
+  // engine mutates those in place), so a progress-feed refresh never resets
+  // the layout and the pop-apart intro plays only for genuinely new nodes.
+  const prevNodesRef = useRef<ProcessNode[]>([]);
+  const graphData = useMemo(() => {
+    const nodes = preservePhysics(data.nodes, prevNodesRef.current);
+    prevNodesRef.current = nodes;
+    return { nodes, links: data.edges.map((e) => ({ ...e })) };
+  }, [data]);
+
+  // Reheat ONLY when the node set grows (a new stage of the answer trail
+  // landed). Data refreshes with the same nodes keep the settled layout
+  // frozen — the engine is not re-energized, nothing drifts or replays.
+  const prevCountRef = useRef(0);
+  useEffect(() => {
+    const count = data.nodes.length;
+    if (prevCountRef.current > 0 && count > prevCountRef.current) {
+      try {
+        fgRef.current?.d3ReheatSimulation?.();
+      } catch {
+        /* engine not mounted yet */
+      }
+    }
+    prevCountRef.current = count;
+  }, [data.nodes.length]);
 
   const hoverKey = useMemo(() => {
     if (!hoverId) return null;
