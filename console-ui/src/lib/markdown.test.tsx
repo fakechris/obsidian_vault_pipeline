@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MarkdownView,
   splitFrontmatter,
+  trimAtMermaidErrorLine,
   type MarkdownViewProps,
 } from './markdown';
 
@@ -14,6 +15,46 @@ const render = (md: string, extra?: Partial<MarkdownViewProps>) =>
   renderToStaticMarkup(<MarkdownView markdown={md} gutter={false} {...extra} />);
 
 const CITE_RE = /\[\s*((?:claim|card|unit):[^\]\n]+?)\s*\]/g;
+
+describe('trimAtMermaidErrorLine (truncated-ingest healing)', () => {
+  // The 2026-07-13 TencentDB-Agent-Memory note: README cut at 8000 bytes
+  // mid-```mermaid block; the unclosed fence swallowed "*(README
+  // truncated)*" into the code and mermaid failed with "Syntax error".
+  const TRUNCATED =
+    'graph LR\n' +
+    '  Log["Verbose Logs"] --> FS[("External FS")]\n' +
+    '  style Log fill:#f1f5f9\n' +
+    '\n' +
+    '*(README truncated)*';
+
+  it('cuts the garbage tail at the parse-error line', () => {
+    const err = new Error(
+      'Parse error on line 5:\n*(README truncated)*\n———^\nExpecting ...',
+    );
+    expect(trimAtMermaidErrorLine(TRUNCATED, err)).toBe(
+      'graph LR\n' +
+        '  Log["Verbose Logs"] --> FS[("External FS")]\n' +
+        '  style Log fill:#f1f5f9\n',
+    );
+  });
+
+  it('accepts lexical-error wording too', () => {
+    const cut = trimAtMermaidErrorLine(
+      TRUNCATED,
+      new Error('Lexical error on line 3.'),
+    );
+    expect(cut).toBe('graph LR\n  Log["Verbose Logs"] --> FS[("External FS")]');
+  });
+
+  it('returns null when the error has no usable line number', () => {
+    expect(trimAtMermaidErrorLine(TRUNCATED, new Error('boom'))).toBeNull();
+    expect(trimAtMermaidErrorLine(TRUNCATED, 'nope')).toBeNull();
+    // Line 1 failures leave nothing renderable — no retry.
+    expect(
+      trimAtMermaidErrorLine(TRUNCATED, new Error('Parse error on line 1: x')),
+    ).toBeNull();
+  });
+});
 
 describe('mature-engine coverage', () => {
   it('renders a GFM table as a real table', () => {

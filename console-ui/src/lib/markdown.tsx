@@ -269,6 +269,20 @@ function Row({
 
 let mmdSeq = 0;
 
+/** Truncated READMEs (ingest cut mid-fence) leave an unclosed ```mermaid
+ * block whose "code" runs to end-of-document — the trailing prose is not a
+ * diagram and mermaid fails with "Parse error on line N". Everything before
+ * N parsed fine, so cut the tail and retry once. Returns null when the
+ * error carries no usable line number. Exported for tests. */
+export function trimAtMermaidErrorLine(code: string, err: unknown): string | null {
+  const m = /line (\d+)/i.exec(String((err as Error)?.message ?? err));
+  if (!m) return null;
+  const lineNo = Number(m[1]);
+  if (!Number.isFinite(lineNo) || lineNo < 2) return null;
+  const cut = code.split('\n').slice(0, lineNo - 1).join('\n');
+  return cut.trim() ? cut : null;
+}
+
 /** ```mermaid fence → SVG via the mermaid engine, loaded on demand so the
  * main bundle stays lean. Falls back to the raw code block on error. */
 function MermaidBlock({ code }: { code: string }) {
@@ -276,6 +290,7 @@ function MermaidBlock({ code }: { code: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    const id = `ovp-mmd-${(mmdSeq += 1)}`;
     void (async () => {
       try {
         const { default: mermaid } = await import('mermaid');
@@ -285,13 +300,29 @@ function MermaidBlock({ code }: { code: string }) {
           securityLevel: 'strict',
           theme: dark ? 'dark' : 'neutral',
         });
-        const { svg } = await mermaid.render(`ovp-mmd-${(mmdSeq += 1)}`, code);
+        let src = code;
+        try {
+          await mermaid.parse(src);
+        } catch (e) {
+          // Heal truncated-ingest tails (see trimAtMermaidErrorLine).
+          const cut = trimAtMermaidErrorLine(src, e);
+          if (cut == null) throw e;
+          src = cut;
+          await mermaid.parse(src);
+        }
+        const { svg } = await mermaid.render(id, src);
         if (!cancelled && ref.current) {
           // Documented trust boundary (module header): strict mode + own
           // vault. Never point this at untrusted markdown.
           ref.current.innerHTML = svg;
         }
       } catch {
+        // mermaid.render/parse append their error graphic to document.body
+        // under the render id — remove it or the "Syntax error" wall
+        // lingers on the page next to our raw-code fallback.
+        for (const el of document.querySelectorAll(`#${id}, #d${id}`)) {
+          el.remove();
+        }
         if (!cancelled) setFailed(true);
       }
     })();

@@ -387,6 +387,11 @@ fn write_github_note(
         };
         body.push_str(truncated);
         if readme.len() > 8000 {
+            // The cut can land INSIDE a fenced code block: an unclosed fence
+            // then swallows the truncation marker (and any footer) into the
+            // code — a ```mermaid fence so damaged renders as a parse error
+            // wall instead of the diagram. Close the open fence first.
+            body.push_str(&close_open_fence(truncated));
             body.push_str("\n\n*(README truncated)*");
         }
     }
@@ -466,6 +471,37 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Scan markdown for an unclosed code fence; return the closing fence line
+/// ("\n```"/"\n~~~", matching the opener's char + length) or "" when every
+/// fence is closed. CommonMark rules: opener = ≥3 backticks/tildes + info;
+/// closer = same char, ≥ opener length, empty info string (a fence-looking
+/// line WITH an info string inside a block is content, not a closer).
+fn close_open_fence(md: &str) -> String {
+    let mut open: Option<(char, usize)> = None;
+    for line in md.lines() {
+        let t = line.trim_start();
+        let (ch, len) = if t.starts_with("```") {
+            ('`', t.chars().take_while(|c| *c == '`').count())
+        } else if t.starts_with("~~~") {
+            ('~', t.chars().take_while(|c| *c == '~').count())
+        } else {
+            continue;
+        };
+        let after = &t[len..];
+        match open {
+            None => open = Some((ch, len)),
+            Some((och, olen)) if ch == och && len >= olen && after.trim().is_empty() => {
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    match open {
+        Some((ch, len)) => format!("\n{}", ch.to_string().repeat(len)),
+        None => String::new(),
+    }
+}
+
 fn chrono_now_iso() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -517,6 +553,25 @@ struct FixturePayload {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn close_open_fence_closes_unclosed_backtick_fence() {
+        // The 2026-07-13 TencentDB-Agent-Memory note: README cut at 8000
+        // bytes landed mid-```mermaid block; the marker line got swallowed
+        // into the code and mermaid failed with "Syntax error in text".
+        let md = "# T\n\n```mermaid\ngraph LR\n  A --> B\n  style A fill:#fff\n";
+        assert_eq!(close_open_fence(md), "\n```");
+        // Already-closed fences stay untouched.
+        let closed = "```mermaid\ngraph LR\n```\ntail\n";
+        assert_eq!(close_open_fence(closed), "");
+        // Tilde fences close with tildes; a longer closer still matches.
+        assert_eq!(close_open_fence("~~~js\nlet a = 1;\n"), "\n~~~");
+        // An info-string line inside a fence is CONTENT, not a closer.
+        let nested = "```\nplain\n```rust\nstill content per CommonMark\n";
+        assert_eq!(close_open_fence(nested), "\n```");
+        // Opener length is respected: ```` needs at least 4 backticks.
+        assert_eq!(close_open_fence("````\n```\n"), "\n````");
+    }
 
     #[test]
     fn parse_github_repo_url_valid() {
