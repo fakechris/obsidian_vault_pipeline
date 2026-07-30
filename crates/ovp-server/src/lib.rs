@@ -1135,11 +1135,66 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         kind: None,
         status: None,
         date: None,
-        term,
+        term: term.clone(),
         tag: None,
         entity: None,
     };
-    let body = bodies::find_body(&model, &query).to_string();
+    let mut hits = bodies::find_body(&model, &query)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    // Full-text fallback over source BODIES: the metadata query above only
+    // matches title/url/path, so a remembered phrase from inside an article
+    // found nothing (operator report). Reuses the agent's bounded scanner
+    // (ranked + snippeted); metadata hits win on duplicates, additions
+    // capped at 20.
+    if let Some(term) = term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let mut seen: std::collections::HashSet<String> = hits
+            .iter()
+            .filter_map(|h| {
+                h.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let ft =
+            ovp_memory::vault_tools::portal_fulltext_search(&state.vault_root, &model, term, 20);
+        if let Some(body_hits) = ft.get("hits").and_then(serde_json::Value::as_array) {
+            for h in body_hits {
+                let Some(sha) = h.get("source_id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if !seen.insert(sha.to_string()) {
+                    continue;
+                }
+                let source = model.sources.iter().find(|s| s.sha256 == sha);
+                let title = h
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("(untitled)");
+                let snippet = h
+                    .get("snippet")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let status = source
+                    .map(|s| ovp_index::query::source_status_str(s.status))
+                    .unwrap_or("source");
+                let line = if snippet.is_empty() {
+                    title.to_string()
+                } else {
+                    format!("{title} — “{snippet}”")
+                };
+                hits.push(serde_json::json!({
+                    "kind": "source",
+                    "status": status,
+                    "line": line,
+                    "path": source.and_then(|s| s.rel_path.clone()),
+                    "id": sha,
+                }));
+            }
+        }
+    }
+    let body = serde_json::Value::Array(hits).to_string();
     json_stamped(200, &body, Some(&model))
 }
 
@@ -4182,6 +4237,53 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&ack_file).unwrap(), written);
         let v = body_json(dispatch(&st, Method::Get, "/api/model", ""));
         assert_eq!(v["attention_acks"].as_array().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn search_falls_back_to_fulltext_body_hits() {
+        // A phrase that lives ONLY in the article body — title/url/path
+        // don't contain it, so the metadata query alone returns nothing.
+        let vault = portal_vault(
+            "search-fulltext",
+            "50-Inbox/03-Processed/good.md",
+            "# Good Article\n\nLLMs compressed the internet into weights.\n",
+        );
+        let st = state(vault.clone(), None);
+
+        // Body-only phrase → one source hit carrying the snippet in `line`.
+        let v = body_json(dispatch(
+            &st,
+            Method::Get,
+            "/api/search?q=LLMs%20compressed%20the%20internet",
+            "",
+        ));
+        let hits = v.as_array().unwrap();
+        assert_eq!(hits.len(), 1, "expected exactly the body hit: {hits:?}");
+        assert_eq!(hits[0]["kind"], "source");
+        assert_eq!(hits[0]["id"], "aaaa1111");
+        assert_eq!(hits[0]["status"], "processed");
+        assert_eq!(
+            hits[0]["path"].as_str().unwrap(),
+            "50-Inbox/03-Processed/good.md"
+        );
+        let line = hits[0]["line"].as_str().unwrap();
+        assert!(line.contains("Good Article"), "line carries title: {line}");
+        assert!(
+            line.contains("compressed"),
+            "line carries the body snippet: {line}"
+        );
+
+        // A title phrase still hits via metadata and must NOT duplicate via
+        // the body scan (the body heading also contains it — dedupe by id).
+        let v = body_json(dispatch(&st, Method::Get, "/api/search?q=Good%20Article", ""));
+        let hits = v.as_array().unwrap();
+        assert_eq!(
+            hits.iter().filter(|h| h["id"] == "aaaa1111").count(),
+            1,
+            "metadata hit must not be re-added by fulltext: {hits:?}"
+        );
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
