@@ -1004,6 +1004,33 @@ fn search_fulltext_at(
     )
 }
 
+/// Portal searches have no agent turn to protect — generous wall clock.
+const PORTAL_FULLTEXT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Portal `/api/search` entry point: the SAME bounded full-text body scan
+/// the agent `search_fulltext` tool runs (the portal's metadata query only
+/// matches title/url/path — body phrases found nothing). Whole corpus from
+/// the top, no cursor; the JSON shape is the tool's:
+/// `{ hits: [{source_id, title, open_ref, snippet, matched_terms}],
+///    scanned_sources, total_sources, truncated }`.
+pub fn portal_fulltext_search(
+    vault_root: &Path,
+    model: &IndexModel,
+    query: &str,
+    limit: usize,
+) -> Value {
+    search_fulltext_at_with_budget(
+        vault_root,
+        model,
+        query,
+        None,
+        limit,
+        Instant::now(),
+        PORTAL_FULLTEXT_DEADLINE,
+        MAX_FULLTEXT_CORPUS_SCAN_BYTES,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_fulltext_at_with_budget(
     vault_root: &Path,
