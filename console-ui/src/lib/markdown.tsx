@@ -270,6 +270,26 @@ function Row({
 }
 
 let mmdSeq = 0;
+/** Last theme passed to mermaid.initialize — re-init only when it flips so
+ * concurrent diagrams don't race initialize() on every mount. */
+let mmdTheme: 'dark' | 'neutral' | null = null;
+
+async function ensureMermaid() {
+  const { default: mermaid } = await import('mermaid');
+  const dark =
+    typeof document !== 'undefined' &&
+    document.documentElement.dataset.theme === 'dark';
+  const theme: 'dark' | 'neutral' = dark ? 'dark' : 'neutral';
+  if (mmdTheme !== theme) {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme,
+    });
+    mmdTheme = theme;
+  }
+  return mermaid;
+}
 
 /** <img> with a candidate walk: relative srcs get [primary, fallback] from
  * ctx.imageSrcCandidates (e.g. GitHub → raw.githubusercontent first, vault
@@ -316,22 +336,20 @@ export function trimAtMermaidErrorLine(code: string, err: unknown): string | nul
 }
 
 /** ```mermaid fence → SVG via the mermaid engine, loaded on demand so the
- * main bundle stays lean. Falls back to the raw code block on error. */
+ * main bundle stays lean. Falls back to the raw code block on error.
+ * The render host stays mounted (hidden on failure) so a later good `code`
+ * can write into `ref` — unmounting the host on fail left ref null forever. */
 function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const id = `ovp-mmd-${(mmdSeq += 1)}`;
+    setFailed(false);
+    if (ref.current) ref.current.innerHTML = '';
     void (async () => {
       try {
-        const { default: mermaid } = await import('mermaid');
-        const dark = document.documentElement.dataset.theme === 'dark';
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: dark ? 'dark' : 'neutral',
-        });
+        const mermaid = await ensureMermaid();
         let src = code;
         try {
           await mermaid.parse(src);
@@ -347,6 +365,7 @@ function MermaidBlock({ code }: { code: string }) {
           // Documented trust boundary (module header): strict mode + own
           // vault. Never point this at untrusted markdown.
           ref.current.innerHTML = svg;
+          setFailed(false);
         }
       } catch {
         // mermaid.render/parse append their error graphic to document.body
@@ -355,21 +374,31 @@ function MermaidBlock({ code }: { code: string }) {
         for (const el of document.querySelectorAll(`#${id}, #d${id}`)) {
           el.remove();
         }
-        if (!cancelled) setFailed(true);
+        if (!cancelled) {
+          if (ref.current) ref.current.innerHTML = '';
+          setFailed(true);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [code]);
-  if (failed) {
-    return (
-      <pre>
-        <code>{code}</code>
-      </pre>
-    );
-  }
-  return <div className="md-mermaid" ref={ref} />;
+  return (
+    <>
+      {failed && (
+        <pre>
+          <code>{code}</code>
+        </pre>
+      )}
+      <div
+        className="md-mermaid"
+        ref={ref}
+        style={failed ? { display: 'none' } : undefined}
+        aria-hidden={failed || undefined}
+      />
+    </>
+  );
 }
 
 // ------------------------------------------------------------- components
@@ -501,6 +530,15 @@ export interface MarkdownViewProps {
   imageSrcCandidates?: (src: string) => string[];
 }
 
+/** Paths that live inside the vault (clipper attachments, PARA roots) —
+ * joining them onto a remote article URL always 404s, so skip that hop. */
+function looksLikeVaultPath(path: string): boolean {
+  return (
+    /^(?:\d{2}-|attachments\/|\.ovp\/)/i.test(path) ||
+    path.includes('/attachments/')
+  );
+}
+
 /** Build the imageSrcCandidates chain for a source note. Relative image
  * paths come in two shapes: GitHub READMEs point INTO THE REPO
  * (`./assets/logo.png` → raw.githubusercontent.com/<owner>/<repo>/HEAD/…)
@@ -521,17 +559,23 @@ export function sourceImageCandidates(
     ? `https://raw.githubusercontent.com/${gh[1]}/${gh[2].replace(/\.git$/, '')}/HEAD/`
     : sourceUrl;
   return (src) => {
-    if (!src || /^(?:https?:|data:|blob:|#)/i.test(src)) return [src];
-    // Strip leading "./" segments: "./x" means "next to the note", and the
-    // server's plain-relative guard rejects CurDir components outright.
-    const vaultPath = src.replace(/^(\.\/)+/, '');
+    if (!src) return [];
+    // Protocol-relative CDN URLs (`//cdn…/x.png`) are absolute, not vault.
+    if (src.startsWith('//')) return [`https:${src}`];
+    if (/^(?:https?:|data:|blob:|#)/i.test(src)) return [src];
+    // Strip "./" and a leading "/" (Obsidian vault-root absolute). The
+    // server's plain-relative guard rejects CurDir and RootDir outright.
+    const vaultPath = src.replace(/^(\.\/)+/, '').replace(/^\//, '');
+    if (!vaultPath) return [];
     const vault =
       `/api/file/${vaultPath.split('/').map(encodeURIComponent).join('/')}` +
       (noteRelPath ? `?note=${encodeURIComponent(noteRelPath)}` : '');
+    // Vault-shaped paths never resolve against a remote article URL.
+    // GitHub READMEs still try raw.githubusercontent.com first (repo assets).
     let remote: string | null = null;
-    if (remoteBase) {
+    if (remoteBase && (gh || !looksLikeVaultPath(vaultPath))) {
       try {
-        remote = new URL(src, remoteBase).href;
+        remote = new URL(vaultPath, remoteBase).href;
       } catch {
         remote = null;
       }

@@ -13,7 +13,7 @@
 // shared `ovp-api-projection` crate so the live server and the static publisher
 // can never drift. `graph` is re-exported under its old path so the many
 // `graph::…` call sites in this file are unchanged.
-use ovp_api_projection::{bodies, graph, readers};
+use ovp_api_projection::{bodies, graph, is_plain_relative, readers};
 
 mod ask_client;
 pub use ask_client::{
@@ -45,6 +45,14 @@ use tiny_http::{Header, Method, Response, Server};
 /// the response truncates with an explicit flag instead of shipping megabytes
 /// of JSON (same limit the v1 server-rendered page used).
 pub const MAX_SOURCE_DOC_BYTES: usize = 200 * 1024;
+
+/// Cap for a single image attachment served by `GET /api/file/…` — keeps a
+/// mis-labelled multi-hundred-MB blob from being read into memory.
+pub const MAX_VAULT_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Skip the expensive full-text body scan when metadata already filled the
+/// result list (omnibox is satisfied; scanning 48 MiB for more hits is waste).
+const FULLTEXT_SKIP_WHEN_METADATA_HITS: usize = 10;
 
 /// Cap for POST request bodies (`/api/ask` questions are short; anything
 /// bigger is a mistake, not a question).
@@ -1148,8 +1156,12 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
     // matches title/url/path, so a remembered phrase from inside an article
     // found nothing (operator report). Reuses the agent's bounded scanner
     // (ranked + snippeted); metadata hits win on duplicates, additions
-    // capped at 20.
-    if let Some(term) = term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+    // capped at 20. Skipped for short/noisy ASCII terms and when metadata
+    // already filled the list (omnibox is satisfied without a 48 MiB scan).
+    if let Some(term) = term.as_deref().map(str::trim).filter(|t| !t.is_empty())
+        && fulltext_term_worth_scanning(term)
+        && hits.len() < FULLTEXT_SKIP_WHEN_METADATA_HITS
+    {
         let mut seen: std::collections::HashSet<String> = hits
             .iter()
             .filter_map(|h| {
@@ -3477,8 +3489,8 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
 /// Dynamic Workflows page showed a broken-image icon for every inline
 /// figure). `?note=` adds the note's own directory as a second resolution
 /// base (Obsidian-style note-relative references). Guards: plain-relative
-/// only, image extensions only, canonicalized path must stay under the
-/// canonicalized vault root (symlinks can't escape).
+/// only, image extensions only, size ≤ `MAX_VAULT_FILE_BYTES`, canonicalized
+/// path must stay under the canonicalized vault root (symlinks can't escape).
 fn handle_vault_file(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let not_found = || json_response(404, r#"{"error":"not found"}"#);
     let path_part = url.split('?').next().unwrap_or(url);
@@ -3513,29 +3525,37 @@ fn handle_vault_file(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
         if !canon.starts_with(&canon_vault) || !canon.is_file() {
             continue;
         }
+        let Ok(meta) = std::fs::metadata(&canon) else {
+            continue;
+        };
+        if meta.len() > MAX_VAULT_FILE_BYTES {
+            continue;
+        }
         if let Ok(bytes) = std::fs::read(&canon) {
-            let header = Header::from_bytes("Content-Type", mime.as_bytes()).unwrap();
             return Response::from_data(bytes)
-                .with_header(header)
+                .with_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap())
+                .with_header(
+                    Header::from_bytes("Cache-Control", "private, max-age=3600").unwrap(),
+                )
+                .with_header(Header::from_bytes("X-Content-Type-Options", "nosniff").unwrap())
                 .with_status_code(200);
         }
     }
     not_found()
 }
 
-/// True only for a plain relative path: every `Path::components()` entry is
-/// `Component::Normal` — no `ParentDir`, no `RootDir`, no Windows
-/// `Component::Prefix` (`C:\`, `\\server\share`). Backslashes and drive
-/// colons are ALSO rejected as raw bytes: on Unix `C:\evil` parses as one
-/// Normal component, yet a Windows deployment would treat it as absolute
-/// and `Path::join` would silently replace the base directory.
-fn is_plain_relative(rel: &str) -> bool {
-    if rel.is_empty() || rel.contains('\\') || rel.contains(':') {
+/// True when a portal search term is worth the full-text body scan.
+/// Pure-ASCII 1–2 char queries (`AI`, `ab`) are too noisy/cheap for a
+/// corpus walk; 2+ char CJK (or other non-ASCII) and any 3+ char term pass.
+fn fulltext_term_worth_scanning(term: &str) -> bool {
+    let n = term.chars().count();
+    if n < 2 {
         return false;
     }
-    std::path::Path::new(rel)
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    if n >= 3 {
+        return true;
+    }
+    !term.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Read a root-relative asset from the SPA app build: the deployed
@@ -4339,7 +4359,26 @@ mod tests {
             "metadata hit must not be re-added by fulltext: {hits:?}"
         );
 
+        // Short pure-ASCII terms must NOT trigger a corpus scan (noise).
+        // Body-only "LL" is not in title/url/path → empty without fulltext.
+        let v = body_json(dispatch(&st, Method::Get, "/api/search?q=LL", ""));
+        assert!(
+            v.as_array().unwrap().is_empty(),
+            "2-char ASCII must skip fulltext: {v}"
+        );
+
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn fulltext_term_gate_keeps_cjk_short_queries() {
+        assert!(fulltext_term_worth_scanning("记忆"));
+        assert!(fulltext_term_worth_scanning("LLM"));
+        assert!(fulltext_term_worth_scanning("compressed"));
+        assert!(!fulltext_term_worth_scanning(""));
+        assert!(!fulltext_term_worth_scanning("a"));
+        assert!(!fulltext_term_worth_scanning("AI"));
+        assert!(!fulltext_term_worth_scanning("ab"));
     }
 
     #[test]
@@ -4355,6 +4394,12 @@ mod tests {
         std::fs::create_dir_all(&note_dir).unwrap();
         std::fs::write(note_dir.join("local.png"), b"LOCAL-PNG").unwrap();
         std::fs::write(note_dir.join("secret.md"), "not an image").unwrap();
+        // Oversize image: present on disk but must not be loaded into memory.
+        {
+            let huge_path = att.join("huge.png");
+            let f = std::fs::File::create(&huge_path).unwrap();
+            f.set_len(MAX_VAULT_FILE_BYTES + 1).unwrap();
+        }
         let st = state(vault.clone(), None);
 
         // Root-relative hit.
@@ -4366,6 +4411,8 @@ mod tests {
         );
         assert_eq!(resp.status_code(), 200);
         assert_eq!(header_value(&resp, "Content-Type"), "image/png");
+        assert_eq!(header_value(&resp, "Cache-Control"), "private, max-age=3600");
+        assert_eq!(header_value(&resp, "X-Content-Type-Options"), "nosniff");
 
         // Note-relative fallback via ?note=.
         let resp = dispatch(
@@ -4391,6 +4438,17 @@ mod tests {
         // Missing file 404s.
         assert_eq!(
             dispatch(&st, Method::Get, "/api/file/nope.png", "").status_code(),
+            404
+        );
+        // Oversize image 404s (size guard before read).
+        assert_eq!(
+            dispatch(
+                &st,
+                Method::Get,
+                "/api/file/50-Inbox/01-Raw/attachments/2026-05/huge.png",
+                ""
+            )
+            .status_code(),
             404
         );
 
