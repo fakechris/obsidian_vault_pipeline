@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
   MarkdownView,
-  sourceImageResolver,
+  sourceImageCandidates,
   splitFrontmatter,
   trimAtMermaidErrorLine,
   type MarkdownViewProps,
@@ -57,37 +57,50 @@ describe('trimAtMermaidErrorLine (truncated-ingest healing)', () => {
   });
 });
 
-describe('sourceImageResolver (repo-relative README images)', () => {
-  const GH = sourceImageResolver('https://github.com/TencentCloud/TencentDB-Agent-Memory');
+describe('sourceImageCandidates (repo vs vault image chains)', () => {
+  const GH = sourceImageCandidates(
+    'https://github.com/TencentCloud/TencentDB-Agent-Memory',
+    '50-Inbox/03-Processed/2026-06/note.md',
+  );
 
-  it('maps repo-relative paths to raw.githubusercontent.com/HEAD', () => {
-    expect(GH?.('./assets/images/logo.png')).toBe(
+  it('GitHub notes try raw.githubusercontent.com/HEAD first, vault second', () => {
+    expect(GH('./assets/images/logo.png')).toEqual([
       'https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/HEAD/assets/images/logo.png',
-    );
-    expect(GH?.('docs/pic.png')).toBe(
-      'https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/HEAD/docs/pic.png',
-    );
+      '/api/file/assets/images/logo.png?note=50-Inbox%2F03-Processed%2F2026-06%2Fnote.md',
+    ]);
   });
 
   it('strips a .git suffix from the repo segment', () => {
-    const r = sourceImageResolver('https://github.com/o/r.git');
-    expect(r?.('./x.png')).toBe('https://raw.githubusercontent.com/o/r/HEAD/x.png');
+    const r = sourceImageCandidates('https://github.com/o/r.git');
+    expect(r('./x.png')[0]).toBe('https://raw.githubusercontent.com/o/r/HEAD/x.png');
   });
 
-  it('passes absolute/data srcs through untouched', () => {
-    expect(GH?.('https://img.shields.io/b.svg')).toBe('https://img.shields.io/b.svg');
-    expect(GH?.('data:image/png;base64,xx')).toBe('data:image/png;base64,xx');
+  it('passes absolute/data srcs through as a single candidate', () => {
+    expect(GH('https://img.shields.io/b.svg')).toEqual(['https://img.shields.io/b.svg']);
+    expect(GH('data:image/png;base64,xx')).toEqual(['data:image/png;base64,xx']);
   });
 
-  it('resolves non-GitHub pages by standard URL joining', () => {
-    const r = sourceImageResolver('https://example.com/blog/post');
-    expect(r?.('./img.png')).toBe('https://example.com/blog/img.png');
-    expect(r?.('/static/img.png')).toBe('https://example.com/static/img.png');
+  it('clippings try the vault attachment endpoint first, then URL-joined remote', () => {
+    const r = sourceImageCandidates(
+      'https://example.com/blog/post',
+      '50-Inbox/03-Processed/2026-05/note.md',
+    );
+    expect(r('50-Inbox/01-Raw/attachments/2026-05/img-1.png')).toEqual([
+      '/api/file/50-Inbox/01-Raw/attachments/2026-05/img-1.png?note=50-Inbox%2F03-Processed%2F2026-05%2Fnote.md',
+      'https://example.com/blog/50-Inbox/01-Raw/attachments/2026-05/img-1.png',
+    ]);
   });
 
-  it('returns undefined without a source URL (src untouched)', () => {
-    expect(sourceImageResolver(undefined)).toBeUndefined();
-    expect(sourceImageResolver('')).toBeUndefined();
+  it('percent-encodes path segments (Chinese dir names, spaces)', () => {
+    const r = sourceImageCandidates(undefined, undefined);
+    expect(r('50-Inbox/附件 图/img x.png')).toEqual([
+      `/api/file/50-Inbox/${encodeURIComponent('附件 图')}/${encodeURIComponent('img x.png')}`,
+    ]);
+  });
+
+  it('still yields the vault candidate without any source URL', () => {
+    expect(sourceImageCandidates()('a/b.png')).toEqual(['/api/file/a/b.png']);
+    expect(sourceImageCandidates('')('a/b.png')).toEqual(['/api/file/a/b.png']);
   });
 });
 

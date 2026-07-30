@@ -231,7 +231,9 @@ interface MdCtxValue {
   gutter: boolean;
   register: (key: string, el: HTMLElement | null, ls: number, le: number) => void;
   cite?: CiteMarks;
-  resolveImageSrc?: (src: string) => string;
+  /** Relative image src → ordered candidates; the <img> error handler
+   * walks the list (see MdImg). */
+  imageSrcCandidates?: (src: string) => string[];
 }
 const MdCtx = createContext<MdCtxValue>({ gutter: true, register: () => {} });
 
@@ -268,6 +270,36 @@ function Row({
 }
 
 let mmdSeq = 0;
+
+/** <img> with a candidate walk: relative srcs get [primary, fallback] from
+ * ctx.imageSrcCandidates (e.g. GitHub → raw.githubusercontent first, vault
+ * attachments second; clippings the other way round). Each onError steps to
+ * the next candidate; when all fail (dead CDN link, missing attachment) the
+ * alt chip beats the browser's broken-image icon. */
+function MdImg({ raw, alt }: { raw: string; alt: string }) {
+  const ctx = useContext(MdCtx);
+  const [idx, setIdx] = useState(0);
+  const candidates =
+    raw && ctx.imageSrcCandidates ? ctx.imageSrcCandidates(raw) : [raw];
+  const src = candidates[idx];
+  if (STATIC_MODE || !src) {
+    // B2: the published static site never hot-loads remote imagery.
+    return (
+      <span className="md-img-placeholder">
+        [image{alt ? `: ${alt}` : ''}]
+      </span>
+    );
+  }
+  return (
+    <img
+      className="md-img"
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onError={() => setIdx((i) => i + 1)}
+    />
+  );
+}
 
 /** Truncated READMEs (ingest cut mid-fence) leave an unclosed ```mermaid
  * block whose "code" runs to end-of-document — the trailing prose is not a
@@ -414,20 +446,11 @@ const components: Components = {
     );
   },
   img(props) {
-    const ctx = useContext(MdCtx);
     const p = props as unknown as { src?: unknown; alt?: unknown };
     const raw = typeof p.src === 'string' ? p.src : '';
-    const resolved = raw && ctx.resolveImageSrc ? ctx.resolveImageSrc(raw) : raw;
     const altText = typeof p.alt === 'string' ? p.alt : '';
-    if (STATIC_MODE || !resolved) {
-      // B2: the published static site never hot-loads remote imagery.
-      return (
-        <span className="md-img-placeholder">
-          [image{altText ? `: ${altText}` : ''}]
-        </span>
-      );
-    }
-    return <img className="md-img" src={resolved} alt={altText} loading="lazy" />;
+    // key: a changed src restarts the candidate walk from the top.
+    return <MdImg key={raw} raw={raw} alt={altText} />;
   },
   pre(props) {
     const p = props as unknown as AnyProps;
@@ -472,33 +495,49 @@ export interface MarkdownViewProps {
   frontmatterLabel?: string;
   /** Citation interactivity for Ask answers — see CiteMarks. */
   citeMarks?: CiteMarks;
-  /** Resolve relative image srcs (READMEs reference repo-relative paths) —
-   * SourceDetailPage rewrites them against the note's origin URL. */
-  resolveImageSrc?: (src: string) => string;
+  /** Relative image srcs → ordered candidates (READMEs reference
+   * repo-relative paths, clippings reference vault attachments) —
+   * SourceDetailPage builds the chain from the note's source URL + path. */
+  imageSrcCandidates?: (src: string) => string[];
 }
 
-/** Build the resolveImageSrc for a source note. Repo-relative paths
- * (`./assets/logo.png`, a README staple) must NOT resolve against the
- * portal origin (instant 404 broken-image); rewrite against the note's
- * source URL. GitHub repos map to raw.githubusercontent.com/<owner>/<repo>/
- * HEAD/<path> (github.com/... is the HTML view, not the bytes); everything
- * else resolves via standard URL joining. Absolute/data: srcs pass through.
- * Returns undefined when no usable base exists (src left untouched). */
-export function sourceImageResolver(
+/** Build the imageSrcCandidates chain for a source note. Relative image
+ * paths come in two shapes: GitHub READMEs point INTO THE REPO
+ * (`./assets/logo.png` → raw.githubusercontent.com/<owner>/<repo>/HEAD/…)
+ * while web clippings point INTO THE VAULT (`50-Inbox/01-Raw/attachments/
+ * …/img-x.png` → the server's /api/file/ endpoint, with the note's own
+ * directory as second base for note-relative refs). Neither is knowable
+ * from the path alone, so the chain tries the likely base first and MdImg
+ * walks the rest on onError. Absolute/data: srcs pass through as a
+ * single-candidate chain. */
+export function sourceImageCandidates(
   sourceUrl?: string,
-): ((src: string) => string) | undefined {
-  if (!sourceUrl) return undefined;
-  const gh = /^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
-  const base = gh
+  noteRelPath?: string,
+): (src: string) => string[] {
+  const gh =
+    sourceUrl &&
+    /^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
+  const remoteBase = gh
     ? `https://raw.githubusercontent.com/${gh[1]}/${gh[2].replace(/\.git$/, '')}/HEAD/`
     : sourceUrl;
   return (src) => {
-    if (!src || /^(?:https?:|data:|blob:|#)/i.test(src)) return src;
-    try {
-      return new URL(src, base).href;
-    } catch {
-      return src;
+    if (!src || /^(?:https?:|data:|blob:|#)/i.test(src)) return [src];
+    // Strip leading "./" segments: "./x" means "next to the note", and the
+    // server's plain-relative guard rejects CurDir components outright.
+    const vaultPath = src.replace(/^(\.\/)+/, '');
+    const vault =
+      `/api/file/${vaultPath.split('/').map(encodeURIComponent).join('/')}` +
+      (noteRelPath ? `?note=${encodeURIComponent(noteRelPath)}` : '');
+    let remote: string | null = null;
+    if (remoteBase) {
+      try {
+        remote = new URL(src, remoteBase).href;
+      } catch {
+        remote = null;
+      }
     }
+    const chain = gh ? [remote, vault] : [vault, remote];
+    return chain.filter((s): s is string => typeof s === 'string' && s !== '');
   };
 }
 
@@ -510,7 +549,7 @@ export function MarkdownView({
   gutter = true,
   frontmatterLabel = 'metadata',
   citeMarks,
-  resolveImageSrc,
+  imageSrcCandidates,
 }: MarkdownViewProps) {
   const fm = useMemo(() => splitFrontmatter(markdown), [markdown]);
   const rowsRef = useRef(new Map<string, { ls: number; le: number; el: HTMLElement }>());
@@ -540,9 +579,9 @@ export function MarkdownView({
       gutter,
       register,
       cite: citeMarks,
-      resolveImageSrc,
+      imageSrcCandidates,
     }),
-    [anchoredLines, highlightLine, gutter, register, citeMarks, resolveImageSrc],
+    [anchoredLines, highlightLine, gutter, register, citeMarks, imageSrcCandidates],
   );
 
   const rehypePlugins = useMemo(
