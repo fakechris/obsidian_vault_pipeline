@@ -1,545 +1,433 @@
-/** Markdown reading view for source bodies — a TS port (and extension) of
- * the v1 escape-first mini renderer (ovp-console/src/md.rs).
+/** Markdown reading view on top of react-markdown (mature engine) with a
+ * lazy mermaid renderer for ```mermaid fences. Replaces the v1/v2 escape-
+ * first mini renderer: README bodies are full of raw HTML, GFM tables,
+ * images and diagrams — a hand-rolled parser could never keep up.
  *
- * XSS approach: there is NO html-string pathway at all. The parser produces
- * a block model, the renderer emits React elements, and every piece of
- * source text stays a React TEXT node — React escapes it on render. No
- * dangerouslySetInnerHTML anywhere, so a hostile clipping
- * (`<script>…</script>`, `<img onerror=…>`) can never become live markup.
- * Link URLs are additionally scheme-filtered (http/https/mailto/#) and
- * images render as an alt-text placeholder — no remote loading (B2
- * decision).
- *
- * Deliberately tiny: headings, paragraphs, fenced code, lists, blockquotes,
- * links/bold/italic/inline-code, hr, YAML frontmatter. The portal renders
- * vault notes for orientation, not fidelity — this keeps zero new
- * dependencies and gives exact source-line tracking for unit anchors, which
- * react-markdown would only approximate.
+ * Security model (unchanged in spirit):
+ * - No dangerouslySetInnerHTML for NOTE CONTENT: react-markdown emits React
+ *   elements only; embedded HTML is parsed by rehype-raw and whitelisted by
+ *   rehype-sanitize (GitHub-derived schema + align). Scripts, handlers and
+ *   unknown tags never become markup; URLs are scheme-filtered.
+ * - Images render as real <img> in the live app (the operator's own local
+ *   vault, Obsidian parity). The published static site (VITE_OVP_STATIC)
+ *   keeps alt-text chips — the B2 no-remote-loading decision is scoped to
+ *   where bodies actually ship.
+ * - Mermaid SVG is the one innerHTML sink: mermaid runs with
+ *   securityLevel 'strict' (labels sanitized) and the input is the local
+ *   vault — documented trust boundary.
+ * - Line anchors: a rehype plugin wraps top-level blocks in .md-row divs
+ *   carrying data-ls/data-le from remark position info, so grounded-unit
+ *   L<n> anchors and scroll-to-line survive the engine swap.
  */
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import {
+  createContext,
+  isValidElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import type { PluggableList } from 'unified';
+import { STATIC_MODE } from './api';
 
-// ------------------------------------------------------------------ parser
+/** Citation interactivity for Ask answers: the vault-text plugin wraps
+ * `[kind:id]` tokens in span.md-cite[data-cite]; the span component calls
+ * render(citeId) — null keeps the literal marker text. Tokens inside links
+ * and code are never marked (single-navigation invariant from v2). */
+export interface CiteMarks {
+  pattern: RegExp;
+  render: (citeId: string) => ReactNode | null;
+}
 
-/** One rendered block; `line`..`end` are 1-based source line numbers. */
-export type MdBlock =
-  | { kind: 'heading'; line: number; end: number; level: number; text: string }
-  | { kind: 'para'; line: number; end: number; lines: string[] }
-  | { kind: 'code'; line: number; end: number; lang: string; text: string }
-  | { kind: 'quote'; line: number; end: number; lines: string[] }
-  | {
-      kind: 'list';
-      line: number;
-      end: number;
-      ordered: boolean;
-      items: { line: number; text: string }[];
+/** Sanitizer schema: GitHub defaults plus the few extras real clippings
+ * need (align on blocks — README centering, language-* on code so mermaid
+ * fences survive, mark/u/s/sub/sup, details/summary already included). */
+const MD_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    'mark',
+    'u',
+    's',
+    'details',
+    'summary',
+    'sub',
+    'sup',
+  ],
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [
+      ...(defaultSchema.attributes?.code ?? []),
+      ['className', /^language-[\w-]+$/],
+    ],
+    img: [...(defaultSchema.attributes?.img ?? []), 'align', 'width', 'height'],
+    p: [...(defaultSchema.attributes?.p ?? []), 'align'],
+    h1: [...(defaultSchema.attributes?.h1 ?? []), 'align'],
+    h2: [...(defaultSchema.attributes?.h2 ?? []), 'align'],
+    h3: [...(defaultSchema.attributes?.h3 ?? []), 'align'],
+    h4: [...(defaultSchema.attributes?.h4 ?? []), 'align'],
+    h5: [...(defaultSchema.attributes?.h5 ?? []), 'align'],
+    h6: [...(defaultSchema.attributes?.h6 ?? []), 'align'],
+    div: [...(defaultSchema.attributes?.div ?? []), 'align'],
+    table: [...(defaultSchema.attributes?.table ?? []), 'align'],
+    td: [...(defaultSchema.attributes?.td ?? []), 'align'],
+    th: [...(defaultSchema.attributes?.th ?? []), 'align'],
+  },
+} as unknown as typeof defaultSchema;
+
+// ---------------------------------------------------------------- hast bits
+
+interface HastNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  children?: HastNode[];
+  properties?: Record<string, unknown>;
+  position?: { start: { line: number }; end: { line: number } };
+}
+
+/** Wrap every TOP-LEVEL element in <div class="md-row" data-ls data-le> so
+ * the gutter/anchor layer can map rendered blocks back to source lines.
+ * Runs AFTER sanitize (data-* and class would otherwise be stripped). */
+function rehypeLineRows() {
+  return (tree: HastNode) => {
+    if (!tree.children) return;
+    tree.children = tree.children.map((child) => {
+      if (child.type !== 'element') return child;
+      return {
+        type: 'element',
+        tagName: 'div',
+        properties: {
+          className: ['md-row'],
+          dataLs: child.position?.start.line ?? 0,
+          dataLe: child.position?.end.line ?? 0,
+        },
+        children: [
+          {
+            type: 'element',
+            tagName: 'div',
+            properties: { className: ['md-block'] },
+            children: [child],
+          },
+        ],
+      };
+    });
+  };
+}
+
+/** Text-node transforms the engine doesn't know: citation markers (Ask),
+ * Obsidian [[wiki-links]] (display text, portal can't resolve them) and
+ * ==highlights==. Never fires inside a/code/pre — a marked token nested in
+ * an anchor would be invalid markup with two competing navigations. */
+function rehypeVaultText(citePattern: RegExp | null) {
+  const SKIP = new Set(['a', 'code', 'pre', 'script', 'style']);
+  const citeRx = citePattern
+    ? new RegExp(
+        citePattern.source,
+        citePattern.flags.includes('g') ? citePattern.flags : `${citePattern.flags}g`,
+      )
+    : null;
+  const WIKI = /\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g;
+  const MARK = /==([^=\n]+)==/g;
+
+  const applyRx = (
+    node: HastNode,
+    rx: RegExp,
+    make: (m: RegExpMatchArray) => HastNode,
+  ): HastNode[] => {
+    if (node.type !== 'text' || node.value == null) return [node];
+    const out: HastNode[] = [];
+    let last = 0;
+    for (const m of node.value.matchAll(rx)) {
+      const at = m.index ?? 0;
+      if (at > last) out.push({ type: 'text', value: node.value.slice(last, at) });
+      out.push(make(m));
+      last = at + m[0].length;
     }
-  | { kind: 'hr'; line: number; end: number }
-  | {
-      kind: 'table';
-      line: number;
-      end: number;
-      header: string[];
-      aligns: ('left' | 'center' | 'right' | null)[];
-      rows: { line: number; cells: string[] }[];
+    if (out.length === 0) return [node];
+    if (last < node.value.length) {
+      out.push({ type: 'text', value: node.value.slice(last) });
     }
-  | { kind: 'frontmatter'; line: number; end: number; text: string };
+    return out;
+  };
 
-const LIST_ITEM = /^\s{0,3}(?:([-*+])|(\d{1,9})[.)])\s+(.*)$/;
-const HR = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+  const splitText = (value: string): HastNode[] => {
+    let nodes: HastNode[] = [{ type: 'text', value }];
+    if (citeRx) {
+      nodes = nodes.flatMap((n) =>
+        applyRx(n, citeRx, (m) => ({
+          type: 'element',
+          tagName: 'span',
+          properties: { className: ['md-cite'], dataCite: m[1] ?? m[0] },
+          children: [{ type: 'text', value: m[0] }],
+        })),
+      );
+    }
+    nodes = nodes.flatMap((n) =>
+      applyRx(n, WIKI, (m) => ({
+        type: 'element',
+        tagName: 'span',
+        properties: { className: ['md-wikilink'] },
+        children: [{ type: 'text', value: (m[2] ?? m[1]).trim() }],
+      })),
+    );
+    nodes = nodes.flatMap((n) =>
+      applyRx(n, MARK, (m) => ({
+        type: 'element',
+        tagName: 'mark',
+        properties: {},
+        children: [{ type: 'text', value: m[1] }],
+      })),
+    );
+    return nodes;
+  };
 
-// --- GFM tables: header row + |---|---| separator, rows until a blank or
-// non-table line. Cells split on unescaped pipes.
-const TABLE_SEP = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+  const walk = (node: HastNode, blocked: boolean) => {
+    if (!node.children) return;
+    const b = blocked || (node.tagName != null && SKIP.has(node.tagName));
+    node.children = node.children.flatMap((c) => {
+      if (c.type === 'text' && !b) return splitText(c.value ?? '');
+      walk(c, b);
+      return [c];
+    });
+  };
 
-function splitTableRow(line: string): string[] {
-  const cells: string[] = [];
-  let cur = '';
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (ch === '\\' && line[i + 1] === '|') {
-      cur += '|';
-      i += 1;
-    } else if (ch === '|') {
-      cells.push(cur);
-      cur = '';
-    } else {
-      cur += ch;
+  return (tree: HastNode) => walk(tree, false);
+}
+
+/** Frontmatter occupies lines 1..close; those lines carry unit anchors, so
+ * the body keeps its line count — frontmatter lines are BLANKED, not cut,
+ * and rendered separately as a collapsed details block. */
+export function splitFrontmatter(md: string): {
+  fmText: string | null;
+  body: string;
+} {
+  const lines = md.split('\n');
+  if (lines[0]?.trim() !== '---') return { fmText: null, body: md };
+  for (let j = 1; j < lines.length; j += 1) {
+    if (lines[j].trim() === '---') {
+      return {
+        fmText: lines.slice(1, j).join('\n'),
+        body: lines.map((l, i) => (i <= j ? '' : l)).join('\n'),
+      };
     }
   }
-  cells.push(cur);
-  if (cells.length > 0 && cells[0].trim() === '') cells.shift();
-  if (cells.length > 0 && cells[cells.length - 1].trim() === '') cells.pop();
-  return cells.map((c) => c.trim());
+  return { fmText: null, body: md };
 }
 
-function tableAligns(sep: string): ('left' | 'center' | 'right' | null)[] {
-  return splitTableRow(sep).map((cell) => {
-    const left = cell.startsWith(':');
-    const right = cell.endsWith(':');
-    if (left && right) return 'center';
-    if (right) return 'right';
-    if (left) return 'left';
-    return null;
-  });
-}
+// ---------------------------------------------------------------- context
 
-/** A table starts here when this line holds a pipe and the NEXT line is the
- * separator row (GFM requires both). */
-function tableStart(lines: string[], i: number): boolean {
+interface MdCtxValue {
+  anchored?: ReadonlySet<number>;
+  highlight?: number | null;
+  gutter: boolean;
+  register: (key: string, el: HTMLElement | null, ls: number, le: number) => void;
+  cite?: CiteMarks;
+  resolveImageSrc?: (src: string) => string;
+}
+const MdCtx = createContext<MdCtxValue>({ gutter: true, register: () => {} });
+
+/** One top-level source block: gutter tick for anchored lines, highlight
+ * flash for the jump target. Structure matches the v2 CSS grid. */
+function Row({
+  ls,
+  le,
+  children,
+}: {
+  ls: number;
+  le: number;
+  children: ReactNode;
+}) {
+  const ctx = useContext(MdCtx);
+  const anchor = ctx.anchored
+    ? [...ctx.anchored].find((l) => ls <= l && l <= le)
+    : undefined;
+  const hit = ctx.highlight != null && ls <= ctx.highlight && ctx.highlight <= le;
   return (
-    i + 1 < lines.length && lines[i].includes('|') && TABLE_SEP.test(lines[i + 1])
+    <div
+      ref={(el) => ctx.register(`${ls}:${le}`, el, ls, le)}
+      id={anchor != null ? `L${anchor}` : undefined}
+      className={`md-row${hit ? ' md-hit' : ''}`}
+      data-ls={ls}
+      data-le={le}
+    >
+      {ctx.gutter && (
+        <span className="gut">{anchor != null ? `L${anchor}` : ''}</span>
+      )}
+      {children}
+    </div>
   );
 }
 
-/** `## Title` → level 2. ATX only, requires the space (v1 parity). */
-function heading(line: string): { level: number; text: string } | null {
-  const m = /^(#{1,6}) (.*)$/.exec(line);
-  return m ? { level: m[1].length, text: m[2].trim() } : null;
-}
+let mmdSeq = 0;
 
-export function parseMarkdown(md: string): MdBlock[] {
-  // CRLF sources (Windows-authored clippings): strip the trailing \r so
-  // trim-based matches (frontmatter fence, hr, headings) see clean lines.
-  const lines = md
-    .split('\n')
-    .map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
-  const blocks: MdBlock[] = [];
-  let i = 0;
-
-  // YAML frontmatter: only when the document opens with `---`.
-  if (lines[0]?.trim() === '---') {
-    let close = -1;
-    for (let j = 1; j < lines.length; j += 1) {
-      if (lines[j].trim() === '---') {
-        close = j;
-        break;
-      }
-    }
-    if (close > 0) {
-      blocks.push({
-        kind: 'frontmatter',
-        line: 1,
-        end: close + 1,
-        text: lines.slice(1, close).join('\n'),
-      });
-      i = close + 1;
-    }
-  }
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const lineNo = i + 1;
-
-    if (line.trim() === '') {
-      i += 1;
-      continue;
-    }
-
-    // Fenced code — runs to the closing fence or EOF (v1: an unterminated
-    // fence is closed rather than swallowing the rest of the page).
-    if (line.trimStart().startsWith('```')) {
-      const lang = line.trimStart().slice(3).trim();
-      const body: string[] = [];
-      let j = i + 1;
-      while (j < lines.length && !lines[j].trimStart().startsWith('```')) {
-        body.push(lines[j]);
-        j += 1;
-      }
-      blocks.push({
-        kind: 'code',
-        line: lineNo,
-        end: Math.min(j + 1, lines.length),
-        lang,
-        text: body.join('\n'),
-      });
-      i = j + 1;
-      continue;
-    }
-
-    const h = heading(line);
-    if (h) {
-      blocks.push({ kind: 'heading', line: lineNo, end: lineNo, ...h });
-      i += 1;
-      continue;
-    }
-
-    if (HR.test(line)) {
-      blocks.push({ kind: 'hr', line: lineNo, end: lineNo });
-      i += 1;
-      continue;
-    }
-
-    if (line.startsWith('>')) {
-      const body: string[] = [];
-      let j = i;
-      while (j < lines.length && lines[j].startsWith('>')) {
-        body.push(lines[j].replace(/^> ?/, ''));
-        j += 1;
-      }
-      blocks.push({ kind: 'quote', line: lineNo, end: j, lines: body });
-      i = j;
-      continue;
-    }
-
-    if (tableStart(lines, i)) {
-      const header = splitTableRow(lines[i]);
-      const aligns = tableAligns(lines[i + 1]);
-      const rows: { line: number; cells: string[] }[] = [];
-      let j = i + 2;
-      while (j < lines.length && lines[j].trim() !== '' && lines[j].includes('|')) {
-        rows.push({ line: j + 1, cells: splitTableRow(lines[j]) });
-        j += 1;
-      }
-      blocks.push({ kind: 'table', line: lineNo, end: j, header, aligns, rows });
-      i = j;
-      continue;
-    }
-
-    const li = LIST_ITEM.exec(line);
-    if (li) {
-      const ordered = li[2] !== undefined;
-      const items: { line: number; text: string }[] = [];
-      let j = i;
-      while (j < lines.length) {
-        const m = LIST_ITEM.exec(lines[j]);
-        if (!m) break;
-        items.push({ line: j + 1, text: m[3] });
-        j += 1;
-      }
-      blocks.push({ kind: 'list', line: lineNo, end: j, ordered, items });
-      i = j;
-      continue;
-    }
-
-    // Paragraph: consecutive non-blank, non-structural lines.
-    const body: string[] = [line];
-    let j = i + 1;
-    while (
-      j < lines.length &&
-      lines[j].trim() !== '' &&
-      !lines[j].trimStart().startsWith('```') &&
-      !heading(lines[j]) &&
-      !lines[j].startsWith('>') &&
-      !LIST_ITEM.test(lines[j]) &&
-      !HR.test(lines[j]) &&
-      !tableStart(lines, j)
-    ) {
-      body.push(lines[j]);
-      j += 1;
-    }
-    blocks.push({ kind: 'para', line: lineNo, end: j, lines: body });
-    i = j;
-  }
-
-  return blocks;
-}
-
-// ------------------------------------------------------------------ inline
-
-/** Only these link targets become <a>; everything else renders as text.
- * Relative/anchor targets are fine — `javascript:` and friends are not. */
-export function safeLinkHref(url: string): string | null {
-  const trimmed = url.trim();
-  if (/^(https?:|mailto:)/i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('#') || trimmed.startsWith('/')) return trimmed;
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && trimmed !== '') return trimmed;
-  return null;
-}
-
-// Token order matters: linked image (badge) before image before wikilink
-// before plain link — the longer bracket patterns must win.
-const INLINE =
-  /(\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\))|(!\[[^\]]*\]\([^)]*\))|(\[\[[^\]\n]+\]\])|(\[[^\]]+\]\([^)]*\))|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(==[^=\n]+==)/;
-
-/** Clippers escape markdown punctuation literally ("1\. Codex") — strip the
- * backslash for the punctuation set CommonMark allows. Code spans never
- * pass through here (they tokenize first), so `\` inside code survives. */
-const UNESCAPE = /\\([\\`*_[\]{}()#+.!|>~-])/g;
-
-/** Marker hook for the inline pass: plain-text runs are additionally split
- * on `pattern` (which MUST carry the `g` flag) and each match is handed to
- * `render`. Returning null leaves the token as plain text. The hook only
- * ever produces React elements from the caller — matched source text still
- * never becomes markup, so the XSS story is unchanged. Suppressed inside
- * link labels: an interactive marker nested in an <a> would be invalid
- * markup with double navigation. Used by the Ask page to turn `[kind:id]`
- * citations into live markers inside markdown. */
-export interface InlineMarker {
-  pattern: RegExp;
-  render: (match: RegExpMatchArray, key: string) => ReactNode | null;
-}
-
-/** Source text → React nodes. Text stays text nodes (React escapes it). */
-export function renderInline(
-  text: string,
-  keyPrefix = 'i',
-  marker?: InlineMarker,
-  autolink = true,
-): ReactNode[] {
-  const out: ReactNode[] = [];
-  let rest = text;
-  let k = 0;
-  // Bare http(s) URLs in prose become links too — models (and humans) write
-  // them without markdown syntax, and a dead-text GitHub URL in an answer is
-  // a product failure. Trailing punctuation stays text; the href is the
-  // matched URL verbatim (still only http/https — no scheme smuggling).
-  const AUTOLINK = /https?:\/\/[^\s<>"'`\]}]+/g;
-  const pushText = (raw: string) => {
-    if (raw === '') return;
-    const chunk = raw.replace(UNESCAPE, '$1');
-    if (!autolink) {
-      out.push(chunk);
-      return;
-    }
-    let last = 0;
-    for (const m of chunk.matchAll(AUTOLINK)) {
-      const at = m.index ?? 0;
-      let url = m[0];
-      // Common trailing punctuation is sentence-ware, not URL — but a
-      // closing paren stays when the URL contains its opening half
-      // (https://en.wikipedia.org/wiki/Foo_(bar)).
-      for (;;) {
-        const last = url.slice(-1);
-        if (/[.,;:!?、。,;!?:]/.test(last)) {
-          url = url.slice(0, -1);
-          continue;
+/** ```mermaid fence → SVG via the mermaid engine, loaded on demand so the
+ * main bundle stays lean. Falls back to the raw code block on error. */
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { default: mermaid } = await import('mermaid');
+        const dark = document.documentElement.dataset.theme === 'dark';
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: dark ? 'dark' : 'neutral',
+        });
+        const { svg } = await mermaid.render(`ovp-mmd-${(mmdSeq += 1)}`, code);
+        if (!cancelled && ref.current) {
+          // Documented trust boundary (module header): strict mode + own
+          // vault. Never point this at untrusted markdown.
+          ref.current.innerHTML = svg;
         }
-        if (
-          last === ')' &&
-          (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)
-        ) {
-          url = url.slice(0, -1);
-          continue;
-        }
-        break;
+      } catch {
+        if (!cancelled) setFailed(true);
       }
-      if (url.length === 0) continue;
-      if (at > last) out.push(chunk.slice(last, at));
-      out.push(
-        <a
-          key={`${keyPrefix}-al${k}`}
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {url}
-        </a>,
-      );
-      k += 1;
-      last = at + url.length;
-    }
-    if (last < chunk.length) out.push(chunk.slice(last));
-  };
-  const pushPlain = (chunk: string) => {
-    if (chunk === '') return;
-    if (!marker) {
-      pushText(chunk);
-      return;
-    }
-    let last = 0;
-    // matchAll clones the regex — the shared pattern's lastIndex is safe.
-    for (const m of chunk.matchAll(marker.pattern)) {
-      const at = m.index ?? 0;
-      const node = marker.render(m, `${keyPrefix}-mk${k}`);
-      if (node == null) continue;
-      if (at > last) pushText(chunk.slice(last, at));
-      out.push(node);
-      k += 1;
-      last = at + m[0].length;
-    }
-    if (last < chunk.length) pushText(chunk.slice(last));
-  };
-  while (rest.length > 0) {
-    const m = INLINE.exec(rest);
-    if (!m || m.index === undefined) {
-      pushPlain(rest);
-      break;
-    }
-    if (m.index > 0) pushPlain(rest.slice(0, m.index));
-    const token = m[0];
-    const key = `${keyPrefix}-${k}`;
-    k += 1;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code]);
+  if (failed) {
+    return (
+      <pre>
+        <code>{code}</code>
+      </pre>
+    );
+  }
+  return <div className="md-mermaid" ref={ref} />;
+}
 
-    if (m[1]) {
-      // Linked image (badges: [![alt](src)](href)) — one anchor, the image
-      // stays an alt-text chip (no remote loading, B2), no dangling "(url)".
-      const parts = /^\[!\[([^\]]*)\]\(([^)]*)\)\]\(([^)]*)\)$/.exec(token);
-      const alt = parts?.[1] ?? '';
-      const href = safeLinkHref(parts?.[3] ?? '');
-      const chip = `[image${alt ? `: ${alt}` : ''}]`;
-      out.push(
-        href ? (
-          <a key={key} href={href} target="_blank" rel="noreferrer">
-            <span className="md-img-placeholder">{chip}</span>
-          </a>
-        ) : (
-          <span key={key} className="md-img-placeholder">
-            {chip}
-          </span>
-        ),
+// ------------------------------------------------------------- components
+
+/** README centering uses the deprecated align attribute — map it to a real
+ * style (browsers ignore bare align on modern elements). */
+function alignOf(props: Record<string, unknown>): CSSProperties | undefined {
+  const a = props.align;
+  return typeof a === 'string' && ['center', 'right', 'left'].includes(a)
+    ? { textAlign: a as 'center' | 'right' | 'left' }
+    : undefined;
+}
+
+type AnyProps = Record<string, unknown> & { children?: ReactNode };
+
+const components: Components = {
+  div(props) {
+    const p = props as unknown as AnyProps;
+    if (p.className === 'md-row') {
+      const ls = Number(p['data-ls'] ?? p.dataLs ?? 0);
+      const le = Number(p['data-le'] ?? p.dataLe ?? 0);
+      return (
+        <Row ls={ls} le={le}>
+          {p.children}
+        </Row>
       );
-    } else if (m[2]) {
-      // Image → CLICKABLE alt-text chip; still no remote loading in B2.
-      const im = /^!\[([^\]]*)\]\(([^)]*)\)$/.exec(token);
-      const alt = im?.[1] ?? '';
-      const src = safeLinkHref(im?.[2] ?? '');
-      const chip = `[image${alt ? `: ${alt}` : ''}]`;
-      out.push(
-        src ? (
-          <a key={key} href={src} target="_blank" rel="noreferrer">
-            <span className="md-img-placeholder">{chip}</span>
-          </a>
-        ) : (
-          <span key={key} className="md-img-placeholder">
-            {chip}
-          </span>
-        ),
+    }
+    return (
+      <div className={typeof p.className === 'string' ? p.className : undefined} style={alignOf(p)}>
+        {p.children}
+      </div>
+    );
+  },
+  // Page structure owns h1 — source headings shift down (v1 parity).
+  h1(props) {
+    const p = props as unknown as AnyProps;
+    return <h2 style={alignOf(p)}>{p.children}</h2>;
+  },
+  h2(props) {
+    const p = props as unknown as AnyProps;
+    return <h3 style={alignOf(p)}>{p.children}</h3>;
+  },
+  h3(props) {
+    const p = props as unknown as AnyProps;
+    return <h4 style={alignOf(p)}>{p.children}</h4>;
+  },
+  h4(props) {
+    const p = props as unknown as AnyProps;
+    return <h4 style={alignOf(p)}>{p.children}</h4>;
+  },
+  h5(props) {
+    const p = props as unknown as AnyProps;
+    return <h4 style={alignOf(p)}>{p.children}</h4>;
+  },
+  h6(props) {
+    const p = props as unknown as AnyProps;
+    return <h4 style={alignOf(p)}>{p.children}</h4>;
+  },
+  p(props) {
+    const p2 = props as unknown as AnyProps;
+    return <p style={alignOf(p2)}>{p2.children}</p>;
+  },
+  a(props) {
+    const p = props as unknown as AnyProps & { href?: unknown };
+    const href = typeof p.href === 'string' ? p.href : undefined;
+    const external = href != null && /^https?:/i.test(href);
+    return (
+      <a
+        href={href}
+        {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}
+      >
+        {p.children}
+      </a>
+    );
+  },
+  img(props) {
+    const ctx = useContext(MdCtx);
+    const p = props as unknown as { src?: unknown; alt?: unknown };
+    const raw = typeof p.src === 'string' ? p.src : '';
+    const resolved = raw && ctx.resolveImageSrc ? ctx.resolveImageSrc(raw) : raw;
+    const altText = typeof p.alt === 'string' ? p.alt : '';
+    if (STATIC_MODE || !resolved) {
+      // B2: the published static site never hot-loads remote imagery.
+      return (
+        <span className="md-img-placeholder">
+          [image{altText ? `: ${altText}` : ''}]
+        </span>
       );
-    } else if (m[3]) {
-      // Obsidian wiki-link: [[Note]] / [[Note|Alias]] → plain text (the
-      // portal can't resolve vault-internal targets).
-      const body = token.slice(2, -2);
-      const pipe = body.indexOf('|');
-      out.push(pipe >= 0 ? body.slice(pipe + 1) : body);
-    } else if (m[4]) {
-      const lm = /^\[([^\]]+)\]\(([^)]*)\)$/.exec(token);
-      const label = lm?.[1] ?? token;
-      const href = safeLinkHref(lm?.[2] ?? '');
-      if (href) {
-        // No marker hook inside a link label: an interactive marker nested
-        // in an anchor would be invalid markup with two competing
-        // navigations — a citation-shaped label renders as the link's plain
-        // text and the <a> keeps single-navigation semantics.
-        out.push(
-          <a key={key} href={href} target="_blank" rel="noreferrer">
-            {renderInline(label, key, undefined, false)}
-          </a>,
+    }
+    return <img className="md-img" src={resolved} alt={altText} loading="lazy" />;
+  },
+  pre(props) {
+    const p = props as unknown as AnyProps;
+    if (isValidElement(p.children)) {
+      const cp = p.children.props as { className?: string; children?: ReactNode };
+      if (/\blanguage-mermaid\b/.test(cp.className ?? '')) {
+        return (
+          <MermaidBlock code={String(cp.children ?? '').replace(/\n$/, '')} />
         );
-      } else {
-        out.push(label);
       }
-    } else if (m[5]) {
-      out.push(<code key={key}>{token.slice(1, -1)}</code>);
-    } else if (m[6]) {
-      out.push(
-        <strong key={key}>{renderInline(token.slice(2, -2), key, marker)}</strong>,
-      );
-    } else if (m[7]) {
-      out.push(
-        <em key={key}>{renderInline(token.slice(1, -1), key, marker)}</em>,
-      );
-    } else {
-      out.push(
-        <mark key={key}>{renderInline(token.slice(2, -2), key, marker)}</mark>,
-      );
     }
-    rest = rest.slice(m.index + token.length);
-  }
-  return out;
-}
+    return <pre>{p.children}</pre>;
+  },
+  span(props) {
+    const ctx = useContext(MdCtx);
+    const p = props as unknown as AnyProps;
+    if (p.className === 'md-cite' && ctx.cite) {
+      const id = p['data-cite'] ?? p.dataCite;
+      const rendered =
+        typeof id === 'string' ? ctx.cite.render(id) : null;
+      return <>{rendered ?? p.children}</>;
+    }
+    return (
+      <span className={typeof p.className === 'string' ? p.className : undefined}>
+        {p.children}
+      </span>
+    );
+  },
+};
 
-// ---------------------------------------------------------------- renderer
-
-function blockBody(
-  block: MdBlock,
-  key: string,
-  marker?: InlineMarker,
-  frontmatterLabel = 'metadata',
-): ReactNode {
-  switch (block.kind) {
-    case 'heading': {
-      const inner = renderInline(block.text, key, marker);
-      // Page structure owns h1; source headings start at h2 (v1 parity).
-      if (block.level === 1) return <h2>{inner}</h2>;
-      if (block.level === 2) return <h3>{inner}</h3>;
-      return <h4>{inner}</h4>;
-    }
-    case 'para':
-      return (
-        <p>
-          {block.lines.map((l, n) => (
-            <span key={`${key}-l${n}`}>
-              {n > 0 && <br />}
-              {renderInline(l, `${key}-l${n}`, marker)}
-            </span>
-          ))}
-        </p>
-      );
-    case 'code':
-      return (
-        <pre data-lang={block.lang || undefined}>
-          <code>{block.text}</code>
-        </pre>
-      );
-    case 'quote': {
-      // Obsidian callout: "> [!note] Title" — lift the marker into a small
-      // type label instead of leaking the bracket syntax into the text.
-      const cm = /^\[!(\w+)\][+-]?\s*(.*)$/.exec(block.lines[0] ?? '');
-      const lines = cm ? [cm[2], ...block.lines.slice(1)] : block.lines;
-      return (
-        <blockquote
-          className={cm ? 'md-callout' : undefined}
-          data-callout={cm ? cm[1].toLowerCase() : undefined}
-        >
-          {cm && <span className="md-callout-tag">{cm[1].toLowerCase()}</span>}
-          {lines.map((l, n) => (
-            <span key={`${key}-q${n}`}>
-              {n > 0 && <br />}
-              {renderInline(l, `${key}-q${n}`, marker)}
-            </span>
-          ))}
-        </blockquote>
-      );
-    }
-    case 'table':
-      return (
-        <table>
-          <thead>
-            <tr>
-              {block.header.map((cell, n) => (
-                <th key={`${key}-h${n}`} style={{ textAlign: block.aligns[n] ?? undefined }}>
-                  {renderInline(cell, `${key}-h${n}`, marker)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, r) => (
-              <tr key={`${key}-r${r}`}>
-                {row.cells.map((cell, n) => (
-                  <td key={`${key}-r${r}c${n}`} style={{ textAlign: block.aligns[n] ?? undefined }}>
-                    {renderInline(cell, `${key}-r${r}c${n}`, marker)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-    case 'list': {
-      const items = block.items.map((it, n) => (
-        <li key={`${key}-it${n}`}>
-          {renderInline(it.text, `${key}-it${n}`, marker)}
-        </li>
-      ));
-      return block.ordered ? <ol>{items}</ol> : <ul>{items}</ul>;
-    }
-    case 'hr':
-      return <hr />;
-    case 'frontmatter':
-      // Collapsed by default — clipping frontmatter is provenance metadata,
-      // not prose; a wall of YAML above every article read as broken
-      // rendering to the operator.
-      return (
-        <details className="md-frontmatter">
-          <summary>{frontmatterLabel}</summary>
-          <pre>
-            <code>{block.text}</code>
-          </pre>
-        </details>
-      );
-  }
-}
+// ---------------------------------------------------------------- view
 
 export interface MarkdownViewProps {
   markdown: string;
@@ -547,74 +435,91 @@ export interface MarkdownViewProps {
   anchoredLines?: ReadonlySet<number>;
   /** Line to scroll to and highlight (set when a unit anchor is clicked). */
   highlightLine?: number | null;
-  /** False hides the line-number gutter column (chat answers — no source
-   * lines to anchor to). Default true: the source reading view. */
+  /** False hides the line-number gutter column (chat answers). */
   gutter?: boolean;
-  /** Inline marker hook — see InlineMarker (Ask citation markers). */
-  marker?: InlineMarker;
   /** Summary label for the collapsed frontmatter block (localized). */
   frontmatterLabel?: string;
+  /** Citation interactivity for Ask answers — see CiteMarks. */
+  citeMarks?: CiteMarks;
+  /** Resolve relative image srcs (READMEs reference repo-relative paths) —
+   * SourceDetailPage rewrites them against the note's origin URL. */
+  resolveImageSrc?: (src: string) => string;
 }
 
-/** The ~720px-measure reading view with a line-number gutter. Blocks whose
- * source range contains an anchored line get a gutter mark; the highlight
- * line scrolls into view and flashes the containing block. */
+/** The ~720px-measure reading view with a line-number gutter. */
 export function MarkdownView({
   markdown,
   anchoredLines,
   highlightLine,
   gutter = true,
-  marker,
-  frontmatterLabel,
+  frontmatterLabel = 'metadata',
+  citeMarks,
+  resolveImageSrc,
 }: MarkdownViewProps) {
-  // Parsing walks the whole document — memoize per markdown string so
-  // unrelated re-renders (highlight changes, anchor sets) don't re-parse.
-  const blocks = useMemo(() => parseMarkdown(markdown), [markdown]);
-  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const fm = useMemo(() => splitFrontmatter(markdown), [markdown]);
+  const rowsRef = useRef(new Map<string, { ls: number; le: number; el: HTMLElement }>());
+
+  const register = useCallback(
+    (key: string, el: HTMLElement | null, ls: number, le: number) => {
+      if (el) rowsRef.current.set(key, { ls, le, el });
+      else rowsRef.current.delete(key);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (highlightLine == null) return;
-    const idx = blocks.findIndex(
-      (b) => b.line <= highlightLine && highlightLine <= b.end,
-    );
-    if (idx >= 0) {
-      rowRefs.current
-        .get(idx)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    for (const { ls, le, el } of rowsRef.current.values()) {
+      if (ls <= highlightLine && highlightLine <= le) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        break;
+      }
     }
-    // blocks derive from markdown; the ref map is rebuilt on each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightLine, markdown]);
 
+  const ctx = useMemo<MdCtxValue>(
+    () => ({
+      anchored: anchoredLines,
+      highlight: highlightLine,
+      gutter,
+      register,
+      cite: citeMarks,
+      resolveImageSrc,
+    }),
+    [anchoredLines, highlightLine, gutter, register, citeMarks, resolveImageSrc],
+  );
+
+  const rehypePlugins = useMemo(
+    () =>
+      [
+        rehypeRaw,
+        [rehypeSanitize, MD_SCHEMA],
+        [rehypeVaultText, citeMarks?.pattern ?? null],
+        rehypeLineRows,
+      ] as unknown as PluggableList,
+    [citeMarks?.pattern],
+  );
+
   return (
-    <div className={`md-preview${gutter ? '' : ' no-gut'}`}>
-      {blocks.map((b, idx) => {
-        const anchor = anchoredLines
-          ? [...anchoredLines].find((l) => b.line <= l && l <= b.end)
-          : undefined;
-        const hit =
-          highlightLine != null &&
-          b.line <= highlightLine &&
-          highlightLine <= b.end;
-        return (
-          <div
-            key={`b${b.line}`}
-            className={`md-row${hit ? ' md-hit' : ''}`}
-            id={anchor != null ? `L${anchor}` : undefined}
-            ref={(el) => {
-              if (el) rowRefs.current.set(idx, el);
-              else rowRefs.current.delete(idx);
-            }}
-          >
-            {gutter && (
-              <span className="gut">{anchor != null ? `L${anchor}` : ''}</span>
-            )}
-            <div className="md-block">
-              {blockBody(b, `b${b.line}`, marker, frontmatterLabel)}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <MdCtx.Provider value={ctx}>
+      <div className={`md-preview${gutter ? '' : ' no-gut'}`}>
+        {fm.fmText != null && (
+          <details className="md-frontmatter">
+            <summary>{frontmatterLabel}</summary>
+            <pre>
+              <code>{fm.fmText}</code>
+            </pre>
+          </details>
+        )}
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          remarkRehypeOptions={{ allowDangerousHtml: true }}
+          rehypePlugins={rehypePlugins}
+          components={components}
+        >
+          {fm.body}
+        </ReactMarkdown>
+      </div>
+    </MdCtx.Provider>
   );
 }

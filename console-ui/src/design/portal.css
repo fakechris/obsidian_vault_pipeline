@@ -1006,13 +1006,17 @@ body {
 .md-block pre.md-frontmatter {
   color: var(--muted);
 }
-/* Collapsed provenance block (replaces the raw YAML wall). */
+/* Collapsed provenance block (replaces the raw YAML wall). The top-level
+ * frontmatter lives OUTSIDE .md-block (engine swap); README-embedded
+ * details/summary blocks stay inside it — both selectors stay. */
+.md-preview details.md-frontmatter,
 .md-block details.md-frontmatter {
   margin: 0 0 0.9rem;
   border: 1px solid var(--border);
   border-radius: var(--ovp-radius-input);
   background: var(--surface-2);
 }
+.md-preview details.md-frontmatter summary,
 .md-block details.md-frontmatter summary {
   cursor: pointer;
   padding: 0.35rem 0.7rem;
@@ -1020,6 +1024,7 @@ body {
   color: var(--muted);
   user-select: none;
 }
+.md-preview details.md-frontmatter pre,
 .md-block details.md-frontmatter pre {
   margin: 0;
   border: 0;
@@ -1065,6 +1070,25 @@ body {
   color: inherit;
   border-radius: 3px;
   padding: 0 0.1em;
+}
+/* Real images in the live app (Obsidian parity); static build keeps chips. */
+.md-block img.md-img,
+.md-preview img.md-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--ovp-radius-input);
+}
+/* Mermaid diagram container (SVG injected by the mermaid engine). */
+.md-block .md-mermaid {
+  margin: 0 0 0.9rem;
+  overflow-x: auto;
+}
+.md-block .md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.md-block .md-wikilink {
+  color: var(--muted);
 }
 .md-block code {
   font-family: var(--ovp-font-mono);
