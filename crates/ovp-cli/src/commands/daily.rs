@@ -23,7 +23,8 @@ use ovp_index::{
     build_evidence, build_index, build_index_with_progress, write_evidence, write_index,
 };
 use ovp_enrich::github::{
-    enrich_github_repos, parse_github_repo_url, FixtureGitHubFetch, GitHubFetch,
+    enrich_github_repos, find_truncated_github_notes, parse_github_repo_url, FixtureGitHubFetch,
+    GitHubFetch,
 };
 use ovp_enrich::web_fetch::{enrich_needs_content, FixtureWebFetch, WebFetch};
 use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch};
@@ -287,7 +288,13 @@ fn run_inner(
     // Phase 2.6 — GitHub enrichment (optional).
     // Enriches needs-content sources whose URLs point to GitHub repos —
     // this run's freshly-flagged AND previously-flagged pending captures.
+    // Plus the self-healing backlog: notes written before the 100 KiB
+    // README cap still carry the legacy `*(README truncated)*` marker; the
+    // re-enrich rewrite drops the marker, so the repair list drains itself.
     if (args.github_fixture.is_some() || args.github_live) && !args.dry_run {
+        let repair = find_truncated_github_notes(&args.vault_root);
+        let repair_count = repair.len();
+        let mut seen_paths = std::collections::HashSet::new();
         let github_items: Vec<(String, String)> = sweep_needs_content
             .iter()
             .filter_map(|rec| {
@@ -300,6 +307,8 @@ fn run_inner(
                     .and_then(|u| parse_github_repo_url(u))
                     .map(|_| (from.clone(), url.clone().unwrap()))
             }))
+            .chain(repair)
+            .filter(|(rel, _)| seen_paths.insert(rel.clone()))
             .collect();
         if !github_items.is_empty() {
             let mut fetcher = build_github_fetcher(&args)?;
@@ -311,8 +320,8 @@ fn run_inner(
             let written = results.iter().filter(|r| r.written).count();
             let failed = results.iter().filter(|r| !r.written).count();
             sayln!(
-                "  github: {} repo URL(s), {} enriched, {} failed",
-                github_items.len(), written, failed,
+                "  github: {} repo URL(s) ({} truncated-note repairs), {} enriched, {} failed",
+                github_items.len(), repair_count, written, failed,
             );
             for r in &results {
                 if !r.written

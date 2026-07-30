@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
   MarkdownView,
+  sourceImageResolver,
   splitFrontmatter,
   trimAtMermaidErrorLine,
   type MarkdownViewProps,
@@ -53,6 +54,40 @@ describe('trimAtMermaidErrorLine (truncated-ingest healing)', () => {
     expect(
       trimAtMermaidErrorLine(TRUNCATED, new Error('Parse error on line 1: x')),
     ).toBeNull();
+  });
+});
+
+describe('sourceImageResolver (repo-relative README images)', () => {
+  const GH = sourceImageResolver('https://github.com/TencentCloud/TencentDB-Agent-Memory');
+
+  it('maps repo-relative paths to raw.githubusercontent.com/HEAD', () => {
+    expect(GH?.('./assets/images/logo.png')).toBe(
+      'https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/HEAD/assets/images/logo.png',
+    );
+    expect(GH?.('docs/pic.png')).toBe(
+      'https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/HEAD/docs/pic.png',
+    );
+  });
+
+  it('strips a .git suffix from the repo segment', () => {
+    const r = sourceImageResolver('https://github.com/o/r.git');
+    expect(r?.('./x.png')).toBe('https://raw.githubusercontent.com/o/r/HEAD/x.png');
+  });
+
+  it('passes absolute/data srcs through untouched', () => {
+    expect(GH?.('https://img.shields.io/b.svg')).toBe('https://img.shields.io/b.svg');
+    expect(GH?.('data:image/png;base64,xx')).toBe('data:image/png;base64,xx');
+  });
+
+  it('resolves non-GitHub pages by standard URL joining', () => {
+    const r = sourceImageResolver('https://example.com/blog/post');
+    expect(r?.('./img.png')).toBe('https://example.com/blog/img.png');
+    expect(r?.('/static/img.png')).toBe('https://example.com/static/img.png');
+  });
+
+  it('returns undefined without a source URL (src untouched)', () => {
+    expect(sourceImageResolver(undefined)).toBeUndefined();
+    expect(sourceImageResolver('')).toBeUndefined();
   });
 });
 
