@@ -31,7 +31,7 @@ import {
   parseChatTranscript,
 } from '../lib/chatTranscript';
 import { isReactImeComposing } from '../lib/ime';
-import { MarkdownView, type InlineMarker } from '../lib/markdown';
+import { MarkdownView, type CiteMarks } from '../lib/markdown';
 import type {
   AskCitation,
   AskProgress,
@@ -504,15 +504,14 @@ function AnswerText({
   onOpen: (cit: AskCitation) => void;
 }) {
   const index = new Map(citations.map((c, i) => [citationLookupKey(c.id), i]));
-  const marker: InlineMarker = {
+  const citeMarks: CiteMarks = {
     pattern: CITE_RE,
-    render: (m, key) => {
-      const i = index.get(citationLookupKey(m[1]));
+    render: (citeId) => {
+      const i = index.get(citationLookupKey(citeId));
       if (i === undefined) return null;
       const cit = citations[i];
       return (
         <button
-          key={key}
           type="button"
           className={`cite-marker${cit.verified === false ? ' warn' : ''}`}
           onMouseEnter={() => onHover(cit.id)}
@@ -529,7 +528,7 @@ function AnswerText({
   };
   return (
     <div className="answer-text">
-      <MarkdownView markdown={answer} gutter={false} marker={marker} />
+      <MarkdownView markdown={answer} gutter={false} citeMarks={citeMarks} />
     </div>
   );
 }
