@@ -774,6 +774,7 @@ fn dispatch(
         (Method::Get, "/api/terrain") => handle_terrain(state),
         (Method::Get, p) if p.starts_with("/api/claim/") => handle_claim(state, url),
         (Method::Get, p) if p.starts_with("/api/source/") => handle_source_api(state, url),
+        (Method::Get, p) if p.starts_with("/api/file/") => handle_vault_file(state, url),
         (Method::Get, p) if p == "/api" || p.starts_with("/api/") => {
             json_response(404, r#"{"error":"unknown api route"}"#)
         }
@@ -3469,6 +3470,59 @@ fn resolve_static(state: &AppState, url_path: &str) -> Resolved {
     Resolved::NotFound
 }
 
+/// `GET /api/file/<vault-relative path>[?note=<rel>]` — serve an image
+/// attachment straight from the vault. Clipped articles reference
+/// vault-relative paths (`50-Inbox/01-Raw/attachments/2026-05/img-….png`)
+/// that can NEVER resolve against the note's source URL (2026-07-30: the
+/// Dynamic Workflows page showed a broken-image icon for every inline
+/// figure). `?note=` adds the note's own directory as a second resolution
+/// base (Obsidian-style note-relative references). Guards: plain-relative
+/// only, image extensions only, canonicalized path must stay under the
+/// canonicalized vault root (symlinks can't escape).
+fn handle_vault_file(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let not_found = || json_response(404, r#"{"error":"not found"}"#);
+    let path_part = url.split('?').next().unwrap_or(url);
+    let rel = url_decode(path_part.trim_start_matches("/api/file/"));
+    if !is_plain_relative(&rel) {
+        return not_found();
+    }
+    let mime = match rel.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        _ => return not_found(),
+    };
+    let mut candidates = vec![state.vault_root.join(&rel)];
+    // parse_query_string already url-decodes its values.
+    if let Some(note) = parse_query_string(url).get("note")
+        && is_plain_relative(note)
+        && let Some(parent) = std::path::Path::new(note).parent()
+    {
+        candidates.push(state.vault_root.join(parent).join(&rel));
+    }
+    let Ok(canon_vault) = state.vault_root.canonicalize() else {
+        return not_found();
+    };
+    for cand in candidates {
+        let Ok(canon) = cand.canonicalize() else {
+            continue;
+        };
+        if !canon.starts_with(&canon_vault) || !canon.is_file() {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&canon) {
+            let header = Header::from_bytes("Content-Type", mime.as_bytes()).unwrap();
+            return Response::from_data(bytes)
+                .with_header(header)
+                .with_status_code(200);
+        }
+    }
+    not_found()
+}
+
 /// True only for a plain relative path: every `Path::components()` entry is
 /// `Component::Normal` — no `ParentDir`, no `RootDir`, no Windows
 /// `Component::Prefix` (`C:\`, `\\server\share`). Backslashes and drive
@@ -4286,6 +4340,61 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn vault_file_serves_attachments_and_refuses_traversal() {
+        let root = temp_root("vault-file");
+        let vault = root.join("vault");
+        // Vault-root-relative attachment (the Dynamic Workflows shape).
+        let att = vault.join("50-Inbox/01-Raw/attachments/2026-05");
+        std::fs::create_dir_all(&att).unwrap();
+        std::fs::write(att.join("img-1.png"), b"PNG-BYTES").unwrap();
+        // Note-relative attachment (Obsidian style: note dir + filename).
+        let note_dir = vault.join("50-Inbox/03-Processed/2026-05");
+        std::fs::create_dir_all(&note_dir).unwrap();
+        std::fs::write(note_dir.join("local.png"), b"LOCAL-PNG").unwrap();
+        std::fs::write(note_dir.join("secret.md"), "not an image").unwrap();
+        let st = state(vault.clone(), None);
+
+        // Root-relative hit.
+        let resp = dispatch(
+            &st,
+            Method::Get,
+            "/api/file/50-Inbox/01-Raw/attachments/2026-05/img-1.png",
+            "",
+        );
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(header_value(&resp, "Content-Type"), "image/png");
+
+        // Note-relative fallback via ?note=.
+        let resp = dispatch(
+            &st,
+            Method::Get,
+            "/api/file/local.png?note=50-Inbox/03-Processed/2026-05/n.md",
+            "",
+        );
+        assert_eq!(resp.status_code(), 200);
+
+        // Traversal, absolute paths, and non-image extensions are refused.
+        for bad in [
+            "/api/file/../secret.md",
+            "/api/file/50-Inbox/03-Processed/2026-05/secret.md",
+            "/api/file/%2e%2e/%2e%2e/etc/passwd.png",
+        ] {
+            assert_eq!(
+                dispatch(&st, Method::Get, bad, "").status_code(),
+                404,
+                "{bad} must 404"
+            );
+        }
+        // Missing file 404s.
+        assert_eq!(
+            dispatch(&st, Method::Get, "/api/file/nope.png", "").status_code(),
+            404
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

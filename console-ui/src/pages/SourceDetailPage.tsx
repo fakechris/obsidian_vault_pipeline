@@ -12,7 +12,7 @@ import { useI18n } from '../i18n';
 import { entityUrl, fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
-import { MarkdownView, sourceImageResolver } from '../lib/markdown';
+import { MarkdownView, sourceImageCandidates } from '../lib/markdown';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
 
 type Tab = 'memory' | 'source';
@@ -205,14 +205,20 @@ export default function SourceDetailPage() {
     [detail],
   );
 
-  // READMEs reference repo-relative image paths (./assets/logo.png) — they
-  // must resolve against the note's source URL, not the portal origin.
+  // Notes reference image paths relative to the REPO (READMEs) or the
+  // VAULT (clipped attachments) — resolve through an ordered candidate
+  // chain built from the note's source URL + vault path; the <img> error
+  // handler walks it.
   // HOOKS RULE: this useMemo must stay ABOVE the status early-returns below
   // — a hook that only runs once `detail` is ready changes the hook count
   // between renders and React unmounts the whole app (the 2026-07-29
   // OpenChatCut white screen).
   const sourceUrl = detail?.source.url ?? undefined;
-  const resolveImageSrc = useMemo(() => sourceImageResolver(sourceUrl), [sourceUrl]);
+  const noteRelPath = detail?.source.rel_path ?? undefined;
+  const imageSrcCandidates = useMemo(
+    () => sourceImageCandidates(sourceUrl, noteRelPath),
+    [sourceUrl, noteRelPath],
+  );
 
   const jumpToLine = (line: number) => {
     setTab('source');
@@ -464,7 +470,7 @@ export default function SourceDetailPage() {
                     anchoredLines={anchoredLines}
                     highlightLine={highlightLine}
                     frontmatterLabel={t('source.frontmatter')}
-                    resolveImageSrc={resolveImageSrc}
+                    imageSrcCandidates={imageSrcCandidates}
                   />
                   {doc.truncated && (
                     <div className="doc-note tiny muted">
