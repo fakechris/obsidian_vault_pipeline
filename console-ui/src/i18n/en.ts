@@ -218,6 +218,9 @@ export const en = {
   'source.notFound': 'No source with this id in the index.',
   'source.backToLibrary': 'Library',
   'source.loadError': 'Could not load the source detail — is the server running?',
+  'error.pageTitle': 'Something went wrong rendering this page.',
+  'error.pageHint':
+    'Use the navigation above to keep browsing — reopening the page retries.',
   'source.tabMemory': 'Memory',
   'source.tabMemoryCounts': '{cards} cards · {units} units',
   'source.tabSource': 'Source',

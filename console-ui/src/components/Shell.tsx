@@ -15,6 +15,7 @@ import { useModel } from '../model';
 import { useTheme } from '../theme';
 import { STATIC_MODE } from '../lib/api';
 import { isDesktopApp, openInSystemBrowser } from '../lib/desktopExternalLinks';
+import ErrorBoundary from './ErrorBoundary';
 import RunBanner from './RunBanner';
 import SearchOmnibox from './SearchOmnibox';
 
@@ -228,7 +229,14 @@ export default function Shell() {
             </nav>
           </div>
           <div className="shell-body">
-            <Outlet />
+            {/* key=pathname: navigating after a crash resets the boundary. */}
+            <ErrorBoundary
+              key={location.pathname}
+              title={t('error.pageTitle')}
+              hint={t('error.pageHint')}
+            >
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </div>
       </div>
