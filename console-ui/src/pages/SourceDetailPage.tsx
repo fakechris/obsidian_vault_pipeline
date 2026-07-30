@@ -205,6 +205,15 @@ export default function SourceDetailPage() {
     [detail],
   );
 
+  // READMEs reference repo-relative image paths (./assets/logo.png) — they
+  // must resolve against the note's source URL, not the portal origin.
+  // HOOKS RULE: this useMemo must stay ABOVE the status early-returns below
+  // — a hook that only runs once `detail` is ready changes the hook count
+  // between renders and React unmounts the whole app (the 2026-07-29
+  // OpenChatCut white screen).
+  const sourceUrl = detail?.source.url ?? undefined;
+  const resolveImageSrc = useMemo(() => sourceImageResolver(sourceUrl), [sourceUrl]);
+
   const jumpToLine = (line: number) => {
     setTab('source');
     setHighlightLine(line);
@@ -231,12 +240,6 @@ export default function SourceDetailPage() {
 
   const { source, memory, citing_claims: citing, doc } = detail;
   const title = source.title ?? source.sha256;
-  // READMEs reference repo-relative image paths (./assets/logo.png) — they
-  // must resolve against the note's source URL, not the portal origin.
-  const resolveImageSrc = useMemo(
-    () => sourceImageResolver(source.url ?? undefined),
-    [source.url],
-  );
 
   return (
     <>

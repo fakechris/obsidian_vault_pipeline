@@ -208,6 +208,8 @@ export const zh: Record<keyof typeof en, string> = {
   'source.notFound': '索引中没有这个 id 对应的源。',
   'source.backToLibrary': '资料',
   'source.loadError': '无法加载资料详情——服务是否在运行？',
+  'error.pageTitle': '这一页渲染出错了。',
+  'error.pageHint': '可以用上方导航继续浏览；重新打开这一页会重试。',
   'source.tabMemory': '记忆',
   'source.tabMemoryCounts': '{cards} 卡片 · {units} 单元',
   'source.tabSource': '原文',
