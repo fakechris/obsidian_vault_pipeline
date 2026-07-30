@@ -477,6 +477,31 @@ export interface MarkdownViewProps {
   resolveImageSrc?: (src: string) => string;
 }
 
+/** Build the resolveImageSrc for a source note. Repo-relative paths
+ * (`./assets/logo.png`, a README staple) must NOT resolve against the
+ * portal origin (instant 404 broken-image); rewrite against the note's
+ * source URL. GitHub repos map to raw.githubusercontent.com/<owner>/<repo>/
+ * HEAD/<path> (github.com/... is the HTML view, not the bytes); everything
+ * else resolves via standard URL joining. Absolute/data: srcs pass through.
+ * Returns undefined when no usable base exists (src left untouched). */
+export function sourceImageResolver(
+  sourceUrl?: string,
+): ((src: string) => string) | undefined {
+  if (!sourceUrl) return undefined;
+  const gh = /^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)/i.exec(sourceUrl);
+  const base = gh
+    ? `https://raw.githubusercontent.com/${gh[1]}/${gh[2].replace(/\.git$/, '')}/HEAD/`
+    : sourceUrl;
+  return (src) => {
+    if (!src || /^(?:https?:|data:|blob:|#)/i.test(src)) return src;
+    try {
+      return new URL(src, base).href;
+    } catch {
+      return src;
+    }
+  };
+}
+
 /** The ~720px-measure reading view with a line-number gutter. */
 export function MarkdownView({
   markdown,

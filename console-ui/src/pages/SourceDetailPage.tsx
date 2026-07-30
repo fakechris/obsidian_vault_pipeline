@@ -12,7 +12,7 @@ import { useI18n } from '../i18n';
 import { entityUrl, fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
-import { MarkdownView } from '../lib/markdown';
+import { MarkdownView, sourceImageResolver } from '../lib/markdown';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
 
 type Tab = 'memory' | 'source';
@@ -231,6 +231,12 @@ export default function SourceDetailPage() {
 
   const { source, memory, citing_claims: citing, doc } = detail;
   const title = source.title ?? source.sha256;
+  // READMEs reference repo-relative image paths (./assets/logo.png) — they
+  // must resolve against the note's source URL, not the portal origin.
+  const resolveImageSrc = useMemo(
+    () => sourceImageResolver(source.url ?? undefined),
+    [source.url],
+  );
 
   return (
     <>
@@ -455,6 +461,7 @@ export default function SourceDetailPage() {
                     anchoredLines={anchoredLines}
                     highlightLine={highlightLine}
                     frontmatterLabel={t('source.frontmatter')}
+                    resolveImageSrc={resolveImageSrc}
                   />
                   {doc.truncated && (
                     <div className="doc-note tiny muted">

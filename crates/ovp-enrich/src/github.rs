@@ -375,9 +375,14 @@ fn write_github_note(
 
     // README content. Floor the cut to a char boundary — READMEs are routinely
     // non-ASCII (CJK/emoji), so a raw byte slice would panic mid-character.
+    // Cap at 100 KiB: the old 8000 cut most READMEs in half (the portal Source
+    // view IS the reading surface — operator: "还是摘抄，没有渲染全文");
+    // the server serves up to 200 KiB and the fulltext scanner 2 MiB, so a
+    // 100 KiB note flows through every downstream budget whole.
     if let Some(readme) = &result.readme_content {
-        let truncated = if readme.len() > 8000 {
-            let mut end = 8000;
+        const MAX_README_BYTES: usize = 100 * 1024;
+        let truncated = if readme.len() > MAX_README_BYTES {
+            let mut end = MAX_README_BYTES;
             while end > 0 && !readme.is_char_boundary(end) {
                 end -= 1;
             }
@@ -386,13 +391,16 @@ fn write_github_note(
             readme.as_str()
         };
         body.push_str(truncated);
-        if readme.len() > 8000 {
+        if readme.len() > MAX_README_BYTES {
             // The cut can land INSIDE a fenced code block: an unclosed fence
             // then swallows the truncation marker (and any footer) into the
             // code — a ```mermaid fence so damaged renders as a parse error
             // wall instead of the diagram. Close the open fence first.
             body.push_str(&close_open_fence(truncated));
-            body.push_str("\n\n*(README truncated)*");
+            // SIZED marker: the repair scan targets the legacy unsized one
+            // exactly, so a genuinely >100 KiB README is NOT re-fetched on
+            // every daily run (the backlog drains instead of looping).
+            body.push_str("\n\n*(README truncated at 100 KiB)*");
         }
     }
     body.push('\n');
@@ -469,6 +477,70 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
         }
         None => (None, content),
     }
+}
+
+/// Legacy truncation marker written by the pre-100-KiB-cap ingest
+/// (2026-07-30 and earlier). New truncations carry a SIZED marker so this
+/// repair scan self-drains instead of re-fetching >100 KiB READMEs forever.
+const LEGACY_TRUNCATION_MARKER: &str = "*(README truncated)*";
+
+/// Self-healing backlog for the pre-100-KiB-cap ingest: notes under
+/// 50-Inbox whose body still carries the legacy `*(README truncated)*`
+/// marker were written with an 8 KiB README stub (127 such notes in the
+/// operator vault). Returns `(rel_path, source URL)` for those pointing at
+/// GitHub repos so daily Phase 2.6 re-enriches them once — the rewrite
+/// drops the marker and the list drains itself.
+pub fn find_truncated_github_notes(vault_root: &std::path::Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut stack = vec![vault_root.join("50-Inbox")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if !content.contains(LEGACY_TRUNCATION_MARKER) {
+                continue;
+            }
+            let Some(url) = frontmatter_source_url(&content) else {
+                continue;
+            };
+            if parse_github_repo_url(&url).is_none() {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(vault_root) else {
+                continue;
+            };
+            out.push((rel.to_string_lossy().to_string(), url));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `source:` URL from the YAML frontmatter block (quoted or bare).
+fn frontmatter_source_url(content: &str) -> Option<String> {
+    let content = content.strip_prefix("---\n")?;
+    let fm = content.split("\n---").next()?;
+    for line in fm.lines() {
+        if let Some(rest) = line.strip_prefix("source:") {
+            let v = rest.trim().trim_matches('"');
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Scan markdown for an unclosed code fence; return the closing fence line
@@ -571,6 +643,47 @@ mod tests {
         assert_eq!(close_open_fence(nested), "\n```");
         // Opener length is respected: ```` needs at least 4 backticks.
         assert_eq!(close_open_fence("````\n```\n"), "\n````");
+    }
+
+    #[test]
+    fn find_truncated_github_notes_targets_legacy_marker_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let dir = vault.join("50-Inbox/03-Processed/2026-07");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fm = |url: &str| {
+            format!("---\ntitle: t\nsource: \"{url}\"\nsource_type: github_repo\n---\n\nbody\n")
+        };
+        // Hit: legacy marker + github source URL.
+        std::fs::write(
+            dir.join("a.md"),
+            format!("{}\n*(README truncated)*\n", fm("https://github.com/o/r")),
+        )
+        .unwrap();
+        // Skip: legacy marker but not a GitHub repo.
+        std::fs::write(
+            dir.join("b.md"),
+            format!("{}\n*(README truncated)*\n", fm("https://example.com/blog")),
+        )
+        .unwrap();
+        // Skip: github repo but NO marker (complete note).
+        std::fs::write(dir.join("c.md"), fm("https://github.com/o/r2")).unwrap();
+        // Skip: SIZED marker — genuinely >100 KiB README, must not be
+        // re-fetched every run (the backlog would never drain).
+        std::fs::write(
+            dir.join("d.md"),
+            format!("{}\n*(README truncated at 100 KiB)*\n", fm("https://github.com/o/r3")),
+        )
+        .unwrap();
+
+        let found = find_truncated_github_notes(vault);
+        assert_eq!(
+            found,
+            vec![(
+                "50-Inbox/03-Processed/2026-07/a.md".to_string(),
+                "https://github.com/o/r".to_string()
+            )]
+        );
     }
 
     #[test]
