@@ -80,14 +80,38 @@ describe('sourceImageCandidates (repo vs vault image chains)', () => {
     expect(GH('data:image/png;base64,xx')).toEqual(['data:image/png;base64,xx']);
   });
 
-  it('clippings try the vault attachment endpoint first, then URL-joined remote', () => {
+  it('upgrades protocol-relative URLs to https', () => {
+    expect(GH('//cdn.example.com/a.png')).toEqual(['https://cdn.example.com/a.png']);
+  });
+
+  it('strips Obsidian vault-root leading slash before /api/file', () => {
+    const r = sourceImageCandidates(
+      undefined,
+      '50-Inbox/03-Processed/2026-05/note.md',
+    );
+    expect(r('/50-Inbox/01-Raw/attachments/2026-05/img-1.png')).toEqual([
+      '/api/file/50-Inbox/01-Raw/attachments/2026-05/img-1.png?note=50-Inbox%2F03-Processed%2F2026-05%2Fnote.md',
+    ]);
+  });
+
+  it('clippings: vault attachments stay vault-only (no guaranteed-404 remote)', () => {
     const r = sourceImageCandidates(
       'https://example.com/blog/post',
       '50-Inbox/03-Processed/2026-05/note.md',
     );
     expect(r('50-Inbox/01-Raw/attachments/2026-05/img-1.png')).toEqual([
       '/api/file/50-Inbox/01-Raw/attachments/2026-05/img-1.png?note=50-Inbox%2F03-Processed%2F2026-05%2Fnote.md',
-      'https://example.com/blog/50-Inbox/01-Raw/attachments/2026-05/img-1.png',
+    ]);
+  });
+
+  it('clippings: site-relative images still try the remote hop', () => {
+    const r = sourceImageCandidates(
+      'https://example.com/blog/post/',
+      '50-Inbox/03-Processed/2026-05/note.md',
+    );
+    expect(r('images/fig.png')).toEqual([
+      '/api/file/images/fig.png?note=50-Inbox%2F03-Processed%2F2026-05%2Fnote.md',
+      'https://example.com/blog/post/images/fig.png',
     ]);
   });
 
