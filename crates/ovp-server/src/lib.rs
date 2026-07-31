@@ -676,6 +676,8 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
+                || (p.starts_with("/api/source/") && p.ends_with("/translate"))
+                || (p.starts_with("/api/source/") && p.ends_with("/summarize"))
             {
                 let headers = AskHeaders::of(&request);
                 if let Some(resp) = guard_json_same_origin(&headers) {
@@ -768,6 +770,15 @@ fn dispatch(
         (Method::Get, p) if p.starts_with("/api/entity/") => handle_entity_api(state, url),
         (Method::Post, p) if p.starts_with("/api/source/") && p.ends_with("/tags") => {
             handle_source_tags_post(state, p, body)
+        }
+        (Method::Post, p) if p.starts_with("/api/source/") && p.ends_with("/translate") => {
+            handle_source_translate(state, p, body)
+        }
+        (Method::Post, p) if p.starts_with("/api/source/") && p.ends_with("/summarize") => {
+            handle_source_summarize(state, p, body)
+        }
+        (Method::Get, p) if p.starts_with("/api/source/") && p.ends_with("/work") => {
+            handle_source_work_get(state, p)
         }
         (Method::Get, "/api/chats") => handle_chats_list(state),
         (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
@@ -2271,6 +2282,219 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
     }
 }
 
+/// Parse `/api/source/<sha>/<action>` → sha (action already matched by caller).
+fn source_sha_from_action_path(path: &str, action: &str) -> Option<String> {
+    let rest = path
+        .trim_start_matches("/api/source/")
+        .trim_end_matches('/')
+        .strip_suffix(action)?
+        .trim_end_matches('/');
+    if rest.is_empty() || rest.contains('/') {
+        return None;
+    }
+    Some(url_decode(rest))
+}
+
+fn source_markdown_for(
+    state: &AppState,
+    model: &IndexModel,
+    sha: &str,
+) -> Result<(String, Option<String>, Option<String>), Response<std::io::Cursor<Vec<u8>>>> {
+    let Some(source) = model.sources.iter().find(|s| s.sha256 == sha) else {
+        return Err(json_response(
+            404,
+            &serde_json::json!({ "error": format!("source not found: {sha}") }).to_string(),
+        ));
+    };
+    let (markdown, _trunc, error) = readers::read_source_doc(
+        &state.vault_root,
+        &state.layout,
+        source.rel_path.as_deref(),
+        Some(&source.sha256),
+    );
+    if let Some(err) = error {
+        return Err(json_response(
+            500,
+            &serde_json::json!({ "error": err }).to_string(),
+        ));
+    }
+    let Some(md) = markdown.filter(|s| !s.trim().is_empty()) else {
+        return Err(json_response(400, r#"{"error":"source has no markdown body"}"#));
+    };
+    Ok((md, source.title.clone(), source.url.clone()))
+}
+
+/// `GET /api/source/:sha/work` — translation/summary archive status.
+fn handle_source_work_get(state: &AppState, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Some(sha) = source_sha_from_action_path(path, "work") else {
+        return json_response(400, r#"{"error":"missing source sha"}"#);
+    };
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    let (md, title, _url) = match source_markdown_for(state, &model, &sha) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let st = ovp_memory::source_work::load_status(
+        &state.vault_root,
+        &sha,
+        title.as_deref(),
+        &md,
+    );
+    let zh = ovp_memory::source_work::read_work_file(&state.vault_root, &st.work_rel, "zh.md");
+    let summary =
+        ovp_memory::source_work::read_work_file(&state.vault_root, &st.work_rel, "summary.md");
+    json_response(
+        200,
+        &serde_json::json!({
+            "work_rel": st.work_rel,
+            "has_original": st.has_original,
+            "has_zh": st.has_zh,
+            "has_summary": st.has_summary,
+            "primarily_english": st.primarily_english,
+            "meta": st.meta,
+            "zh": zh,
+            "summary": summary,
+        })
+        .to_string(),
+    )
+}
+
+fn parse_force_flag(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("force")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// `POST /api/source/:sha/translate` — refined EN→zh archive (LLM).
+fn handle_source_translate(
+    state: &AppState,
+    path: &str,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Some(sha) = source_sha_from_action_path(path, "translate") else {
+        return json_response(400, r#"{"error":"missing source sha"}"#);
+    };
+    let Some(factory) = state.ask_client.clone() else {
+        return json_response(
+            503,
+            r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+        );
+    };
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    let (md, title, url) = match source_markdown_for(state, &model, &sha) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let force = parse_force_flag(body);
+    let mut client = match factory() {
+        Ok(c) => c,
+        Err(e) => {
+            return json_response(
+                503,
+                &serde_json::json!({ "error": e, "code": "llm_unavailable" }).to_string(),
+            );
+        }
+    };
+    let model_name = ovp_memory::ask::AskArgs::default().model_name;
+    match ovp_memory::source_work::translate_source(
+        &state.vault_root,
+        &sha,
+        title.as_deref(),
+        url.as_deref(),
+        &md,
+        client.as_mut(),
+        &model_name,
+        force,
+    ) {
+        Ok(st) => {
+            let zh =
+                ovp_memory::source_work::read_work_file(&state.vault_root, &st.work_rel, "zh.md");
+            json_response(
+                200,
+                &serde_json::json!({
+                    "ok": true,
+                    "work_rel": st.work_rel,
+                    "has_zh": st.has_zh,
+                    "meta": st.meta,
+                    "zh": zh,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+/// `POST /api/source/:sha/summarize` — deep reading note (LLM).
+fn handle_source_summarize(
+    state: &AppState,
+    path: &str,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Some(sha) = source_sha_from_action_path(path, "summarize") else {
+        return json_response(400, r#"{"error":"missing source sha"}"#);
+    };
+    let Some(factory) = state.ask_client.clone() else {
+        return json_response(
+            503,
+            r#"{"error":"llm not configured","code":"llm_not_configured"}"#,
+        );
+    };
+    let Some(model) = state.current_model() else {
+        return json_response(503, r#"{"error":"index not available"}"#);
+    };
+    let (md, title, url) = match source_markdown_for(state, &model, &sha) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let force = parse_force_flag(body);
+    let mut client = match factory() {
+        Ok(c) => c,
+        Err(e) => {
+            return json_response(
+                503,
+                &serde_json::json!({ "error": e, "code": "llm_unavailable" }).to_string(),
+            );
+        }
+    };
+    let model_name = ovp_memory::ask::AskArgs::default().model_name;
+    match ovp_memory::source_work::summarize_source(
+        &state.vault_root,
+        &sha,
+        title.as_deref(),
+        url.as_deref(),
+        &md,
+        client.as_mut(),
+        &model_name,
+        force,
+    ) {
+        Ok(st) => {
+            let summary = ovp_memory::source_work::read_work_file(
+                &state.vault_root,
+                &st.work_rel,
+                "summary.md",
+            );
+            json_response(
+                200,
+                &serde_json::json!({
+                    "ok": true,
+                    "work_rel": st.work_rel,
+                    "has_summary": st.has_summary,
+                    "meta": st.meta,
+                    "summary": summary,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
 fn handle_flow(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = match state.current_model() {
         Some(m) => m,
@@ -2445,17 +2669,44 @@ fn handle_ask(
             return json_response(400, &body.to_string());
         }
     };
-    let question = parsed
+    let question_raw = parsed
         .get("question")
         .and_then(|q| q.as_str())
         .map(str::trim)
         .unwrap_or("");
-    if question.is_empty() {
+    if question_raw.is_empty() {
         return json_response(
             400,
             r#"{"error":"body must be {\"question\": \"<non-empty string>\"}"}"#,
         );
     }
+    // Optional chat-on-this: pin the turn to one library source body.
+    let focus_source = parsed
+        .get("focus_source")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 128)
+        .map(str::to_string);
+    let question_owned = if let Some(sha) = focus_source.as_deref() {
+        if let Some(model) = state.current_model() {
+            match source_markdown_for(state, &model, sha) {
+                Ok((md, title, url)) => {
+                    let clip: String = md.chars().take(24_000).collect();
+                    format!(
+                        "[FOCUS SOURCE]\nsha: {sha}\ntitle: {}\nurl: {}\n\n---\n{clip}\n---\n\n[USER QUESTION]\n{question_raw}",
+                        title.as_deref().unwrap_or("(untitled)"),
+                        url.as_deref().unwrap_or("(none)"),
+                    )
+                }
+                Err(_) => question_raw.to_string(),
+            }
+        } else {
+            question_raw.to_string()
+        }
+    } else {
+        question_raw.to_string()
+    };
+    let question = question_owned.as_str();
     // Optional session stem: continue an existing `.ovp/chats/<chat>.md`
     // (append + multi-turn context). Invalid stems are ignored (new chat).
     let chat = parsed

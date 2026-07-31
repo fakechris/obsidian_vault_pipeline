@@ -201,6 +201,7 @@ export const en = {
   // source detail
   'source.title': 'Source',
   'source.url': 'url',
+  'source.companions': 'open with',
   'source.staticLite':
     'The full text and evidence layer are not published here. Follow the url above to read the original; the durable claims this source supports are listed on the right.',
   'source.staticLiteNoUrl':
@@ -224,6 +225,18 @@ export const en = {
   'source.tabMemory': 'Memory',
   'source.tabMemoryCounts': '{cards} cards · {units} units',
   'source.tabSource': 'Source',
+  'source.tabZh': '中文',
+  'source.tabSummary': 'Summary',
+  'source.translate': 'Translate to 中文',
+  'source.retranslate': 'Re-translate',
+  'source.translating': 'Translating…',
+  'source.summarize': 'Deep summary',
+  'source.resummarize': 'Re-summarize',
+  'source.summarizing': 'Summarizing…',
+  'source.chatOnThis': 'Chat on this',
+  'source.workDir': 'archive',
+  'source.zhEmpty': 'No Chinese translation yet — use Translate above.',
+  'source.summaryEmpty': 'No deep summary yet — use Deep summary above.',
   'source.frontmatter': 'Properties (frontmatter)',
   'source.cardsTitle': 'Cards',
   'source.cardsHint':
@@ -357,6 +370,8 @@ export const en = {
   'ask.title': 'Ask',
   'ask.help':
     'Vault assistant: finds articles in your library, answers knowledge questions with checkable citations, or chats more openly. Follow-ups keep context in one session. Ask “what can you do?” for capability limits.',
+  'ask.focusBanner':
+    'Chat-on-this-source is on — answers are grounded in the focused article first:',
   'ask.historyTitle': 'History',
   'ask.historyEmpty':
     'No saved chats yet — each conversation is saved here as one session.',

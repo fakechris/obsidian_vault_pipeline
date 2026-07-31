@@ -11,6 +11,7 @@ pub mod ask;
 pub mod digest;
 pub mod intent;
 pub mod receipts;
+pub mod source_work;
 pub mod vault_tools;
 pub mod verify;
 pub mod working_memory;
