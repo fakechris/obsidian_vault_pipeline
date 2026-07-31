@@ -60,14 +60,10 @@ jobs:
       # `embed` (ONNX semantic themes) is OFF — its `ort` tree has no clean
       # x86_64-apple-darwin build (why dist dropped that target) and it bloats
       # the DMG. Themes stay a follow-up (lazy model download). Keeps both
-      # arches identical and small.
+      # arches identical and small. Uses scripts/build-desktop-sidecar.sh so
+      # local rebuilds can't silently ship a no-feature binary (2026-07-31).
       - name: Build ovp2 sidecar
-        run: |
-          cargo build --release -p ovp-cli --target ${{ matrix.target }} \
-            --features anthropic,pinboard-live,web-fetch-live,github-live
-          mkdir -p apps/desktop/src-tauri/binaries
-          cp "target/${{ matrix.target }}/release/ovp2" \
-             "apps/desktop/src-tauri/binaries/ovp2-${{ matrix.target }}"
+        run: bash scripts/build-desktop-sidecar.sh ${{ matrix.target }}
 
       - name: Build the portal (embedded by ovp-server)
         working-directory: console-ui
