@@ -798,6 +798,20 @@ fn dispatch(
             json_response(404, r#"{"error":"unknown api route"}"#)
         }
         (Method::Get, _) => serve_static(state, url),
+        // HEAD for static assets — some WebViews probe modules with HEAD
+        // before GET; answering 405 can leave the portal blank.
+        (Method::Head, path) if !path.starts_with("/api/") => {
+            let resp = serve_static(state, url);
+            // tiny_http doesn't strip body on HEAD; drop payload so clients
+            // that only read headers stay happy.
+            let headers: Vec<_> = resp.headers().to_vec();
+            let status = resp.status_code();
+            let mut out = Response::from_data(Vec::<u8>::new()).with_status_code(status);
+            for h in headers {
+                out.add_header(h);
+            }
+            out
+        }
         _ => text_response(405, "Method Not Allowed"),
     }
 }
@@ -3642,9 +3656,14 @@ fn serve_static(state: &AppState, url_path: &str) -> Response<std::io::Cursor<Ve
             } else {
                 "public, max-age=31536000, immutable"
             };
+            // Vite emits `crossorigin` on module scripts / stylesheets. In the
+            // desktop WKWebView that forces CORS mode even for same-origin
+            // loads — without ACAO the JS never executes and the portal is a
+            // blank white page (Chrome is more lenient; 2026-07-31 repro).
             Response::from_data(body)
                 .with_header(Header::from_bytes("Content-Type", content_type).unwrap())
                 .with_header(Header::from_bytes("Cache-Control", cache_control).unwrap())
+                .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap())
                 .with_status_code(200)
         }
         Resolved::BadRequest => text_response(400, "Bad Request"),

@@ -212,14 +212,41 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
     // could grab the port between the probe and run_server binding it), so a
     // lost race just picks a new port rather than failing the launch.
     let mut last_err = "failed to start the portal server".to_string();
-    for _ in 0..3 {
+    // Local diagnostic (desktop launches swallow stderr when opened via Finder).
+    let diag = |msg: &str| {
+        let line = format!(
+            "{} {}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            msg
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(vault.join(".ovp/desktop-portal.log"))
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(line.as_bytes())
+            });
+        eprintln!("ovp2-desktop: {msg}");
+    };
+    diag(&format!(
+        "start_server vault={} viz={}",
+        vault.display(),
+        viz_dir.display()
+    ));
+    for attempt in 0..3 {
         let port = match free_port() {
             Ok(p) => p,
             Err(e) => {
                 last_err = e;
+                diag(&format!("free_port failed: {last_err}"));
                 continue;
             }
         };
+        diag(&format!("attempt {attempt} port {port}"));
         let ask_client = ovp_server::providers_ask_client_factory(vault.clone());
         let config = ovp_server::ServeConfig {
             vault_root: vault.clone(),
@@ -243,10 +270,18 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
             }
         });
         match wait_until_http(port) {
-            Ok(()) => return Ok(format!("http://127.0.0.1:{port}/")),
-            Err(e) => last_err = e,
+            Ok(()) => {
+                let url = format!("http://127.0.0.1:{port}/");
+                diag(&format!("portal up at {url}"));
+                return Ok(url);
+            }
+            Err(e) => {
+                last_err = e;
+                diag(&format!("wait_until_http failed: {last_err}"));
+            }
         }
     }
+    diag(&format!("start_server giving up: {last_err}"));
     Err(last_err)
 }
 
