@@ -161,19 +161,12 @@ fn run_inner(
     // PINBOARD_TOKEN with --pinboard-live, and `--pinboard-since auto`
     // before any watermark exists (the desktop scheduler enables both by
     // default; an explicit `pinboard-sync` invocation errors instead).
-    // Also: a product schedule that passes --pinboard-live against a binary
-    // built without the feature (local desktop rebuilds that forgot live
-    // flags) must WARN+skip, not brick the whole daily run.
+    //
+    // Honesty rule: these are the ONLY soft-skips. A missing compile-time
+    // feature, or a live API/network error after the phase is armed, must
+    // hard-fail the run (last_run=failed) — never look like a green success
+    // with pinboard silently absent (operator 2026-07-31).
     let pinboard_skip = if args.pinboard_live
-        && args.pinboard_fixture.is_none()
-        && !cfg!(feature = "pinboard-live")
-    {
-        Some(
-            "binary built without `--features pinboard-live` (rebuild the product \
-             ovp2 / desktop sidecar with live features)"
-                .to_string(),
-        )
-    } else if args.pinboard_live
         && args.pinboard_fixture.is_none()
         && std::env::var("PINBOARD_TOKEN").ok().filter(|t| !t.trim().is_empty()).is_none()
     {
@@ -213,33 +206,22 @@ fn run_inner(
             yes_all: false,
             ..Default::default()
         };
-        // Unattended daily: a transient Pinboard API outage (HTTP 5xx / network)
-        // must not brick the whole run — intake + reader still need to drain
-        // local captures. Explicit `ovp2 pinboard-sync` stays hard-fail.
-        match sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts) {
-            Ok(outcome) => {
-                sayln!(
-                    "  pinboard: {} fetched, {} new note(s), {} known ({})",
-                    outcome.fetched,
-                    outcome.new_notes.len(),
-                    outcome.skipped_known,
-                    outcome.origin
-                );
-                if outcome.guard_would_abort {
-                    sayln!(
-                        "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
-                         exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
-                         (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
-                        outcome.new_notes.len(),
-                        ovp_intake::FIRST_SYNC_GUARD_MAX_NEW,
-                    );
-                }
-                report.pinboard = Some((&outcome).into());
-            }
-            Err(e) => {
-                sayln!("  pinboard: skipped (live capture failed: {e})");
-            }
+        let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts)
+            .map_err(CliError::Io)?;
+        sayln!(
+            "  pinboard: {} fetched, {} new note(s), {} known ({})",
+            outcome.fetched, outcome.new_notes.len(), outcome.skipped_known, outcome.origin
+        );
+        if outcome.guard_would_abort {
+            sayln!(
+                "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
+                 exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
+                 (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
+                outcome.new_notes.len(),
+                ovp_intake::FIRST_SYNC_GUARD_MAX_NEW,
+            );
         }
+        report.pinboard = Some((&outcome).into());
     }
 
     // Phase 2 — intake sweep (capture dirs → 01-Raw).
@@ -274,20 +256,10 @@ fn run_inner(
     // previously-flagged captures still pending) by fetching their URLs.
     // Successfully enriched files get enough body for plan_daily to pick them
     // up as reader candidates on the NEXT sweep.
-    // Soft-skip when the schedule passes --web-fetch-live against a binary
-    // compiled without the feature (2026-07-31: desktop sidecar rebuilt
-    // without live flags → every last_run failed in ~1s and blocked reader
-    // processing of ready sources).
-    if args.web_fetch_live
-        && args.web_fetch_fixture.is_none()
-        && !cfg!(feature = "web-fetch-live")
-        && !args.dry_run
-    {
-        sayln!(
-            "  enrich: skipped (binary built without `--features web-fetch-live`; \
-             rebuild the product ovp2 / desktop sidecar with live features)"
-        );
-    } else if (args.web_fetch_fixture.is_some() || args.web_fetch_live) && !args.dry_run {
+    // Per-URL fetch failures are recorded and skipped; a missing compile-time
+    // feature (binary without `--features web-fetch-live`) hard-fails via
+    // `build_web_fetcher` so last_run cannot greenwash a broken sidecar.
+    if (args.web_fetch_fixture.is_some() || args.web_fetch_live) && !args.dry_run {
         let needs_content_items: Vec<(String, String)> = sweep_needs_content
             .iter()
             .filter_map(|rec| {
@@ -327,17 +299,8 @@ fn run_inner(
     // Plus the self-healing backlog: notes written before the 100 KiB
     // README cap still carry the legacy `*(README truncated)*` marker; the
     // re-enrich rewrite drops the marker, so the repair list drains itself.
-    // Soft-skip on a no-feature binary (same desktop-sidecar footgun as 2.5).
-    if args.github_live
-        && args.github_fixture.is_none()
-        && !cfg!(feature = "github-live")
-        && !args.dry_run
-    {
-        sayln!(
-            "  github: skipped (binary built without `--features github-live`; \
-             rebuild the product ovp2 / desktop sidecar with live features)"
-        );
-    } else if (args.github_fixture.is_some() || args.github_live) && !args.dry_run {
+    // Same honesty rule as web-fetch: missing `github-live` feature hard-fails.
+    if (args.github_fixture.is_some() || args.github_live) && !args.dry_run {
         let repair = find_truncated_github_notes(&args.vault_root);
         let repair_count = repair.len();
         let mut seen_paths = std::collections::HashSet::new();
