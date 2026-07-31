@@ -270,6 +270,67 @@ export function fetchSourceDetail(sha: string): Promise<SourceDetail> {
   return fetchJson<SourceDetail>(`/api/source/${encodeURIComponent(sha)}`);
 }
 
+/** Translation / summary archive status for one source. */
+export interface SourceWorkPayload {
+  work_rel: string;
+  has_original: boolean;
+  has_zh: boolean;
+  has_summary: boolean;
+  primarily_english: boolean;
+  meta?: Record<string, unknown> | null;
+  zh?: string | null;
+  summary?: string | null;
+}
+
+export function fetchSourceWork(sha: string): Promise<SourceWorkPayload> {
+  if (STATIC_MODE) {
+    return Promise.resolve({
+      work_rel: '',
+      has_original: false,
+      has_zh: false,
+      has_summary: false,
+      primarily_english: false,
+    });
+  }
+  return fetchJson<SourceWorkPayload>(
+    `/api/source/${encodeURIComponent(sha)}/work`,
+  );
+}
+
+export async function postSourceTranslate(
+  sha: string,
+  force = false,
+): Promise<SourceWorkPayload & { ok: boolean }> {
+  const res = await fetch(`/api/source/${encodeURIComponent(sha)}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    ok?: boolean;
+  } & Partial<SourceWorkPayload>;
+  if (!res.ok) throw new Error(data.error ?? `translate failed (${res.status})`);
+  return data as SourceWorkPayload & { ok: boolean };
+}
+
+export async function postSourceSummarize(
+  sha: string,
+  force = false,
+): Promise<SourceWorkPayload & { ok: boolean }> {
+  const res = await fetch(`/api/source/${encodeURIComponent(sha)}/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    ok?: boolean;
+  } & Partial<SourceWorkPayload>;
+  if (!res.ok) throw new Error(data.error ?? `summarize failed (${res.status})`);
+  return data as SourceWorkPayload & { ok: boolean };
+}
+
 /** Source-centric neighborhood for the KnowledgeGraph component (design §4):
  * this source → claims citing it → sibling sources. Not pre-baked in static
  * mode — the source page falls back to its citing-claims list. */
@@ -336,17 +397,21 @@ export interface AskHistoryTurn {
   answer: string;
 }
 
+/** POST /api/ask options — chat stem, multi-turn history, optional focus. */
 export interface PostAskOptions {
   /** Stem of the live session's `.ovp/chats/<chat>.md` — continue that file. */
   chat?: string | null;
   /** Prior Q/A in this conversation so the model sees follow-up context. */
   history?: AskHistoryTurn[];
+  /** Pin the turn to one library source (chat-on-this). */
+  focus_source?: string;
 }
 
 /** POST /api/ask — cited answer over the grounded evidence index. The
  * server saves (or appends) the transcript to `.ovp/chats/` as a side effect.
  * Pass `chat` + `history` to continue one conversation instead of opening a
  * new history row per question. */
+
 export async function postAsk(
   question: string,
   opts: PostAskOptions = {},
@@ -357,6 +422,7 @@ export async function postAsk(
   const body: Record<string, unknown> = { question };
   if (opts.chat) body.chat = opts.chat;
   if (opts.history && opts.history.length > 0) body.history = opts.history;
+  if (opts.focus_source) body.focus_source = opts.focus_source;
   const res = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -10,7 +10,7 @@
  * The textarea sets `data-omnibox-suppress` so the Shell's global ⌘K
  * handler leaves it alone while composing. */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import AskProcessGraph from '../components/AskProcessGraph';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
@@ -678,6 +678,9 @@ export default function AskPage() {
   const { t, lang } = useI18n();
   const navigate = useNavigate();
   const { chatId: routeChatId } = useParams<{ chatId?: string }>();
+  const [searchParams] = useSearchParams();
+  // Chat-on-this-source: /ask?focus=<sha> pins every turn to that body.
+  const focusSource = searchParams.get('focus');
   // URL is the source of truth for which saved chat is open (bookmarkable).
   const openChat = routeChatId ?? null;
 
@@ -908,7 +911,11 @@ export default function AskPage() {
         setSessionChat(chat);
       }
       setPollChat(agent ? chat : null);
-      return postAsk(question, { chat, history });
+      return postAsk(question, {
+        chat,
+        history,
+        focus_source: focusSource ?? undefined,
+      });
     })()
       .then(applyResponse)
       .catch(async (err: unknown) => {
@@ -1013,6 +1020,16 @@ export default function AskPage() {
     <>
       <h1 style={{ marginTop: '1rem' }}>{t('ask.title')}</h1>
       <PageHelp>{t('ask.help')}</PageHelp>
+      {focusSource && !viewingSaved && (
+        <div className="card" style={{ marginBottom: '0.75rem' }}>
+          <p className="sm" style={{ marginBottom: 0 }}>
+            {t('ask.focusBanner')}{' '}
+            <Link className="mono tiny" to={`/library/${encodeURIComponent(focusSource)}`}>
+              {focusSource.slice(0, 12)}…
+            </Link>
+          </p>
+        </div>
+      )}
 
       <div className="grid ask">
         {/* left: saved chat history — one row per conversation session */}

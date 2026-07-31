@@ -9,13 +9,24 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
-import { entityUrl, fetchSourceDetail, fetchTags, postSourceTags, STATIC_MODE } from '../lib/api';
+import {
+  entityUrl,
+  fetchSourceDetail,
+  fetchSourceWork,
+  fetchTags,
+  postSourceSummarize,
+  postSourceTags,
+  postSourceTranslate,
+  STATIC_MODE,
+  type SourceWorkPayload,
+} from '../lib/api';
 import { collectionOf } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, sourceImageCandidates } from '../lib/markdown';
+import { companionLinks, isPrimarilyEnglish } from '../lib/sourceLinks';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
 
-type Tab = 'memory' | 'source';
+type Tab = 'memory' | 'source' | 'zh' | 'summary';
 
 interface DetailState {
   detail: SourceDetail | null;
@@ -181,19 +192,26 @@ export default function SourceDetailPage() {
   // rule as the Library facets (design §5). Default is the full SOURCE
   // rendering (operator finding: the memory tab alone reads as excerpts).
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: Tab = searchParams.get('tab') === 'memory' ? 'memory' : 'source';
+  const tabParam = searchParams.get('tab');
+  const tab: Tab =
+    tabParam === 'memory' || tabParam === 'zh' || tabParam === 'summary'
+      ? tabParam
+      : 'source';
   const setTab = (next: Tab) => {
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (next === 'memory') p.set('tab', 'memory');
-        else p.delete('tab');
+        if (next === 'source') p.delete('tab');
+        else p.set('tab', next);
         return p;
       },
       { replace: true },
     );
   };
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const [work, setWork] = useState<SourceWorkPayload | null>(null);
+  const [workBusy, setWorkBusy] = useState<'translate' | 'summarize' | null>(null);
+  const [workError, setWorkError] = useState<string | null>(null);
 
   const anchoredLines = useMemo(
     () =>
@@ -219,6 +237,85 @@ export default function SourceDetailPage() {
     () => sourceImageCandidates(sourceUrl, noteRelPath),
     [sourceUrl, noteRelPath],
   );
+
+  // Companion chips + English-ness only need URL/entities/body — safe hooks
+  // above early returns (same rules as imageSrcCandidates).
+  const companions = useMemo(
+    () =>
+      companionLinks(
+        detail?.source.url,
+        detail?.source.entities ?? [],
+      ),
+    [detail?.source.url, detail?.source.entities],
+  );
+  const bodyMarkdown = detail?.doc.markdown ?? '';
+  const offerTranslate =
+    !STATIC_MODE &&
+    (work?.primarily_english ??
+      (bodyMarkdown ? isPrimarilyEnglish(bodyMarkdown) : false));
+
+  useEffect(() => {
+    if (STATIC_MODE || !sha || status !== 'ready') return;
+    let cancelled = false;
+    fetchSourceWork(sha)
+      .then((w) => {
+        if (!cancelled) setWork(w);
+      })
+      .catch(() => {
+        if (!cancelled) setWork(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sha, status, version]);
+
+  const runTranslate = async (force = false) => {
+    if (!sha) return;
+    setWorkBusy('translate');
+    setWorkError(null);
+    try {
+      const w = await postSourceTranslate(sha, force);
+      setWork((prev) => ({
+        work_rel: w.work_rel ?? prev?.work_rel ?? '',
+        has_original: true,
+        has_zh: w.has_zh ?? true,
+        has_summary: w.has_summary ?? prev?.has_summary ?? false,
+        primarily_english: true,
+        meta: w.meta ?? prev?.meta,
+        zh: w.zh ?? null,
+        summary: w.summary ?? prev?.summary,
+      }));
+      setTab('zh');
+    } catch (e) {
+      setWorkError((e as Error).message);
+    } finally {
+      setWorkBusy(null);
+    }
+  };
+
+  const runSummarize = async (force = false) => {
+    if (!sha) return;
+    setWorkBusy('summarize');
+    setWorkError(null);
+    try {
+      const w = await postSourceSummarize(sha, force);
+      setWork((prev) => ({
+        work_rel: w.work_rel ?? prev?.work_rel ?? '',
+        has_original: true,
+        has_zh: w.has_zh ?? prev?.has_zh ?? false,
+        has_summary: w.has_summary ?? true,
+        primarily_english: prev?.primarily_english ?? offerTranslate,
+        meta: w.meta ?? prev?.meta,
+        zh: w.zh ?? prev?.zh,
+        summary: w.summary ?? null,
+      }));
+      setTab('summary');
+    } catch (e) {
+      setWorkError((e as Error).message);
+    } finally {
+      setWorkBusy(null);
+    }
+  };
 
   const jumpToLine = (line: number) => {
     setTab('source');
@@ -286,6 +383,25 @@ export default function SourceDetailPage() {
               <a className="mono tiny" href={source.url} target="_blank" rel="noreferrer">
                 {source.url}
               </a>
+            </dd>
+          </>
+        )}
+        {companions.length > 0 && (
+          <>
+            <dt>{t('source.companions')}</dt>
+            <dd className="companion-row">
+              {companions.map((c) => (
+                <a
+                  key={c.href}
+                  className="companion-chip"
+                  href={c.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={c.title}
+                >
+                  {c.label} ↗
+                </a>
+              ))}
             </dd>
           </>
         )}
@@ -364,6 +480,49 @@ export default function SourceDetailPage() {
         )}
       </dl>
 
+      {!STATIC_MODE && (
+        <div className="source-actions">
+          {offerTranslate && (
+            <button
+              type="button"
+              className="action-btn"
+              disabled={workBusy != null}
+              onClick={() => runTranslate(!!work?.has_zh)}
+            >
+              {workBusy === 'translate'
+                ? t('source.translating')
+                : work?.has_zh
+                  ? t('source.retranslate')
+                  : t('source.translate')}
+            </button>
+          )}
+          <button
+            type="button"
+            className="action-btn"
+            disabled={workBusy != null}
+            onClick={() => runSummarize(!!work?.has_summary)}
+          >
+            {workBusy === 'summarize'
+              ? t('source.summarizing')
+              : work?.has_summary
+                ? t('source.resummarize')
+                : t('source.summarize')}
+          </button>
+          <Link
+            className="action-btn action-btn-link"
+            to={`/ask?focus=${encodeURIComponent(source.sha256)}`}
+          >
+            {t('source.chatOnThis')}
+          </Link>
+          {work?.work_rel && (
+            <span className="tiny muted mono" title={work.work_rel}>
+              {t('source.workDir')}: {work.work_rel}
+            </span>
+          )}
+          {workError && <span className="fail-note">{workError}</span>}
+        </div>
+      )}
+
       <div className="grid two-col">
         {/* main column: Memory | Source tabs. On the published static site the
             evidence layer + full markdown aren't shipped (copyright), so show a
@@ -384,6 +543,24 @@ export default function SourceDetailPage() {
             >
               {t('source.tabSource')} <span className="mono muted tiny">md</span>
             </button>
+            {work?.has_zh && (
+              <button
+                type="button"
+                className={tab === 'zh' ? 'active' : ''}
+                onClick={() => setTab('zh')}
+              >
+                {t('source.tabZh')}
+              </button>
+            )}
+            {work?.has_summary && (
+              <button
+                type="button"
+                className={tab === 'summary' ? 'active' : ''}
+                onClick={() => setTab('summary')}
+              >
+                {t('source.tabSummary')}
+              </button>
+            )}
             <button
               type="button"
               className={tab === 'memory' ? 'active' : ''}
@@ -478,6 +655,38 @@ export default function SourceDetailPage() {
                     </div>
                   )}
                 </>
+              )}
+            </>
+          )}
+
+          {tab === 'zh' && (
+            <>
+              {work?.zh ? (
+                <MarkdownView
+                  markdown={work.zh}
+                  gutter={false}
+                  frontmatterLabel={t('source.frontmatter')}
+                />
+              ) : (
+                <EmptyState>
+                  <p>{t('source.zhEmpty')}</p>
+                </EmptyState>
+              )}
+            </>
+          )}
+
+          {tab === 'summary' && (
+            <>
+              {work?.summary ? (
+                <MarkdownView
+                  markdown={work.summary}
+                  gutter={false}
+                  frontmatterLabel={t('source.frontmatter')}
+                />
+              ) : (
+                <EmptyState>
+                  <p>{t('source.summaryEmpty')}</p>
+                </EmptyState>
               )}
             </>
           )}

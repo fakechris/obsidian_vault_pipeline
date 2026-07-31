@@ -671,6 +671,57 @@ body {
   padding: 0 0 0 0.3rem;
 }
 /* URL entity chip: mono id + a small external-link-out arrow. */
+.companion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.companion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border, #ccc);
+  font-size: 0.78rem;
+  text-decoration: none;
+  color: inherit;
+  background: var(--chip-bg, transparent);
+}
+.companion-chip:hover {
+  border-color: var(--accent, #3b82f6);
+  color: var(--accent, #3b82f6);
+}
+.source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0 1rem;
+}
+.action-btn {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #ccc);
+  background: var(--card, #fff);
+  cursor: pointer;
+}
+.action-btn:hover:not(:disabled) {
+  border-color: var(--accent, #3b82f6);
+}
+.action-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.action-btn-link {
+  text-decoration: none;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+}
 .entity-chip {
   display: inline-flex;
   align-items: center;
