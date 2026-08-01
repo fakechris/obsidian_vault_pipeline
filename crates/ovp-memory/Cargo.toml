@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 ovp-domain = { path = "../ovp-domain" }
 ovp-index = { path = "../ovp-index" }
+ovp-intake = { path = "../ovp-intake" }
 ovp-llm = { path = "../ovp-llm" }
 ovp-embed = { path = "../ovp-embed", optional = true }
 serde = { workspace = true }

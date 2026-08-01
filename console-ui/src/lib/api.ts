@@ -369,11 +369,22 @@ export interface SourceWorkQueueItem {
   notify_sent: boolean;
 }
 
+export interface SourceWorkWorkerInfo {
+  /** This portal process is running the LLM worker. */
+  active_here: boolean;
+  /** PID holding the vault worker lock, if any. */
+  owner_pid?: number | null;
+  /** This portal's PID. */
+  this_pid?: number;
+}
+
 export interface SourceWorkQueueSnapshot {
   schema: string;
   items: SourceWorkQueueItem[];
   /** Terminal items the client should notify about (server marks sent). */
   notify: SourceWorkQueueItem[];
+  /** Cross-process worker election status. */
+  worker?: SourceWorkWorkerInfo;
 }
 
 export function fetchSourceWorkQueue(): Promise<SourceWorkQueueSnapshot> {

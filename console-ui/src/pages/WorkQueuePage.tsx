@@ -83,7 +83,7 @@ function ItemRow({
 
 export default function WorkQueuePage() {
   const { t } = useI18n();
-  const { items, reorder, cancel, remove, refresh } = useSourceWorkQueue();
+  const { items, worker, reorder, cancel, remove, refresh } = useSourceWorkQueue();
   const [polledAt, setPolledAt] = useState(() => Date.now());
 
   const queued = items.filter((i) => i.status === 'queued');
@@ -127,6 +127,19 @@ export default function WorkQueuePage() {
           })}
         </span>
       </div>
+      {worker && !worker.active_here && (
+        <p className="tiny muted workq-worker-banner" role="status">
+          {t('workq.workerElsewhere', {
+            pid: worker.owner_pid ?? '—',
+            here: worker.this_pid ?? '—',
+          })}
+        </p>
+      )}
+      {worker?.active_here && (
+        <p className="tiny muted workq-worker-banner" role="status">
+          {t('workq.workerHere', { pid: worker.this_pid ?? '—' })}
+        </p>
+      )}
 
       {running.length > 0 && (
         <section className="workq-section">

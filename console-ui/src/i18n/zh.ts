@@ -215,6 +215,9 @@ export const zh: Record<keyof typeof en, string> = {
   'workq.refresh': '刷新',
   'workq.counts': '进行中 {running} · 排队 {queued} · 历史 {history}',
   'workq.polled': '更新于 {time}',
+  'workq.workerHere': '队列 worker 在本门户（pid {pid}）。可同时开多个窗口——同一 vault 只会有一个 worker。',
+  'workq.workerElsewhere':
+    '队列 worker 在另一进程（pid {pid}）；本门户（pid {here}）只负责入队。任务仍会执行，不必关掉任一方。',
   'workq.running': '进行中',
   'workq.queued': '排队中',
   'workq.queuedEmpty': '暂无排队 — 在资料页点「译为中文」或「深度摘要」即可入队。',

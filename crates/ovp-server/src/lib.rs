@@ -323,6 +323,11 @@ struct AppState {
     /// Per-article translate/summarize queue (serial across sources; parallel
     /// tasks within one source). See `ovp_memory::source_work_queue`.
     source_work_queue: Arc<ovp_memory::source_work_queue::SourceWorkQueue>,
+    /// Held for process lifetime when THIS portal won the worker election.
+    /// Dropping the process releases the lock so another portal can take over.
+    _source_work_worker_lock: Option<ovp_intake::RunLock>,
+    /// True when this process runs the background source-work worker.
+    source_work_worker_here: bool,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -583,6 +588,33 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     let vault_root = config.vault_root;
     let source_work_queue =
         Arc::new(ovp_memory::source_work_queue::SourceWorkQueue::open(&vault_root));
+    // Cross-process worker election: only ONE portal (desktop or CLI serve)
+    // runs the LLM worker for a given vault. Others still serve the API and
+    // can enqueue; jobs are claimed by the lock holder after disk reload.
+    let worker_lock = ovp_intake::RunLock::acquire_named(
+        &vault_root,
+        ovp_memory::source_work_queue::WORKER_LOCK,
+    );
+    let (worker_lock, worker_here) = match worker_lock {
+        Ok(lock) => {
+            eprintln!(
+                "source-work-queue: this process is the worker (pid {})",
+                std::process::id()
+            );
+            (Some(lock), true)
+        }
+        Err(e) => {
+            let owner = source_work_queue
+                .worker_owner_pid()
+                .map(|p| format!("pid {p}"))
+                .unwrap_or_else(|| "another process".into());
+            eprintln!(
+                "source-work-queue: worker already running ({owner}); \
+                 this portal will only enqueue/read — {e}"
+            );
+            (None, false)
+        }
+    };
     let state = Arc::new(AppState {
         vault_root,
         layout: VaultLayout::new(),
@@ -607,13 +639,15 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
         chat_saves: Arc::new(std::sync::Mutex::new(())),
         source_work_queue,
+        _source_work_worker_lock: worker_lock,
+        source_work_worker_here: worker_here,
     });
 
     // Pre-load model
     state.refresh_model();
 
-    // Background worker: one article at a time; translate∥summarize inside.
-    {
+    // Background worker: only the elected process.
+    if worker_here {
         let worker_state = Arc::clone(&state);
         std::thread::Builder::new()
             .name("source-work-queue".into())
@@ -2599,12 +2633,18 @@ fn parse_force_flag(body: &str) -> bool {
 fn handle_source_work_queue_get(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let snap = state.source_work_queue.snapshot();
     let notify = state.source_work_queue.take_notify_batch();
+    let owner_pid = state.source_work_queue.worker_owner_pid();
     json_response(
         200,
         &serde_json::json!({
             "schema": snap.schema,
             "items": snap.items,
             "notify": notify,
+            "worker": {
+                "active_here": state.source_work_worker_here,
+                "owner_pid": owner_pid,
+                "this_pid": std::process::id(),
+            },
         })
         .to_string(),
     )
@@ -4551,6 +4591,8 @@ mod tests {
             ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
             chat_saves: Arc::new(std::sync::Mutex::new(())),
             source_work_queue,
+            _source_work_worker_lock: None,
+            source_work_worker_here: false,
         }
     }
 

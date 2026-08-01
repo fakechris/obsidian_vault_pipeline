@@ -16,11 +16,13 @@ import {
   fetchSourceWorkQueue,
   reorderSourceWorkQueue,
   type SourceWorkQueueItem,
+  type SourceWorkWorkerInfo,
 } from './api';
 import { ensureNotifyPermission, notifyWorkItemDone } from './notify';
 
 interface QueueCtx {
   items: SourceWorkQueueItem[];
+  worker: SourceWorkWorkerInfo | null;
   activeCount: number;
   refresh: () => void;
   enqueue: (opts: {
@@ -39,12 +41,14 @@ const Ctx = createContext<QueueCtx | null>(null);
 
 export function SourceWorkQueueProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<SourceWorkQueueItem[]>([]);
+  const [worker, setWorker] = useState<SourceWorkWorkerInfo | null>(null);
 
   const refresh = useCallback(() => {
     if (STATIC_MODE) return;
     fetchSourceWorkQueue()
       .then((snap) => {
         setItems(snap.items);
+        setWorker(snap.worker ?? null);
         for (const n of snap.notify) {
           notifyWorkItemDone(n);
         }
@@ -112,6 +116,7 @@ export function SourceWorkQueueProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       items,
+      worker,
       activeCount,
       refresh,
       enqueue,
@@ -119,7 +124,7 @@ export function SourceWorkQueueProvider({ children }: { children: ReactNode }) {
       cancel,
       remove,
     }),
-    [items, activeCount, refresh, enqueue, reorder, cancel, remove],
+    [items, worker, activeCount, refresh, enqueue, reorder, cancel, remove],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
