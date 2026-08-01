@@ -136,11 +136,54 @@ pub struct SourceWorkQueue {
 impl SourceWorkQueue {
     pub fn open(vault_root: &Path) -> Self {
         let path = vault_root.join(QUEUE_REL);
-        let file = load_file(&path).unwrap_or_default();
+        let mut file = load_file(&path).unwrap_or_default();
+        // Restart recovery: anything left `running` was mid-flight when the
+        // process died. Promote to Done when artifacts already exist (no need
+        // to re-burn LLM); otherwise re-queue so `claim_next` is not blocked
+        // forever (one-running-at-a-time gate).
+        let recovered = recover_interrupted(vault_root, &mut file);
+        if recovered > 0 {
+            let _ = persist(&path, &file);
+            eprintln!(
+                "source-work-queue: recovered {recovered} interrupted item(s) after restart"
+            );
+        }
         Self {
             path,
             state: Mutex::new(file),
             wake: Condvar::new(),
+        }
+    }
+
+    /// After a worker finishes an item (or panics), force any still-Running
+    /// tasks on `id` into Failed so the serial gate cannot stick.
+    pub fn fail_still_running(&self, id: &str, reason: &str) {
+        let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(item) = g.items.iter_mut().find(|i| i.id == id) else {
+            return;
+        };
+        let mut touched = false;
+        if item.translate.wanted && item.translate.status == TaskStatus::Running {
+            item.translate.status = TaskStatus::Failed;
+            item.translate.error = Some(reason.into());
+            touched = true;
+        }
+        if item.summarize.wanted && item.summarize.status == TaskStatus::Running {
+            item.summarize.status = TaskStatus::Failed;
+            item.summarize.error = Some(reason.into());
+            touched = true;
+        }
+        if item.status == ItemStatus::Running && item_tasks_terminal(item) {
+            recompute_item_status(item);
+            touched = true;
+        } else if item.status == ItemStatus::Running && !item_tasks_terminal(item) {
+            // Still somehow non-terminal — park as failed item.
+            item.status = ItemStatus::Failed;
+            item.finished_at = Some(now_secs());
+            touched = true;
+        }
+        if touched {
+            let _ = persist(&self.path, &g);
         }
     }
 
@@ -477,6 +520,76 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Recover items left mid-flight across process death. Returns how many
+/// queue items were touched.
+fn recover_interrupted(vault_root: &Path, file: &mut QueueFile) -> usize {
+    let mut n = 0usize;
+    for item in file.items.iter_mut() {
+        let mut touched = false;
+
+        // Soft-cancelled mid-run: tasks may still be Running — park them.
+        if item.status == ItemStatus::Cancelled {
+            if item.translate.status == TaskStatus::Running {
+                item.translate.status = TaskStatus::Cancelled;
+                touched = true;
+            }
+            if item.summarize.status == TaskStatus::Running {
+                item.summarize.status = TaskStatus::Cancelled;
+                touched = true;
+            }
+            if touched {
+                n += 1;
+            }
+            continue;
+        }
+
+        let interrupted = item.status == ItemStatus::Running
+            || (item.translate.wanted && item.translate.status == TaskStatus::Running)
+            || (item.summarize.wanted && item.summarize.status == TaskStatus::Running);
+        if !interrupted {
+            continue;
+        }
+
+        // Prefer Done when artifacts already on disk (idempotent skip).
+        let work_rel =
+            crate::source_work::work_rel_for(&item.sha256, item.title.as_deref());
+        let dir = crate::source_work::work_abs(vault_root, &work_rel);
+        if item.translate.wanted && item.translate.status == TaskStatus::Running {
+            if dir.join("zh.md").is_file() {
+                item.translate.status = TaskStatus::Done;
+                item.translate.error = None;
+            } else {
+                item.translate.status = TaskStatus::Queued;
+                item.translate.error = None;
+            }
+            touched = true;
+        }
+        if item.summarize.wanted && item.summarize.status == TaskStatus::Running {
+            if dir.join("summary.md").is_file() {
+                item.summarize.status = TaskStatus::Done;
+                item.summarize.error = None;
+            } else {
+                item.summarize.status = TaskStatus::Queued;
+                item.summarize.error = None;
+            }
+            touched = true;
+        }
+        if item.status == ItemStatus::Running {
+            if item_tasks_terminal(item) {
+                recompute_item_status(item);
+            } else {
+                item.status = ItemStatus::Queued;
+                item.started_at = None;
+            }
+            touched = true;
+        }
+        if touched {
+            n += 1;
+        }
+    }
+    n
+}
+
 fn load_file(path: &Path) -> Option<QueueFile> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -570,6 +683,100 @@ mod tests {
         q.finish_task(&first.id, TaskKind::Translate, Ok(())).unwrap();
         let second = q.claim_next().unwrap();
         assert_ne!(first.sha256, second.sha256);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn open_requeues_interrupted_running_items() {
+        let vault = tmp();
+        let path = vault.join(QUEUE_REL);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = QueueFile {
+            schema: QUEUE_SCHEMA.into(),
+            items: vec![QueueItem {
+                id: "swq-stuck".into(),
+                sha256: "deadbeef".into(),
+                title: Some("stuck".into()),
+                translate: TaskState {
+                    wanted: true,
+                    force: false,
+                    status: TaskStatus::Running,
+                    error: None,
+                },
+                summarize: TaskState {
+                    wanted: true,
+                    force: false,
+                    status: TaskStatus::Running,
+                    error: None,
+                },
+                status: ItemStatus::Running,
+                created_at: 1,
+                started_at: Some(2),
+                finished_at: None,
+                notify: true,
+                notify_sent: false,
+            }],
+        };
+        persist(&path, &file).unwrap();
+        let q = SourceWorkQueue::open(&vault);
+        let snap = q.snapshot();
+        assert_eq!(snap.items.len(), 1);
+        // No artifacts on disk → re-queued for retry.
+        assert_eq!(snap.items[0].status, ItemStatus::Queued);
+        assert_eq!(snap.items[0].translate.status, TaskStatus::Queued);
+        assert_eq!(snap.items[0].summarize.status, TaskStatus::Queued);
+        // Worker can claim again after recovery.
+        let claimed = q.claim_next().unwrap();
+        assert_eq!(claimed.id, "swq-stuck");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn open_promotes_interrupted_when_artifacts_exist() {
+        let vault = tmp();
+        let path = vault.join(QUEUE_REL);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let title = "Has Artifacts";
+        let sha = "cafebabe01234567";
+        let work_rel = crate::source_work::work_rel_for(sha, Some(title));
+        let dir = vault.join(&work_rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("zh.md"), "译").unwrap();
+        std::fs::write(dir.join("summary.md"), "概").unwrap();
+        let file = QueueFile {
+            schema: QUEUE_SCHEMA.into(),
+            items: vec![QueueItem {
+                id: "swq-doneish".into(),
+                sha256: sha.into(),
+                title: Some(title.into()),
+                translate: TaskState {
+                    wanted: true,
+                    force: false,
+                    status: TaskStatus::Running,
+                    error: None,
+                },
+                summarize: TaskState {
+                    wanted: true,
+                    force: false,
+                    status: TaskStatus::Running,
+                    error: None,
+                },
+                status: ItemStatus::Running,
+                created_at: 1,
+                started_at: Some(2),
+                finished_at: None,
+                notify: true,
+                notify_sent: false,
+            }],
+        };
+        persist(&path, &file).unwrap();
+        let q = SourceWorkQueue::open(&vault);
+        let snap = q.snapshot();
+        assert_eq!(snap.items[0].status, ItemStatus::Done);
+        assert_eq!(snap.items[0].translate.status, TaskStatus::Done);
+        assert_eq!(snap.items[0].summarize.status, TaskStatus::Done);
+        // Gate free — next claim can proceed.
+        assert!(q.claim_next().is_none());
         let _ = std::fs::remove_dir_all(&vault);
     }
 
