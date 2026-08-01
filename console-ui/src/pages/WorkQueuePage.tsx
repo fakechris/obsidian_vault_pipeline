@@ -1,5 +1,6 @@
 /** Source-work queue manager — per-article translate/summarize jobs.
  * Serial across articles; parallel tasks within one article. */
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
@@ -83,6 +84,7 @@ function ItemRow({
 export default function WorkQueuePage() {
   const { t } = useI18n();
   const { items, reorder, cancel, remove, refresh } = useSourceWorkQueue();
+  const [polledAt, setPolledAt] = useState(() => Date.now());
 
   const queued = items.filter((i) => i.status === 'queued');
   const running = items.filter((i) => i.status === 'running');
@@ -90,6 +92,10 @@ export default function WorkQueuePage() {
     (i) =>
       i.status === 'done' || i.status === 'failed' || i.status === 'cancelled',
   );
+
+  useEffect(() => {
+    setPolledAt(Date.now());
+  }, [items]);
 
   const moveQueued = async (id: string, dir: -1 | 1) => {
     const ids = queued.map((i) => i.id);
@@ -114,6 +120,10 @@ export default function WorkQueuePage() {
             running: running.length,
             queued: queued.length,
             history: history.length,
+          })}
+          {' · '}
+          {t('workq.polled', {
+            time: new Date(polledAt).toLocaleTimeString(),
           })}
         </span>
       </div>

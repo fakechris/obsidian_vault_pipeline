@@ -126,10 +126,20 @@ pub struct EnqueueRequest {
     pub notify: bool,
 }
 
+/// How long a `running` item may sit with no finish before restart recovery
+/// treats it as abandoned (seconds). LLM translate of a long article can take
+/// several minutes; 12m is a generous upper bound that still unblocks a stuck
+/// gate within a refresh cycle users notice.
+const STALE_RUNNING_SECS: u64 = 12 * 60;
+
 /// Process-local queue + wake for the background worker.
 pub struct SourceWorkQueue {
     path: PathBuf,
+    /// Vault root — for artifact-aware recovery.
+    vault_root: PathBuf,
     state: Mutex<QueueFile>,
+    /// mtime of the queue file last loaded/persisted by THIS process.
+    disk_mtime: Mutex<Option<SystemTime>>,
     wake: Condvar,
 }
 
@@ -148,11 +158,100 @@ impl SourceWorkQueue {
                 "source-work-queue: recovered {recovered} interrupted item(s) after restart"
             );
         }
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         Self {
             path,
+            vault_root: vault_root.to_path_buf(),
             state: Mutex::new(file),
+            disk_mtime: Mutex::new(mtime),
             wake: Condvar::new(),
         }
+    }
+
+    /// Re-read the durable file when another process (or a prior crash recovery)
+    /// wrote a newer version. Skipped while THIS process owns a `running` item
+    /// so we don't clobber in-flight task state.
+    fn maybe_reload_from_disk(&self, g: &mut QueueFile) {
+        let disk_m = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok();
+        let last = self
+            .disk_mtime
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let newer = match (disk_m, last) {
+            (Some(d), Some(l)) => d > l,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if !newer {
+            return;
+        }
+        if g.items.iter().any(|i| i.status == ItemStatus::Running) {
+            // We own a run — do not replace in-memory state mid-flight.
+            return;
+        }
+        if let Some(mut file) = load_file(&self.path) {
+            let n = recover_interrupted(&self.vault_root, &mut file);
+            if n > 0 {
+                let _ = self.persist_tracked(&file);
+            }
+            *g = file;
+            if let Some(m) = disk_m {
+                *self
+                    .disk_mtime
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(m);
+            }
+            if n > 0 {
+                eprintln!(
+                    "source-work-queue: reloaded disk + recovered {n} interrupted item(s)"
+                );
+            }
+        }
+    }
+
+    /// Unstick items that have been `running` longer than [`STALE_RUNNING_SECS`]
+    /// (abandoned after crash/kill while this process still thought they ran).
+    fn recover_stale_running(&self, g: &mut QueueFile) -> usize {
+        let now = now_secs();
+        let mut stale_ids = Vec::new();
+        for item in g.items.iter() {
+            if item.status != ItemStatus::Running {
+                continue;
+            }
+            let started = item.started_at.unwrap_or(item.created_at);
+            if now.saturating_sub(started) >= STALE_RUNNING_SECS {
+                stale_ids.push(item.id.clone());
+            }
+        }
+        if stale_ids.is_empty() {
+            return 0;
+        }
+        // Re-run full interrupted recovery on the whole file so artifacts can
+        // promote to Done.
+        let n = recover_interrupted(&self.vault_root, g);
+        // Force any remaining long-running items (no artifacts) back to queued
+        // even if started_at was just cleared.
+        for item in g.items.iter_mut() {
+            if stale_ids.contains(&item.id) && item.status == ItemStatus::Running {
+                item.status = ItemStatus::Queued;
+                item.started_at = None;
+                if item.translate.status == TaskStatus::Running {
+                    item.translate.status = TaskStatus::Queued;
+                }
+                if item.summarize.status == TaskStatus::Running {
+                    item.summarize.status = TaskStatus::Queued;
+                }
+            }
+        }
+        if n > 0 || !stale_ids.is_empty() {
+            let _ = self.persist_tracked(g);
+            eprintln!(
+                "source-work-queue: unstuck {} stale running item(s)",
+                stale_ids.len()
+            );
+        }
+        stale_ids.len()
     }
 
     /// After a worker finishes an item (or panics), force any still-Running
@@ -183,15 +282,15 @@ impl SourceWorkQueue {
             touched = true;
         }
         if touched {
-            let _ = persist(&self.path, &g);
+            let _ = self.persist_tracked(&g);
         }
     }
 
     pub fn snapshot(&self) -> QueueFile {
-        self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.maybe_reload_from_disk(&mut g);
+        self.recover_stale_running(&mut g);
+        g.clone()
     }
 
     pub fn wake_worker(&self) {
@@ -246,7 +345,7 @@ impl SourceWorkQueue {
             }
             item.notify = item.notify || req.notify;
             let out = item.clone();
-            persist(&self.path, &g)?;
+            self.persist_tracked(&g)?;
             drop(g);
             self.wake.notify_one();
             return Ok(out);
@@ -270,7 +369,7 @@ impl SourceWorkQueue {
         g.items.push(item.clone());
         // Cap history: keep last 40 terminal + all active.
         prune_history(&mut g.items, 40);
-        persist(&self.path, &g)?;
+        self.persist_tracked(&g)?;
         drop(g);
         self.wake.notify_one();
         Ok(item)
@@ -306,7 +405,7 @@ impl SourceWorkQueue {
         g.items = running;
         g.items.extend(new_queued);
         g.items.extend(rest);
-        persist(&self.path, &g)?;
+        self.persist_tracked(&g)?;
         Ok(g.clone())
     }
 
@@ -337,7 +436,7 @@ impl SourceWorkQueue {
             _ => return Err("item already terminal".into()),
         }
         let out = item.clone();
-        persist(&self.path, &g)?;
+        self.persist_tracked(&g)?;
         Ok(out)
     }
 
@@ -355,13 +454,15 @@ impl SourceWorkQueue {
             }
             return Err(format!("queue item not found: {id}"));
         }
-        persist(&self.path, &g)?;
+        self.persist_tracked(&g)?;
         Ok(())
     }
 
     /// Claim the next queued article for the worker (marks Running).
     pub fn claim_next(&self) -> Option<QueueItem> {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.maybe_reload_from_disk(&mut g);
+        self.recover_stale_running(&mut g);
         if g.items.iter().any(|i| i.status == ItemStatus::Running) {
             return None; // one article at a time
         }
@@ -375,7 +476,7 @@ impl SourceWorkQueue {
             item.summarize.status = TaskStatus::Running;
         }
         let out = item.clone();
-        let _ = persist(&self.path, &g);
+        let _ = self.persist_tracked(&g);
         Some(out)
     }
 
@@ -412,7 +513,7 @@ impl SourceWorkQueue {
             item.finished_at = item.finished_at.or_else(|| Some(now_secs()));
         }
         let out = item.clone();
-        persist(&self.path, &g)?;
+        self.persist_tracked(&g)?;
         Ok(out)
     }
 
@@ -434,7 +535,7 @@ impl SourceWorkQueue {
             }
         }
         if !out.is_empty() {
-            let _ = persist(&self.path, &g);
+            let _ = self.persist_tracked(&g);
         }
         out
     }
@@ -449,7 +550,7 @@ impl SourceWorkQueue {
                 item.summarize.status = TaskStatus::Skipped;
             }
             recompute_item_status(item);
-            let _ = persist(&self.path, &g);
+            let _ = self.persist_tracked(&g);
         }
     }
 }
@@ -608,6 +709,20 @@ fn persist(path: &Path, file: &QueueFile) -> Result<(), String> {
     std::fs::write(&tmp, &raw).map_err(|e| format!("write queue tmp: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("rename queue: {e}"))?;
     Ok(())
+}
+
+/// Like [`persist`], and refresh the caller's mtime tracker when available.
+impl SourceWorkQueue {
+    fn persist_tracked(&self, file: &QueueFile) -> Result<(), String> {
+        persist(&self.path, file)?;
+        if let Ok(m) = std::fs::metadata(&self.path).and_then(|m| m.modified()) {
+            *self
+                .disk_mtime
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = Some(m);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

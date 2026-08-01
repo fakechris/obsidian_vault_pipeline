@@ -224,6 +224,7 @@ export const en = {
     'Translate and deep-summary jobs run one article at a time. Within an article, both tasks can run in parallel. Drag order with ↑↓, cancel queued items, get a notification when each article finishes.',
   'workq.refresh': 'Refresh',
   'workq.counts': 'running {running} · queued {queued} · history {history}',
+  'workq.polled': 'updated {time}',
   'workq.running': 'Running',
   'workq.queued': 'Queued',
   'workq.queuedEmpty': 'Nothing waiting — start Translate or Summary from a source page.',
