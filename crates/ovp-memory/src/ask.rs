@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::intent::{
     classify_intent, content_query_for_find, meta_capability_answer, AskIntent,
 };
-use crate::retrieve::{hybrid_retrieve, RetrieveCoverage};
+use crate::retrieve::{hybrid_retrieve, hybrid_retrieve_with_embed, RetrieveCoverage};
 use crate::verify::{VerificationReport, verify_answer};
 
 /// One completed Q/A turn from the same conversation (not including the
@@ -220,7 +220,8 @@ pub fn ask_with_optional_evidence(
                 quotas.cards = 0;
                 quotas.claims = 0;
             }
-            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            let mut items =
+                assemble_evidence_in_vault(model, evidence, &args.question, quotas, Some(vault_root));
             if args.max_context_hits > 0 && items.len() > args.max_context_hits {
                 items.truncate(args.max_context_hits);
             }
@@ -239,7 +240,8 @@ pub fn ask_with_optional_evidence(
                 quotas.cards = 0;
                 quotas.claims = 0;
             }
-            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            let mut items =
+                assemble_evidence_in_vault(model, evidence, &args.question, quotas, Some(vault_root));
             if args.max_context_hits > 0 && items.len() > args.max_context_hits {
                 items.truncate(args.max_context_hits);
             }
@@ -738,16 +740,29 @@ pub fn assemble_evidence(
     question: &str,
     quotas: EvidenceQuotas,
 ) -> Vec<EvidenceItem> {
-    assemble_evidence_with_coverage(model, evidence, question, quotas).0
+    assemble_evidence_in_vault(model, evidence, question, quotas, None)
+}
+
+/// Like [`assemble_evidence`], optionally using a vault path to enable the
+/// dense-embedding kNN lane (`embed` feature).
+pub fn assemble_evidence_in_vault(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    quotas: EvidenceQuotas,
+    vault_root: Option<&Path>,
+) -> Vec<EvidenceItem> {
+    assemble_evidence_with_coverage(model, evidence, question, quotas, vault_root).0
 }
 
 /// Like [`assemble_evidence`], but also returns the hybrid retrieve coverage
-/// ledger (lexical vs soft-semantic lanes over claims).
+/// ledger (lexical vs soft-semantic vs embed lanes over claims).
 pub fn assemble_evidence_with_coverage(
     model: &IndexModel,
     evidence: Option<&EvidenceModel>,
     question: &str,
     quotas: EvidenceQuotas,
+    vault_root: Option<&Path>,
 ) -> (Vec<EvidenceItem>, RetrieveCoverage) {
     if quotas.max_chars == 0 || (quotas.units + quotas.cards + quotas.claims) == 0 {
         return (Vec::new(), RetrieveCoverage::default());
@@ -772,7 +787,20 @@ pub fn assemble_evidence_with_coverage(
         claim_by_id.insert(id, claim);
     }
     let pool = (quotas.claims.saturating_mul(3)).max(quotas.claims);
-    let (ranked, retrieve_coverage) = hybrid_retrieve(question, &claim_docs, pool);
+    // Dense embed lane is optional (feature `embed`). Soft-fail when unavailable.
+    #[cfg(feature = "embed")]
+    let embed_lane = vault_root.and_then(|root| {
+        crate::embed_lane::build_claim_embed_lane(root, question, &claim_docs)
+    });
+    #[cfg(not(feature = "embed"))]
+    let embed_lane: Option<crate::retrieve::EmbedLane> = {
+        let _ = vault_root;
+        None
+    };
+    let (ranked, retrieve_coverage) = match embed_lane.as_ref() {
+        Some(lane) => hybrid_retrieve_with_embed(question, &claim_docs, pool, Some(lane)),
+        None => hybrid_retrieve(question, &claim_docs, pool),
+    };
     for hit in ranked {
         let Some(claim) = claim_by_id.get(&hit.id) else {
             continue;

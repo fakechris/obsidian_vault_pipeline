@@ -250,12 +250,27 @@ fn write_api_tree(
     // under claim_key (unique) plus claim_id when unambiguous (the model/graph
     // link by claim_id while `claim_body` keys on claim_key). `safe_component`
     // neutralizes any `..`/`/` so a filename can't escape the output tree.
+    // Lineage is optional for static sites: recompute from the same records'
+    // supersede edges when the publisher has no live ledger (publish folds
+    // active records only). Edges among the shipped active set are empty
+    // unless supersedes was carried on records — so static claim pages get
+    // lineage when the live server is used; public snapshot stays best-effort.
     for r in records {
-        if let Some(v) = bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false) {
-            write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_key))), &v)?;
+        if let Some(v) =
+            bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false)
+        {
+            write_json(
+                &api.join("claim")
+                    .join(format!("{}.json", safe_component(&r.claim_key))),
+                &v,
+            )?;
             files += 1;
             if r.claim_id != r.claim_key && id_counts.get(r.claim_id.as_str()) == Some(&1) {
-                write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
+                write_json(
+                    &api.join("claim")
+                        .join(format!("{}.json", safe_component(&r.claim_id))),
+                    &v,
+                )?;
                 files += 1;
             }
         }

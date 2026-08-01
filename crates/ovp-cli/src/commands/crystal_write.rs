@@ -45,6 +45,9 @@ pub struct WriteInputs {
     pub run_id: Option<String>,
     pub header: CrystalHeader,
     pub processed_review_ids: BTreeSet<String>,
+    /// Optional forced supersede targets: revision claim_id → durable claim_key
+    /// to supersede (from M36 strengthen/supersede review actions).
+    pub supersede_targets: std::collections::BTreeMap<String, String>,
 }
 
 /// What a durable write produced (returned so callers can print their own summary).
@@ -212,6 +215,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         run_id: args.run_id.clone(),
         header,
         processed_review_ids: BTreeSet::new(),
+        supersede_targets: Default::default(),
     })?;
 
     println!("crystal-write: run_id={}", out.run_id);
@@ -241,6 +245,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         run_id: run_id_override,
         header,
         processed_review_ids,
+        supersede_targets,
     } = inputs;
     let report = lint_candidate(&candidate, &index);
     let scores = score_candidate(&report);
@@ -353,51 +358,69 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         if active.contains(&r.claim_key) {
             continue; // idempotent: already active (or already appended this run)
         }
+        // Forced supersede from review (strengthen/supersede) wins over auto lineage.
+        let forced = supersede_targets
+            .get(&r.claim_id)
+            .cloned()
+            .or_else(|| supersede_targets.get(&r.claim_key).cloned());
         let decision = decide_lineage(r, &active_records);
-        let ev = match decision {
-            LineageDecision::SkipDuplicate {
-                existing_key,
-                reason,
-            } => {
-                lineage_notes.push(format!(
-                    "skip near-dup {} → {existing_key}: {reason}",
-                    r.claim_key
-                ));
-                continue;
+        let ev = if let Some(target) = forced {
+            lineage_notes.push(format!(
+                "review-forced supersede {} → {target}",
+                r.claim_key
+            ));
+            StoreEvent {
+                op: StoreOp::Supersede,
+                record: r.clone(),
+                supersedes: Some(target),
+                reason: Some("review strengthen/supersede".into()),
             }
-            LineageDecision::Supersede {
-                existing_key,
-                reason,
-            } => {
-                lineage_notes.push(format!(
-                    "supersede {} → {existing_key}: {reason}",
-                    r.claim_key
-                ));
-                StoreEvent {
-                    op: StoreOp::Supersede,
-                    record: r.clone(),
-                    supersedes: Some(existing_key),
-                    reason: Some(reason),
+        } else {
+            match decision {
+                LineageDecision::SkipDuplicate {
+                    existing_key,
+                    reason,
+                } => {
+                    lineage_notes.push(format!(
+                        "skip near-dup {} → {existing_key}: {reason}",
+                        r.claim_key
+                    ));
+                    continue;
                 }
-            }
-            LineageDecision::AppendWithNote { note } => {
-                lineage_notes.push(format!(
-                    "strengthen-candidate {} ↔ {}: {}",
-                    r.claim_key, note.existing_key, note.reason
-                ));
-                StoreEvent {
+                LineageDecision::Supersede {
+                    existing_key,
+                    reason,
+                } => {
+                    lineage_notes.push(format!(
+                        "supersede {} → {existing_key}: {reason}",
+                        r.claim_key
+                    ));
+                    StoreEvent {
+                        op: StoreOp::Supersede,
+                        record: r.clone(),
+                        supersedes: Some(existing_key),
+                        reason: Some(reason),
+                    }
+                }
+                LineageDecision::AppendWithNote { note } => {
+                    lineage_notes.push(format!(
+                        "strengthen-candidate {} ↔ {}: {}",
+                        r.claim_key, note.existing_key, note.reason
+                    ));
+                    StoreEvent {
+                        op: StoreOp::Write,
+                        record: r.clone(),
+                        supersedes: None,
+                        reason: Some(note.reason),
+                    }
+                }
+                LineageDecision::Append => StoreEvent {
                     op: StoreOp::Write,
                     record: r.clone(),
                     supersedes: None,
-                    reason: Some(note.reason),
-                }
+                    reason: None,
+                },
             }
-            LineageDecision::Append => StoreEvent {
-                op: StoreOp::Write,
-                record: r.clone(),
-                supersedes: None,
-                reason: None,
-            },
         };
         appended_lines
             .push_str(&serde_json::to_string(&ev).map_err(|e| CliError::Io(e.to_string()))?);

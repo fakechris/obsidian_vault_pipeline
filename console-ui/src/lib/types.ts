@@ -65,6 +65,12 @@ export interface ClaimDetail {
   theme: string;
   strength: string;
   citations: CitationDetail[];
+  /** Keys this claim superseded (lineage). */
+  supersedes?: string[];
+  /** Keys that superseded this claim. */
+  superseded_by?: string[];
+  /** Folded ledger status when known: active | superseded | retracted. */
+  status?: string;
 }
 
 export interface FlowLink {

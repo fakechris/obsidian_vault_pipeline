@@ -35,6 +35,8 @@ pub enum LaneState {
 pub struct RetrieveCoverage {
     pub lexical: LaneState,
     pub semantic: LaneState,
+    /// Dense embedding kNN lane (Unavailable when no vectors provided).
+    pub embed: LaneState,
 }
 
 #[derive(Debug, Clone)]
@@ -129,16 +131,93 @@ pub fn lexical_rank(query: &str, docs: &BTreeMap<String, String>) -> Vec<ScoredI
     out
 }
 
+/// Optional third lane: dense embedding kNN (cosine over precomputed vectors).
+/// Callers that have a query vector + doc vectors (e.g. from `ovp-embed` cache)
+/// pass them here; when absent the embed lane is `Unavailable`.
+#[derive(Debug, Clone)]
+pub struct EmbedLane {
+    pub query: Vec<f32>,
+    /// id → L2-normalized (or raw) embedding
+    pub docs: BTreeMap<String, Vec<f32>>,
+    pub min_cosine: f64,
+}
+
+/// Rank by cosine against a query vector.
+pub fn embed_knn_rank(lane: &EmbedLane, limit: usize) -> Vec<ScoredId> {
+    let q = &lane.query;
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<ScoredId> = lane
+        .docs
+        .iter()
+        .filter_map(|(id, v)| {
+            if v.len() != q.len() || v.is_empty() {
+                return None;
+            }
+            let score = cosine_f32(q, v);
+            (score >= lane.min_cosine).then(|| ScoredId {
+                id: id.clone(),
+                score,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    if limit > 0 && out.len() > limit {
+        out.truncate(limit);
+    }
+    out
+}
+
+fn cosine_f32(a: &[f32], b: &[f32]) -> f64 {
+    let mut dot = 0.0f64;
+    let mut na = 0.0f64;
+    let mut nb = 0.0f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let xf = f64::from(*x);
+        let yf = f64::from(*y);
+        dot += xf * yf;
+        na += xf * xf;
+        nb += yf * yf;
+    }
+    let denom = na.sqrt() * nb.sqrt();
+    if denom == 0.0 {
+        0.0
+    } else {
+        dot / denom
+    }
+}
+
 /// Run hybrid retrieval over an id→text map. Returns fused ranking + coverage.
 pub fn hybrid_retrieve(
     query: &str,
     docs: &BTreeMap<String, String>,
     limit: usize,
 ) -> (Vec<ScoredId>, RetrieveCoverage) {
+    hybrid_retrieve_with_embed(query, docs, limit, None)
+}
+
+/// Hybrid retrieve with an optional dense embed lane.
+pub fn hybrid_retrieve_with_embed(
+    query: &str,
+    docs: &BTreeMap<String, String>,
+    limit: usize,
+    embed: Option<&EmbedLane>,
+) -> (Vec<ScoredId>, RetrieveCoverage) {
     let mut coverage = RetrieveCoverage::default();
     if query.trim().is_empty() || docs.is_empty() {
         coverage.lexical = LaneState::Empty;
         coverage.semantic = LaneState::Empty;
+        coverage.embed = if embed.is_some() {
+            LaneState::Empty
+        } else {
+            LaneState::Unavailable
+        };
         return (Vec::new(), coverage);
     }
 
@@ -156,7 +235,24 @@ pub fn hybrid_retrieve(
         LaneState::Complete
     };
 
-    let fused = rrf_fuse(&[lex, sem], 60.0, limit);
+    let mut lists = vec![lex, sem];
+    match embed {
+        None => coverage.embed = LaneState::Unavailable,
+        Some(lane) if lane.query.is_empty() || lane.docs.is_empty() => {
+            coverage.embed = LaneState::Unavailable;
+        }
+        Some(lane) => {
+            let emb = embed_knn_rank(lane, limit.max(32));
+            coverage.embed = if emb.is_empty() {
+                LaneState::Empty
+            } else {
+                LaneState::Complete
+            };
+            lists.push(emb);
+        }
+    }
+
+    let fused = rrf_fuse(&lists, 60.0, limit);
     (fused, coverage)
 }
 
@@ -219,5 +315,27 @@ mod tests {
         let (hits, cov) = hybrid_retrieve("", &docs, 5);
         assert!(hits.is_empty());
         assert_eq!(cov.lexical, LaneState::Empty);
+        assert_eq!(cov.embed, LaneState::Unavailable);
+    }
+
+    #[test]
+    fn embed_lane_fuses_into_rrf() {
+        let mut docs = BTreeMap::new();
+        docs.insert("near".into(), "alpha beta gamma".into());
+        docs.insert("far".into(), "zzzz unrelated".into());
+        let mut emb_docs = BTreeMap::new();
+        emb_docs.insert("near".into(), vec![1.0f32, 0.0]);
+        emb_docs.insert("far".into(), vec![0.0f32, 1.0]);
+        let lane = EmbedLane {
+            query: vec![1.0, 0.0],
+            docs: emb_docs,
+            min_cosine: 0.1,
+        };
+        let (hits, cov) =
+            hybrid_retrieve_with_embed("alpha beta", &docs, 5, Some(&lane));
+        assert_eq!(cov.embed, LaneState::Complete);
+        assert_eq!(hits[0].id, "near");
     }
 }
+
+

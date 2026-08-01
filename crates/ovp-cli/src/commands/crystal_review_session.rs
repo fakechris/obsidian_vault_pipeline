@@ -311,12 +311,25 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
     let mut malformed: Vec<String> = Vec::new();
     for d in &decisions {
         match d.action {
-            ReviewAction::Rewrite | ReviewAction::Narrow if d.revisions.len() != 1 => {
+            ReviewAction::Rewrite
+            | ReviewAction::Narrow
+            | ReviewAction::Strengthen
+            | ReviewAction::Supersede
+                if d.revisions.len() != 1 =>
+            {
                 malformed.push(format!(
                     "{}: {:?} requires exactly 1 revision (got {})",
                     d.claim_id,
                     d.action,
                     d.revisions.len()
+                ))
+            }
+            ReviewAction::Strengthen | ReviewAction::Supersede
+                if d.target_claim_key.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) =>
+            {
+                malformed.push(format!(
+                    "{}: {:?} requires non-empty target_claim_key",
+                    d.claim_id, d.action
                 ))
             }
             ReviewAction::Split | ReviewAction::SplitByEvidence if d.revisions.len() < 2 => {
@@ -389,6 +402,8 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
                 action,
                 ReviewAction::Rewrite
                     | ReviewAction::Narrow
+                    | ReviewAction::Strengthen
+                    | ReviewAction::Supersede
                     | ReviewAction::Split
                     | ReviewAction::SplitByEvidence
                     | ReviewAction::Reject
@@ -583,6 +598,32 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         not_claiming: String::new(),
     };
     let n_revised = revised.items.len();
+    // Map revision claim ids → durable targets for strengthen/supersede.
+    let mut supersede_targets = std::collections::BTreeMap::new();
+    for d in &decisions {
+        if !matches!(
+            d.action,
+            ReviewAction::Strengthen | ReviewAction::Supersede
+        ) {
+            continue;
+        }
+        let Some(target) = d.target_claim_key.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        for rev in &d.revisions {
+            let id = if rev.id.trim().is_empty() {
+                match d.action {
+                    ReviewAction::Strengthen => format!("{}k", d.claim_id),
+                    ReviewAction::Supersede => format!("{}p", d.claim_id),
+                    _ => format!("{}r", d.claim_id),
+                }
+            } else {
+                rev.id.clone()
+            };
+            supersede_targets.insert(id, target.to_string());
+        }
+    }
     let out = write_durable(WriteInputs {
         candidate: revised,
         verdicts,
@@ -591,6 +632,7 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         run_id: args.run_id.clone(),
         header,
         processed_review_ids: processed,
+        supersede_targets,
     })?;
     println!("crystal-review-session-apply: run_id={}", out.run_id);
     println!(
@@ -683,7 +725,9 @@ fn render_decisions_template(review: &[ReviewEntry]) -> Result<String, CliError>
             action: ReviewAction::KeepCaveated,
             revisions: Vec::new(),
             defer: None,
-            note: "TODO: narrow | split_by_evidence | demote_to_source_insight | \
+            target_claim_key: None,
+            note: "TODO: narrow | split_by_evidence | strengthen|supersede \
+                   (+target_claim_key + 1 revision) | demote_to_source_insight | \
                    defer_until (+defer{trigger,n}) | reject_as_noise | keep_caveated"
                 .into(),
         })

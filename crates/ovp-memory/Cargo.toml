@@ -10,6 +10,7 @@ authors.workspace = true
 ovp-domain = { path = "../ovp-domain" }
 ovp-index = { path = "../ovp-index" }
 ovp-llm = { path = "../ovp-llm" }
+ovp-embed = { path = "../ovp-embed", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -18,3 +19,5 @@ tempfile = { workspace = true }
 
 [features]
 default = []
+# Dense embedding kNN lane for hybrid retrieve (ONNX via ovp-embed).
+embed = ["dep:ovp-embed", "ovp-embed/embed"]

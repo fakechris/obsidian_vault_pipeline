@@ -8,10 +8,25 @@ use std::path::{Path, PathBuf};
 
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
+use ovp_domain::crystal::lineage::{lineage_index, ClaimLineage};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_intake::read_jsonl;
+use std::collections::BTreeMap;
 
 use crate::{MAX_SOURCE_DOC_BYTES, is_plain_relative};
+
+/// Load the full ledger events (missing file → empty).
+pub fn load_ledger_events(vault_root: &Path, layout: &VaultLayout) -> Vec<StoreEvent> {
+    let ledger = vault_root
+        .join(layout.crystal_store_dir())
+        .join("ledger.jsonl");
+    read_jsonl(&ledger).unwrap_or_default()
+}
+
+/// Lineage index for claim pages / graph detail (rebuildable projection).
+pub fn load_lineage_index(vault_root: &Path, layout: &VaultLayout) -> BTreeMap<String, ClaimLineage> {
+    lineage_index(&load_ledger_events(vault_root, layout))
+}
 
 /// Fold the crystal ledger to its ACTIVE durable records and relabel each with
 /// the semantic display theme from `themes.json` — mirroring

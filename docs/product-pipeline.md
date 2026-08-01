@@ -191,9 +191,10 @@ designed and doctor-visible. Until all five hold, crystal-synth stays a manual c
 P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a 994-corpus synth
 run/signoff · review-queue apply loop with weekly cadence · doctor crystal-integrity checks.
 P1: incremental dirty-group synth · cost report ·
-minimal lineage 🟡 (dedup/strengthen/supersede hooks in crystal-write; deepen review typed actions) ·
-hybrid claim retrieve 🟡 (lexical+soft-semantic RRF; embedding kNN still optional later) ·
+minimal lineage 🟡 (crystal-write auto + M36 strengthen/supersede actions + claim API lineage fields) ·
+hybrid claim retrieve 🟡 (lexical+soft-semantic RRF; optional `embed` feature for dense kNN) ·
 capture thrift 🟡 (`--capture-tier` + worth_distilling 0-cost gate) ·
+cost report 🟡 (index_only vs reader_ran in daily run-report + CLI summary) ·
 publish secret scrub 🟡 (body secret/PII shapes at PublicView+records choke-point) ·
 **ask semantic verifier** (the shipped deterministic citation verifier checks evidence ids and
 quote-backed unit presence; it does not yet prove every answer sentence is semantically entailed) ·

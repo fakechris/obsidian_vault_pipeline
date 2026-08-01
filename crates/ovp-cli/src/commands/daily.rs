@@ -561,6 +561,25 @@ fn run_inner(
     // refresh happened — index/console paths are printed, not recorded, since
     // they are written after it.
     report.set_reader(planned, &daily);
+    if let Some(cost) = &report.cost {
+        sayln!(
+            "  cost: attempted={} reader_ran={} index_only={} failed={} units={} cards={}",
+            cost.attempted,
+            cost.reader_ran,
+            cost.index_only,
+            cost.failed,
+            cost.total_units,
+            cost.total_cards
+        );
+        if !cost.index_only_reasons.is_empty() {
+            let reasons: Vec<String> = cost
+                .index_only_reasons
+                .iter()
+                .map(|(k, n)| format!("{k}×{n}"))
+                .collect();
+            sayln!("  index_only reasons: {}", reasons.join(", "));
+        }
+    }
     let report_rel =
         ovp_daily::write_run_report(&args.vault_root, &report).map_err(CliError::Io)?;
 

@@ -47,7 +47,7 @@ pub use ledger::{
     succeeded_hashes, DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,
 };
 pub use report::{
-    write_run_report, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
+    write_run_report, CostReport, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
     RUN_REPORT_SCHEMA,
 };
 

@@ -15,11 +15,80 @@
 //! Never deletes old claims. Never rewrites evidence. Wrong-merge default is
 //! append (only auto-act on high-confidence supersede/dedup).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::crystal::{DurableCitation, DurableRecord};
+use crate::crystal::{CrystalStatus, DurableCitation, DurableRecord, StoreEvent, StoreOp};
+
+/// Public lineage view for one claim key (API / UI).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ClaimLineage {
+    /// Keys this claim explicitly superseded (from ledger Supersede events).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<String>,
+    /// Keys that superseded this claim (inverse of supersedes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub superseded_by: Vec<String>,
+    /// Folded status if known (active / superseded / retracted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// Build a per-claim lineage index from the append-only ledger events.
+/// Pure projection — never mutates authority.
+pub fn lineage_index(events: &[StoreEvent]) -> BTreeMap<String, ClaimLineage> {
+    let mut by_key: BTreeMap<String, ClaimLineage> = BTreeMap::new();
+    // Status from fold order (last event wins per key).
+    let folded = crate::crystal::fold_ledger(events);
+    for r in &folded {
+        let e = by_key.entry(r.claim_key.clone()).or_default();
+        e.status = Some(status_label(r.status));
+    }
+    for ev in events {
+        if ev.op != StoreOp::Supersede {
+            continue;
+        }
+        let Some(old) = ev.supersedes.as_ref() else {
+            continue;
+        };
+        let newer = &ev.record.claim_key;
+        by_key
+            .entry(newer.clone())
+            .or_default()
+            .supersedes
+            .push(old.clone());
+        by_key
+            .entry(old.clone())
+            .or_default()
+            .superseded_by
+            .push(newer.clone());
+    }
+    // Dedup edges (multiple supersede events over time).
+    for v in by_key.values_mut() {
+        v.supersedes.sort();
+        v.supersedes.dedup();
+        v.superseded_by.sort();
+        v.superseded_by.dedup();
+    }
+    by_key
+}
+
+fn status_label(s: CrystalStatus) -> String {
+    match s {
+        CrystalStatus::Active => "active".into(),
+        CrystalStatus::Superseded => "superseded".into(),
+        CrystalStatus::Retracted => "retracted".into(),
+        CrystalStatus::Draft => "draft".into(),
+    }
+}
+
+/// Lookup helper for claim pages.
+pub fn lineage_for(events: &[StoreEvent], claim_key: &str) -> ClaimLineage {
+    lineage_index(events)
+        .remove(claim_key)
+        .unwrap_or_default()
+}
 
 /// What to do with a new record relative to one active claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
