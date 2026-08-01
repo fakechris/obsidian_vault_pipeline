@@ -2773,20 +2773,26 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             let sha = sha.clone();
             let model_name = model_name.clone();
             handles.push(std::thread::spawn(move || {
-                let result = (|| {
-                    let mut client = factory_t()?;
-                    ovp_memory::source_work::translate_source(
-                        &vault,
-                        &sha,
-                        title_t.as_deref(),
-                        url_t.as_deref(),
-                        &md_t,
-                        client.as_mut(),
-                        &model_name,
-                        force_t,
-                    )
-                    .map(|_| ())
-                })();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (|| {
+                        let mut client = factory_t()?;
+                        ovp_memory::source_work::translate_source(
+                            &vault,
+                            &sha,
+                            title_t.as_deref(),
+                            url_t.as_deref(),
+                            &md_t,
+                            client.as_mut(),
+                            &model_name,
+                            force_t,
+                        )
+                        .map(|_| ())
+                    })()
+                }));
+                let result = match result {
+                    Ok(r) => r,
+                    Err(_) => Err("translate task panicked".into()),
+                };
                 let _ = q.finish_task(&id, TaskKind::Translate, result);
             }));
         } else {
@@ -2801,20 +2807,26 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             let sha = sha.clone();
             let model_name = model_name.clone();
             handles.push(std::thread::spawn(move || {
-                let result = (|| {
-                    let mut client = factory_s()?;
-                    ovp_memory::source_work::summarize_source(
-                        &vault,
-                        &sha,
-                        title_s.as_deref(),
-                        url_s.as_deref(),
-                        &md_s,
-                        client.as_mut(),
-                        &model_name,
-                        force_s,
-                    )
-                    .map(|_| ())
-                })();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (|| {
+                        let mut client = factory_s()?;
+                        ovp_memory::source_work::summarize_source(
+                            &vault,
+                            &sha,
+                            title_s.as_deref(),
+                            url_s.as_deref(),
+                            &md_s,
+                            client.as_mut(),
+                            &model_name,
+                            force_s,
+                        )
+                        .map(|_| ())
+                    })()
+                }));
+                let result = match result {
+                    Ok(r) => r,
+                    Err(_) => Err("summarize task panicked".into()),
+                };
                 let _ = q.finish_task(&id, TaskKind::Summarize, result);
             }));
         } else {
@@ -2829,6 +2841,11 @@ fn source_work_queue_worker(state: Arc<AppState>) {
         state
             .source_work_queue
             .mark_task_skipped_if_not_wanted(&id);
+        // Belt-and-suspenders: never leave a claimed article as `running`
+        // after the worker moves on (panic / missing finish_task / etc.).
+        state
+            .source_work_queue
+            .fail_still_running(&id, "worker finished without task result");
     }
 }
 
