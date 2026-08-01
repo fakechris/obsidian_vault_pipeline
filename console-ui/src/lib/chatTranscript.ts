@@ -10,6 +10,27 @@ export interface ChatTurn {
   answer: string;
 }
 
+/**
+ * Agent sessions store the LLM user message (may include the full
+ * `[FOCUS CONTEXT …] … [USER QUESTION]` pack). Product UI must only show
+ * the human question — never the injected body/memory/crystal dump.
+ */
+export function displayUserQuestion(raw: string): string {
+  const text = raw ?? '';
+  const marker = '[USER QUESTION]';
+  const idx = text.indexOf(marker);
+  if (idx >= 0) {
+    return text.slice(idx + marker.length).trim();
+  }
+  // Defensive: focus pack without marker must not paint as the Q bubble.
+  if (text.trimStart().startsWith('[FOCUS CONTEXT')) {
+    const lines = text.split('\n');
+    const last = [...lines].reverse().find((l) => l.trim() && !l.startsWith('#'));
+    return (last ?? '').trim() || '…';
+  }
+  return text.trim();
+}
+
 /** Citation keys the answer text cites, in first-appearance order.
  * Mirrors the Ask page tokenizer (claim/card/unit + bare ck-). */
 const CITE_RE =

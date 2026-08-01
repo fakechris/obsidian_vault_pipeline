@@ -237,7 +237,31 @@ fn dispose_duplicate(
             run_id: cfg.run_id.clone(),
         })?;
     }
-    let mut rec = record(cfg, IntakeAction::Duplicate, from, Some(to_rel), None, sha256, None, None);
+    // Capture title/url when possible so the index doesn't show a bare hash
+    // for parked duplicates (UI previously fell back to sha256).
+    let (dup_title, dup_url) = match read_source_from_path(path) {
+        Ok(s) => (
+            (!s.title.trim().is_empty()).then_some(s.title),
+            (!s.source_url.is_empty()).then_some(s.source_url),
+        ),
+        Err(_) => {
+            let stem = path
+                .file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty());
+            (stem, None)
+        }
+    };
+    let mut rec = record(
+        cfg,
+        IntakeAction::Duplicate,
+        from,
+        Some(to_rel),
+        dup_url,
+        sha256,
+        dup_title,
+        None,
+    );
     rec.dup_of = Some(dup_of);
     if !dry_run {
         append_intake_record(ledger_path, &rec)?;

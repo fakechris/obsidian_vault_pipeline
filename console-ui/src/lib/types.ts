@@ -65,6 +65,12 @@ export interface ClaimDetail {
   theme: string;
   strength: string;
   citations: CitationDetail[];
+  /** Keys this claim superseded (lineage). */
+  supersedes?: string[];
+  /** Keys that superseded this claim. */
+  superseded_by?: string[];
+  /** Folded ledger status when known: active | superseded | retracted. */
+  status?: string;
 }
 
 export interface FlowLink {
@@ -345,10 +351,17 @@ export interface AskProgress {
   started: boolean;
 }
 
-/** /api/chats entry — `mtime` is unix seconds; the client formats it. */
+/** /api/chats entry — `mtime` is unix seconds; the client formats it.
+ * Source-grounded sessions (chat-on-this) carry focus_* so Ask history and
+ * Library can filter/label without re-parsing markdown. */
 export interface ChatEntry {
   name: string;
   mtime: number;
+  /** Source sha when this session was started via Chat-on-this. */
+  focus_source?: string | null;
+  focus_title?: string | null;
+  /** First user question preview (truncated). */
+  preview?: string | null;
 }
 
 // ---- GET /api/settings (B5 System page, read-only v1) ----

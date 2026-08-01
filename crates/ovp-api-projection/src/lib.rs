@@ -15,8 +15,12 @@ pub mod bodies;
 pub mod graph;
 pub mod readers;
 pub mod redact;
+pub mod secret_redact;
 
 pub use redact::PublicView;
+pub use secret_redact::{redact_secrets, redact_text, scrub_durable_record, scrub_index_model};
+// Re-export for server/publish claim pages.
+pub use bodies::claim_body_with_lineage;
 
 /// Source markdown cap shipped in `/api/source/:sha` — kept here so the live
 /// server and the publisher truncate identically.

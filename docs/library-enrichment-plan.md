@@ -46,8 +46,18 @@ UI: chip row under URL on SourceDetailPage (live + static).
 
 **Detect**: body CJK ratio < ~15% and Latin-heavy → offer “译为中文”.
 
-**Engine**: product LLM via existing `providers.toml` / ask client factory
-(refined prompt: 信达雅, term consistency, no free MT engines).
+**Engine**: product LLM via `providers.toml` / ask client factory — **not** free MT.
+
+Quality stack (product subset of industry refined translators e.g. baoyu-translate):
+
+| Layer | What |
+|-------|------|
+| System prompt | 信达雅 + KEEP list (tickers, ETF codes, AUM/TRS/ADR…) + standard finance CN |
+| Glossary pre-pass | Multi-chunk / long body: extract `EN → CN\|KEEP` (≤40), inject every chunk; also `glossary.md` |
+| Chunking | ~12k chars, paragraph breaks, shared glossary |
+| Portal UX | Desktop WebView may drop long POSTs — UI **polls** `GET /work` until `has_zh` / new `translated_at` so the 中文 tab appears without leaving the page |
+
+Full multi-pass review/polish (baoyu refined) is a future latency trade-off, not default.
 
 **Archive** (idempotent; skip if artifact fresh):
 
@@ -56,10 +66,11 @@ UI: chip row under URL on SourceDetailPage (live + static).
   meta.json      # sha, url, model, times, lang
   original.md    # body snapshot at first translate
   zh.md          # Chinese translation
+  glossary.md    # optional session glossary (audit)
 ```
 
 **API**:
-- `GET  /api/source/:sha/work` → meta + paths + flags
+- `GET  /api/source/:sha/work` → meta + paths + flags + zh/summary body
 - `POST /api/source/:sha/translate` → runs LLM, writes archive, returns zh preview
 
 ---
@@ -74,11 +85,35 @@ UI tab: Summary | Source | Memory | 中文.
 
 ---
 
-## S4 — Chat on this source
+## S4 — Chat on this source (source-grounded, in-context)
 
-- Button → `/ask?focus=<sha>`
-- Ask POST accepts `focus_source: "<sha>"` → inject full body (capped) as
-  primary context; agent tools still available for vault-wide follow-ups.
+**Product model (not a bare Ask jump):**
+
+| Surface | Job |
+|---------|-----|
+| **Source detail dock** | Read + talk about THIS doc. Stay on the page. |
+| **Ask (global)** | Vault-wide questions. Unified history for all sessions. |
+
+**Interaction**
+
+1. 「针对本文对话」opens a **right dock** on `/library/:sha` (URL `?chat=1` or
+   `?chat=<stem>` to resume). Document stays visible.
+2. Context pack chips show what is auto-injected: **Body · Memory · Crystal**.
+3. Each `POST /api/ask` with `focus_source` injects body + memory cards/units +
+   citing claims (server-side). User question is stored raw in history.
+4. Seed prompts are source-local; multi-turn stays in the dock.
+5. “Open in Ask” / history badges link both surfaces without losing session.
+
+**History (one spine: `.ovp/chats/`)**
+
+- New source-grounded files get `<!-- ovp:focus_source=… -->` (+ title).
+- `GET /api/chats` returns `focus_source`, `focus_title`, `preview`.
+- **Ask** history: filter All | On sources | Vault-wide; badge + jump back to
+  source dock.
+- **Library detail**: “Past chats on this source” list inside the dock.
+
+**Non-goals for S4:** separate chat product, re-selecting source in Ask empty
+state, dumping the focus pack into the saved **Q:** line.
 
 ---
 

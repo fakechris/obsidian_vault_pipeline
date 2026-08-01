@@ -2667,6 +2667,7 @@ dependencies = [
  "ovp-intake",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -2902,6 +2903,7 @@ name = "ovp-memory"
 version = "2.0.1"
 dependencies = [
  "ovp-domain",
+ "ovp-embed",
  "ovp-index",
  "ovp-llm",
  "serde",

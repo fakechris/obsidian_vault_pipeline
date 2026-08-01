@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::intent::{
     classify_intent, content_query_for_find, meta_capability_answer, AskIntent,
 };
+use crate::retrieve::{hybrid_retrieve, hybrid_retrieve_with_embed, RetrieveCoverage};
 use crate::verify::{VerificationReport, verify_answer};
 
 /// One completed Q/A turn from the same conversation (not including the
@@ -28,6 +29,14 @@ use crate::verify::{VerificationReport, verify_answer};
 pub struct AskHistoryTurn {
     pub question: String,
     pub answer: String,
+}
+
+/// Optional source-grounded chat tag written into the saved transcript header
+/// so Ask history and Library can show "on this source" sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChatFocusMeta {
+    pub source_sha: String,
+    pub title: Option<String>,
 }
 
 pub struct AskArgs {
@@ -44,6 +53,12 @@ pub struct AskArgs {
     /// a new file. Invalid / missing names fall back to creating a new chat
     /// (never path-traverse).
     pub chat: Option<String>,
+    /// Source-grounded pack prepended to the *LLM* user message only (not used
+    /// for retrieval or intent). Keeps focus body/memory/crystal out of the
+    /// chat transcript's **Q:** line.
+    pub context_prefix: Option<String>,
+    /// When set, new chat files get `<!-- ovp:focus_source=… -->` metadata.
+    pub focus: Option<ChatFocusMeta>,
 }
 
 impl Default for AskArgs {
@@ -58,6 +73,8 @@ impl Default for AskArgs {
             verify_citations: true,
             history: Vec::new(),
             chat: None,
+            context_prefix: None,
+            focus: None,
         }
     }
 }
@@ -153,6 +170,7 @@ pub fn ask_with_optional_evidence(
                 &[],
                 None,
                 0,
+                args.focus.as_ref(),
             )?)
         } else {
             None
@@ -202,7 +220,8 @@ pub fn ask_with_optional_evidence(
                 quotas.cards = 0;
                 quotas.claims = 0;
             }
-            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            let mut items =
+                assemble_evidence_in_vault(model, evidence, &args.question, quotas, Some(vault_root));
             if args.max_context_hits > 0 && items.len() > args.max_context_hits {
                 items.truncate(args.max_context_hits);
             }
@@ -221,7 +240,8 @@ pub fn ask_with_optional_evidence(
                 quotas.cards = 0;
                 quotas.claims = 0;
             }
-            let mut items = assemble_evidence(model, evidence, &args.question, quotas);
+            let mut items =
+                assemble_evidence_in_vault(model, evidence, &args.question, quotas, Some(vault_root));
             if args.max_context_hits > 0 && items.len() > args.max_context_hits {
                 items.truncate(args.max_context_hits);
             }
@@ -247,10 +267,15 @@ pub fn ask_with_optional_evidence(
             content: turn.answer.clone(),
         });
     }
+    let user_request = match args.context_prefix.as_deref() {
+        Some(prefix) if !prefix.trim().is_empty() => {
+            format!("{prefix}\n\n[USER QUESTION]\n{}", args.question)
+        }
+        _ => args.question.clone(),
+    };
     messages.push(ModelMessage::User {
         content: format!(
-            "{user_prefix} ({context_hits} hits):\n\n{context}\n\n---\n\nUser request: {}",
-            args.question
+            "{user_prefix} ({context_hits} hits):\n\n{context}\n\n---\n\nUser request: {user_request}"
         ),
     });
 
@@ -281,6 +306,7 @@ pub fn ask_with_optional_evidence(
             &evidence_items,
             verification.as_ref(),
             context_hits,
+            args.focus.as_ref(),
         )?)
     } else {
         None
@@ -513,6 +539,7 @@ fn save_or_append_chat(
     evidence: &[EvidenceItem],
     verification: Option<&VerificationReport>,
     context_hits: usize,
+    focus: Option<&ChatFocusMeta>,
 ) -> Result<PathBuf, String> {
     let chats_dir = vault_root.join(".ovp").join("chats");
     std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
@@ -531,8 +558,69 @@ fn save_or_append_chat(
     }
 
     let ts = chrono_like_timestamp();
-    let chat_content = format!("# Ask — {ts}\n\n{turn_block}");
+    let chat_content = format!("{}{turn_block}", chat_file_header(&ts, focus));
     write_unique_chat(&chats_dir, &ts, &chat_content)
+}
+
+/// Markdown header for a new chat file, optionally tagged with source focus.
+pub fn chat_file_header(ts: &str, focus: Option<&ChatFocusMeta>) -> String {
+    let mut out = format!("# Ask — {ts}\n");
+    if let Some(f) = focus {
+        let sha = f.source_sha.trim();
+        if !sha.is_empty() {
+            out.push_str(&format!("<!-- ovp:focus_source={sha} -->\n"));
+            if let Some(title) = f.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                // HTML comment cannot contain `--`; keep the list surface readable.
+                let safe = title.replace("--", "—");
+                out.push_str(&format!("<!-- ovp:focus_title={safe} -->\n"));
+            }
+        }
+    }
+    out.push('\n');
+    out
+}
+
+/// Parse focus metadata + first question preview from a saved chat markdown.
+/// Scans only the leading portion (cheap for /api/chats list).
+pub fn parse_chat_surface_meta(md: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let head = md.get(..md.len().min(8_192)).unwrap_or(md);
+    let mut focus_source = None;
+    let mut focus_title = None;
+    for line in head.lines().take(40) {
+        let line = line.trim();
+        if let Some(rest) = line
+            .strip_prefix("<!-- ovp:focus_source=")
+            .and_then(|s| s.strip_suffix("-->"))
+        {
+            let v = rest.trim();
+            if !v.is_empty() {
+                focus_source = Some(v.to_string());
+            }
+        } else if let Some(rest) = line
+            .strip_prefix("<!-- ovp:focus_title=")
+            .and_then(|s| s.strip_suffix("-->"))
+        {
+            let v = rest.trim();
+            if !v.is_empty() {
+                focus_title = Some(v.to_string());
+            }
+        }
+    }
+    let preview = head.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("**Q:**")
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(|q| {
+                let clipped: String = q.chars().take(120).collect();
+                if q.chars().count() > 120 {
+                    format!("{clipped}…")
+                } else {
+                    clipped
+                }
+            })
+    });
+    (focus_source, focus_title, preview)
 }
 
 fn format_chat_turn(
@@ -555,11 +643,25 @@ fn format_chat_turn(
 /// is the audit record, this is the product surface. Same stem rules and
 /// create-or-append semantics as the legacy path; the block is the minimal
 /// Q/A form the transcript parser needs.
+///
+/// `question` must be the **user-visible** question (not the focus pack
+/// injected for the model). Optional `focus` tags a new file for source-
+/// scoped history in Ask + Library.
 pub fn save_agent_chat_turn(
     vault_root: &Path,
     chat: &str,
     question: &str,
     answer: &str,
+) -> Result<PathBuf, String> {
+    save_agent_chat_turn_with_focus(vault_root, chat, question, answer, None)
+}
+
+pub fn save_agent_chat_turn_with_focus(
+    vault_root: &Path,
+    chat: &str,
+    question: &str,
+    answer: &str,
+    focus: Option<&ChatFocusMeta>,
 ) -> Result<PathBuf, String> {
     let chats_dir = vault_root.join(".ovp").join("chats");
     std::fs::create_dir_all(&chats_dir).map_err(|e| format!("create chats dir: {e}"))?;
@@ -583,7 +685,10 @@ pub fn save_agent_chat_turn(
         .len()
         == 0;
     let payload = if empty {
-        format!("# Ask — {}\n\n{turn_block}", chrono_like_timestamp())
+        format!(
+            "{}{turn_block}",
+            chat_file_header(&chrono_like_timestamp(), focus)
+        )
     } else {
         format!("\n---\n\n{turn_block}")
     };
@@ -635,32 +740,78 @@ pub fn assemble_evidence(
     question: &str,
     quotas: EvidenceQuotas,
 ) -> Vec<EvidenceItem> {
+    assemble_evidence_in_vault(model, evidence, question, quotas, None)
+}
+
+/// Like [`assemble_evidence`], optionally using a vault path to enable the
+/// dense-embedding kNN lane (`embed` feature).
+pub fn assemble_evidence_in_vault(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    quotas: EvidenceQuotas,
+    vault_root: Option<&Path>,
+) -> Vec<EvidenceItem> {
+    assemble_evidence_with_coverage(model, evidence, question, quotas, vault_root).0
+}
+
+/// Like [`assemble_evidence`], but also returns the hybrid retrieve coverage
+/// ledger (lexical vs soft-semantic vs embed lanes over claims).
+pub fn assemble_evidence_with_coverage(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    question: &str,
+    quotas: EvidenceQuotas,
+    vault_root: Option<&Path>,
+) -> (Vec<EvidenceItem>, RetrieveCoverage) {
     if quotas.max_chars == 0 || (quotas.units + quotas.cards + quotas.claims) == 0 {
-        return Vec::new();
+        return (Vec::new(), RetrieveCoverage::default());
     }
 
     let mut claims = Vec::new();
     let mut cards = Vec::new();
     let mut units = Vec::new();
 
+    // Hybrid claim ranking: lexical + soft-semantic RRF. Coverage reports
+    // which lanes produced hits (Empty ≠ offline).
+    let mut claim_docs = std::collections::BTreeMap::new();
+    let mut claim_by_id = std::collections::BTreeMap::new();
     for claim in &model.claims {
+        let id = claim
+            .claim_key
+            .clone()
+            .unwrap_or_else(|| claim.claim_id.clone());
         let theme = claim.theme.as_deref().unwrap_or("");
-        let score = lexical_score(question, &[&claim.claim_id, &claim.claim, theme]);
-        if score <= 0.0 {
+        let text = format!("{} {} {}", claim.claim_id, claim.claim, theme);
+        claim_docs.insert(id.clone(), text);
+        claim_by_id.insert(id, claim);
+    }
+    let pool = (quotas.claims.saturating_mul(3)).max(quotas.claims);
+    // Dense embed lane is optional (feature `embed`). Soft-fail when unavailable.
+    #[cfg(feature = "embed")]
+    let embed_lane = vault_root.and_then(|root| {
+        crate::embed_lane::build_claim_embed_lane(root, question, &claim_docs)
+    });
+    #[cfg(not(feature = "embed"))]
+    let embed_lane: Option<crate::retrieve::EmbedLane> = {
+        let _ = vault_root;
+        None
+    };
+    let (ranked, retrieve_coverage) = match embed_lane.as_ref() {
+        Some(lane) => hybrid_retrieve_with_embed(question, &claim_docs, pool, Some(lane)),
+        None => hybrid_retrieve(question, &claim_docs, pool),
+    };
+    for hit in ranked {
+        let Some(claim) = claim_by_id.get(&hit.id) else {
             continue;
-        }
+        };
+        let theme = claim.theme.as_deref().unwrap_or("");
         let status = claim_status_str(claim.status);
         claims.push(ScoredEvidence {
-            score,
+            score: hit.score * 100.0, // RRF scores are small; scale for sort mix
             tier: 0,
             item: EvidenceItem {
-                // The STABLE ledger key when the index carries it (claim_ids
-                // can collide across runs; an answer's [claim:…] citation
-                // must audit unambiguously), claim_id for older indexes.
-                id: claim
-                    .claim_key
-                    .clone()
-                    .unwrap_or_else(|| claim.claim_id.clone()),
+                id: hit.id,
                 kind: EvidenceKind::Claim,
                 title: format!("{status} claim{}", optional_theme_suffix(theme)),
                 body: format!(
@@ -758,7 +909,7 @@ pub fn assemble_evidence(
         used_chars += rendered_len;
         out.push(row.item);
     }
-    out
+    (out, retrieve_coverage)
 }
 
 fn sort_scored(rows: &mut [ScoredEvidence]) {
@@ -904,7 +1055,10 @@ mod tests {
     };
     use ovp_llm::{CallError, ModelClient, ModelReply, ModelRequest, StopReason, Usage};
 
-    use crate::ask::{AskArgs, EvidenceKind, EvidenceQuotas, ask_with_evidence, assemble_evidence};
+    use crate::ask::{
+        AskArgs, ChatFocusMeta, EvidenceKind, EvidenceQuotas, ask_with_evidence, assemble_evidence,
+        chat_file_header, parse_chat_surface_meta, save_agent_chat_turn_with_focus,
+    };
 
     struct CapturingClient {
         request: Arc<Mutex<Option<ModelRequest>>>,
@@ -1208,6 +1362,60 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.is_file() && b.is_file());
 
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn chat_focus_meta_header_and_parse_round_trip() {
+        let focus = ChatFocusMeta {
+            source_sha: "abc123deadbeef".into(),
+            title: Some("Memory as state — draft".into()),
+        };
+        let header = chat_file_header("1751812999", Some(&focus));
+        assert!(header.contains("<!-- ovp:focus_source=abc123deadbeef -->"));
+        assert!(header.contains("<!-- ovp:focus_title=Memory as state — draft -->"));
+        let md = format!("{header}**Q:** What is the thesis?\n\n**A:** State over recall.\n");
+        let (sha, title, preview) = parse_chat_surface_meta(&md);
+        assert_eq!(sha.as_deref(), Some("abc123deadbeef"));
+        assert_eq!(title.as_deref(), Some("Memory as state — draft"));
+        assert_eq!(preview.as_deref(), Some("What is the thesis?"));
+    }
+
+    #[test]
+    fn save_agent_chat_turn_writes_focus_on_create_only() {
+        let vault =
+            std::env::temp_dir().join(format!("ovp-memory-chat-focus-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        std::fs::create_dir_all(&vault).unwrap();
+        let focus = ChatFocusMeta {
+            source_sha: "sha-focus-1".into(),
+            title: Some("Focused Source".into()),
+        };
+        save_agent_chat_turn_with_focus(
+            &vault,
+            "web-focus-1",
+            "summarize this",
+            "it is about X",
+            Some(&focus),
+        )
+        .unwrap();
+        // Second turn appends without duplicating focus header.
+        save_agent_chat_turn_with_focus(
+            &vault,
+            "web-focus-1",
+            "more?",
+            "yes",
+            Some(&focus),
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(vault.join(".ovp/chats/web-focus-1.md")).unwrap();
+        assert_eq!(md.matches("ovp:focus_source=sha-focus-1").count(), 1);
+        assert!(md.contains("**Q:** summarize this"));
+        assert!(md.contains("**Q:** more?"));
+        let (sha, title, preview) = parse_chat_surface_meta(&md);
+        assert_eq!(sha.as_deref(), Some("sha-focus-1"));
+        assert_eq!(title.as_deref(), Some("Focused Source"));
+        assert_eq!(preview.as_deref(), Some("summarize this"));
         let _ = std::fs::remove_dir_all(&vault);
     }
 

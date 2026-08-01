@@ -27,6 +27,7 @@ import { useModel } from '../model';
 import {
   citationsInOrder,
   citeLinkTarget,
+  displayUserQuestion,
   normalizeCiteToken,
   parseChatTranscript,
 } from '../lib/chatTranscript';
@@ -726,6 +727,10 @@ export default function AskPage() {
   const [pollChat, setPollChat] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
+  /** History rail filter: all | source-grounded only | vault-wide only. */
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'source' | 'vault'>(
+    'all',
+  );
   const [savedTurns, setSavedTurns] = useState<Turn[] | null>(null);
   const [savedError, setSavedError] = useState<string | null>(null);
   // Async guard: slow fetch for chat A must not paint under chat B.
@@ -763,7 +768,7 @@ export default function AskPage() {
         if (session.turns.length === 0) return fetchChatMarkdown(openChat);
         setSavedTurns(
           session.turns.map((turn) => ({
-            question: turn.question,
+            question: displayUserQuestion(turn.question),
             errorKey: null,
             response: {
               answer: turn.answer,
@@ -984,6 +989,16 @@ export default function AskPage() {
     [chats, openChat],
   );
 
+  const filteredChats = useMemo(() => {
+    if (historyFilter === 'source') {
+      return chats.filter((c) => Boolean(c.focus_source));
+    }
+    if (historyFilter === 'vault') {
+      return chats.filter((c) => !c.focus_source);
+    }
+    return chats;
+  }, [chats, historyFilter]);
+
   // Live agent activity for the in-flight turn. Before the first poll lands
   // (or on the legacy path) the thread falls back to the static pending text.
   let liveTrail: React.ReactNode = null;
@@ -1024,8 +1039,18 @@ export default function AskPage() {
         <div className="card" style={{ marginBottom: '0.75rem' }}>
           <p className="sm" style={{ marginBottom: 0 }}>
             {t('ask.focusBanner')}{' '}
-            <Link className="mono tiny" to={`/library/${encodeURIComponent(focusSource)}`}>
+            <Link
+              className="mono tiny"
+              to={`/library/${encodeURIComponent(focusSource)}?chat=1`}
+            >
               {focusSource.slice(0, 12)}…
+            </Link>
+            {' · '}
+            <Link
+              className="tiny"
+              to={`/library/${encodeURIComponent(focusSource)}?chat=1`}
+            >
+              {t('ask.focusOpenOnSource')}
             </Link>
           </p>
         </div>
@@ -1046,11 +1071,35 @@ export default function AskPage() {
                 {t('ask.newConversation')}
               </button>
             )}
+            {chats.length > 0 && (
+              <div className="chat-history-filters" role="tablist">
+                {(
+                  [
+                    ['all', 'ask.historyFilterAll'],
+                    ['source', 'ask.historyFilterSource'],
+                    ['vault', 'ask.historyFilterVault'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={historyFilter === key}
+                    className={historyFilter === key ? 'active' : undefined}
+                    onClick={() => setHistoryFilter(key)}
+                  >
+                    {t(label)}
+                  </button>
+                ))}
+              </div>
+            )}
             {chats.length === 0 ? (
               <p className="tiny muted">{t('ask.historyEmpty')}</p>
+            ) : filteredChats.length === 0 ? (
+              <p className="tiny muted">{t('ask.historyFilterEmpty')}</p>
             ) : (
               <ul className="facet-list chat-list">
-                {chats.map((entry) => (
+                {filteredChats.map((entry) => (
                   <li key={entry.name}>
                     <Link
                       to={`/ask/chat/${encodeURIComponent(entry.name)}`}
@@ -1061,7 +1110,47 @@ export default function AskPage() {
                           : undefined
                       }
                     >
+                      {entry.focus_source ? (
+                        <span className="chat-focus-badge" title={entry.focus_title ?? entry.focus_source}>
+                          {t('ask.historyOnSource')}
+                        </span>
+                      ) : (
+                        <span className="chat-vault-badge">{t('ask.historyVault')}</span>
+                      )}
+                      <span className="chat-preview">
+                        {entry.preview ||
+                          entry.focus_title ||
+                          chatDate(entry)}
+                      </span>
                       <span className="chat-date">{chatDate(entry)}</span>
+                      {entry.focus_source && (
+                        <span
+                          className="chat-focus-link"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            navigate(
+                              `/library/${encodeURIComponent(entry.focus_source!)}?chat=${encodeURIComponent(entry.name)}`,
+                            );
+                          }}
+                          role="link"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              navigate(
+                                `/library/${encodeURIComponent(entry.focus_source!)}?chat=${encodeURIComponent(entry.name)}`,
+                              );
+                            }
+                          }}
+                        >
+                          {entry.focus_title
+                            ? entry.focus_title.length > 28
+                              ? `${entry.focus_title.slice(0, 28)}…`
+                              : entry.focus_title
+                            : entry.focus_source.slice(0, 10)}
+                        </span>
+                      )}
                     </Link>
                   </li>
                 ))}
@@ -1081,6 +1170,16 @@ export default function AskPage() {
                   <span className="mono">
                     {openChatMeta ? chatDate(openChatMeta) : openChat}
                   </span>
+                  {openChatMeta?.focus_source && (
+                    <>
+                      {' · '}
+                      <Link
+                        to={`/library/${encodeURIComponent(openChatMeta.focus_source)}?chat=${encodeURIComponent(openChatMeta.name)}`}
+                      >
+                        {openChatMeta.focus_title || t('ask.historyOnSource')}
+                      </Link>
+                    </>
+                  )}
                 </span>
                 <button
                   type="button"

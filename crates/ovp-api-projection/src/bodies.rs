@@ -204,6 +204,18 @@ pub fn claim_body(
     id: &str,
     include_unit_text: bool,
 ) -> Option<Value> {
+    claim_body_with_lineage(records, model, reader_root, id, include_unit_text, None)
+}
+
+/// Like [`claim_body`], with an optional lineage index (from ledger events).
+pub fn claim_body_with_lineage(
+    records: &[DurableRecord],
+    model: Option<&IndexModel>,
+    reader_root: &Path,
+    id: &str,
+    include_unit_text: bool,
+    lineage_for: Option<&std::collections::BTreeMap<String, ovp_domain::crystal::lineage::ClaimLineage>>,
+) -> Option<Value> {
     let rec = records
         .iter()
         .find(|r| r.claim_key == id || r.claim_id == id)?;
@@ -258,13 +270,32 @@ pub fn claim_body(
         }));
     }
 
-    Some(json!({
+    // Optional lineage fields (callers pass a precomputed map from ledger
+    // events). Empty / missing lineage is fine — older clients ignore extras.
+    let lineage = lineage_for
+        .and_then(|m| m.get(&rec.claim_key).or_else(|| m.get(&rec.claim_id)));
+
+    let mut body = json!({
         "claim_id": rec.claim_key,
         "claim": rec.claim,
         "theme": rec.theme,
         "strength": format!("{:?}", rec.strength).to_lowercase(),
         "citations": citations,
-    }))
+    });
+    if let Some(lin) = lineage {
+        if let Some(obj) = body.as_object_mut() {
+            if !lin.supersedes.is_empty() {
+                obj.insert("supersedes".into(), json!(lin.supersedes));
+            }
+            if !lin.superseded_by.is_empty() {
+                obj.insert("superseded_by".into(), json!(lin.superseded_by));
+            }
+            if let Some(st) = &lin.status {
+                obj.insert("status".into(), json!(st));
+            }
+        }
+    }
+    Some(body)
 }
 
 /// The source markdown payload for `/api/source/:sha`. `None` in publish (lite)

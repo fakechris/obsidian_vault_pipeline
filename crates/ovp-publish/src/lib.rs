@@ -12,7 +12,9 @@ pub mod run;
 
 use std::path::{Path, PathBuf};
 
-use ovp_api_projection::{PublicView, bodies, graph, readers};
+use ovp_api_projection::{
+    PublicView, bodies, graph, readers, scrub_durable_record, scrub_index_model,
+};
 use ovp_domain::VaultLayout;
 use ovp_index::{
     IndexModel, Query, build_evidence, build_index_at, now_rfc3339, write_evidence, write_index,
@@ -75,8 +77,11 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         write_evidence(&args.vault_root, &e)?;
     }
 
-    // 2. Redact to a public-safe OWNED model.
+    // 2. Redact to a public-safe OWNED model, then scrub secret/PII shapes from
+    // every public string field (claims, quotes, titles). Authority ledgers
+    // are never rewritten — only this publish projection is scrubbed.
     let mut public = PublicView::from_model(&model).into_model();
+    let _secret_hits_model = scrub_index_model(&mut public);
     let public_cases: std::collections::HashSet<String> =
         public.packs.iter().map(|p| p.pack_dir.clone()).collect();
 
@@ -119,6 +124,7 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
                     ovp_domain::crystal::themes::UNCLASSIFIED_THEME.to_string()
                 });
             }
+            let _ = scrub_durable_record(&mut r);
             Some(r)
         })
         .collect();
@@ -244,12 +250,27 @@ fn write_api_tree(
     // under claim_key (unique) plus claim_id when unambiguous (the model/graph
     // link by claim_id while `claim_body` keys on claim_key). `safe_component`
     // neutralizes any `..`/`/` so a filename can't escape the output tree.
+    // Lineage is optional for static sites: recompute from the same records'
+    // supersede edges when the publisher has no live ledger (publish folds
+    // active records only). Edges among the shipped active set are empty
+    // unless supersedes was carried on records — so static claim pages get
+    // lineage when the live server is used; public snapshot stays best-effort.
     for r in records {
-        if let Some(v) = bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false) {
-            write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_key))), &v)?;
+        if let Some(v) =
+            bodies::claim_body(records, Some(public), Path::new(""), &r.claim_key, false)
+        {
+            write_json(
+                &api.join("claim")
+                    .join(format!("{}.json", safe_component(&r.claim_key))),
+                &v,
+            )?;
             files += 1;
             if r.claim_id != r.claim_key && id_counts.get(r.claim_id.as_str()) == Some(&1) {
-                write_json(&api.join("claim").join(format!("{}.json", safe_component(&r.claim_id))), &v)?;
+                write_json(
+                    &api.join("claim")
+                        .join(format!("{}.json", safe_component(&r.claim_id))),
+                    &v,
+                )?;
                 files += 1;
             }
         }
@@ -600,6 +621,26 @@ mod tests {
 
     fn read(p: &Path) -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn publish_scrubs_secret_shapes_from_claim_text() {
+        use ovp_api_projection::{scrub_durable_record, scrub_index_model};
+        let mut m = PublicView::from_model(&model()).into_model();
+        m.claims[0].claim =
+            "Use sk-abcdefghijklmnopqrstuvwxyz012345 in config".into();
+        let hits = scrub_index_model(&mut m);
+        assert!(hits >= 1);
+        assert!(!m.claims[0].claim.contains("sk-abcdefghijklmnopqrstuvwxyz012345"));
+        assert!(m.claims[0].claim.contains("«redacted:"));
+
+        let mut r = record();
+        r.claim = "token ghp_abcdefghijklmnopqrstuvwx leaked".into();
+        r.citations[0].quote = "AKIAIOSFODNN7EXAMPLE".into();
+        let hits = scrub_durable_record(&mut r);
+        assert!(hits >= 2);
+        assert!(!r.claim.contains("ghp_"));
+        assert!(!r.citations[0].quote.contains("AKIA"));
     }
 
     #[test]

@@ -1,6 +1,9 @@
 /** Library `/library` — answers US2/US6 (design §3.2). In-page secondary
  * navigation over three dimensions (collection × month × status), month-
- * grouped rows, all state URL-parameterized: /library?c=&m=&status=. */
+ * grouped rows, all state URL-parameterized: /library?c=&m=&status=.
+ * Entering a source carries the active filter so detail can prev/next
+ * within the same set. */
+import { useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { STATIC_MODE } from '../lib/api';
 import { AgeLabel, EmptyState, ModelGate, PageHelp, StatusPill } from '../components/ui';
@@ -11,8 +14,13 @@ import {
   countTags,
   filterSources,
   groupByMonth,
+  libraryBrowseOrder,
+  librarySourcePath,
   monthOf,
+  saveLibraryNavSnapshot,
+  sourceDisplayTitle,
   type Collection,
+  type LibraryFilter,
 } from '../lib/derive';
 import type { IndexModel, SourceRow } from '../lib/types';
 import { useModel } from '../model';
@@ -65,7 +73,7 @@ function LibraryBody({ model }: { model: IndexModel }) {
   const statusCount = (st: string): number =>
     st === 'queued' ? (model.queued_live ?? (byStatus.get('queued') ?? 0)) : (byStatus.get(st) ?? 0);
 
-  const filtered = filterSources(model.sources, {
+  const libraryFilter: LibraryFilter = {
     // Collection is path-derived, redacted on the static site — never filter by
     // it there (a manual ?c= would match the false default for every source).
     collection:
@@ -73,8 +81,30 @@ function LibraryBody({ model }: { model: IndexModel }) {
     month,
     status,
     tag,
-  });
+  };
+  const filtered = filterSources(model.sources, libraryFilter);
   const groups = groupByMonth(filtered);
+  const browseOrder = libraryBrowseOrder(model.sources, libraryFilter);
+
+  // Persist order so Source detail prev/next works even if the URL loses facets.
+  useEffect(() => {
+    const bits: string[] = [];
+    if (libraryFilter.collection) bits.push(libraryFilter.collection);
+    if (libraryFilter.month) bits.push(libraryFilter.month);
+    if (libraryFilter.status) bits.push(libraryFilter.status);
+    if (libraryFilter.tag) bits.push(`#${libraryFilter.tag}`);
+    saveLibraryNavSnapshot({
+      order: browseOrder,
+      filter: libraryFilter,
+      label: bits.length > 0 ? bits.join(' · ') : undefined,
+    });
+  }, [
+    browseOrder.join('|'),
+    libraryFilter.collection,
+    libraryFilter.month,
+    libraryFilter.status,
+    libraryFilter.tag,
+  ]);
 
   // Tag facet: top of the vocabulary by count (plus the active tag, so a
   // deep-linked ?tag= never renders as an invisible filter). Hidden entirely
@@ -209,8 +239,8 @@ function LibraryBody({ model }: { model: IndexModel }) {
                 <div className="row" key={s.sha256}>
                   <span className="row-main">
                     <StatusPill status={s.status} />
-                    <Link to={`/library/${s.sha256}`}>
-                      {s.title ?? s.sha256}
+                    <Link to={librarySourcePath(s.sha256, libraryFilter)}>
+                      {sourceDisplayTitle(s)}
                     </Link>
                     {(s.status === 'blocked' || s.status === 'failed') &&
                       s.last_reason && (

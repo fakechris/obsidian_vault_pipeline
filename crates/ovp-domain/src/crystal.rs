@@ -45,6 +45,10 @@ pub mod select;
 pub mod theme_pages;
 pub mod themes;
 
+/// G4 claim lineage: supersede / near-dup / strengthen-candidate decisions
+/// over active durable claims. Append-only; never rewrites evidence.
+pub mod lineage;
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 
@@ -879,6 +883,13 @@ pub enum ReviewAction {
     /// `crystal-review-session` prepare skips it until the trigger fires, so
     /// deferral is visible parking, never silent loss. Queue-only.
     DeferUntil,
+    /// Lineage: re-gate one revised claim that unions evidence with (or
+    /// replaces) an existing durable claim. Requires exactly 1 revision and
+    /// `target_claim_key` naming the durable claim to strengthen.
+    Strengthen,
+    /// Lineage: re-gate one revised claim that explicitly supersedes
+    /// `target_claim_key` when written durable (append-only Supersede event).
+    Supersede,
 }
 
 /// The closed trigger vocabulary for `DeferUntil` (M36: no free-text
@@ -929,6 +940,9 @@ pub struct ReviewDecision {
     /// Required iff `action == DeferUntil` (baseline stamped at apply time).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defer: Option<DeferSpec>,
+    /// Durable claim_key targeted by `Strengthen` / `Supersede`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_claim_key: Option<String>,
     #[serde(default)]
     pub note: String,
 }
@@ -960,15 +974,28 @@ pub fn apply_decisions(original: &CrystalCandidate, decisions: &[ReviewDecision]
             continue;
         }
         let n = match d.action {
-            ReviewAction::Rewrite | ReviewAction::Narrow | ReviewAction::Split
+            ReviewAction::Rewrite
+            | ReviewAction::Narrow
+            | ReviewAction::Strengthen
+            | ReviewAction::Supersede
+            | ReviewAction::Split
             | ReviewAction::SplitByEvidence => {
-                let single =
-                    matches!(d.action, ReviewAction::Rewrite | ReviewAction::Narrow);
+                let single = matches!(
+                    d.action,
+                    ReviewAction::Rewrite
+                        | ReviewAction::Narrow
+                        | ReviewAction::Strengthen
+                        | ReviewAction::Supersede
+                );
                 for (i, rev) in d.revisions.iter().enumerate() {
                     let mut c = rev.clone();
                     if c.id.trim().is_empty() {
                         c.id = if single {
-                            format!("{}r", d.claim_id)
+                            match d.action {
+                                ReviewAction::Strengthen => format!("{}k", d.claim_id),
+                                ReviewAction::Supersede => format!("{}p", d.claim_id),
+                                _ => format!("{}r", d.claim_id),
+                            }
                         } else {
                             format!("{}s{}", d.claim_id, i + 1)
                         };
@@ -1289,11 +1316,11 @@ mod tests {
         let mut rw = claim("");
         rw.claim = "narrower c1".into();
         let decisions = vec![
-            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rw], defer: None, note: "narrow".into() },
+            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rw], defer: None, target_claim_key: None, note: "narrow".into() },
             ReviewDecision { claim_id: "c2".into(), action: ReviewAction::Split,
-                revisions: vec![{ let mut a = claim(""); a.claim = "part a".into(); a }, { let mut b = claim(""); b.claim = "part b".into(); b }], defer: None, note: String::new() },
-            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, note: String::new() },
-            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Reject, revisions: vec![], defer: None, note: String::new() },
+                revisions: vec![{ let mut a = claim(""); a.claim = "part a".into(); a }, { let mut b = claim(""); b.claim = "part b".into(); b }], defer: None, target_claim_key: None, note: String::new() },
+            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, target_claim_key: None, note: String::new() },
+            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Reject, revisions: vec![], defer: None, target_claim_key: None, note: String::new() },
         ];
         let out = apply_decisions(&orig, &decisions);
         let ids: Vec<&str> = out.revised.items.iter().map(|c| c.id.as_str()).collect();
@@ -1305,7 +1332,7 @@ mod tests {
     #[test]
     fn apply_flags_unknown_claim_id() {
         let orig = CrystalCandidate { items: vec![claim("c1")] };
-        let decisions = vec![ReviewDecision { claim_id: "c9".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, note: String::new() }];
+        let decisions = vec![ReviewDecision { claim_id: "c9".into(), action: ReviewAction::KeepCaveated, revisions: vec![], defer: None, target_claim_key: None, note: String::new() }];
         let out = apply_decisions(&orig, &decisions);
         assert_eq!(out.unknown, vec!["c9"]);
         assert!(out.revised.items.is_empty());
@@ -1316,25 +1343,28 @@ mod tests {
         let orig = CrystalCandidate { items: vec![claim("c1")] };
         let mut rev = claim("c1-narrow");
         rev.claim = "x".into();
-        let decisions = vec![ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rev], defer: None, note: String::new() }];
+        let decisions = vec![ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Rewrite, revisions: vec![rev], defer: None, target_claim_key: None, note: String::new() }];
         let out = apply_decisions(&orig, &decisions);
         assert_eq!(out.revised.items[0].id, "c1-narrow", "explicit id kept");
     }
 
     #[test]
     fn apply_m36_actions_narrow_aliases_and_queue_ops_produce_no_claims() {
-        let orig = CrystalCandidate { items: vec![claim("c1"), claim("c2"), claim("c3")] };
+        let orig = CrystalCandidate { items: vec![claim("c1"), claim("c2"), claim("c3"), claim("c4")] };
         let mut rw = claim("");
         rw.claim = "narrower".into();
+        let mut sk = claim("");
+        sk.claim = "strengthened".into();
         let decisions = vec![
-            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Narrow, revisions: vec![rw], defer: None, note: String::new() },
-            ReviewDecision { claim_id: "c2".into(), action: ReviewAction::DemoteToSourceInsight, revisions: vec![], defer: None, note: String::new() },
-            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::DeferUntil, revisions: vec![], defer: Some(DeferSpec { trigger: DeferTrigger::CorpusGrowsBy, n: 10 }), note: String::new() },
+            ReviewDecision { claim_id: "c1".into(), action: ReviewAction::Narrow, revisions: vec![rw], defer: None, target_claim_key: None, note: String::new() },
+            ReviewDecision { claim_id: "c2".into(), action: ReviewAction::DemoteToSourceInsight, revisions: vec![], defer: None, target_claim_key: None, note: String::new() },
+            ReviewDecision { claim_id: "c3".into(), action: ReviewAction::DeferUntil, revisions: vec![], defer: Some(DeferSpec { trigger: DeferTrigger::CorpusGrowsBy, n: 10 }), target_claim_key: None, note: String::new() },
+            ReviewDecision { claim_id: "c4".into(), action: ReviewAction::Strengthen, revisions: vec![sk], defer: None, target_claim_key: Some("ck-old".into()), note: String::new() },
         ];
         let out = apply_decisions(&orig, &decisions);
         let ids: Vec<&str> = out.revised.items.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, vec!["c1r"], "narrow derives the rewrite id; queue ops produce no claims");
-        assert_eq!(out.log.len(), 3);
+        assert_eq!(ids, vec!["c1r", "c4k"], "narrow + strengthen derive ids; queue ops produce no claims");
+        assert_eq!(out.log.len(), 4);
         assert!(out.unknown.is_empty());
     }
 

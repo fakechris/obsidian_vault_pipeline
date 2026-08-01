@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   citationsInOrder,
   citeLinkTarget,
+  displayUserQuestion,
   normalizeCiteToken,
   parseChatTranscript,
 } from './chatTranscript';
@@ -73,5 +74,19 @@ describe('cite helpers', () => {
     expect(normalizeCiteToken('ck-x')).toBe('claim:ck-x');
     expect(citeLinkTarget('claim:ck-x')).toBe('/knowledge#ck-x');
     expect(citeLinkTarget('unit:u-1')).toBeNull();
+  });
+});
+
+describe('displayUserQuestion', () => {
+  it('strips focus pack and keeps only the human question', () => {
+    const packed =
+      '[FOCUS CONTEXT — source-grounded chat]\n## Body\nlong text\n\n[USER QUESTION]\n详细讲讲这个金融产品';
+    expect(displayUserQuestion(packed)).toBe('详细讲讲这个金融产品');
+  });
+
+  it('passes through plain questions unchanged', () => {
+    expect(displayUserQuestion('What is agent memory?')).toBe(
+      'What is agent memory?',
+    );
   });
 });

@@ -102,8 +102,8 @@ from KMEM: their memory is a self-contained summary; our unit is an evidence-anc
 | Pipeline | In → Out | Auth | Cost | Status | Failure states |
 |---|---|---|---|---|---|
 | review-queue | caveated/reject → repair (text/evidence/lineage ops) → RE-GATE | A (via write) | 0+human→agent | ✅ v1 loop shipped (prepare + turnkey apply); M35 lanes route single-source Supported out of the human queue; **redesign anchor = [`stage-m36-review-loop-design.md`](./stage-m36-review-loop-design.md)** (repair-workshop model, typed actions, agent-executable gate-re-entrant repairs, phased R0–R3 subordinate to the M32 clock) | stale queue (weekly SLA; defer_until triggers from R1) |
-| lineage: dedup/strengthen | new claims vs active (text+citation overlap+grouping) | A (via write) | 0/$ | ⬜ near-term, minimal form | wrong-merge (conservative default: append) |
-| supersede | strengthened claim replaces old, `superseded_by` | A | 0 | ⬜ mid-term | — |
+| lineage: dedup/strengthen | new claims vs active (text+citation overlap+grouping) | A (via write) | 0/$ | 🟡 minimal form shipped (`crystal::lineage` + crystal-write: near-dup skip, strengthen-candidate note, conservative append default) | wrong-merge (conservative default: append) |
+| supersede | strengthened claim replaces old, `superseded_by` | A | 0 | 🟡 auto when near-same text + citation proper-superset (append-only `StoreOp::Supersede`) | — |
 | contradiction | opposing claims, same subject | A | $ | ⬜ long-term; needs stable subject — **M34 experiment decides** | — |
 
 Rule: no entity ledger before the M34 verdict; lifecycle starts in its minimal viable form.
@@ -126,7 +126,7 @@ console/graph`.
 | project --write | `10-Knowledge/Crystal/*.md` (machine-managed marker) | 0 | ✅ |
 | digest | `.ovp/digests/<date>.md` — ops digest (new packs/blocked/claim counts) | 0 today · $ optional (`render_llm_digest` exists, unwired) | ✅ plain |
 | working-memory | `.ovp/working-memory.md` | 0 today | ✅ |
-| ask / find | on-demand answers. `find` is deterministic lexical search over the read model and evidence sidecar. `ask/v2` is retrieval-constrained over claims + cards + units and runs a deterministic citation verifier after the model answer: cited evidence ids must be among the blocks supplied to the model; unit citations must retain quote-backed evidence; card citations must retain cited units. Strict mode can fail an uncited/unverified answer. This is **citation verification, not whole-answer semantic truth-gating**. | $/0 | 🟡 |
+| ask / find | on-demand answers. `find` is deterministic lexical search over the read model and evidence sidecar. `ask/v2` is retrieval-constrained over claims + cards + units and runs a deterministic citation verifier after the model answer: cited evidence ids must be among the blocks supplied to the model; unit citations must retain quote-backed evidence; card citations must retain cited units. Strict mode can fail an uncited/unverified answer. This is **citation verification, not whole-answer semantic truth-gating**. Claim retrieval uses **hybrid** lexical + soft-semantic (token cosine) RRF with a multi-lane coverage ledger (`ovp-memory::retrieve`). | $/0 | 🟡 |
 | serve / MCP | localhost UI · MCP tools (find/search/status + shallow doctor only; no ask/project/crystal-status) | 0 | ✅ minimal |
 
 Boundary: these can be deleted and rebuilt at any time and MUST NOT write back into authorities.
@@ -190,7 +190,12 @@ designed and doctor-visible. Until all five hold, crystal-synth stays a manual c
 
 P0 (product doesn't hold long-term without): scheduler tiers (§4) · Stage 3a 994-corpus synth
 run/signoff · review-queue apply loop with weekly cadence · doctor crystal-integrity checks.
-P1: incremental dirty-group synth · cost report · minimal lineage (dedup/strengthen) ·
+P1: incremental dirty-group synth · cost report ·
+minimal lineage 🟡 (crystal-write auto + M36 strengthen/supersede actions + claim API lineage fields) ·
+hybrid claim retrieve 🟡 (lexical+soft-semantic RRF; optional `embed` feature for dense kNN) ·
+capture thrift 🟡 (`--capture-tier` + worth_distilling 0-cost gate) ·
+cost report 🟡 (index_only vs reader_ran in daily run-report + CLI summary) ·
+publish secret scrub 🟡 (body secret/PII shapes at PublicView+records choke-point) ·
 **ask semantic verifier** (the shipped deterministic citation verifier checks evidence ids and
 quote-backed unit presence; it does not yet prove every answer sentence is semantically entailed) ·
 **MCP mature surface** (ask/project/crystal-status; deep doctor) ·

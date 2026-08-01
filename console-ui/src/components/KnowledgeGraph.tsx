@@ -851,6 +851,32 @@ export default function KnowledgeGraph({
               )}
               {selected.type === 'claim' && closure?.forId === selected.id && (
                 <div className="graph-evidence">
+                  {(closure.detail.supersedes?.length ||
+                    closure.detail.superseded_by?.length ||
+                    closure.detail.status) && (
+                    <div className="graph-lineage">
+                      <div className="graph-evidence-title">
+                        {t('graph.lineageTitle')}
+                      </div>
+                      {closure.detail.status && (
+                        <div className="tiny muted">
+                          {t('graph.lineageStatus', {
+                            status: closure.detail.status,
+                          })}
+                        </div>
+                      )}
+                      {(closure.detail.supersedes ?? []).map((k) => (
+                        <div className="tiny" key={`sup-${k}`}>
+                          {t('graph.lineageSupersedes', { key: k })}
+                        </div>
+                      ))}
+                      {(closure.detail.superseded_by ?? []).map((k) => (
+                        <div className="tiny" key={`by-${k}`}>
+                          {t('graph.lineageSupersededBy', { key: k })}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="graph-evidence-title">
                     {t('graph.evidenceTitle')}
                   </div>

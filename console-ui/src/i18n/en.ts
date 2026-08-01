@@ -5,6 +5,7 @@ export const en = {
   // nav
   'nav.today': 'Today',
   'nav.library': 'Library',
+  'nav.workQueue': 'Work queue',
   'nav.tags': 'Tags',
   'nav.entities': 'Entities',
 
@@ -200,6 +201,37 @@ export const en = {
 
   // source detail
   'source.title': 'Source',
+  'source.browseNav': 'Browse within Library filter',
+  'source.browsePrev': 'Previous',
+  'source.browseNext': 'Next',
+  'source.browsePrevHint': 'Previous source in the current Library filter ([ or ←)',
+  'source.browseNextHint': 'Next source in the current Library filter (] or →)',
+  'source.browsePosition': '{i} / {n}',
+  'source.workBusyTranslate':
+    'Translating… the 中文 tab will appear here when ready — no need to leave this page.',
+  'source.workBusySummarize':
+    'Summarizing… the Summary tab will appear here when ready — no need to leave this page.',
+  'source.workBusyBoth':
+    'Translating + summarizing in parallel… tabs appear here when each finishes.',
+  'source.queuedOk': 'Queued — you can leave; a notification will fire when done.',
+  'source.queuedTranslate': 'Translation queued',
+  'source.queuedSummarize': 'Summary queued',
+  'source.openQueue': 'Open work queue',
+
+  // work queue page
+  'workq.title': 'Work queue',
+  'workq.help':
+    'Translate and deep-summary jobs run one article at a time. Within an article, both tasks can run in parallel. Drag order with ↑↓, cancel queued items, get a notification when each article finishes.',
+  'workq.refresh': 'Refresh',
+  'workq.counts': 'running {running} · queued {queued} · history {history}',
+  'workq.running': 'Running',
+  'workq.queued': 'Queued',
+  'workq.queuedEmpty': 'Nothing waiting — start Translate or Summary from a source page.',
+  'workq.history': 'Recent',
+  'workq.cancel': 'Cancel',
+  'workq.remove': 'Remove',
+  'workq.taskTranslate': 'Translate',
+  'workq.taskSummarize': 'Summary',
   'source.url': 'url',
   'source.companions': 'open with',
   'source.staticLite':
@@ -234,6 +266,27 @@ export const en = {
   'source.resummarize': 'Re-summarize',
   'source.summarizing': 'Summarizing…',
   'source.chatOnThis': 'Chat on this',
+  'source.chatPanelTitle': 'Chat on this source',
+  'source.chatGroundedIn': 'Grounded in',
+  'source.chatChipBody': 'Body',
+  'source.chatChipMemory': 'Memory · {n}',
+  'source.chatChipCrystal': 'Crystal · {n}',
+  'source.chatMetaLine':
+    'Context · body + {cards} cards · {units} units · {claims} crystals',
+  'source.chatPackSummary':
+    '{cards} cards · {units} units · {claims} citing claims — auto-injected each turn (not shown raw)',
+  'source.chatPackHint': 'Injected each turn · not shown as text',
+  'source.chatEmpty':
+    'Ask about this article. Body, memory cards/units, and citing crystals are already in context — no need to re-select.',
+  'source.chatPlaceholder': 'Ask about this source…',
+  'source.chatSeed1': 'What is the core thesis of this piece?',
+  'source.chatSeed2': 'How do the memory cards relate to the original text?',
+  'source.chatSeed3': 'Which crystal claims cite this source, and why?',
+  'source.chatRecents': 'Past chats on this source',
+  'source.chatNewOnSource': 'New chat',
+  'source.chatOpenInAsk': 'Open in Ask',
+  'source.chatClose': 'Close',
+  'source.chatWorking': 'Working… ({n} steps)',
   'source.workDir': 'archive',
   'source.zhEmpty': 'No Chinese translation yet — use Translate above.',
   'source.summaryEmpty': 'No deep summary yet — use Deep summary above.',
@@ -276,6 +329,10 @@ export const en = {
   'graph.openHint': 'Click for a summary, then Open.',
   'graph.open': 'Open',
   'graph.evidenceTitle': 'Evidence chain',
+  'graph.lineageTitle': 'Lineage',
+  'graph.lineageStatus': 'status: {status}',
+  'graph.lineageSupersedes': 'supersedes {key}',
+  'graph.lineageSupersededBy': 'superseded by {key}',
   'graph.evidenceLine': 'line {n}',
   'graph.no3d': '3D needs WebGL, which is unavailable in this browser.',
   'graph.controls3d': 'Drag to rotate · scroll to zoom · right-drag to pan',
@@ -371,10 +428,17 @@ export const en = {
   'ask.help':
     'Vault assistant: finds articles in your library, answers knowledge questions with checkable citations, or chats more openly. Follow-ups keep context in one session. Ask “what can you do?” for capability limits.',
   'ask.focusBanner':
-    'Chat-on-this-source is on — answers are grounded in the focused article first:',
+    'Source-grounded mode — answers prefer the focused article (body + memory + crystal). Prefer chatting from the source page:',
+  'ask.focusOpenOnSource': 'Open chat on source',
   'ask.historyTitle': 'History',
   'ask.historyEmpty':
     'No saved chats yet — each conversation is saved here as one session.',
+  'ask.historyFilterAll': 'All',
+  'ask.historyFilterSource': 'On sources',
+  'ask.historyFilterVault': 'Vault-wide',
+  'ask.historyFilterEmpty': 'No chats in this filter.',
+  'ask.historyOnSource': 'Source',
+  'ask.historyVault': 'Vault',
   'ask.savedChat': 'Saved chat',
   'ask.closeChat': 'Back to conversation',
   'ask.newConversation': 'New conversation',

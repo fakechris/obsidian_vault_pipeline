@@ -5,6 +5,7 @@ export const zh: Record<keyof typeof en, string> = {
   // nav
   'nav.today': '今天',
   'nav.library': '资料',
+  'nav.workQueue': '任务队列',
   'nav.tags': '标签',
   'nav.entities': '实体',
 
@@ -190,6 +191,37 @@ export const zh: Record<keyof typeof en, string> = {
 
   // source detail
   'source.title': '资料',
+  'source.browseNav': '在当前 Library 筛选集内浏览',
+  'source.browsePrev': '上一篇',
+  'source.browseNext': '下一篇',
+  'source.browsePrevHint': '当前筛选集中的上一篇（[ 或 ←）',
+  'source.browseNextHint': '当前筛选集中的下一篇（] 或 →）',
+  'source.browsePosition': '{i} / {n}',
+  'source.workBusyTranslate':
+    '翻译中…完成后会在本页自动出现「中文」页签，无需离开。',
+  'source.workBusySummarize':
+    '摘要中…完成后会在本页自动出现「摘要」页签，无需离开。',
+  'source.workBusyBoth':
+    '翻译与摘要并行进行中…各自完成后会在本页出现对应页签。',
+  'source.queuedOk': '已入队 — 可离开本页；完成后会弹出系统通知。',
+  'source.queuedTranslate': '翻译已入队',
+  'source.queuedSummarize': '摘要已入队',
+  'source.openQueue': '打开任务队列',
+
+  // work queue page
+  'workq.title': '任务队列',
+  'workq.help':
+    '翻译与深度摘要按「文章」排队：同一时间只处理一篇；单篇内翻译和摘要可并行。可用 ↑↓ 调整顺序、取消排队项；每篇文章完成后会系统通知。',
+  'workq.refresh': '刷新',
+  'workq.counts': '进行中 {running} · 排队 {queued} · 历史 {history}',
+  'workq.running': '进行中',
+  'workq.queued': '排队中',
+  'workq.queuedEmpty': '暂无排队 — 在资料页点「译为中文」或「深度摘要」即可入队。',
+  'workq.history': '最近完成',
+  'workq.cancel': '取消',
+  'workq.remove': '移除',
+  'workq.taskTranslate': '翻译',
+  'workq.taskSummarize': '摘要',
   'source.url': '链接',
   'source.staticLite':
     '此处不发布全文与证据层。点击上方链接阅读原文;该来源支持的持久主张列在右侧。',
@@ -223,6 +255,27 @@ export const zh: Record<keyof typeof en, string> = {
   'source.resummarize': '重新摘要',
   'source.summarizing': '摘要中…',
   'source.chatOnThis': '针对本文对话',
+  'source.chatPanelTitle': '针对本文对话',
+  'source.chatGroundedIn': '锚定',
+  'source.chatChipBody': '原文',
+  'source.chatChipMemory': '记忆 · {n}',
+  'source.chatChipCrystal': '结晶 · {n}',
+  'source.chatMetaLine':
+    '上下文 · 原文 + {cards} 卡片 · {units} 单元 · {claims} 结晶',
+  'source.chatPackSummary':
+    '{cards} 张卡片 · {units} 个单元 · {claims} 条引用结晶 — 每轮自动注入（不展示原文）',
+  'source.chatPackHint': '每轮自动注入 · 不展示原文',
+  'source.chatEmpty':
+    '直接问本文相关问题。原文、记忆卡片/单元、引用结晶已自动进入上下文——无需再选一次。',
+  'source.chatPlaceholder': '基于本文提问…',
+  'source.chatSeed1': '这篇的核心论点是什么？',
+  'source.chatSeed2': '记忆卡片和原文之间有没有张力？',
+  'source.chatSeed3': '哪些结晶主张引用了本文？为什么？',
+  'source.chatRecents': '本文历史对话',
+  'source.chatNewOnSource': '新对话',
+  'source.chatOpenInAsk': '在 Ask 中打开',
+  'source.chatClose': '关闭',
+  'source.chatWorking': '处理中…（{n} 步）',
   'source.workDir': '存档',
   'source.zhEmpty': '还没有中文译本——点上方「译为中文」。',
   'source.summaryEmpty': '还没有精读摘要——点上方「深度摘要」。',
@@ -264,6 +317,10 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.focusCommunity': '聚焦这个社区',
   'graph.open': '打开',
   'graph.evidenceTitle': '证据链路',
+  'graph.lineageTitle': '版本链',
+  'graph.lineageStatus': '状态：{status}',
+  'graph.lineageSupersedes': '取代 {key}',
+  'graph.lineageSupersededBy': '被 {key} 取代',
   'graph.evidenceLine': '第 {n} 行',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
@@ -346,9 +403,17 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.title': '对话',
   'ask.help':
     'Vault 助理：可帮你在资料库里找文章、用可核查引用回答知识问题，或更口语地聊。同线程追问会保留上下文。直接问「你能做什么」可看能力边界。',
-  'ask.focusBanner': '已开启「针对本文」——回答会优先锚定这篇资料：',
+  'ask.focusBanner':
+    '已开启「针对本文」——回答优先锚定原文 + 记忆 + 结晶。更推荐在资料页内嵌对话：',
+  'ask.focusOpenOnSource': '在原文页打开对话',
   'ask.historyTitle': '历史会话',
   'ask.historyEmpty': '还没有保存的会话——每段连续对话会作为一条会话保存在这里。',
+  'ask.historyFilterAll': '全部',
+  'ask.historyFilterSource': '针对资料',
+  'ask.historyFilterVault': '全库',
+  'ask.historyFilterEmpty': '该筛选下没有会话。',
+  'ask.historyOnSource': '本文',
+  'ask.historyVault': '全库',
   'ask.savedChat': '已保存会话',
   'ask.closeChat': '返回对话',
   'ask.newConversation': '新对话',

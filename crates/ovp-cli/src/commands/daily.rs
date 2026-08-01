@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
-    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, DailyConfig,
-    DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
+    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, CaptureTier,
+    DailyConfig, DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
 };
 use ovp_domain::VaultLayout;
 use ovp_index::{
@@ -65,6 +65,8 @@ pub struct DailyArgs {
     pub pinboard_max: Option<usize>,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
+    /// Capture thrift: focused | balanced | comprehensive (worth gate before `$` reader).
+    pub capture_tier: CaptureTier,
     /// Web fetch fixture directory for enriching needs-content sources.
     pub web_fetch_fixture: Option<PathBuf>,
     /// Enrich needs-content sources via live web fetch.
@@ -394,6 +396,7 @@ fn run_inner(
         max_sources: args.max_sources,
         lifecycle_move: !args.no_lifecycle,
         retry_blocked: args.retry_blocked,
+        capture_tier: args.capture_tier,
     };
     let planned = work.todo.len();
     // The batch run_daily will actually attempt this run — `--max-sources`
@@ -558,6 +561,25 @@ fn run_inner(
     // refresh happened — index/console paths are printed, not recorded, since
     // they are written after it.
     report.set_reader(planned, &daily);
+    if let Some(cost) = &report.cost {
+        sayln!(
+            "  cost: attempted={} reader_ran={} index_only={} failed={} units={} cards={}",
+            cost.attempted,
+            cost.reader_ran,
+            cost.index_only,
+            cost.failed,
+            cost.total_units,
+            cost.total_cards
+        );
+        if !cost.index_only_reasons.is_empty() {
+            let reasons: Vec<String> = cost
+                .index_only_reasons
+                .iter()
+                .map(|(k, n)| format!("{k}×{n}"))
+                .collect();
+            sayln!("  index_only reasons: {}", reasons.join(", "));
+        }
+    }
     let report_rel =
         ovp_daily::write_run_report(&args.vault_root, &report).map_err(CliError::Io)?;
 

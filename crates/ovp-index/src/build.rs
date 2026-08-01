@@ -108,6 +108,9 @@ pub fn build_index_at_with_progress(
     backfill_corpus_packs(vault_root, &layout, &mut sources, &mut packs)?;
     on_phase(&format!("hashed {} pack(s)", packs.len()));
     enrich_titles_from_packs(&mut sources, &packs);
+    // Duplicates / ledger-only rows often have null title — re-read the note
+    // (or use the filename stem) so the Library never shows a bare 64-char hash.
+    enrich_missing_titles(vault_root, &mut sources);
     let tagged = attach_tags(vault_root, &mut sources)?;
     on_phase(&format!("tagged {tagged} source(s)"));
     let originated = attach_origins(vault_root, &layout, &mut sources)?;
@@ -666,6 +669,40 @@ fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
             && let Some(p) = s.pack_dir.as_deref().and_then(|d| by_pack.get(d)) {
                 s.title = Some(p.title.clone());
             }
+    }
+}
+
+/// Fill empty titles (and urls when missing) from the note on disk.
+/// Duplicate intake rows historically wrote `title: null` — without this the
+/// portal falls back to the 64-char content hash as the only label.
+fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
+    for s in sources.iter_mut() {
+        let title_empty = s.title.as_ref().is_none_or(|t| t.trim().is_empty());
+        if !title_empty && s.url.is_some() {
+            continue;
+        }
+        let Some(rel) = s.rel_path.as_deref() else {
+            continue;
+        };
+        let path = vault_root.join(rel);
+        if let Ok(doc) = read_source_from_path(&path) {
+            if title_empty && !doc.title.trim().is_empty() {
+                s.title = Some(doc.title);
+            }
+            if s.url.is_none() && !doc.source_url.is_empty() {
+                s.url = Some(doc.source_url);
+            }
+        }
+        if s.title.as_ref().is_none_or(|t| t.trim().is_empty()) {
+            if let Some(stem) = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                s.title = Some(stem.to_string());
+            }
+        }
     }
 }
 

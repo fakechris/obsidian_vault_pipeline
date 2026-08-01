@@ -653,6 +653,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
         not_claiming: args.not_claiming.clone().unwrap_or_default(),
     };
     let outcome = write_durable(WriteInputs {
+        supersede_targets: Default::default(),
         candidate: grounded,
         verdicts,
         index,

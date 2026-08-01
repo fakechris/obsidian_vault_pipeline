@@ -34,8 +34,8 @@ use ovp_index::{
 };
 use ovp_llm::ModelClient;
 use ovp_memory::ask::{
-    AskArgs, AskHistoryTurn, AskResult, EvidenceItem, EvidenceKind, ask_with_optional_evidence,
-    valid_chat_stem,
+    AskArgs, AskHistoryTurn, AskResult, ChatFocusMeta, EvidenceItem, EvidenceKind,
+    ask_with_optional_evidence, parse_chat_surface_meta, valid_chat_stem,
 };
 use ovp_memory::receipts::{agent_citations, agent_citations_unindexed, args_brief};
 use ovp_memory::verify::{citation_key, citations_in_order};
@@ -320,6 +320,9 @@ struct AppState {
     /// session reorder window sub-millisecond, but the create-vs-append
     /// file race needs real mutual exclusion).
     chat_saves: Arc<std::sync::Mutex<()>>,
+    /// Per-article translate/summarize queue (serial across sources; parallel
+    /// tasks within one source). See `ovp_memory::source_work_queue`.
+    source_work_queue: Arc<ovp_memory::source_work_queue::SourceWorkQueue>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -577,8 +580,11 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     let bind = format!("{}:{}", config.host, config.port);
     let server = Server::http(&bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
 
+    let vault_root = config.vault_root;
+    let source_work_queue =
+        Arc::new(ovp_memory::source_work_queue::SourceWorkQueue::open(&vault_root));
     let state = Arc::new(AppState {
-        vault_root: config.vault_root,
+        vault_root,
         layout: VaultLayout::new(),
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
@@ -600,10 +606,20 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         ask_agent: config.ask_agent,
         ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
         chat_saves: Arc::new(std::sync::Mutex::new(())),
+        source_work_queue,
     });
 
     // Pre-load model
     state.refresh_model();
+
+    // Background worker: one article at a time; translate∥summarize inside.
+    {
+        let worker_state = Arc::clone(&state);
+        std::thread::Builder::new()
+            .name("source-work-queue".into())
+            .spawn(move || source_work_queue_worker(worker_state))
+            .ok();
+    }
 
     eprintln!("ovp-server listening on http://{bind}");
     eprintln!("  console: http://{bind}/");
@@ -678,6 +694,9 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
                 || (p.starts_with("/api/source/") && p.ends_with("/translate"))
                 || (p.starts_with("/api/source/") && p.ends_with("/summarize"))
+                || p == "/api/source-work/queue"
+                || p == "/api/source-work/queue/order"
+                || (p.starts_with("/api/source-work/queue/") && p.ends_with("/cancel"))
             {
                 let headers = AskHeaders::of(&request);
                 if let Some(resp) = guard_json_same_origin(&headers) {
@@ -782,6 +801,17 @@ fn dispatch(
         }
         (Method::Get, "/api/chats") => handle_chats_list(state),
         (Method::Get, p) if p.starts_with("/api/chats/") => handle_chat_detail(state, p),
+        (Method::Get, "/api/source-work/queue") => handle_source_work_queue_get(state),
+        (Method::Post, "/api/source-work/queue") => handle_source_work_queue_enqueue(state, body),
+        (Method::Put, "/api/source-work/queue/order") => {
+            handle_source_work_queue_reorder(state, body)
+        }
+        (Method::Post, p) if p.starts_with("/api/source-work/queue/") && p.ends_with("/cancel") => {
+            handle_source_work_queue_cancel(state, p)
+        }
+        (Method::Delete, p) if p.starts_with("/api/source-work/queue/") => {
+            handle_source_work_queue_delete(state, p)
+        }
         (Method::Get, p) if p.starts_with("/api/find") => handle_find(state, url),
         (Method::Get, p) if p.starts_with("/api/search") => handle_search(state, url),
         (Method::Get, "/api/model") => handle_model(state),
@@ -2237,7 +2267,15 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     let model = state.current_model();
     let records = load_active_records(state);
     let reader_root = state.vault_root.join(state.layout.reader_root());
-    match bodies::claim_body(&records, model.as_ref(), &reader_root, &id, true) {
+    let lineage = ovp_api_projection::readers::load_lineage_index(&state.vault_root, &state.layout);
+    match bodies::claim_body_with_lineage(
+        &records,
+        model.as_ref(),
+        &reader_root,
+        &id,
+        true,
+        Some(&lineage),
+    ) {
         Some(v) => json_stamped(200, &v.to_string(), model.as_ref()),
         None => json_response(404, r#"{"error":"claim not found"}"#),
     }
@@ -2338,6 +2376,178 @@ fn source_markdown_for(
     Ok((md, source.title.clone(), source.url.clone()))
 }
 
+/// Caps for the source-grounded chat pack (body + memory + crystal).
+const FOCUS_BODY_CHARS: usize = 18_000;
+const FOCUS_CARD_MAX: usize = 8;
+const FOCUS_CARD_CHARS: usize = 900;
+const FOCUS_UNIT_MAX: usize = 12;
+const FOCUS_UNIT_CHARS: usize = 420;
+const FOCUS_CLAIM_MAX: usize = 8;
+
+/// Build the auto-injected context pack for "chat on this source":
+/// document body + memory cards/units + citing crystal claims.
+/// Returns `(pack, focus_meta)`. Missing body still yields a pack from memory
+/// when present so chat-on remains useful for thin/empty sources.
+fn build_source_focus_pack(
+    state: &AppState,
+    model: &IndexModel,
+    sha: &str,
+) -> Option<(String, ChatFocusMeta)> {
+    let source = model.sources.iter().find(|s| s.sha256 == sha)?;
+    let title = source
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "(untitled)".into());
+    let url = source
+        .url
+        .clone()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "(none)".into());
+    let body = source_markdown_for(state, model, sha)
+        .ok()
+        .map(|(md, _, _)| md)
+        .unwrap_or_default();
+    let body_clip: String = body.chars().take(FOCUS_BODY_CHARS).collect();
+    let body_note = if body.chars().count() > FOCUS_BODY_CHARS {
+        "\n…(body truncated for context window)"
+    } else {
+        ""
+    };
+
+    let evidence = state.current_evidence();
+    let pack_dir = source.pack_dir.as_deref();
+    let belongs =
+        |row_sha: Option<&str>, row_pack: &str| row_sha == Some(sha) || pack_dir == Some(row_pack);
+
+    let mut cards_block = String::new();
+    let mut card_n = 0usize;
+    if let Some(ev) = evidence.as_ref() {
+        for c in ev
+            .cards
+            .iter()
+            .filter(|c| belongs(c.source_sha256.as_deref(), &c.pack_dir))
+            .take(FOCUS_CARD_MAX)
+        {
+            card_n += 1;
+            let content: String = c.content.chars().take(FOCUS_CARD_CHARS).collect();
+            cards_block.push_str(&format!(
+                "### {}\n{}\n\n",
+                if c.title.trim().is_empty() {
+                    "(card)"
+                } else {
+                    c.title.trim()
+                },
+                content
+            ));
+        }
+    }
+    if cards_block.is_empty() {
+        cards_block.push_str("(no memory cards for this source)\n");
+    }
+
+    let mut units_block = String::new();
+    let mut unit_n = 0usize;
+    if let Some(ev) = evidence.as_ref() {
+        for u in ev
+            .units
+            .iter()
+            .filter(|u| belongs(u.source_sha256.as_deref(), &u.pack_dir))
+            .take(FOCUS_UNIT_MAX)
+        {
+            unit_n += 1;
+            let quote = if !u.quote.trim().is_empty() {
+                u.quote.as_str()
+            } else {
+                u.text.as_str()
+            };
+            let clip: String = quote.chars().take(FOCUS_UNIT_CHARS).collect();
+            let line = u
+                .line
+                .map(|n| format!("L{n}"))
+                .unwrap_or_else(|| "L?".into());
+            units_block.push_str(&format!(
+                "- [unit:{}] ({line}) {clip}\n",
+                u.unit_id
+            ));
+        }
+    }
+    if units_block.is_empty() {
+        units_block.push_str("(no grounded units for this source)\n");
+    }
+
+    let case_id = pack_dir.and_then(|d| {
+        let s = d.trim_end_matches(['/', '\\']);
+        s.rsplit(['/', '\\']).next().filter(|p| !p.is_empty())
+    });
+    let mut claims: Vec<&ovp_index::ClaimRow> = match case_id {
+        Some(case) => model
+            .claims
+            .iter()
+            .filter(|c| c.sources.iter().any(|s| s == case))
+            .collect(),
+        None => Vec::new(),
+    };
+    claims.sort_by_key(|c| {
+        (
+            match c.status {
+                ovp_index::ClaimStatus::Durable => 0u8,
+                ovp_index::ClaimStatus::Caveated => 1,
+                _ => 2,
+            },
+            c.claim_id.clone(),
+        )
+    });
+    let mut claims_block = String::new();
+    let mut claim_n = 0usize;
+    for c in claims.into_iter().take(FOCUS_CLAIM_MAX) {
+        claim_n += 1;
+        let key = c
+            .claim_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .unwrap_or(c.claim_id.as_str());
+        let status = match c.status {
+            ovp_index::ClaimStatus::Durable => "durable",
+            ovp_index::ClaimStatus::Caveated => "caveated",
+            _ => "other",
+        };
+        claims_block.push_str(&format!(
+            "- [claim:{key}] ({status}) {}\n",
+            c.claim.trim()
+        ));
+    }
+    if claims_block.is_empty() {
+        claims_block.push_str("(no crystal claims cite this source yet)\n");
+    }
+
+    let pack = format!(
+        "[FOCUS CONTEXT — source-grounded chat]\n\
+You are answering questions about ONE library source. Prefer the packs below \
+(body, memory cards/units, citing crystals). Cite with [source:{sha}], [unit:…], \
+[card:…], or [claim:…] when used. Vault-wide tools are allowed for comparison, \
+but the primary answer must stay grounded in this source.\n\n\
+## Source\n\
+sha: {sha}\n\
+title: {title}\n\
+url: {url}\n\n\
+## Body\n\
+{body_clip}{body_note}\n\n\
+## Memory cards ({card_n})\n\
+{cards_block}\n\
+## Grounded units ({unit_n})\n\
+{units_block}\n\
+## Citing crystals ({claim_n})\n\
+{claims_block}"
+    );
+
+    let meta = ChatFocusMeta {
+        source_sha: sha.to_string(),
+        title: source.title.clone(),
+    };
+    Some((pack, meta))
+}
+
 /// `GET /api/source/:sha/work` — translation/summary archive status.
 fn handle_source_work_get(state: &AppState, path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let Some(sha) = source_sha_from_action_path(path, "work") else {
@@ -2380,6 +2590,246 @@ fn parse_force_flag(body: &str) -> bool {
         .ok()
         .and_then(|v| v.get("force")?.as_bool())
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Source-work queue (per-article translate/summarize)
+// ---------------------------------------------------------------------------
+
+fn handle_source_work_queue_get(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let snap = state.source_work_queue.snapshot();
+    let notify = state.source_work_queue.take_notify_batch();
+    json_response(
+        200,
+        &serde_json::json!({
+            "schema": snap.schema,
+            "items": snap.items,
+            "notify": notify,
+        })
+        .to_string(),
+    )
+}
+
+fn handle_source_work_queue_enqueue(
+    state: &AppState,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let parsed: ovp_memory::source_work_queue::EnqueueRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return json_response(
+                400,
+                &serde_json::json!({ "error": format!("invalid body: {e}") }).to_string(),
+            );
+        }
+    };
+    match state.source_work_queue.enqueue(parsed) {
+        Ok(item) => json_response(200, &serde_json::json!({ "ok": true, "item": item }).to_string()),
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+fn handle_source_work_queue_reorder(
+    state: &AppState,
+    body: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let ids: Vec<String> = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => v
+            .get("ids")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Err(e) => {
+            return json_response(
+                400,
+                &serde_json::json!({ "error": format!("invalid body: {e}") }).to_string(),
+            );
+        }
+    };
+    match state.source_work_queue.reorder(&ids) {
+        Ok(snap) => json_response(200, &serde_json::json!({ "ok": true, "items": snap.items }).to_string()),
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+fn handle_source_work_queue_cancel(
+    state: &AppState,
+    path: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let id = path
+        .trim_start_matches("/api/source-work/queue/")
+        .trim_end_matches("/cancel")
+        .trim_matches('/');
+    if id.is_empty() {
+        return json_response(400, r#"{"error":"missing id"}"#);
+    }
+    match state.source_work_queue.cancel(id) {
+        Ok(item) => json_response(200, &serde_json::json!({ "ok": true, "item": item }).to_string()),
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+fn handle_source_work_queue_delete(
+    state: &AppState,
+    path: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let id = path.trim_start_matches("/api/source-work/queue/").trim_matches('/');
+    if id.is_empty() || id.contains('/') {
+        return json_response(400, r#"{"error":"missing id"}"#);
+    }
+    match state.source_work_queue.remove(id) {
+        Ok(()) => json_response(200, r#"{"ok":true}"#),
+        Err(e) => json_response(400, &serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+/// Background loop: claim one article, run its wanted tasks (parallel), finish.
+fn source_work_queue_worker(state: Arc<AppState>) {
+    use ovp_memory::source_work_queue::TaskKind;
+    loop {
+        state
+            .source_work_queue
+            .wait_for_work(std::time::Duration::from_secs(2));
+        let Some(item) = state.source_work_queue.claim_next() else {
+            continue;
+        };
+        let Some(factory) = state.ask_client.clone() else {
+            let _ = state.source_work_queue.finish_task(
+                &item.id,
+                TaskKind::Translate,
+                Err("llm not configured".into()),
+            );
+            if item.summarize.wanted {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Summarize,
+                    Err("llm not configured".into()),
+                );
+            }
+            continue;
+        };
+        let Some(model) = state.current_model() else {
+            let err = "index not available".to_string();
+            if item.translate.wanted {
+                let _ = state
+                    .source_work_queue
+                    .finish_task(&item.id, TaskKind::Translate, Err(err.clone()));
+            }
+            if item.summarize.wanted {
+                let _ = state
+                    .source_work_queue
+                    .finish_task(&item.id, TaskKind::Summarize, Err(err));
+            }
+            continue;
+        };
+        let (md, title, url) = match source_markdown_for(&state, &model, &item.sha256) {
+            Ok(v) => v,
+            Err(_) => {
+                let err = "source markdown unavailable".to_string();
+                if item.translate.wanted {
+                    let _ = state.source_work_queue.finish_task(
+                        &item.id,
+                        TaskKind::Translate,
+                        Err(err.clone()),
+                    );
+                }
+                if item.summarize.wanted {
+                    let _ = state
+                        .source_work_queue
+                        .finish_task(&item.id, TaskKind::Summarize, Err(err));
+                }
+                continue;
+            }
+        };
+        // Prefer live title from the note when the queue item has none.
+        let title = title.or(item.title.clone());
+        let model_name = ovp_memory::ask::AskArgs::default().model_name;
+        let vault = state.vault_root.clone();
+        let q = Arc::clone(&state.source_work_queue);
+        let id = item.id.clone();
+        let sha = item.sha256.clone();
+        let md_t = md.clone();
+        let md_s = md;
+        let title_t = title.clone();
+        let title_s = title;
+        let url_t = url.clone();
+        let url_s = url;
+        let force_t = item.translate.force;
+        let force_s = item.summarize.force;
+        let do_t = item.translate.wanted;
+        let do_s = item.summarize.wanted;
+        let factory_t = factory.clone();
+        let factory_s = factory;
+
+        let mut handles = Vec::new();
+        if do_t {
+            let q = Arc::clone(&q);
+            let id = id.clone();
+            let vault = vault.clone();
+            let sha = sha.clone();
+            let model_name = model_name.clone();
+            handles.push(std::thread::spawn(move || {
+                let result = (|| {
+                    let mut client = factory_t()?;
+                    ovp_memory::source_work::translate_source(
+                        &vault,
+                        &sha,
+                        title_t.as_deref(),
+                        url_t.as_deref(),
+                        &md_t,
+                        client.as_mut(),
+                        &model_name,
+                        force_t,
+                    )
+                    .map(|_| ())
+                })();
+                let _ = q.finish_task(&id, TaskKind::Translate, result);
+            }));
+        } else {
+            state
+                .source_work_queue
+                .mark_task_skipped_if_not_wanted(&id);
+        }
+        if do_s {
+            let q = Arc::clone(&q);
+            let id = id.clone();
+            let vault = vault.clone();
+            let sha = sha.clone();
+            let model_name = model_name.clone();
+            handles.push(std::thread::spawn(move || {
+                let result = (|| {
+                    let mut client = factory_s()?;
+                    ovp_memory::source_work::summarize_source(
+                        &vault,
+                        &sha,
+                        title_s.as_deref(),
+                        url_s.as_deref(),
+                        &md_s,
+                        client.as_mut(),
+                        &model_name,
+                        force_s,
+                    )
+                    .map(|_| ())
+                })();
+                let _ = q.finish_task(&id, TaskKind::Summarize, result);
+            }));
+        } else {
+            state
+                .source_work_queue
+                .mark_task_skipped_if_not_wanted(&id);
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+        // Ensure item status recomputed if both skipped oddly.
+        state
+            .source_work_queue
+            .mark_task_skipped_if_not_wanted(&id);
+    }
 }
 
 /// `POST /api/source/:sha/translate` — refined EN→zh archive (LLM).
@@ -2694,33 +3144,33 @@ fn handle_ask(
             r#"{"error":"body must be {\"question\": \"<non-empty string>\"}"}"#,
         );
     }
-    // Optional chat-on-this: pin the turn to one library source body.
+    // Optional chat-on-this: auto-inject body + memory + crystal; keep the
+    // user-visible question separate so history never stores the full pack.
     let focus_source = parsed
         .get("focus_source")
         .and_then(|s| s.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty() && s.len() <= 128)
         .map(str::to_string);
-    let question_owned = if let Some(sha) = focus_source.as_deref() {
-        if let Some(model) = state.current_model() {
-            match source_markdown_for(state, &model, sha) {
-                Ok((md, title, url)) => {
-                    let clip: String = md.chars().take(24_000).collect();
-                    format!(
-                        "[FOCUS SOURCE]\nsha: {sha}\ntitle: {}\nurl: {}\n\n---\n{clip}\n---\n\n[USER QUESTION]\n{question_raw}",
-                        title.as_deref().unwrap_or("(untitled)"),
-                        url.as_deref().unwrap_or("(none)"),
-                    )
-                }
-                Err(_) => question_raw.to_string(),
-            }
-        } else {
-            question_raw.to_string()
-        }
+    let focus_built = focus_source.as_deref().and_then(|sha| {
+        state
+            .current_model()
+            .and_then(|model| build_source_focus_pack(state, &model, sha))
+    });
+    let focus_meta = focus_built.as_ref().map(|(_, m)| m.clone());
+    // Agent path: full pack + user question as one user message (tools still
+    // available). Legacy path: pack goes in context_prefix so retrieval still
+    // scores the raw question.
+    let question_for_agent = if let Some((pack, _)) = focus_built.as_ref() {
+        format!("{pack}\n\n[USER QUESTION]\n{question_raw}")
     } else {
         question_raw.to_string()
     };
-    let question = question_owned.as_str();
+    let question = question_for_agent.as_str();
+    let context_prefix = focus_built
+        .as_ref()
+        .map(|(pack, _)| pack.clone())
+        .filter(|_| !state.ask_agent); // only used on legacy path
     // Optional session stem: continue an existing `.ovp/chats/<chat>.md`
     // (append + multi-turn context). Invalid stems are ignored (new chat).
     let chat = parsed
@@ -2813,6 +3263,8 @@ fn handle_ask(
         return handle_ask_agent(
             state,
             question,
+            question_raw,
+            focus_meta,
             chat.as_deref(),
             idempotency_key.as_deref(),
             slot,
@@ -2833,7 +3285,10 @@ fn handle_ask(
 
     let evidence = state.current_evidence();
     let vault_root = state.vault_root.clone();
-    let question = question.to_string();
+    // Legacy path: raw question for retrieval/intent; pack only for the LLM.
+    let question = question_raw.to_string();
+    let context_prefix = context_prefix;
+    let focus_meta = focus_meta;
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -2845,6 +3300,8 @@ fn handle_ask(
             &question,
             chat.as_deref(),
             &history,
+            context_prefix.as_deref(),
+            focus_meta.as_ref(),
             &vault_root,
         );
         let _ = tx.send(result);
@@ -2888,7 +3345,11 @@ fn handle_ask(
 #[allow(clippy::too_many_arguments)]
 fn handle_ask_agent(
     state: &AppState,
+    // Full message for the model (may include focus pack).
     question: &str,
+    // User-visible question saved to `.ovp/chats` (never the focus pack).
+    display_question: &str,
+    focus_meta: Option<ChatFocusMeta>,
     chat: Option<&str>,
     idempotency_key: Option<&str>,
     slot: AskSlot,
@@ -2968,6 +3429,8 @@ fn handle_ask_agent(
     let chat_saves = Arc::clone(&state.chat_saves);
     let progress_session = session.clone();
     let question = question.to_string();
+    let display_question = display_question.to_string();
+    let focus_meta = focus_meta;
     let response_session = session.clone();
     let request_key = idempotency_key.map(str::to_string);
 
@@ -3015,15 +3478,16 @@ fn handle_ask_agent(
                     && !ovp_memory::ask::agent_chat_contains_question(
                         &vault_root,
                         &response_session,
-                        &question,
+                        &display_question,
                     )
                 {
                     let _save_guard = chat_saves.lock().unwrap();
-                    if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                    if let Err(e) = ovp_memory::ask::save_agent_chat_turn_with_focus(
                         &vault_root,
                         &response_session,
-                        &question,
+                        &display_question,
                         &done.answer,
+                        focus_meta.as_ref(),
                     ) {
                         replay_save_error = Some(e);
                     }
@@ -3244,11 +3708,12 @@ fn handle_ask_agent(
             // turn mid-flight) ran nothing here — the racer owns the save.
             if deliverable && !outcome.idempotent_replay && !outcome.answer.is_empty() {
                 let _save_guard = chat_saves.lock().unwrap();
-                if let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+                if let Err(e) = ovp_memory::ask::save_agent_chat_turn_with_focus(
                     &vault_root,
                     &response_session,
-                    &question,
+                    &display_question,
                     &outcome.answer,
+                    focus_meta.as_ref(),
                 ) && let Some(obj) = body.as_object_mut()
                 {
                     obj.insert("chat_save_error".into(), serde_json::json!(e));
@@ -3361,9 +3826,12 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
                     })
                 })
                 .collect();
+            // Transcript may hold the full focus pack (model input). Product
+            // surfaces only the human question after `[USER QUESTION]`.
+            let visible_q = user_visible_ask_question(&question);
             serde_json::json!({
                 "turn_id": turn_id,
-                "question": question,
+                "question": visible_q,
                 "answer": answer,
                 "stopped_reason": stopped_reason,
                 "tool_trace": trail,
@@ -3371,6 +3839,18 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
         })
         .collect();
     json_response(200, &serde_json::json!({"turns": turns}).to_string())
+}
+
+/// Strip server-injected focus pack from a transcript question for product UI.
+fn user_visible_ask_question(raw: &str) -> String {
+    const MARKER: &str = "[USER QUESTION]";
+    if let Some(idx) = raw.find(MARKER) {
+        return raw[idx + MARKER.len()..].trim().to_string();
+    }
+    if raw.trim_start().starts_with("[FOCUS CONTEXT") {
+        return String::new();
+    }
+    raw.to_string()
 }
 
 /// `GET /api/ask/progress?chat=<session>` — the minimal A0 §3.7 progress feed.
@@ -3409,6 +3889,8 @@ fn run_ask(
     question: &str,
     chat: Option<&str>,
     history: &[AskHistoryTurn],
+    context_prefix: Option<&str>,
+    focus: Option<&ChatFocusMeta>,
     vault_root: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
     let mut client = factory()?;
@@ -3417,6 +3899,8 @@ fn run_ask(
         save_chat: true,
         chat: chat.map(str::to_string),
         history: history.to_vec(),
+        context_prefix: context_prefix.map(str::to_string),
+        focus: focus.cloned(),
         ..Default::default()
     };
     let result = ask_with_optional_evidence(model, evidence, client.as_mut(), &args, vault_root)?;
@@ -3572,10 +4056,10 @@ fn chats_dir(state: &AppState) -> PathBuf {
 }
 
 /// GET /api/chats — saved ask transcripts, newest first:
-/// `[{name, mtime}]` (mtime = unix seconds; the client formats the date).
+/// `[{name, mtime, focus_source?, focus_title?, preview?}]`.
 /// A vault without any chats answers an empty list, not an error.
 fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut rows: Vec<(u64, String)> = Vec::new();
+    let mut rows: Vec<(u64, String, PathBuf)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(chats_dir(state)) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -3592,13 +4076,31 @@ fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            rows.push((mtime, name.to_string()));
+            rows.push((mtime, name.to_string(), path));
         }
     }
-    rows.sort_by(|a, b| b.cmp(a));
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
     let list: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(mtime, name)| serde_json::json!({ "name": name, "mtime": mtime }))
+        .map(|(mtime, name, path)| {
+            let (focus_source, focus_title, preview) = std::fs::read_to_string(&path)
+                .ok()
+                .map(|md| parse_chat_surface_meta(&md))
+                .unwrap_or((None, None, None));
+            let mut obj = serde_json::json!({ "name": name, "mtime": mtime });
+            if let Some(map) = obj.as_object_mut() {
+                if let Some(sha) = focus_source {
+                    map.insert("focus_source".into(), serde_json::json!(sha));
+                }
+                if let Some(title) = focus_title {
+                    map.insert("focus_title".into(), serde_json::json!(title));
+                }
+                if let Some(p) = preview {
+                    map.insert("preview".into(), serde_json::json!(p));
+                }
+            }
+            obj
+        })
         .collect();
     let body = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
     json_response(200, &body)
@@ -4008,6 +4510,8 @@ mod tests {
     }
 
     fn state(vault: PathBuf, viz_dir: Option<PathBuf>) -> AppState {
+        let source_work_queue =
+            Arc::new(ovp_memory::source_work_queue::SourceWorkQueue::open(&vault));
         AppState {
             vault_root: vault,
             layout: VaultLayout::new(),
@@ -4028,7 +4532,8 @@ mod tests {
             acks_write_lock: std::sync::Mutex::new(()),
             ask_agent: false,
             ask_progress: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        chat_saves: Arc::new(std::sync::Mutex::new(())),
+            chat_saves: Arc::new(std::sync::Mutex::new(())),
+            source_work_queue,
         }
     }
 

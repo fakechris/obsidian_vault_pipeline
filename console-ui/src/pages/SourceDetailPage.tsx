@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
+import SourceChatPanel from '../components/SourceChatPanel';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
@@ -14,23 +15,79 @@ import {
   fetchSourceDetail,
   fetchSourceWork,
   fetchTags,
-  postSourceSummarize,
   postSourceTags,
-  postSourceTranslate,
   STATIC_MODE,
   type SourceWorkPayload,
 } from '../lib/api';
-import { collectionOf } from '../lib/derive';
+import { useSourceWorkQueueOptional } from '../lib/sourceWorkQueue';
+import {
+  collectionOf,
+  libraryBrowseOrder,
+  libraryFilterActive,
+  libraryFilterFromSearch,
+  librarySourcePath,
+  loadLibraryNavSnapshot,
+  sourceDisplayTitle,
+  type LibraryFilter,
+} from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, sourceImageCandidates } from '../lib/markdown';
 import { companionLinks, isPrimarilyEnglish } from '../lib/sourceLinks';
 import type { ClaimRow, SourceDetail, SourceRow } from '../lib/types';
+import { useModel } from '../model';
 
 type Tab = 'memory' | 'source' | 'zh' | 'summary';
 
 interface DetailState {
   detail: SourceDetail | null;
   status: 'loading' | 'ready' | 'notFound' | 'error';
+}
+
+/** meta.translated_at / summarized_at — used to detect force re-runs finishing. */
+function workStamp(
+  w: SourceWorkPayload | null | undefined,
+  key: 'translated_at' | 'summarized_at',
+): string | null {
+  const m = w?.meta;
+  if (!m || typeof m !== 'object') return null;
+  const v = (m as Record<string, unknown>)[key];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => window.setTimeout(r, ms));
+}
+
+/**
+ * Long translate/summarize POSTs often outlive desktop WebView request
+ * tolerance while the server still finishes. Poll GET /work until the
+ * predicate holds so the 中文/摘要 tab appears without leaving the page.
+ */
+async function pollSourceWork(
+  sha: string,
+  done: (w: SourceWorkPayload) => boolean,
+  opts: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    /** Set `.current = true` to stop early (POST already applied UI). */
+    stop?: { current: boolean };
+  } = {},
+): Promise<SourceWorkPayload | null> {
+  const timeoutMs = opts.timeoutMs ?? 12 * 60 * 1000;
+  const intervalMs = opts.intervalMs ?? 2000;
+  const deadline = Date.now() + timeoutMs;
+  let last: SourceWorkPayload | null = null;
+  while (Date.now() < deadline) {
+    if (opts.stop?.current) return last && done(last) ? last : null;
+    try {
+      last = await fetchSourceWork(sha);
+      if (done(last)) return last;
+    } catch {
+      /* transient — keep polling */
+    }
+    await sleep(intervalMs);
+  }
+  return last && done(last) ? last : null;
 }
 
 function useSourceDetail(sha: string | undefined, version: number): DetailState {
@@ -181,16 +238,38 @@ function CitingClaims({ claims }: { claims: ClaimRow[] }) {
   );
 }
 
+function filterLabel(f: LibraryFilter): string {
+  const bits: string[] = [];
+  if (f.collection) bits.push(f.collection);
+  if (f.month) bits.push(f.month);
+  if (f.status) bits.push(f.status);
+  if (f.tag) bits.push(`#${f.tag}`);
+  return bits.join(' · ');
+}
+
+function libraryListHref(f: LibraryFilter): string {
+  const q = new URLSearchParams();
+  if (f.collection) q.set('c', f.collection);
+  if (f.month) q.set('m', f.month);
+  if (f.status) q.set('status', f.status);
+  if (f.tag) q.set('tag', f.tag);
+  const s = q.toString();
+  return s ? `/library?${s}` : '/library';
+}
+
 export default function SourceDetailPage() {
   const { t } = useI18n();
   const { sha } = useParams<{ sha: string }>();
   const navigate = useNavigate();
+  const { model } = useModel();
+  const workQueue = useSourceWorkQueueOptional();
   // Bumped after a tag write so the detail (and its rebuilt tags) reloads.
   const [version, setVersion] = useState(0);
   const { detail, status } = useSourceDetail(sha, version);
   // Tab is URL-parameterized (?tab=memory) — shareable deep links, same
   // rule as the Library facets (design §5). Default is the full SOURCE
   // rendering (operator finding: the memory tab alone reads as excerpts).
+  // Facet params (c/m/status/tag) are preserved for in-set prev/next.
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const tab: Tab =
@@ -208,10 +287,111 @@ export default function SourceDetailPage() {
       { replace: true },
     );
   };
+
+  /** Continuous browse within the Library filter set the user entered with. */
+  const browse = useMemo(() => {
+    const empty: LibraryFilter = {
+      collection: null,
+      month: null,
+      status: null,
+      tag: null,
+    };
+    if (!sha) {
+      return { order: [] as string[], idx: -1, filter: empty, label: '' };
+    }
+    const fromUrl = libraryFilterFromSearch(searchParams);
+    let order: string[] = [];
+    let filter = fromUrl;
+    let label = '';
+    if (model && libraryFilterActive(fromUrl)) {
+      order = libraryBrowseOrder(model.sources, fromUrl);
+      label = filterLabel(fromUrl);
+    } else {
+      const snap = loadLibraryNavSnapshot();
+      if (snap?.order?.includes(sha)) {
+        order = snap.order;
+        filter = snap.filter ?? fromUrl;
+        label = snap.label ?? filterLabel(filter);
+      } else if (model) {
+        order = libraryBrowseOrder(model.sources, empty);
+      }
+    }
+    return {
+      order,
+      idx: order.indexOf(sha),
+      filter,
+      label,
+    };
+  }, [sha, searchParams, model]);
+
+  const prevSha =
+    browse.idx > 0 ? browse.order[browse.idx - 1] : null;
+  const nextSha =
+    browse.idx >= 0 && browse.idx < browse.order.length - 1
+      ? browse.order[browse.idx + 1]
+      : null;
+  const prevHref = prevSha
+    ? librarySourcePath(prevSha, browse.filter)
+    : null;
+  const nextHref = nextSha
+    ? librarySourcePath(nextSha, browse.filter)
+    : null;
+
+  // [ ] / ArrowLeft/Right — sequential browse when not typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el) {
+        const tag = el.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          el.isContentEditable
+        ) {
+          return;
+        }
+        if (el.closest('[data-omnibox-suppress]')) return;
+      }
+      if ((e.key === 'ArrowLeft' || e.key === '[') && prevHref) {
+        e.preventDefault();
+        navigate(prevHref);
+      } else if ((e.key === 'ArrowRight' || e.key === ']') && nextHref) {
+        e.preventDefault();
+        navigate(nextHref);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [prevHref, nextHref, navigate]);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [work, setWork] = useState<SourceWorkPayload | null>(null);
-  const [workBusy, setWorkBusy] = useState<'translate' | 'summarize' | null>(null);
-  const [workError, setWorkError] = useState<string | null>(null);
+  /** Local enqueue-in-flight (not server job running — that lives in the queue). */
+  const [busyTranslate, setBusyTranslate] = useState(false);
+  const [busySummarize, setBusySummarize] = useState(false);
+  const [workErrors, setWorkErrors] = useState<{
+    translate?: string;
+    summarize?: string;
+  }>({});
+  const [queueNote, setQueueNote] = useState<string | null>(null);
+  // Source-grounded chat dock (not a jump to Ask). URL: ?chat=1 opens empty;
+  // ?chat=<stem> resumes that session in-context.
+  const chatParam = searchParams.get('chat');
+  const chatOpen = chatParam != null && chatParam !== '';
+  const resumeChat =
+    chatParam && chatParam !== '1' && chatParam !== 'true' ? chatParam : null;
+  const setChatOpen = (open: boolean, stem?: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (!open) p.delete('chat');
+        else p.set('chat', stem && stem !== '1' ? stem : '1');
+        return p;
+      },
+      { replace: true },
+    );
+  };
 
   const anchoredLines = useMemo(
     () =>
@@ -269,51 +449,103 @@ export default function SourceDetailPage() {
     };
   }, [sha, status, version]);
 
+  /** Merge so a finishing translate never wipes summary body (and vice versa). */
+  const applyWork = (w: SourceWorkPayload, preferTab: 'zh' | 'summary' | null) => {
+    setWork((prev) => ({
+      work_rel: w.work_rel || prev?.work_rel || '',
+      has_original: w.has_original ?? prev?.has_original ?? true,
+      has_zh: Boolean(w.has_zh || prev?.has_zh),
+      has_summary: Boolean(w.has_summary || prev?.has_summary),
+      primarily_english: w.primarily_english ?? prev?.primarily_english ?? true,
+      meta: w.meta ?? prev?.meta ?? null,
+      zh: w.zh ?? prev?.zh ?? null,
+      summary: w.summary ?? prev?.summary ?? null,
+    }));
+    if (preferTab === 'zh' && w.has_zh) setTab('zh');
+    if (preferTab === 'summary' && w.has_summary) setTab('summary');
+  };
+
+  // While this article has a queue job running, poll work artifacts so tabs appear
+  // even after navigating away and back.
+  useEffect(() => {
+    if (!sha || !workQueue) return;
+    const mine = workQueue.items.filter(
+      (i) =>
+        i.sha256 === sha &&
+        (i.status === 'queued' || i.status === 'running'),
+    );
+    if (mine.length === 0) return;
+    let stop = false;
+    const tick = () => {
+      if (stop) return;
+      fetchSourceWork(sha)
+        .then((w) => {
+          if (stop) return;
+          applyWork(w, null);
+        })
+        .catch(() => {});
+    };
+    tick();
+    const id = window.setInterval(tick, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [sha, workQueue?.items]);
+
   const runTranslate = async (force = false) => {
-    if (!sha) return;
-    setWorkBusy('translate');
-    setWorkError(null);
+    if (!sha || busyTranslate) return;
+    setBusyTranslate(true);
+    setWorkErrors((e) => ({ ...e, translate: undefined }));
+    setQueueNote(null);
     try {
-      const w = await postSourceTranslate(sha, force);
-      setWork((prev) => ({
-        work_rel: w.work_rel ?? prev?.work_rel ?? '',
-        has_original: true,
-        has_zh: w.has_zh ?? true,
-        has_summary: w.has_summary ?? prev?.has_summary ?? false,
-        primarily_english: true,
-        meta: w.meta ?? prev?.meta,
-        zh: w.zh ?? null,
-        summary: w.summary ?? prev?.summary,
-      }));
-      setTab('zh');
+      if (!workQueue) throw new Error('work queue unavailable');
+      const titleHint =
+        detail != null
+          ? sourceDisplayTitle(detail.source)
+          : sha;
+      await workQueue.enqueue({
+        sha256: sha,
+        title: titleHint,
+        translate: true,
+        force,
+      });
+      setQueueNote(t('source.queuedOk'));
     } catch (e) {
-      setWorkError((e as Error).message);
+      setWorkErrors((err) => ({
+        ...err,
+        translate: (e as Error).message,
+      }));
     } finally {
-      setWorkBusy(null);
+      setBusyTranslate(false);
     }
   };
 
   const runSummarize = async (force = false) => {
-    if (!sha) return;
-    setWorkBusy('summarize');
-    setWorkError(null);
+    if (!sha || busySummarize) return;
+    setBusySummarize(true);
+    setWorkErrors((e) => ({ ...e, summarize: undefined }));
+    setQueueNote(null);
     try {
-      const w = await postSourceSummarize(sha, force);
-      setWork((prev) => ({
-        work_rel: w.work_rel ?? prev?.work_rel ?? '',
-        has_original: true,
-        has_zh: w.has_zh ?? prev?.has_zh ?? false,
-        has_summary: w.has_summary ?? true,
-        primarily_english: prev?.primarily_english ?? offerTranslate,
-        meta: w.meta ?? prev?.meta,
-        zh: w.zh ?? prev?.zh,
-        summary: w.summary ?? null,
-      }));
-      setTab('summary');
+      if (!workQueue) throw new Error('work queue unavailable');
+      const titleHint =
+        detail != null
+          ? sourceDisplayTitle(detail.source)
+          : sha;
+      await workQueue.enqueue({
+        sha256: sha,
+        title: titleHint,
+        summarize: true,
+        force,
+      });
+      setQueueNote(t('source.queuedOk'));
     } catch (e) {
-      setWorkError((e as Error).message);
+      setWorkErrors((err) => ({
+        ...err,
+        summarize: (e as Error).message,
+      }));
     } finally {
-      setWorkBusy(null);
+      setBusySummarize(false);
     }
   };
 
@@ -332,7 +564,10 @@ export default function SourceDetailPage() {
     return (
       <>
         <div className="crumbs">
-          <Link to="/library">{t('source.backToLibrary')}</Link> / {sha}
+          <Link to={libraryListHref(browse.filter)}>
+            {t('source.backToLibrary')}
+          </Link>{' '}
+          / {sha}
         </div>
         <EmptyState>
           <p>{t('source.notFound')}</p>
@@ -342,18 +577,87 @@ export default function SourceDetailPage() {
   }
 
   const { source, memory, citing_claims: citing, doc } = detail;
-  const title = source.title ?? source.sha256;
+  const title = sourceDisplayTitle(source);
 
   return (
     <>
-      <div className="crumbs">
-        <Link to="/library">{t('source.backToLibrary')}</Link> / {title}
-      </div>
+      {/* Single compact chrome row: prev | Library / title… | i/n | next */}
+      <nav className="source-top-bar" aria-label={t('source.browseNav')}>
+        {browse.order.length > 1 && browse.idx >= 0 ? (
+          prevHref ? (
+            <Link
+              className="browse-step"
+              to={prevHref}
+              title={t('source.browsePrevHint')}
+              aria-label={t('source.browsePrev')}
+            >
+              ←
+            </Link>
+          ) : (
+            <span className="browse-step is-disabled" aria-hidden>
+              ←
+            </span>
+          )
+        ) : (
+          <span className="browse-step is-spacer" aria-hidden />
+        )}
+        <div className="source-top-trail">
+          <Link className="source-top-lib" to={libraryListHref(browse.filter)}>
+            {t('source.backToLibrary')}
+          </Link>
+          <span className="source-top-sep" aria-hidden>
+            /
+          </span>
+          <span className="source-top-title" title={title}>
+            {title}
+          </span>
+        </div>
+        {browse.order.length > 1 && browse.idx >= 0 ? (
+          <>
+            <span
+              className="source-top-pos mono tiny muted"
+              title={
+                browse.label
+                  ? `${browse.label} · [ ] / ← →`
+                  : '[ ] / ← →'
+              }
+            >
+              {t('source.browsePosition', {
+                i: browse.idx + 1,
+                n: browse.order.length,
+              })}
+            </span>
+            {nextHref ? (
+              <Link
+                className="browse-step"
+                to={nextHref}
+                title={t('source.browseNextHint')}
+                aria-label={t('source.browseNext')}
+              >
+                →
+              </Link>
+            ) : (
+              <span className="browse-step is-disabled" aria-hidden>
+                →
+              </span>
+            )}
+          </>
+        ) : null}
+      </nav>
 
       <div className="src-head">
-        <h1 style={{ marginBottom: '0.25rem' }}>{title}</h1>
+        <h1 title={title}>{title}</h1>
         <StatusPill status={source.status} />
       </div>
+
+      {queueNote && (
+        <div className="source-work-busy" role="status">
+          {queueNote}{' '}
+          <Link to="/work-queue" className="tiny">
+            {t('source.openQueue')} →
+          </Link>
+        </div>
+      )}
 
       {(source.status === 'failed' || source.status === 'blocked') && (
         <div className="card warn source-failed">
@@ -486,10 +790,10 @@ export default function SourceDetailPage() {
             <button
               type="button"
               className="action-btn"
-              disabled={workBusy != null}
+              disabled={busyTranslate}
               onClick={() => runTranslate(!!work?.has_zh)}
             >
-              {workBusy === 'translate'
+              {busyTranslate
                 ? t('source.translating')
                 : work?.has_zh
                   ? t('source.retranslate')
@@ -499,27 +803,37 @@ export default function SourceDetailPage() {
           <button
             type="button"
             className="action-btn"
-            disabled={workBusy != null}
+            disabled={busySummarize}
             onClick={() => runSummarize(!!work?.has_summary)}
           >
-            {workBusy === 'summarize'
+            {busySummarize
               ? t('source.summarizing')
               : work?.has_summary
                 ? t('source.resummarize')
                 : t('source.summarize')}
           </button>
-          <Link
-            className="action-btn action-btn-link"
-            to={`/ask?focus=${encodeURIComponent(source.sha256)}`}
+          <button
+            type="button"
+            className={`action-btn${chatOpen ? ' active' : ''}`}
+            onClick={() => setChatOpen(!chatOpen)}
           >
             {t('source.chatOnThis')}
-          </Link>
+          </button>
           {work?.work_rel && (
             <span className="tiny muted mono" title={work.work_rel}>
               {t('source.workDir')}: {work.work_rel}
             </span>
           )}
-          {workError && <span className="fail-note">{workError}</span>}
+          {workErrors.translate && (
+            <span className="fail-note">
+              {t('source.translate')}: {workErrors.translate}
+            </span>
+          )}
+          {workErrors.summarize && (
+            <span className="fail-note">
+              {t('source.summarize')}: {workErrors.summarize}
+            </span>
+          )}
         </div>
       )}
 
@@ -709,6 +1023,19 @@ export default function SourceDetailPage() {
           </div>
         </div>
       </div>
+
+      {!STATIC_MODE && (
+        <SourceChatPanel
+          sha={source.sha256}
+          title={title}
+          cardCount={memory.cards.length}
+          unitCount={memory.units.length}
+          claimCount={citing.length}
+          open={chatOpen}
+          resumeChat={resumeChat}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
     </>
   );
 }

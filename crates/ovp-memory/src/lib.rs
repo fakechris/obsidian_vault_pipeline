@@ -9,9 +9,13 @@ pub mod agent_policy;
 pub mod agent_transcript;
 pub mod ask;
 pub mod digest;
+#[cfg(feature = "embed")]
+pub mod embed_lane;
 pub mod intent;
 pub mod receipts;
+pub mod retrieve;
 pub mod source_work;
+pub mod source_work_queue;
 pub mod vault_tools;
 pub mod verify;
 pub mod working_memory;

@@ -32,10 +32,12 @@ use ovp_domain::VaultLayout;
 use ovp_intake::vaultops::{hex_sha256, rel_to, safe_move};
 use ovp_llm::ModelClient;
 
+pub mod capture;
 pub mod heartbeat;
 pub mod ledger;
 pub mod report;
 
+pub use capture::{worth_distilling, CaptureTier, NotWorth};
 pub use heartbeat::{
     read_last_run, write_last_run, HeartbeatGuard, LastRun, LastRunStatus, RecentSource, RunCounts,
     LAST_RUN_SCHEMA, RECENT_RING_CAP,
@@ -45,7 +47,7 @@ pub use ledger::{
     succeeded_hashes, DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,
 };
 pub use report::{
-    write_run_report, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
+    write_run_report, CostReport, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
     RUN_REPORT_SCHEMA,
 };
 
@@ -68,6 +70,23 @@ pub struct DailyConfig {
     pub lifecycle_move: bool,
     /// Also plan sources blocked by the retry cap.
     pub retry_blocked: bool,
+    /// Capture thrift: skip `$` reader for low-signal sources (index-only).
+    pub capture_tier: CaptureTier,
+}
+
+impl DailyConfig {
+    /// Builder default used by tests that don't care about capture thrift.
+    pub fn with_defaults(vault_root: PathBuf, date: String, run_id: String) -> Self {
+        Self {
+            vault_root,
+            date,
+            run_id,
+            max_sources: 0,
+            lifecycle_move: true,
+            retry_blocked: false,
+            capture_tier: CaptureTier::Balanced,
+        }
+    }
 }
 
 /// One scanned inbox source.
@@ -298,6 +317,20 @@ where
                 Some(format!("source parse: {e}"))))
         }
     };
+
+    // Capture thrift: 0-cost worth gate BEFORE any `$` client is built.
+    // Index-only closeout = Succeeded with 0 units so dedup skips forever
+    // and retries are not burned on bookmarks.
+    if let Err(nw) = worth_distilling(&source.title, &source.body_markdown, cfg.capture_tier) {
+        return Ok(record(
+            RunStatus::Succeeded,
+            None,
+            None,
+            0,
+            0,
+            Some(nw.code()),
+        ));
+    }
 
     let hash8 = &item.sha256[..8];
     let pack_rel = layout.reader_pack_dir(&cfg.date, &source.title, hash8);
