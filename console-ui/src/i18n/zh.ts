@@ -214,6 +214,7 @@ export const zh: Record<keyof typeof en, string> = {
     '翻译与深度摘要按「文章」排队：同一时间只处理一篇；单篇内翻译和摘要可并行。可用 ↑↓ 调整顺序、取消排队项；每篇文章完成后会系统通知。',
   'workq.refresh': '刷新',
   'workq.counts': '进行中 {running} · 排队 {queued} · 历史 {history}',
+  'workq.polled': '更新于 {time}',
   'workq.running': '进行中',
   'workq.queued': '排队中',
   'workq.queuedEmpty': '暂无排队 — 在资料页点「译为中文」或「深度摘要」即可入队。',
