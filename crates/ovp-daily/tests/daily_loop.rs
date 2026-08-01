@@ -73,6 +73,9 @@ fn cfg(root: &Path) -> DailyConfig {
         max_sources: 0,
         lifecycle_move: true,
         retry_blocked: false,
+        // Tests use a short fixture body; Comprehensive keeps the worth gate
+        // out of the way so the reader trunk path under test still runs.
+        capture_tier: ovp_daily::CaptureTier::Comprehensive,
     }
 }
 

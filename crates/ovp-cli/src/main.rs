@@ -209,6 +209,12 @@ enum Cmd {
         /// Also retry sources blocked by the 3-failure cap.
         #[arg(long)]
         retry_blocked: bool,
+        /// Capture thrift before the `$` reader trunk: `focused` (long body),
+        /// `balanced` (default, ≥200 chars), or `comprehensive` (thinner notes).
+        /// Low-signal sources close as index-only (Succeeded, 0 units) without
+        /// an LLM call.
+        #[arg(long, default_value = "balanced")]
+        capture_tier: String,
         /// Web fetch enrichment from a fixture directory (offline testing).
         #[arg(long)]
         web_fetch_fixture: Option<PathBuf>,
@@ -1441,6 +1447,7 @@ fn main() -> ExitCode {
             pinboard_max,
             no_lifecycle,
             retry_blocked,
+            capture_tier,
             web_fetch_fixture,
             web_fetch_live,
             github_fixture,
@@ -1458,6 +1465,15 @@ fn main() -> ExitCode {
             };
             let date = date.unwrap_or_else(today_iso);
             let run_id = run_id.unwrap_or_else(|| format!("daily-{date}"));
+            let capture_tier = match ovp_daily::CaptureTier::parse(&capture_tier) {
+                Some(t) => t,
+                None => {
+                    eprintln!(
+                        "error: unknown --capture-tier '{capture_tier}' (expected focused|balanced|comprehensive)"
+                    );
+                    return ExitCode::from(2);
+                }
+            };
             commands::daily::run(DailyArgs {
                 vault_root,
                 inbox,
@@ -1475,6 +1491,7 @@ fn main() -> ExitCode {
                 pinboard_max,
                 no_lifecycle,
                 retry_blocked,
+                capture_tier,
                 web_fetch_fixture,
                 web_fetch_live,
                 github_fixture,

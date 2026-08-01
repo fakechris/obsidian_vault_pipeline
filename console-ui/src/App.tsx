@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Shell from './components/Shell';
 import { ModelProvider } from './model';
 import { STATIC_MODE } from './lib/api';
+import { SourceWorkQueueProvider } from './lib/sourceWorkQueue';
 import { useI18n, type MsgKey } from './i18n';
 import AskPage from './pages/AskPage';
 import KnowledgePage from './pages/KnowledgePage';
@@ -15,6 +16,7 @@ import EntityDetailPage from './pages/EntityDetailPage';
 import SystemPage from './pages/SystemPage';
 import ThemeDetailPage from './pages/ThemeDetailPage';
 import TodayPage from './pages/TodayPage';
+import WorkQueuePage from './pages/WorkQueuePage';
 
 // Flow/Monitor carry d3 — lazy so the portal pages stay light.
 const FlowPage = lazy(() => import('./pages/FlowPage'));
@@ -75,57 +77,59 @@ function VizRedirect() {
 export default function App() {
   return (
     <ModelProvider>
-      <Routes>
-        <Route element={<Shell />}>
-          {/* Published site is knowledge-only: home = Knowledge, no ops/ask
+      <SourceWorkQueueProvider>
+        <Routes>
+          <Route element={<Shell />}>
+            {/* Published site is knowledge-only: home = Knowledge, no ops/ask
               surfaces (they need a live server + are pipeline-internal). */}
+            <Route
+              path="/"
+              element={STATIC_MODE ? <Navigate to="/knowledge" replace /> : <TodayPage />}
+            />
+            <Route path="/library" element={<LibraryPage />} />
+            <Route path="/library/:sha" element={<SourceDetailPage />} />
+            {!STATIC_MODE && <Route path="/work-queue" element={<WorkQueuePage />} />}
+            {!STATIC_MODE && <Route path="/tags" element={<TagsPage />} />}
+            <Route path="/entities" element={<EntitiesPage />} />
+            <Route path="/entity/:id" element={<EntityDetailPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/knowledge" element={<KnowledgePage />} />
+            <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
+            {!STATIC_MODE && <Route path="/ask" element={<AskPage />} />}
+            {!STATIC_MODE && (
+              <Route path="/ask/chat/:chatId" element={<AskPage />} />
+            )}
+            {!STATIC_MODE && <Route path="/system" element={<SystemPage />} />}
+            {!STATIC_MODE && (
+              <Route
+                path="/flow"
+                element={
+                  <LegacyPanel titleKey="system.flowLink">
+                    <FlowPage />
+                  </LegacyPanel>
+                }
+              />
+            )}
+            {!STATIC_MODE && (
+              <Route
+                path="/monitor"
+                element={
+                  <LegacyPanel titleKey="system.monitorLink">
+                    <MonitorPage />
+                  </LegacyPanel>
+                }
+              />
+            )}
+          </Route>
           <Route
-            path="/"
-            element={STATIC_MODE ? <Navigate to="/knowledge" replace /> : <TodayPage />}
+            path="/graph"
+            element={<Navigate to="/knowledge?view=graph" replace />}
           />
-          <Route path="/library" element={<LibraryPage />} />
-          <Route path="/library/:sha" element={<SourceDetailPage />} />
-          {!STATIC_MODE && <Route path="/tags" element={<TagsPage />} />}
-          <Route path="/entities" element={<EntitiesPage />} />
-          <Route path="/entity/:id" element={<EntityDetailPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/knowledge" element={<KnowledgePage />} />
-          <Route path="/knowledge/theme/:theme" element={<ThemeDetailPage />} />
-          {!STATIC_MODE && <Route path="/ask" element={<AskPage />} />}
-          {!STATIC_MODE && (
-            <Route path="/ask/chat/:chatId" element={<AskPage />} />
-          )}
-          {!STATIC_MODE && <Route path="/system" element={<SystemPage />} />}
-          {!STATIC_MODE && (
-            <Route
-              path="/flow"
-              element={
-                <LegacyPanel titleKey="system.flowLink">
-                  <FlowPage />
-                </LegacyPanel>
-              }
-            />
-          )}
-          {!STATIC_MODE && (
-            <Route
-              path="/monitor"
-              element={
-                <LegacyPanel titleKey="system.monitorLink">
-                  <MonitorPage />
-                </LegacyPanel>
-              }
-            />
-          )}
-        </Route>
-        {/* Retired standalone viz routes → their portal homes (design §2). */}
-        <Route
-          path="/graph"
-          element={<Navigate to="/knowledge?view=graph" replace />}
-        />
-        <Route path="/explore" element={<Navigate to="/search" replace />} />
-        <Route path="/viz/*" element={<VizRedirect />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          <Route path="/explore" element={<Navigate to="/search" replace />} />
+          <Route path="/viz/*" element={<VizRedirect />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </SourceWorkQueueProvider>
     </ModelProvider>
   );
 }

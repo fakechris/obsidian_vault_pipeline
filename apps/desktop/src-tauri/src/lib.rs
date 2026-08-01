@@ -508,6 +508,51 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// macOS Notification Center / Linux notify-send — used when a background
+/// source-work queue item finishes while the operator is in another app.
+#[tauri::command]
+fn desktop_notify(title: String, body: String) -> Result<(), String> {
+    // Cap payload size so we never hand a multi-KB dump to the shell.
+    let title = title.chars().take(80).collect::<String>();
+    let body = body.chars().take(200).collect::<String>();
+    #[cfg(target_os = "macos")]
+    {
+        // Escape for AppleScript string literals.
+        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "display notification \"{}\" with title \"{}\"",
+            esc(&body),
+            esc(&title)
+        );
+        let mut child = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .spawn()
+            .map_err(|e| format!("osascript: {e}"))?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut child = Command::new("notify-send")
+            .arg(&title)
+            .arg(&body)
+            .spawn()
+            .map_err(|e| format!("notify-send: {e}"))?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (title, body);
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Vault menu — Obsidian-style switching. Every action is config + restart:
 // one mechanism, and the boot path (auto-open the persisted vault, else the
@@ -706,7 +751,8 @@ pub fn run() {
             boot,
             set_vault_and_start,
             known_vaults,
-            open_external
+            open_external,
+            desktop_notify
         ])
         .setup(|app| {
             rebuild_vault_menu(app.handle())?;

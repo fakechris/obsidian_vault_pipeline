@@ -13,6 +13,7 @@ use ovp_domain::crystal::{
     render_crystal_md, score_candidate, strength_coverage, ClaimStrengthVerdict, CrystalCandidate,
     CrystalHeader, FinalClass, GroundingIndex, ReviewEntry, StoreEvent, StoreOp,
 };
+use ovp_domain::crystal::lineage::{decide_lineage, LineageDecision};
 use ovp_domain::units::Unit;
 
 use crate::CliError;
@@ -329,7 +330,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         }
     }
 
-    // --- Append-only, idempotent write. ---
+    // --- Append-only, idempotent write (with G4 lineage). ---
     std::fs::create_dir_all(&store)
         .map_err(|e| CliError::Io(format!("creating store {}: {e}", store.display())))?;
     let ledger_path = store.join("ledger.jsonl");
@@ -339,18 +340,79 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     // a duplicate claim) append only once — idempotency holds within a batch too.
     let mut active = active_keys(&existing);
     let mut events = existing.clone();
+    // Active records (full) for lineage scoring — rebuilt as we append so a
+    // later claim in this batch can supersede one written earlier in the batch.
+    let mut active_records: Vec<_> = fold_ledger(&events)
+        .into_iter()
+        .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
+        .collect();
     let mut appended = 0usize;
     let mut appended_lines = String::new();
+    let mut lineage_notes: Vec<String> = Vec::new();
     for r in &new_records {
         if active.contains(&r.claim_key) {
             continue; // idempotent: already active (or already appended this run)
         }
-        let ev = StoreEvent { op: StoreOp::Write, record: r.clone(), supersedes: None, reason: None };
-        appended_lines.push_str(&serde_json::to_string(&ev).map_err(|e| CliError::Io(e.to_string()))?);
+        let decision = decide_lineage(r, &active_records);
+        let ev = match decision {
+            LineageDecision::SkipDuplicate {
+                existing_key,
+                reason,
+            } => {
+                lineage_notes.push(format!(
+                    "skip near-dup {} → {existing_key}: {reason}",
+                    r.claim_key
+                ));
+                continue;
+            }
+            LineageDecision::Supersede {
+                existing_key,
+                reason,
+            } => {
+                lineage_notes.push(format!(
+                    "supersede {} → {existing_key}: {reason}",
+                    r.claim_key
+                ));
+                StoreEvent {
+                    op: StoreOp::Supersede,
+                    record: r.clone(),
+                    supersedes: Some(existing_key),
+                    reason: Some(reason),
+                }
+            }
+            LineageDecision::AppendWithNote { note } => {
+                lineage_notes.push(format!(
+                    "strengthen-candidate {} ↔ {}: {}",
+                    r.claim_key, note.existing_key, note.reason
+                ));
+                StoreEvent {
+                    op: StoreOp::Write,
+                    record: r.clone(),
+                    supersedes: None,
+                    reason: Some(note.reason),
+                }
+            }
+            LineageDecision::Append => StoreEvent {
+                op: StoreOp::Write,
+                record: r.clone(),
+                supersedes: None,
+                reason: None,
+            },
+        };
+        appended_lines
+            .push_str(&serde_json::to_string(&ev).map_err(|e| CliError::Io(e.to_string()))?);
         appended_lines.push('\n');
         events.push(ev);
         active.insert(r.claim_key.clone());
+        // Refresh active set for subsequent lineage decisions in this batch.
+        active_records = fold_ledger(&events)
+            .into_iter()
+            .filter(|rec| rec.status == ovp_domain::crystal::CrystalStatus::Active)
+            .collect();
         appended += 1;
+    }
+    for note in &lineage_notes {
+        println!("  lineage: {note}");
     }
     if !appended_lines.is_empty() {
         use std::io::Write;

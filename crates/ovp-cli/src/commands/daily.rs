@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
-    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, DailyConfig,
-    DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
+    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, CaptureTier,
+    DailyConfig, DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
 };
 use ovp_domain::VaultLayout;
 use ovp_index::{
@@ -65,6 +65,8 @@ pub struct DailyArgs {
     pub pinboard_max: Option<usize>,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
+    /// Capture thrift: focused | balanced | comprehensive (worth gate before `$` reader).
+    pub capture_tier: CaptureTier,
     /// Web fetch fixture directory for enriching needs-content sources.
     pub web_fetch_fixture: Option<PathBuf>,
     /// Enrich needs-content sources via live web fetch.
@@ -394,6 +396,7 @@ fn run_inner(
         max_sources: args.max_sources,
         lifecycle_move: !args.no_lifecycle,
         retry_blocked: args.retry_blocked,
+        capture_tier: args.capture_tier,
     };
     let planned = work.todo.len();
     // The batch run_daily will actually attempt this run — `--max-sources`

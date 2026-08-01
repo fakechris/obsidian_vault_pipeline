@@ -541,6 +541,31 @@ export function monthHeat(
 
 // ------------------------------------------------------------------ library
 
+/**
+ * Operator-facing title for a source row.
+ * Prefer indexed title; else filename stem from rel_path (duplicates often
+ * land with null title because intake parked them without parsing frontmatter);
+ * last resort short sha — never a bare 64-char wall as the only chrome label.
+ */
+export function sourceDisplayTitle(source: {
+  title?: string | null;
+  rel_path?: string | null;
+  sha256: string;
+}): string {
+  const t = source.title?.trim();
+  if (t) return t;
+  const path = source.rel_path?.replace(/\\/g, '/') ?? '';
+  const base = path.split('/').pop() ?? '';
+  const stem = base.replace(/\.md$/i, '').trim();
+  if (stem) {
+    // "Author - Title" clipping names → keep full stem (still human-readable)
+    return stem;
+  }
+  return source.sha256.length > 12
+    ? `${source.sha256.slice(0, 12)}…`
+    : source.sha256;
+}
+
 export type Collection = 'clippings' | 'pinboard' | 'capture';
 
 /** Collection = capture origin when the index knows it (URL-matched against
@@ -580,6 +605,91 @@ export function filterSources(
         (s.tags ?? []).includes(filter.tag) ||
         (s.tags_inferred ?? []).includes(filter.tag)),
   );
+}
+
+/** Flattened browse order matching the Library list (month desc, date desc). */
+export function libraryBrowseOrder(
+  sources: SourceRow[],
+  filter: LibraryFilter,
+): string[] {
+  return groupByMonth(filterSources(sources, filter)).flatMap((g) =>
+    g.sources.map((s) => s.sha256),
+  );
+}
+
+/** Parse Library filter facets from a source-detail or library URL query. */
+export function libraryFilterFromSearch(
+  params: URLSearchParams | { get: (k: string) => string | null },
+): LibraryFilter {
+  const c = params.get('c');
+  const collection =
+    c === 'clippings' || c === 'pinboard' || c === 'capture' ? c : null;
+  return {
+    collection,
+    month: params.get('m'),
+    status: params.get('status'),
+    tag: params.get('tag'),
+  };
+}
+
+/** True when any Library facet is active (enables in-filter prev/next). */
+export function libraryFilterActive(f: LibraryFilter): boolean {
+  return Boolean(f.collection || f.month || f.status || f.tag);
+}
+
+/** Carry Library facets onto a source detail URL for continuous browsing. */
+export function librarySourcePath(
+  sha: string,
+  filter: LibraryFilter,
+  extra?: Record<string, string | null | undefined>,
+): string {
+  const q = new URLSearchParams();
+  if (filter.collection) q.set('c', filter.collection);
+  if (filter.month) q.set('m', filter.month);
+  if (filter.status) q.set('status', filter.status);
+  if (filter.tag) q.set('tag', filter.tag);
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v == null || v === '') q.delete(k);
+      else q.set(k, v);
+    }
+  }
+  const qs = q.toString();
+  return qs
+    ? `/library/${encodeURIComponent(sha)}?${qs}`
+    : `/library/${encodeURIComponent(sha)}`;
+}
+
+/** sessionStorage key: last Library browse order for prev/next when the
+ * detail URL has no facet query (e.g. opened from Today then user still
+ * wants sequential browse of what they last filtered). */
+export const LIBRARY_NAV_STORAGE_KEY = 'ovp.libraryNav';
+
+export interface LibraryNavSnapshot {
+  order: string[];
+  filter: LibraryFilter;
+  /** Human-readable filter summary for the nav chrome. */
+  label?: string;
+}
+
+export function saveLibraryNavSnapshot(snap: LibraryNavSnapshot): void {
+  try {
+    sessionStorage.setItem(LIBRARY_NAV_STORAGE_KEY, JSON.stringify(snap));
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+export function loadLibraryNavSnapshot(): LibraryNavSnapshot | null {
+  try {
+    const raw = sessionStorage.getItem(LIBRARY_NAV_STORAGE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as LibraryNavSnapshot;
+    if (!v || !Array.isArray(v.order)) return null;
+    return v;
+  } catch {
+    return null;
+  }
 }
 
 /** Tag → source count over the whole library (operator + inferred — the

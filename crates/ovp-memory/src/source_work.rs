@@ -11,7 +11,9 @@
 //! ```
 //!
 //! Translation uses the product LLM (providers.toml / ask factory) with a
-//! refined 信达雅 system prompt — never free MT engines.
+//! refined 信达雅 system prompt + session glossary pre-pass (industry
+//! refined-translator pattern: analyze terms → consistent render). Never free
+//! MT engines.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -175,6 +177,27 @@ fn write_meta(dir: &Path, meta: &SourceWorkMeta) -> Result<(), String> {
     fs::write(dir.join("meta.json"), raw).map_err(|e| format!("write meta: {e}"))
 }
 
+/// Serialize meta.json updates so parallel translate + summarize never
+/// clobber each other's stamps (read-modify-write under one process lock).
+static WORK_META_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn patch_meta(
+    dir: &Path,
+    sha: &str,
+    title: Option<&str>,
+    url: Option<&str>,
+    work_rel: &str,
+    patch: impl FnOnce(&mut SourceWorkMeta),
+) -> Result<(), String> {
+    let _guard = WORK_META_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut meta =
+        read_meta(dir).unwrap_or_else(|| SourceWorkMeta::new(sha, title, url, work_rel));
+    patch(&mut meta);
+    write_meta(dir, &meta)
+}
+
 fn ensure_original(dir: &Path, body: &str) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
     let p = dir.join("original.md");
@@ -217,22 +240,57 @@ fn chunk_body(body: &str) -> Vec<String> {
     out
 }
 
-const TRANSLATE_SYSTEM: &str = r#"You are a professional literary-technical translator (English → Simplified Chinese).
+/// System prompt for EN→zh refined translation.
+///
+/// Quality bar is closer to industry refined translators (analysis → glossary
+/// → translate → consistency) than free MT. Glossary is built in a prior call
+/// for long docs and injected into each chunk.
+const TRANSLATE_SYSTEM: &str = r#"You are a professional EN→zh-CN translator for technical and financial long-form (literary-technical register).
 
-Goals — 信 · 达 · 雅:
-1. Faithful: preserve meaning, structure, code fences, links, tables, headings.
-2. Fluent: natural Chinese for technical readers; no Chinglish.
-3. Elegant: tight rhythm; avoid AI filler (总之/值得注意的是/在当今…).
+Rewrite into natural Simplified Chinese that a skilled native editor would publish — not word-for-word MT. Facts, numbers, and logic must match the source exactly.
 
-Terminology:
-- Keep well-known product/API names in English (e.g. React, Kubernetes, Claude).
-- On first use of a domain term, prefer「中文（English）」then 中文 alone.
-- Do NOT invent citations or facts.
+## 信 · 达 · 雅
+1. Faithful: meaning, argument structure, headings, tables, lists, links.
+2. Fluent: idiomatic Chinese word order; break long English sentences; no Chinglish.
+3. Elegant: tight rhythm; ban AI filler (总之/值得注意的是/在当今/首先…其次…最后 as boilerplate).
 
-Format:
-- Output ONLY the translated markdown body (no preface, no "以下是翻译").
-- Preserve fenced code blocks and inline `code` untranslated except comments when they are prose.
-- Keep wikilinks and URLs intact.
+## Terminology (most quality is won or lost here)
+**KEEP in English / original form (do NOT invent Chinese):**
+- Tickers & product codes: NVDA, TSLA, 7709.HK, NVDL, TSLL, MUU, SK Hynix, etc.
+- Exchanges & indices when conventionally Latin in CN media: KOSPI, NASDAQ, NYSE, S&P 500
+- Acronyms widely used as-is in CN finance/tech: ETF, AUM, ADR, TRS, NAV, ASP, LTA, AP, FSS, HBM, DRAM, NAND, FOFs, PM, ROI
+- Metrics notation: -6.07σ, 2x, Level 1, Q2
+- Brand / product proper names when CN press keeps Latin (Goldman Sachs may be 高盛 — use the form already dominant in CN finance press)
+
+**Standard industry Chinese (do not invent calques):**
+- rebalancing → 再平衡; circuit breaker → 熔断; collateral → 保证金
+- total return swap → 收益互换（Total Return Swap, TRS）on first use, then TRS/收益互换
+- delta hedging → Delta 对冲; notional → 名义本金/名义敞口; volatility decay → 波动率衰减（Volatility Decay）
+- authorized participant → 授权参与者（AP）
+
+**First occurrence of specialized terms:** 「中文（English）」or keep English with brief Chinese gloss when the English form is the market standard.
+
+**Consistency:** If a session glossary is provided below the user message, OBEY it for the whole chunk. Never switch mid-article.
+
+## Hard rules
+- Do NOT invent citations, numbers, or facts.
+- Output ONLY the translated markdown body (no preface like「以下是翻译」).
+- Preserve fenced code / inline `code` (except translating prose comments).
+- Keep wikilinks `[[…]]` and URLs intact.
+- Keep markdown tables aligned; do not drop columns.
+"#;
+
+/// One-shot term extraction before multi-chunk translate (baoyu-style glossary).
+const GLOSSARY_SYSTEM: &str = r#"You extract a translation glossary for EN→zh-CN of a technical/finance article.
+
+Output ONLY a bullet list (max 40 lines), one term per line, no prose:
+- EnglishTerm → ChineseOrKEEP | note
+
+Rules:
+- Tickers, product codes, exchange codes, Greek metrics: → KEEP
+- Established finance/tech jargon: standard CN press form + English in parens when helpful
+- Prefer KEEP when a forced Chinese would sound amateur or non-standard
+- No headings, no intro, no closing
 "#;
 
 const SUMMARY_SYSTEM: &str = r#"You are a senior research analyst writing a deep reading note for a personal knowledge vault.
@@ -291,7 +349,8 @@ fn llm_text(
         max_tokens,
         temperature: Some(0.2),
         tools: None,
-        cache_namespace: Some("source_work/v1".into()),
+        // v2: stronger terminology policy + optional session glossary.
+        cache_namespace: Some("source_work/v2".into()),
     };
     let reply = client.call(&req).map_err(|e| e.to_string())?;
     let text = reply.text.trim().to_string();
@@ -325,29 +384,82 @@ pub fn translate_source(
 
     let body = clip_chars(body, MAX_WORK_BODY_CHARS);
     let chunks = chunk_body(&body);
+    // Pre-pass glossary (industry refined pattern): extract terms once from a
+    // head sample so multi-chunk (and long single-chunk) stays terminologically
+    // consistent — product codes stay Latin, finance jargon uses market forms.
+    let glossary = build_session_glossary(client, model, &body, chunks.len())?;
     let mut parts = Vec::with_capacity(chunks.len());
     for (i, chunk) in chunks.iter().enumerate() {
-        let user = if chunks.len() == 1 {
-            format!("Translate the following markdown to Simplified Chinese.\n\n{chunk}")
-        } else {
-            format!(
-                "Translate chunk {}/{} of a longer markdown article to Simplified Chinese. \
-                 Keep terminology consistent with prior chunks (same article).\n\n{chunk}",
-                i + 1,
-                chunks.len()
-            )
-        };
+        let user = format_translate_user(chunk, i, chunks.len(), glossary.as_deref());
         parts.push(llm_text(client, model, TRANSLATE_SYSTEM, &user, 8192)?);
     }
     let zh = parts.join("\n\n");
     fs::write(&zh_path, &zh).map_err(|e| format!("write zh.md: {e}"))?;
+    if let Some(g) = glossary.as_ref() {
+        // Durable for operators to audit / reuse (not shown in the portal tab).
+        let _ = fs::write(dir.join("glossary.md"), g);
+    }
 
-    let mut meta = read_meta(&dir).unwrap_or_else(|| SourceWorkMeta::new(sha, title, url, &work_rel));
-    meta.translated_at = Some(now_rfc3339());
-    meta.model = Some(model.to_string());
-    meta.source_lang = "en".into();
-    write_meta(&dir, &meta)?;
+    patch_meta(&dir, sha, title, url, &work_rel, |meta| {
+        meta.translated_at = Some(now_rfc3339());
+        meta.model = Some(model.to_string());
+        meta.source_lang = "en".into();
+    })?;
     Ok(load_status(vault_root, sha, title, &body))
+}
+
+fn format_translate_user(
+    chunk: &str,
+    index: usize,
+    total: usize,
+    glossary: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    if let Some(g) = glossary.map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("## Session glossary (OBEY — do not re-decide these terms)\n");
+        out.push_str(g);
+        out.push_str("\n\n");
+    }
+    if total == 1 {
+        out.push_str("Translate the following markdown to Simplified Chinese.\n\n");
+    } else {
+        out.push_str(&format!(
+            "Translate chunk {}/{} of one continuous article to Simplified Chinese. \
+             Match glossary + prior-chunk terminology; do not re-introduce alternate names.\n\n",
+            index + 1,
+            total
+        ));
+    }
+    out.push_str(chunk);
+    out
+}
+
+/// Extract a short glossary for the session. Best-effort: failure returns None
+/// so translate still proceeds (never blocks the archive on glossary errors).
+fn build_session_glossary(
+    client: &mut dyn ModelClient,
+    model: &str,
+    body: &str,
+    chunk_count: usize,
+) -> Result<Option<String>, String> {
+    // Always run for multi-chunk; for single long bodies (>4k chars) also run.
+    let chars = body.chars().count();
+    if chunk_count <= 1 && chars < 4_000 {
+        return Ok(None);
+    }
+    let sample: String = body.chars().take(8_000).collect();
+    let user = format!(
+        "Article title/domain sample for glossary extraction:\n\n{sample}"
+    );
+    match llm_text(client, model, GLOSSARY_SYSTEM, &user, 1500) {
+        Ok(g) if !g.trim().is_empty() => Ok(Some(g.trim().to_string())),
+        Ok(_) => Ok(None),
+        Err(e) => {
+            // Soft-fail: translation quality degrades slightly but still completes.
+            let _ = e;
+            Ok(None)
+        }
+    }
 }
 
 /// Deep summary → summary.md.
@@ -377,10 +489,10 @@ pub fn summarize_source(
     let summary = llm_text(client, model, SUMMARY_SYSTEM, &user, 4096)?;
     fs::write(&sum_path, &summary).map_err(|e| format!("write summary.md: {e}"))?;
 
-    let mut meta = read_meta(&dir).unwrap_or_else(|| SourceWorkMeta::new(sha, title, url, &work_rel));
-    meta.summarized_at = Some(now_rfc3339());
-    meta.model = Some(model.to_string());
-    write_meta(&dir, &meta)?;
+    patch_meta(&dir, sha, title, url, &work_rel, |meta| {
+        meta.summarized_at = Some(now_rfc3339());
+        meta.model = Some(model.to_string());
+    })?;
     Ok(load_status(vault_root, sha, title, &body))
 }
 

@@ -13,6 +13,7 @@ ovp-index = { path = "../ovp-index" }
 ovp-intake = { path = "../ovp-intake" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

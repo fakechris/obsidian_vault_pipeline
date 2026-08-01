@@ -223,6 +223,151 @@ export function splitFrontmatter(md: string): {
   return { fmText: null, body: md };
 }
 
+/** One frontmatter field after light YAML-ish parse (vault notes, not full YAML). */
+export interface FrontmatterField {
+  key: string;
+  /** Scalar string or list of scalars (author: - "[[x]]"). */
+  values: string[];
+}
+
+/** Parse simple note frontmatter into structured fields for HTML property view.
+ * Handles `key: value`, empty `key:` + `- list` items, and strips quotes. */
+export function parseFrontmatterFields(fmText: string): FrontmatterField[] {
+  const lines = fmText.split('\n');
+  const out: FrontmatterField[] = [];
+  let i = 0;
+  const stripQ = (s: string) => {
+    const t = s.trim();
+    if (
+      (t.startsWith('"') && t.endsWith('"')) ||
+      (t.startsWith("'") && t.endsWith("'"))
+    ) {
+      return t.slice(1, -1);
+    }
+    return t;
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    const m = /^([A-Za-z0-9_/-]+):\s*(.*)$/.exec(line);
+    if (!m) {
+      i += 1;
+      continue;
+    }
+    const key = m[1];
+    const rest = m[2];
+    if (rest === '' || rest === '|' || rest === '>') {
+      const values: string[] = [];
+      i += 1;
+      while (i < lines.length) {
+        const li = lines[i];
+        const list = /^\s*-\s+(.*)$/.exec(li);
+        if (list) {
+          values.push(stripQ(list[1]));
+          i += 1;
+          continue;
+        }
+        // Indented continuation of a block scalar (rare in our notes).
+        if (/^\s+\S/.test(li) && !/^([A-Za-z0-9_/-]+):/.test(li.trim())) {
+          values.push(stripQ(li));
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      out.push({ key, values: values.length > 0 ? values : [''] });
+      continue;
+    }
+    out.push({ key, values: [stripQ(rest)] });
+    i += 1;
+  }
+  return out;
+}
+
+/** Render a single frontmatter cell value: URLs → links, [[wikilinks]] → chips. */
+function FmValue({ text }: { text: string }) {
+  if (!text) return <span className="fm-empty">—</span>;
+  if (/^https?:\/\//i.test(text)) {
+    return (
+      <a className="fm-link" href={text} target="_blank" rel="noreferrer">
+        {text}
+      </a>
+    );
+  }
+  // Wikilink-only cell: [[name]]
+  const wikiOnly = /^\[\[([^\]]+)\]\]$/.exec(text);
+  if (wikiOnly) {
+    return <span className="fm-wiki">{wikiOnly[1]}</span>;
+  }
+  // Mix of text + [[wiki]]
+  if (text.includes('[[')) {
+    const parts: ReactNode[] = [];
+    const re = /\[\[([^\]]+)\]\]/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    let k = 0;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parts.push(text.slice(last, m.index));
+      parts.push(
+        <span className="fm-wiki" key={`w${k++}`}>
+          {m[1]}
+        </span>,
+      );
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return <>{parts}</>;
+  }
+  return <>{text}</>;
+}
+
+/** Structured properties panel — replaces raw YAML wall for operators. */
+export function FrontmatterProps({
+  fmText,
+  label,
+  defaultOpen = true,
+}: {
+  fmText: string;
+  label: string;
+  defaultOpen?: boolean;
+}) {
+  const fields = useMemo(() => parseFrontmatterFields(fmText), [fmText]);
+  if (fields.length === 0) {
+    return (
+      <details className="md-frontmatter" open={defaultOpen}>
+        <summary>{label}</summary>
+        <pre>
+          <code>{fmText}</code>
+        </pre>
+      </details>
+    );
+  }
+  return (
+    <details className="md-frontmatter" open={defaultOpen}>
+      <summary>{label}</summary>
+      <dl className="fm-props">
+        {fields.map((f) => (
+          <div className="fm-row" key={f.key}>
+            <dt className="fm-key">{f.key}</dt>
+            <dd className="fm-val">
+              {f.values.length > 1 ? (
+                <ul className="fm-list">
+                  {f.values.map((v, i) => (
+                    <li key={`${f.key}-${i}`}>
+                      <FmValue text={v} />
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <FmValue text={f.values[0] ?? ''} />
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
 // ---------------------------------------------------------------- context
 
 interface MdCtxValue {
@@ -643,12 +788,7 @@ export function MarkdownView({
     <MdCtx.Provider value={ctx}>
       <div className={`md-preview${gutter ? '' : ' no-gut'}`}>
         {fm.fmText != null && (
-          <details className="md-frontmatter">
-            <summary>{frontmatterLabel}</summary>
-            <pre>
-              <code>{fm.fmText}</code>
-            </pre>
-          </details>
+          <FrontmatterProps fmText={fm.fmText} label={frontmatterLabel} />
         )}
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

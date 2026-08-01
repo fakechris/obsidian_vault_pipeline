@@ -331,6 +331,123 @@ export async function postSourceSummarize(
   return data as SourceWorkPayload & { ok: boolean };
 }
 
+// ---- Source-work queue (per-article translate/summarize) ----
+
+export type WorkTaskStatus =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled';
+
+export type WorkItemStatus =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export interface WorkTaskState {
+  wanted: boolean;
+  force: boolean;
+  status: WorkTaskStatus;
+  error?: string | null;
+}
+
+export interface SourceWorkQueueItem {
+  id: string;
+  sha256: string;
+  title?: string | null;
+  translate: WorkTaskState;
+  summarize: WorkTaskState;
+  status: WorkItemStatus;
+  created_at: number;
+  started_at?: number | null;
+  finished_at?: number | null;
+  notify: boolean;
+  notify_sent: boolean;
+}
+
+export interface SourceWorkQueueSnapshot {
+  schema: string;
+  items: SourceWorkQueueItem[];
+  /** Terminal items the client should notify about (server marks sent). */
+  notify: SourceWorkQueueItem[];
+}
+
+export function fetchSourceWorkQueue(): Promise<SourceWorkQueueSnapshot> {
+  if (STATIC_MODE) {
+    return Promise.resolve({ schema: '', items: [], notify: [] });
+  }
+  return fetchJson<SourceWorkQueueSnapshot>('/api/source-work/queue');
+}
+
+export async function enqueueSourceWork(opts: {
+  sha256: string;
+  title?: string | null;
+  translate?: boolean;
+  summarize?: boolean;
+  force?: boolean;
+  notify?: boolean;
+}): Promise<SourceWorkQueueItem> {
+  const res = await fetch('/api/source-work/queue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sha256: opts.sha256,
+      title: opts.title ?? null,
+      translate: !!opts.translate,
+      summarize: !!opts.summarize,
+      force: !!opts.force,
+      notify: opts.notify !== false,
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    item?: SourceWorkQueueItem;
+  };
+  if (!res.ok || !data.item) {
+    throw new Error(data.error ?? `enqueue failed (${res.status})`);
+  }
+  return data.item;
+}
+
+export async function reorderSourceWorkQueue(ids: string[]): Promise<SourceWorkQueueItem[]> {
+  const res = await fetch('/api/source-work/queue/order', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    items?: SourceWorkQueueItem[];
+  };
+  if (!res.ok) throw new Error(data.error ?? `reorder failed (${res.status})`);
+  return data.items ?? [];
+}
+
+export async function cancelSourceWorkItem(id: string): Promise<void> {
+  const res = await fetch(
+    `/api/source-work/queue/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+  );
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `cancel failed (${res.status})`);
+  }
+}
+
+export async function deleteSourceWorkItem(id: string): Promise<void> {
+  const res = await fetch(`/api/source-work/queue/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `delete failed (${res.status})`);
+  }
+}
+
 /** Source-centric neighborhood for the KnowledgeGraph component (design §4):
  * this source → claims citing it → sibling sources. Not pre-baked in static
  * mode — the source page falls back to its citing-claims list. */

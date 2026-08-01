@@ -45,6 +45,10 @@ pub mod select;
 pub mod theme_pages;
 pub mod themes;
 
+/// G4 claim lineage: supersede / near-dup / strengthen-candidate decisions
+/// over active durable claims. Append-only; never rewrites evidence.
+pub mod lineage;
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 

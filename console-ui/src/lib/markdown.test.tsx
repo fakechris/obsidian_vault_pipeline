@@ -196,7 +196,22 @@ describe('anchors + frontmatter', () => {
     });
     expect(html).toContain('md-frontmatter');
     expect(html).toContain('Props');
+    expect(html).toContain('fm-props');
+    expect(html).toContain('fm-key');
+    expect(html).toContain('title');
     expect(html).toContain('data-ls="5"');
+  });
+});
+
+describe('parseFrontmatterFields', () => {
+  it('parses scalars, lists, and quoted values', async () => {
+    const { parseFrontmatterFields } = await import('./markdown');
+    const fields = parseFrontmatterFields(
+      'title: "Hello"\nsource: https://x.com/a\nauthor:\n  - "[[ali]]"\nauthor_handle: waterloo\npublished: 2026-07-27\n',
+    );
+    expect(fields.find((f) => f.key === 'title')?.values).toEqual(['Hello']);
+    expect(fields.find((f) => f.key === 'author')?.values).toEqual(['[[ali]]']);
+    expect(fields.find((f) => f.key === 'source')?.values[0]).toMatch(/^https:/);
   });
 });
 

@@ -31,6 +31,7 @@ const NAV = STATIC_MODE
   : ([
       { to: '/', key: 'nav.today', end: true },
       { to: '/library', key: 'nav.library', end: false },
+      { to: '/work-queue', key: 'nav.workQueue', end: false },
       { to: '/tags', key: 'nav.tags', end: false },
       { to: '/entities', key: 'nav.entities', end: false },
       { to: '/search', key: 'nav.search', end: false },
