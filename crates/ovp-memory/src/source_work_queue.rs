@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 const QUEUE_SCHEMA: &str = "ovp.source-work-queue/v1";
 const QUEUE_REL: &str = ".ovp/source-work-queue.json";
+/// Cross-process exclusive lock for queue file mutations (enqueue/cancel/…).
+const QUEUE_WRITE_LOCK: &str = "source-work-queue.write.lock";
+/// Cross-process election: only one process runs the background worker.
+pub const WORKER_LOCK: &str = "source-work-worker.lock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -297,6 +301,54 @@ impl SourceWorkQueue {
         self.wake.notify_one();
     }
 
+    /// Who currently holds [`WORKER_LOCK`] for this vault (if any).
+    pub fn worker_owner_pid(&self) -> Option<u32> {
+        read_lock_pid(&self.vault_root.join(".ovp").join(WORKER_LOCK))
+    }
+
+    /// True when `pid` is the live owner of the worker lock (or no lock and
+    /// we are about to take it — caller decides).
+    pub fn worker_owner_is_this_process(&self) -> bool {
+        match self.worker_owner_pid() {
+            Some(p) => p == std::process::id(),
+            None => false,
+        }
+    }
+
+    /// Brief exclusive lock around a disk-coordinated mutation. Retries a few
+    /// times if another portal is mid-write.
+    fn with_write_lock<R>(&self, f: impl FnOnce() -> Result<R, String>) -> Result<R, String> {
+        const ATTEMPTS: usize = 40;
+        for attempt in 0..ATTEMPTS {
+            match ovp_intake::RunLock::acquire_named(&self.vault_root, QUEUE_WRITE_LOCK) {
+                Ok(_lock) => return f(),
+                Err(_) if attempt + 1 < ATTEMPTS => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "source-work queue busy (another portal is writing): {e}"
+                    ));
+                }
+            }
+        }
+        Err("source-work queue write lock timed out".into())
+    }
+
+    /// Force-replace in-memory state from the durable file (call under write lock).
+    fn reload_from_disk(&self, g: &mut QueueFile) {
+        if let Some(mut file) = load_file(&self.path) {
+            let _ = recover_interrupted(&self.vault_root, &mut file);
+            *g = file;
+            if let Ok(m) = std::fs::metadata(&self.path).and_then(|m| m.modified()) {
+                *self
+                    .disk_mtime
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(m);
+            }
+        }
+    }
+
     /// Block until something may need work, or timeout.
     pub fn wait_for_work(&self, timeout: std::time::Duration) {
         let guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -307,11 +359,14 @@ impl SourceWorkQueue {
         if !req.translate && !req.summarize {
             return Err("at least one of translate/summarize required".into());
         }
-        let sha = req.sha256.trim();
+        let sha = req.sha256.trim().to_string();
         if sha.is_empty() || sha.len() > 128 {
             return Err("invalid sha256".into());
         }
+        let req = req;
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         // Merge into existing *queued* item for same sha.
         if let Some(item) = g
             .items
@@ -373,11 +428,15 @@ impl SourceWorkQueue {
         drop(g);
         self.wake.notify_one();
         Ok(item)
+        })
     }
 
     /// Reorder: `ids` is the desired order of *queued* items (running is fixed first).
     pub fn reorder(&self, ids: &[String]) -> Result<QueueFile, String> {
+        let ids = ids.to_vec();
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let mut running: Vec<QueueItem> = Vec::new();
         let mut queued: Vec<QueueItem> = Vec::new();
         let mut rest: Vec<QueueItem> = Vec::new();
@@ -391,7 +450,7 @@ impl SourceWorkQueue {
         let mut by_id: std::collections::HashMap<String, QueueItem> =
             queued.into_iter().map(|i| (i.id.clone(), i)).collect();
         let mut new_queued = Vec::new();
-        for id in ids {
+        for id in &ids {
             if let Some(it) = by_id.remove(id) {
                 new_queued.push(it);
             }
@@ -407,10 +466,14 @@ impl SourceWorkQueue {
         g.items.extend(rest);
         self.persist_tracked(&g)?;
         Ok(g.clone())
+        })
     }
 
     pub fn cancel(&self, id: &str) -> Result<QueueItem, String> {
+        let id = id.to_string();
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let item = g
             .items
             .iter_mut()
@@ -438,10 +501,14 @@ impl SourceWorkQueue {
         let out = item.clone();
         self.persist_tracked(&g)?;
         Ok(out)
+        })
     }
 
     pub fn remove(&self, id: &str) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let before = g.items.len();
         g.items.retain(|i| {
             // Never drop a running item mid-flight from the list; cancel first.
@@ -456,17 +523,21 @@ impl SourceWorkQueue {
         }
         self.persist_tracked(&g)?;
         Ok(())
+        })
     }
 
     /// Claim the next queued article for the worker (marks Running).
     pub fn claim_next(&self) -> Option<QueueItem> {
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        self.maybe_reload_from_disk(&mut g);
+        self.reload_from_disk(&mut g);
         self.recover_stale_running(&mut g);
         if g.items.iter().any(|i| i.status == ItemStatus::Running) {
-            return None; // one article at a time
+            return Ok(None); // one article at a time
         }
-        let item = g.items.iter_mut().find(|i| i.status == ItemStatus::Queued)?;
+        let Some(item) = g.items.iter_mut().find(|i| i.status == ItemStatus::Queued) else {
+            return Ok(None);
+        };
         item.status = ItemStatus::Running;
         item.started_at = Some(now_secs());
         if item.translate.wanted && item.translate.status == TaskStatus::Queued {
@@ -476,8 +547,11 @@ impl SourceWorkQueue {
             item.summarize.status = TaskStatus::Running;
         }
         let out = item.clone();
-        let _ = self.persist_tracked(&g);
-        Some(out)
+        self.persist_tracked(&g)?;
+        Ok(Some(out))
+        })
+        .ok()
+        .flatten()
     }
 
     pub fn finish_task(
@@ -486,7 +560,10 @@ impl SourceWorkQueue {
         kind: TaskKind,
         result: Result<(), String>,
     ) -> Result<QueueItem, String> {
+        let id = id.to_string();
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let item = g
             .items
             .iter_mut()
@@ -496,14 +573,14 @@ impl SourceWorkQueue {
             TaskKind::Translate => &mut item.translate,
             TaskKind::Summarize => &mut item.summarize,
         };
-        match result {
+        match &result {
             Ok(()) => {
                 task.status = TaskStatus::Done;
                 task.error = None;
             }
             Err(e) => {
                 task.status = TaskStatus::Failed;
-                task.error = Some(e);
+                task.error = Some(e.clone());
             }
         }
         // If cancelled mid-run, keep cancelled item status but record task results.
@@ -515,29 +592,34 @@ impl SourceWorkQueue {
         let out = item.clone();
         self.persist_tracked(&g)?;
         Ok(out)
+        })
     }
 
     /// Items that need a client notification (terminal + notify + !notify_sent).
     pub fn take_notify_batch(&self) -> Vec<QueueItem> {
-        let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let mut out = Vec::new();
-        for item in g.items.iter_mut() {
-            if item.notify
-                && !item.notify_sent
-                && matches!(
-                    item.status,
-                    ItemStatus::Done | ItemStatus::Failed | ItemStatus::Cancelled
-                )
-                && item_tasks_terminal(item)
-            {
-                item.notify_sent = true;
-                out.push(item.clone());
+        self.with_write_lock(|| {
+            let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            self.reload_from_disk(&mut g);
+            let mut out = Vec::new();
+            for item in g.items.iter_mut() {
+                if item.notify
+                    && !item.notify_sent
+                    && matches!(
+                        item.status,
+                        ItemStatus::Done | ItemStatus::Failed | ItemStatus::Cancelled
+                    )
+                    && item_tasks_terminal(item)
+                {
+                    item.notify_sent = true;
+                    out.push(item.clone());
+                }
             }
-        }
-        if !out.is_empty() {
-            let _ = self.persist_tracked(&g);
-        }
-        out
+            if !out.is_empty() {
+                self.persist_tracked(&g)?;
+            }
+            Ok(out)
+        })
+        .unwrap_or_default()
     }
 
     pub fn mark_task_skipped_if_not_wanted(&self, id: &str) {
@@ -619,6 +701,27 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn read_lock_pid(path: &Path) -> Option<u32> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let pid = raw.trim().parse::<u32>().ok().filter(|p| *p > 0)?;
+    // Only report if the process is still alive (unix kill -0).
+    #[cfg(unix)]
+    {
+        let alive = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !alive {
+            return None;
+        }
+    }
+    Some(pid)
 }
 
 /// Recover items left mid-flight across process death. Returns how many

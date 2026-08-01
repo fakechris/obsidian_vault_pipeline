@@ -225,6 +225,9 @@ export const en = {
   'workq.refresh': 'Refresh',
   'workq.counts': 'running {running} · queued {queued} · history {history}',
   'workq.polled': 'updated {time}',
+  'workq.workerHere': 'Queue worker is this portal (pid {pid}). Safe to open other windows — only one worker runs per vault.',
+  'workq.workerElsewhere':
+    'Queue worker is another process (pid {pid}); this portal (pid {here}) only enqueues. Jobs still run — no need to close either.',
   'workq.running': 'Running',
   'workq.queued': 'Queued',
   'workq.queuedEmpty': 'Nothing waiting — start Translate or Summary from a source page.',
