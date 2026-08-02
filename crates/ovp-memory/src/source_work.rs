@@ -24,11 +24,21 @@ use serde::{Deserialize, Serialize};
 /// Vault-relative root for source-work archives.
 pub const SOURCE_WORK_ROOT: &str = "40-Resources/Source-Work";
 
-/// Cap on body chars sent to a single translate/summarize request.
+/// Cap on body chars for a single summarize request (deep note need not
+/// cover every appendix of a monorepo dump).
 pub const MAX_WORK_BODY_CHARS: usize = 48_000;
+
+/// Translate may walk further than summarize: long GitHub/deepwiki pages
+/// still get multi-chunk refined translation. Soft ceiling on total chars
+/// (≈ max_chunks × chunk size) so a pathological dump cannot burn unbounded
+/// tokens. Beyond this the tail is truncated with an explicit note.
+pub const MAX_TRANSLATE_BODY_CHARS: usize = 160_000;
 
 /// Chunk size for long documents (refined translation).
 const CHUNK_CHARS: usize = 12_000;
+
+/// Hard cap on chunk count for one translate job.
+const MAX_TRANSLATE_CHUNKS: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceWorkMeta {
@@ -316,6 +326,7 @@ Caveats, failure modes, open questions
 
 ## 可行动作
 2–5 things the reader could try or verify next
+(use this exact heading — not 「可行动动作」)
 
 ## 术语表
 | 术语 | 含义 |
@@ -382,8 +393,15 @@ pub fn translate_source(
         return Ok(load_status(vault_root, sha, title, body));
     }
 
-    let body = clip_chars(body, MAX_WORK_BODY_CHARS);
-    let chunks = chunk_body(&body);
+    // Long docs: clip to translate ceiling (not the shorter summarize cap),
+    // then chunk. Deepwiki monorepo dumps were previously truncated at 48k
+    // and looked "done" while missing most sections.
+    let body = clip_chars(body, MAX_TRANSLATE_BODY_CHARS);
+    let mut chunks = chunk_body(&body);
+    let truncated_chunks = chunks.len() > MAX_TRANSLATE_CHUNKS;
+    if truncated_chunks {
+        chunks.truncate(MAX_TRANSLATE_CHUNKS);
+    }
     // Pre-pass glossary (industry refined pattern): extract terms once from a
     // head sample so multi-chunk (and long single-chunk) stays terminologically
     // consistent — product codes stay Latin, finance jargon uses market forms.
@@ -391,9 +409,17 @@ pub fn translate_source(
     let mut parts = Vec::with_capacity(chunks.len());
     for (i, chunk) in chunks.iter().enumerate() {
         let user = format_translate_user(chunk, i, chunks.len(), glossary.as_deref());
-        parts.push(llm_text(client, model, TRANSLATE_SYSTEM, &user, 8192)?);
+        let raw = llm_text(client, model, TRANSLATE_SYSTEM, &user, 8192)?;
+        // Per-chunk sanitize so a leaked glossary mid-document does not
+        // contaminate later joins.
+        parts.push(sanitize_translate_output(&raw));
     }
-    let zh = parts.join("\n\n");
+    let mut zh = sanitize_translate_output(&parts.join("\n\n"));
+    if truncated_chunks {
+        zh.push_str(
+            "\n\n---\n\n> 〔截断〕原文超过翻译长度上限，尾部未译。可对源做拆分或提高 `MAX_TRANSLATE_BODY_CHARS` 后 `--force` 重跑。\n",
+        );
+    }
     fs::write(&zh_path, &zh).map_err(|e| format!("write zh.md: {e}"))?;
     if let Some(g) = glossary.as_ref() {
         // Durable for operators to audit / reuse (not shown in the portal tab).
@@ -406,6 +432,130 @@ pub fn translate_source(
         meta.source_lang = "en".into();
     })?;
     Ok(load_status(vault_root, sha, title, &body))
+}
+
+/// Strip model echoes of the session-glossary prompt and collapse empty
+/// fenced code blocks left when diagrams/source were dropped.
+///
+/// Observed failure (open-slide deepwiki, 2026-08): mid-body
+/// `## Session glossary (OBEY — do not re-decide these terms)` plus empty
+/// fences. Authority is the EN original; zh is rebuildable, so aggressive
+/// sanitize is safer than leaving prompt text in the vault.
+pub fn sanitize_translate_output(text: &str) -> String {
+    let mut out = text.replace("\r\n", "\n");
+    out = strip_session_glossary_blocks(&out);
+    for prefix in [
+        "以下是翻译：",
+        "以下是翻译:",
+        "以下为翻译：",
+        "以下为翻译:",
+        "翻译如下：",
+        "翻译如下:",
+        "Here is the translation:",
+        "Here's the translation:",
+    ] {
+        if let Some(rest) = out.trim_start().strip_prefix(prefix) {
+            out = rest.trim_start().to_string();
+        }
+    }
+    out = strip_empty_fences(&out);
+    out = squeeze_blank_lines(&out);
+    out.trim().to_string() + "\n"
+}
+
+fn squeeze_blank_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = 0usize;
+    for line in text.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            blank_run += 1;
+            if blank_run <= 2 {
+                out.push('\n');
+            }
+        } else {
+            blank_run = 0;
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+fn strip_session_glossary_blocks(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    let marker = "## session glossary";
+    while i < text.len() {
+        let search_from = i;
+        let rel = lower[search_from..].find(marker).map(|p| search_from + p);
+        let Some(start) = rel else {
+            out.push_str(&text[i..]);
+            break;
+        };
+        // Require line start.
+        if start > 0 && text.as_bytes()[start - 1] != b'\n' {
+            // False hit inside a line — skip past this occurrence and continue.
+            out.push_str(&text[i..start + marker.len()]);
+            i = start + marker.len();
+            continue;
+        }
+        out.push_str(&text[i..start]);
+        let after = &text[start..];
+        let mut consumed = after.find('\n').map(|n| n + 1).unwrap_or(after.len());
+        let mut end_rel = consumed;
+        for line in after[consumed..].split_inclusive('\n') {
+            let t = line.trim();
+            if t.starts_with("## ") && !t.to_ascii_lowercase().contains("glossary") {
+                break;
+            }
+            let keep = t.is_empty()
+                || t.starts_with('-')
+                || t.starts_with('*')
+                || t.starts_with('|')
+                || t.contains('→')
+                || t.contains("->")
+                || t.to_ascii_lowercase().contains("obey")
+                || t.to_ascii_lowercase().contains("keep");
+            if !keep && !t.is_empty() {
+                break;
+            }
+            consumed += line.len();
+            end_rel = consumed;
+        }
+        i = start + end_rel;
+    }
+    out
+}
+
+fn strip_empty_fences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut lines = text.split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        if line.trim().starts_with("```") {
+            let mut body = String::new();
+            let mut closed = false;
+            let mut close_line = String::new();
+            while let Some(l2) = lines.next() {
+                if l2.trim().starts_with("```") {
+                    closed = true;
+                    close_line = l2.to_string();
+                    break;
+                }
+                body.push_str(l2);
+            }
+            if closed && body.trim().is_empty() {
+                continue;
+            }
+            out.push_str(line);
+            out.push_str(&body);
+            if closed {
+                out.push_str(&close_line);
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 fn format_translate_user(
@@ -535,5 +685,37 @@ mod tests {
         let st = load_status(tmp.path(), "aaaa1111bbbb", Some("T"), en);
         assert!(!st.has_zh);
         assert!(st.primarily_english);
+    }
+
+    #[test]
+    fn sanitize_strips_session_glossary_leak() {
+        let dirty = r#"# 标题
+
+正文第一段。
+
+## Session glossary (OBEY — do not re-decide these terms)
+- open-slide → KEEP
+- monorepo → 单体仓库
+
+## 下一章
+
+继续正文。
+"#;
+        let clean = sanitize_translate_output(dirty);
+        assert!(!clean.to_ascii_lowercase().contains("session glossary"));
+        assert!(!clean.contains("OBEY"));
+        assert!(clean.contains("正文第一段"));
+        assert!(clean.contains("下一章"));
+        assert!(clean.contains("继续正文"));
+    }
+
+    #[test]
+    fn sanitize_strips_empty_fences_and_preface() {
+        let dirty = "以下是翻译：\n\n前言\n\n```\n\n```\n\n后记\n";
+        let clean = sanitize_translate_output(dirty);
+        assert!(!clean.starts_with("以下是翻译"));
+        assert!(!clean.contains("```"));
+        assert!(clean.contains("前言"));
+        assert!(clean.contains("后记"));
     }
 }
