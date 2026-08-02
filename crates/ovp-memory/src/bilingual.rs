@@ -1,0 +1,618 @@
+//! Rebuildable bilingual projections over English authorities.
+//!
+//! - Crystal ledger / claim text stays English (authority).
+//! - `.ovp/crystal/claims_zh.json` — claim_key → Simplified Chinese claim.
+//! - `.ovp/crystal/cards_zh.json` — card id → title_zh + content_zh.
+//! - `.ovp/crystal/theme_pages_zh.json` — community_id → sections_zh.
+//! - `.ovp/crystal/glossary.json` — shared EN→zh term table (session + vault).
+//!
+//! Translation quality: same 信达雅 bar as source_work (key terms KEEP English;
+//! session glossary injected). Never free MT engines.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+
+use ovp_llm::{ModelClient, ModelMessage, ModelRequest};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Shared vault glossary (merge of operator edits + LLM extractions).
+pub const GLOSSARY_REL: &str = ".ovp/crystal/glossary.json";
+pub const CLAIMS_ZH_REL: &str = ".ovp/crystal/claims_zh.json";
+pub const CARDS_ZH_REL: &str = ".ovp/crystal/cards_zh.json";
+pub const THEME_PAGES_ZH_REL: &str = ".ovp/crystal/theme_pages_zh.json";
+
+pub const GLOSSARY_SCHEMA: &str = "ovp.glossary/v1";
+pub const CLAIMS_ZH_SCHEMA: &str = "ovp.claims_zh/v1";
+pub const CARDS_ZH_SCHEMA: &str = "ovp.cards_zh/v1";
+pub const THEME_PAGES_ZH_SCHEMA: &str = "ovp.theme_pages_zh/v1";
+
+const TRANSLATE_SHORT_SYSTEM: &str = r#"You are a professional EN→zh-CN translator for technical knowledge claims and memory cards.
+
+Rewrite into natural Simplified Chinese a skilled native editor would publish.
+
+## Rules
+1. Faithful meaning — do not invent facts, numbers, or citations.
+2. Idiomatic Chinese; no Chinglish; no AI filler.
+3. KEEP in English: tickers, product codes, widely-used acronyms (ETF, LLM, API, ROI, HBM…), metrics (-6.07σ, 2x).
+4. First use of specialized terms: 中文（English） when helpful; then consistent form.
+5. If a glossary is provided, OBEY it.
+6. Output ONLY the translated text — no preface, no quotes around the whole answer.
+"#;
+
+// ---- Glossary ----
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GlossaryTerm {
+    pub en: String,
+    pub zh: String,
+    /// When true, prefer Latin form (or 中文（EN）) over pure Chinese.
+    #[serde(default)]
+    pub keep_en: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GlossaryFile {
+    pub schema: String,
+    #[serde(default)]
+    pub terms: Vec<GlossaryTerm>,
+}
+
+impl Default for GlossaryFile {
+    fn default() -> Self {
+        Self {
+            schema: GLOSSARY_SCHEMA.into(),
+            terms: Vec::new(),
+        }
+    }
+}
+
+impl GlossaryFile {
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        let path = vault_root.join(GLOSSARY_REL);
+        if !path.is_file() {
+            return Ok(Self::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|e| format!("read glossary: {e}"))?;
+        let file: Self = serde_json::from_str(&raw).map_err(|e| format!("parse glossary: {e}"))?;
+        if file.schema != GLOSSARY_SCHEMA {
+            return Err(format!(
+                "unsupported glossary schema `{}` (expected `{GLOSSARY_SCHEMA}`)",
+                file.schema
+            ));
+        }
+        Ok(file)
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<(), String> {
+        let path = vault_root.join(GLOSSARY_REL);
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p).map_err(|e| format!("mkdir: {e}"))?;
+        }
+        let raw = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        fs::write(&path, raw).map_err(|e| format!("write glossary: {e}"))
+    }
+
+    /// Render as bullet list for prompt injection.
+    pub fn as_prompt_block(&self) -> String {
+        if self.terms.is_empty() {
+            return String::new();
+        }
+        let mut lines = Vec::new();
+        for t in &self.terms {
+            let keep = if t.keep_en { " | KEEP" } else { "" };
+            let note = t
+                .note
+                .as_deref()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default();
+            lines.push(format!("- {} → {}{keep}{note}", t.en, t.zh));
+        }
+        lines.join("\n")
+    }
+
+    /// Merge terms by lowercase English key (incoming wins on conflict).
+    pub fn merge_terms(&mut self, incoming: impl IntoIterator<Item = GlossaryTerm>) {
+        let mut map: BTreeMap<String, GlossaryTerm> = self
+            .terms
+            .drain(..)
+            .map(|t| (t.en.to_ascii_lowercase(), t))
+            .collect();
+        for t in incoming {
+            map.insert(t.en.to_ascii_lowercase(), t);
+        }
+        self.terms = map.into_values().collect();
+        self.terms.sort_by(|a, b| a.en.to_ascii_lowercase().cmp(&b.en.to_ascii_lowercase()));
+    }
+}
+
+// ---- Claims zh ----
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimZhEntry {
+    pub claim_zh: String,
+    /// sha256 prefix of English claim text — staleness marker.
+    pub en_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimsZhFile {
+    pub schema: String,
+    #[serde(default)]
+    pub entries: BTreeMap<String, ClaimZhEntry>,
+}
+
+impl Default for ClaimsZhFile {
+    fn default() -> Self {
+        Self {
+            schema: CLAIMS_ZH_SCHEMA.into(),
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl ClaimsZhFile {
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        load_map_file(vault_root, CLAIMS_ZH_REL, CLAIMS_ZH_SCHEMA)
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<(), String> {
+        save_json(vault_root, CLAIMS_ZH_REL, self)
+    }
+
+    pub fn get_fresh(&self, claim_key: &str, en_claim: &str) -> Option<&str> {
+        let e = self.entries.get(claim_key)?;
+        if e.en_hash == text_hash(en_claim) {
+            Some(e.claim_zh.as_str())
+        } else {
+            None
+        }
+    }
+}
+
+// ---- Cards zh ----
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CardZhEntry {
+    pub title_zh: String,
+    pub content_zh: String,
+    pub en_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CardsZhFile {
+    pub schema: String,
+    #[serde(default)]
+    pub entries: BTreeMap<String, CardZhEntry>,
+}
+
+impl Default for CardsZhFile {
+    fn default() -> Self {
+        Self {
+            schema: CARDS_ZH_SCHEMA.into(),
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl CardsZhFile {
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        load_map_file(vault_root, CARDS_ZH_REL, CARDS_ZH_SCHEMA)
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<(), String> {
+        save_json(vault_root, CARDS_ZH_REL, self)
+    }
+
+    pub fn get_fresh(&self, card_id: &str, title: &str, content: &str) -> Option<&CardZhEntry> {
+        let e = self.entries.get(card_id)?;
+        if e.en_hash == text_hash(&format!("{title}\n{content}")) {
+            Some(e)
+        } else {
+            None
+        }
+    }
+}
+
+// ---- Theme pages zh ----
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemePageSectionZh {
+    pub heading: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemePageZhEntry {
+    pub community_id: i64,
+    pub sections: Vec<ThemePageSectionZh>,
+    /// Staleness: hash of English section bodies joined.
+    pub en_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemePagesZhFile {
+    pub schema: String,
+    #[serde(default)]
+    pub pages: BTreeMap<String, ThemePageZhEntry>,
+}
+
+impl Default for ThemePagesZhFile {
+    fn default() -> Self {
+        Self {
+            schema: THEME_PAGES_ZH_SCHEMA.into(),
+            pages: BTreeMap::new(),
+        }
+    }
+}
+
+impl ThemePagesZhFile {
+    pub fn load(vault_root: &Path) -> Result<Self, String> {
+        let path = vault_root.join(THEME_PAGES_ZH_REL);
+        if !path.is_file() {
+            return Ok(Self::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?;
+        let file: Self = serde_json::from_str(&raw).map_err(|e| format!("parse: {e}"))?;
+        if file.schema != THEME_PAGES_ZH_SCHEMA {
+            return Err(format!("unsupported schema `{}`", file.schema));
+        }
+        Ok(file)
+    }
+
+    pub fn save(&self, vault_root: &Path) -> Result<(), String> {
+        save_json(vault_root, THEME_PAGES_ZH_REL, self)
+    }
+
+    pub fn get_fresh(&self, community_id: i64, en_hash: &str) -> Option<&ThemePageZhEntry> {
+        let key = community_id.to_string();
+        let e = self.pages.get(&key)?;
+        if e.en_hash == en_hash {
+            Some(e)
+        } else {
+            None
+        }
+    }
+}
+
+// ---- Translate primitives ----
+
+fn text_hash(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.trim().as_bytes());
+    format!("{:x}", h.finalize())[..16].to_string()
+}
+
+fn now_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+fn llm_text(
+    client: &mut dyn ModelClient,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let req = ModelRequest {
+        model: model.to_string(),
+        system: Some(system.to_string()),
+        messages: vec![ModelMessage::User {
+            content: user.to_string(),
+        }],
+        max_tokens,
+        temperature: Some(0.2),
+        tools: None,
+        cache_namespace: Some("bilingual/v1".into()),
+    };
+    let reply = client.call(&req).map_err(|e| e.to_string())?;
+    let text = reply.text.trim().to_string();
+    if text.is_empty() {
+        return Err("model returned empty text".into());
+    }
+    Ok(text)
+}
+
+fn user_with_glossary(glossary: &GlossaryFile, kind: &str, body: &str) -> String {
+    let mut out = String::new();
+    let g = glossary.as_prompt_block();
+    if !g.is_empty() {
+        out.push_str("## Session glossary (OBEY)\n");
+        out.push_str(&g);
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("Translate this {kind} to Simplified Chinese:\n\n{body}"));
+    out
+}
+
+/// Translate one claim into the claims_zh projection (skip if fresh).
+pub fn translate_claim(
+    vault_root: &Path,
+    claim_key: &str,
+    claim_en: &str,
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+) -> Result<String, String> {
+    let mut file = ClaimsZhFile::load(vault_root)?;
+    if !force {
+        if let Some(zh) = file.get_fresh(claim_key, claim_en) {
+            return Ok(zh.to_string());
+        }
+    }
+    let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
+    let user = user_with_glossary(&glossary, "knowledge claim", claim_en);
+    let zh = llm_text(client, model, TRANSLATE_SHORT_SYSTEM, &user, 1024)?;
+    file.entries.insert(
+        claim_key.to_string(),
+        ClaimZhEntry {
+            claim_zh: zh.clone(),
+            en_hash: text_hash(claim_en),
+            model: Some(model.to_string()),
+            translated_at: Some(now_stamp()),
+        },
+    );
+    file.save(vault_root)?;
+    Ok(zh)
+}
+
+/// Batch-translate missing claims. Returns (done, skipped, errors).
+pub fn translate_claims_batch(
+    vault_root: &Path,
+    claims: &[(String, String)], // (claim_key, claim_en)
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+    max: usize,
+) -> (usize, usize, Vec<String>) {
+    let mut done = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = Vec::new();
+    let existing = ClaimsZhFile::load(vault_root).unwrap_or_default();
+    for (key, en) in claims {
+        if max > 0 && done >= max {
+            break;
+        }
+        if !force && existing.get_fresh(key, en).is_some() {
+            skipped += 1;
+            continue;
+        }
+        match translate_claim(vault_root, key, en, client, model, force) {
+            Ok(_) => done += 1,
+            Err(e) => errors.push(format!("{key}: {e}")),
+        }
+    }
+    (done, skipped, errors)
+}
+
+/// Translate one memory card.
+pub fn translate_card(
+    vault_root: &Path,
+    card_id: &str,
+    title: &str,
+    content: &str,
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+) -> Result<CardZhEntry, String> {
+    let mut file = CardsZhFile::load(vault_root)?;
+    if !force {
+        if let Some(e) = file.get_fresh(card_id, title, content) {
+            return Ok(e.clone());
+        }
+    }
+    let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
+    let blob = format!("# {title}\n\n{content}");
+    let user = user_with_glossary(&glossary, "memory card (keep markdown)", &blob);
+    let zh = llm_text(client, model, TRANSLATE_SHORT_SYSTEM, &user, 2048)?;
+    // Split first heading line as title when possible.
+    let (title_zh, content_zh) = split_card_zh(&zh, title);
+    let entry = CardZhEntry {
+        title_zh,
+        content_zh,
+        en_hash: text_hash(&format!("{title}\n{content}")),
+        model: Some(model.to_string()),
+        translated_at: Some(now_stamp()),
+    };
+    file.entries.insert(card_id.to_string(), entry.clone());
+    file.save(vault_root)?;
+    Ok(entry)
+}
+
+fn split_card_zh(zh: &str, fallback_title: &str) -> (String, String) {
+    let t = zh.trim();
+    if let Some(rest) = t.strip_prefix("# ") {
+        if let Some((first, body)) = rest.split_once('\n') {
+            return (first.trim().to_string(), body.trim().to_string());
+        }
+        return (rest.trim().to_string(), String::new());
+    }
+    // No heading — use first line as title if short.
+    if let Some((first, body)) = t.split_once('\n') {
+        if first.chars().count() <= 80 {
+            return (first.trim().to_string(), body.trim().to_string());
+        }
+    }
+    (fallback_title.to_string(), t.to_string())
+}
+
+/// Hash English theme page sections for staleness.
+pub fn theme_page_en_hash(sections: &[(String, String)]) -> String {
+    let joined = sections
+        .iter()
+        .map(|(h, b)| format!("{h}\n{b}"))
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    text_hash(&joined)
+}
+
+/// Translate theme page sections (preserves [claim:…] markers).
+pub fn translate_theme_page(
+    vault_root: &Path,
+    community_id: i64,
+    sections: &[(String, String)], // (heading, body) EN
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+) -> Result<ThemePageZhEntry, String> {
+    let en_hash = theme_page_en_hash(sections);
+    let mut file = ThemePagesZhFile::load(vault_root)?;
+    let key = community_id.to_string();
+    if !force {
+        if let Some(e) = file.get_fresh(community_id, &en_hash) {
+            return Ok(e.clone());
+        }
+    }
+    let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
+    let mut out_sections = Vec::new();
+    for (heading, body) in sections {
+        let blob = format!("## {heading}\n\n{body}");
+        let mut user = user_with_glossary(
+            &glossary,
+            "theme page section (KEEP [claim:…] citation tokens EXACTLY)",
+            &blob,
+        );
+        user.push_str("\n\nDo not translate or alter [claim:…] tokens.");
+        let zh = llm_text(client, model, TRANSLATE_SHORT_SYSTEM, &user, 3000)?;
+        let (h_zh, b_zh) = split_section_zh(&zh, heading);
+        out_sections.push(ThemePageSectionZh {
+            heading: h_zh,
+            body: b_zh,
+        });
+    }
+    let entry = ThemePageZhEntry {
+        community_id,
+        sections: out_sections,
+        en_hash,
+        model: Some(model.to_string()),
+        translated_at: Some(now_stamp()),
+    };
+    file.pages.insert(key, entry.clone());
+    file.save(vault_root)?;
+    Ok(entry)
+}
+
+fn split_section_zh(zh: &str, fallback_heading: &str) -> (String, String) {
+    let t = zh.trim();
+    for prefix in ["## ", "# "] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            if let Some((first, body)) = rest.split_once('\n') {
+                return (first.trim().to_string(), body.trim().to_string());
+            }
+            return (rest.trim().to_string(), String::new());
+        }
+    }
+    (fallback_heading.to_string(), t.to_string())
+}
+
+// ---- IO helpers ----
+
+fn load_map_file<T: for<'de> Deserialize<'de> + Default>(
+    vault_root: &Path,
+    rel: &str,
+    schema: &str,
+) -> Result<T, String>
+where
+    T: SchemaCheck,
+{
+    let path = vault_root.join(rel);
+    if !path.is_file() {
+        return Ok(T::default());
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("read {rel}: {e}"))?;
+    let file: T = serde_json::from_str(&raw).map_err(|e| format!("parse {rel}: {e}"))?;
+    if file.schema_str() != schema {
+        return Err(format!(
+            "{rel}: unsupported schema `{}` (expected `{schema}`)",
+            file.schema_str()
+        ));
+    }
+    Ok(file)
+}
+
+trait SchemaCheck {
+    fn schema_str(&self) -> &str;
+}
+
+impl SchemaCheck for ClaimsZhFile {
+    fn schema_str(&self) -> &str {
+        &self.schema
+    }
+}
+impl SchemaCheck for CardsZhFile {
+    fn schema_str(&self) -> &str {
+        &self.schema
+    }
+}
+
+fn save_json<T: Serialize>(vault_root: &Path, rel: &str, value: &T) -> Result<(), String> {
+    let path = vault_root.join(rel);
+    if let Some(p) = path.parent() {
+        fs::create_dir_all(p).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    let raw = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    fs::write(&path, raw).map_err(|e| format!("write {rel}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glossary_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut g = GlossaryFile::default();
+        g.terms.push(GlossaryTerm {
+            en: "total return swap".into(),
+            zh: "收益互换".into(),
+            keep_en: true,
+            note: Some("TRS".into()),
+        });
+        g.save(tmp.path()).unwrap();
+        let loaded = GlossaryFile::load(tmp.path()).unwrap();
+        assert_eq!(loaded.terms.len(), 1);
+        assert!(loaded.as_prompt_block().contains("KEEP"));
+    }
+
+    #[test]
+    fn claim_zh_staleness() {
+        let mut f = ClaimsZhFile::default();
+        f.entries.insert(
+            "ck-abc".into(),
+            ClaimZhEntry {
+                claim_zh: "记忆是预算".into(),
+                en_hash: text_hash("Memory is a budget"),
+                model: None,
+                translated_at: None,
+            },
+        );
+        assert!(f.get_fresh("ck-abc", "Memory is a budget").is_some());
+        assert!(f.get_fresh("ck-abc", "Memory is scarce").is_none());
+    }
+
+    #[test]
+    fn split_card_heading() {
+        let (t, b) = split_card_zh("# 标题\n\n正文段落", "Fallback");
+        assert_eq!(t, "标题");
+        assert!(b.contains("正文"));
+    }
+}

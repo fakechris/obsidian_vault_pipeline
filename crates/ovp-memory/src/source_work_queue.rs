@@ -336,9 +336,13 @@ impl SourceWorkQueue {
     }
 
     /// Force-replace in-memory state from the durable file (call under write lock).
+    ///
+    /// Does **not** run [`recover_interrupted`]: that would re-queue a
+    /// just-claimed `Running` item mid-flight (breaking the one-at-a-time
+    /// gate). Restart recovery belongs in [`Self::open`] and
+    /// [`Self::recover_stale_running`] only.
     fn reload_from_disk(&self, g: &mut QueueFile) {
-        if let Some(mut file) = load_file(&self.path) {
-            let _ = recover_interrupted(&self.vault_root, &mut file);
+        if let Some(file) = load_file(&self.path) {
             *g = file;
             if let Ok(m) = std::fs::metadata(&self.path).and_then(|m| m.modified()) {
                 *self

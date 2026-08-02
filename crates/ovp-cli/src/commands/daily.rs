@@ -556,6 +556,78 @@ fn run_inner(
             }
         }
 
+    // Phase 4.6 — auto source-work (deep summary + EN→zh) for succeeded sources.
+    // Config: `.ovp/source-work.toml` (defaults: auto_summarize + auto_translate on).
+    // Jobs land in the durable queue; the portal worker (serve / desktop) runs them.
+    if !args.dry_run {
+        let succeeded: Vec<&DailyRunRecord> = daily
+            .processed
+            .iter()
+            .filter(|r| r.status == RunStatus::Succeeded)
+            .collect();
+        if !succeeded.is_empty() {
+            use ovp_memory::source_work_auto::{
+                candidate_with_paths, run_auto_enqueue, title_from_source_path,
+            };
+            let cands: Vec<_> = succeeded
+                .iter()
+                .map(|r| {
+                    let title = title_from_source_path(&r.source_path);
+                    let mut paths: Vec<&str> = Vec::new();
+                    if let Some(m) = r.moved_to.as_deref() {
+                        paths.push(m);
+                    }
+                    paths.push(r.source_path.as_str());
+                    if let Some(p) = r.pack_dir.as_deref() {
+                        // pack-relative names resolved below via join in helper —
+                        // pass full vault-relative when possible.
+                        let _ = p;
+                    }
+                    let path_refs: Vec<&str> = paths.clone();
+                    let mut cand = candidate_with_paths(
+                        &args.vault_root,
+                        r.source_sha256.clone(),
+                        title,
+                        &path_refs,
+                    );
+                    // Prefer pack source.md if body still empty.
+                    if cand.body.is_none() {
+                        if let Some(pack) = r.pack_dir.as_deref() {
+                            for name in ["source.md", "source-support.md", "reader.md"] {
+                                let rel = format!("{pack}/{name}");
+                                if let Ok(s) = std::fs::read_to_string(args.vault_root.join(&rel)) {
+                                    if !s.trim().is_empty() {
+                                        cand.body = Some(s);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    cand
+                })
+                .collect();
+            match run_auto_enqueue(&args.vault_root, &cands, false, None, None, false) {
+                Ok(rep) if rep.enqueued > 0 || rep.considered > 0 => {
+                    sayln!(
+                        "  source-work: considered={} enqueued={} complete={} not_en={} cap={} err={}",
+                        rep.considered,
+                        rep.enqueued,
+                        rep.skipped_complete,
+                        rep.skipped_not_english,
+                        rep.skipped_cap,
+                        rep.errors.len()
+                    );
+                    for e in &rep.errors {
+                        sayln!("    warn queue: {e}");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => sayln!("  warn source-work auto: {e}"),
+            }
+        }
+    }
+
     // Phase 5 — durable run report FIRST (so the rebuilt index includes this
     // run), then read model + console refresh. The report does NOT claim the
     // refresh happened — index/console paths are printed, not recorded, since

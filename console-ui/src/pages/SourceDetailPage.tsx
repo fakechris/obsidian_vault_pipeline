@@ -213,7 +213,7 @@ function SourceTags({
 }
 
 function CitingClaims({ claims }: { claims: ClaimRow[] }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   if (claims.length === 0) {
     return (
       <EmptyState>
@@ -226,14 +226,18 @@ function CitingClaims({ claims }: { claims: ClaimRow[] }) {
   }
   return (
     <ul className="citing-list">
-      {claims.map((c) => (
-        <li key={c.claim_id}>
-          {(c.status === 'durable' || c.status === 'caveated') && (
-            <ClaimPill status={c.status} />
-          )}{' '}
-          <Link to={`/knowledge#${c.claim_id}`}>{c.claim}</Link>
-        </li>
-      ))}
+      {claims.map((c) => {
+        const text =
+          lang === 'zh' && c.claim_zh?.trim() ? c.claim_zh : c.claim;
+        return (
+          <li key={c.claim_id}>
+            {(c.status === 'durable' || c.status === 'caveated') && (
+              <ClaimPill status={c.status} />
+            )}{' '}
+            <Link to={`/knowledge#${c.claim_id}`}>{text}</Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -258,7 +262,7 @@ function libraryListHref(f: LibraryFilter): string {
 }
 
 export default function SourceDetailPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { sha } = useParams<{ sha: string }>();
   const navigate = useNavigate();
   const { model } = useModel();
@@ -900,12 +904,22 @@ export default function SourceDetailPage() {
                   <p className="tiny muted">{t('source.cardsHint')}</p>
                 </>
               )}
-              {memory.cards.map((card, i) => (
-                <div className="card mem-card" key={`c${i}`}>
-                  <div className="mem-title">{card.title}</div>
-                  <p>{card.content}</p>
-                </div>
-              ))}
+              {memory.cards.map((card, i) => {
+                const title =
+                  lang === 'zh' && card.title_zh?.trim()
+                    ? card.title_zh
+                    : card.title;
+                const content =
+                  lang === 'zh' && card.content_zh?.trim()
+                    ? card.content_zh
+                    : card.content;
+                return (
+                  <div className="card mem-card" key={card.id ?? `c${i}`}>
+                    <div className="mem-title">{title}</div>
+                    <p>{content}</p>
+                  </div>
+                );
+              })}
               {memory.cards.length === 0 && memory.units.length === 0 && (
                 <EmptyState>
                   <p>

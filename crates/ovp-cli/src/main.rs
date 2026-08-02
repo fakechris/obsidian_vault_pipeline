@@ -512,6 +512,15 @@ enum Cmd {
         #[arg(long)]
         viz_dir: Option<PathBuf>,
     },
+    /// PRODUCT — source-work enrichment: deep summary + refined EN→zh queue,
+    /// historical backfill, and bilingual claim/memory projections.
+    /// Config: `.ovp/source-work.toml`. Queue: `.ovp/source-work-queue.json`
+    /// (executed by `serve` / desktop worker). Ledger stays English; zh is
+    /// rebuildable projection under Source-Work / `.ovp/crystal/*_zh.json`.
+    SourceWork {
+        #[command(subcommand)]
+        action: SourceWorkAction,
+    },
     /// PRODUCT — put the daily loop on the OS scheduler (launchd on macOS,
     /// systemd user timer on Linux) so the pipeline heartbeat never depends
     /// on a human remembering to run `ovp2 daily`. `install` writes the unit
@@ -1170,6 +1179,75 @@ enum ClientKindArg {
 }
 
 #[derive(Subcommand, Debug)]
+enum SourceWorkAction {
+    /// Print `.ovp/source-work.toml` (or product defaults if missing).
+    ShowConfig {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
+    /// Write a commented `.ovp/source-work.toml` template if absent.
+    InitConfig {
+        #[arg(long)]
+        vault_root: PathBuf,
+    },
+    /// Enqueue historical sources missing deep summary and/or zh translation.
+    /// Jobs execute when `ovp2 serve` / OVP2.app holds the worker lock.
+    Backfill {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Max sources to enqueue this pass (0 = all missing).
+        #[arg(long, default_value_t = 20)]
+        max: usize,
+        /// Only enqueue translate (default: both from config).
+        #[arg(long)]
+        translate: bool,
+        /// Only enqueue summarize (default: both from config).
+        #[arg(long)]
+        summarize: bool,
+        /// Re-enqueue even when artifacts already exist.
+        #[arg(long)]
+        force: bool,
+        /// Plan only — print counts, write no queue.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Translate active durable claims → `.ovp/crystal/claims_zh.json`.
+    ClaimsZh {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Max claims to translate this pass (0 = all missing).
+        #[arg(long, default_value_t = 50)]
+        max: usize,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Translate memory cards + theme pages → cards_zh / theme_pages_zh.
+    MemoryZh {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
+        client: ClientKindArg,
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Max items this pass (0 = unlimited).
+        #[arg(long, default_value_t = 30)]
+        max: usize,
+        #[arg(long)]
+        force: bool,
+        /// Only cards (default: both).
+        #[arg(long)]
+        cards: bool,
+        /// Only theme pages (default: both).
+        #[arg(long)]
+        theme_pages: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum ScheduleAction {
     /// Write the scheduler unit(s) + env-file template (if missing) and load
     /// the job. Idempotent: re-running overwrites the previous install
@@ -1678,6 +1756,77 @@ fn main() -> ExitCode {
             port,
             viz_dir,
         }),
+        Cmd::SourceWork { action } => match action {
+            SourceWorkAction::ShowConfig { vault_root } => {
+                commands::source_work_cmd::show_config(commands::source_work_cmd::ShowConfigArgs {
+                    vault_root,
+                })
+            }
+            SourceWorkAction::InitConfig { vault_root } => {
+                commands::source_work_cmd::init_config(commands::source_work_cmd::InitConfigArgs {
+                    vault_root,
+                })
+            }
+            SourceWorkAction::Backfill {
+                vault_root,
+                max,
+                translate,
+                summarize,
+                force,
+                dry_run,
+            } => commands::source_work_cmd::backfill(commands::source_work_cmd::BackfillArgs {
+                vault_root,
+                max,
+                translate,
+                summarize,
+                force,
+                dry_run,
+            }),
+            SourceWorkAction::ClaimsZh {
+                vault_root,
+                client,
+                cache_dir,
+                max,
+                force,
+            } => {
+                use commands::client::ClientKind;
+                let client_kind = match client {
+                    ClientKindArg::Replay => ClientKind::Replay,
+                    ClientKindArg::Live => ClientKind::Live,
+                };
+                commands::source_work_cmd::claims_zh(commands::source_work_cmd::ClaimsZhArgs {
+                    vault_root,
+                    client_kind,
+                    cache_dir,
+                    max,
+                    force,
+                })
+            }
+            SourceWorkAction::MemoryZh {
+                vault_root,
+                client,
+                cache_dir,
+                max,
+                force,
+                cards,
+                theme_pages,
+            } => {
+                use commands::client::ClientKind;
+                let client_kind = match client {
+                    ClientKindArg::Replay => ClientKind::Replay,
+                    ClientKindArg::Live => ClientKind::Live,
+                };
+                commands::source_work_cmd::memory_zh(commands::source_work_cmd::MemoryZhArgs {
+                    vault_root,
+                    client_kind,
+                    cache_dir,
+                    max,
+                    force,
+                    cards,
+                    theme_pages,
+                })
+            }
+        },
         Cmd::Schedule { action } => match action {
             ScheduleAction::Install {
                 vault_root,

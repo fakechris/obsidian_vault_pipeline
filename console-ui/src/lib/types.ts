@@ -62,6 +62,8 @@ export interface CitationDetail {
 export interface ClaimDetail {
   claim_id: string;
   claim: string;
+  /** Rebuildable Chinese projection when present (ledger stays EN). */
+  claim_zh?: string;
   theme: string;
   strength: string;
   citations: CitationDetail[];
@@ -96,11 +98,14 @@ export interface ThemePageData {
   label_zh: string;
   claim_count: number;
   sections: ThemePageSection[];
+  /** Rebuildable Chinese sections when projection is fresh. */
+  sections_zh?: ThemePageSection[];
 }
 
 export interface ThemePageClaimInfo {
   claim_id: string;
   claim: string;
+  claim_zh?: string;
   strength?: string;
   sources: string[];
 }
@@ -194,6 +199,8 @@ export interface ClaimRow {
    * claim_keys cannot. Absent on pre-key indexes. */
   claim_key?: string;
   claim: string;
+  /** Rebuildable Chinese projection when served by live API. */
+  claim_zh?: string;
   theme?: string;
   status: ClaimStatus;
   sources: string[];
@@ -207,8 +214,11 @@ export interface ClaimRow {
 // ---- /api/source/:sha (B2 source detail) ----
 
 export interface MemoryCard {
+  id?: string;
   title: string;
   content: string;
+  title_zh?: string;
+  content_zh?: string;
 }
 
 export interface MemoryUnit {

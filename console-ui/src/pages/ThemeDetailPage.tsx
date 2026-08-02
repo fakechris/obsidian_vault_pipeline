@@ -30,7 +30,7 @@ import type {
 import { useModel } from '../model';
 
 function TopicOverview({ theme }: { theme: string }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [themePages, setThemePages] = useState<ThemePagesResponse | null>(null);
 
   useEffect(() => {
@@ -51,7 +51,12 @@ function TopicOverview({ theme }: { theme: string }) {
   const page = themePages?.pages.find((candidate) => candidate.label === theme);
   const overview = useMemo(() => {
     if (!page || !themePages) return null;
-    const sections = page.sections.map((section) => ({
+    // Prefer rebuildable sections_zh when UI lang is Chinese.
+    const sectionSrc =
+      lang === 'zh' && page.sections_zh && page.sections_zh.length > 0
+        ? page.sections_zh
+        : page.sections;
+    const sections = sectionSrc.map((section) => ({
       ...section,
       paragraphs: parsePageBody(section.body),
     }));
@@ -81,15 +86,18 @@ function TopicOverview({ theme }: { theme: string }) {
       [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id),
     );
     return { sections, citationNumberByKey, ambiguousIds };
-  }, [page, themePages]);
+  }, [page, themePages, lang]);
 
   if (!page || !themePages || !overview) return null;
+
+  const displayLabel =
+    lang === 'zh' && page.label_zh?.trim() ? page.label_zh : page.label;
 
   return (
     <div className="card topic-overview">
       <h2>{t('theme.topicOverview')}</h2>
       <div className="claim-meta topic-overview-caption">
-        {t('theme.topicOverviewCaption', { n: page.claim_count })}
+        {displayLabel} · {t('theme.topicOverviewCaption', { n: page.claim_count })}
       </div>
       {overview.sections.map((section, sectionIndex) => (
         <section
@@ -106,12 +114,16 @@ function TopicOverview({ theme }: { theme: string }) {
                 const claim = themePages.claims[token.key];
                 const number = overview.citationNumberByKey.get(token.key);
                 if (!claim || number == null) return null;
+                const tip =
+                  lang === 'zh' && claim.claim_zh?.trim()
+                    ? claim.claim_zh
+                    : claim.claim;
                 if (overview.ambiguousIds.has(claim.claim_id)) {
                   return (
                     <span
                       className="topic-cite"
                       key={`${token.key}-${tokenIndex}`}
-                      title={claim.claim}
+                      title={tip}
                     >
                       [{number}]
                     </span>
@@ -121,7 +133,7 @@ function TopicOverview({ theme }: { theme: string }) {
                   <Link
                     className="topic-cite"
                     key={`${token.key}-${tokenIndex}`}
-                    title={claim.claim}
+                    title={tip}
                     to={{ hash: `#${encodeURIComponent(claim.claim_id)}` }}
                   >
                     [{number}]
@@ -176,7 +188,11 @@ function ClaimCard({
   byCase: Map<string, SourceRow>;
   highlighted: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  // Content language follows UI lang: zh prefers claim_zh projection, falls
+  // back to English authority text when the projection is missing/stale.
+  const text =
+    lang === 'zh' && claim.claim_zh?.trim() ? claim.claim_zh : claim.claim;
   return (
     <div
       className={`card claim-card${highlighted ? ' claim-hit' : ''}`}
@@ -206,7 +222,7 @@ function ClaimCard({
           #{claim.claim_id}
         </button>
       </div>
-      <div className="claim-text">{claim.claim}</div>
+      <div className="claim-text">{text}</div>
       <ClaimSources claim={claim} byCase={byCase} />
     </div>
   );
