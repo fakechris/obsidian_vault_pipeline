@@ -1404,36 +1404,77 @@ body {
 /* Work queue page */
 .workq-toolbar {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  align-items: baseline;
+  gap: 0.65rem;
   margin: 0.75rem 0 1rem;
   flex-wrap: wrap;
 }
-.workq-eta {
-  margin: 0 0 1.1rem;
-  padding: 0.65rem 0.8rem;
+/* Compact status: one dense line; detail on hover. */
+.workq-status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex: 1 1 16rem;
+  min-width: 0;
+  flex-wrap: wrap;
+  position: relative;
+}
+.workq-status-line {
+  line-height: 1.45;
+  min-width: 0;
+}
+.workq-status-hint {
+  position: relative;
+  cursor: default;
+  text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent);
+  text-underline-offset: 0.15em;
+  flex: none;
+  white-space: nowrap;
+}
+.workq-status-hint:hover,
+.workq-status-hint:focus-visible {
+  color: var(--fg, inherit);
+}
+.workq-status-pop {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 40;
+  min-width: 16rem;
+  max-width: min(22rem, 90vw);
+  padding: 0.55rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #3b82f6) 5%, var(--surface-2, transparent));
+  background: var(--surface, var(--bg, #fff));
+  box-shadow: 0 6px 20px color-mix(in srgb, #000 14%, transparent);
+  color: var(--fg, inherit);
+  font-size: var(--ovp-text-xs);
+  line-height: 1.4;
+  font-weight: 400;
+  text-decoration: none;
+  white-space: normal;
 }
-.workq-eta-title {
-  margin: 0 0 0.35rem;
-  font-size: var(--ovp-text-sm);
-  font-weight: 600;
+.workq-status-hint:hover .workq-status-pop,
+.workq-status-hint:focus-visible .workq-status-pop {
+  display: block;
 }
-.workq-eta-grid {
+.workq-pop-inner {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.35rem;
 }
-.workq-eta-line {
-  margin: 0;
-  font-size: var(--ovp-text-sm);
-  line-height: 1.4;
-}
-.workq-eta-emph {
+.workq-pop-title {
   font-weight: 600;
-  margin-top: 0.15rem !important;
+  font-size: var(--ovp-text-sm);
+  margin-bottom: 0.1rem;
+}
+.workq-pop-emph {
+  font-weight: 600;
+}
+.workq-pop-title-clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .workq-eta-warn {
   color: var(--warn, #ca8a04);

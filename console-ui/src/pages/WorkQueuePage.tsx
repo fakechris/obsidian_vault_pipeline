@@ -10,6 +10,7 @@ import {
   computeWorkQueueEta,
   formatClock,
   formatDurationSec,
+  type WorkQueueEta,
 } from '../lib/workQueueEta';
 
 function taskLabel(t: WorkTaskState, yes: string, no: string): string {
@@ -109,106 +110,172 @@ function ItemRow({
   );
 }
 
-function EtaPanel({
+/** Compact status line: counts + pace + ETA. Detail lives in a hover popover. */
+function QueueStatusLine({
+  running,
+  queued,
+  history,
+  polledAt,
   items,
   workerActive,
   nowSec,
 }: {
+  running: number;
+  queued: number;
+  history: number;
+  polledAt: number;
   items: SourceWorkQueueItem[];
   workerActive: boolean | null;
   nowSec: number;
 }) {
   const { t } = useI18n();
   const eta = useMemo(() => computeWorkQueueEta(items, nowSec), [items, nowSec]);
-  const remaining = items.filter(
-    (i) => i.status === 'queued' || i.status === 'running',
-  ).length;
+  const remaining = running + queued;
+
+  const compactParts: string[] = [
+    t('workq.counts', { running, queued, history }),
+  ];
+
+  if (eta.sampleCount > 0 && eta.avgSec > 0) {
+    compactParts.push(
+      t('workq.compactPace', { avg: formatDurationSec(eta.avgSec) }),
+    );
+  }
+
+  if (eta.doneLastHour > 0 || eta.doneLast15m > 0) {
+    compactParts.push(
+      t('workq.compactThru', {
+        n15: eta.doneLast15m,
+        n60: eta.doneLastHour,
+      }),
+    );
+  }
+
+  if (remaining === 0) {
+    compactParts.push(t('workq.etaIdle'));
+  } else if (eta.reliable && eta.etaSec != null && eta.etaAt != null) {
+    compactParts.push(
+      t('workq.compactEta', {
+        left: formatDurationSec(eta.etaSec),
+        eta: formatClock(eta.etaAt),
+      }),
+    );
+  } else if (eta.sampleCount > 0 && eta.avgSec > 0) {
+    compactParts.push(
+      t('workq.etaRemainingShort', {
+        left: formatDurationSec(eta.avgSec * Math.max(1, remaining)),
+      }),
+    );
+  }
+
+  if (eta.runningElapsedSec != null) {
+    compactParts.push(
+      t('workq.compactRunning', {
+        elapsed: formatDurationSec(eta.runningElapsedSec),
+      }),
+    );
+  }
+
+  if (workerActive === false && remaining > 0) {
+    compactParts.push(t('workq.compactNoWorker'));
+  }
+
+  compactParts.push(
+    t('workq.polled', { time: new Date(polledAt).toLocaleTimeString() }),
+  );
 
   return (
-    <section className="workq-eta" aria-live="polite">
-      <h3 className="workq-eta-title">{t('workq.etaTitle')}</h3>
-      <div className="workq-eta-grid">
-        {eta.sampleCount > 0 ? (
-          <p className="workq-eta-line">
-            <strong>
-              {t('workq.etaAvg', { avg: formatDurationSec(eta.avgSec) })}
-            </strong>
-            <span className="muted">
-              {' '}
-              · {t('workq.etaMedian', { median: formatDurationSec(eta.medianSec) })}
-              {' · '}
-              {t('workq.etaSamples', { n: eta.sampleCount })}
-            </span>
-          </p>
-        ) : (
-          <p className="workq-eta-line muted">{t('workq.etaWarmup')}</p>
-        )}
+    <span className="workq-status">
+      <span className="workq-status-line tiny muted" aria-live="polite">
+        {compactParts.join(' · ')}
+      </span>
+      <span className="workq-status-hint tiny muted" tabIndex={0}>
+        {t('workq.etaHoverHint')}
+        <span className="workq-status-pop" role="tooltip">
+          <EtaPopoverBody eta={eta} remaining={remaining} workerActive={workerActive} />
+        </span>
+      </span>
+    </span>
+  );
+}
 
-        <p className="workq-eta-line">
-          {t('workq.etaThroughput', {
-            n15: eta.doneLast15m,
-            n60: eta.doneLastHour,
-          })}
-        </p>
-
-        {eta.lastFinishedAt != null && (
-          <p className="workq-eta-line">
-            {eta.lastStatus === 'failed'
-              ? t('workq.etaLastFailed', {
-                  when: formatClock(eta.lastFinishedAt),
-                  dur: formatDurationSec(eta.lastDurationSec ?? 0),
-                })
-              : t('workq.etaLast', {
-                  when: formatClock(eta.lastFinishedAt),
-                  dur: formatDurationSec(eta.lastDurationSec ?? 0),
-                })}
-            {eta.lastTitle && (
-              <span className="muted">
-                {' '}
-                {t('workq.etaLastTitle', {
-                  title:
-                    eta.lastTitle.length > 48
-                      ? eta.lastTitle.slice(0, 48) + '…'
-                      : eta.lastTitle,
-                })}
-              </span>
-            )}
-          </p>
-        )}
-
-        {eta.runningElapsedSec != null && (
-          <p className="workq-eta-line">
-            {t('workq.etaRunning', {
-              elapsed: formatDurationSec(eta.runningElapsedSec),
-            })}
-          </p>
-        )}
-
-        {workerActive === false && remaining > 0 && (
-          <p className="workq-eta-line workq-eta-warn">{t('workq.etaNoWorker')}</p>
-        )}
-
-        {remaining === 0 ? (
-          <p className="workq-eta-line workq-eta-emph">{t('workq.etaIdle')}</p>
-        ) : eta.reliable && eta.etaSec != null && eta.etaAt != null ? (
-          <p className="workq-eta-line workq-eta-emph">
-            {t('workq.etaRemaining', {
-              left: formatDurationSec(eta.etaSec),
-              eta: formatClock(eta.etaAt),
-            })}
-          </p>
-        ) : eta.sampleCount > 0 && eta.avgSec > 0 ? (
-          <p className="workq-eta-line workq-eta-emph">
-            {t('workq.etaRemainingShort', {
-              left: formatDurationSec(eta.avgSec * Math.max(1, remaining)),
-            })}
-            <span className="muted"> · {t('workq.etaWarmup')}</span>
-          </p>
-        ) : (
-          <p className="workq-eta-line muted">{t('workq.etaWarmup')}</p>
-        )}
+function EtaPopoverBody({
+  eta,
+  remaining,
+  workerActive,
+}: {
+  eta: WorkQueueEta;
+  remaining: number;
+  workerActive: boolean | null;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="workq-pop-inner">
+      <div className="workq-pop-title">{t('workq.etaTitle')}</div>
+      {eta.sampleCount > 0 ? (
+        <div>
+          {t('workq.etaAvg', { avg: formatDurationSec(eta.avgSec) })}
+          {' · '}
+          {t('workq.etaMedian', { median: formatDurationSec(eta.medianSec) })}
+          <div className="muted">
+            {t('workq.etaSamples', { n: eta.sampleCount })}
+          </div>
+        </div>
+      ) : (
+        <div className="muted">{t('workq.etaWarmup')}</div>
+      )}
+      <div>
+        {t('workq.etaThroughput', {
+          n15: eta.doneLast15m,
+          n60: eta.doneLastHour,
+        })}
       </div>
-    </section>
+      {eta.lastFinishedAt != null && (
+        <div>
+          {eta.lastStatus === 'failed'
+            ? t('workq.etaLastFailed', {
+                when: formatClock(eta.lastFinishedAt),
+                dur: formatDurationSec(eta.lastDurationSec ?? 0),
+              })
+            : t('workq.etaLast', {
+                when: formatClock(eta.lastFinishedAt),
+                dur: formatDurationSec(eta.lastDurationSec ?? 0),
+              })}
+          {eta.lastTitle && (
+            <div className="muted workq-pop-title-clip">
+              {t('workq.etaLastTitle', {
+                title:
+                  eta.lastTitle.length > 56
+                    ? eta.lastTitle.slice(0, 56) + '…'
+                    : eta.lastTitle,
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {eta.runningElapsedSec != null && (
+        <div>
+          {t('workq.etaRunning', {
+            elapsed: formatDurationSec(eta.runningElapsedSec),
+          })}
+        </div>
+      )}
+      {workerActive === false && remaining > 0 && (
+        <div className="workq-eta-warn">{t('workq.etaNoWorker')}</div>
+      )}
+      {remaining === 0 ? (
+        <div className="workq-pop-emph">{t('workq.etaIdle')}</div>
+      ) : eta.reliable && eta.etaSec != null && eta.etaAt != null ? (
+        <div className="workq-pop-emph">
+          {t('workq.etaRemaining', {
+            left: formatDurationSec(eta.etaSec),
+            eta: formatClock(eta.etaAt),
+          })}
+        </div>
+      ) : (
+        <div className="muted">{t('workq.etaWarmup')}</div>
+      )}
+    </div>
   );
 }
 
@@ -258,17 +325,15 @@ export default function WorkQueuePage() {
         <button type="button" className="action-btn" onClick={() => refresh()}>
           {t('workq.refresh')}
         </button>
-        <span className="tiny muted">
-          {t('workq.counts', {
-            running: running.length,
-            queued: queued.length,
-            history: history.length,
-          })}
-          {' · '}
-          {t('workq.polled', {
-            time: new Date(polledAt).toLocaleTimeString(),
-          })}
-        </span>
+        <QueueStatusLine
+          running={running.length}
+          queued={queued.length}
+          history={history.length}
+          polledAt={polledAt}
+          items={items}
+          workerActive={workerActive}
+          nowSec={nowSec}
+        />
       </div>
       {worker && !worker.active_here && (
         <p className="tiny muted workq-worker-banner" role="status">
@@ -283,8 +348,6 @@ export default function WorkQueuePage() {
           {t('workq.workerHere', { pid: worker.this_pid ?? '—' })}
         </p>
       )}
-
-      <EtaPanel items={items} workerActive={workerActive} nowSec={nowSec} />
 
       {running.length > 0 && (
         <section className="workq-section">
