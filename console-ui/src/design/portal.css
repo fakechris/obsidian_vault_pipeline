@@ -1409,6 +1409,38 @@ body {
   margin: 0.75rem 0 1rem;
   flex-wrap: wrap;
 }
+.workq-eta {
+  margin: 0 0 1.1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 5%, var(--surface-2, transparent));
+}
+.workq-eta-title {
+  margin: 0 0 0.35rem;
+  font-size: var(--ovp-text-sm);
+  font-weight: 600;
+}
+.workq-eta-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.workq-eta-line {
+  margin: 0;
+  font-size: var(--ovp-text-sm);
+  line-height: 1.4;
+}
+.workq-eta-emph {
+  font-weight: 600;
+  margin-top: 0.15rem !important;
+}
+.workq-eta-warn {
+  color: var(--warn, #ca8a04);
+}
+.workq-timing {
+  color: var(--muted);
+}
 .workq-section {
   margin-bottom: 1.25rem;
 }
