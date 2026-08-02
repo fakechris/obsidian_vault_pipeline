@@ -334,11 +334,16 @@ export default function SourceDetailPage() {
     browse.idx >= 0 && browse.idx < browse.order.length - 1
       ? browse.order[browse.idx + 1]
       : null;
+  // Carry the active content tab across prev/next so reading summary/zh
+  // stays on that tab when the neighbor has it; missing tabs fall back to
+  // source once work status is known (see effect below).
+  const browseTabExtra =
+    tab === 'source' ? undefined : ({ tab } as Record<string, string>);
   const prevHref = prevSha
-    ? librarySourcePath(prevSha, browse.filter)
+    ? librarySourcePath(prevSha, browse.filter, browseTabExtra)
     : null;
   const nextHref = nextSha
-    ? librarySourcePath(nextSha, browse.filter)
+    ? librarySourcePath(nextSha, browse.filter, browseTabExtra)
     : null;
 
   // [ ] / ArrowLeft/Right — sequential browse when not typing.
@@ -438,20 +443,45 @@ export default function SourceDetailPage() {
     (work?.primarily_english ??
       (bodyMarkdown ? isPrimarilyEnglish(bodyMarkdown) : false));
 
+  /** True once source-work for *this* sha has settled (ok or missing). */
+  const [workReady, setWorkReady] = useState(false);
+
   useEffect(() => {
-    if (STATIC_MODE || !sha || status !== 'ready') return;
+    // Drop prior article's artifacts so tab availability is not stale while
+    // the next fetch is in flight (otherwise zh/summary may look present).
+    setWork(null);
+    setWorkReady(false);
+    if (STATIC_MODE || !sha || status !== 'ready') {
+      if (status === 'ready') setWorkReady(true);
+      return;
+    }
     let cancelled = false;
     fetchSourceWork(sha)
       .then((w) => {
-        if (!cancelled) setWork(w);
+        if (!cancelled) {
+          setWork(w);
+          setWorkReady(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setWork(null);
+        if (!cancelled) {
+          setWork(null);
+          setWorkReady(true);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [sha, status, version]);
+
+  // Prefer sticking to the URL tab (carried by prev/next). If this article
+  // has no zh/summary artifact, fall back to the default source tab.
+  useEffect(() => {
+    if (!workReady) return;
+    if (tab === 'zh' && !work?.has_zh) setTab('source');
+    else if (tab === 'summary' && !work?.has_summary) setTab('source');
+    // memory + source always exist as tabs
+  }, [workReady, work?.has_zh, work?.has_summary, tab]);
 
   /** Merge so a finishing translate never wipes summary body (and vice versa). */
   const applyWork = (w: SourceWorkPayload, preferTab: 'zh' | 'summary' | null) => {

@@ -7,6 +7,7 @@ import {
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
+  librarySourcePath,
   parsePageBody,
   runActivity,
   STALE_AFTER_MS,
@@ -396,5 +397,28 @@ describe('collectionOf', () => {
       'clippings',
     );
     expect(collectionOf(row({}))).toBe('clippings');
+  });
+});
+
+describe('librarySourcePath', () => {
+  const empty = {
+    collection: null,
+    month: null,
+    status: null,
+    tag: null,
+  };
+
+  it('carries an active content tab for continuous browse', () => {
+    expect(
+      librarySourcePath('abc', empty, { tab: 'summary' }),
+    ).toBe('/library/abc?tab=summary');
+    expect(
+      librarySourcePath('abc', { ...empty, month: '2026-07' }, { tab: 'zh' }),
+    ).toBe('/library/abc?m=2026-07&tab=zh');
+  });
+
+  it('omits empty extra values (default source tab)', () => {
+    expect(librarySourcePath('abc', empty)).toBe('/library/abc');
+    expect(librarySourcePath('abc', empty, { tab: null })).toBe('/library/abc');
   });
 });
