@@ -134,6 +134,8 @@ pub fn enqueue_candidates(
             summarize: want_s,
             force,
             notify: cfg.auto_notify,
+            // Bulk daily/backfill never jumps ahead of interactive UI jobs.
+            priority: crate::source_work_queue::PRIORITY_BACKFILL,
         };
         match queue.enqueue(req) {
             Ok(item) => {

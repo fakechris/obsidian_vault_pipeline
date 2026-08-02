@@ -73,6 +73,13 @@ impl TaskState {
     }
 }
 
+/// Higher = claimed sooner. Pre-priority queue files deserialize as 0 (backfill).
+/// Interactive UI jobs use [`PRIORITY_INTERACTIVE`]; bulk backfill/daily use
+/// [`PRIORITY_BACKFILL`].
+pub const PRIORITY_BACKFILL: i32 = 0;
+pub const PRIORITY_NORMAL: i32 = 50;
+pub const PRIORITY_INTERACTIVE: i32 = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueItem {
     pub id: String,
@@ -93,6 +100,10 @@ pub struct QueueItem {
     /// Set once when the item becomes terminal so clients can fire notify once.
     #[serde(default)]
     pub notify_sent: bool,
+    /// Scheduling priority: higher runs first among `queued` items.
+    /// Default 0 = backfill; UI interactive = 100. Serde-additive.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 fn default_true() -> bool {
@@ -128,6 +139,9 @@ pub struct EnqueueRequest {
     pub force: bool,
     #[serde(default = "default_true")]
     pub notify: bool,
+    /// Higher = claimed sooner. Omitted/0 = backfill. UI should send 100.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 /// How long a `running` item may sit with no finish before restart recovery
@@ -403,7 +417,11 @@ impl SourceWorkQueue {
                 item.title = Some(t);
             }
             item.notify = item.notify || req.notify;
+            // Interactive bump wins over a prior backfill enqueue for same sha.
+            item.priority = item.priority.max(req.priority);
             let out = item.clone();
+            // Keep queued list ordered: higher priority first, then FIFO.
+            resort_queued(&mut g.items);
             self.persist_tracked(&g)?;
             drop(g);
             self.wake.notify_one();
@@ -424,8 +442,10 @@ impl SourceWorkQueue {
             finished_at: None,
             notify: req.notify,
             notify_sent: false,
+            priority: req.priority,
         };
         g.items.push(item.clone());
+        resort_queued(&mut g.items);
         // Cap history: keep last 40 terminal + all active.
         prune_history(&mut g.items, 40);
         self.persist_tracked(&g)?;
@@ -531,6 +551,11 @@ impl SourceWorkQueue {
     }
 
     /// Claim the next queued article for the worker (marks Running).
+    ///
+    /// Selection: highest [`QueueItem::priority`] first; within the same
+    /// priority, older `created_at` (FIFO). UI interactive jobs (priority 100)
+    /// therefore jump ahead of bulk backfill (priority 0) without reordering
+    /// the whole list by hand.
     pub fn claim_next(&self) -> Option<QueueItem> {
         self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -539,9 +564,10 @@ impl SourceWorkQueue {
         if g.items.iter().any(|i| i.status == ItemStatus::Running) {
             return Ok(None); // one article at a time
         }
-        let Some(item) = g.items.iter_mut().find(|i| i.status == ItemStatus::Queued) else {
+        let Some(idx) = pick_next_queued_index(&g.items) else {
             return Ok(None);
         };
+        let item = &mut g.items[idx];
         item.status = ItemStatus::Running;
         item.started_at = Some(now_secs());
         if item.translate.wanted && item.translate.status == TaskStatus::Queued {
@@ -674,6 +700,44 @@ fn recompute_item_status(item: &mut QueueItem) {
         ItemStatus::Done
     };
     item.finished_at = Some(now_secs());
+}
+
+/// Index of the next queued item: highest priority, then oldest created_at.
+fn pick_next_queued_index(items: &[QueueItem]) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.status == ItemStatus::Queued)
+        .min_by(|(_, a), (_, b)| {
+            // Prefer higher priority (so reverse cmp), then older created_at.
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+        })
+        .map(|(idx, _)| idx)
+}
+
+/// Stable visual order for the portal: running first, then queued by
+/// priority desc / created_at asc, then terminal history as-is.
+fn resort_queued(items: &mut Vec<QueueItem>) {
+    let mut running = Vec::new();
+    let mut queued = Vec::new();
+    let mut rest = Vec::new();
+    for it in items.drain(..) {
+        match it.status {
+            ItemStatus::Running => running.push(it),
+            ItemStatus::Queued => queued.push(it),
+            _ => rest.push(it),
+        }
+    }
+    queued.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.created_at.cmp(&b.created_at))
+    });
+    items.extend(running);
+    items.extend(queued);
+    items.extend(rest);
 }
 
 fn prune_history(items: &mut Vec<QueueItem>, keep_terminal: usize) {
@@ -860,6 +924,7 @@ mod tests {
                 summarize: false,
                 force: false,
                 notify: true,
+                priority: PRIORITY_INTERACTIVE,
             })
             .unwrap();
         let b = q
@@ -870,6 +935,7 @@ mod tests {
                 summarize: true,
                 force: false,
                 notify: true,
+                priority: PRIORITY_INTERACTIVE,
             })
             .unwrap();
         assert_eq!(a.id, b.id);
@@ -889,6 +955,7 @@ mod tests {
             summarize: false,
             force: false,
             notify: true,
+            priority: PRIORITY_NORMAL,
         })
         .unwrap();
         q.enqueue(EnqueueRequest {
@@ -898,6 +965,7 @@ mod tests {
             summarize: false,
             force: false,
             notify: true,
+            priority: PRIORITY_NORMAL,
         })
         .unwrap();
         let first = q.claim_next().unwrap();
@@ -905,6 +973,71 @@ mod tests {
         q.finish_task(&first.id, TaskKind::Translate, Ok(())).unwrap();
         let second = q.claim_next().unwrap();
         assert_ne!(first.sha256, second.sha256);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn interactive_priority_jumps_ahead_of_backfill() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        q.enqueue(EnqueueRequest {
+            sha256: "backfill1".into(),
+            title: Some("BF".into()),
+            translate: true,
+            summarize: false,
+            force: false,
+            notify: false,
+            priority: PRIORITY_BACKFILL,
+        })
+        .unwrap();
+        // Later interactive job must still claim first.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        q.enqueue(EnqueueRequest {
+            sha256: "ui-click".into(),
+            title: Some("UI".into()),
+            translate: true,
+            summarize: false,
+            force: false,
+            notify: true,
+            priority: PRIORITY_INTERACTIVE,
+        })
+        .unwrap();
+        let first = q.claim_next().unwrap();
+        assert_eq!(first.sha256, "ui-click");
+        assert_eq!(first.priority, PRIORITY_INTERACTIVE);
+        q.finish_task(&first.id, TaskKind::Translate, Ok(())).unwrap();
+        let second = q.claim_next().unwrap();
+        assert_eq!(second.sha256, "backfill1");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn merge_bumps_priority_to_interactive() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        q.enqueue(EnqueueRequest {
+            sha256: "same".into(),
+            title: Some("BF".into()),
+            translate: true,
+            summarize: false,
+            force: false,
+            notify: false,
+            priority: PRIORITY_BACKFILL,
+        })
+        .unwrap();
+        let bumped = q
+            .enqueue(EnqueueRequest {
+                sha256: "same".into(),
+                title: None,
+                translate: false,
+                summarize: true,
+                force: false,
+                notify: true,
+                priority: PRIORITY_INTERACTIVE,
+            })
+            .unwrap();
+        assert_eq!(bumped.priority, PRIORITY_INTERACTIVE);
+        assert!(bumped.translate.wanted && bumped.summarize.wanted);
         let _ = std::fs::remove_dir_all(&vault);
     }
 
@@ -937,6 +1070,7 @@ mod tests {
                 finished_at: None,
                 notify: true,
                 notify_sent: false,
+                priority: 0,
             }],
         };
         persist(&path, &file).unwrap();
@@ -989,6 +1123,7 @@ mod tests {
                 finished_at: None,
                 notify: true,
                 notify_sent: false,
+                priority: 0,
             }],
         };
         persist(&path, &file).unwrap();
@@ -1014,6 +1149,7 @@ mod tests {
                 summarize: false,
                 force: false,
                 notify: true,
+                priority: PRIORITY_NORMAL,
             })
             .unwrap();
         let b = q
@@ -1024,6 +1160,7 @@ mod tests {
                 summarize: false,
                 force: false,
                 notify: true,
+                priority: PRIORITY_NORMAL,
             })
             .unwrap();
         q.reorder(&[b.id.clone(), a.id.clone()]).unwrap();

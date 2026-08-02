@@ -211,7 +211,7 @@ export const zh: Record<keyof typeof en, string> = {
   // work queue page
   'workq.title': '任务队列',
   'workq.help':
-    '翻译与深度摘要按「文章」排队：同一时间只处理一篇；单篇内翻译和摘要可并行。可用 ↑↓ 调整顺序、取消排队项；每篇文章完成后会系统通知。',
+    '翻译与深度摘要按「文章」排队：同一时间只处理一篇；单篇内翻译和摘要可并行。资料页手动点的任务优先级高，会插到 bulk 回填前面。同优先级内可用 ↑↓ 调序、取消排队；完成后会系统通知。',
   'workq.refresh': '刷新',
   'workq.counts': '进行中 {running} · 排队 {queued} · 历史 {history}',
   'workq.polled': '更新于 {time}',
@@ -226,6 +226,9 @@ export const zh: Record<keyof typeof en, string> = {
   'workq.remove': '移除',
   'workq.taskTranslate': '翻译',
   'workq.taskSummarize': '摘要',
+  'workq.prioInteractive': 'UI',
+  'workq.prioBackfill': '批',
+  'workq.prioHint': '优先级 {n} — 数字越大越先跑（UI 100 · 回填 0）',
   'workq.etaTitle': '节奏与预计完成',
   'workq.etaAvg': '约 {avg} / 篇',
   'workq.etaMedian': '中位 {median}',

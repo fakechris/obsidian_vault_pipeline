@@ -221,7 +221,7 @@ export const en = {
   // work queue page
   'workq.title': 'Work queue',
   'workq.help':
-    'Translate and deep-summary jobs run one article at a time. Within an article, both tasks can run in parallel. Drag order with ↑↓, cancel queued items, get a notification when each article finishes.',
+    'Translate and deep-summary jobs run one article at a time. Within an article, both tasks can run in parallel. UI clicks are high priority and jump ahead of bulk backfill. Drag order with ↑↓ within the same priority, cancel queued items, get a notification when each article finishes.',
   'workq.refresh': 'Refresh',
   'workq.counts': 'running {running} · queued {queued} · history {history}',
   'workq.polled': 'updated {time}',
@@ -236,6 +236,9 @@ export const en = {
   'workq.remove': 'Remove',
   'workq.taskTranslate': 'Translate',
   'workq.taskSummarize': 'Summary',
+  'workq.prioInteractive': 'UI',
+  'workq.prioBackfill': 'bf',
+  'workq.prioHint': 'priority {n} — higher runs first (UI 100 · backfill 0)',
   'workq.etaTitle': 'Pace & ETA',
   'workq.etaAvg': '≈ {avg} / article',
   'workq.etaMedian': 'median {median}',

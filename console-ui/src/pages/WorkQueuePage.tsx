@@ -61,10 +61,22 @@ function ItemRow({
     }
   }
 
+  const prio = item.priority ?? 0;
+  const prioLabel =
+    prio >= 100 ? t('workq.prioInteractive') : prio <= 0 ? t('workq.prioBackfill') : null;
+
   return (
     <li className={`workq-item status-${item.status}`}>
       <div className="workq-main">
         <span className={`workq-pill status-${item.status}`}>{item.status}</span>
+        {prioLabel && (
+          <span
+            className={`workq-prio ${prio >= 100 ? 'interactive' : 'backfill'}`}
+            title={t('workq.prioHint', { n: prio })}
+          >
+            {prioLabel}
+          </span>
+        )}
         <Link className="workq-title" to={`/library/${encodeURIComponent(item.sha256)}`}>
           {title}
         </Link>

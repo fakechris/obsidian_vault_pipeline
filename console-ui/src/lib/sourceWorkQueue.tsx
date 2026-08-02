@@ -75,7 +75,12 @@ export function SourceWorkQueueProvider({ children }: { children: ReactNode }) {
       force?: boolean;
     }) => {
       ensureNotifyPermission();
-      const item = await enqueueSourceWork({ ...opts, notify: true });
+      const item = await enqueueSourceWork({
+        ...opts,
+        notify: true,
+        // Portal clicks always outrank bulk backfill/daily auto jobs.
+        priority: 100,
+      });
       refresh();
       return item;
     },

@@ -1546,6 +1546,24 @@ body {
   border: 1px solid var(--border);
   flex: none;
 }
+.workq-prio {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.02rem 0.28rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex: none;
+  text-transform: uppercase;
+}
+.workq-prio.interactive {
+  color: var(--accent, #3b82f6);
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 45%, var(--border));
+}
+.workq-prio.backfill {
+  opacity: 0.75;
+}
 .workq-item.status-running .workq-pill {
   color: var(--accent, #3b82f6);
   border-color: color-mix(in srgb, var(--accent, #3b82f6) 50%, var(--border));
