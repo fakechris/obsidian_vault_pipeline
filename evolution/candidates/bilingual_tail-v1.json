@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "bilingual_tail-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.bilingual_tail",
+  "hypothesis": "RUNTIME surface: wire the EXISTING `auto_claim_zh` / `auto_memory_zh` flags (`.ovp/source-work.toml`, already parsed but today only biasing manual CLIs) as best-effort TAIL STAGES of the commands that mutate the English authority — `daily` (reader → cards_zh delta), `crystal-synth` (ledger → claims_zh delta), `crystal-theme-pages` (pages → theme_pages_zh delta). Each tail reuses the existing `ovp-memory::bilingual` translate functions and `get_fresh` content-hash skip, so an unchanged authority costs ZERO LLM calls and only the delta is translated. Predicted: after any live daily/crystal run, the portal's zh surfaces are fresh without a manual `source-work claims-zh|memory-zh` pass; flag-off and replay-mode runs are byte-identical to today (no LLM calls added); tail failures surface as warnings and never change the run's terminal status.",
+  "predicted_delta": {
+    "operational_reliability": "zh projections stop drifting behind the EN authority — today they only advance when an operator remembers the manual CLI (the 2026-08 dogfood gap: 994 claims + 15 theme pages + all cards untranslated for days); after wiring, every scheduled daily/crystal run self-heals the delta, and a network outage just defers zh to the next run instead of leaving a silent permanent hole",
+    "coverage": "portal zh coverage (claims / theme overview / reader cards) tracks the EN authority within one run instead of being weeks stale; `zh ready X/N` on the theme page converges to N without operator action"
+  },
+  "guardrails": {
+    "en_authority_untouched": "tails only WRITE the rebuildable projections `.ovp/crystal/claims_zh.json|cards_zh.json|theme_pages_zh.json`; the crystal ledger, reader packs, and theme_pages.json are never opened for write — a tail crash cannot corrupt the English authority it follows",
+    "flag_off_bytes_unchanged": "auto_claim_zh=false / auto_memory_zh=false (or an unparseable source-work.toml, which warns + skips the tail) reproduces today's behavior exactly; existing daily/crystal tests pass unmodified because the default test fixture path uses replay + no config file... with tails gated OFF for replay",
+    "replay_mode_no_calls": "tails run only when the parent command's client kind is LIVE; replay/offline runs skip the tail (NeverCallsClient must never be hit), so offline determinism and cassette-replay CI stay intact",
+    "failure_isolation": "any tail error (transport, decode, config, index build) is caught, printed as a warn line, and appended to the run report warnings where one exists; the parent command's exit code and terminal status are decided by the EN phases alone",
+    "incremental_only": "tails translate strictly through get_fresh (content-hash keyed) — re-running on an unchanged authority is a 0-call no-op; no --force semantics are exposed to the tail, so a wedged projection can only be rebuilt via the existing manual CLI",
+    "no_queue_interaction": "tails run inline after the parent phase and never touch `.ovp/source-work-queue.json` or the worker lock — the queue's single-writer and priority invariants are unaffected"
+  },
+  "eval_plan": {
+    "replay_set": "ovp-cli tests with a scripted/replay client on a temp vault: (1) daily with auto_memory_zh default + replay client → tail skipped, no cards_zh.json, run output/status identical to pre-change; (2) live-kind call sites factored so the tail body is unit-tested against a fake ModelClient — cards delta writes only changed cards, errors degrade to warnings, exit code stays 0; (3) crystal-theme-pages tail: pages_zh written for a fixture page, second run = 0 calls; (4) flag-off config → no projection files created; (5) malformed source-work.toml → warn + skip, parent run still succeeds",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set `auto_claim_zh = false` / `auto_memory_zh = false` in `.ovp/source-work.toml` — the flags pre-exist and gate the new code paths; the EN pipeline never moved. Code rollback is a single revert: tails are additive tail-phase blocks in three commands plus batch helpers in ovp-memory::bilingual.",
+  "ablation_required": false
+}
