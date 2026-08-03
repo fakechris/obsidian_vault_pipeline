@@ -314,6 +314,60 @@ body {
 }
 
 /* ---------- run activity feed (the portal's tail -f) ---------- */
+.run-activity-summary {
+  margin: 0 0 0.5rem;
+}
+.run-activity-clock {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.run-activity-error {
+  color: var(--c-1, crimson);
+}
+.run-timeline-heading {
+  margin: 0.6rem 0 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.run-timeline {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border-left: 2px solid color-mix(in srgb, var(--text-muted, #888) 35%, transparent);
+  padding-left: 0.65rem;
+}
+.run-timeline-step {
+  display: grid;
+  grid-template-columns: 1rem minmax(9.5rem, auto) 1fr;
+  gap: 0.4rem 0.55rem;
+  align-items: baseline;
+  font-size: var(--ovp-text-xs);
+  line-height: 1.35;
+}
+.run-timeline-mark {
+  font-weight: 700;
+  text-align: center;
+}
+.run-timeline-step--done .run-timeline-mark { color: var(--c-3, green); }
+.run-timeline-step--fail .run-timeline-mark { color: var(--c-1, crimson); }
+.run-timeline-step--skip .run-timeline-mark { color: var(--text-muted, #888); }
+.run-timeline-step--pending .run-timeline-mark { color: var(--accent, #4a90d9); }
+.run-timeline-step--running .run-timeline-mark { color: var(--accent, #4a90d9); }
+.run-timeline-when {
+  color: var(--text-muted, #666);
+  white-space: nowrap;
+}
+.run-timeline-label {
+  min-width: 0;
+  word-break: break-word;
+}
 .run-activity-head {
   display: flex;
   align-items: baseline;
@@ -358,6 +412,10 @@ body {
   font-family: var(--ovp-font-mono);
   font-size: var(--ovp-text-xs);
   border-radius: var(--ovp-radius-sm, 4px);
+}
+.run-activity-when {
+  flex: 0 0 auto;
+  min-width: 8.5rem;
 }
 .run-activity-row.failed {
   background: color-mix(in srgb, var(--c-1, crimson) 8%, transparent);

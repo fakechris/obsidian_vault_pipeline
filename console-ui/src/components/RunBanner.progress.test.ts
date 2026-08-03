@@ -53,10 +53,11 @@ describe('RunBanner in-run progress text', () => {
       total: b.totalPlanned!,
       current: b.current!,
       ago: '12m ago',
-      when: '2026-07-12 11:48',
+      when: '2026-07-12 11:48:00',
     });
     expect(text).toContain('18/90');
     expect(text).toContain('Great Article');
+    expect(text).toContain('2026-07-12 11:48:00');
     // No unfilled placeholders leak through.
     expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
   });
@@ -71,7 +72,7 @@ describe('RunBanner in-run progress text', () => {
       total: b.totalPlanned!,
       current: b.current!,
       ago: '12 分钟前',
-      when: '2026-07-12 11:48',
+      when: '2026-07-12 11:48:00',
     });
     expect(text).toContain('5/40');
     expect(text).toContain('某篇文章');
@@ -89,10 +90,10 @@ describe('RunBanner in-run progress text', () => {
       done: b.processedSoFar!,
       total: b.totalPlanned!,
       ago: '1m ago',
-      when: '2026-07-12 11:48',
+      when: '2026-07-12 11:48:00',
     });
     expect(text).toContain('2/9');
-    expect(text).not.toContain('(');
+    expect(text).toContain('2026-07-12 11:48:00');
     expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 

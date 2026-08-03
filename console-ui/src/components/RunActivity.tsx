@@ -1,15 +1,18 @@
-/** Run activity — the portal's tail -f. Renders the live per-source feed from
- * the heartbeat `recent[]` ring plus the running fraction/percent bar and the
- * current source. Shown on the System page and expandable from the top
- * RunBanner. It reads the shared /api/model state (already polled every ~12s
- * while a run is `running`), so the feed refreshes at seconds-latency WITHOUT a
- * separate endpoint — the per-source heartbeat write is the mechanism, not the
- * coarse projection rebuild.
+/** Run activity — the portal's tail -f + an absolute-time timeline.
  *
- * On an idle/finished vault it shows the LAST run's feed until the next run, so
- * a completed/failed/aborted run's final outcomes stay diagnosable. */
+ * Operators were stuck with "FAILED 1d ago" and "no per-source activity yet"
+ * with no wall-clock or phase context. This panel always leads with a
+ * timeline (start → fail/complete phase → what was skipped → next due), then
+ * the live per-source feed when one exists. */
+import { useEffect, useState } from 'react';
 import { useI18n, type MsgKey } from '../i18n';
-import { runActivity } from '../lib/derive';
+import {
+  buildRunTimeline,
+  formatRunWhen,
+  runActivity,
+  type TimelineStep,
+} from '../lib/derive';
+import { STATIC_MODE, fetchSchedule, type ScheduleJob } from '../lib/api';
 import type { RecentSource } from '../lib/types';
 import { useModel } from '../model';
 import { useNowTick } from './RunBanner';
@@ -17,6 +20,7 @@ import { useNowTick } from './RunBanner';
 function FeedRow({ item }: { item: RecentSource }) {
   const { t } = useI18n();
   const ok = item.status === 'ok';
+  const when = formatRunWhen(item.at, { withSeconds: true });
   const label = ok
     ? t('activity.ok', { title: item.title, units: item.units, cards: item.cards })
     : item.reason
@@ -27,26 +31,81 @@ function FeedRow({ item }: { item: RecentSource }) {
       <span className="run-activity-mark" aria-hidden="true">
         {ok ? '✓' : '✗'}
       </span>
+      <span className="run-activity-when mono tiny muted">{when || '—'}</span>
       <span className="run-activity-label">{label}</span>
     </li>
   );
 }
 
-/** The panel body. `useNowTick` keeps the "started {ago}" string honest while
- * running without depending on a model refetch. */
+const KIND_MARK: Record<TimelineStep['kind'], string> = {
+  done: '●',
+  fail: '✗',
+  skip: '○',
+  pending: '▷',
+  running: '▶',
+};
+
+function Timeline({
+  steps,
+  t,
+}: {
+  steps: TimelineStep[];
+  t: (k: MsgKey, v?: Record<string, string | number>) => string;
+}) {
+  if (steps.length === 0) return null;
+  return (
+    <ol className="run-timeline" aria-label={t('timeline.title')}>
+      {steps.map((s) => (
+        <li key={s.id} className={`run-timeline-step run-timeline-step--${s.kind}`}>
+          <span className="run-timeline-mark" aria-hidden="true">
+            {KIND_MARK[s.kind]}
+          </span>
+          <span className="run-timeline-when mono">
+            {s.when ?? t('timeline.noClock')}
+          </span>
+          <span className="run-timeline-label">
+            {t(s.labelKey as MsgKey, s.vars)}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** The panel body. `useNowTick` keeps relative labels honest while running. */
 export default function RunActivity() {
   const { t } = useI18n();
   const { model } = useModel();
-  useNowTick(); // re-render so relative labels stay fresh
+  useNowTick();
   const act = runActivity(model);
+  const lr = model?.ops?.last_run ?? null;
+  const [dailyJob, setDailyJob] = useState<ScheduleJob | null>(null);
+
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    fetchSchedule()
+      .then((s) => {
+        if (!cancelled) setDailyJob(s.jobs.find((j) => j.id === 'daily') ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDailyJob(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lr?.run_id, lr?.status, lr?.ended_at]);
 
   // Nothing to show at all (fresh vault, no heartbeat).
   if (act.status === null) return null;
 
+  const steps = buildRunTimeline(lr, dailyJob);
+  const started = formatRunWhen(lr?.started_at, { withSeconds: true });
+  const ended = formatRunWhen(lr?.ended_at, { withSeconds: true });
   const startedAgo = (() => {
-    const started = model?.ops?.last_run?.started_at;
-    if (!started) return '';
-    const mins = Math.max(0, Math.floor((Date.now() - Date.parse(started)) / 60000));
+    const raw = lr?.started_at;
+    if (!raw) return '';
+    const mins = Math.max(0, Math.floor((Date.now() - Date.parse(raw)) / 60000));
     if (Number.isNaN(mins)) return '';
     if (mins < 1) return t('banner.agoJustNow');
     if (mins < 60) return t('banner.agoMinutes', { n: mins });
@@ -56,6 +115,21 @@ export default function RunActivity() {
 
   return (
     <div className="run-activity">
+      <div className="run-activity-summary">
+        <p className="run-activity-clock mono sm">
+          {t('timeline.clockLine', {
+            runId: lr?.run_id ?? '—',
+            status: act.status ?? '—',
+            started: started || '—',
+            ended: ended || (act.running ? t('timeline.stillRunning') : '—'),
+            ago: startedAgo || '—',
+          })}
+        </p>
+      </div>
+
+      <h3 className="run-timeline-heading tiny muted">{t('timeline.title')}</h3>
+      <Timeline steps={steps} t={t} />
+
       {act.running ? (
         <>
           <div className="run-activity-head">
@@ -66,10 +140,13 @@ export default function RunActivity() {
                   total: act.totalPlanned,
                   pct: act.pct ?? 0,
                   ago: startedAgo,
+                  when: started || '—',
                 })}
               </span>
             ) : (
-              <span className="run-activity-fraction">{t('banner.running', { ago: startedAgo })}</span>
+              <span className="run-activity-fraction">
+                {t('banner.running', { ago: startedAgo, when: started || '—' })}
+              </span>
             )}
           </div>
           {act.pct != null && (
@@ -90,16 +167,37 @@ export default function RunActivity() {
           )}
         </>
       ) : (
-        <p className="sm muted run-activity-idle">
-          {act.status === 'completed' || act.status === 'failed' || act.status === 'aborted'
-            ? t('activity.finished', { ok: act.processed ?? 0, failed: act.failed ?? 0 })
-            : t('activity.idle')}
-          {act.error && ` — ${act.error}`}
+        <p className="sm run-activity-idle">
+          {act.status === 'failed' || act.status === 'aborted'
+            ? t('activity.finishedFail', {
+                started: started || '—',
+                ended: ended || '—',
+                ok: act.processed ?? 0,
+                failed: act.failed ?? 0,
+              })
+            : act.status === 'completed'
+              ? t('activity.finishedOk', {
+                  started: started || '—',
+                  ended: ended || '—',
+                  ok: act.processed ?? 0,
+                  failed: act.failed ?? 0,
+                })
+              : t('activity.idle')}
+          {act.error ? (
+            <span className="run-activity-error"> — {act.error}</span>
+          ) : null}
         </p>
       )}
 
+      <h3 className="run-timeline-heading tiny muted">{t('activity.feedTitle')}</h3>
       {act.recent.length === 0 ? (
-        <p className="sm muted">{t('activity.empty')}</p>
+        <p className="sm muted">
+          {act.status === 'failed' || act.status === 'aborted'
+            ? t('activity.emptyAfterFail')
+            : act.running
+              ? t('activity.emptyRunning')
+              : t('activity.empty')}
+        </p>
       ) : (
         <ul className="run-activity-feed">
           {act.recent.map((item) => (
@@ -115,7 +213,6 @@ export default function RunActivity() {
 export function RunActivitySection() {
   const { t } = useI18n();
   const { model } = useModel();
-  // Hide the whole section only when there is genuinely no run to show.
   if (runActivity(model).status === null) return null;
   return (
     <div className="section">

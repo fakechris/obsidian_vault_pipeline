@@ -48,26 +48,195 @@ export interface LastRunBanner {
   endedAt: string | null;
 }
 
-/** Format a UTC RFC3339 (or local schedule) stamp for banner/hover: local
- * wall clock `YYYY-MM-DD HH:mm`. Empty input → empty string. */
-export function formatRunWhen(iso: string | null | undefined): string {
+/** Format a UTC RFC3339 (or local schedule) stamp for UI: local wall clock
+ * `YYYY-MM-DD HH:mm` (or with seconds when `withSeconds`). Empty → ''. */
+export function formatRunWhen(
+  iso: string | null | undefined,
+  opts: { withSeconds?: boolean } = {},
+): string {
   if (!iso) return '';
-  const ms = Date.parse(iso.includes('T') && !iso.endsWith('Z') && !/[+-]\d\d:\d\d$/.test(iso)
-    ? `${iso}Z` // schedule-state is local naive — treat carefully below
-    : iso);
-  // Schedule timestamps are local naive `YYYY-MM-DDTHH:MM:SS` without Z.
-  // Prefer display as-is with a space when Date.parse is ambiguous.
+  const withSeconds = opts.withSeconds === true;
+  const sliceEnd = withSeconds ? 19 : 16;
+  // Schedule timestamps are local naive `YYYY-MM-DDTHH:MM:SS` without Z —
+  // show digits as-is so we do not shift a 09:00 schedule into the previous
+  // evening via UTC parse.
+  if (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) &&
+    !iso.endsWith('Z') &&
+    !/[+-]\d{2}:\d{2}$/.test(iso)
+  ) {
+    return iso.replace('T', ' ').slice(0, sliceEnd);
+  }
+  const ms = Date.parse(iso);
   if (Number.isNaN(ms)) {
     return iso.replace('T', ' ').replace(/Z$/, ' UTC');
   }
-  // If the source was naive local (no Z/offset), show the digits directly so
-  // we do not shift a 09:00 schedule into the previous evening.
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) && !iso.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(iso)) {
-    return iso.replace('T', ' ').slice(0, 16);
-  }
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return withSeconds ? `${base}:${pad(d.getSeconds())}` : base;
+}
+
+/** Infer which daily phase a heartbeat error points at (best-effort). */
+export type FailPhase =
+  | 'pinboard'
+  | 'intake'
+  | 'enrich'
+  | 'reader'
+  | 'index'
+  | 'unknown';
+
+export function failPhaseFromError(error: string | null | undefined): FailPhase {
+  if (!error) return 'unknown';
+  const e = error.toLowerCase();
+  if (e.includes('pinboard')) return 'pinboard';
+  if (e.includes('intake') || e.includes('sweep')) return 'intake';
+  if (e.includes('web-fetch') || e.includes('github') || e.includes('enrich')) return 'enrich';
+  if (e.includes('reader') || e.includes('unit') || e.includes('card') || e.includes('llm')) {
+    return 'reader';
+  }
+  if (e.includes('index') || e.includes('console')) return 'index';
+  return 'unknown';
+}
+
+/** One step in the operator-facing run timeline (absolute times preferred). */
+export interface TimelineStep {
+  id: string;
+  /** Absolute local wall time, or null when not yet known. */
+  when: string | null;
+  /** short status: done | fail | skip | pending | running */
+  kind: 'done' | 'fail' | 'skip' | 'pending' | 'running';
+  /** i18n key or already-resolved label filled by the component. */
+  labelKey: string;
+  /** Extra vars for the label. */
+  vars?: Record<string, string | number>;
+}
+
+/**
+ * Build an ordered timeline from the heartbeat (+ optional schedule job).
+ * Pure — components only render. Explains "why no per-source feed" when the
+ * run died before the reader phase.
+ */
+export function buildRunTimeline(
+  lr: LastRunModel | null | undefined,
+  schedule?: {
+    last_run?: string;
+    last_status?: string;
+    next_run?: string | null;
+    due?: boolean;
+    cadence?: string;
+  } | null,
+): TimelineStep[] {
+  const steps: TimelineStep[] = [];
+  if (!lr) {
+    if (schedule?.next_run) {
+      steps.push({
+        id: 'next',
+        when: formatRunWhen(schedule.next_run, { withSeconds: true }),
+        kind: schedule.due ? 'pending' : 'pending',
+        labelKey: schedule.due ? 'timeline.nextDueNow' : 'timeline.nextDue',
+        vars: { cadence: schedule.cadence ?? 'daily' },
+      });
+    }
+    return steps;
+  }
+
+  if (schedule?.last_run) {
+    steps.push({
+      id: 'sched-stamp',
+      when: formatRunWhen(schedule.last_run, { withSeconds: true }),
+      kind: schedule.last_status === 'error' ? 'fail' : 'done',
+      labelKey: 'timeline.schedStamp',
+      vars: { status: schedule.last_status ?? '—' },
+    });
+  }
+
+  steps.push({
+    id: 'start',
+    when: formatRunWhen(lr.started_at, { withSeconds: true }),
+    kind: lr.status === 'running' ? 'running' : 'done',
+    labelKey: 'timeline.started',
+    vars: { runId: lr.run_id },
+  });
+
+  const phase = failPhaseFromError(lr.error);
+  if (lr.status === 'failed' || lr.status === 'aborted') {
+    const phaseKey =
+      phase === 'pinboard'
+        ? 'timeline.failPinboard'
+        : phase === 'intake'
+          ? 'timeline.failIntake'
+          : phase === 'enrich'
+            ? 'timeline.failEnrich'
+            : phase === 'reader'
+              ? 'timeline.failReader'
+              : phase === 'index'
+                ? 'timeline.failIndex'
+                : 'timeline.failUnknown';
+    steps.push({
+      id: 'fail',
+      when: formatRunWhen(lr.ended_at ?? lr.started_at, { withSeconds: true }),
+      kind: 'fail',
+      labelKey: phaseKey,
+      vars: { error: lr.error ?? '' },
+    });
+    // Explicit "what did not run" for early-phase deaths.
+    if (phase === 'pinboard' || phase === 'intake' || phase === 'enrich') {
+      steps.push({
+        id: 'skipped-reader',
+        when: null,
+        kind: 'skip',
+        labelKey: 'timeline.skippedReader',
+      });
+    }
+    if ((lr.processed ?? 0) === 0 && (lr.failed ?? 0) === 0 && !(lr.recent && lr.recent.length)) {
+      steps.push({
+        id: 'no-sources',
+        when: null,
+        kind: 'skip',
+        labelKey: 'timeline.noSourceFeed',
+      });
+    }
+  } else if (lr.status === 'completed') {
+    steps.push({
+      id: 'end',
+      when: formatRunWhen(lr.ended_at ?? lr.started_at, { withSeconds: true }),
+      kind: 'done',
+      labelKey: 'timeline.completed',
+      vars: {
+        ok: lr.processed ?? 0,
+        failed: lr.failed ?? 0,
+        queued: lr.queued_after ?? 0,
+      },
+    });
+  } else if (lr.status === 'running') {
+    steps.push({
+      id: 'running',
+      when: formatRunWhen(lr.started_at, { withSeconds: true }),
+      kind: 'running',
+      labelKey:
+        lr.processed_so_far != null && lr.total_planned != null
+          ? 'timeline.runningProgress'
+          : 'timeline.running',
+      vars: {
+        done: lr.processed_so_far ?? 0,
+        total: lr.total_planned ?? 0,
+        current: lr.current ? ` · ${lr.current}` : '',
+      },
+    });
+  }
+
+  if (schedule?.next_run) {
+    steps.push({
+      id: 'next',
+      when: formatRunWhen(schedule.next_run, { withSeconds: true }),
+      kind: schedule.due ? 'pending' : 'pending',
+      labelKey: schedule.due ? 'timeline.nextDueNow' : 'timeline.nextDue',
+      vars: { cadence: schedule.cadence ?? 'daily' },
+    });
+  }
+
+  return steps;
 }
 
 /** The instant the banner ages from: the terminal time if the run ended, else

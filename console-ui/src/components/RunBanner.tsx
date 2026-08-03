@@ -91,8 +91,10 @@ export default function RunBanner() {
   };
 
   const when = (): string => {
+    // Prefer end clock for terminal runs; start for in-flight. Always show
+    // absolute local wall time first (relative age is secondary in the string).
     const raw = banner.endedAt ?? banner.startedAt;
-    return formatRunWhen(raw) || '—';
+    return formatRunWhen(raw, { withSeconds: true }) || '—';
   };
 
   const shortError = (): string => {
