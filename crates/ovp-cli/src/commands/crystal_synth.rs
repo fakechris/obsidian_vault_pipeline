@@ -695,9 +695,18 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // self-heals after each live run instead of waiting for a manual
     // `source-work claims-zh` pass. Best-effort: replay/offline, no vault
     // root, flag-off, or any tail error warns/skips and never changes the
-    // run's terminal status.
-    if let Some(vault) = &args.vault_root {
-        claims_zh_tail(vault, args.client_kind);
+    // run's terminal status. The vault is derived from the resolved STORE,
+    // not --vault-root: an explicit `--store <other-vault>/.ovp/crystal`
+    // must top up the vault its ledger actually lives in; a diagnostic
+    // store elsewhere skips (same rule as the run.lock derivation).
+    if args.vault_root.is_some() {
+        match crate::commands::crystal_write::vault_of_crystal_store(&paths.store) {
+            Some(vault) => claims_zh_tail(&vault, args.client_kind),
+            None => sayln!(
+                "  claims_zh tail skipped (store {} is not a <vault>/.ovp/crystal layout)",
+                paths.store.display()
+            ),
+        }
     }
 
     // Default: caveated claims route to review.json and the run succeeds.
