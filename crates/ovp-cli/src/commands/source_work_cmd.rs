@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use ovp_index::build_index;
 use ovp_memory::bilingual::{
-    CACHE_REL, GlossaryFile, topup_cards_zh, topup_theme_pages_zh, translate_claims_batch,
+    CACHE_REL, CORRUPT_PROJECTION_MARKER, GlossaryFile, topup_cards_zh, topup_theme_pages_zh,
+    translate_claims_batch,
 };
 use ovp_memory::source_work_auto::candidates_from_index;
 use ovp_memory::source_work_config::SourceWorkConfig;
@@ -155,10 +156,14 @@ pub(crate) fn active_claim_pairs(
             match serde_json::from_str::<StoreEvent>(line) {
                 Ok(ev) => events.push(ev),
                 // The serve worker appends without a read/write lock, so a
-                // read can catch a half-written FINAL line. Tolerate just
-                // that one — it will be complete next run. Mid-file garbage
-                // stays a loud, line-numbered error.
-                Err(_) if pos + 1 == lines.len() => {}
+                // read can catch a half-written FINAL line — recognizable by
+                // the missing terminating newline. Tolerate just that case
+                // (it will be complete next run). A malformed line that IS
+                // newline-terminated is a complete, permanently bad record —
+                // silently dropping it could lose the latest write/retract
+                // and corrupt the claims projection (codex P2), so it stays
+                // a loud, line-numbered error like mid-file garbage.
+                Err(_) if pos + 1 == lines.len() && !raw.ends_with('\n') => {}
                 Err(e) => return Err(format!("ledger line {}: {e}", i + 1)),
             }
         }
@@ -190,6 +195,13 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
         args.force,
         args.max,
     );
+    // A corrupt projection fails the MANUAL command loud — pre-refactor the
+    // initial `ClaimsZhFile::load?` did exactly that, and a silent Ok would
+    // let automation report success while nothing was repaired (codex P2).
+    // Only the automatic tails degrade this to a warning.
+    if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+        return Err(CliError::Io(format!("claims-zh: {e}")));
+    }
     for e in &errors {
         sayln!("  FAIL {e}");
     }
@@ -252,6 +264,10 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
         done += d;
         skipped += s;
         budget = budget.saturating_sub(d);
+        // Same corrupt-projection loud failure as claims-zh (codex P2).
+        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+            return Err(CliError::Io(format!("memory-zh: {e}")));
+        }
         for e in &errors {
             sayln!("  card FAIL {e}");
         }
@@ -298,6 +314,9 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
         );
         done += d;
         skipped += s;
+        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+            return Err(CliError::Io(format!("memory-zh: {e}")));
+        }
         for e in &errors {
             sayln!("  theme FAIL {e}");
         }
@@ -422,5 +441,17 @@ mod tests {
             pairs,
             vec![("ck-a".to_string(), "Active claim.".to_string())]
         );
+    }
+
+    /// A malformed last line that IS newline-terminated is a complete bad
+    /// record, not a half-written append — it must stay a loud error (codex
+    /// P2), otherwise the latest write/retract would silently vanish.
+    #[test]
+    fn active_claim_pairs_rejects_terminated_malformed_last_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{not json\n"));
+        let err = active_claim_pairs(tmp.path()).unwrap_err();
+        assert!(err.contains("ledger line 2"), "{err}");
     }
 }

@@ -405,6 +405,11 @@ pub fn translate_claim(
 /// retrying client's backoff — an unattended daily tail hammering the API.
 const MAX_CONSECUTIVE_ERRORS: usize = 3;
 
+/// Substring marking the single corrupt-projection error produced by
+/// `load_snapshot!` — the manual CLIs match on it to fail loud (nonzero)
+/// where the automatic tails only warn. (codex P2)
+pub const CORRUPT_PROJECTION_MARKER: &str = "projection corrupt";
+
 /// Load a batch snapshot, distinguishing a MISSING projection (default, the
 /// steady state before the first run) from a CORRUPT one (exists but won't
 /// parse / schema-mismatched). Corrupt must fail once, loud and clear —
@@ -419,8 +424,8 @@ macro_rules! load_snapshot {
                     0,
                     0,
                     vec![format!(
-                        "{}: projection corrupt ({e}) — delete the file to rebuild",
-                        $rel
+                        "{}: {} ({e}) — delete the file to rebuild",
+                        $rel, CORRUPT_PROJECTION_MARKER
                     )],
                 );
             }
@@ -449,8 +454,10 @@ pub fn translate_claims_batch(
             break;
         }
         if !force && existing.get_fresh(key, en).is_some() {
+            // A fresh skip makes no provider call, so it must NOT reset the
+            // outage breaker — interleaved cache hits would otherwise let an
+            // outage retry every stale item (codex P2).
             skipped += 1;
-            consecutive_errors = 0;
             continue;
         }
         match translate_claim(vault_root, key, en, client, model, force) {
@@ -530,8 +537,9 @@ pub fn topup_cards_zh(
             break;
         }
         if !force && existing.get_fresh(id, title, content).is_some() {
+            // Fresh skip = no provider call — must not reset the outage
+            // breaker (see translate_claims_batch).
             skipped += 1;
-            consecutive_errors = 0;
             continue;
         }
         match translate_card(vault_root, id, title, content, client, model, force) {
@@ -651,8 +659,9 @@ pub fn topup_theme_pages_zh(
         }
         let en_hash = theme_page_en_hash(sections);
         if !force && existing.get_fresh(*community_id, &en_hash).is_some() {
+            // Fresh skip = no provider call — must not reset the outage
+            // breaker (see translate_claims_batch).
             skipped += 1;
-            consecutive_errors = 0;
             continue;
         }
         match translate_theme_page(vault_root, *community_id, sections, client, model, force) {
@@ -912,6 +921,37 @@ mod tests {
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("c1"), "{}", errors[0]);
+    }
+
+    /// Interleaved fresh hits make no provider call, so they must not reset
+    /// the outage breaker — otherwise a half-populated projection would retry
+    /// every stale card through the backoff during an outage (codex P2).
+    #[test]
+    fn topup_cards_zh_breaker_ignores_fresh_skips() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Populate c1/c3/c5 as fresh entries.
+        let fresh = vec![
+            card("c1", "T", "B"),
+            card("c3", "T", "B"),
+            card("c5", "T", "B"),
+        ];
+        let mut seed = CountingClient::new("# 标题\n\n正文");
+        topup_cards_zh(tmp.path(), &fresh, &mut seed, "m", false, 0);
+        // Interleave fresh (skip) with stale (failing) cards.
+        let mixed = vec![
+            card("c1", "T", "B"),
+            card("c2", "T", "B"),
+            card("c3", "T", "B"),
+            card("c4", "T", "B"),
+            card("c5", "T", "B"),
+            card("c6", "T", "B"),
+        ];
+        let mut client = AlwaysFailsClient::default();
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &mixed, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 3));
+        assert_eq!(client.calls, 3, "breaker trips on 3 failed CALLS despite interleaved fresh skips");
+        assert!(errors.iter().any(|e| e.contains("provider outage")));
     }
 
     /// Circuit breaker: 3 consecutive failures abort the batch instead of
