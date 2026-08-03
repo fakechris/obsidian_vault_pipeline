@@ -13,9 +13,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use ovp_llm::{ModelClient, ModelMessage, ModelRequest};
+use ovp_llm::{ModelClient, ModelMessage, ModelRequest, StopReason};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+/// Cassette cache root for every bilingual-tail client (daily / crystal-synth /
+/// crystal-theme-pages / source-work) — one place to change the replay store.
+pub const CACHE_REL: &str = ".ovp/cassettes/bilingual";
 
 /// Shared vault glossary (merge of operator edits + LLM extractions).
 pub const GLOSSARY_REL: &str = ".ovp/crystal/glossary.json";
@@ -88,12 +92,7 @@ impl GlossaryFile {
     }
 
     pub fn save(&self, vault_root: &Path) -> Result<(), String> {
-        let path = vault_root.join(GLOSSARY_REL);
-        if let Some(p) = path.parent() {
-            fs::create_dir_all(p).map_err(|e| format!("mkdir: {e}"))?;
-        }
-        let raw = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&path, raw).map_err(|e| format!("write glossary: {e}"))
+        save_json(vault_root, GLOSSARY_REL, self)
     }
 
     /// Render as bullet list for prompt injection.
@@ -325,11 +324,37 @@ fn llm_text(
         cache_namespace: Some("bilingual/v1".into()),
     };
     let reply = client.call(&req).map_err(|e| e.to_string())?;
+    // A truncated/refused reply must never be persisted: stored with a
+    // matching en_hash it would be treated as fresh forever. Error instead so
+    // the item is collected and retried next run.
+    if !reply.is_final_success() {
+        return Err(format!(
+            "model stopped early (stop_reason={}) — not storing truncated translation",
+            stop_reason_label(&reply.stop_reason, reply.raw_stop_reason.as_deref())
+        ));
+    }
     let text = reply.text.trim().to_string();
     if text.is_empty() {
         return Err("model returned empty text".into());
     }
     Ok(text)
+}
+
+/// snake_case stop reason for error messages, with the verbatim provider
+/// string appended when the reason was not recognized.
+fn stop_reason_label(reason: &StopReason, raw: Option<&str>) -> String {
+    let name = match reason {
+        StopReason::EndTurn => "end_turn",
+        StopReason::MaxTokens => "max_tokens",
+        StopReason::StopSequence => "stop_sequence",
+        StopReason::ToolUse => "tool_use",
+        StopReason::Refusal => "refusal",
+        StopReason::Unknown => "unknown",
+    };
+    match (reason, raw) {
+        (StopReason::Unknown, Some(raw)) => format!("{name} (raw: {raw})"),
+        _ => name.to_string(),
+    }
 }
 
 fn user_with_glossary(glossary: &GlossaryFile, kind: &str, body: &str) -> String {
@@ -375,6 +400,36 @@ pub fn translate_claim(
     Ok(zh)
 }
 
+/// Consecutive per-item failures tolerated before a batch helper aborts.
+/// During a provider outage every stale item would otherwise go through the
+/// retrying client's backoff — an unattended daily tail hammering the API.
+const MAX_CONSECUTIVE_ERRORS: usize = 3;
+
+/// Load a batch snapshot, distinguishing a MISSING projection (default, the
+/// steady state before the first run) from a CORRUPT one (exists but won't
+/// parse / schema-mismatched). Corrupt must fail once, loud and clear —
+/// defaulting to empty would turn every per-item `load()?` into N permanent
+/// errors that never heal.
+macro_rules! load_snapshot {
+    ($ty:ty, $vault_root:expr, $rel:expr) => {
+        match <$ty>::load($vault_root) {
+            Ok(f) => f,
+            Err(e) if $vault_root.join($rel).is_file() => {
+                return (
+                    0,
+                    0,
+                    vec![format!(
+                        "{}: projection corrupt ({e}) — delete the file to rebuild",
+                        $rel
+                    )],
+                );
+            }
+            // Vanished between the existence check and the read — treat as missing.
+            Err(_) => <$ty>::default(),
+        }
+    };
+}
+
 /// Batch-translate missing claims. Returns (done, skipped, errors).
 pub fn translate_claims_batch(
     vault_root: &Path,
@@ -387,18 +442,32 @@ pub fn translate_claims_batch(
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
-    let existing = ClaimsZhFile::load(vault_root).unwrap_or_default();
+    let mut consecutive_errors = 0usize;
+    let existing = load_snapshot!(ClaimsZhFile, vault_root, CLAIMS_ZH_REL);
     for (key, en) in claims {
         if max > 0 && done >= max {
             break;
         }
         if !force && existing.get_fresh(key, en).is_some() {
             skipped += 1;
+            consecutive_errors = 0;
             continue;
         }
         match translate_claim(vault_root, key, en, client, model, force) {
-            Ok(_) => done += 1,
-            Err(e) => errors.push(format!("{key}: {e}")),
+            Ok(_) => {
+                done += 1;
+                consecutive_errors = 0;
+            }
+            Err(e) => {
+                errors.push(format!("{key}: {e}"));
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    errors.push(format!(
+                        "aborting batch after {MAX_CONSECUTIVE_ERRORS} consecutive failures (provider outage?)"
+                    ));
+                    break;
+                }
+            }
         }
     }
     (done, skipped, errors)
@@ -454,18 +523,32 @@ pub fn topup_cards_zh(
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
-    let existing = CardsZhFile::load(vault_root).unwrap_or_default();
+    let mut consecutive_errors = 0usize;
+    let existing = load_snapshot!(CardsZhFile, vault_root, CARDS_ZH_REL);
     for (id, title, content) in cards {
         if max > 0 && done >= max {
             break;
         }
         if !force && existing.get_fresh(id, title, content).is_some() {
             skipped += 1;
+            consecutive_errors = 0;
             continue;
         }
         match translate_card(vault_root, id, title, content, client, model, force) {
-            Ok(_) => done += 1,
-            Err(e) => errors.push(format!("{id}: {e}")),
+            Ok(_) => {
+                done += 1;
+                consecutive_errors = 0;
+            }
+            Err(e) => {
+                errors.push(format!("{id}: {e}"));
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    errors.push(format!(
+                        "aborting batch after {MAX_CONSECUTIVE_ERRORS} consecutive failures (provider outage?)"
+                    ));
+                    break;
+                }
+            }
         }
     }
     (done, skipped, errors)
@@ -560,7 +643,8 @@ pub fn topup_theme_pages_zh(
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
-    let existing = ThemePagesZhFile::load(vault_root).unwrap_or_default();
+    let mut consecutive_errors = 0usize;
+    let existing = load_snapshot!(ThemePagesZhFile, vault_root, THEME_PAGES_ZH_REL);
     for (community_id, sections) in pages {
         if max > 0 && done >= max {
             break;
@@ -568,11 +652,24 @@ pub fn topup_theme_pages_zh(
         let en_hash = theme_page_en_hash(sections);
         if !force && existing.get_fresh(*community_id, &en_hash).is_some() {
             skipped += 1;
+            consecutive_errors = 0;
             continue;
         }
         match translate_theme_page(vault_root, *community_id, sections, client, model, force) {
-            Ok(_) => done += 1,
-            Err(e) => errors.push(format!("community {community_id}: {e}")),
+            Ok(_) => {
+                done += 1;
+                consecutive_errors = 0;
+            }
+            Err(e) => {
+                errors.push(format!("community {community_id}: {e}"));
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    errors.push(format!(
+                        "aborting batch after {MAX_CONSECUTIVE_ERRORS} consecutive failures (provider outage?)"
+                    ));
+                    break;
+                }
+            }
         }
     }
     (done, skipped, errors)
@@ -634,7 +731,17 @@ fn save_json<T: Serialize>(vault_root: &Path, rel: &str, value: &T) -> Result<()
         fs::create_dir_all(p).map_err(|e| format!("mkdir: {e}"))?;
     }
     let raw = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(&path, raw).map_err(|e| format!("write {rel}: {e}"))
+    // Atomic publish: tmp + rename in the same directory, so concurrent
+    // readers (the portal serve worker answering HTTP requests) never see a
+    // torn projection mid-write.
+    let mut tmp_os = path.clone().into_os_string();
+    tmp_os.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp_os);
+    if let Err(e) = fs::write(&tmp, raw) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("write {rel}: {e}"));
+    }
+    fs::rename(&tmp, &path).map_err(|e| format!("rename {rel}: {e}"))
 }
 
 #[cfg(test)]
@@ -717,12 +824,35 @@ mod tests {
     }
 
     /// Client whose every call fails (transport-style outage).
-    struct AlwaysFailsClient;
+    #[derive(Default)]
+    struct AlwaysFailsClient {
+        calls: usize,
+    }
 
     impl ModelClient for AlwaysFailsClient {
         fn call(&mut self, _request: &ModelRequest) -> Result<ModelReply, CallError> {
+            self.calls += 1;
             Err(CallError::Transport {
                 detail: "simulated outage".into(),
+            })
+        }
+    }
+
+    /// Client whose replies are truncated at the token cap.
+    struct MaxTokensClient;
+
+    impl ModelClient for MaxTokensClient {
+        fn call(&mut self, _request: &ModelRequest) -> Result<ModelReply, CallError> {
+            Ok(ModelReply {
+                model: "truncated".into(),
+                text: "partial translation".into(),
+                stop_reason: StopReason::MaxTokens,
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                blocks: None,
+                raw_stop_reason: None,
             })
         }
     }
@@ -776,12 +906,160 @@ mod tests {
     fn topup_cards_zh_errors_are_collected_not_thrown() {
         let tmp = tempfile::tempdir().unwrap();
         let cards = vec![card("c1", "T", "B")];
-        let mut client = AlwaysFailsClient;
+        let mut client = AlwaysFailsClient::default();
         let (done, skipped, errors) =
             topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("c1"), "{}", errors[0]);
+    }
+
+    /// Circuit breaker: 3 consecutive failures abort the batch instead of
+    /// attempting every stale item through the retrying client's backoff
+    /// (provider outage ⇒ a daily tail must not hammer the API).
+    #[test]
+    fn topup_cards_zh_aborts_after_three_consecutive_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cards: Vec<_> = (0..5).map(|i| card(&format!("c{i}"), "T", "B")).collect();
+        let mut client = AlwaysFailsClient::default();
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(client.calls, 3, "abort after 3 consecutive failures");
+        assert_eq!(errors.len(), 4, "3 per-item errors + 1 summary");
+        assert!(errors[3].contains("provider outage"), "{}", errors[3]);
+    }
+
+    /// A MaxTokens reply is an error, never persisted — stored with a matching
+    /// en_hash, a truncated translation would be treated as fresh forever.
+    #[test]
+    fn max_tokens_reply_errors_and_persists_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cards = vec![card("c1", "T", "B")];
+        let mut client = MaxTokensClient;
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("stop_reason=max_tokens"), "{}", errors[0]);
+        assert!(
+            !tmp.path().join(CARDS_ZH_REL).exists(),
+            "truncated translations must never be written"
+        );
+    }
+
+    /// Write unparseable bytes at a projection path; returns the bytes written
+    /// so the caller can assert the corrupt file survives the batch untouched.
+    fn write_corrupt(vault: &std::path::Path, rel: &str) -> String {
+        let path = vault.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = "{corrupt not json";
+        std::fs::write(&path, bytes).unwrap();
+        bytes.to_string()
+    }
+
+    #[test]
+    fn topup_cards_zh_corrupt_projection_fails_once_and_preserves_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let corrupt = write_corrupt(tmp.path(), CARDS_ZH_REL);
+        let cards = vec![card("c1", "T", "B")];
+        let mut client = CountingClient::new("# 标题\n\n正文");
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
+        assert!(errors[0].contains(CARDS_ZH_REL), "{}", errors[0]);
+        assert!(errors[0].contains("corrupt"), "{}", errors[0]);
+        assert_eq!(client.calls, 0, "no item attempted against a corrupt projection");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(CARDS_ZH_REL)).unwrap(),
+            corrupt,
+            "the corrupt file must NOT be overwritten"
+        );
+    }
+
+    #[test]
+    fn topup_theme_pages_zh_corrupt_projection_fails_once_and_preserves_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let corrupt = write_corrupt(tmp.path(), THEME_PAGES_ZH_REL);
+        let pages = vec![(7i64, vec![("Memory".to_string(), "Persists.".to_string())])];
+        let mut client = CountingClient::new("## 记忆\n\n持久化。");
+        let (done, skipped, errors) =
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
+        assert!(errors[0].contains(THEME_PAGES_ZH_REL), "{}", errors[0]);
+        assert!(errors[0].contains("corrupt"), "{}", errors[0]);
+        assert_eq!(client.calls, 0, "no item attempted against a corrupt projection");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(THEME_PAGES_ZH_REL)).unwrap(),
+            corrupt,
+            "the corrupt file must NOT be overwritten"
+        );
+    }
+
+    // ---- translate_claims_batch ----
+
+    fn claim(key: &str, text: &str) -> (String, String) {
+        (key.to_string(), text.to_string())
+    }
+
+    #[test]
+    fn translate_claims_batch_writes_delta_then_second_run_is_zero_call_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claims = vec![
+            claim("ck-1", "Memory is a budget."),
+            claim("ck-2", "Context compounds."),
+        ];
+        let mut client = CountingClient::new("译文");
+        let (done, skipped, errors) =
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (2, 0));
+        assert!(errors.is_empty());
+        assert_eq!(client.calls, 2);
+        let file = ClaimsZhFile::load(tmp.path()).unwrap();
+        assert_eq!(file.entries.len(), 2);
+        assert!(file.entries.contains_key("ck-1"));
+
+        // Unchanged authority: a fresh client must NEVER be called.
+        let mut client2 = CountingClient::new("译文");
+        let (done, skipped, errors) =
+            translate_claims_batch(tmp.path(), &claims, &mut client2, "m", false, 0);
+        assert_eq!((done, skipped), (0, 2));
+        assert!(errors.is_empty());
+        assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
+    }
+
+    #[test]
+    fn translate_claims_batch_errors_are_collected_not_thrown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claims = vec![claim("ck-1", "Claim one.")];
+        let mut client = AlwaysFailsClient::default();
+        let (done, skipped, errors) =
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("ck-1"), "{}", errors[0]);
+    }
+
+    #[test]
+    fn translate_claims_batch_corrupt_projection_fails_once_and_preserves_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let corrupt = write_corrupt(tmp.path(), CLAIMS_ZH_REL);
+        let claims = vec![claim("ck-1", "Claim one.")];
+        let mut client = CountingClient::new("译文");
+        let (done, skipped, errors) =
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
+        assert!(errors[0].contains(CLAIMS_ZH_REL), "{}", errors[0]);
+        assert!(errors[0].contains("corrupt"), "{}", errors[0]);
+        assert_eq!(client.calls, 0, "no item attempted against a corrupt projection");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(CLAIMS_ZH_REL)).unwrap(),
+            corrupt,
+            "the corrupt file must NOT be overwritten"
+        );
     }
 
     #[test]
