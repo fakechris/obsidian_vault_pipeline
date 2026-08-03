@@ -693,15 +693,14 @@ fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
                 s.url = Some(doc.source_url);
             }
         }
-        if s.title.as_ref().is_none_or(|t| t.trim().is_empty()) {
-            if let Some(stem) = path
+        if s.title.as_ref().is_none_or(|t| t.trim().is_empty())
+            && let Some(stem) = path
                 .file_stem()
                 .and_then(|n| n.to_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-            {
-                s.title = Some(stem.to_string());
-            }
+        {
+            s.title = Some(stem.to_string());
         }
     }
 }
