@@ -354,10 +354,10 @@ pub fn translate_claim(
     force: bool,
 ) -> Result<String, String> {
     let mut file = ClaimsZhFile::load(vault_root)?;
-    if !force {
-        if let Some(zh) = file.get_fresh(claim_key, claim_en) {
-            return Ok(zh.to_string());
-        }
+    if !force
+        && let Some(zh) = file.get_fresh(claim_key, claim_en)
+    {
+        return Ok(zh.to_string());
     }
     let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
     let user = user_with_glossary(&glossary, "knowledge claim", claim_en);
@@ -415,10 +415,10 @@ pub fn translate_card(
     force: bool,
 ) -> Result<CardZhEntry, String> {
     let mut file = CardsZhFile::load(vault_root)?;
-    if !force {
-        if let Some(e) = file.get_fresh(card_id, title, content) {
-            return Ok(e.clone());
-        }
+    if !force
+        && let Some(e) = file.get_fresh(card_id, title, content)
+    {
+        return Ok(e.clone());
     }
     let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
     let blob = format!("# {title}\n\n{content}");
@@ -438,6 +438,39 @@ pub fn translate_card(
     Ok(entry)
 }
 
+/// Top up the cards_zh projection for `cards` ((card_id, title, content)),
+/// translating only stale/missing entries through `get_fresh`. Shared by the
+/// manual `source-work memory-zh` CLI and the daily bilingual tail — an
+/// unchanged authority (`force = false`) costs zero LLM calls.
+/// Returns (done, skipped, errors).
+pub fn topup_cards_zh(
+    vault_root: &Path,
+    cards: &[(String, String, String)],
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+    max: usize,
+) -> (usize, usize, Vec<String>) {
+    let mut done = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = Vec::new();
+    let existing = CardsZhFile::load(vault_root).unwrap_or_default();
+    for (id, title, content) in cards {
+        if max > 0 && done >= max {
+            break;
+        }
+        if !force && existing.get_fresh(id, title, content).is_some() {
+            skipped += 1;
+            continue;
+        }
+        match translate_card(vault_root, id, title, content, client, model, force) {
+            Ok(_) => done += 1,
+            Err(e) => errors.push(format!("{id}: {e}")),
+        }
+    }
+    (done, skipped, errors)
+}
+
 fn split_card_zh(zh: &str, fallback_title: &str) -> (String, String) {
     let t = zh.trim();
     if let Some(rest) = t.strip_prefix("# ") {
@@ -447,10 +480,10 @@ fn split_card_zh(zh: &str, fallback_title: &str) -> (String, String) {
         return (rest.trim().to_string(), String::new());
     }
     // No heading — use first line as title if short.
-    if let Some((first, body)) = t.split_once('\n') {
-        if first.chars().count() <= 80 {
-            return (first.trim().to_string(), body.trim().to_string());
-        }
+    if let Some((first, body)) = t.split_once('\n')
+        && first.chars().count() <= 80
+    {
+        return (first.trim().to_string(), body.trim().to_string());
     }
     (fallback_title.to_string(), t.to_string())
 }
@@ -477,10 +510,10 @@ pub fn translate_theme_page(
     let en_hash = theme_page_en_hash(sections);
     let mut file = ThemePagesZhFile::load(vault_root)?;
     let key = community_id.to_string();
-    if !force {
-        if let Some(e) = file.get_fresh(community_id, &en_hash) {
-            return Ok(e.clone());
-        }
+    if !force
+        && let Some(e) = file.get_fresh(community_id, &en_hash)
+    {
+        return Ok(e.clone());
     }
     let glossary = GlossaryFile::load(vault_root).unwrap_or_default();
     let mut out_sections = Vec::new();
@@ -511,6 +544,40 @@ pub fn translate_theme_page(
     Ok(entry)
 }
 
+/// Top up the theme_pages_zh projection for `pages`
+/// ((community_id, [(heading, body)])), translating only stale/missing
+/// entries through `get_fresh`. Shared by the manual `source-work memory-zh`
+/// CLI and the crystal-theme-pages bilingual tail — an unchanged authority
+/// (`force = false`) costs zero LLM calls. Returns (done, skipped, errors).
+pub fn topup_theme_pages_zh(
+    vault_root: &Path,
+    pages: &[(i64, Vec<(String, String)>)],
+    client: &mut dyn ModelClient,
+    model: &str,
+    force: bool,
+    max: usize,
+) -> (usize, usize, Vec<String>) {
+    let mut done = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = Vec::new();
+    let existing = ThemePagesZhFile::load(vault_root).unwrap_or_default();
+    for (community_id, sections) in pages {
+        if max > 0 && done >= max {
+            break;
+        }
+        let en_hash = theme_page_en_hash(sections);
+        if !force && existing.get_fresh(*community_id, &en_hash).is_some() {
+            skipped += 1;
+            continue;
+        }
+        match translate_theme_page(vault_root, *community_id, sections, client, model, force) {
+            Ok(_) => done += 1,
+            Err(e) => errors.push(format!("community {community_id}: {e}")),
+        }
+    }
+    (done, skipped, errors)
+}
+
 fn split_section_zh(zh: &str, fallback_heading: &str) -> (String, String) {
     let t = zh.trim();
     for prefix in ["## ", "# "] {
@@ -526,14 +593,11 @@ fn split_section_zh(zh: &str, fallback_heading: &str) -> (String, String) {
 
 // ---- IO helpers ----
 
-fn load_map_file<T: for<'de> Deserialize<'de> + Default>(
+fn load_map_file<T: for<'de> Deserialize<'de> + Default + SchemaCheck>(
     vault_root: &Path,
     rel: &str,
     schema: &str,
-) -> Result<T, String>
-where
-    T: SchemaCheck,
-{
+) -> Result<T, String> {
     let path = vault_root.join(rel);
     if !path.is_file() {
         return Ok(T::default());
@@ -614,5 +678,157 @@ mod tests {
         let (t, b) = split_card_zh("# 标题\n\n正文段落", "Fallback");
         assert_eq!(t, "标题");
         assert!(b.contains("正文"));
+    }
+
+    // ---- topup helpers (shared by manual CLIs + bilingual tails) ----
+
+    use ovp_llm::{CallError, ModelReply, StopReason, Usage};
+
+    /// Scripted client: counts calls and replies with a fixed zh blob.
+    struct CountingClient {
+        calls: usize,
+        reply: String,
+    }
+
+    impl CountingClient {
+        fn new(reply: &str) -> Self {
+            Self {
+                calls: 0,
+                reply: reply.to_string(),
+            }
+        }
+    }
+
+    impl ModelClient for CountingClient {
+        fn call(&mut self, _request: &ModelRequest) -> Result<ModelReply, CallError> {
+            self.calls += 1;
+            Ok(ModelReply {
+                model: "counting".into(),
+                text: self.reply.clone(),
+                stop_reason: StopReason::EndTurn,
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                blocks: None,
+                raw_stop_reason: None,
+            })
+        }
+    }
+
+    /// Client whose every call fails (transport-style outage).
+    struct AlwaysFailsClient;
+
+    impl ModelClient for AlwaysFailsClient {
+        fn call(&mut self, _request: &ModelRequest) -> Result<ModelReply, CallError> {
+            Err(CallError::Transport {
+                detail: "simulated outage".into(),
+            })
+        }
+    }
+
+    fn card(id: &str, title: &str, content: &str) -> (String, String, String) {
+        (id.to_string(), title.to_string(), content.to_string())
+    }
+
+    #[test]
+    fn topup_cards_zh_writes_delta_then_second_run_is_zero_call_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cards = vec![
+            card("c1", "Memory budget", "Memory is a budget."),
+            card("c2", "Context", "Context compounds."),
+        ];
+        let mut client = CountingClient::new("# 标题\n\n正文");
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (2, 0));
+        assert!(errors.is_empty());
+        assert_eq!(client.calls, 2);
+        // Projection file written, keyed by card id.
+        let file = CardsZhFile::load(tmp.path()).unwrap();
+        assert_eq!(file.entries.len(), 2);
+        assert!(file.entries.contains_key("c1"));
+
+        // Unchanged authority: a fresh client must NEVER be called.
+        let mut client2 = CountingClient::new("# 标题\n\n正文");
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client2, "m", false, 0);
+        assert_eq!((done, skipped), (0, 2));
+        assert!(errors.is_empty());
+        assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
+
+        // One changed card → exactly one call.
+        let cards2 = vec![
+            card("c1", "Memory budget", "Memory is a SCARCE budget."),
+            card("c2", "Context", "Context compounds."),
+        ];
+        let mut client3 = CountingClient::new("# 新标题\n\n新正文");
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards2, &mut client3, "m", false, 0);
+        assert_eq!((done, skipped), (1, 1));
+        assert!(errors.is_empty());
+        assert_eq!(client3.calls, 1);
+        let file = CardsZhFile::load(tmp.path()).unwrap();
+        assert_eq!(file.entries["c1"].title_zh, "新标题");
+    }
+
+    #[test]
+    fn topup_cards_zh_errors_are_collected_not_thrown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cards = vec![card("c1", "T", "B")];
+        let mut client = AlwaysFailsClient;
+        let (done, skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (0, 0));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("c1"), "{}", errors[0]);
+    }
+
+    #[test]
+    fn topup_theme_pages_zh_writes_delta_then_second_run_is_zero_call_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pages = vec![(
+            7i64,
+            vec![(
+                "Memory".to_string(),
+                "Persists [claim:ck-a].".to_string(),
+            )],
+        )];
+        let mut client = CountingClient::new("## 记忆\n\n持久化 [claim:ck-a]。");
+        let (done, skipped, errors) =
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0);
+        assert_eq!((done, skipped), (1, 0));
+        assert!(errors.is_empty());
+        assert_eq!(client.calls, 1, "one section = one call");
+        let file = ThemePagesZhFile::load(tmp.path()).unwrap();
+        let entry = &file.pages["7"];
+        assert_eq!(entry.sections[0].heading, "记忆");
+        assert!(
+            entry.sections[0].body.contains("[claim:ck-a]"),
+            "citation tokens preserved"
+        );
+
+        // Unchanged authority: zero calls.
+        let mut client2 = CountingClient::new("## 记忆\n\n持久化 [claim:ck-a]。");
+        let (done, skipped, errors) =
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client2, "m", false, 0);
+        assert_eq!((done, skipped), (0, 1));
+        assert!(errors.is_empty());
+        assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
+
+        // Changed body → retranslated.
+        let pages2 = vec![(
+            7i64,
+            vec![(
+                "Memory".to_string(),
+                "Persists and compounds [claim:ck-a].".to_string(),
+            )],
+        )];
+        let mut client3 = CountingClient::new("## 记忆\n\n持久化并复利 [claim:ck-a]。");
+        let (done, skipped, errors) =
+            topup_theme_pages_zh(tmp.path(), &pages2, &mut client3, "m", false, 0);
+        assert_eq!((done, skipped), (1, 0));
+        assert!(errors.is_empty());
+        assert_eq!(client3.calls, 1);
     }
 }
