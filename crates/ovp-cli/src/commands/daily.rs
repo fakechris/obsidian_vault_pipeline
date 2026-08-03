@@ -164,10 +164,14 @@ fn run_inner(
     // before any watermark exists (the desktop scheduler enables both by
     // default; an explicit `pinboard-sync` invocation errors instead).
     //
-    // Honesty rule: these are the ONLY soft-skips. A missing compile-time
-    // feature, or a live API/network error after the phase is armed, must
-    // hard-fail the run (last_run=failed) — never look like a green success
-    // with pinboard silently absent (operator 2026-07-31).
+    // Soft-skips (warn + continue, do NOT fail the whole daily):
+    //   - missing PINBOARD_TOKEN
+    //   - `--pinboard-since auto` before any watermark
+    //   - live API / network errors (5xx, timeout) after the phase is armed
+    // Hard-fail still: first-sync flood guard (deliberate operator action
+    // required), and missing compile-time feature when --pinboard-live is set.
+    // Rationale (2026-08): a Pinboard 500 previously aborted intake+reader for
+    // the entire vault; capture is best-effort relative to the reader loop.
     let pinboard_skip = if args.pinboard_live
         && args.pinboard_fixture.is_none()
         && std::env::var("PINBOARD_TOKEN").ok().filter(|t| !t.trim().is_empty()).is_none()
@@ -208,22 +212,37 @@ fn run_inner(
             yes_all: false,
             ..Default::default()
         };
-        let outcome = sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts)
-            .map_err(CliError::Io)?;
-        sayln!(
-            "  pinboard: {} fetched, {} new note(s), {} known ({})",
-            outcome.fetched, outcome.new_notes.len(), outcome.skipped_known, outcome.origin
-        );
-        if outcome.guard_would_abort {
-            sayln!(
-                "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
-                 exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
-                 (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
-                outcome.new_notes.len(),
-                ovp_intake::FIRST_SYNC_GUARD_MAX_NEW,
-            );
+        match sync_pinboard(&intake_cfg, fetch.as_mut(), args.dry_run, &opts) {
+            Ok(outcome) => {
+                sayln!(
+                    "  pinboard: {} fetched, {} new note(s), {} known ({})",
+                    outcome.fetched,
+                    outcome.new_notes.len(),
+                    outcome.skipped_known,
+                    outcome.origin
+                );
+                if outcome.guard_would_abort {
+                    sayln!(
+                        "  WARNING: a REAL run would ABORT at the pinboard phase — {} new bookmark(s) \
+                         exceed the {}-note first-sync guard; pass --pinboard-since or --pinboard-max \
+                         (or run `ovp2 pinboard-sync --yes-all` once, deliberately)",
+                        outcome.new_notes.len(),
+                        ovp_intake::FIRST_SYNC_GUARD_MAX_NEW,
+                    );
+                }
+                report.pinboard = Some((&outcome).into());
+            }
+            Err(e) if pinboard_error_is_soft(&e) => {
+                // Transient / remote failure: continue intake+reader so one
+                // flaky capture vendor cannot strand the rest of the pipeline.
+                sayln!(
+                    "  pinboard: WARN soft-skip after error — {e} \
+                     (intake + reader continue; fix pinboard / re-run capture later)"
+                );
+                report.warnings.push(format!("pinboard: {e}"));
+            }
+            Err(e) => return Err(CliError::Io(e)),
         }
-        report.pinboard = Some((&outcome).into());
     }
 
     // Phase 2 — intake sweep (capture dirs → 01-Raw).
@@ -879,6 +898,32 @@ fn drain_runs(queued: usize, cap: usize) -> Option<usize> {
         return None;
     }
     Some(queued.div_ceil(cap))
+}
+
+/// True when a pinboard phase error should soft-skip (continue daily) rather
+/// than fail the whole run. Flood-guard and config errors stay hard.
+fn pinboard_error_is_soft(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    // Remote / transport
+    if e.contains("http 5")
+        || e.contains("http 429")
+        || e.contains("http 408")
+        || e.contains("timed out")
+        || e.contains("timeout")
+        || e.contains("connection")
+        || e.contains("request failed")
+        || e.contains("pinboard api returned")
+        || e.contains("parsing pinboard api")
+    {
+        return true;
+    }
+    // Flood guard must stay loud — operator action required.
+    if e.contains("pinboard-sync guard") || e.contains("first-sync") {
+        return false;
+    }
+    // Default soft for other live-path surprises so capture cannot strand
+    // intake+reader; explicit config problems surface earlier as skip/build err.
+    e.contains("pinboard")
 }
 
 fn build_pinboard_fetch(args: &DailyArgs) -> Result<Box<dyn PinboardFetch>, CliError> {

@@ -38,20 +38,27 @@ export const en = {
 
   // run-liveness banner (fixed top strip, every page)
   'banner.none': 'No runs yet',
-  'banner.completed': 'Last run: completed {ago}',
-  'banner.completedCounts': 'Last run: completed {ago} · {read} read · {queued} queued',
-  'banner.running': 'Run in progress · started {ago}',
-  'banner.runningProgress': 'Run in progress · {done}/{total} ({current}) · started {ago}',
-  'banner.runningProgressNoCurrent': 'Run in progress · {done}/{total} · started {ago}',
-  'banner.stale': 'Last run: {ago} — the daily loop may be stalled',
-  'banner.failed': 'Last run: FAILED {ago}{error}',
-  'banner.aborted': 'Last run: ABORTED {ago}{error}',
+  'banner.completed': 'Last run: completed {ago} · {when}',
+  'banner.completedCounts': 'Last run: completed {ago} · {when} · {read} read · {queued} queued',
+  'banner.running': 'Run in progress · started {ago} · {when}',
+  'banner.runningProgress': 'Run in progress · {done}/{total} ({current}) · started {ago} · {when}',
+  'banner.runningProgressNoCurrent': 'Run in progress · {done}/{total} · started {ago} · {when}',
+  'banner.stale': 'Last run: {ago} · {when} — daily loop may be stalled',
+  'banner.failed': 'Last run: FAILED {ago} · {when}{error}',
+  'banner.aborted': 'Last run: ABORTED {ago} · {when}{error}',
   'banner.agoJustNow': 'just now',
   'banner.agoMinutes': '{n}m ago',
   'banner.agoHours': '{n}h ago',
   'banner.agoDays': '{n}d ago',
   'banner.viewSystem': 'View system status',
   'banner.activityToggle': 'activity',
+  'banner.hover.base':
+    'Heartbeat (.ovp/last-run.json)\nrun: {runId}\nstatus: {status}\nstarted: {started}\nended: {ended}\n{error}',
+  'banner.hover.schedule':
+    'Schedule (daily)\nlast schedule stamp: {lastRun} ({lastStatus})\nnext due: {nextRun}\n{dueLine}\nClock: desktop app ticks ~every 10m while open; OS launchd/cron if installed. A failed capture phase no longer blocks intake+reader.',
+  'banner.hover.dueYes': 'due now: YES — waiting for the next tick / Run now',
+  'banner.hover.dueNo': 'due now: no',
+  'banner.hover.noError': '(no error body)',
 
   // live run activity feed (the portal's tail -f)
   'activity.title': 'Run activity',
@@ -561,6 +568,12 @@ export const en = {
   'auto.nextRun': 'Next due',
   'auto.never': 'Never',
   'auto.paused': 'Paused (disabled)',
+  'auto.lastRunLine': 'Last: {when} ({status})',
+  'auto.dueExplainYes':
+    'Due: the most recent schedule window has passed since the last stamp, but nothing new finished. The desktop app must be open (or launchd installed) to actually exec — or use Run now below.',
+  'auto.dueExplainNo': 'Not due: still inside this cycle, or the job is disabled.',
+  'auto.jobTooltip':
+    '{title}\ncadence: {cadence}\nstatus: {status}\nlast: {lastRun}\nnext: {nextRun}\n{dueExplain}',
   'auto.pipelineAria': 'Pipeline stages for this job',
   'auto.stageOn': 'On',
   'auto.stageOff': 'Off',
@@ -646,6 +659,8 @@ export const en = {
   'run.running': 'Running…',
   'run.confirmAgain': 'Today\'s job already ran. Run it again?',
   'run.lastRun': 'Last scheduled run: {when} ({status})',
+  'run.lastRunHint':
+    'Local stamp from .ovp/schedule-state.json. May differ by seconds from the top banner heartbeat (.ovp/last-run.json); status=error means the child exited non-zero.',
   'run.lastOk': 'Manual run completed.',
   'run.lastFailed': 'Manual run failed',
   'providers.title': 'LLM Provider',

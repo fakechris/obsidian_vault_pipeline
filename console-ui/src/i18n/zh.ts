@@ -38,20 +38,27 @@ export const zh: Record<keyof typeof en, string> = {
 
   // run-liveness banner (fixed top strip, every page)
   'banner.none': '尚无运行记录',
-  'banner.completed': '最近运行：已完成 {ago}',
-  'banner.completedCounts': '最近运行：已完成 {ago} · 阅读 {read} · 队列 {queued}',
-  'banner.running': '运行进行中 · 开始于 {ago}',
-  'banner.runningProgress': '运行进行中 · {done}/{total}（{current}）· 开始于 {ago}',
-  'banner.runningProgressNoCurrent': '运行进行中 · {done}/{total} · 开始于 {ago}',
-  'banner.stale': '最近运行：{ago} —— 每日流程可能已停滞',
-  'banner.failed': '最近运行：失败 {ago}{error}',
-  'banner.aborted': '最近运行：中断 {ago}{error}',
+  'banner.completed': '最近运行：已完成 {ago} · {when}',
+  'banner.completedCounts': '最近运行：已完成 {ago} · {when} · 阅读 {read} · 队列 {queued}',
+  'banner.running': '运行进行中 · 开始于 {ago} · {when}',
+  'banner.runningProgress': '运行进行中 · {done}/{total}（{current}）· 开始于 {ago} · {when}',
+  'banner.runningProgressNoCurrent': '运行进行中 · {done}/{total} · 开始于 {ago} · {when}',
+  'banner.stale': '最近运行：{ago} · {when} —— 每日流程可能已停滞',
+  'banner.failed': '最近运行：失败 {ago} · {when}{error}',
+  'banner.aborted': '最近运行：中断 {ago} · {when}{error}',
   'banner.agoJustNow': '刚刚',
   'banner.agoMinutes': '{n} 分钟前',
   'banner.agoHours': '{n} 小时前',
   'banner.agoDays': '{n} 天前',
   'banner.viewSystem': '查看系统状态',
   'banner.activityToggle': '活动',
+  'banner.hover.base':
+    '心跳（.ovp/last-run.json）\nrun: {runId}\n状态: {status}\n开始: {started}\n结束: {ended}\n{error}',
+  'banner.hover.schedule':
+    '调度（daily）\n上次调度戳: {lastRun}（{lastStatus}）\n下次到点: {nextRun}\n{dueLine}\n时钟：桌面 App 打开时约每 10 分钟 tick；若装了 launchd/cron 也会触发。Pinboard 抓取失败不再阻断后续 intake+阅读。',
+  'banner.hover.dueYes': '是否已到点：是 —— 等下次 tick 或点「立即运行」',
+  'banner.hover.dueNo': '是否已到点：否',
+  'banner.hover.noError': '（无错误正文）',
 
   // live run activity feed (the portal's tail -f)
   'activity.title': '运行活动',
@@ -531,6 +538,12 @@ export const zh: Record<keyof typeof en, string> = {
   'auto.nextRun': '下次到点',
   'auto.never': '尚未运行',
   'auto.paused': '已暂停（关闭）',
+  'auto.lastRunLine': '上次：{when}（{status}）',
+  'auto.dueExplainYes':
+    '已到点：自上次成功/失败戳之后，已过最近一个 09:00 窗口，但还没有新的完成记录。打开桌面 App（或依赖 launchd）才会真正 exec；也可点下方「立即运行」。',
+  'auto.dueExplainNo': '未到点：还在本周期内，或任务已关闭。',
+  'auto.jobTooltip':
+    '{title}\n节奏: {cadence}\n状态: {status}\n上次: {lastRun}\n下次: {nextRun}\n{dueExplain}',
   'auto.pipelineAria': '此任务的管线阶段',
   'auto.stageOn': '开启',
   'auto.stageOff': '关闭',
@@ -614,6 +627,8 @@ export const zh: Record<keyof typeof en, string> = {
   'run.running': '运行中…',
   'run.confirmAgain': '今天的任务已经跑过了，确定再跑一次？',
   'run.lastRun': '上次调度运行：{when}（{status}）',
+  'run.lastRunHint':
+    '来自 .ovp/schedule-state.json 的本地时间戳。与顶栏心跳（.ovp/last-run.json）可能差几秒；status=error 表示子进程退出非 0。',
   'run.lastOk': '手动运行已完成。',
   'run.lastFailed': '手动运行失败',
   'providers.title': 'LLM 提供商',

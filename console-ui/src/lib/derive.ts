@@ -41,6 +41,33 @@ export interface LastRunBanner {
   totalPlanned: number | null;
   /** LIVE in-run progress: the source being/just processed. */
   current: string | null;
+  /** Heartbeat run id (e.g. daily-2026-08-01). */
+  runId: string | null;
+  /** Absolute wall times from the heartbeat (UTC RFC3339 as stored). */
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+/** Format a UTC RFC3339 (or local schedule) stamp for banner/hover: local
+ * wall clock `YYYY-MM-DD HH:mm`. Empty input → empty string. */
+export function formatRunWhen(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso.includes('T') && !iso.endsWith('Z') && !/[+-]\d\d:\d\d$/.test(iso)
+    ? `${iso}Z` // schedule-state is local naive — treat carefully below
+    : iso);
+  // Schedule timestamps are local naive `YYYY-MM-DDTHH:MM:SS` without Z.
+  // Prefer display as-is with a space when Date.parse is ambiguous.
+  if (Number.isNaN(ms)) {
+    return iso.replace('T', ' ').replace(/Z$/, ' UTC');
+  }
+  // If the source was naive local (no Z/offset), show the digits directly so
+  // we do not shift a 09:00 schedule into the previous evening.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) && !iso.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(iso)) {
+    return iso.replace('T', ' ').slice(0, 16);
+  }
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** The instant the banner ages from: the terminal time if the run ended, else
@@ -68,6 +95,9 @@ export function lastRunBanner(
       processedSoFar: null,
       totalPlanned: null,
       current: null,
+      runId: null,
+      startedAt: null,
+      endedAt: null,
     };
   }
   const instant = lastRunInstantMs(lr);
@@ -98,6 +128,9 @@ export function lastRunBanner(
     processedSoFar: lr.processed_so_far ?? null,
     totalPlanned: lr.total_planned ?? null,
     current: lr.current ?? null,
+    runId: lr.run_id ?? null,
+    startedAt: lr.started_at ?? null,
+    endedAt: lr.ended_at ?? null,
   };
 }
 

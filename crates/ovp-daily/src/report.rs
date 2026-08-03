@@ -139,6 +139,10 @@ pub struct RunReport {
     pub cost: Option<CostReport>,
     #[serde(default)]
     pub lifecycle_warnings: Vec<String>,
+    /// Soft phase failures that did not abort the run (e.g. pinboard 5xx).
+    /// Operator-visible in the report; run still ends `completed`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// Vault-relative paths of the refreshed read model / console, when those
     /// phases ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +163,7 @@ impl RunReport {
             records: Vec::new(),
             cost: None,
             lifecycle_warnings: Vec::new(),
+            warnings: Vec::new(),
             index_file: None,
             console_file: None,
         }

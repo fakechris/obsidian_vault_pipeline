@@ -12,8 +12,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
-import { isRunningWithProgress, lastRunBanner, runActivity, type BannerLevel } from '../lib/derive';
-import { startRunNow } from '../lib/api';
+import {
+  formatRunWhen,
+  isRunningWithProgress,
+  lastRunBanner,
+  runActivity,
+  type BannerLevel,
+} from '../lib/derive';
+import { STATIC_MODE, fetchSchedule, startRunNow, type ScheduleJob } from '../lib/api';
 import { useModel } from '../model';
 import RunActivity from './RunActivity';
 
@@ -43,6 +49,7 @@ export default function RunBanner() {
   const now = useNowTick();
   const [expanded, setExpanded] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [dailyJob, setDailyJob] = useState<ScheduleJob | null>(null);
 
   const banner = lastRunBanner(model, now);
   // Retry stays pending until the heartbeat actually moves the banner off
@@ -51,6 +58,25 @@ export default function RunBanner() {
   useEffect(() => {
     if (bannerLevel !== 'failed') setRetrying(false);
   }, [bannerLevel]);
+
+  // Schedule context for hover: next due / whether currently due. Soft-fail if
+  // the endpoint is down so the banner still works offline/static.
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    fetchSchedule()
+      .then((s) => {
+        if (cancelled) return;
+        setDailyJob(s.jobs.find((j) => j.id === 'daily') ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDailyJob(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bannerLevel, banner.runId]);
+
   // The activity feed is worth expanding when there IS a run to show (a live
   // run, or a just-finished one whose feed is still on the heartbeat).
   const hasActivity = runActivity(model).status !== null;
@@ -64,12 +90,37 @@ export default function RunBanner() {
     return t('banner.agoDays', { n: Math.floor(m / (60 * 24)) });
   };
 
+  const when = (): string => {
+    const raw = banner.endedAt ?? banner.startedAt;
+    return formatRunWhen(raw) || '—';
+  };
+
   const shortError = (): string => {
     if (!banner.error) return '';
     const e = banner.error.length > 120
       ? `${banner.error.slice(0, 117)}…`
       : banner.error;
     return ` — ${e}`;
+  };
+
+  const hoverTitle = (): string => {
+    const base = t('banner.hover.base', {
+      runId: banner.runId ?? '—',
+      status: banner.status ?? 'none',
+      started: formatRunWhen(banner.startedAt) || '—',
+      ended: formatRunWhen(banner.endedAt) || '—',
+      error: banner.error ?? t('banner.hover.noError'),
+    });
+    if (!dailyJob) return base;
+    const schedule = t('banner.hover.schedule', {
+      lastRun: formatRunWhen(dailyJob.last_run) || t('auto.never'),
+      lastStatus: dailyJob.last_status || '—',
+      nextRun: dailyJob.enabled
+        ? formatRunWhen(dailyJob.next_run) || '—'
+        : t('auto.paused'),
+      dueLine: dailyJob.due ? t('banner.hover.dueYes') : t('banner.hover.dueNo'),
+    });
+    return `${base}\n\n${schedule}`;
   };
 
   // A live run WITH a progress fraction (heartbeat wrote at least one
@@ -86,30 +137,32 @@ export default function RunBanner() {
   if (banner.level === 'none') {
     text = t('banner.none');
   } else if (banner.status === 'failed') {
-    text = t('banner.failed', { ago: ago(), error: shortError() });
+    text = t('banner.failed', { ago: ago(), when: when(), error: shortError() });
   } else if (banner.status === 'aborted') {
-    text = t('banner.aborted', { ago: ago(), error: shortError() });
+    text = t('banner.aborted', { ago: ago(), when: when(), error: shortError() });
   } else if (banner.level === 'stale') {
-    text = t('banner.stale', { ago: ago() });
+    text = t('banner.stale', { ago: ago(), when: when() });
   } else if (withProgress) {
     const params = {
       done: banner.processedSoFar!,
       total: banner.totalPlanned!,
       ago: ago(),
+      when: when(),
     };
     text = banner.current
       ? t('banner.runningProgress', { ...params, current: banner.current })
       : t('banner.runningProgressNoCurrent', params);
   } else if (banner.status === 'running') {
-    text = t('banner.running', { ago: ago() });
+    text = t('banner.running', { ago: ago(), when: when() });
   } else if (banner.processed != null && banner.queuedAfter != null) {
     text = t('banner.completedCounts', {
       ago: ago(),
+      when: when(),
       read: banner.processed,
       queued: banner.queuedAfter,
     });
   } else {
-    text = t('banner.completed', { ago: ago() });
+    text = t('banner.completed', { ago: ago(), when: when() });
   }
 
   const level = LEVEL_CLASS[banner.level];
@@ -121,7 +174,7 @@ export default function RunBanner() {
           type="button"
           className={`run-banner ${level}`}
           onClick={() => navigate('/system')}
-          title={t('banner.viewSystem')}
+          title={hoverTitle()}
           aria-label={text}
         >
           <span className="run-banner-dot" />

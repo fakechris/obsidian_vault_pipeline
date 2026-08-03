@@ -53,11 +53,12 @@ describe('RunBanner in-run progress text', () => {
       total: b.totalPlanned!,
       current: b.current!,
       ago: '12m ago',
+      when: '2026-07-12 11:48',
     });
     expect(text).toContain('18/90');
     expect(text).toContain('Great Article');
     // No unfilled placeholders leak through.
-    expect(text).not.toMatch(/\{[a-z]+\}/);
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 
   it('renders the bilingual (中文) fraction too', () => {
@@ -70,10 +71,11 @@ describe('RunBanner in-run progress text', () => {
       total: b.totalPlanned!,
       current: b.current!,
       ago: '12 分钟前',
+      when: '2026-07-12 11:48',
     });
     expect(text).toContain('5/40');
     expect(text).toContain('某篇文章');
-    expect(text).not.toMatch(/\{[a-z]+\}/);
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 
   it('uses the no-current template when the heartbeat has a fraction but no source name', () => {
@@ -87,10 +89,11 @@ describe('RunBanner in-run progress text', () => {
       done: b.processedSoFar!,
       total: b.totalPlanned!,
       ago: '1m ago',
+      when: '2026-07-12 11:48',
     });
     expect(text).toContain('2/9');
     expect(text).not.toContain('(');
-    expect(text).not.toMatch(/\{[a-z]+\}/);
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 
   it('computes a clamped percentage for the progress bar width', () => {

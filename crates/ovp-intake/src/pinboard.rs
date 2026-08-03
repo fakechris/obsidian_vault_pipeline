@@ -98,6 +98,16 @@ pub struct PinboardPost {
 /// The capture effect boundary: where bookmarks come from.
 pub trait PinboardFetch {
     fn fetch_all(&mut self) -> Result<Vec<PinboardPost>, String>;
+    /// Fetch posts on/after `since` (`YYYY-MM-DD`). Default filters
+    /// [`fetch_all`] client-side; live adapters SHOULD push the bound to the
+    /// API (`fromdt`) so large accounts do not 500 on full `posts/all`.
+    fn fetch_since(&mut self, since: &str) -> Result<Vec<PinboardPost>, String> {
+        let all = self.fetch_all()?;
+        Ok(all
+            .into_iter()
+            .filter(|p| p.time.get(..10).is_some_and(|d| d >= since))
+            .collect())
+    }
     /// Human-readable origin for the run report (file path / "pinboard API").
     fn origin(&self) -> String;
 }
@@ -156,12 +166,20 @@ impl LivePinboardFetch {
 }
 
 #[cfg(feature = "pinboard-live")]
-impl PinboardFetch for LivePinboardFetch {
-    fn fetch_all(&mut self) -> Result<Vec<PinboardPost>, String> {
-        let url = format!(
+impl LivePinboardFetch {
+    fn get_posts_all(&self, fromdt: Option<&str>) -> Result<Vec<PinboardPost>, String> {
+        // Pinboard's unfiltered `posts/all` returns the entire history and
+        // frequently HTTP 500s on large accounts (observed live: token OK,
+        // `posts/update` 200, bare `posts/all` 500; `fromdt` 200). When we
+        // already have a watermark, always push it server-side.
+        let mut url = format!(
             "{}/posts/all?format=json&auth_token={}",
             self.base_url, self.token
         );
+        if let Some(day) = fromdt {
+            // API accepts ISO datetime; day floor is enough for resume.
+            url.push_str(&format!("&fromdt={day}T00:00:00Z"));
+        }
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(self.timeout_secs))
             .build()
@@ -178,6 +196,17 @@ impl PinboardFetch for LivePinboardFetch {
         }
         resp.json::<Vec<PinboardPost>>()
             .map_err(|e| format!("parsing pinboard API reply: {}", e.without_url()))
+    }
+}
+
+#[cfg(feature = "pinboard-live")]
+impl PinboardFetch for LivePinboardFetch {
+    fn fetch_all(&mut self) -> Result<Vec<PinboardPost>, String> {
+        self.get_posts_all(None)
+    }
+
+    fn fetch_since(&mut self, since: &str) -> Result<Vec<PinboardPost>, String> {
+        self.get_posts_all(Some(since))
     }
 
     fn origin(&self) -> String {
@@ -462,7 +491,14 @@ pub fn sync_pinboard(
     let mut known = synced_urls(&read_pinboard_ledger(&pin_ledger_path)?);
     known.extend(known_urls(&read_intake_ledger(&intake_ledger_path)?));
 
-    let mut posts = fetch.fetch_all()?;
+    // Prefer server-side `fromdt` for incremental daily sync (since set, no
+    // until). Full-history `posts/all` 500s on large accounts (LivePinboardFetch).
+    // Backfill windows set both since+until and still need the full export so
+    // `oldest_post_day` can detect exhaustion below the coverage floor.
+    let mut posts = match (&opts.since, &opts.until) {
+        (Some(since), None) => fetch.fetch_since(since)?,
+        _ => fetch.fetch_all()?,
+    };
     // Deterministic order: oldest first, then URL.
     posts.sort_by(|a, b| (a.time.as_str(), a.href.as_str()).cmp(&(b.time.as_str(), b.href.as_str())));
 
