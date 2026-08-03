@@ -86,15 +86,11 @@ pub struct SourceWorkStatus {
     pub meta: Option<SourceWorkMeta>,
 }
 
-/// True when Latin letter share among CJK+Latin is high (mirror of UI heuristic).
-pub fn is_primarily_english(text: &str) -> bool {
-    let body = strip_frontmatter(text);
-    if body.chars().count() < 80 {
-        return false;
-    }
+/// Count CJK (incl. JP kana/ext) vs ASCII Latin letters in `text`.
+fn count_script_letters(text: &str) -> (usize, usize) {
     let mut cjk = 0usize;
     let mut latin = 0usize;
-    for ch in body.chars() {
+    for ch in text.chars() {
         let c = ch as u32;
         if (0x4E00..=0x9FFF).contains(&c)
             || (0x3400..=0x4DBF).contains(&c)
@@ -105,11 +101,109 @@ pub fn is_primarily_english(text: &str) -> bool {
             latin += 1;
         }
     }
+    (cjk, latin)
+}
+
+/// True when Latin letter share among CJK+Latin is high (mirror of UI heuristic).
+pub fn is_primarily_english(text: &str) -> bool {
+    let body = strip_frontmatter(text);
+    if body.chars().count() < 80 {
+        return false;
+    }
+    let (cjk, latin) = count_script_letters(body);
     let letters = cjk + latin;
     if letters < 40 {
         return false;
     }
     (latin as f64) / (letters as f64) >= 0.85
+}
+
+/// Drop fenced + inline code so language detection scores prose, not source.
+///
+/// Monorepo / deepwiki dumps are mostly paths and fences; those stay Latin
+/// even after a correct translation. Without stripping them, a good zh body
+/// can still look "English" by letter share.
+pub fn strip_code_for_lang_detect(text: &str) -> String {
+    // Fenced blocks first (line-oriented).
+    let mut lines = text.split_inclusive('\n').peekable();
+    let mut rebuilt = String::with_capacity(text.len());
+    while let Some(line) = lines.next() {
+        if line.trim_start().starts_with("```") {
+            while let Some(l2) = lines.next() {
+                if l2.trim_start().starts_with("```") {
+                    break;
+                }
+            }
+            rebuilt.push(' ');
+            continue;
+        }
+        rebuilt.push_str(line);
+    }
+    // Inline `code` — char-safe (CJK must not be byte-sliced).
+    let mut out = String::with_capacity(rebuilt.len());
+    let mut chars = rebuilt.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            while let Some(c2) = chars.next() {
+                if c2 == '`' {
+                    break;
+                }
+            }
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Accept EN→zh output only when it is no longer primarily English.
+///
+/// **Root-cause class this gates (2026-08 vault audit):** models (and
+/// poisoned `source_work/v2` cassettes) sometimes return English copy-through
+/// or near-untranslated prose. Pre-gate we only checked that the *source*
+/// looked English, then wrote any non-empty sanitize result as `zh.md` and
+/// stamped `translated_at` — silent false "done".
+///
+/// Rule: language share is measured on **prose** (code fences + inline code
+/// stripped). Latin letter share among CJK+Latin must be **below** the
+/// `is_primarily_english` bar (85%). Pure-English bodies without fences fail
+/// the same way; code-heavy monorepos with real Chinese prose pass.
+pub fn is_acceptable_zh_translation(zh: &str) -> bool {
+    let body = strip_frontmatter(zh);
+    if body.chars().count() < 40 {
+        // Tiny stubs: require at least one CJK ideograph.
+        return count_script_letters(body).0 > 0;
+    }
+    let prose = strip_code_for_lang_detect(body);
+    let (cjk_p, latin_p) = count_script_letters(&prose);
+    let letters_p = cjk_p + latin_p;
+    if letters_p >= 40 {
+        return (latin_p as f64) / (letters_p as f64) < 0.85;
+    }
+    // Almost no prose left after stripping code — demand some CJK in the
+    // full body, otherwise treat as untranslated English dump.
+    let (cjk, _latin) = count_script_letters(body);
+    cjk > 0
+}
+
+/// True when zh prose is essentially still the English original (copy-through).
+pub fn is_near_untranslated_copy(zh: &str, original: &str) -> bool {
+    fn norm(s: &str) -> String {
+        strip_code_for_lang_detect(strip_frontmatter(s))
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .take(400)
+            .collect::<String>()
+            .to_ascii_lowercase()
+    }
+    let a = norm(zh);
+    let b = norm(original);
+    if a.len() < 120 || b.len() < 120 {
+        return false;
+    }
+    let n = a.len().min(b.len()).min(280);
+    a[..n] == b[..n]
 }
 
 fn strip_frontmatter(text: &str) -> &str {
@@ -344,14 +438,14 @@ fn now_rfc3339() -> String {
     format!("{secs}")
 }
 
-fn llm_text(
-    client: &mut dyn ModelClient,
+/// Build the source_work LLM request (shared key material for call + invalidate).
+fn source_work_request(
     model: &str,
     system: &str,
     user: &str,
     max_tokens: u32,
-) -> Result<String, String> {
-    let req = ModelRequest {
+) -> ModelRequest {
+    ModelRequest {
         model: model.to_string(),
         system: Some(system.to_string()),
         messages: vec![ModelMessage::User {
@@ -361,14 +455,81 @@ fn llm_text(
         temperature: Some(0.2),
         tools: None,
         // v2: stronger terminology policy + optional session glossary.
+        // Quality gate invalidates bad keys in-place; do not bump namespace
+        // solely for English-output failures (would thrash good cassettes).
         cache_namespace: Some("source_work/v2".into()),
-    };
+    }
+}
+
+fn llm_text(
+    client: &mut dyn ModelClient,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let req = source_work_request(model, system, user, max_tokens);
     let reply = client.call(&req).map_err(|e| e.to_string())?;
     let text = reply.text.trim().to_string();
     if text.is_empty() {
+        client.invalidate(&req);
         return Err("model returned empty text".into());
     }
     Ok(text)
+}
+
+/// Call model and return both text and the request (for cassette invalidate).
+fn llm_text_tracked(
+    client: &mut dyn ModelClient,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(ModelRequest, String), String> {
+    let req = source_work_request(model, system, user, max_tokens);
+    let reply = client.call(&req).map_err(|e| e.to_string())?;
+    let text = reply.text.trim().to_string();
+    if text.is_empty() {
+        client.invalidate(&req);
+        return Err("model returned empty text".into());
+    }
+    Ok((req, text))
+}
+
+/// Translate one chunk: sanitize + optional quality gate with one live retry
+/// after cassette invalidate (poisoned English Record hits).
+fn translate_chunk_with_gate(
+    client: &mut dyn ModelClient,
+    model: &str,
+    user: &str,
+    source_chunk: &str,
+    gate: bool,
+) -> Result<(ModelRequest, String), String> {
+    let (req, raw) = llm_text_tracked(client, model, TRANSLATE_SYSTEM, user, 8192)?;
+    let cleaned = sanitize_translate_output(&raw);
+    if !gate {
+        return Ok((req, cleaned));
+    }
+    let bad = !is_acceptable_zh_translation(&cleaned)
+        || is_near_untranslated_copy(&cleaned, source_chunk);
+    if !bad {
+        return Ok((req, cleaned));
+    }
+    // Drop poisoned cassette and re-ask once (Record mode re-fills).
+    client.invalidate(&req);
+    let (req2, raw2) = llm_text_tracked(client, model, TRANSLATE_SYSTEM, user, 8192)?;
+    let cleaned2 = sanitize_translate_output(&raw2);
+    if !is_acceptable_zh_translation(&cleaned2)
+        || is_near_untranslated_copy(&cleaned2, source_chunk)
+    {
+        client.invalidate(&req2);
+        return Err(
+            "translate output still primarily English after live retry (quality gate); \
+             will not mark zh done"
+                .into(),
+        );
+    }
+    Ok((req2, cleaned2))
 }
 
 /// Translate body → zh.md (skip if already present unless `force`).
@@ -407,17 +568,31 @@ pub fn translate_source(
     // consistent — product codes stay Latin, finance jargon uses market forms.
     let glossary = build_session_glossary(client, model, &body, chunks.len())?;
     let mut parts = Vec::with_capacity(chunks.len());
+    let mut chunk_reqs: Vec<ModelRequest> = Vec::with_capacity(chunks.len());
     for (i, chunk) in chunks.iter().enumerate() {
         let user = format_translate_user(chunk, i, chunks.len(), glossary.as_deref());
-        let raw = llm_text(client, model, TRANSLATE_SYSTEM, &user, 8192)?;
-        // Per-chunk sanitize so a leaked glossary mid-document does not
-        // contaminate later joins.
-        parts.push(sanitize_translate_output(&raw));
+        let (req, cleaned) =
+            translate_chunk_with_gate(client, model, &user, chunk, chunks.len() == 1)?;
+        chunk_reqs.push(req);
+        parts.push(cleaned);
     }
     let mut zh = sanitize_translate_output(&parts.join("\n\n"));
     if truncated_chunks {
         zh.push_str(
             "\n\n---\n\n> 〔截断〕原文超过翻译长度上限，尾部未译。可对源做拆分或提高 `MAX_TRANSLATE_BODY_CHARS` 后 `--force` 重跑。\n",
+        );
+    }
+    // Final join gate (covers multi-chunk dilution / copy-through).
+    if !is_acceptable_zh_translation(&zh) || is_near_untranslated_copy(&zh, &body) {
+        for req in &chunk_reqs {
+            client.invalidate(req);
+        }
+        // One live re-join path is expensive; invalidate so a requeue is not
+        // pinned to the bad cassette set, and refuse to stamp done.
+        return Err(
+            "translate output still primarily English (quality gate); \
+             cassettes invalidated — will not mark zh done"
+                .into(),
         );
     }
     fs::write(&zh_path, &zh).map_err(|e| format!("write zh.md: {e}"))?;
@@ -437,12 +612,16 @@ pub fn translate_source(
 /// Strip model echoes of the session-glossary prompt and collapse empty
 /// fenced code blocks left when diagrams/source were dropped.
 ///
-/// Observed failure (open-slide deepwiki, 2026-08): mid-body
-/// `## Session glossary (OBEY — do not re-decide these terms)` plus empty
-/// fences. Authority is the EN original; zh is rebuildable, so aggressive
-/// sanitize is safer than leaving prompt text in the vault.
+/// Observed failures (2026-08 vault):
+/// - mid-body `## Session glossary (OBEY — …)` plus empty fences
+/// - CoT JSON envelope `{understanding, plan, reasoning, response}` (or
+///   fenced ```json) with the real translation only under `response`
+///
+/// Authority is the EN original; zh is rebuildable, so aggressive sanitize
+/// is safer than leaving prompt / chain-of-thought text in the vault.
 pub fn sanitize_translate_output(text: &str) -> String {
     let mut out = text.replace("\r\n", "\n");
+    out = unwrap_cot_json_envelope(&out);
     out = strip_session_glossary_blocks(&out);
     for prefix in [
         "以下是翻译：",
@@ -461,6 +640,82 @@ pub fn sanitize_translate_output(text: &str) -> String {
     out = strip_empty_fences(&out);
     out = squeeze_blank_lines(&out);
     out.trim().to_string() + "\n"
+}
+
+/// If the model returned a CoT / tool-style JSON wrapper, keep only `response`
+/// (or `translation` / `zh` / `text`). Otherwise return input unchanged.
+fn unwrap_cot_json_envelope(text: &str) -> String {
+    let trimmed = text.trim();
+    // Fenced ```json … ```
+    let candidate = if let Some(rest) = trimmed.strip_prefix("```") {
+        let rest = rest
+            .strip_prefix("json")
+            .or_else(|| rest.strip_prefix("JSON"))
+            .unwrap_or(rest)
+            .trim_start_matches('\n');
+        if let Some(end) = rest.rfind("```") {
+            rest[..end].trim()
+        } else {
+            trimmed
+        }
+    } else {
+        trimmed
+    };
+    if !(candidate.starts_with('{') && candidate.contains("\"response\""))
+        && !(candidate.starts_with('{') && candidate.contains("\"translation\""))
+    {
+        // Also handle: prose + trailing/leading json fence with response key.
+        if let Some(extracted) = extract_response_from_embedded_json(text) {
+            return extracted;
+        }
+        return text.to_string();
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) {
+        for key in ["response", "translation", "zh", "text", "content"] {
+            if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+                if s.chars().count() > 40 {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    if let Some(extracted) = extract_response_from_embedded_json(text) {
+        return extracted;
+    }
+    text.to_string()
+}
+
+/// Scan for a fenced or raw JSON object that has a string `response` field
+/// large enough to be the translation body (hyperagents-style leak).
+fn extract_response_from_embedded_json(text: &str) -> Option<String> {
+    // Prefer fenced json blocks.
+    let mut search = text;
+    while let Some(start) = search.find("```") {
+        let after = &search[start + 3..];
+        let after = after
+            .strip_prefix("json")
+            .or_else(|| after.strip_prefix("JSON"))
+            .unwrap_or(after);
+        let after = after.trim_start_matches('\n');
+        let end = after.find("```")?;
+        let block = after[..end].trim();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(block) {
+            for key in ["response", "translation", "zh"] {
+                if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+                    if s.chars().count() > 40 {
+                        // Keep material before the fence + extracted response.
+                        let prefix = text[..text.len() - search.len() + start].trim_end();
+                        if prefix.is_empty() {
+                            return Some(s.to_string());
+                        }
+                        return Some(format!("{prefix}\n\n{s}"));
+                    }
+                }
+            }
+        }
+        search = &after[end + 3..];
+    }
+    None
 }
 
 fn squeeze_blank_lines(text: &str) -> String {
@@ -717,5 +972,63 @@ mod tests {
         assert!(!clean.contains("```"));
         assert!(clean.contains("前言"));
         assert!(clean.contains("后记"));
+    }
+
+    #[test]
+    fn quality_gate_rejects_english_copy_through() {
+        let en = "The harness is all you need for reliable evaluation of agent \
+                  systems in production. Teams that invest in harnesses ship \
+                  faster with fewer regressions over months of iteration.";
+        assert!(!is_acceptable_zh_translation(en));
+        assert!(is_near_untranslated_copy(en, en));
+    }
+
+    #[test]
+    fn quality_gate_accepts_chinese_prose() {
+        let zh = "生产环境里，评估 harness 是可靠智能体系统的关键。\
+                  愿意投入 harness 的团队通常迭代更快，回归更少。\
+                  本文讨论指标、闸门与回放夹具的工程实践。";
+        assert!(is_acceptable_zh_translation(zh));
+    }
+
+    #[test]
+    fn quality_gate_ignores_code_fences_when_prose_is_chinese() {
+        // Code stays Latin; prose is Chinese — must still accept.
+        let mut body = String::from(
+            "本文说明 monorepo 的 TypeScript 配置如何分层。\
+             严格模式默认开启，详见下文。\n\n",
+        );
+        for _ in 0..30 {
+            body.push_str("```ts\nconst x = require('fs');\nexport const y = 1;\n```\n\n");
+        }
+        assert!(
+            is_acceptable_zh_translation(&body),
+            "code-heavy but Chinese prose must pass"
+        );
+    }
+
+    #[test]
+    fn quality_gate_rejects_english_prose_even_with_chinese_title() {
+        let mixed = "# 标题翻译\n\nThe monorepo uses a hierarchical tsconfig structure. \
+                     Strict mode is enabled by default. The agents documentation \
+                     covers code style, testing, and release procedures in detail \
+                     for every package under the apps and packages directories.";
+        assert!(!is_acceptable_zh_translation(mixed));
+    }
+
+    #[test]
+    fn sanitize_unwraps_cot_json_response_envelope() {
+        // Build via serde so we do not fight raw-string / markdown-heading rules.
+        let body = "## 软件工程已死\n\nHyperagent 框架体现了苦涩的教训。本文继续讨论自我改进与元智能体边界。";
+        let envelope = serde_json::json!({
+            "understanding": "chunk 2/2 following the session glossary",
+            "plan": "translate",
+            "response": body,
+        });
+        let dirty = format!("```json\n{}\n```\n", envelope);
+        let clean = sanitize_translate_output(&dirty);
+        assert!(clean.contains("软件工程已死"), "{clean}");
+        assert!(!clean.contains("understanding"), "{clean}");
+        assert!(!clean.contains("session glossary"), "{clean}");
     }
 }
