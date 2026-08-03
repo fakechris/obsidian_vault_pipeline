@@ -463,6 +463,17 @@ export const en = {
   'theme.topicOverview': 'Topic overview',
   'theme.topicOverviewCaption': 'woven from {n} claims',
   'theme.counts': 'durable {durable} · caveated {caveated}',
+  'theme.contentLang': 'content {lang} · zh ready {zh}/{total}',
+  'theme.claimEnOnly': 'EN only',
+  'theme.claimZhMissingTip':
+    'No Chinese projection for this claim — ledger text is English authority.',
+  'theme.zhMissingBody':
+    'UI is Chinese, but claim translations are missing for all {n} claims on this theme. Theme labels may still localize; body text falls back to English.',
+  'theme.zhMissingHint':
+    'Generate rebuildable projections: `ovp2 source-work claims-zh --vault-root … --client live` and `ovp2 source-work memory-zh --vault-root … --theme-pages --client live`. Files land under `.ovp/crystal/claims_zh.json` / `theme_pages_zh.json` (ledger stays English).',
+  'theme.zhPartialOverview':
+    'Claim zh is partial; topic-overview sections are still English (no theme_pages_zh yet).',
+  'theme.switchToEn': 'Switch UI to EN',
   'theme.citedSources': 'Sources:',
   'theme.legacySource': 'Legacy source — no detail page in this vault.',
   'theme.strength': 'strength',
@@ -650,6 +661,12 @@ export const en = {
   'system.runs': 'Runs',
   'system.runsEmpty':
     'No runs recorded yet — run `ovp2 daily` against this vault.',
+  'system.runsShowingRecent':
+    'Showing the newest {shown} of {total} runs (reports are kept forever under .ovp/reports/).',
+  'system.runsShowingAll':
+    'Showing all {n} runs (reports are kept forever under .ovp/reports/).',
+  'system.runsExpand': 'Show {n} older run(s)…',
+  'system.runsCollapse': 'Show only the newest {n}',
   'system.runDate': 'date',
   'system.runOk': 'ok',
   'system.runFailed': 'failed',

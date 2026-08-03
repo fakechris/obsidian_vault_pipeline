@@ -440,6 +440,17 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.topicOverview': '主题综述',
   'theme.topicOverviewCaption': '由 {n} 条结晶主张编织',
   'theme.counts': '持久 {durable} · 存疑 {caveated}',
+  'theme.contentLang': '正文 {lang} · 中文就绪 {zh}/{total}',
+  'theme.claimEnOnly': '仅英文',
+  'theme.claimZhMissingTip':
+    '此主张尚无中文投影——账本正文以英文为权威。',
+  'theme.zhMissingBody':
+    '界面已是中文，但本主题 {n} 条主张都还没有中文投影。主题名可能已本地化，正文会回退到英文。',
+  'theme.zhMissingHint':
+    '生成可重建投影：`ovp2 source-work claims-zh --vault-root … --client live` 与 `ovp2 source-work memory-zh --vault-root … --theme-pages --client live`。文件写在 `.ovp/crystal/claims_zh.json` / `theme_pages_zh.json`（ledger 仍为英文权威）。',
+  'theme.zhPartialOverview':
+    '主张中文部分就绪；主题综述段落仍是英文（尚无 theme_pages_zh）。',
+  'theme.switchToEn': '切换界面到 EN',
   'theme.citedSources': '来源：',
   'theme.legacySource': '旧源——该 vault 中没有对应的详情页。',
   'theme.strength': '强度',
@@ -619,6 +630,10 @@ export const zh: Record<keyof typeof en, string> = {
     '机房页：定时自动化（定时在跑什么）、全部运行记录、需要你处理的源、管线管理视图、三层模型说明，以及服务端配置（只读）。',
   'system.runs': '运行记录',
   'system.runsEmpty': '还没有运行记录——对该 vault 运行 `ovp2 daily`。',
+  'system.runsShowingRecent': '显示最近 {shown} / 共 {total} 次（磁盘 .ovp/reports/ 仍全量保留）。',
+  'system.runsShowingAll': '显示全部 {n} 次运行（磁盘 .ovp/reports/ 全量保留）。',
+  'system.runsExpand': '展开更早的 {n} 次…',
+  'system.runsCollapse': '只显示最近 {n} 次',
   'system.runDate': '日期',
   'system.runOk': '成功',
   'system.runFailed': '失败',

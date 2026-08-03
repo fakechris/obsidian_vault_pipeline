@@ -7,7 +7,7 @@
  * three-layer concept explainer, (e) read-only settings from /api/settings.
  * Internal vocabulary (pack/unit/ledger) is allowed HERE and only here
  * (design §6, BL-051 word layering). */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
 import AutomationPanel from '../components/AutomationPanel';
@@ -35,10 +35,17 @@ import { useModel } from '../model';
  * links: they are server-rendered pages outside the SPA router. */
 const ADMIN_PAGES = ['ops.html', 'audit.html', 'candidates.html'] as const;
 
+/** Default rows in System → Runs. Full history stays on disk / in the model;
+ * the table only expands on demand so the page does not grow without bound. */
+const RUNS_DEFAULT_SHOWN = 30;
+
 function RunsSection({ model }: { model: IndexModel }) {
   const { t } = useI18n();
-  // Newest first — model.runs is append-ordered.
-  const runs = [...model.runs].reverse();
+  const [showAll, setShowAll] = useState(false);
+  // Newest first — model.runs is append-ordered ascending by date/seq.
+  const runs = useMemo(() => [...model.runs].reverse(), [model.runs]);
+  const hidden = Math.max(0, runs.length - RUNS_DEFAULT_SHOWN);
+  const shown = showAll || hidden === 0 ? runs : runs.slice(0, RUNS_DEFAULT_SHOWN);
   return (
     <div className="section">
       <h2>{t('system.runs')}</h2>
@@ -47,36 +54,59 @@ function RunsSection({ model }: { model: IndexModel }) {
           <p>{t('system.runsEmpty')}</p>
         </EmptyState>
       ) : (
-        <table className="runs-table">
-          <thead>
-            <tr>
-              <th>{t('system.runDate')}</th>
-              <th className="num">{t('system.runOk')}</th>
-              <th className="num">{t('system.runFailed')}</th>
-              <th className="num">{t('system.runBlocked')}</th>
-              <th className="num">{t('system.runIngested')}</th>
-              <th>{t('system.runReport')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((r) => (
-              <tr key={r.run_id}>
-                <td className="mono">{r.date}</td>
-                <td className="num">{r.succeeded}</td>
-                <td className={r.failed > 0 ? 'num warn' : 'num'}>
-                  {r.failed}
-                </td>
-                <td className={r.blocked > 0 ? 'num warn' : 'num'}>
-                  {r.blocked}
-                </td>
-                <td className="num">{r.ingested}</td>
-                {/* Filename as text (design §3.6): the report is a JSON file
-                    in the vault (.ovp/reports/), not an HTTP resource. */}
-                <td className="mono tiny">{r.report_file}</td>
+        <>
+          <p className="sm muted" style={{ marginBottom: '0.5rem' }}>
+            {showAll || hidden === 0
+              ? t('system.runsShowingAll', { n: runs.length })
+              : t('system.runsShowingRecent', {
+                  shown: shown.length,
+                  total: runs.length,
+                })}
+          </p>
+          <table className="runs-table">
+            <thead>
+              <tr>
+                <th>{t('system.runDate')}</th>
+                <th className="num">{t('system.runOk')}</th>
+                <th className="num">{t('system.runFailed')}</th>
+                <th className="num">{t('system.runBlocked')}</th>
+                <th className="num">{t('system.runIngested')}</th>
+                <th>{t('system.runReport')}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={`${r.run_id}-${r.report_file}`}>
+                  <td className="mono">{r.date}</td>
+                  <td className="num">{r.succeeded}</td>
+                  <td className={r.failed > 0 ? 'num warn' : 'num'}>
+                    {r.failed}
+                  </td>
+                  <td className={r.blocked > 0 ? 'num warn' : 'num'}>
+                    {r.blocked}
+                  </td>
+                  <td className="num">{r.ingested}</td>
+                  {/* Filename as text (design §3.6): the report is a JSON file
+                      in the vault (.ovp/reports/), not an HTTP resource. */}
+                  <td className="mono tiny">{r.report_file}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hidden > 0 && (
+            <p style={{ marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="linkish"
+                onClick={() => setShowAll((v) => !v)}
+              >
+                {showAll
+                  ? t('system.runsCollapse', { n: RUNS_DEFAULT_SHOWN })
+                  : t('system.runsExpand', { n: hidden })}
+              </button>
+            </p>
+          )}
+        </>
       )}
     </div>
   );
