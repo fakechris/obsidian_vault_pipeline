@@ -436,6 +436,15 @@ body {
   white-space: nowrap;
 }
 
+.theme-zh-missing {
+  margin: 0 0 0.75rem;
+  border-left: 3px solid var(--accent, #4a90d9);
+  padding: 0.55rem 0.75rem;
+}
+.theme-zh-partial {
+  margin: 0 0 0.6rem;
+}
+
 /* ---------- toggles (theme + language): text buttons in a pill ---------- */
 .seg-toggle {
   display: inline-flex;

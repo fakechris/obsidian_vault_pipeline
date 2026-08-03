@@ -183,16 +183,20 @@ function ClaimCard({
   claim,
   byCase,
   highlighted,
+  claimZh,
 }: {
   claim: ClaimRow;
   byCase: Map<string, SourceRow>;
   highlighted: boolean;
+  /** Optional zh from theme-pages / claims_zh projection (by claim_key). */
+  claimZh?: string | null;
 }) {
   const { t, lang } = useI18n();
-  // Content language follows UI lang: zh prefers claim_zh projection, falls
-  // back to English authority text when the projection is missing/stale.
-  const text =
-    lang === 'zh' && claim.claim_zh?.trim() ? claim.claim_zh : claim.claim;
+  // Content language follows UI lang (top-bar EN/中): zh prefers claim_zh
+  // projection, falls back to English authority when missing/stale.
+  const zh = (claimZh ?? claim.claim_zh ?? '').trim();
+  const hasZh = zh.length > 0;
+  const text = lang === 'zh' && hasZh ? zh : claim.claim;
   return (
     <div
       className={`card claim-card${highlighted ? ' claim-hit' : ''}`}
@@ -205,6 +209,11 @@ function ClaimCard({
         {claim.strength && (
           <span className="tiny muted">
             {t('theme.strength')} {claim.strength}
+          </span>
+        )}
+        {lang === 'zh' && !hasZh && (
+          <span className="tiny muted" title={t('theme.claimZhMissingTip')}>
+            {t('theme.claimEnOnly')}
           </span>
         )}
         {/* Scroll via onClick rather than a native `#id` href: under the
@@ -229,10 +238,50 @@ function ClaimCard({
 }
 
 function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
-  const { t } = useI18n();
+  const { t, lang, setLang } = useI18n();
   const location = useLocation();
   const claims = useMemo(() => themeClaims(model.claims, theme), [model, theme]);
   const byCase = useMemo(() => sourcesByCase(model), [model]);
+  // theme-pages payload carries claim_zh keyed by claim_key when
+  // .ovp/crystal/claims_zh.json exists — reuse for cards (index model may not
+  // splice claim_zh on every claim row yet).
+  const [themePages, setThemePages] = useState<ThemePagesResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchThemePages().then(
+      (r) => {
+        if (!cancelled) setThemePages(r);
+      },
+      () => {
+        /* optional */
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const zhByKey = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!themePages?.claims) return m;
+    for (const [key, info] of Object.entries(themePages.claims)) {
+      const z = info.claim_zh?.trim();
+      if (z) m.set(key, z);
+    }
+    return m;
+  }, [themePages]);
+  const zhCount = useMemo(() => {
+    let n = 0;
+    for (const c of claims) {
+      const z =
+        (c.claim_key && zhByKey.get(c.claim_key)) ||
+        c.claim_zh?.trim() ||
+        '';
+      if (z) n += 1;
+    }
+    return n;
+  }, [claims, zhByKey]);
+  const pageMeta = themePages?.pages.find((p) => p.label === theme);
+  const hasSectionsZh = !!(pageMeta?.sections_zh && pageMeta.sections_zh.length > 0);
 
   // Anchor handling: #<claim_id> scrolls to + highlights the claim card
   // (same pattern as the source page's unit line anchors). Scroll fires
@@ -279,13 +328,46 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
                 durable,
                 caveated: claims.length - durable,
               })}
+              {' · '}
+              {t('theme.contentLang', {
+                lang: lang === 'zh' ? '中文' : 'EN',
+                zh: zhCount,
+                total: claims.length,
+              })}
             </div>
+            {lang === 'zh' && zhCount === 0 && (
+              <div className="card theme-zh-missing sm">
+                <p style={{ margin: 0 }}>
+                  {t('theme.zhMissingBody', { n: claims.length })}
+                </p>
+                <p className="tiny muted" style={{ margin: '0.4rem 0 0' }}>
+                  {t('theme.zhMissingHint')}
+                </p>
+                <p style={{ margin: '0.5rem 0 0' }}>
+                  <button
+                    type="button"
+                    className="linkish tiny"
+                    onClick={() => setLang('en')}
+                  >
+                    {t('theme.switchToEn')}
+                  </button>
+                </p>
+              </div>
+            )}
+            {lang === 'zh' && zhCount > 0 && !hasSectionsZh && pageMeta && (
+              <p className="sm muted theme-zh-partial">
+                {t('theme.zhPartialOverview')}
+              </p>
+            )}
             {claims.map((c) => (
               <ClaimCard
                 key={c.claim_id}
                 claim={c}
                 byCase={byCase}
                 highlighted={anchor === c.claim_id}
+                claimZh={
+                  (c.claim_key && zhByKey.get(c.claim_key)) || c.claim_zh || null
+                }
               />
             ))}
           </>
