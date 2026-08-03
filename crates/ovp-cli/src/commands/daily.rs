@@ -941,8 +941,18 @@ fn cards_zh_tail(
         }
     };
     let model = ovp_memory::ask::AskArgs::default().model_name;
-    let (done, skipped, errors) =
-        ovp_memory::bilingual::topup_cards_zh(vault_root, cards, client.as_mut(), &model, false, 0);
+    // Cap the tail at the vault's per-run auto budget (default 30, 0 =
+    // unlimited): steady-state deltas are a handful of cards, but the first
+    // run in a long-stale vault must not fire hundreds of paid calls in one
+    // unattended run — the remainder self-heals over the next runs (codex P1).
+    let (done, skipped, errors) = ovp_memory::bilingual::topup_cards_zh(
+        vault_root,
+        cards,
+        client.as_mut(),
+        &model,
+        false,
+        cfg.auto_max_per_run,
+    );
     sayln!(
         "  cards_zh: translated={done} skipped={skipped} errors={}",
         errors.len()

@@ -791,13 +791,14 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
         }
     };
     let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
     let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
         vault_root,
         &pairs,
         client.as_mut(),
         &model,
         false,
-        0,
+        cfg.auto_max_per_run,
     );
     sayln!(
         "  claims_zh: translated={done} skipped={skipped} errors={}",

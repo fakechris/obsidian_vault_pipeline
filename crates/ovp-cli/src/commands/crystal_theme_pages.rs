@@ -266,13 +266,14 @@ fn theme_pages_zh_tail(
         }
     };
     let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
     let (done, skipped, errors) = ovp_memory::bilingual::topup_theme_pages_zh(
         vault_root,
         &page_inputs,
         client.as_mut(),
         &model,
         false,
-        0,
+        cfg.auto_max_per_run,
     );
     sayln!(
         "  theme_pages_zh: translated={done} skipped={skipped} errors={}",
