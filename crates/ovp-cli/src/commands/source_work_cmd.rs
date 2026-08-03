@@ -12,8 +12,7 @@ use std::path::PathBuf;
 
 use ovp_index::build_index;
 use ovp_memory::bilingual::{
-    theme_page_en_hash, translate_card, translate_claim, translate_theme_page, CardsZhFile,
-    ClaimsZhFile, GlossaryFile, ThemePagesZhFile,
+    topup_cards_zh, topup_theme_pages_zh, translate_claims_batch, GlossaryFile,
 };
 use ovp_memory::source_work_auto::candidates_from_index;
 use ovp_memory::source_work_config::SourceWorkConfig;
@@ -135,32 +134,36 @@ pub fn backfill(args: BackfillArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
-    use ovp_domain::crystal::{fold_ledger, CrystalStatus, StoreEvent};
-    let ledger = args.vault_root.join(".ovp/crystal/ledger.jsonl");
-    let events: Vec<StoreEvent> = if ledger.is_file() {
-        let raw = std::fs::read_to_string(&ledger)
-            .map_err(|e| CliError::Io(format!("reading ledger: {e}")))?;
-        let mut out = Vec::new();
+/// Active durable (claim_key, claim) pairs folded from the crystal ledger.
+/// Shared by `claims-zh` and the crystal-synth bilingual tail. Read-only —
+/// the ledger is the English authority and is never opened for write here.
+pub(crate) fn active_claim_pairs(
+    vault_root: &std::path::Path,
+) -> Result<Vec<(String, String)>, String> {
+    use ovp_domain::crystal::{CrystalStatus, StoreEvent, fold_ledger};
+    let ledger = vault_root.join(".ovp/crystal/ledger.jsonl");
+    let mut events: Vec<StoreEvent> = Vec::new();
+    if ledger.is_file() {
+        let raw = std::fs::read_to_string(&ledger).map_err(|e| format!("reading ledger: {e}"))?;
         for (i, line) in raw.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let ev: StoreEvent = serde_json::from_str(line).map_err(|e| {
-                CliError::Io(format!("ledger line {}: {e}", i + 1))
-            })?;
-            out.push(ev);
+            let ev: StoreEvent =
+                serde_json::from_str(line).map_err(|e| format!("ledger line {}: {e}", i + 1))?;
+            events.push(ev);
         }
-        out
-    } else {
-        Vec::new()
-    };
-    let pairs: Vec<(String, String)> = fold_ledger(&events)
+    }
+    Ok(fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)
         .map(|r| (r.claim_key, r.claim))
-        .collect();
+        .collect())
+}
+
+pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
+    let pairs = active_claim_pairs(&args.vault_root).map_err(CliError::Io)?;
     sayln!("claims-zh: {} active durable claim(s)", pairs.len());
     if pairs.is_empty() {
         return Ok(());
@@ -171,35 +174,16 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
         .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/bilingual"));
     let mut client = build_client(args.client_kind, &cache)?;
     let model = ovp_memory::ask::AskArgs::default().model_name;
-    let existing = ClaimsZhFile::load(&args.vault_root).map_err(CliError::Io)?;
-    let mut done = 0usize;
-    let mut skipped = 0usize;
-    let mut errors = Vec::new();
-    for (key, en) in &pairs {
-        if args.max > 0 && done >= args.max {
-            break;
-        }
-        if !args.force && existing.get_fresh(key, en).is_some() {
-            skipped += 1;
-            continue;
-        }
-        match translate_claim(
-            &args.vault_root,
-            key,
-            en,
-            client.as_mut(),
-            &model,
-            args.force,
-        ) {
-            Ok(_) => {
-                done += 1;
-                sayln!("  ok {key}");
-            }
-            Err(e) => {
-                errors.push(format!("{key}: {e}"));
-                sayln!("  FAIL {key}: {e}");
-            }
-        }
+    let (done, skipped, errors) = translate_claims_batch(
+        &args.vault_root,
+        &pairs,
+        client.as_mut(),
+        &model,
+        args.force,
+        args.max,
+    );
+    for e in &errors {
+        sayln!("  FAIL {e}");
     }
     // Ensure glossary file exists for operators to extend.
     let _ = GlossaryFile::load(&args.vault_root)
@@ -241,32 +225,26 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
             &build_index(&args.vault_root, &date, None).map_err(CliError::Io)?,
         )
         .map_err(CliError::Io)?;
-        let existing = CardsZhFile::load(&args.vault_root).map_err(CliError::Io)?;
-        sayln!("memory-zh cards: {} in evidence", evidence.cards.len());
-        for card in &evidence.cards {
-            if budget == 0 {
-                break;
-            }
-            if !args.force && existing.get_fresh(&card.id, &card.title, &card.content).is_some() {
-                skipped += 1;
-                continue;
-            }
-            match translate_card(
-                &args.vault_root,
-                &card.id,
-                &card.title,
-                &card.content,
-                client.as_mut(),
-                &model_name,
-                args.force,
-            ) {
-                Ok(_) => {
-                    done += 1;
-                    budget = budget.saturating_sub(1);
-                    sayln!("  card ok {}", card.id);
-                }
-                Err(e) => sayln!("  card FAIL {}: {e}", card.id),
-            }
+        let cards: Vec<(String, String, String)> = evidence
+            .cards
+            .iter()
+            .map(|c| (c.id.clone(), c.title.clone(), c.content.clone()))
+            .collect();
+        sayln!("memory-zh cards: {} in evidence", cards.len());
+        let max = if budget == usize::MAX { 0 } else { budget };
+        let (d, s, errors) = topup_cards_zh(
+            &args.vault_root,
+            &cards,
+            client.as_mut(),
+            &model_name,
+            args.force,
+            max,
+        );
+        done += d;
+        skipped += s;
+        budget = budget.saturating_sub(d);
+        for e in &errors {
+            sayln!("  card FAIL {e}");
         }
     }
 
@@ -279,37 +257,33 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
             sayln!("memory-zh done: translated={done} skipped={skipped}");
             return Ok(());
         };
-        let existing = ThemePagesZhFile::load(&args.vault_root).map_err(CliError::Io)?;
         sayln!("memory-zh theme_pages: {} page(s)", pages.pages.len());
-        for page in &pages.pages {
-            if budget == 0 {
-                break;
-            }
-            let sections: Vec<(String, String)> = page
-                .sections
-                .iter()
-                .map(|s| (s.heading.clone(), s.body.clone()))
-                .collect();
-            let en_hash = theme_page_en_hash(&sections);
-            if !args.force && existing.get_fresh(page.community_id, &en_hash).is_some() {
-                skipped += 1;
-                continue;
-            }
-            match translate_theme_page(
-                &args.vault_root,
-                page.community_id,
-                &sections,
-                client.as_mut(),
-                &model_name,
-                args.force,
-            ) {
-                Ok(_) => {
-                    done += 1;
-                    budget = budget.saturating_sub(1);
-                    sayln!("  theme ok community={}", page.community_id);
-                }
-                Err(e) => sayln!("  theme FAIL {}: {e}", page.community_id),
-            }
+        let page_inputs: Vec<(i64, Vec<(String, String)>)> = pages
+            .pages
+            .iter()
+            .map(|p| {
+                (
+                    p.community_id,
+                    p.sections
+                        .iter()
+                        .map(|s| (s.heading.clone(), s.body.clone()))
+                        .collect(),
+                )
+            })
+            .collect();
+        let max = if budget == usize::MAX { 0 } else { budget };
+        let (d, s, errors) = topup_theme_pages_zh(
+            &args.vault_root,
+            &page_inputs,
+            client.as_mut(),
+            &model_name,
+            args.force,
+            max,
+        );
+        done += d;
+        skipped += s;
+        for e in &errors {
+            sayln!("  theme FAIL {e}");
         }
     }
 
