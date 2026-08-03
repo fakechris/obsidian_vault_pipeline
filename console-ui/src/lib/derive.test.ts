@@ -2,11 +2,14 @@
  * Pure functions over the model + a passed-in wall clock — no DOM. */
 import { describe, expect, it } from 'vitest';
 import {
+  buildRunTimeline,
   closureNodeIds,
   collectionOf,
+  failPhaseFromError,
   healthLevel,
   isRunningWithProgress,
   lastRunBanner,
+  librarySourcePath,
   parsePageBody,
   runActivity,
   STALE_AFTER_MS,
@@ -191,6 +194,39 @@ describe('isRunningWithProgress', () => {
       NOW,
     );
     expect(isRunningWithProgress(b)).toBe(false);
+  });
+});
+
+describe('buildRunTimeline', () => {
+  it('explains pinboard hard-fail with absolute times and skipped reader', () => {
+    const steps = buildRunTimeline(
+      {
+        run_id: 'daily-2026-08-01',
+        started_at: '2026-08-01T22:46:26Z',
+        ended_at: '2026-08-01T22:46:42Z',
+        status: 'failed',
+        error: 'io: pinboard API returned HTTP 500 Internal Server Error',
+        processed: 0,
+        failed: 0,
+      },
+      {
+        last_run: '2026-08-01T15:46:26',
+        last_status: 'error',
+        next_run: '2026-08-03T09:00:00',
+        due: true,
+        cadence: 'daily 09:00',
+      },
+    );
+    const ids = steps.map((s) => s.id);
+    expect(ids).toContain('start');
+    expect(ids).toContain('fail');
+    expect(ids).toContain('skipped-reader');
+    expect(ids).toContain('no-sources');
+    expect(ids).toContain('next');
+    const fail = steps.find((s) => s.id === 'fail')!;
+    expect(fail.labelKey).toBe('timeline.failPinboard');
+    expect(fail.when).toMatch(/2026-08-0[12]/); // local wall clock
+    expect(failPhaseFromError(fail.vars?.error as string)).toBe('pinboard');
   });
 });
 
@@ -396,5 +432,28 @@ describe('collectionOf', () => {
       'clippings',
     );
     expect(collectionOf(row({}))).toBe('clippings');
+  });
+});
+
+describe('librarySourcePath', () => {
+  const empty = {
+    collection: null,
+    month: null,
+    status: null,
+    tag: null,
+  };
+
+  it('carries an active content tab for continuous browse', () => {
+    expect(
+      librarySourcePath('abc', empty, { tab: 'summary' }),
+    ).toBe('/library/abc?tab=summary');
+    expect(
+      librarySourcePath('abc', { ...empty, month: '2026-07' }, { tab: 'zh' }),
+    ).toBe('/library/abc?m=2026-07&tab=zh');
+  });
+
+  it('omits empty extra values (default source tab)', () => {
+    expect(librarySourcePath('abc', empty)).toBe('/library/abc');
+    expect(librarySourcePath('abc', empty, { tab: null })).toBe('/library/abc');
   });
 });

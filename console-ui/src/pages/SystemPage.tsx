@@ -246,9 +246,9 @@ function RunNowSection() {
         {busy ? t('run.running') : ranToday ? t('run.runAgain') : t('run.runNow')}
       </button>
       {status?.jobs?.daily?.last_run && (
-        <p className="sm muted">
+        <p className="sm muted" title={t('run.lastRunHint')}>
           {t('run.lastRun', {
-            when: status.jobs.daily.last_run,
+            when: status.jobs.daily.last_run.replace('T', ' ').slice(0, 16),
             status: status.jobs.daily.last_status,
           })}
         </p>

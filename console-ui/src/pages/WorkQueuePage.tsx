@@ -1,11 +1,17 @@
 /** Source-work queue manager — per-article translate/summarize jobs.
  * Serial across articles; parallel tasks within one article. */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { useSourceWorkQueue } from '../lib/sourceWorkQueue';
 import type { SourceWorkQueueItem, WorkTaskState } from '../lib/api';
+import {
+  computeWorkQueueEta,
+  formatClock,
+  formatDurationSec,
+  type WorkQueueEta,
+} from '../lib/workQueueEta';
 
 function taskLabel(t: WorkTaskState, yes: string, no: string): string {
   if (!t.wanted) return no;
@@ -20,6 +26,7 @@ function ItemRow({
   onRemove,
   canUp,
   canDown,
+  nowSec,
 }: {
   item: SourceWorkQueueItem;
   onUp: () => void;
@@ -28,6 +35,7 @@ function ItemRow({
   onRemove: () => void;
   canUp: boolean;
   canDown: boolean;
+  nowSec: number;
 }) {
   const { t } = useI18n();
   const title = item.title?.trim() || item.sha256.slice(0, 12) + '…';
@@ -38,10 +46,37 @@ function ItemRow({
     item.status === 'failed' ||
     item.status === 'cancelled';
 
+  let timing: string | null = null;
+  if (isRunning && item.started_at != null) {
+    timing = t('workq.itemRunningFor', {
+      elapsed: formatDurationSec(Math.max(0, nowSec - item.started_at)),
+    });
+  } else if (isTerminal && item.finished_at != null) {
+    const when = formatClock(item.finished_at);
+    if (item.started_at != null && item.finished_at > item.started_at) {
+      const dur = formatDurationSec(item.finished_at - item.started_at);
+      timing = `${t('workq.itemFinished', { when })} · ${t('workq.itemDuration', { dur })}`;
+    } else {
+      timing = t('workq.itemFinished', { when });
+    }
+  }
+
+  const prio = item.priority ?? 0;
+  const prioLabel =
+    prio >= 100 ? t('workq.prioInteractive') : prio <= 0 ? t('workq.prioBackfill') : null;
+
   return (
     <li className={`workq-item status-${item.status}`}>
       <div className="workq-main">
         <span className={`workq-pill status-${item.status}`}>{item.status}</span>
+        {prioLabel && (
+          <span
+            className={`workq-prio ${prio >= 100 ? 'interactive' : 'backfill'}`}
+            title={t('workq.prioHint', { n: prio })}
+          >
+            {prioLabel}
+          </span>
+        )}
         <Link className="workq-title" to={`/library/${encodeURIComponent(item.sha256)}`}>
           {title}
         </Link>
@@ -51,6 +86,12 @@ function ItemRow({
         <span>{taskLabel(item.translate, t('workq.taskTranslate'), '—')}</span>
         <span>·</span>
         <span>{taskLabel(item.summarize, t('workq.taskSummarize'), '—')}</span>
+        {timing && (
+          <>
+            <span>·</span>
+            <span className="workq-timing">{timing}</span>
+          </>
+        )}
       </div>
       <div className="workq-actions">
         {isQueued && (
@@ -81,10 +122,181 @@ function ItemRow({
   );
 }
 
+/** Compact status line: counts + pace + ETA. Detail lives in a hover popover. */
+function QueueStatusLine({
+  running,
+  queued,
+  history,
+  polledAt,
+  items,
+  workerActive,
+  nowSec,
+}: {
+  running: number;
+  queued: number;
+  history: number;
+  polledAt: number;
+  items: SourceWorkQueueItem[];
+  workerActive: boolean | null;
+  nowSec: number;
+}) {
+  const { t } = useI18n();
+  const eta = useMemo(() => computeWorkQueueEta(items, nowSec), [items, nowSec]);
+  const remaining = running + queued;
+
+  const compactParts: string[] = [
+    t('workq.counts', { running, queued, history }),
+  ];
+
+  if (eta.sampleCount > 0 && eta.avgSec > 0) {
+    compactParts.push(
+      t('workq.compactPace', { avg: formatDurationSec(eta.avgSec) }),
+    );
+  }
+
+  if (eta.doneLastHour > 0 || eta.doneLast15m > 0) {
+    compactParts.push(
+      t('workq.compactThru', {
+        n15: eta.doneLast15m,
+        n60: eta.doneLastHour,
+      }),
+    );
+  }
+
+  if (remaining === 0) {
+    compactParts.push(t('workq.etaIdle'));
+  } else if (eta.reliable && eta.etaSec != null && eta.etaAt != null) {
+    compactParts.push(
+      t('workq.compactEta', {
+        left: formatDurationSec(eta.etaSec),
+        eta: formatClock(eta.etaAt),
+      }),
+    );
+  } else if (eta.sampleCount > 0 && eta.avgSec > 0) {
+    compactParts.push(
+      t('workq.etaRemainingShort', {
+        left: formatDurationSec(eta.avgSec * Math.max(1, remaining)),
+      }),
+    );
+  }
+
+  if (eta.runningElapsedSec != null) {
+    compactParts.push(
+      t('workq.compactRunning', {
+        elapsed: formatDurationSec(eta.runningElapsedSec),
+      }),
+    );
+  }
+
+  if (workerActive === false && remaining > 0) {
+    compactParts.push(t('workq.compactNoWorker'));
+  }
+
+  compactParts.push(
+    t('workq.polled', { time: new Date(polledAt).toLocaleTimeString() }),
+  );
+
+  return (
+    <span className="workq-status">
+      <span className="workq-status-line tiny muted" aria-live="polite">
+        {compactParts.join(' · ')}
+      </span>
+      <span className="workq-status-hint tiny muted" tabIndex={0}>
+        {t('workq.etaHoverHint')}
+        <span className="workq-status-pop" role="tooltip">
+          <EtaPopoverBody eta={eta} remaining={remaining} workerActive={workerActive} />
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function EtaPopoverBody({
+  eta,
+  remaining,
+  workerActive,
+}: {
+  eta: WorkQueueEta;
+  remaining: number;
+  workerActive: boolean | null;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="workq-pop-inner">
+      <div className="workq-pop-title">{t('workq.etaTitle')}</div>
+      {eta.sampleCount > 0 ? (
+        <div>
+          {t('workq.etaAvg', { avg: formatDurationSec(eta.avgSec) })}
+          {' · '}
+          {t('workq.etaMedian', { median: formatDurationSec(eta.medianSec) })}
+          <div className="muted">
+            {t('workq.etaSamples', { n: eta.sampleCount })}
+          </div>
+        </div>
+      ) : (
+        <div className="muted">{t('workq.etaWarmup')}</div>
+      )}
+      <div>
+        {t('workq.etaThroughput', {
+          n15: eta.doneLast15m,
+          n60: eta.doneLastHour,
+        })}
+      </div>
+      {eta.lastFinishedAt != null && (
+        <div>
+          {eta.lastStatus === 'failed'
+            ? t('workq.etaLastFailed', {
+                when: formatClock(eta.lastFinishedAt),
+                dur: formatDurationSec(eta.lastDurationSec ?? 0),
+              })
+            : t('workq.etaLast', {
+                when: formatClock(eta.lastFinishedAt),
+                dur: formatDurationSec(eta.lastDurationSec ?? 0),
+              })}
+          {eta.lastTitle && (
+            <div className="muted workq-pop-title-clip">
+              {t('workq.etaLastTitle', {
+                title:
+                  eta.lastTitle.length > 56
+                    ? eta.lastTitle.slice(0, 56) + '…'
+                    : eta.lastTitle,
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {eta.runningElapsedSec != null && (
+        <div>
+          {t('workq.etaRunning', {
+            elapsed: formatDurationSec(eta.runningElapsedSec),
+          })}
+        </div>
+      )}
+      {workerActive === false && remaining > 0 && (
+        <div className="workq-eta-warn">{t('workq.etaNoWorker')}</div>
+      )}
+      {remaining === 0 ? (
+        <div className="workq-pop-emph">{t('workq.etaIdle')}</div>
+      ) : eta.reliable && eta.etaSec != null && eta.etaAt != null ? (
+        <div className="workq-pop-emph">
+          {t('workq.etaRemaining', {
+            left: formatDurationSec(eta.etaSec),
+            eta: formatClock(eta.etaAt),
+          })}
+        </div>
+      ) : (
+        <div className="muted">{t('workq.etaWarmup')}</div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkQueuePage() {
   const { t } = useI18n();
   const { items, worker, reorder, cancel, remove, refresh } = useSourceWorkQueue();
   const [polledAt, setPolledAt] = useState(() => Date.now());
+  // Tick so running elapsed / ETA countdown refresh without waiting for poll.
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   const queued = items.filter((i) => i.status === 'queued');
   const running = items.filter((i) => i.status === 'running');
@@ -97,6 +309,13 @@ export default function WorkQueuePage() {
     setPolledAt(Date.now());
   }, [items]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const moveQueued = async (id: string, dir: -1 | 1) => {
     const ids = queued.map((i) => i.id);
     const idx = ids.indexOf(id);
@@ -107,6 +326,9 @@ export default function WorkQueuePage() {
     await reorder(next);
   };
 
+  const workerActive =
+    worker == null ? null : worker.active_here === true;
+
   return (
     <>
       <h1 style={{ marginTop: '1rem' }}>{t('workq.title')}</h1>
@@ -115,17 +337,15 @@ export default function WorkQueuePage() {
         <button type="button" className="action-btn" onClick={() => refresh()}>
           {t('workq.refresh')}
         </button>
-        <span className="tiny muted">
-          {t('workq.counts', {
-            running: running.length,
-            queued: queued.length,
-            history: history.length,
-          })}
-          {' · '}
-          {t('workq.polled', {
-            time: new Date(polledAt).toLocaleTimeString(),
-          })}
-        </span>
+        <QueueStatusLine
+          running={running.length}
+          queued={queued.length}
+          history={history.length}
+          polledAt={polledAt}
+          items={items}
+          workerActive={workerActive}
+          nowSec={nowSec}
+        />
       </div>
       {worker && !worker.active_here && (
         <p className="tiny muted workq-worker-banner" role="status">
@@ -155,6 +375,7 @@ export default function WorkQueuePage() {
                 onDown={() => {}}
                 onCancel={() => void cancel(item.id)}
                 onRemove={() => {}}
+                nowSec={nowSec}
               />
             ))}
           </ul>
@@ -177,6 +398,7 @@ export default function WorkQueuePage() {
                 onDown={() => void moveQueued(item.id, 1)}
                 onCancel={() => void cancel(item.id)}
                 onRemove={() => {}}
+                nowSec={nowSec}
               />
             ))}
           </ul>
@@ -197,6 +419,7 @@ export default function WorkQueuePage() {
                 onDown={() => {}}
                 onCancel={() => {}}
                 onRemove={() => void remove(item.id)}
+                nowSec={nowSec}
               />
             ))}
           </ul>

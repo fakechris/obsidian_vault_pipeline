@@ -367,6 +367,8 @@ export interface SourceWorkQueueItem {
   finished_at?: number | null;
   notify: boolean;
   notify_sent: boolean;
+  /** Higher runs first. 0 = backfill, 100 = interactive UI. */
+  priority?: number;
 }
 
 export interface SourceWorkWorkerInfo {
@@ -394,6 +396,10 @@ export function fetchSourceWorkQueue(): Promise<SourceWorkQueueSnapshot> {
   return fetchJson<SourceWorkQueueSnapshot>('/api/source-work/queue');
 }
 
+/** Interactive UI jobs jump ahead of bulk backfill (see PRIORITY_* in Rust). */
+export const WORKQ_PRIORITY_INTERACTIVE = 100;
+export const WORKQ_PRIORITY_BACKFILL = 0;
+
 export async function enqueueSourceWork(opts: {
   sha256: string;
   title?: string | null;
@@ -401,6 +407,8 @@ export async function enqueueSourceWork(opts: {
   summarize?: boolean;
   force?: boolean;
   notify?: boolean;
+  /** Default: interactive (100) for portal clicks. */
+  priority?: number;
 }): Promise<SourceWorkQueueItem> {
   const res = await fetch('/api/source-work/queue', {
     method: 'POST',
@@ -412,6 +420,11 @@ export async function enqueueSourceWork(opts: {
       summarize: !!opts.summarize,
       force: !!opts.force,
       notify: opts.notify !== false,
+      priority:
+        opts.priority ??
+        (opts.notify === false
+          ? WORKQ_PRIORITY_BACKFILL
+          : WORKQ_PRIORITY_INTERACTIVE),
     }),
   });
   const data = (await res.json().catch(() => ({}))) as {

@@ -213,7 +213,7 @@ function SourceTags({
 }
 
 function CitingClaims({ claims }: { claims: ClaimRow[] }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   if (claims.length === 0) {
     return (
       <EmptyState>
@@ -226,14 +226,18 @@ function CitingClaims({ claims }: { claims: ClaimRow[] }) {
   }
   return (
     <ul className="citing-list">
-      {claims.map((c) => (
-        <li key={c.claim_id}>
-          {(c.status === 'durable' || c.status === 'caveated') && (
-            <ClaimPill status={c.status} />
-          )}{' '}
-          <Link to={`/knowledge#${c.claim_id}`}>{c.claim}</Link>
-        </li>
-      ))}
+      {claims.map((c) => {
+        const text =
+          lang === 'zh' && c.claim_zh?.trim() ? c.claim_zh : c.claim;
+        return (
+          <li key={c.claim_id}>
+            {(c.status === 'durable' || c.status === 'caveated') && (
+              <ClaimPill status={c.status} />
+            )}{' '}
+            <Link to={`/knowledge#${c.claim_id}`}>{text}</Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -258,7 +262,7 @@ function libraryListHref(f: LibraryFilter): string {
 }
 
 export default function SourceDetailPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { sha } = useParams<{ sha: string }>();
   const navigate = useNavigate();
   const { model } = useModel();
@@ -330,11 +334,16 @@ export default function SourceDetailPage() {
     browse.idx >= 0 && browse.idx < browse.order.length - 1
       ? browse.order[browse.idx + 1]
       : null;
+  // Carry the active content tab across prev/next so reading summary/zh
+  // stays on that tab when the neighbor has it; missing tabs fall back to
+  // source once work status is known (see effect below).
+  const browseTabExtra =
+    tab === 'source' ? undefined : ({ tab } as Record<string, string>);
   const prevHref = prevSha
-    ? librarySourcePath(prevSha, browse.filter)
+    ? librarySourcePath(prevSha, browse.filter, browseTabExtra)
     : null;
   const nextHref = nextSha
-    ? librarySourcePath(nextSha, browse.filter)
+    ? librarySourcePath(nextSha, browse.filter, browseTabExtra)
     : null;
 
   // [ ] / ArrowLeft/Right — sequential browse when not typing.
@@ -434,20 +443,45 @@ export default function SourceDetailPage() {
     (work?.primarily_english ??
       (bodyMarkdown ? isPrimarilyEnglish(bodyMarkdown) : false));
 
+  /** True once source-work for *this* sha has settled (ok or missing). */
+  const [workReady, setWorkReady] = useState(false);
+
   useEffect(() => {
-    if (STATIC_MODE || !sha || status !== 'ready') return;
+    // Drop prior article's artifacts so tab availability is not stale while
+    // the next fetch is in flight (otherwise zh/summary may look present).
+    setWork(null);
+    setWorkReady(false);
+    if (STATIC_MODE || !sha || status !== 'ready') {
+      if (status === 'ready') setWorkReady(true);
+      return;
+    }
     let cancelled = false;
     fetchSourceWork(sha)
       .then((w) => {
-        if (!cancelled) setWork(w);
+        if (!cancelled) {
+          setWork(w);
+          setWorkReady(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setWork(null);
+        if (!cancelled) {
+          setWork(null);
+          setWorkReady(true);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [sha, status, version]);
+
+  // Prefer sticking to the URL tab (carried by prev/next). If this article
+  // has no zh/summary artifact, fall back to the default source tab.
+  useEffect(() => {
+    if (!workReady) return;
+    if (tab === 'zh' && !work?.has_zh) setTab('source');
+    else if (tab === 'summary' && !work?.has_summary) setTab('source');
+    // memory + source always exist as tabs
+  }, [workReady, work?.has_zh, work?.has_summary, tab]);
 
   /** Merge so a finishing translate never wipes summary body (and vice versa). */
   const applyWork = (w: SourceWorkPayload, preferTab: 'zh' | 'summary' | null) => {
@@ -900,12 +934,22 @@ export default function SourceDetailPage() {
                   <p className="tiny muted">{t('source.cardsHint')}</p>
                 </>
               )}
-              {memory.cards.map((card, i) => (
-                <div className="card mem-card" key={`c${i}`}>
-                  <div className="mem-title">{card.title}</div>
-                  <p>{card.content}</p>
-                </div>
-              ))}
+              {memory.cards.map((card, i) => {
+                const title =
+                  lang === 'zh' && card.title_zh?.trim()
+                    ? card.title_zh
+                    : card.title;
+                const content =
+                  lang === 'zh' && card.content_zh?.trim()
+                    ? card.content_zh
+                    : card.content;
+                return (
+                  <div className="card mem-card" key={card.id ?? `c${i}`}>
+                    <div className="mem-title">{title}</div>
+                    <p>{content}</p>
+                  </div>
+                );
+              })}
               {memory.cards.length === 0 && memory.units.length === 0 && (
                 <EmptyState>
                   <p>

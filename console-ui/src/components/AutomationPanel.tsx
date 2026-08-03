@@ -152,7 +152,8 @@ function graphFor(job: ScheduleJob): { nodes: GraphNode[]; edges: GraphEdge[] } 
 
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
-  return iso.replace('T', ' ');
+  // Local schedule stamps are naive YYYY-MM-DDTHH:MM:SS — show digits as-is.
+  return iso.replace('T', ' ').slice(0, 16);
 }
 
 function jobTitle(t: (k: MsgKey, v?: Record<string, string | number>) => string, job: ScheduleJob) {
@@ -413,6 +414,14 @@ function JobStrip({
             className={`auto-job-tab${active ? ' auto-job-tab--active' : ''}${
               job.enabled ? '' : ' auto-job-tab--off'
             }`}
+            title={t('auto.jobTooltip', {
+              title: jobTitle(t, job),
+              cadence: job.cadence,
+              status: statusLabel(t, job),
+              lastRun: job.last_run ? formatWhen(job.last_run) : t('auto.never'),
+              nextRun: job.enabled ? formatWhen(job.next_run) : t('auto.paused'),
+              dueExplain: job.due ? t('auto.dueExplainYes') : t('auto.dueExplainNo'),
+            })}
             onClick={() => onSelect(job.id)}
           >
             <span className="auto-job-tab-title">{jobTitle(t, job)}</span>
@@ -422,8 +431,15 @@ function JobStrip({
               {statusLabel(t, job)}
             </span>
             <span className="auto-job-tab-when tiny muted">
+              {t('auto.lastRunLine', {
+                when: job.last_run ? formatWhen(job.last_run) : t('auto.never'),
+                status: statusLabel(t, job),
+              })}
+            </span>
+            <span className="auto-job-tab-when tiny muted">
               {t('auto.nextRun')}:{' '}
               {job.enabled ? formatWhen(job.next_run) : t('auto.paused')}
+              {job.due ? ' · due' : ''}
             </span>
           </button>
         );
