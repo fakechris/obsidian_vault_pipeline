@@ -767,8 +767,10 @@ fn run_inner(
     // instead of waiting for a manual `source-work memory-zh` pass. Reuses the
     // evidence built above — no second index walk. Best-effort like the tags
     // bootstrap: replay/offline, flag-off, or any tail error warns/skips and
-    // never changes the run's terminal status.
-    {
+    // never changes the run's terminal status. The card collection itself is
+    // gated on Live: the tail returns immediately for replay/offline, so
+    // cloning every evidence card there would be wasted work.
+    if args.client_kind == ClientKind::Live {
         let cards: Vec<(String, String, String)> = evidence
             .cards
             .iter()
@@ -930,7 +932,7 @@ fn cards_zh_tail(
     if !cfg.auto_memory_zh {
         return;
     }
-    let cache = vault_root.join(".ovp/cassettes/bilingual");
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
     let mut client = match build_client(ClientKind::Live, &cache) {
         Ok(c) => c,
         Err(e) => {
@@ -1278,6 +1280,15 @@ mod tests {
     fn cards_zh_tail_skipped_for_replay_client() {
         let tmp = tempfile::tempdir().unwrap();
         cards_zh_tail(tmp.path(), ClientKind::Replay, &sample_cards());
+        assert!(!tmp.path().join(CARDS_ZH).exists());
+    }
+
+    /// The flag-on path with no cards is a no-op: nothing to translate, and
+    /// the live client is never built (empty-cards gate comes first).
+    #[test]
+    fn cards_zh_tail_noop_without_cards() {
+        let tmp = tempfile::tempdir().unwrap();
+        cards_zh_tail(tmp.path(), ClientKind::Live, &[]);
         assert!(!tmp.path().join(CARDS_ZH).exists());
     }
 

@@ -257,7 +257,7 @@ fn theme_pages_zh_tail(
             )
         })
         .collect();
-    let cache = vault_root.join(".ovp/cassettes/bilingual");
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
     let mut client = match build_client(ClientKind::Live, &cache) {
         Ok(c) => c,
         Err(e) => {

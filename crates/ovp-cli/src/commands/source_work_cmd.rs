@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use ovp_index::build_index;
 use ovp_memory::bilingual::{
-    topup_cards_zh, topup_theme_pages_zh, translate_claims_batch, GlossaryFile,
+    CACHE_REL, GlossaryFile, topup_cards_zh, topup_theme_pages_zh, translate_claims_batch,
 };
 use ovp_memory::source_work_auto::candidates_from_index;
 use ovp_memory::source_work_config::SourceWorkConfig;
@@ -145,14 +145,22 @@ pub(crate) fn active_claim_pairs(
     let mut events: Vec<StoreEvent> = Vec::new();
     if ledger.is_file() {
         let raw = std::fs::read_to_string(&ledger).map_err(|e| format!("reading ledger: {e}"))?;
-        for (i, line) in raw.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+        let lines: Vec<(usize, &str)> = raw
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i, l.trim()))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+        for (pos, (i, line)) in lines.iter().enumerate() {
+            match serde_json::from_str::<StoreEvent>(line) {
+                Ok(ev) => events.push(ev),
+                // The serve worker appends without a read/write lock, so a
+                // read can catch a half-written FINAL line. Tolerate just
+                // that one — it will be complete next run. Mid-file garbage
+                // stays a loud, line-numbered error.
+                Err(_) if pos + 1 == lines.len() => {}
+                Err(e) => return Err(format!("ledger line {}: {e}", i + 1)),
             }
-            let ev: StoreEvent =
-                serde_json::from_str(line).map_err(|e| format!("ledger line {}: {e}", i + 1))?;
-            events.push(ev);
         }
     }
     Ok(fold_ledger(&events)
@@ -171,7 +179,7 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
 
     let cache = args
         .cache_dir
-        .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/bilingual"));
+        .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
     let mut client = build_client(args.client_kind, &cache)?;
     let model = ovp_memory::ask::AskArgs::default().model_name;
     let (done, skipped, errors) = translate_claims_batch(
@@ -210,7 +218,7 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     let date = today_iso();
     let cache = args
         .cache_dir
-        .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/bilingual"));
+        .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
     let mut client = build_client(args.client_kind, &cache)?;
     let model_name = ovp_memory::ask::AskArgs::default().model_name;
 
@@ -231,7 +239,8 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
             .map(|c| (c.id.clone(), c.title.clone(), c.content.clone()))
             .collect();
         sayln!("memory-zh cards: {} in evidence", cards.len());
-        let max = if budget == usize::MAX { 0 } else { budget };
+        // First phase: the budget is never exhausted yet, so this never skips.
+        let max = remaining_max(budget).unwrap_or(0);
         let (d, s, errors) = topup_cards_zh(
             &args.vault_root,
             &cards,
@@ -249,6 +258,14 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     }
 
     if do_pages {
+        // An exhausted --max budget must NOT become unlimited: the helpers
+        // treat max=0 as "no cap", so forwarding a drained budget would
+        // translate EVERY theme page.
+        let Some(max) = remaining_max(budget) else {
+            sayln!("memory-zh theme_pages: skipped (--max budget exhausted by cards)");
+            sayln!("memory-zh done: translated={done} skipped={skipped}");
+            return Ok(());
+        };
         use ovp_domain::crystal::theme_pages::ThemePagesFile;
         let path = args.vault_root.join(".ovp/crystal/theme_pages.json");
         let pages = ThemePagesFile::load(&path).map_err(CliError::Io)?;
@@ -271,7 +288,6 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
                 )
             })
             .collect();
-        let max = if budget == usize::MAX { 0 } else { budget };
         let (d, s, errors) = topup_theme_pages_zh(
             &args.vault_root,
             &page_inputs,
@@ -291,7 +307,120 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Map the remaining `--max` budget onto a phase's `max` argument.
+/// `usize::MAX` (no `--max` given) means unlimited — the helpers take 0 for
+/// that. An exhausted budget means the phase must NOT run at all (`None`):
+/// forwarding 0 there would silently become unlimited.
+fn remaining_max(budget: usize) -> Option<usize> {
+    match budget {
+        usize::MAX => Some(0),
+        0 => None,
+        n => Some(n),
+    }
+}
+
 fn today_iso() -> String {
     // Local civil day — same as `ovp2 daily` default date.
     chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_domain::crystal::{
+        CrystalStatus, DurableRecord, FinalClass, ProvenanceClass, StoreEvent, StoreOp,
+        StrengthClass,
+    };
+
+    fn record(claim_key: &str, claim: &str) -> DurableRecord {
+        DurableRecord {
+            claim_key: claim_key.into(),
+            claim_id: format!("cl-{claim_key}"),
+            claim: claim.into(),
+            theme: "t".into(),
+            source_cases: vec![],
+            citations: vec![],
+            provenance_score: 0.9,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "r".into(),
+            final_class: FinalClass::Durable,
+            run_id: "run-test".into(),
+            status: CrystalStatus::Active,
+        }
+    }
+
+    fn write_event(claim_key: &str, claim: &str) -> StoreEvent {
+        StoreEvent {
+            op: StoreOp::Write,
+            record: record(claim_key, claim),
+            supersedes: None,
+            reason: None,
+        }
+    }
+
+    fn write_ledger(vault: &std::path::Path, body: &str) {
+        let dir = vault.join(".ovp/crystal");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ledger.jsonl"), body).unwrap();
+    }
+
+    /// Regression (F1): an exhausted --max budget must map to "phase must not
+    /// run", never to 0 — the topup helpers treat max=0 as UNLIMITED.
+    #[test]
+    fn remaining_max_maps_budget_to_phase_cap() {
+        assert_eq!(remaining_max(usize::MAX), Some(0), "no --max = unlimited");
+        assert_eq!(remaining_max(5), Some(5));
+        assert_eq!(remaining_max(1), Some(1));
+        assert_eq!(remaining_max(0), None, "exhausted budget = phase must not run");
+    }
+
+    #[test]
+    fn active_claim_pairs_missing_ledger_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(active_claim_pairs(tmp.path()).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn active_claim_pairs_returns_only_active_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let active = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        let retract = serde_json::to_string(&StoreEvent {
+            op: StoreOp::Retract,
+            record: record("ck-r", "Retracted claim."),
+            supersedes: None,
+            reason: Some("stale".into()),
+        })
+        .unwrap();
+        write_ledger(tmp.path(), &format!("{active}\n{retract}"));
+        let pairs = active_claim_pairs(tmp.path()).unwrap();
+        assert_eq!(
+            pairs,
+            vec![("ck-a".to_string(), "Active claim.".to_string())]
+        );
+    }
+
+    #[test]
+    fn active_claim_pairs_midfile_garbage_errors_with_line_number() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{garbage\n{good}"));
+        let err = active_claim_pairs(tmp.path()).unwrap_err();
+        assert!(err.contains("ledger line 2"), "{err}");
+    }
+
+    /// The serve worker appends without a read/write lock: a read can catch a
+    /// half-written FINAL line. Skip just that line — it will be complete
+    /// next run — and still fold the events before it.
+    #[test]
+    fn active_claim_pairs_tolerates_trailing_partial_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{\"op\":\"write\",\"rec"));
+        let pairs = active_claim_pairs(tmp.path()).unwrap();
+        assert_eq!(
+            pairs,
+            vec![("ck-a".to_string(), "Active claim.".to_string())]
+        );
+    }
 }

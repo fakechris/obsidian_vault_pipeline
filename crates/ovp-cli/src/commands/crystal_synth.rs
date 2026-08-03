@@ -773,7 +773,7 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
     if pairs.is_empty() {
         return;
     }
-    let cache = vault_root.join(".ovp/cassettes/bilingual");
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
     let mut client = match build_client(ClientKind::Live, &cache) {
         Ok(c) => c,
         Err(e) => {
