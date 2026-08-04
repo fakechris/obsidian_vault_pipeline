@@ -33,7 +33,8 @@ pub fn run(args: AskCliArgs) -> Result<(), CliError> {
     let cassette_root = args
         .cache_dir
         .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/ask"));
-    let mut client = build_client(args.client_kind, &cassette_root)?;
+    let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = build_client(args.client_kind, &cassette_root, Some(&usage_ledger))?;
 
     let ask_args = AskArgs {
         question: args.question,

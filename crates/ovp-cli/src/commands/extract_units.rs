@@ -35,7 +35,7 @@ pub fn run(args: ExtractUnitsArgs) -> Result<(), CliError> {
     let source = ovp_domain::units::read_source_from_path(&args.input_path)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.input_path.display())))?;
 
-    let mut client = build_client(args.client_kind, &args.cache_dir)?;
+    let mut client = build_client(args.client_kind, &args.cache_dir, None)?;
 
     let run = run_unit_extraction(&source, client.as_mut())
         .map_err(|e| CliError::Io(format!("unit extraction call failed: {e}")))?;
@@ -85,8 +85,8 @@ fn run_repaired(args: ExtractUnitsArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.input_path.display())))?;
 
     // Base ALWAYS replays (frozen v5); only the critic call may go live.
-    let mut base_client = build_client(ClientKind::Replay, &args.cache_dir)?;
-    let mut critic_client = build_client(args.client_kind, &args.critic_cache_dir)?;
+    let mut base_client = build_client(ClientKind::Replay, &args.cache_dir, None)?;
+    let mut critic_client = build_client(args.client_kind, &args.critic_cache_dir, None)?;
 
     let run: RepairedRun =
         run_unit_extraction_repaired(&source, base_client.as_mut(), critic_client.as_mut())

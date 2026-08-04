@@ -455,11 +455,22 @@ enum Cmd {
         #[arg(long)]
         strict_ask: bool,
     },
+    /// PRODUCT — read-only LLM usage report from the metering ledger
+    /// (`.ovp/usage/llm-usage-YYYY-MM.jsonl`): day × lane token rollup,
+    /// soft daily-budget line (`.ovp/providers.toml` `[budget]`), and a
+    /// source-work queue drain estimate. Only metered (wired) entry points
+    /// are covered — the report says which.
+    Usage {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Days of history to roll up (default 7).
+        #[arg(long, default_value_t = 7)]
+        days: usize,
+    },
     /// PRODUCT — health checks over OVP vault state: ledger↔fs consistency,
     /// orphan packs, stale index, crystal integrity, disk usage. Exits non-zero
     /// if any check FAILs. `--fix` applies safe repairs (rebuild index, etc.).
-    Doctor {
-        #[arg(long)]
+    Doctor {        #[arg(long)]
         vault_root: PathBuf,
         /// Apply safe fixes (rebuild stale index, etc.). Never deletes.
         #[arg(long)]
@@ -1729,6 +1740,9 @@ fn main() -> ExitCode {
                 save,
                 strict_ask,
             })
+        }
+        Cmd::Usage { vault_root, days } => {
+            commands::usage_cmd::run(commands::usage_cmd::UsageArgs { vault_root, days })
         }
         Cmd::Doctor {
             vault_root,

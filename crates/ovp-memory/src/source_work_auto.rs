@@ -34,6 +34,11 @@ pub struct AutoEnqueueReport {
     pub skipped_cap: usize,
     pub errors: Vec<String>,
     pub item_ids: Vec<String>,
+    /// Per-kind breakdown of `enqueued` (dry-run included) — feeds the
+    /// backfill dry-run token estimate (`ovp2 usage` cold-start constants /
+    /// lane averages).
+    pub enqueued_translate: usize,
+    pub enqueued_summarize: usize,
 }
 
 /// Decide translate/summarize flags for one candidate under `cfg`.
@@ -122,6 +127,8 @@ pub fn enqueue_candidates(
         };
         if dry_run {
             report.enqueued += 1;
+            report.enqueued_translate += usize::from(want_t);
+            report.enqueued_summarize += usize::from(want_s);
             report
                 .item_ids
                 .push(format!("dry-{}", &cand.sha256[..cand.sha256.len().min(8)]));
@@ -140,6 +147,8 @@ pub fn enqueue_candidates(
         match queue.enqueue(req) {
             Ok(item) => {
                 report.enqueued += 1;
+                report.enqueued_translate += usize::from(want_t);
+                report.enqueued_summarize += usize::from(want_s);
                 report.item_ids.push(item.id);
             }
             Err(e) => report.errors.push(format!("{}: {e}", cand.sha256)),
@@ -334,6 +343,32 @@ mod tests {
         );
         assert_eq!(report.enqueued, 1);
         assert_eq!(report.considered, 1);
+        // Per-kind breakdown feeds the backfill dry-run token estimate.
+        assert_eq!(report.enqueued_translate, 1);
+        assert_eq!(report.enqueued_summarize, 1);
+    }
+
+    #[test]
+    fn dry_run_counts_follow_kind_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let queue = SourceWorkQueue::open(tmp.path());
+        let cand = SourceWorkCandidate {
+            sha256: "bbbbbbbbbbbbbbbb".into(),
+            title: Some("X".into()),
+            body: Some(en_body()),
+        };
+        let report = enqueue_candidates(
+            tmp.path(),
+            &queue,
+            &[cand],
+            &SourceWorkConfig::default(),
+            false,
+            Some(true),
+            Some(false),
+            true,
+        );
+        assert_eq!(report.enqueued_translate, 1);
+        assert_eq!(report.enqueued_summarize, 0);
     }
 
     #[test]

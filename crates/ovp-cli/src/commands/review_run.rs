@@ -64,7 +64,7 @@ pub fn run(args: ReviewRunArgs) -> Result<(), CliError> {
     let factory_run_id = run_id.clone();
     let factory_input = input_path.clone();
     let make_wiring = move || -> Result<AppWiring, String> {
-        let client = build_client(client_kind, &cache_dir).map_err(|e| e.to_string())?;
+        let client = build_client(client_kind, &cache_dir, None).map_err(|e| e.to_string())?;
         let registry = match &concept_registry {
             Some(path) => ConceptRegistry::load_from_file(path)
                 .map_err(|e| format!("loading concept registry: {e}"))?,

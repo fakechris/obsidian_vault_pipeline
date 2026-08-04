@@ -457,7 +457,7 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
     // ---- Labels ----
     let mut communities = Vec::with_capacity(n_communities);
     let mut live_client = match args.client_kind {
-        ClientKind::Live => Some(build_client(ClientKind::Live, &cassette_dir)?),
+        ClientKind::Live => Some(build_client(ClientKind::Live, &cassette_dir, None)?),
         ClientKind::Replay => None,
     };
     for (id, ms) in members.iter().enumerate() {

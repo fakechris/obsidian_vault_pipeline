@@ -20,7 +20,7 @@ pub struct CopyProbeArgs {
 pub fn run(args: CopyProbeArgs) -> Result<(), CliError> {
     let source = ovp_domain::units::read_source_from_path(&args.input_path)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.input_path.display())))?;
-    let mut client = build_client(args.client_kind, &args.cache_dir)?;
+    let mut client = build_client(args.client_kind, &args.cache_dir, None)?;
     let (report, raw) = run_copy_probe(&source, client.as_mut(), args.max_spans)
         .map_err(|e| CliError::Io(format!("copy-probe call failed: {e}")))?;
 

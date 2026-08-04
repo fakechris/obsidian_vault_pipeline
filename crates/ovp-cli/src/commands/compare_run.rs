@@ -66,7 +66,7 @@ pub fn run(args: CompareRunArgs) -> Result<(), CliError> {
     let factory_registry = args.concept_registry.clone();
     let client_kind = args.client_kind;
     let make_wiring = move |input: &std::path::Path| -> Result<AppWiring, String> {
-        let client = build_client(client_kind, &factory_cache).map_err(|e| e.to_string())?;
+        let client = build_client(client_kind, &factory_cache, None).map_err(|e| e.to_string())?;
         let registry = match &factory_registry {
             Some(path) => ConceptRegistry::load_from_file(path)
                 .map_err(|e| format!("loading concept registry: {e}"))?,

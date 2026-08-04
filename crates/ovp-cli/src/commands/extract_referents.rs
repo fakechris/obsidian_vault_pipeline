@@ -30,7 +30,7 @@ pub fn run(args: ExtractReferentsArgs) -> Result<(), CliError> {
     }
     let case_id = case_id_of(&args.units_path);
 
-    let mut client = build_client(args.client_kind, &args.cache_dir)?;
+    let mut client = build_client(args.client_kind, &args.cache_dir, None)?;
     let run = run_referent_extraction(&units, &case_id, client.as_mut())
         .map_err(|e| CliError::Io(format!("referent classification call failed: {e}")))?;
     let ex = run.extraction;

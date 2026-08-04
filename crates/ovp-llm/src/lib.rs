@@ -13,6 +13,7 @@ pub mod fixture;
 pub mod key;
 pub mod reply;
 pub mod request;
+pub mod usage;
 
 #[cfg(feature = "anthropic")]
 pub mod live;
@@ -28,6 +29,7 @@ pub use reply::{ExecutableToolCall, ModelReply, ReplyBlock, StopReason, Usage};
 pub use request::{
     AssistantBlock, ModelMessage, ModelRequest, ToolDef, ToolResultBlock,
 };
+pub use usage::UsageRow;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicBlockingClient;

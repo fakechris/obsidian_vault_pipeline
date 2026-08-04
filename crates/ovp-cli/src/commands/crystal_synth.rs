@@ -367,7 +367,11 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // Grounding index over the canonical packs dir — shared by the grounded
     // filter (both modes) and the L3 routing preview.
     let index = synth_build_index(&packs_dir).map_err(synth_err)?;
-    let mut base = build_client(args.client_kind, &paths.cache_dir)?;
+    let usage_ledger = args
+        .vault_root
+        .as_ref()
+        .map(|v| v.join(crate::commands::usage_cmd::USAGE_LEDGER_REL));
+    let mut base = build_client(args.client_kind, &paths.cache_dir, usage_ledger.as_deref())?;
     let mut repairs: Vec<RepairLog> = Vec::new();
     let mut stats = RunStats {
         mode: match args.cluster_mode {
@@ -783,7 +787,8 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
         return;
     }
     let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
-    let mut client = match build_client(ClientKind::Live, &cache) {
+    let usage_ledger = vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = match build_client(ClientKind::Live, &cache, Some(&usage_ledger)) {
         Ok(c) => c,
         Err(e) => {
             sayln!("  claims_zh tail skipped ({e})");

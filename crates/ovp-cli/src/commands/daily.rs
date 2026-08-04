@@ -407,7 +407,9 @@ fn run_inner(
         .cache_dir
         .clone()
         .unwrap_or_else(|| args.vault_root.join(layout.daily_cassette_dir()));
-    let mut make_client = || build_client(args.client_kind, &cache_dir).map_err(|e| e.to_string());
+    let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut make_client =
+        || build_client(args.client_kind, &cache_dir, Some(&usage_ledger)).map_err(|e| e.to_string());
     let cfg = DailyConfig {
         vault_root: args.vault_root.clone(),
         date: args.date.clone(),
@@ -933,7 +935,8 @@ fn cards_zh_tail(
         return;
     }
     let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
-    let mut client = match build_client(ClientKind::Live, &cache) {
+    let usage_ledger = vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = match build_client(ClientKind::Live, &cache, Some(&usage_ledger)) {
         Ok(c) => c,
         Err(e) => {
             sayln!("  cards_zh tail skipped ({e})");

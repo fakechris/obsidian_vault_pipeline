@@ -359,6 +359,9 @@ mod live {
         /// [`Self::with_no_proxy`]. Tracked so the timeout isn't lost when
         /// the proxy setting changes.
         no_proxy: bool,
+        /// Opt-in usage metering ledger dir (see [`Self::with_usage_ledger`]).
+        /// `None` = zero overhead, zero files.
+        usage_ledger: Option<std::path::PathBuf>,
         http: reqwest::blocking::Client,
     }
 
@@ -397,6 +400,7 @@ mod live {
                 max_tokens_override: None,
                 timeout_secs,
                 no_proxy: false,
+                usage_ledger: None,
                 http: build_http_client(timeout_secs, false),
             }
         }
@@ -436,6 +440,18 @@ mod live {
             self
         }
 
+        /// Opt-in usage metering: append one JSONL row per REAL HTTP call
+        /// (success AND failure) to monthly shards `llm-usage-YYYY-MM.jsonl`
+        /// under `dir` (the vault's `.ovp/usage/`). Pure side channel — a
+        /// ledger write failure logs to stderr once and NEVER changes the
+        /// call's result. Not calling this = zero overhead, zero files, so
+        /// replay/offline paths (which never build this client) and unwired
+        /// call sites stay unmetered.
+        pub fn with_usage_ledger(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+            self.usage_ledger = Some(dir.into());
+            self
+        }
+
         /// Override the request timeout. Reasoning/thinking models can spend
         /// 30-90s on a single response while emitting `thinking` blocks; a
         /// request that succeeds in spirit but trips reqwest's
@@ -459,6 +475,47 @@ mod live {
             self.http = build_http_client(self.timeout_secs, true);
             self
         }
+
+        /// Meter one real HTTP exchange into the usage ledger (when wired via
+        /// [`Self::with_usage_ledger`]). `body` is the raw response body when
+        /// one arrived; tokens are read from it HERE (`parse_anthropic_reply`
+        /// stays an untouched pure free function), so rows for calls that
+        /// failed WITH a body still carry real token counts, while transport
+        /// failures record null tokens. Ledger write failures are swallowed
+        /// by `record_usage_side_channel` — metering never changes `result`.
+        fn meter(
+            &self,
+            request: &ModelRequest,
+            started: std::time::Instant,
+            body: Option<&str>,
+            result: &Result<ModelReply, CallError>,
+        ) {
+            let Some(dir) = &self.usage_ledger else {
+                return;
+            };
+            let (input_tokens, output_tokens) = body
+                .map(crate::usage::body_usage_tokens)
+                .unwrap_or((None, None));
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let row = crate::usage::UsageRow {
+                ts,
+                lane: crate::usage::lane_for_namespace(request.cache_namespace.as_deref()),
+                ns: request.cache_namespace.clone(),
+                model: self
+                    .model_override
+                    .clone()
+                    .unwrap_or_else(|| request.model.clone()),
+                ok: result.is_ok(),
+                input_tokens,
+                output_tokens,
+                ms: started.elapsed().as_millis() as u64,
+                err_kind: result.as_ref().err().map(crate::usage::err_kind_of).map(str::to_string),
+            };
+            crate::usage::record_usage_side_channel(dir, &row);
+        }
     }
 
     impl ModelClient for AnthropicBlockingClient {
@@ -473,7 +530,8 @@ mod live {
                 // `request.max_tokens` above the override on a retry).
                 body["max_tokens"] = serde_json::json!(mt.max(request.max_tokens));
             }
-            let resp = self
+            let started = std::time::Instant::now();
+            let resp = match self
                 .http
                 .post(&self.base_url)
                 .header("x-api-key", &self.api_key)
@@ -481,26 +539,40 @@ mod live {
                 .header("content-type", "application/json")
                 .json(&body)
                 .send()
-                .map_err(|e| CallError::Transport { detail: format!("send: {e}") })?;
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let err = CallError::Transport { detail: format!("send: {e}") };
+                    self.meter(request, started, None, &Err(err.clone()));
+                    return Err(err);
+                }
+            };
 
             let status = resp.status();
-            let text = resp
-                .text()
-                .map_err(|e| CallError::Transport { detail: format!("read body: {e}") })?;
+            let text = match resp.text() {
+                Ok(text) => text,
+                Err(e) => {
+                    let err = CallError::Transport { detail: format!("read body: {e}") };
+                    self.meter(request, started, None, &Err(err.clone()));
+                    return Err(err);
+                }
+            };
 
-            if !status.is_success() {
+            let result = if !status.is_success() {
                 // Non-2xx: try to extract the structured error; fall back
                 // to the raw body if it isn't the expected shape.
-                return match parse_anthropic_reply(&text) {
+                match parse_anthropic_reply(&text) {
                     Err(e @ CallError::Provider { .. }) => Err(e),
                     _ => Err(CallError::Provider {
                         code: status.as_u16().to_string(),
                         detail: text.chars().take(500).collect(),
                     }),
-                };
-            }
-
-            parse_anthropic_reply(&text)
+                }
+            } else {
+                parse_anthropic_reply(&text)
+            };
+            self.meter(request, started, Some(&text), &result);
+            result
         }
     }
 }
@@ -915,5 +987,19 @@ mod tests {
         // No text but stop_reason != max_tokens → genuine Decode (not retryable).
         let json = r#"{"model":"m","content":[{"type":"thinking","thinking":"x","signature":"s"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}"#;
         assert!(matches!(parse_anthropic_reply(json), Err(CallError::Decode { .. })));
+    }
+
+    /// Metering is opt-in: constructing the client — with OR without
+    /// `with_usage_ledger` — must touch nothing on disk. Files appear only
+    /// when a real HTTP call is metered.
+    #[cfg(feature = "anthropic")]
+    #[test]
+    fn usage_ledger_builder_has_zero_side_effects_until_a_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("usage");
+        let _unwired = AnthropicBlockingClient::new("sk-test");
+        assert!(!dir.exists(), "unwired builder creates nothing");
+        let _wired = AnthropicBlockingClient::new("sk-test").with_usage_ledger(&dir);
+        assert!(!dir.exists(), "the builder alone must not create the ledger dir");
     }
 }

@@ -33,7 +33,7 @@ pub fn run(args: InterpretArticleArgs) -> Result<(), CliError> {
     // Namespace = ARTICLE_PROMPT_ID = "article_interpret/v1". Schema bump
     // changes the const → namespace dir changes → old cassettes don't
     // masquerade as new-schema responses. See invariant docs.
-    let client: Box<dyn ModelClient> = build_client(args.client_kind, &args.cache_dir)?;
+    let client: Box<dyn ModelClient> = build_client(args.client_kind, &args.cache_dir, None)?;
 
     // ConceptResolver consumes a ConceptRegistry (not raw CLI constants):
     // loaded from --concept-registry if given, else a default seed.

@@ -557,7 +557,7 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         .cache_dir
         .clone()
         .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/crystal"));
-    let mut client = build_client(args.client_kind, &cache_dir)?;
+    let mut client = build_client(args.client_kind, &cache_dir, None)?;
     let mut verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
     let mut repairs: Vec<RepairLog> = Vec::new();
     // Each chunk is one live re-gate LLM call; stream a flushed heartbeat so a
