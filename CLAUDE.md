@@ -39,15 +39,24 @@ sidecar 的 mtime/哈希与目标提交,**不是看 `cargo build` 成功**。dev
 它会命中一个可能没编 live features 的 `target/release/ovp2`,然后把
 `--features web-fetch-live` 这种构建期错误抛给 GUI 用户。
 
-## 前端住在 vault 里,不在 app 包里
+## 前端有两份,vault 那份优先
 
-`read_app_file`(`ovp-server/src/lib.rs:4557`)**逐文件**地先查
-`<vault>/.ovp/console/app/`,再退到 `--viz-dir` / app 包自带的 dist。这是 `2987cebb`
-定下的:**已部署副本是权威,overlay 只是 dev checkout 服务任意 vault 时的兜底。**
+两份都能独立工作,`read_app_file`(`ovp-server/src/lib.rs:4557`)**逐文件**决定用哪份:
 
-后果是新人最容易踩的一脚:**重新打包 desktop app 不会改变门户显示的东西。** vault 里那份
+| 位置 | 角色 | 什么时候更新 |
+|---|---|---|
+| `<vault>/.ovp/console/app/` | **优先**。存在就赢 | 手动部署(`deploy-portal.sh`) |
+| app 包 `Contents/Resources/console-ui/dist` | 兜底(经 `--viz-dir`) | 重新打包 app 时 |
+
+最终用户的 vault 里**没有**第一份,门户就吃 app 包那份——这是正常路径。第一份是给
+"不重新打包就要看到前端改动"用的,也就是开发迭代。
+
+这个优先级是 `2987cebb` 有意定的:已部署副本让 vault 自成一体(`ovp2 serve` 时代的需求),
+`--viz-dir` 让 dev checkout 能服务任意 vault。**两者是不同场景,不是替代关系。**
+
+坑在于开发机上两份都在:**重新打包 desktop app 不会改变门户显示的东西。** vault 那份
 `index.html` 赢,它引用旧的 asset 哈希,那些 asset 也从同一份旧副本解析出来——整页都是旧
-构建,而构建日志全绿。
+构建,而构建日志全绿。不想要这个优先级就删掉 vault 那份,门户立刻回到 app 包那份。
 
 所以改完前端要跑:
 
