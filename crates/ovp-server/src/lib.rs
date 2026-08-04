@@ -2886,7 +2886,7 @@ fn handle_source_work_queue_delete(
 
 /// Background loop: claim one article, run its wanted tasks (parallel), finish.
 fn source_work_queue_worker(state: Arc<AppState>) {
-    use ovp_memory::source_work_queue::TaskKind;
+    use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
     loop {
         state
             .source_work_queue
@@ -2957,8 +2957,13 @@ fn source_work_queue_worker(state: Arc<AppState>) {
         let url_s = url;
         let force_t = item.translate.force;
         let force_s = item.summarize.force;
-        let do_t = item.translate.wanted;
-        let do_s = item.summarize.wanted;
+        // Run ONLY the tasks claim_next armed (Running): after a partial
+        // retry the terminal sibling (Done / permanently Failed) must not
+        // execute again — with force=true that would repeat a paid LLM call,
+        // and a permanent sibling would be retried despite first-failure
+        // terminal semantics (codex P2 on PR #411).
+        let do_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
+        let do_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
         let factory_t = factory.clone();
         let factory_s = factory;
 
