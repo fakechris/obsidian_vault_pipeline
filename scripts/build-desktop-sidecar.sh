@@ -5,6 +5,30 @@
 # --pinboard-live. A plain `cargo build -p ovp-cli` omits those features and
 # bricks every daily run the moment any needs-content item is pending
 # (2026-07-31 last-run regression). Mirror release-desktop.yml features.
+#
+# This is THE correct local build path — `npx tauri build` alone is NOT enough:
+# the sidecar at apps/desktop/src-tauri/binaries/ovp2-<triple> is a HAND-STAGED
+# static file (CI rebuilds it each cut; local `tauri build` packs whatever is
+# there). If you `cargo build` without --features and stage that binary, every
+# daily run fails on the first needs-content source with:
+#   "live web fetch requires a build with `--features web-fetch-live`"
+#
+# == LOCAL REBUILD WORKFLOW ==
+# 1) (this script)  Build the sidecar with all live features → stage into
+#    apps/desktop/src-tauri/binaries/ovp2-<triple>.
+# 2) Full DMG/app bundle rebuild for distribution:
+#        cd apps/desktop && npm run tauri build            # → target/release/bundle/
+# 3) Hot-swap the sidecar into an already-running app (NO full re-bundle,
+#    ~50s vs minutes): pass INSTALL_APP=/path/to/OVP2.app. The script copies
+#    the fresh binary next to the app executable and ad-hoc re-signs it so
+#    macOS will exec the replaced binary:
+#        INSTALL_APP=/Applications/OVP2.app ./scripts/build-desktop-sidecar.sh
+#
+# == VERIFY (do NOT trust `strings` grep — brotli/false negatives) ==
+# Functional check: run the bundled CLI directly and hit the portal:
+#   /Applications/OVP2.app/Contents/MacOS/ovp2 serve --vault-root <vault> &
+#   curl -s http://127.0.0.1:<port>/api/ask/status
+# Or just launch the app and trigger a daily run from the System page.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

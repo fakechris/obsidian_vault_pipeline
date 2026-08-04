@@ -154,7 +154,10 @@ pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<St
 
 /// Rewrite `<vault>/.ovp/providers.toml` from a validated map (UPPER_SNAKE
 /// names enforced; values written as TOML strings), with the standard header
-/// and 0600 permissions (it holds credentials).
+/// and 0600 permissions (it holds credentials). Non-`[env]` sections
+/// (`[budget]`, future sections) are PRESERVED verbatim — rebuilding only
+/// `[env]` from the server settings endpoint must not silently delete the
+/// operator's budget config (codex adversarial).
 pub fn write_providers_file(
     vault_root: &Path,
     entries: &std::collections::BTreeMap<String, String>,
@@ -173,12 +176,33 @@ pub fn write_providers_file(
     let dir = vault_root.join(".ovp");
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = dir.join("providers.toml");
+    // Preserve every non-[env] section block from the existing file. Section
+    // blocks start at a `[name]` header line; preamble comments before the
+    // first header are regenerated below, so they are intentionally dropped.
+    let mut kept_sections = String::new();
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let mut keep = false;
+        for line in raw.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                keep = t != "[env]";
+            }
+            if keep {
+                kept_sections.push_str(line);
+                kept_sections.push('\n');
+            }
+        }
+    }
     let mut body = String::from(
         "# Provider configuration — read by ovp2/desktop at startup.\n\
          # Values are DEFAULTS: variables already set in the environment win.\n[env]\n",
     );
     for (k, v) in entries {
         body.push_str(&format!("{k} = {}\n", toml_escape(v)));
+    }
+    if !kept_sections.trim().is_empty() {
+        body.push('\n');
+        body.push_str(&kept_sections);
     }
     // Create with 0600 FROM THE START — a write-then-chmod leaves a window
     // where the credentials are readable under the default umask (review
@@ -381,5 +405,36 @@ mod tests {
         assert!(apply_providers_env(tmp.path()).is_err());
         std::fs::write(&p, "[budget]\ndaily_token_budget = -5\n").unwrap();
         assert!(read_budget(tmp.path()).is_err());
+    }
+
+    /// The server settings endpoint rewrites `[env]` through
+    /// `write_providers_file` — `[budget]` (and any future section) must
+    /// survive that rewrite verbatim (codex adversarial: silent deletion).
+    #[test]
+    fn write_providers_file_preserves_non_env_sections() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".ovp/providers.toml");
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        std::fs::write(
+            &p,
+            "[env]\nOLD_KEY = \"old\"\n\n[budget]\ndaily_token_budget = 200000\n",
+        )
+        .unwrap();
+        let entries = std::collections::BTreeMap::from([("NEW_KEY".to_string(), "v".to_string())]);
+        write_providers_file(tmp.path(), &entries).unwrap();
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("NEW_KEY"), "{raw}");
+        assert!(!raw.contains("OLD_KEY"), "[env] was replaced: {raw}");
+        assert!(raw.contains("[budget]"), "[budget] preserved: {raw}");
+        assert!(raw.contains("daily_token_budget = 200000"), "{raw}");
+        // And it still parses through both loaders.
+        assert_eq!(
+            read_budget(tmp.path()).unwrap().daily_token_budget,
+            Some(200000)
+        );
+        assert_eq!(
+            read_providers_file(tmp.path()).unwrap().get("NEW_KEY"),
+            Some(&"v".to_string())
+        );
     }
 }

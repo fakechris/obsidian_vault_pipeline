@@ -37,38 +37,55 @@ pub(crate) fn cold_start_upper_bound(kind: &str) -> Option<u64> {
 }
 
 /// Load every ledger row from the monthly shards (sorted by filename =
-/// chronological). Malformed lines are skipped and counted, never fatal —
-/// this is a report over an append-only side channel.
-pub(crate) fn load_usage_rows(ledger_dir: &Path) -> (Vec<UsageRow>, usize) {
+/// chronological). Returns (rows, malformed_lines_skipped, io_warnings).
+/// Malformed lines are skipped and counted; a MISSING ledger dir is just an
+/// empty ledger — but a ledger/shard that EXISTS and can't be read is an
+/// io_warning (permission, transient IO): the caller must surface it,
+/// because silently treating it as "no usage" would print a zero budget
+/// total while spend is unknown (codex adversarial).
+pub(crate) fn load_usage_rows(ledger_dir: &Path) -> (Vec<UsageRow>, usize, Vec<String>) {
     let mut paths: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(ledger_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if name.starts_with("llm-usage-") && name.ends_with(".jsonl") {
-                paths.push(entry.path());
+    let mut io_warnings = Vec::new();
+    match std::fs::read_dir(ledger_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if name.starts_with("llm-usage-") && name.ends_with(".jsonl") {
+                    paths.push(entry.path());
+                }
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => io_warnings.push(format!(
+            "usage ledger {} unreadable ({e}) — report incomplete",
+            ledger_dir.display()
+        )),
     }
     paths.sort();
     let mut rows = Vec::new();
     let mut skipped = 0;
     for path in paths {
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for line in raw.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => {
+                for line in raw.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<UsageRow>(line) {
+                        Ok(row) => rows.push(row),
+                        Err(_) => skipped += 1,
+                    }
+                }
             }
-            match serde_json::from_str::<UsageRow>(line) {
-                Ok(row) => rows.push(row),
-                Err(_) => skipped += 1,
-            }
+            Err(e) => io_warnings.push(format!(
+                "usage shard {} unreadable ({e}) — report incomplete",
+                path.display()
+            )),
         }
     }
-    (rows, skipped)
+    (rows, skipped, io_warnings)
 }
 
 /// Local civil day (YYYY-MM-DD) for a row timestamp — matches the operator's
@@ -135,13 +152,18 @@ pub(crate) fn lane_avg_tokens(rows: &[UsageRow], lane: &str) -> Option<u64> {
 }
 
 /// (percent, verdict) for the soft budget line. Thresholds per the approved
-/// candidate: warn at >=80%, over at >=100%.
+/// candidate: warn at >=80%, over at >=100%. An explicit zero budget means
+/// "spend nothing": any recorded usage is OVER (codex adversarial — 0% / ok
+/// would silence exactly the alarm a zero budget exists to raise).
 pub(crate) fn budget_verdict(tokens_today: u64, budget: usize) -> (u64, &'static str) {
-    let pct = if budget == 0 {
-        0
-    } else {
-        tokens_today * 100 / budget as u64
-    };
+    if budget == 0 {
+        return if tokens_today > 0 {
+            (100, "OVER BUDGET")
+        } else {
+            (0, "ok")
+        };
+    }
+    let pct = tokens_today * 100 / budget as u64;
     let verdict = if pct >= 100 {
         "OVER BUDGET"
     } else if pct >= 80 {
@@ -169,7 +191,7 @@ pub(crate) fn estimate_source_work(
     translate: usize,
     summarize: usize,
 ) -> TokenEstimate {
-    let (rows, _) = load_usage_rows(&vault_root.join(USAGE_LEDGER_REL));
+    let (rows, _, _) = load_usage_rows(&vault_root.join(USAGE_LEDGER_REL));
     let calls = translate + summarize;
     match lane_avg_tokens(&rows, "source-work") {
         Some(avg) => TokenEstimate {
@@ -212,7 +234,7 @@ fn queued_source_work_counts(vault_root: &Path) -> (usize, usize) {
 
 pub fn run(args: UsageArgs) -> Result<(), CliError> {
     let ledger_dir = args.vault_root.join(USAGE_LEDGER_REL);
-    let (rows, skipped) = load_usage_rows(&ledger_dir);
+    let (rows, skipped, io_warnings) = load_usage_rows(&ledger_dir);
     let now = chrono::Local::now();
     let today = now.format("%Y-%m-%d").to_string();
     let cutoff = (now - chrono::Duration::days(args.days.saturating_sub(1) as i64))
@@ -220,6 +242,9 @@ pub fn run(args: UsageArgs) -> Result<(), CliError> {
         .to_string();
 
     sayln!("usage ledger: {}", ledger_dir.display());
+    for w in &io_warnings {
+        sayln!("  warn: {w}");
+    }
     if skipped > 0 {
         sayln!("  ({skipped} malformed ledger line(s) skipped)");
     }
@@ -242,16 +267,29 @@ pub fn run(args: UsageArgs) -> Result<(), CliError> {
     }
 
     // Soft daily budget (visibility only — nothing is ever blocked on it).
+    // Rows without token counts (transport failures — the provider may still
+    // have generated and charged a response) make the true total UNKNOWN;
+    // the printed figure is a lower bound and says so (codex adversarial).
     let tokens_today: u64 = rows
         .iter()
         .filter(|r| day_key(r.ts) == today)
         .filter_map(|r| Some(u64::from(r.input_tokens?) + u64::from(r.output_tokens?)))
         .sum();
+    let unknown_today = rows
+        .iter()
+        .filter(|r| day_key(r.ts) == today)
+        .filter(|r| r.input_tokens.is_none() || r.output_tokens.is_none())
+        .count();
     let budget = ovp_domain::providers::read_budget(&args.vault_root).map_err(CliError::Io)?;
     match budget.daily_token_budget {
         Some(b) => {
             let (pct, verdict) = budget_verdict(tokens_today, b);
-            sayln!("budget: today: {tokens_today} / {b} ({pct}%) [{verdict}]");
+            sayln!("budget: today: ≥{tokens_today} / {b} ({pct}%) [{verdict}]");
+            if unknown_today > 0 {
+                sayln!(
+                    "  (+ {unknown_today} call(s) with unknown usage — total is a LOWER BOUND)"
+                );
+            }
         }
         None => {
             sayln!(
@@ -265,7 +303,7 @@ pub fn run(args: UsageArgs) -> Result<(), CliError> {
     if qt + qs > 0 {
         let est = estimate_source_work(&args.vault_root, qt, qs);
         let basis = if est.cold_start {
-            "upper-bound estimate, typically 3-5x over"
+            "cold-start output-token ceilings — excludes input tokens & retries, typically 3-5x over"
         } else {
             "source-work lane average"
         };
@@ -338,8 +376,9 @@ mod tests {
                 row(ts2 + 120, "bilingual", true, Some((10, 5))),
             ],
         );
-        let (rows, skipped) = load_usage_rows(&dir);
+        let (rows, skipped, io_warnings) = load_usage_rows(&dir);
         assert_eq!(skipped, 0);
+        assert!(io_warnings.is_empty());
         assert_eq!(rows.len(), 4, "rows across month shards all load");
 
         let cutoff = day_key(ts1); // include both rows' day
@@ -367,9 +406,30 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let good = serde_json::to_string(&row(1_786_752_000, "ask", true, Some((1, 1)))).unwrap();
         std::fs::write(dir.join("llm-usage-2026-08.jsonl"), format!("{good}\n{{garbage\n")).unwrap();
-        let (rows, skipped) = load_usage_rows(&dir);
+        let (rows, skipped, io_warnings) = load_usage_rows(&dir);
         assert_eq!(rows.len(), 1);
         assert_eq!(skipped, 1);
+        assert!(io_warnings.is_empty());
+    }
+
+    /// A ledger dir that exists but is unreadable must NOT look like an
+    /// empty ledger (codex: IO failure masquerading as zero usage).
+    #[test]
+    fn unreadable_ledger_is_a_warning_not_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("usage");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shard = dir.join("llm-usage-2026-08.jsonl");
+        std::fs::write(&shard, "{}\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shard, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let (_, _, io_warnings) = load_usage_rows(&dir);
+            assert_eq!(io_warnings.len(), 1, "{io_warnings:?}");
+            assert!(io_warnings[0].contains("unreadable"));
+            std::fs::set_permissions(&shard, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
 
     #[test]
@@ -379,6 +439,8 @@ mod tests {
         assert_eq!(budget_verdict(999, 1000), (99, "WARN"));
         assert_eq!(budget_verdict(1000, 1000), (100, "OVER BUDGET"));
         assert_eq!(budget_verdict(0, 0), (0, "ok"));
+        // An explicit zero budget means "spend nothing" — any usage is over.
+        assert_eq!(budget_verdict(1, 0), (100, "OVER BUDGET"));
     }
 
     #[test]

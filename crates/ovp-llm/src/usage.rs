@@ -107,7 +107,19 @@ pub fn record_usage(ledger_dir: &Path, row: &UsageRow) -> std::io::Result<()> {
         .create(true)
         .append(true)
         .open(&shard)?;
-    f.write_all(line.as_bytes())
+    // ONE write() syscall per row: under O_APPEND, POSIX positions each
+    // write at EOF atomically, so concurrent processes cannot interleave
+    // rows. `write_all` may split into several syscalls and interleave
+    // (codex adversarial). A short write fails the row instead of leaving
+    // a partial line the next row would concatenate onto.
+    let n = f.write(line.as_bytes())?;
+    if n != line.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "short ledger write",
+        ));
+    }
+    Ok(())
 }
 
 static LEDGER_WARNED: AtomicBool = AtomicBool::new(false);
@@ -119,8 +131,14 @@ pub fn record_usage_side_channel(ledger_dir: &Path, row: &UsageRow) {
     if let Err(e) = record_usage(ledger_dir, row) {
         // Log ONCE per process; later failures stay silent (a metering
         // problem must never spam the operator log of a multi-hour run).
+        // `writeln!` (not `eprintln!`): the printing macros PANIC when
+        // stderr itself is broken (closed pipe, daemon fd) — a metering
+        // side channel must never unwind a successful call (codex).
         if !LEDGER_WARNED.swap(true, Ordering::Relaxed) {
-            eprintln!("ovp-llm: usage ledger write failed (further failures stay silent): {e}");
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "ovp-llm: usage ledger write failed (further failures stay silent): {e}"
+            );
         }
     }
 }

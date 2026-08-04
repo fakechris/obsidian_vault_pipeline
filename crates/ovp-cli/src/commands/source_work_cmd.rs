@@ -136,7 +136,7 @@ pub fn backfill(args: BackfillArgs) -> Result<(), CliError> {
             report.enqueued_summarize,
         );
         let basis = if est.cold_start {
-            "upper-bound estimate, typically 3-5x over"
+            "cold-start output-token ceilings — excludes input tokens & retries, typically 3-5x over"
         } else {
             "source-work lane average from .ovp/usage"
         };
