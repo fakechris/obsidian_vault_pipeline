@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "queue_failback-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.queue_failback",
+  "hypothesis": "RUNTIME surface: give source-work queue tasks a fail-back lifecycle instead of terminal-failed-forever. TaskState gains serde-default additive `attempts` + `not_before` (schema stays ovp.source-work-queue/v1). On task failure: TRANSIENT errors (transport/429/5xx/rate-limit/overloaded — same rules as ovp-llm is_transient) with attempts < 3 are re-queued with exponential backoff (60s x 2^attempts); permanent errors (4xx/decode/content) or exhausted attempts stay terminal Failed exactly as today. Claiming is gated at ITEM level: an item is claimable only when ALL wanted+queued tasks are past their not_before (claim_next flips both tasks at once). The retry branch sets item.status=Queued + started_at=None EXPLICITLY (never via recompute_item_status, which would leave the item Running and jam the one-at-a-time claim gate for STALE_RUNNING_SECS). enqueue's re-arm of Failed/Skipped/Cancelled tasks resets attempts=0 and not_before=None so a manual backfill re-run stays a working painkiller. Predicted: the 2026-08 network-outage class of incident (hundreds of transient task failures requiring manual re-enqueue) self-recovers within minutes with zero operator action, while permanent failures surface exactly as before.",
+  "predicted_delta": {
+    "transient_recovery": "100% of transient task failures (transport/429/5xx/rate-limit) are retried automatically up to 3 attempts with backoff; 0 operator re-enqueues needed for the outage class; permanent failures still reach terminal Failed on the first failure (no retry storm)",
+    "queue_liveness": "an item in backoff never blocks other items: cross-item claim continues immediately (pinned by the cross-item gate regression test); 0 queue stalls longer than the 1-4 minute backoff windows",
+    "operational_reliability": "the manual 're-run backfill after a network blip' runbook step disappears for the transient class"
+  },
+  "guardrails": {
+    "schema_backward_compatible": "new TaskState fields are #[serde(default)]: old queue files load with attempts=0/not_before=None (identical-to-today behavior); reverted code reads new files fine (unknown fields dropped on rewrite)",
+    "no_queue_stall": "the retry path NEVER goes through recompute_item_status: it explicitly sets item.status=Queued and started_at=None, so claim_next's one-item-running gate is not held by a backing-off item; recover_stale_running preserves attempts and not_before (no infinite 12-minute retry loop)",
+    "permanent_failures_unchanged": "4xx/decode/content errors and attempt-exhausted items reach terminal Failed with the same error text and operator surfaces as today; history pruning (40 terminal) unchanged",
+    "manual_reenqueue_still_works": "enqueue re-arm resets attempts/not_before — a manual backfill (today's only recovery tool) keeps full retry semantics and is never blocked by a stale not_before",
+    "budget_defer_reserved": "a budget-exhausted class maps to not_before=next local midnight; nothing produces it today (meter-don't-enforce per operator decision) — mechanism + tests only"
+  },
+  "eval_plan": {
+    "replay_set": "unit tests over source_work_queue.rs, no LLM calls: (1) CROSS-ITEM GATE (core regression): item A transient-fails back to Queued, item B is immediately claimable; (2) transient failure → attempts=1, not_before≈now+60s, claimable after the window; 3rd transient failure → terminal Failed; (3) item-level gate: translate backing off + summarize ready → item NOT claimable; (4) recover_stale_running preserves attempts and not_before; (5) permanent error → terminal Failed on first failure; (6) enqueue re-arm resets attempts/not_before; (7) legacy queue JSON without the new fields loads and behaves identically to today",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Single revert: with attempts=0/not_before=None everywhere the code paths collapse to today's behavior; queue files written by the new code load fine in old code (serde ignores unknown fields on read, drops on rewrite — no operator action).",
+  "ablation_required": false
+}
