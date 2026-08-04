@@ -16,6 +16,9 @@
 //! OVP_LLM_NO_PROXY = "1"
 //! GITHUB_TOKEN = "ghp_…"
 //! PINBOARD_TOKEN = "user:…"
+//!
+//! [budget]
+//! daily_token_budget = 200000   # optional; soft, surfaced by `ovp2 usage`
 //! ```
 
 use std::collections::BTreeMap;
@@ -23,11 +26,26 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+// NOTE: no top-level `deny_unknown_fields` — a vault's providers.toml is read
+// by MULTIPLE binaries of different versions (desktop sidecar, scheduler-
+// spawned ovp2, other worktrees), so an unknown section (e.g. `[budget]`
+// written before an older binary reads the file) must be TOLERATED, not
+// fail loud. Format/type errors still fail loud.
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ProvidersFile {
     #[serde(default)]
     env: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    budget: BudgetSection,
+}
+
+/// `[budget]` — soft per-day token budget, surfaced by `ovp2 usage` as a
+/// `today: X / Y (Z%)` line with 80%/100% warnings. Visibility only — by
+/// operator decision nothing is ever blocked on it.
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct BudgetSection {
+    #[serde(default)]
+    pub daily_token_budget: Option<usize>,
 }
 
 /// What `apply_providers_env` did, for the caller's (stderr) log line.
@@ -39,6 +57,21 @@ pub struct ProvidersApplied {
     pub already_set: Vec<String>,
 }
 
+/// Read + parse `<vault>/.ovp/providers.toml`. Missing file → `Ok(None)`;
+/// malformed TOML / type errors → `Err` (fail loud). Unknown top-level
+/// sections are tolerated (forward compat — see the struct note).
+fn parse_providers_file(vault_root: &Path) -> Result<Option<ProvidersFile>, String> {
+    let path = vault_root.join(".ovp/providers.toml");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    let file: ProvidersFile =
+        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    Ok(Some(file))
+}
+
 /// Read `<vault>/.ovp/providers.toml`'s `[env]` table as strings (the same
 /// scalar coercion `apply_providers_env` uses). Missing file → empty map;
 /// malformed → Err.
@@ -46,13 +79,9 @@ pub fn read_providers_file(
     vault_root: &Path,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
     let path = vault_root.join(".ovp/providers.toml");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    let Some(file) = parse_providers_file(vault_root)? else {
+        return Ok(Default::default());
     };
-    let file: ProvidersFile =
-        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
     let mut out = std::collections::BTreeMap::new();
     for (name, value) in &file.env {
         let text = match value {
@@ -76,6 +105,17 @@ pub fn read_providers_file(
         out.insert(name.clone(), text);
     }
     Ok(out)
+}
+
+/// Read `<vault>/.ovp/providers.toml`'s `[budget]` section (same parse as
+/// [`read_providers_file`]). Missing file / missing section → default
+/// (budget unset); malformed TOML or a wrong-typed `daily_token_budget`
+/// fails loud, exactly like `[env]`.
+pub fn read_budget(vault_root: &Path) -> Result<BudgetSection, String> {
+    let Some(file) = parse_providers_file(vault_root)? else {
+        return Ok(BudgetSection::default());
+    };
+    Ok(file.budget)
 }
 
 /// Parse the LEGACY `<vault>/.ovp/daily.env` (KEY=VALUE lines, optional
@@ -173,9 +213,10 @@ fn toml_escape(v: &str) -> String {
 
 /// Load `<vault>/.ovp/providers.toml` and export every `[env]` entry that is
 /// not already set in the process environment. Missing file → no-op;
-/// unparseable file, unknown top-level keys, lowercase names, or non-scalar
-/// values → `Err` (a typo'd secrets file must fail loud, not silently run
-/// unconfigured).
+/// unparseable file, lowercase names, or non-scalar values → `Err` (a typo'd
+/// secrets file must fail loud, not silently run unconfigured). Unknown
+/// top-level SECTIONS are tolerated (forward compat with newer binaries —
+/// e.g. a `[budget]` section written for `ovp2 usage`).
 ///
 /// # Safety contract
 /// Mutates the PROCESS environment (`std::env::set_var`) — call once at
@@ -183,15 +224,9 @@ fn toml_escape(v: &str) -> String {
 /// boot).
 pub fn apply_providers_env(vault_root: &Path) -> Result<ProvidersApplied, String> {
     let path = vault_root.join(".ovp/providers.toml");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ProvidersApplied::default());
-        }
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    let Some(file) = parse_providers_file(vault_root)? else {
+        return Ok(ProvidersApplied::default());
     };
-    let file: ProvidersFile =
-        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
 
     // Two phases: validate + convert the ENTIRE table first, mutate second.
     // A partial apply followed by an error would leave the process with an
@@ -295,8 +330,56 @@ mod tests {
         assert!(apply_providers_env(tmp.path()).is_err());
         std::fs::write(&p, "[env]\nOVP_X = [1, 2]\n").unwrap();
         assert!(apply_providers_env(tmp.path()).is_err());
-        // Unknown top-level table — probably a misplaced section.
-        std::fs::write(&p, "[llm]\nkey = \"x\"\n").unwrap();
+    }
+
+    /// Forward compat: a providers.toml carrying sections a binary doesn't
+    /// know (e.g. `[budget]` written for a newer ovp2, or any future section)
+    /// must NOT break older readers of the same vault — unknown sections are
+    /// ignored, while format/type errors (above) stay fail loud.
+    #[test]
+    fn unknown_sections_are_tolerated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".ovp/providers.toml");
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        std::fs::write(&p, "[llm]\nkey = \"x\"\n[future_thing]\nn = 1\n").unwrap();
+        assert!(apply_providers_env(tmp.path()).is_ok());
+        assert!(read_providers_file(tmp.path()).is_ok());
+        assert_eq!(read_budget(tmp.path()).unwrap(), BudgetSection::default());
+    }
+
+    #[test]
+    fn budget_section_parses_via_both_loaders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".ovp/providers.toml");
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        std::fs::write(
+            &p,
+            "[env]\nOVP_TEST_BUDGET_ENV = \"x\"\n\n[budget]\ndaily_token_budget = 200000\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_budget(tmp.path()).unwrap().daily_token_budget,
+            Some(200000)
+        );
+        // The `[env]` loader sees the same file fine with `[budget]` present.
+        assert_eq!(
+            read_providers_file(tmp.path()).unwrap().get("OVP_TEST_BUDGET_ENV"),
+            Some(&"x".to_string())
+        );
+        // Missing file → unset, not an error.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(read_budget(empty.path()).unwrap().daily_token_budget, None);
+    }
+
+    #[test]
+    fn malformed_or_mistyped_budget_fails_loud() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".ovp/providers.toml");
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        std::fs::write(&p, "[budget]\ndaily_token_budget = \"lots\"\n").unwrap();
+        assert!(read_budget(tmp.path()).is_err());
         assert!(apply_providers_env(tmp.path()).is_err());
+        std::fs::write(&p, "[budget]\ndaily_token_budget = -5\n").unwrap();
+        assert!(read_budget(tmp.path()).is_err());
     }
 }
