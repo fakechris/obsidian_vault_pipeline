@@ -200,7 +200,10 @@ fn daily_and_pinboard_sync_inherit_first_sync_flood_guard() {
     assert!(stdout.contains("pinboard: 503 fetched, 2 new note(s)"), "{stdout}");
     assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 2);
 
-    // --pinboard-since passthrough: everything predates the cutoff → 0 new.
+    // --pinboard-since passthrough: the cutoff is pushed down to the FETCH
+    // (5b0bc0ea: live uses fromdt because unfiltered posts/all HTTP 500s on
+    // large accounts; the fixture filters the same way). Every post predates
+    // the cutoff → nothing is even fetched, nothing materialized.
     let stdout = run_ok(bin().args([
         "daily",
         "--vault-root", vault.to_str().unwrap(),
@@ -209,7 +212,7 @@ fn daily_and_pinboard_sync_inherit_first_sync_flood_guard() {
         "--pinboard-fixture", export.to_str().unwrap(),
         "--pinboard-since", "2021-01-01",
     ]));
-    assert!(stdout.contains("pinboard: 503 fetched, 0 new note(s)"), "{stdout}");
+    assert!(stdout.contains("pinboard: 0 fetched, 0 new note(s)"), "{stdout}");
     assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 2, "nothing added");
 
     // pinboard-sync: same guard, same message.
