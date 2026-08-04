@@ -199,8 +199,14 @@ fn pinboard_since_filters_older_and_undated_bookmarks() {
     let opts = PinboardSyncOptions { since: Some("2026-06-03".into()), ..Default::default() };
     let out = sync_pinboard(&cfg(root), &mut FixturePinboardFetch::new(&export), false, &opts)
         .unwrap();
-    assert_eq!(out.fetched, 4);
-    assert_eq!(out.skipped_since, 2, "old + undated excluded: {out:?}");
+    // since WITHOUT until pushes the cutoff down to the fetch (5b0bc0ea:
+    // live uses fromdt — unfiltered posts/all HTTP 500s on large accounts;
+    // the fixture filters identically), so the old + undated posts never
+    // arrive: fetched counts only on/after-cutoff posts, and the
+    // materialize-side skipped_since stays 0. (since+until backfill windows
+    // still fetch the full export and filter materialize-side.)
+    assert_eq!(out.fetched, 2);
+    assert_eq!(out.skipped_since, 0, "excluded at fetch, not materialize: {out:?}");
     let urls: Vec<&str> = out.new_notes.iter().map(|r| r.url.as_str()).collect();
     assert_eq!(urls, ["https://e.x/edge", "https://e.x/new"], "on/after cutoff, oldest first");
     assert_eq!(read_pinboard_ledger(&root.join(".ovp/pinboard-sync.jsonl")).unwrap().len(), 2);
