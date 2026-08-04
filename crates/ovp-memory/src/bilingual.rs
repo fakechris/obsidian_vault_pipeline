@@ -424,7 +424,7 @@ macro_rules! load_snapshot {
                     0,
                     0,
                     vec![format!(
-                        "{}: {} ({e}) — delete the file to rebuild",
+                        "{}: {} ({e}) — if the file is unparseable, delete it to rebuild",
                         $rel, CORRUPT_PROJECTION_MARKER
                     )],
                 );
@@ -448,9 +448,13 @@ pub fn translate_claims_batch(
     let mut skipped = 0usize;
     let mut errors = Vec::new();
     let mut consecutive_errors = 0usize;
+    // `max` caps provider ATTEMPTS, not successes: each failure is still a
+    // paid call, and alternating success/failure would otherwise blow the
+    // budget without ever tripping the breaker (CodeRabbit).
+    let mut attempts = 0usize;
     let existing = load_snapshot!(ClaimsZhFile, vault_root, CLAIMS_ZH_REL);
     for (key, en) in claims {
-        if max > 0 && done >= max {
+        if max > 0 && attempts >= max {
             break;
         }
         if !force && existing.get_fresh(key, en).is_some() {
@@ -460,6 +464,7 @@ pub fn translate_claims_batch(
             skipped += 1;
             continue;
         }
+        attempts += 1;
         match translate_claim(vault_root, key, en, client, model, force) {
             Ok(_) => {
                 done += 1;
@@ -531,9 +536,11 @@ pub fn topup_cards_zh(
     let mut skipped = 0usize;
     let mut errors = Vec::new();
     let mut consecutive_errors = 0usize;
+    // `max` caps provider attempts, not successes (see translate_claims_batch).
+    let mut attempts = 0usize;
     let existing = load_snapshot!(CardsZhFile, vault_root, CARDS_ZH_REL);
     for (id, title, content) in cards {
-        if max > 0 && done >= max {
+        if max > 0 && attempts >= max {
             break;
         }
         if !force && existing.get_fresh(id, title, content).is_some() {
@@ -542,6 +549,7 @@ pub fn topup_cards_zh(
             skipped += 1;
             continue;
         }
+        attempts += 1;
         match translate_card(vault_root, id, title, content, client, model, force) {
             Ok(_) => {
                 done += 1;
@@ -652,9 +660,11 @@ pub fn topup_theme_pages_zh(
     let mut skipped = 0usize;
     let mut errors = Vec::new();
     let mut consecutive_errors = 0usize;
+    // `max` caps provider attempts, not successes (see translate_claims_batch).
+    let mut attempts = 0usize;
     let existing = load_snapshot!(ThemePagesZhFile, vault_root, THEME_PAGES_ZH_REL);
     for (community_id, sections) in pages {
-        if max > 0 && done >= max {
+        if max > 0 && attempts >= max {
             break;
         }
         let en_hash = theme_page_en_hash(sections);
@@ -664,6 +674,7 @@ pub fn topup_theme_pages_zh(
             skipped += 1;
             continue;
         }
+        attempts += 1;
         match translate_theme_page(vault_root, *community_id, sections, client, model, force) {
             Ok(_) => {
                 done += 1;
@@ -742,9 +753,15 @@ fn save_json<T: Serialize>(vault_root: &Path, rel: &str, value: &T) -> Result<()
     let raw = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
     // Atomic publish: tmp + rename in the same directory, so concurrent
     // readers (the portal serve worker answering HTTP requests) never see a
-    // torn projection mid-write.
+    // torn projection mid-write. The tmp name is unique per process+write —
+    // two writers sharing a fixed `<dest>.tmp` could rename each other's
+    // half-written file (CodeRabbit).
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let mut tmp_os = path.clone().into_os_string();
-    tmp_os.push(".tmp");
+    tmp_os.push(format!(".tmp.{}-{nanos}", std::process::id()));
     let tmp = std::path::PathBuf::from(tmp_os);
     if let Err(e) = fs::write(&tmp, raw) {
         let _ = fs::remove_file(&tmp);
@@ -968,6 +985,20 @@ mod tests {
         assert_eq!(client.calls, 3, "abort after 3 consecutive failures");
         assert_eq!(errors.len(), 4, "3 per-item errors + 1 summary");
         assert!(errors[3].contains("provider outage"), "{}", errors[3]);
+    }
+
+    /// `max` caps provider ATTEMPTS, not successes: with an always-failing
+    /// client and max=2, exactly 2 calls are made — old behavior would run
+    /// to the 3-failure breaker (CodeRabbit).
+    #[test]
+    fn topup_cards_zh_max_counts_attempts_not_successes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cards: Vec<_> = (0..5).map(|i| card(&format!("c{i}"), "T", "B")).collect();
+        let mut client = AlwaysFailsClient::default();
+        let (_done, _skipped, errors) =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 2);
+        assert_eq!(client.calls, 2, "max=2 attempts even when all fail");
+        assert_eq!(errors.len(), 2, "no breaker summary — cap hit first");
     }
 
     /// A MaxTokens reply is an error, never persisted — stored with a matching
