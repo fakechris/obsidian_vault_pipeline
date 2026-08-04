@@ -226,6 +226,26 @@ export function buildRunTimeline(
     });
   }
 
+  // A failed run does NOT re-arm the schedule: `is_due` compares last_run to the
+  // most recent occurrence and ignores last_status (ovp-scheduler/src/lib.rs),
+  // so this failure already consumed the current window. "Next schedule window"
+  // on its own reads as "it will fix itself" — say the quiet part out loud.
+  if (
+    (lr.status === 'failed' || lr.status === 'aborted') &&
+    schedule &&
+    schedule.due === false
+  ) {
+    steps.push({
+      id: 'no-auto-retry',
+      when: null,
+      kind: 'skip',
+      labelKey: 'timeline.noAutoRetry',
+      vars: {
+        next: formatRunWhen(schedule.next_run, { withSeconds: true }) || '—',
+      },
+    });
+  }
+
   if (schedule?.next_run) {
     steps.push({
       id: 'next',
@@ -301,6 +321,46 @@ export function lastRunBanner(
     startedAt: lr.started_at ?? null,
     endedAt: lr.ended_at ?? null,
   };
+}
+
+// ------------------------------------------------------------ retry pending
+
+/** How long a pending manual retry may sit before the button re-arms itself.
+ * A retry whose child dies before it writes a heartbeat would otherwise strand
+ * the only recovery control the operator has. */
+export const RETRY_WATCHDOG_MS = 90_000;
+
+/** Identity of the run the banner is showing. Same-day retries REUSE `run_id`
+ * (`daily-2026-08-03`), so the start instant is the part that actually moves
+ * when a new attempt begins — both halves are required to spot a new run. */
+export function runSignature(banner: LastRunBanner): string {
+  return `${banner.runId ?? '-'}|${banner.startedAt ?? '-'}`;
+}
+
+export interface RetryPending {
+  /** The run signature the operator clicked Retry from. */
+  from: string;
+  /** When the click happened (ms since epoch), for the watchdog. */
+  atMs: number;
+}
+
+/** Should the pending "Starting…" state clear?
+ *
+ * Watching only `level !== 'failed'` strands the button forever when the retry
+ * ALSO fails: the level keeps the same VALUE, so a level-keyed effect never
+ * re-fires and the operator is left holding a dead control with no error. Clear
+ * on any of: the banner left `failed`, a NEW run appeared (signature moved), or
+ * the watchdog expired. */
+export function shouldClearRetry(
+  pending: RetryPending | null,
+  banner: LastRunBanner,
+  nowMs: number,
+  watchdogMs: number = RETRY_WATCHDOG_MS,
+): boolean {
+  if (!pending) return false;
+  if (banner.level !== 'failed') return true;
+  if (runSignature(banner) !== pending.from) return true;
+  return nowMs - pending.atMs >= watchdogMs;
 }
 
 /** True when the heartbeat is a live in-progress run WITH a progress fraction —

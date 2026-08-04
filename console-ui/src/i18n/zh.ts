@@ -95,6 +95,8 @@ export const zh: Record<keyof typeof en, string> = {
   'timeline.failUnknown': '失败。{error}',
   'timeline.skippedReader': '未执行：intake → reader → index（未到达）',
   'timeline.noSourceFeed': '无逐条活动 — 失败发生在认领任何来源之前',
+  'timeline.noAutoRetry':
+    '不会自动重试 —— 这次失败已经占用掉了当前调度窗口。在 {next} 之前不会有任何运行。要立刻处理，请点「重试」或「立即运行」。',
   'timeline.nextDue': '下一次调度窗口（{cadence}）',
   'timeline.nextDueNow': '下一次调度窗口（{cadence}）— 已到点（等 tick / 点立即运行）',
 
@@ -661,6 +663,7 @@ export const zh: Record<keyof typeof en, string> = {
   'attention.ackHint': '隐藏此条，状态变化时会重新出现',
   'banner.retry': '重试',
   'banner.retrying': '启动中…',
+  'banner.retryFailed': '启动失败：{error}',
   'run.title': '管线运行',
   'run.help':
     '立即强制运行今天的 daily 任务。有保护：任何运行进行中时再次点击会被拒绝；手动运行完成后计入自动调度（当天不会重复跑）。',

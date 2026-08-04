@@ -213,6 +213,14 @@
    "quality_buckets": [
     "operational_reliability"
    ]
+  },
+  {
+   "id": "runtime.queue_failback",
+   "surface": "runtime",
+   "file": "crates/ovp-memory/src/source_work_queue.rs",
+   "quality_buckets": [
+    "operational_reliability"
+   ]
   }
  ]
 }
