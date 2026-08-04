@@ -46,6 +46,17 @@ pub enum Cadence {
         hour: u8,
         minute: u8,
     },
+    /// Every `hours` hours, ANCHORED AT LOCAL MIDNIGHT (`every 4h` → 00:00,
+    /// 04:00, …, 20:00). Anchoring — rather than stepping from `last_run` —
+    /// keeps occurrences drift-free: a late tick or a long run shifts nothing,
+    /// so `is_due` stays a pure function of the wall clock.
+    ///
+    /// `hours` that do not divide 24 leave a SHORT final slot before midnight
+    /// (`every 5h` → 00,05,10,15,20, then 00 four hours later). That is
+    /// accepted, not prevented: the alternative is drift.
+    EveryHours {
+        hours: u8,
+    },
 }
 
 fn parse_hm(s: &str) -> Result<(u8, u8), String> {
@@ -60,6 +71,23 @@ fn parse_hm(s: &str) -> Result<(u8, u8), String> {
         return Err(bad());
     }
     Ok((hour, minute))
+}
+
+/// Parse the `<N>h` of an `every <N>h` cadence. 1..=23 only: `24h` is `daily
+/// 00:00` (use that — it says what it means), and 0 would divide by zero.
+fn parse_every_hours(s: &str) -> Result<u8, String> {
+    let bad = || {
+        format!("invalid interval '{s}': expected <N>h with N in 1..=23, e.g. 4h (24h = 'daily 00:00')")
+    };
+    let n = s.strip_suffix('h').ok_or_else(bad)?;
+    if n.is_empty() || n.len() > 2 {
+        return Err(bad());
+    }
+    let hours: u8 = n.parse().map_err(|_| bad())?;
+    if !(1..=23).contains(&hours) {
+        return Err(bad());
+    }
+    Ok(hours)
 }
 
 fn parse_weekday(s: &str) -> Result<Weekday, String> {
@@ -90,7 +118,8 @@ fn weekday_abbr(wd: Weekday) -> &'static str {
 }
 
 impl Cadence {
-    /// Parse `"daily HH:MM"` or `"weekly <DOW> HH:MM"` (case-insensitive DOW).
+    /// Parse `"daily HH:MM"`, `"weekly <DOW> HH:MM"` (case-insensitive DOW), or
+    /// `"every <N>h"`.
     pub fn parse(s: &str) -> Result<Cadence, String> {
         let parts: Vec<&str> = s.split_whitespace().collect();
         match parts.as_slice() {
@@ -107,8 +136,12 @@ impl Cadence {
                     minute,
                 })
             }
+            ["every", spec] => {
+                let hours = parse_every_hours(spec)?;
+                Ok(Cadence::EveryHours { hours })
+            }
             _ => Err(format!(
-                "invalid cadence '{s}': expected 'daily HH:MM' or 'weekly <DOW> HH:MM'"
+                "invalid cadence '{s}': expected 'daily HH:MM', 'weekly <DOW> HH:MM', or 'every <N>h'"
             )),
         }
     }
@@ -121,6 +154,7 @@ impl Cadence {
                 hour,
                 minute,
             } => format!("weekly {} {hour:02}:{minute:02}", weekday_abbr(weekday)),
+            Cadence::EveryHours { hours } => format!("every {hours}h"),
         }
     }
 
@@ -156,17 +190,35 @@ impl Cadence {
                     cand - Duration::days(7)
                 }
             }
+            Cadence::EveryHours { hours } => {
+                // Anchor at LOCAL midnight and floor to the slot: the last
+                // occurrence is today's midnight + floor(elapsed_hours / N) * N.
+                // Sub-hour components are dropped, so 13:59 with `every 4h`
+                // resolves to 12:00, not 13:00.
+                let midnight = now.date().and_hms_opt(0, 0, 0).expect("midnight exists");
+                let slots = (now - midnight).num_hours() / hours as i64;
+                midnight + Duration::hours(slots * hours as i64)
+            }
         }
     }
 
     /// Next scheduled instant strictly after `now` (for status "next due").
     pub fn next_occurrence(self, now: NaiveDateTime) -> NaiveDateTime {
         let prev = self.most_recent_occurrence(now);
-        let step = match self {
-            Cadence::Daily { .. } => Duration::days(1),
-            Cadence::Weekly { .. } => Duration::days(7),
-        };
-        prev + step
+        match self {
+            Cadence::Daily { .. } => prev + Duration::days(1),
+            Cadence::Weekly { .. } => prev + Duration::days(7),
+            Cadence::EveryHours { hours } => {
+                // Midnight RE-ANCHORS the slot grid, so an interval that does
+                // not divide 24 must not step past it: `every 5h` goes
+                // 20:00 → 00:00 (the short final slot), never 01:00.
+                let stepped = prev + Duration::hours(hours as i64);
+                let next_midnight = (now.date() + Duration::days(1))
+                    .and_hms_opt(0, 0, 0)
+                    .expect("midnight exists");
+                stepped.min(next_midnight)
+            }
+        }
     }
 }
 
@@ -629,6 +681,95 @@ mod tests {
         ] {
             assert!(Cadence::parse(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    // -- interval cadence (`every <N>h`) ------------------------------------
+
+    #[test]
+    fn interval_cadence_round_trips_and_rejects_garbage() {
+        for s in ["every 1h", "every 4h", "every 23h"] {
+            assert_eq!(Cadence::parse(s).unwrap().to_display(), s, "round-trip {s}");
+        }
+        for bad in [
+            "every 0h",   // would divide by zero
+            "every 24h",  // that is `daily 00:00` — say what you mean
+            "every 25h", "every 4", "every h", "every -4h", "every 4hh", "every 4h 00:00",
+        ] {
+            assert!(Cadence::parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn interval_anchors_at_midnight_and_floors_to_the_slot() {
+        let c = Cadence::parse("every 4h").unwrap();
+        // Slots: 00 04 08 12 16 20. Sub-hour components are dropped.
+        for (now, want) in [
+            ("2026-07-12T00:00:00", "2026-07-12T00:00:00"),
+            ("2026-07-12T03:59:59", "2026-07-12T00:00:00"),
+            ("2026-07-12T04:00:00", "2026-07-12T04:00:00"),
+            ("2026-07-12T13:59:00", "2026-07-12T12:00:00"),
+            ("2026-07-12T23:59:59", "2026-07-12T20:00:00"),
+        ] {
+            assert_eq!(c.most_recent_occurrence(dt(now)), dt(want), "now={now}");
+        }
+    }
+
+    #[test]
+    fn interval_next_occurrence_never_steps_past_midnight() {
+        // 24 % 5 != 0, so the final slot is SHORT: 20:00 → 00:00, not 01:00.
+        // Stepping naively from `prev` would drift the whole next day's grid.
+        let c = Cadence::parse("every 5h").unwrap();
+        assert_eq!(
+            c.next_occurrence(dt("2026-07-12T21:30:00")),
+            dt("2026-07-13T00:00:00")
+        );
+        // A cadence that divides 24 is unaffected mid-day.
+        let c4 = Cadence::parse("every 4h").unwrap();
+        assert_eq!(
+            c4.next_occurrence(dt("2026-07-12T13:00:00")),
+            dt("2026-07-12T16:00:00")
+        );
+        assert_eq!(
+            c4.next_occurrence(dt("2026-07-12T21:00:00")),
+            dt("2026-07-13T00:00:00")
+        );
+    }
+
+    #[test]
+    fn interval_next_occurrence_is_strictly_after_now() {
+        for spec in ["every 1h", "every 4h", "every 5h", "every 7h", "every 23h"] {
+            let c = Cadence::parse(spec).unwrap();
+            for h in 0..24 {
+                for m in [0, 1, 30, 59] {
+                    let now = dt(&format!("2026-07-12T{h:02}:{m:02}:00"));
+                    let next = c.next_occurrence(now);
+                    assert!(next > now, "{spec} at {now}: next {next} must be > now");
+                    assert!(
+                        c.most_recent_occurrence(now) <= now,
+                        "{spec} at {now}: prev must be <= now"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interval_is_due_once_per_slot() {
+        let c = Cadence::parse("every 4h").unwrap();
+        let now = dt("2026-07-12T13:00:00"); // slot 12:00
+        assert!(is_due(c, None, now), "never run → due");
+        assert!(
+            !is_due(c, Some(dt("2026-07-12T12:05:00")), now),
+            "already ran inside this slot → not due"
+        );
+        assert!(
+            is_due(c, Some(dt("2026-07-12T11:59:00")), now),
+            "ran in the PREVIOUS slot → due again"
+        );
+        // The is_due contract is status-blind (see `is_due` docs): a run that
+        // FAILED inside the slot still consumes it. With `every 4h` the wait is
+        // 4 hours, not the 24 a `daily` cadence would impose.
+        assert!(!is_due(c, Some(dt("2026-07-12T12:00:00")), now));
     }
 
     // -- most_recent_occurrence / is_due ------------------------------------
