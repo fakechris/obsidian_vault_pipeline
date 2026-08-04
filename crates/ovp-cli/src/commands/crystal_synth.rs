@@ -367,9 +367,11 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // Grounding index over the canonical packs dir — shared by the grounded
     // filter (both modes) and the L3 routing preview.
     let index = synth_build_index(&packs_dir).map_err(synth_err)?;
-    let usage_ledger = args
-        .vault_root
-        .as_ref()
+    // Derive the usage ledger from the resolved STORE, not --vault-root: an
+    // explicit `--store <other-vault>/.ovp/crystal` must meter into the vault
+    // actually written (same rule as the bilingual tail's vault derivation);
+    // diagnostic stores are unmetered (CodeRabbit).
+    let usage_ledger = crate::commands::crystal_write::vault_of_crystal_store(&paths.store)
         .map(|v| v.join(crate::commands::usage_cmd::USAGE_LEDGER_REL));
     let mut base = build_client(args.client_kind, &paths.cache_dir, usage_ledger.as_deref())?;
     let mut repairs: Vec<RepairLog> = Vec::new();

@@ -1742,7 +1742,15 @@ fn main() -> ExitCode {
             })
         }
         Cmd::Usage { vault_root, days } => {
-            commands::usage_cmd::run(commands::usage_cmd::UsageArgs { vault_root, days })
+            // A zero-day window is meaningless (the cutoff includes today, so
+            // it would report nonzero usage as "0 days") — reject it here.
+            if days == 0 {
+                Err(CliError::Io(
+                    "usage: --days must be ≥ 1 (default 7)".to_string(),
+                ))
+            } else {
+                commands::usage_cmd::run(commands::usage_cmd::UsageArgs { vault_root, days })
+            }
         }
         Cmd::Doctor {
             vault_root,
