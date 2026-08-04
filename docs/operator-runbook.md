@@ -88,6 +88,39 @@ The old generated console stays reachable at `/legacy-index.html`
 portal's System page). After a `daily` run while the server is up, hit
 `/api/refresh` (or restart) to reload the index.
 
+#### Portal SPA deploy — after ANY `console-ui/` change
+
+```bash
+scripts/deploy-portal.sh "$VAULT"
+```
+
+Builds, deploys into `$VAULT/.ovp/console/app/`, then reads the asset hash a
+running portal actually serves and compares it against the one just built.
+Hard-refresh the browser afterwards (Cmd+Shift+R) if a tab was already open.
+
+**Read this part even if you never touch the frontend**, because the failure
+mode looks like a backend bug: file resolution checks the vault's deployed
+`.ovp/console/app/` BEFORE the `--viz-dir` overlay and before the desktop
+app's bundled `console-ui/dist`, per file (`read_app_file` in
+`crates/ovp-server/src/lib.rs`). While that directory exists it is
+authoritative — so **rebuilding the binary, or repackaging the whole desktop
+app, changes nothing about what the portal shows.** `/` resolves to the
+deployed `index.html`, which names the old asset hashes, which resolve from
+the same deployed copy. Every layer is internally consistent and every build
+log is green; the page is simply the old build.
+
+That is why the script verifies instead of just copying: a successful
+`npm run build` is the evidence that keeps this mistake alive.
+
+The precedence is deliberate (`2987cebb`): a deployed copy makes a vault
+self-contained, and `--viz-dir` exists so a dev checkout can serve ANY vault
+without deploying first — the two are different jobs, not alternatives. To
+hand the vault back to the app's bundled build, delete the deployed copy:
+
+```bash
+rm -rf "$VAULT/.ovp/console/app"      # then the app bundle / --viz-dir serves
+```
+
 Useful variants:
 
 ```bash

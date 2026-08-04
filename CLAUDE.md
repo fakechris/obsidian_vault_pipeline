@@ -19,7 +19,7 @@ Only gotchas below. Anything derivable by reading the code is deliberately absen
 | `crates/*`(**除** `ovp-server`)<br>daily / intake / scheduler / reader / CLI | `INSTALL_APP=/Applications/OVP2.app scripts/build-desktop-sidecar.sh` | 否 |
 | `crates/ovp-server` | 重建整个 desktop app(见下) | **是** |
 | `apps/desktop/src-tauri/*`<br>scheduler 间隔 / boot / 窗口 / 菜单 | 重建整个 desktop app | **是** |
-| `console-ui/*` | `npm run build` + 同步 dist(见下) | 否,刷新页面 |
+| `console-ui/*` | `scripts/deploy-portal.sh <vault>`(见下) | 否,硬刷新页面 |
 | `.ovp/schedule.json` | 无——下次 tick 自动读 | 否 |
 | `.ovp/providers.toml` | 无——每次调用重读 | 否 |
 
@@ -39,32 +39,26 @@ sidecar 的 mtime/哈希与目标提交,**不是看 `cargo build` 成功**。dev
 它会命中一个可能没编 live features 的 `target/release/ovp2`,然后把
 `--features web-fetch-live` 这种构建期错误抛给 GUI 用户。
 
-## 前端:vault 里那份副本会遮蔽一切
+## 前端住在 vault 里,不在 app 包里
 
-`resolve_static` 的优先级是 **`<vault>/.ovp/console/app/` 先,`--viz-dir` 后**,而且是
-**逐文件**的(`ovp-server/src/lib.rs:4557`)。vault 里只要有这个目录,app 包里新的
-`console-ui/dist` 就永远不生效——`/` 命中旧的 `index.html`,它引用旧的 asset 哈希,
-那些 asset 也在 vault 副本里,于是整页都是旧构建。
+`read_app_file`(`ovp-server/src/lib.rs:4557`)**逐文件**地先查
+`<vault>/.ovp/console/app/`,再退到 `--viz-dir` / app 包自带的 dist。这是 `2987cebb`
+定下的:**已部署副本是权威,overlay 只是 dev checkout 服务任意 vault 时的兜底。**
 
-代码里**没有任何地方写** `.ovp/console/app/`,它是历史上手工拷进去的(`serve --viz-dir`
-overlay 本来就是为了取代这个手工步骤)。所以两条路选一条:
+后果是新人最容易踩的一脚:**重新打包 desktop app 不会改变门户显示的东西。** vault 里那份
+`index.html` 赢,它引用旧的 asset 哈希,那些 asset 也从同一份旧副本解析出来——整页都是旧
+构建,而构建日志全绿。
 
-```bash
-# A. 让 app 自带的构建生效(推荐):删掉 vault 里的遮蔽副本
-rm -rf <vault>/.ovp/console/app
-
-# B. 不重新打包 app 就想看到新前端:直接覆盖 vault 那份
-npm --prefix console-ui run build
-rsync -a --delete console-ui/dist/ <vault>/.ovp/console/app/
-```
-
-两种都不用重启进程,刷新页面即可。**验收方式是比对页面实际引用的 asset 哈希**:
+所以改完前端要跑:
 
 ```bash
-curl -s http://127.0.0.1:<port>/ | grep -o 'assets/[^"]*\.js'
+scripts/deploy-portal.sh <vault-root>
 ```
 
-端口在 `<vault>/.ovp/desktop-portal.log` 里(每次启动一个随机端口)。
+它构建、部署、然后**去跑着的门户上取实际 asset 哈希做比对**。验收看的是这个比对,
+**不是 `npm run build` 的退出码**——后者正是让这个错误活过一整轮调试的东西。
+
+完整背景和手工步骤见 `docs/operator-runbook.md` 的 "Portal SPA deploy"。
 
 ## 重建整个 desktop app
 
