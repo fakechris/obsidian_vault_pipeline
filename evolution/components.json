@@ -196,6 +196,15 @@
     "operational_reliability",
     "crystal_provenance"
    ]
+  },
+  {
+   "id": "runtime.bilingual_tail",
+   "surface": "runtime",
+   "file": "crates/ovp-memory/src/bilingual.rs",
+   "quality_buckets": [
+    "coverage",
+    "operational_reliability"
+   ]
   }
  ]
 }

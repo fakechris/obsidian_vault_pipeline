@@ -690,6 +690,25 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     println!("  ledger: {}", outcome.ledger_path.display());
     println!("  view:   {}", outcome.crystal_md_path.display());
 
+    // Bilingual tail (candidate bilingual_tail-v1): the ledger write
+    // succeeded, so top up the claims_zh projection — the portal's zh surface
+    // self-heals after each live run instead of waiting for a manual
+    // `source-work claims-zh` pass. Best-effort: replay/offline, no vault
+    // root, flag-off, or any tail error warns/skips and never changes the
+    // run's terminal status. The vault is derived from the resolved STORE,
+    // not --vault-root: an explicit `--store <other-vault>/.ovp/crystal`
+    // must top up the vault its ledger actually lives in; a diagnostic
+    // store elsewhere skips (same rule as the run.lock derivation).
+    if args.vault_root.is_some() {
+        match crate::commands::crystal_write::vault_of_crystal_store(&paths.store) {
+            Some(vault) => claims_zh_tail(&vault, args.client_kind),
+            None => sayln!(
+                "  claims_zh tail skipped (store {} is not a <vault>/.ovp/crystal layout)",
+                paths.store.display()
+            ),
+        }
+    }
+
     // Default: caveated claims route to review.json and the run succeeds.
     // `--strict` turns any caveated/review claim into a loud failure (CI gate).
     if args.strict && outcome.review > 0 {
@@ -727,6 +746,67 @@ fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<(), 
         .map_err(|e| CliError::Io(format!("serializing {}: {e}", path.display())))?;
     std::fs::write(path, format!("{s}\n"))
         .map_err(|e| CliError::Io(format!("writing {}: {e}", path.display())))
+}
+
+/// Bilingual tail for `crystal-synth` (candidate bilingual_tail-v1):
+/// translate the active-claims delta into `.ovp/crystal/claims_zh.json`.
+/// Gates, in order: LIVE client kind only (replay/offline runs skip entirely
+/// — NeverCallsClient is never built); `.ovp/source-work.toml` must parse and
+/// have `auto_claim_zh` (malformed config warns + skips); the live client
+/// must build. Every failure is a warn line — the parent run's exit code is
+/// decided by the EN phases alone. Incremental only: `get_fresh` content-hash
+/// skip means an unchanged authority costs zero LLM calls. Writes ONLY the
+/// rebuildable projection (the ledger is read, never written); never touches
+/// the queue or the worker lock.
+fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
+    if client_kind != ClientKind::Live {
+        return;
+    }
+    let cfg = match ovp_memory::source_work_config::SourceWorkConfig::load(vault_root) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            sayln!("  claims_zh tail skipped (config: {e})");
+            return;
+        }
+    };
+    if !cfg.auto_claim_zh {
+        return;
+    }
+    let pairs = match crate::commands::source_work_cmd::active_claim_pairs(vault_root) {
+        Ok(p) => p,
+        Err(e) => {
+            sayln!("  claims_zh tail skipped (ledger: {e})");
+            return;
+        }
+    };
+    if pairs.is_empty() {
+        return;
+    }
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
+    let mut client = match build_client(ClientKind::Live, &cache) {
+        Ok(c) => c,
+        Err(e) => {
+            sayln!("  claims_zh tail skipped ({e})");
+            return;
+        }
+    };
+    let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
+    let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
+        vault_root,
+        &pairs,
+        client.as_mut(),
+        &model,
+        false,
+        cfg.auto_max_per_run,
+    );
+    sayln!(
+        "  claims_zh: translated={done} skipped={skipped} errors={}",
+        errors.len()
+    );
+    for e in &errors {
+        sayln!("    warn claims_zh: {e}");
+    }
 }
 
 #[cfg(test)]
@@ -1262,5 +1342,51 @@ mod tests {
         let w = std::fs::read_to_string(work.join("warnings.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&w).unwrap();
         assert_eq!(v["fallback_title_cases"], serde_json::json!(["0951c213"]));
+    }
+
+    // ---- claims_zh bilingual tail gates (candidate bilingual_tail-v1) ----
+
+    const CLAIMS_ZH: &str = ".ovp/crystal/claims_zh.json";
+
+    /// Eval_plan (1): a REPLAY-kind tail returns before any client/config
+    /// work — NeverCallsClient is never built and no projection appears.
+    #[test]
+    fn claims_zh_tail_skipped_for_replay_client() {
+        let tmp = tempfile::tempdir().unwrap();
+        claims_zh_tail(tmp.path(), ClientKind::Replay);
+        assert!(!tmp.path().join(CLAIMS_ZH).exists());
+    }
+
+    /// Eval_plan (4): `auto_claim_zh = false` skips the tail. The flag gate
+    /// returns BEFORE the live client is built, so this is provable offline.
+    #[test]
+    fn claims_zh_tail_skipped_when_flag_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_claim_zh = false\n").unwrap();
+        claims_zh_tail(tmp.path(), ClientKind::Live);
+        assert!(!tmp.path().join(CLAIMS_ZH).exists());
+    }
+
+    /// Eval_plan (5): a malformed source-work.toml warns + skips — the tail
+    /// returns normally (failure isolation) and writes nothing.
+    #[test]
+    fn claims_zh_tail_warns_and_skips_on_malformed_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_claim_zh = [not toml\n").unwrap();
+        claims_zh_tail(tmp.path(), ClientKind::Live);
+        assert!(!tmp.path().join(CLAIMS_ZH).exists());
+    }
+
+    /// The flag-on path with no ledger is a no-op: nothing to translate, and
+    /// the live client is never built (empty-pairs gate comes first).
+    #[test]
+    fn claims_zh_tail_noop_without_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        claims_zh_tail(tmp.path(), ClientKind::Live);
+        assert!(!tmp.path().join(CLAIMS_ZH).exists());
     }
 }

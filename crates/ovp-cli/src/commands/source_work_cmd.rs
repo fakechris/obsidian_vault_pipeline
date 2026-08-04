@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use ovp_index::build_index;
 use ovp_memory::bilingual::{
-    theme_page_en_hash, translate_card, translate_claim, translate_theme_page, CardsZhFile,
-    ClaimsZhFile, GlossaryFile, ThemePagesZhFile,
+    CACHE_REL, CORRUPT_PROJECTION_MARKER, GlossaryFile, topup_cards_zh, topup_theme_pages_zh,
+    translate_claims_batch,
 };
 use ovp_memory::source_work_auto::candidates_from_index;
 use ovp_memory::source_work_config::SourceWorkConfig;
@@ -135,32 +135,48 @@ pub fn backfill(args: BackfillArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
-    use ovp_domain::crystal::{fold_ledger, CrystalStatus, StoreEvent};
-    let ledger = args.vault_root.join(".ovp/crystal/ledger.jsonl");
-    let events: Vec<StoreEvent> = if ledger.is_file() {
-        let raw = std::fs::read_to_string(&ledger)
-            .map_err(|e| CliError::Io(format!("reading ledger: {e}")))?;
-        let mut out = Vec::new();
-        for (i, line) in raw.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+/// Active durable (claim_key, claim) pairs folded from the crystal ledger.
+/// Shared by `claims-zh` and the crystal-synth bilingual tail. Read-only —
+/// the ledger is the English authority and is never opened for write here.
+pub(crate) fn active_claim_pairs(
+    vault_root: &std::path::Path,
+) -> Result<Vec<(String, String)>, String> {
+    use ovp_domain::crystal::{CrystalStatus, StoreEvent, fold_ledger};
+    let ledger = vault_root.join(".ovp/crystal/ledger.jsonl");
+    let mut events: Vec<StoreEvent> = Vec::new();
+    if ledger.is_file() {
+        let raw = std::fs::read_to_string(&ledger).map_err(|e| format!("reading ledger: {e}"))?;
+        let lines: Vec<(usize, &str)> = raw
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i, l.trim()))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+        for (pos, (i, line)) in lines.iter().enumerate() {
+            match serde_json::from_str::<StoreEvent>(line) {
+                Ok(ev) => events.push(ev),
+                // The serve worker appends without a read/write lock, so a
+                // read can catch a half-written FINAL line — recognizable by
+                // the missing terminating newline. Tolerate just that case
+                // (it will be complete next run). A malformed line that IS
+                // newline-terminated is a complete, permanently bad record —
+                // silently dropping it could lose the latest write/retract
+                // and corrupt the claims projection (codex P2), so it stays
+                // a loud, line-numbered error like mid-file garbage.
+                Err(_) if pos + 1 == lines.len() && !raw.ends_with('\n') => {}
+                Err(e) => return Err(format!("ledger line {}: {e}", i + 1)),
             }
-            let ev: StoreEvent = serde_json::from_str(line).map_err(|e| {
-                CliError::Io(format!("ledger line {}: {e}", i + 1))
-            })?;
-            out.push(ev);
         }
-        out
-    } else {
-        Vec::new()
-    };
-    let pairs: Vec<(String, String)> = fold_ledger(&events)
+    }
+    Ok(fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)
         .map(|r| (r.claim_key, r.claim))
-        .collect();
+        .collect())
+}
+
+pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
+    let pairs = active_claim_pairs(&args.vault_root).map_err(CliError::Io)?;
     sayln!("claims-zh: {} active durable claim(s)", pairs.len());
     if pairs.is_empty() {
         return Ok(());
@@ -168,38 +184,26 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
 
     let cache = args
         .cache_dir
-        .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/bilingual"));
+        .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
     let mut client = build_client(args.client_kind, &cache)?;
     let model = ovp_memory::ask::AskArgs::default().model_name;
-    let existing = ClaimsZhFile::load(&args.vault_root).map_err(CliError::Io)?;
-    let mut done = 0usize;
-    let mut skipped = 0usize;
-    let mut errors = Vec::new();
-    for (key, en) in &pairs {
-        if args.max > 0 && done >= args.max {
-            break;
-        }
-        if !args.force && existing.get_fresh(key, en).is_some() {
-            skipped += 1;
-            continue;
-        }
-        match translate_claim(
-            &args.vault_root,
-            key,
-            en,
-            client.as_mut(),
-            &model,
-            args.force,
-        ) {
-            Ok(_) => {
-                done += 1;
-                sayln!("  ok {key}");
-            }
-            Err(e) => {
-                errors.push(format!("{key}: {e}"));
-                sayln!("  FAIL {key}: {e}");
-            }
-        }
+    let (done, skipped, errors) = translate_claims_batch(
+        &args.vault_root,
+        &pairs,
+        client.as_mut(),
+        &model,
+        args.force,
+        args.max,
+    );
+    // A corrupt projection fails the MANUAL command loud — pre-refactor the
+    // initial `ClaimsZhFile::load?` did exactly that, and a silent Ok would
+    // let automation report success while nothing was repaired (codex P2).
+    // Only the automatic tails degrade this to a warning.
+    if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+        return Err(CliError::Io(format!("claims-zh: {e}")));
+    }
+    for e in &errors {
+        sayln!("  FAIL {e}");
     }
     // Ensure glossary file exists for operators to extend.
     let _ = GlossaryFile::load(&args.vault_root)
@@ -226,7 +230,7 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     let date = today_iso();
     let cache = args
         .cache_dir
-        .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/bilingual"));
+        .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
     let mut client = build_client(args.client_kind, &cache)?;
     let model_name = ovp_memory::ask::AskArgs::default().model_name;
 
@@ -241,36 +245,43 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
             &build_index(&args.vault_root, &date, None).map_err(CliError::Io)?,
         )
         .map_err(CliError::Io)?;
-        let existing = CardsZhFile::load(&args.vault_root).map_err(CliError::Io)?;
-        sayln!("memory-zh cards: {} in evidence", evidence.cards.len());
-        for card in &evidence.cards {
-            if budget == 0 {
-                break;
-            }
-            if !args.force && existing.get_fresh(&card.id, &card.title, &card.content).is_some() {
-                skipped += 1;
-                continue;
-            }
-            match translate_card(
-                &args.vault_root,
-                &card.id,
-                &card.title,
-                &card.content,
-                client.as_mut(),
-                &model_name,
-                args.force,
-            ) {
-                Ok(_) => {
-                    done += 1;
-                    budget = budget.saturating_sub(1);
-                    sayln!("  card ok {}", card.id);
-                }
-                Err(e) => sayln!("  card FAIL {}: {e}", card.id),
-            }
+        let cards: Vec<(String, String, String)> = evidence
+            .cards
+            .iter()
+            .map(|c| (c.id.clone(), c.title.clone(), c.content.clone()))
+            .collect();
+        sayln!("memory-zh cards: {} in evidence", cards.len());
+        // First phase: the budget is never exhausted yet, so this never skips.
+        let max = remaining_max(budget).unwrap_or(0);
+        let (d, s, errors) = topup_cards_zh(
+            &args.vault_root,
+            &cards,
+            client.as_mut(),
+            &model_name,
+            args.force,
+            max,
+        );
+        done += d;
+        skipped += s;
+        budget = budget.saturating_sub(d);
+        // Same corrupt-projection loud failure as claims-zh (codex P2).
+        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+            return Err(CliError::Io(format!("memory-zh: {e}")));
+        }
+        for e in &errors {
+            sayln!("  card FAIL {e}");
         }
     }
 
     if do_pages {
+        // An exhausted --max budget must NOT become unlimited: the helpers
+        // treat max=0 as "no cap", so forwarding a drained budget would
+        // translate EVERY theme page.
+        let Some(max) = remaining_max(budget) else {
+            sayln!("memory-zh theme_pages: skipped (--max budget exhausted by cards)");
+            sayln!("memory-zh done: translated={done} skipped={skipped}");
+            return Ok(());
+        };
         use ovp_domain::crystal::theme_pages::ThemePagesFile;
         let path = args.vault_root.join(".ovp/crystal/theme_pages.json");
         let pages = ThemePagesFile::load(&path).map_err(CliError::Io)?;
@@ -279,37 +290,35 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
             sayln!("memory-zh done: translated={done} skipped={skipped}");
             return Ok(());
         };
-        let existing = ThemePagesZhFile::load(&args.vault_root).map_err(CliError::Io)?;
         sayln!("memory-zh theme_pages: {} page(s)", pages.pages.len());
-        for page in &pages.pages {
-            if budget == 0 {
-                break;
-            }
-            let sections: Vec<(String, String)> = page
-                .sections
-                .iter()
-                .map(|s| (s.heading.clone(), s.body.clone()))
-                .collect();
-            let en_hash = theme_page_en_hash(&sections);
-            if !args.force && existing.get_fresh(page.community_id, &en_hash).is_some() {
-                skipped += 1;
-                continue;
-            }
-            match translate_theme_page(
-                &args.vault_root,
-                page.community_id,
-                &sections,
-                client.as_mut(),
-                &model_name,
-                args.force,
-            ) {
-                Ok(_) => {
-                    done += 1;
-                    budget = budget.saturating_sub(1);
-                    sayln!("  theme ok community={}", page.community_id);
-                }
-                Err(e) => sayln!("  theme FAIL {}: {e}", page.community_id),
-            }
+        let page_inputs: Vec<(i64, Vec<(String, String)>)> = pages
+            .pages
+            .iter()
+            .map(|p| {
+                (
+                    p.community_id,
+                    p.sections
+                        .iter()
+                        .map(|s| (s.heading.clone(), s.body.clone()))
+                        .collect(),
+                )
+            })
+            .collect();
+        let (d, s, errors) = topup_theme_pages_zh(
+            &args.vault_root,
+            &page_inputs,
+            client.as_mut(),
+            &model_name,
+            args.force,
+            max,
+        );
+        done += d;
+        skipped += s;
+        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+            return Err(CliError::Io(format!("memory-zh: {e}")));
+        }
+        for e in &errors {
+            sayln!("  theme FAIL {e}");
         }
     }
 
@@ -317,7 +326,132 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Map the remaining `--max` budget onto a phase's `max` argument.
+/// `usize::MAX` (no `--max` given) means unlimited — the helpers take 0 for
+/// that. An exhausted budget means the phase must NOT run at all (`None`):
+/// forwarding 0 there would silently become unlimited.
+fn remaining_max(budget: usize) -> Option<usize> {
+    match budget {
+        usize::MAX => Some(0),
+        0 => None,
+        n => Some(n),
+    }
+}
+
 fn today_iso() -> String {
     // Local civil day — same as `ovp2 daily` default date.
     chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_domain::crystal::{
+        CrystalStatus, DurableRecord, FinalClass, ProvenanceClass, StoreEvent, StoreOp,
+        StrengthClass,
+    };
+
+    fn record(claim_key: &str, claim: &str) -> DurableRecord {
+        DurableRecord {
+            claim_key: claim_key.into(),
+            claim_id: format!("cl-{claim_key}"),
+            claim: claim.into(),
+            theme: "t".into(),
+            source_cases: vec![],
+            citations: vec![],
+            provenance_score: 0.9,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "r".into(),
+            final_class: FinalClass::Durable,
+            run_id: "run-test".into(),
+            status: CrystalStatus::Active,
+        }
+    }
+
+    fn write_event(claim_key: &str, claim: &str) -> StoreEvent {
+        StoreEvent {
+            op: StoreOp::Write,
+            record: record(claim_key, claim),
+            supersedes: None,
+            reason: None,
+        }
+    }
+
+    fn write_ledger(vault: &std::path::Path, body: &str) {
+        let dir = vault.join(".ovp/crystal");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ledger.jsonl"), body).unwrap();
+    }
+
+    /// Regression (F1): an exhausted --max budget must map to "phase must not
+    /// run", never to 0 — the topup helpers treat max=0 as UNLIMITED.
+    #[test]
+    fn remaining_max_maps_budget_to_phase_cap() {
+        assert_eq!(remaining_max(usize::MAX), Some(0), "no --max = unlimited");
+        assert_eq!(remaining_max(5), Some(5));
+        assert_eq!(remaining_max(1), Some(1));
+        assert_eq!(remaining_max(0), None, "exhausted budget = phase must not run");
+    }
+
+    #[test]
+    fn active_claim_pairs_missing_ledger_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(active_claim_pairs(tmp.path()).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn active_claim_pairs_returns_only_active_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let active = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        let retract = serde_json::to_string(&StoreEvent {
+            op: StoreOp::Retract,
+            record: record("ck-r", "Retracted claim."),
+            supersedes: None,
+            reason: Some("stale".into()),
+        })
+        .unwrap();
+        write_ledger(tmp.path(), &format!("{active}\n{retract}"));
+        let pairs = active_claim_pairs(tmp.path()).unwrap();
+        assert_eq!(
+            pairs,
+            vec![("ck-a".to_string(), "Active claim.".to_string())]
+        );
+    }
+
+    #[test]
+    fn active_claim_pairs_midfile_garbage_errors_with_line_number() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{garbage\n{good}"));
+        let err = active_claim_pairs(tmp.path()).unwrap_err();
+        assert!(err.contains("ledger line 2"), "{err}");
+    }
+
+    /// The serve worker appends without a read/write lock: a read can catch a
+    /// half-written FINAL line. Skip just that line — it will be complete
+    /// next run — and still fold the events before it.
+    #[test]
+    fn active_claim_pairs_tolerates_trailing_partial_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{\"op\":\"write\",\"rec"));
+        let pairs = active_claim_pairs(tmp.path()).unwrap();
+        assert_eq!(
+            pairs,
+            vec![("ck-a".to_string(), "Active claim.".to_string())]
+        );
+    }
+
+    /// A malformed last line that IS newline-terminated is a complete bad
+    /// record, not a half-written append — it must stay a loud error (codex
+    /// P2), otherwise the latest write/retract would silently vanish.
+    #[test]
+    fn active_claim_pairs_rejects_terminated_malformed_last_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        write_ledger(tmp.path(), &format!("{good}\n{{not json\n"));
+        let err = active_claim_pairs(tmp.path()).unwrap_err();
+        assert!(err.contains("ledger line 2"), "{err}");
+    }
 }

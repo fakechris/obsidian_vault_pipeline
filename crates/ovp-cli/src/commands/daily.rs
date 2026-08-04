@@ -762,6 +762,23 @@ fn run_inner(
         Err(e) => sayln!("  tags: bootstrap skipped ({e})"),
     }
 
+    // Bilingual tail (candidate bilingual_tail-v1): top up the cards_zh
+    // projection so the portal's zh surface self-heals after each live run
+    // instead of waiting for a manual `source-work memory-zh` pass. Reuses the
+    // evidence built above — no second index walk. Best-effort like the tags
+    // bootstrap: replay/offline, flag-off, or any tail error warns/skips and
+    // never changes the run's terminal status. The card collection itself is
+    // gated on Live: the tail returns immediately for replay/offline, so
+    // cloning every evidence card there would be wasted work.
+    if args.client_kind == ClientKind::Live {
+        let cards: Vec<(String, String, String)> = evidence
+            .cards
+            .iter()
+            .map(|c| (c.id.clone(), c.title.clone(), c.content.clone()))
+            .collect();
+        cards_zh_tail(&args.vault_root, args.client_kind, &cards);
+    }
+
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now
         // BLOCKED, not silently retried.
@@ -885,6 +902,64 @@ fn stale_theme_packs(
         None => model.packs.len(),
     };
     Some(count)
+}
+
+/// Bilingual tail for `daily` (candidate bilingual_tail-v1): translate the
+/// memory-cards delta ((card_id, title, content)) into
+/// `.ovp/crystal/cards_zh.json`. Gates, in order: LIVE client kind only
+/// (replay/offline runs skip entirely — NeverCallsClient is never built);
+/// `.ovp/source-work.toml` must parse and have `auto_memory_zh` (malformed
+/// config warns + skips); the live client must build. Every failure is a warn
+/// line — the parent run's exit code is decided by the EN phases alone.
+/// Incremental only: `get_fresh` content-hash skip means an unchanged
+/// authority costs zero LLM calls. Writes ONLY the rebuildable projection;
+/// never touches the queue or the worker lock.
+fn cards_zh_tail(
+    vault_root: &std::path::Path,
+    client_kind: ClientKind,
+    cards: &[(String, String, String)],
+) {
+    if client_kind != ClientKind::Live || cards.is_empty() {
+        return;
+    }
+    let cfg = match ovp_memory::source_work_config::SourceWorkConfig::load(vault_root) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            sayln!("  cards_zh tail skipped (config: {e})");
+            return;
+        }
+    };
+    if !cfg.auto_memory_zh {
+        return;
+    }
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
+    let mut client = match build_client(ClientKind::Live, &cache) {
+        Ok(c) => c,
+        Err(e) => {
+            sayln!("  cards_zh tail skipped ({e})");
+            return;
+        }
+    };
+    let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Cap the tail at the vault's per-run auto budget (default 30, 0 =
+    // unlimited): steady-state deltas are a handful of cards, but the first
+    // run in a long-stale vault must not fire hundreds of paid calls in one
+    // unattended run — the remainder self-heals over the next runs (codex P1).
+    let (done, skipped, errors) = ovp_memory::bilingual::topup_cards_zh(
+        vault_root,
+        cards,
+        client.as_mut(),
+        &model,
+        false,
+        cfg.auto_max_per_run,
+    );
+    sayln!(
+        "  cards_zh: translated={done} skipped={skipped} errors={}",
+        errors.len()
+    );
+    for e in &errors {
+        sayln!("    warn cards_zh: {e}");
+    }
 }
 
 /// Runs needed to drain `queued` sources at `cap` sources per run.
@@ -1040,10 +1115,20 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_runs, rebuild_projection, refresh_decision, run, stale_theme_packs, DailyArgs,
-        RefreshDecision, REFRESH_DEBOUNCE_SECS,
+        cards_zh_tail, drain_runs, rebuild_projection, refresh_decision, run, stale_theme_packs,
+        DailyArgs, RefreshDecision, REFRESH_DEBOUNCE_SECS,
     };
     use crate::commands::client::ClientKind;
+
+    const CARDS_ZH: &str = ".ovp/crystal/cards_zh.json";
+
+    fn sample_cards() -> Vec<(String, String, String)> {
+        vec![(
+            "c1".to_string(),
+            "Memory budget".to_string(),
+            "Memory is a budget.".to_string(),
+        )]
+    }
 
     /// A mid-run refresh that fails MUST surface an `Err` the caller can catch
     /// and log — the run loop turns it into a `warn` and keeps going, never a
@@ -1137,6 +1222,7 @@ mod tests {
             pinboard_max: None,
             no_lifecycle: false,
             retry_blocked: false,
+            capture_tier: ovp_daily::CaptureTier::Balanced,
             web_fetch_fixture: None,
             web_fetch_live: false,
             github_fixture: None,
@@ -1179,6 +1265,66 @@ mod tests {
 
         // Finalize the active run so its guard's Drop doesn't write aborted.
         active_guard.finalize_completed(ovp_daily::RunCounts::default());
+    }
+
+    /// Bilingual tail, eval_plan (1): a REPLAY daily run skips the cards_zh
+    /// tail entirely — no client is built, no projection file appears, and the
+    /// run's status is exactly what the EN phases decided (offline determinism
+    /// is sacred).
+    #[test]
+    fn replay_daily_run_creates_no_cards_zh_projection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().to_path_buf();
+        // Empty-but-real vault: the intake inbox must exist for plan_daily.
+        std::fs::create_dir_all(vault.join("50-Inbox/01-Raw")).unwrap();
+        run(min_args(vault.clone())).expect("empty replay daily run ok");
+        assert!(
+            !vault.join(CARDS_ZH).exists(),
+            "replay runs must never write .ovp/crystal/cards_zh.json"
+        );
+    }
+
+    /// The tail gate itself: replay kind returns before any client/config
+    /// work, so no projection is created even with cards to translate.
+    #[test]
+    fn cards_zh_tail_skipped_for_replay_client() {
+        let tmp = tempfile::tempdir().unwrap();
+        cards_zh_tail(tmp.path(), ClientKind::Replay, &sample_cards());
+        assert!(!tmp.path().join(CARDS_ZH).exists());
+    }
+
+    /// The flag-on path with no cards is a no-op: nothing to translate, and
+    /// the live client is never built (empty-cards gate comes first).
+    #[test]
+    fn cards_zh_tail_noop_without_cards() {
+        let tmp = tempfile::tempdir().unwrap();
+        cards_zh_tail(tmp.path(), ClientKind::Live, &[]);
+        assert!(!tmp.path().join(CARDS_ZH).exists());
+    }
+
+    /// Bilingual tail, eval_plan (4): `auto_memory_zh = false` skips the tail
+    /// (the Live gate returns BEFORE building a client, so this is provable
+    /// offline) — no projection file.
+    #[test]
+    fn cards_zh_tail_skipped_when_flag_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_memory_zh = false\n").unwrap();
+        cards_zh_tail(tmp.path(), ClientKind::Live, &sample_cards());
+        assert!(!tmp.path().join(CARDS_ZH).exists());
+    }
+
+    /// Bilingual tail, eval_plan (5): a malformed source-work.toml warns +
+    /// skips — the tail returns normally (failure isolation) and writes nothing.
+    #[test]
+    fn cards_zh_tail_warns_and_skips_on_malformed_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_memory_zh = [not toml\n").unwrap();
+        cards_zh_tail(tmp.path(), ClientKind::Live, &sample_cards());
+        assert!(!tmp.path().join(CARDS_ZH).exists());
     }
 
     fn model_with_packs(dirs: &[&str]) -> ovp_index::IndexModel {

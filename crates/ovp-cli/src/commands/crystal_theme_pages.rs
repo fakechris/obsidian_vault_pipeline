@@ -217,6 +217,73 @@ fn write_pages_file(
     Ok(())
 }
 
+/// Bilingual tail for `crystal-theme-pages` (candidate bilingual_tail-v1):
+/// translate the theme-pages delta into `.ovp/crystal/theme_pages_zh.json`.
+/// Gates, in order: LIVE client kind only (replay/offline runs skip entirely
+/// — NeverCallsClient is never built); `.ovp/source-work.toml` must parse and
+/// have `auto_memory_zh` (malformed config warns + skips); the live client
+/// must build. Every failure is a warn line — the parent run's exit code is
+/// decided by the EN phases alone. Incremental only: `get_fresh` content-hash
+/// skip means an unchanged authority costs zero LLM calls. Writes ONLY the
+/// rebuildable projection (theme_pages.json is read, never written); never
+/// touches the queue or the worker lock.
+fn theme_pages_zh_tail(
+    vault_root: &std::path::Path,
+    client_kind: ClientKind,
+    pages: &[ThemePage],
+) {
+    if client_kind != ClientKind::Live || pages.is_empty() {
+        return;
+    }
+    let cfg = match ovp_memory::source_work_config::SourceWorkConfig::load(vault_root) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            sayln!("  theme_pages_zh tail skipped (config: {e})");
+            return;
+        }
+    };
+    if !cfg.auto_memory_zh {
+        return;
+    }
+    let page_inputs: Vec<(i64, Vec<(String, String)>)> = pages
+        .iter()
+        .map(|p| {
+            (
+                p.community_id,
+                p.sections
+                    .iter()
+                    .map(|s| (s.heading.clone(), s.body.clone()))
+                    .collect(),
+            )
+        })
+        .collect();
+    let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
+    let mut client = match build_client(ClientKind::Live, &cache) {
+        Ok(c) => c,
+        Err(e) => {
+            sayln!("  theme_pages_zh tail skipped ({e})");
+            return;
+        }
+    };
+    let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
+    let (done, skipped, errors) = ovp_memory::bilingual::topup_theme_pages_zh(
+        vault_root,
+        &page_inputs,
+        client.as_mut(),
+        &model,
+        false,
+        cfg.auto_max_per_run,
+    );
+    sayln!(
+        "  theme_pages_zh: translated={done} skipped={skipped} errors={}",
+        errors.len()
+    );
+    for e in &errors {
+        sayln!("    warn theme_pages_zh: {e}");
+    }
+}
+
 pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
     if args.min_claims == 0 {
         return Err(CliError::Io(
@@ -304,6 +371,15 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
         pages: outcome.pages,
     };
     write_pages_file(&store, &pages_path, &file)?;
+
+    // Bilingual tail (candidate bilingual_tail-v1): the EN pages projection
+    // is on disk, so top up theme_pages_zh — the portal's zh surface
+    // self-heals after each live run instead of waiting for a manual
+    // `source-work memory-zh` pass. Best-effort: replay/offline, flag-off, or
+    // any tail error warns/skips and never changes the run's terminal status
+    // (including the gate-failure return below).
+    theme_pages_zh_tail(&args.vault_root, args.client_kind, &file.pages);
+
     if !outcome.failures.is_empty() {
         let mut msg = format!(
             "crystal-theme-pages: {} theme(s) failed the page gate \
@@ -655,5 +731,63 @@ mod tests {
         let out = build_pages(&records, &themes, None, &mut client, 2, false).unwrap();
         assert_eq!(out.pages.len(), 0);
         assert_eq!((out.built, out.kept, out.skipped_small), (0, 0, 0));
+    }
+
+    // ---- theme_pages_zh bilingual tail gates (candidate bilingual_tail-v1) ----
+
+    const THEME_PAGES_ZH: &str = ".ovp/crystal/theme_pages_zh.json";
+
+    fn sample_pages() -> Vec<ThemePage> {
+        vec![ThemePage {
+            community_id: 0,
+            label: "Agent memory".into(),
+            label_zh: "智能体记忆".into(),
+            claim_keys: vec!["ck-a".into()],
+            sections: vec![ovp_domain::crystal::theme_pages::PageSection {
+                heading: "Memory".into(),
+                body: "Persists [claim:ck-a].".into(),
+            }],
+        }]
+    }
+
+    /// Eval_plan (1): a REPLAY-kind tail returns before any client/config
+    /// work — NeverCallsClient is never built and no projection appears.
+    #[test]
+    fn theme_pages_zh_tail_skipped_for_replay_client() {
+        let tmp = tempfile::tempdir().unwrap();
+        theme_pages_zh_tail(tmp.path(), ClientKind::Replay, &sample_pages());
+        assert!(!tmp.path().join(THEME_PAGES_ZH).exists());
+    }
+
+    /// Eval_plan (4): `auto_memory_zh = false` skips the tail. The flag gate
+    /// returns BEFORE the live client is built, so this is provable offline.
+    #[test]
+    fn theme_pages_zh_tail_skipped_when_flag_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_memory_zh = false\n").unwrap();
+        theme_pages_zh_tail(tmp.path(), ClientKind::Live, &sample_pages());
+        assert!(!tmp.path().join(THEME_PAGES_ZH).exists());
+    }
+
+    /// Eval_plan (5): a malformed source-work.toml warns + skips — the tail
+    /// returns normally (failure isolation) and writes nothing.
+    #[test]
+    fn theme_pages_zh_tail_warns_and_skips_on_malformed_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".ovp/source-work.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "auto_memory_zh = [not toml\n").unwrap();
+        theme_pages_zh_tail(tmp.path(), ClientKind::Live, &sample_pages());
+        assert!(!tmp.path().join(THEME_PAGES_ZH).exists());
+    }
+
+    /// An empty page set is a no-op before any config/client work.
+    #[test]
+    fn theme_pages_zh_tail_noop_without_pages() {
+        let tmp = tempfile::tempdir().unwrap();
+        theme_pages_zh_tail(tmp.path(), ClientKind::Live, &[]);
+        assert!(!tmp.path().join(THEME_PAGES_ZH).exists());
     }
 }
