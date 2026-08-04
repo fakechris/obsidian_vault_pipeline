@@ -626,6 +626,7 @@ impl SourceWorkQueue {
             .iter_mut()
             .find(|i| i.id == id)
             .ok_or_else(|| format!("queue item not found: {id}"))?;
+        let cancelled = item.status == ItemStatus::Cancelled;
         let task = match kind {
             TaskKind::Translate => &mut item.translate,
             TaskKind::Summarize => &mut item.summarize,
@@ -635,6 +636,14 @@ impl SourceWorkQueue {
             Ok(()) => {
                 task.status = TaskStatus::Done;
                 task.error = None;
+            }
+            Err(e) if cancelled => {
+                // A cancelled item takes TERMINAL task results only:
+                // re-queueing a task under a Cancelled item strands it
+                // forever (claim_next only selects Queued items) and blocks
+                // the cancellation notification (CodeRabbit on PR #411).
+                task.status = TaskStatus::Failed;
+                task.error = Some(e.clone());
             }
             Err(e) => match classify_task_error(e) {
                 FailureClass::BudgetDefer => {
@@ -869,9 +878,17 @@ fn pick_next_queued_index(items: &[QueueItem], now: u64) -> Option<usize> {
 
 fn item_claimable(item: &QueueItem, now: u64) -> bool {
     fn task_ready(t: &TaskState, now: u64) -> bool {
+        // A wanted task still RUNNING gates the claim: finish_task can
+        // re-queue the item for a sibling's retry while this task's thread
+        // is still in flight, and claim_next's one-item gate keys on ITEM
+        // status (Queued in that case), not task status — without this a
+        // second thread would start the same task and the late finisher
+        // would overwrite the newer state (CodeRabbit on PR #411).
+        if t.wanted && t.status == TaskStatus::Running {
+            return false;
+        }
         // Only wanted+Queued tasks gate; not_before in the past is ready.
-        !(t.wanted && t.status == TaskStatus::Queued)
-            || t.not_before.is_none_or(|nb| nb <= now)
+        !(t.wanted && t.status == TaskStatus::Queued) || t.not_before.is_none_or(|nb| nb <= now)
     }
     task_ready(&item.translate, now) && task_ready(&item.summarize, now)
 }
@@ -1543,6 +1560,53 @@ mod tests {
         let c = q.claim_next().unwrap();
         assert_eq!(c.translate.status, TaskStatus::Running);
         assert_eq!(c.summarize.status, TaskStatus::Done);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// A sibling task still in flight gates the claim: translate backed off
+    /// and its window expired, but summarize is still Running — claiming now
+    /// would start a second summarize thread whose late finish would
+    /// overwrite the newer state (CodeRabbit on PR #411).
+    #[test]
+    fn running_sibling_gates_claim_after_backoff() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-inflight", true)).unwrap();
+        q.claim_next().unwrap();
+        // translate transient-fails into backoff; summarize is STILL Running.
+        q.finish_task(&a.id, TaskKind::Translate, Err("transport: reset".into()))
+            .unwrap();
+        let snap = q.snapshot();
+        let it = &snap.items[0];
+        assert_eq!(it.status, ItemStatus::Queued);
+        assert_eq!(it.summarize.status, TaskStatus::Running);
+        // Even with translate's backoff expired, the in-flight sibling gates.
+        expire_backoff(&q, &a.id, TaskKind::Translate);
+        assert!(q.claim_next().is_none());
+        // Once summarize finishes, the item is claimable again.
+        q.finish_task(&a.id, TaskKind::Summarize, Ok(())).unwrap();
+        let c = q.claim_next().unwrap();
+        assert_eq!(c.translate.status, TaskStatus::Running);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// A task that fails after the item was CANCELLED takes a terminal
+    /// result — re-queueing it under a Cancelled item would strand it
+    /// forever and block the cancellation notification (CodeRabbit on #411).
+    #[test]
+    fn cancelled_item_takes_terminal_task_results() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-cancelled", false)).unwrap();
+        q.claim_next().unwrap();
+        q.cancel(&a.id).unwrap();
+        let item = q
+            .finish_task(&a.id, TaskKind::Translate, Err("transport: reset".into()))
+            .unwrap();
+        assert_eq!(item.status, ItemStatus::Cancelled);
+        assert_eq!(item.translate.status, TaskStatus::Failed);
+        assert_eq!(item.translate.attempts, 0);
+        assert_eq!(item.translate.not_before, None);
         let _ = std::fs::remove_dir_all(&vault);
     }
 

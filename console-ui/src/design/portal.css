@@ -3172,6 +3172,14 @@ body {
   opacity: 0.5;
   cursor: default;
 }
+.run-banner-retry-error {
+  color: var(--danger, var(--muted));
+  font-size: var(--ovp-text-sm);
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .provider-form {
   display: grid;
   gap: 0.6rem;

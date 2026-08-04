@@ -13,11 +13,15 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import {
+  RETRY_WATCHDOG_MS,
   formatRunWhen,
   isRunningWithProgress,
   lastRunBanner,
   runActivity,
+  runSignature,
+  shouldClearRetry,
   type BannerLevel,
+  type RetryPending,
 } from '../lib/derive';
 import { STATIC_MODE, fetchSchedule, startRunNow, type ScheduleJob } from '../lib/api';
 import { useModel } from '../model';
@@ -48,16 +52,35 @@ export default function RunBanner() {
   const navigate = useNavigate();
   const now = useNowTick();
   const [expanded, setExpanded] = useState(false);
-  const [retrying, setRetrying] = useState(false);
+  const [retryPending, setRetryPending] = useState<RetryPending | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [dailyJob, setDailyJob] = useState<ScheduleJob | null>(null);
 
   const banner = lastRunBanner(model, now);
   // Retry stays pending until the heartbeat actually moves the banner off
-  // `failed` — the 202 alone doesn't mean the model caught up yet.
+  // `failed` — the 202 alone doesn't mean the model caught up yet. Keyed on the
+  // run SIGNATURE, not just the level: a retry that fails again leaves the level
+  // at `failed` (same value → a level-keyed effect never re-fires), which used
+  // to strand the button on "Starting…" forever with no error shown.
   const bannerLevel = banner.level;
+  const signature = runSignature(banner);
+  const retrying = retryPending !== null;
   useEffect(() => {
-    if (bannerLevel !== 'failed') setRetrying(false);
-  }, [bannerLevel]);
+    if (!retryPending) return;
+    if (shouldClearRetry(retryPending, banner, Date.now())) {
+      setRetryPending(null);
+      return;
+    }
+    // Re-arm on a schedule of its own: a child that dies before writing any
+    // heartbeat moves neither the level nor the signature, and the operator
+    // must never be left without a working control.
+    const left = Math.max(0, RETRY_WATCHDOG_MS - (Date.now() - retryPending.atMs));
+    const id = window.setTimeout(() => setRetryPending(null), left);
+    return () => window.clearTimeout(id);
+    // `banner` is re-derived every render; the signature + level are the parts
+    // that actually decide, so they are the deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retryPending, signature, bannerLevel]);
 
   // Schedule context for hover: next due / whether currently due. Soft-fail if
   // the endpoint is down so the banner still works offline/static.
@@ -206,7 +229,8 @@ export default function RunBanner() {
             className="run-banner-retry"
             disabled={retrying}
             onClick={() => {
-              setRetrying(true);
+              setRetryError(null);
+              setRetryPending({ from: signature, atMs: Date.now() });
               startRunNow('daily')
                 .then(() => {
                   // Revalidate soon so the banner flips to "running" via the
@@ -222,11 +246,22 @@ export default function RunBanner() {
                     5000,
                   );
                 })
-                .catch(() => setRetrying(false));
+                .catch((e: unknown) => {
+                  // A rejected start (409 overlap, 500, offline) used to be
+                  // swallowed — the operator saw the button flicker and nothing
+                  // else. Surface it next to the control that caused it.
+                  setRetryPending(null);
+                  setRetryError(e instanceof Error ? e.message : String(e));
+                });
             }}
           >
             {retrying ? t('banner.retrying') : t('banner.retry')}
           </button>
+        )}
+        {banner.level === 'failed' && retryError && (
+          <span className="run-banner-retry-error" title={retryError}>
+            {t('banner.retryFailed', { error: retryError })}
+          </span>
         )}
         {/* Expand the live per-source activity feed inline, without leaving the
             current page — the operator's tail -f, one click away everywhere. */}

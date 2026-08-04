@@ -95,6 +95,8 @@ export const en = {
   'timeline.failUnknown': 'FAILED. {error}',
   'timeline.skippedReader': 'Skipped: intake → reader → index (not reached)',
   'timeline.noSourceFeed': 'No per-source activity — failure was before any source was claimed',
+  'timeline.noAutoRetry':
+    'NOT retried automatically — this failure already used up the current schedule window. Nothing will run until {next}. Use Retry (or Run now) to start it immediately.',
   'timeline.nextDue': 'Next schedule window ({cadence})',
   'timeline.nextDueNow': 'Next schedule window ({cadence}) — DUE NOW (waiting for tick / Run now)',
 
@@ -695,6 +697,7 @@ export const en = {
   'attention.ackHint': 'Hide this item until its status changes',
   'banner.retry': 'Retry',
   'banner.retrying': 'Starting…',
+  'banner.retryFailed': 'Could not start: {error}',
   'run.title': 'Pipeline run',
   'run.help':
     'Force today\'s daily job to run right now. Protected: a second click while any run is in progress is rejected, and a completed manual run counts for the automatic schedule (no double run).',
