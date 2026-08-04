@@ -74,7 +74,7 @@ pub fn run(args: AutoRunArgs) -> Result<(), CliError> {
     // `ovp-auto` calls it and runs the cycle.
     let make_inputs = |input: &Path| -> Result<RunCycleInputs, String> {
         let spec = DomainPipelineSpec::parse(&toml).map_err(|e| e.to_string())?;
-        let client = build_client(client_kind, &cache_dir).map_err(|e| e.to_string())?;
+        let client = build_client(client_kind, &cache_dir, None).map_err(|e| e.to_string())?;
         let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("input");
         let wiring = AppWiring::new(RunId::new(format!("{run_id}-{stem}")))
             .with_date_stamp(&date_stamp)

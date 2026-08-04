@@ -365,7 +365,8 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             .cache_dir
             .clone()
             .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/tags"));
-        let mut client = build_client(ClientKind::Live, &cassette_dir)?;
+        let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+        let mut client = build_client(ClientKind::Live, &cassette_dir, Some(&usage_ledger))?;
         // name→vector memo shared across batches (vocabulary resolved once).
         let mut name_vectors: BTreeMap<String, Vec<f32>> = BTreeMap::new();
         for chunk in targets.chunks(args.batch_size.max(1)) {

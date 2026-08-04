@@ -258,7 +258,8 @@ fn theme_pages_zh_tail(
         })
         .collect();
     let cache = vault_root.join(ovp_memory::bilingual::CACHE_REL);
-    let mut client = match build_client(ClientKind::Live, &cache) {
+    let usage_ledger = vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = match build_client(ClientKind::Live, &cache, Some(&usage_ledger)) {
         Ok(c) => c,
         Err(e) => {
             sayln!("  theme_pages_zh tail skipped ({e})");
@@ -351,7 +352,12 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
         .cache_dir
         .clone()
         .unwrap_or_else(|| args.vault_root.join(".ovp/cassettes/crystal"));
-    let mut client = build_client(args.client_kind, &cassette_dir)?;
+    // The command is advertised as metered — its primary build_pages calls are
+    // the expensive part, so they must not pass None (codex P1 on PR #410).
+    let usage_ledger = args
+        .vault_root
+        .join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = build_client(args.client_kind, &cassette_dir, Some(&usage_ledger))?;
 
     let outcome = build_pages(
         &records,

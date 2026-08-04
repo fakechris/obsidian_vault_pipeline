@@ -129,6 +129,22 @@ pub fn backfill(args: BackfillArgs) -> Result<(), CliError> {
     for e in &report.errors {
         sayln!("  err {e}");
     }
+    if args.dry_run && report.enqueued > 0 {
+        let est = crate::commands::usage_cmd::estimate_source_work(
+            &args.vault_root,
+            report.enqueued_translate,
+            report.enqueued_summarize,
+        );
+        let basis = if est.cold_start {
+            "cold-start output-token ceilings — excludes input tokens & retries, typically 3-5x over"
+        } else {
+            "source-work lane average from .ovp/usage"
+        };
+        sayln!(
+            "  estimate: {} item(s) ≈ {} call(s), ~{} tokens ({basis})",
+            report.enqueued, est.calls, est.tokens
+        );
+    }
     if report.enqueued > 0 && !args.dry_run {
         sayln!("  note: jobs sit in .ovp/source-work-queue.json — run `ovp2 serve` / open OVP2.app to execute");
     }
@@ -185,7 +201,8 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
     let cache = args
         .cache_dir
         .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
-    let mut client = build_client(args.client_kind, &cache)?;
+    let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = build_client(args.client_kind, &cache, Some(&usage_ledger))?;
     let model = ovp_memory::ask::AskArgs::default().model_name;
     let (done, skipped, errors) = translate_claims_batch(
         &args.vault_root,
@@ -231,7 +248,8 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
     let cache = args
         .cache_dir
         .unwrap_or_else(|| args.vault_root.join(CACHE_REL));
-    let mut client = build_client(args.client_kind, &cache)?;
+    let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut client = build_client(args.client_kind, &cache, Some(&usage_ledger))?;
     let model_name = ovp_memory::ask::AskArgs::default().model_name;
 
     let mut budget = if args.max == 0 { usize::MAX } else { args.max };

@@ -41,9 +41,9 @@ pub fn run(args: ReadSourceArgs) -> Result<(), CliError> {
         return run_render_only(&args, &source.title);
     }
 
-    let mut base = build_client(args.client_kind, &args.cache_dir)?;
-    let mut critic = build_client(args.client_kind, &args.critic_cache_dir)?;
-    let mut cards = build_client(args.client_kind, &args.cache_dir)?;
+    let mut base = build_client(args.client_kind, &args.cache_dir, None)?;
+    let mut critic = build_client(args.client_kind, &args.critic_cache_dir, None)?;
+    let mut cards = build_client(args.client_kind, &args.cache_dir, None)?;
 
     let run = run_reader_pipeline(
         &source,

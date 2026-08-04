@@ -205,6 +205,14 @@
     "coverage",
     "operational_reliability"
    ]
+  },
+  {
+   "id": "runtime.llm_usage_metering",
+   "surface": "runtime",
+   "file": "crates/ovp-llm/src/anthropic.rs",
+   "quality_buckets": [
+    "operational_reliability"
+   ]
   }
  ]
 }

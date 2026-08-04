@@ -148,11 +148,14 @@ const LIVE_BUDGET_BASE_DEFAULT: u32 = 16_000;
 /// should map a missing key to [`LLM_NOT_CONFIGURED`]).
 /// `cache_namespace` is the fallback cassette namespace (ask / article interpret
 /// pass their own request-level namespace when present).
+/// `usage_ledger` opts into per-call usage metering (monthly JSONL shards under
+/// that dir); `None` = unmetered, zero files.
 pub fn build_recording_live_client(
     api_key: &str,
     cfg: &LiveClientConfig,
     cache_dir: &Path,
     cache_namespace: &str,
+    usage_ledger: Option<&Path>,
 ) -> Result<Box<dyn ModelClient>, String> {
     if api_key.trim().is_empty() {
         return Err(LLM_NOT_CONFIGURED.into());
@@ -172,6 +175,9 @@ pub fn build_recording_live_client(
     }
     if let Some(secs) = cfg.timeout_secs {
         live = live.with_timeout(secs);
+    }
+    if let Some(dir) = usage_ledger {
+        live = live.with_usage_ledger(dir);
     }
     let retrying = RetryingModelClient::new(live, LIVE_MAX_RETRIES, LIVE_RETRY_BACKOFF);
     let escalated = cfg
@@ -199,6 +205,7 @@ pub fn build_recording_live_client_bounded(
     cache_namespace: &str,
     timeout_cap_secs: u64,
     max_retries: u32,
+    usage_ledger: Option<&Path>,
 ) -> Result<Box<dyn ModelClient>, String> {
     let mut bounded = cfg.clone();
     bounded.timeout_secs = Some(clamp_timeout(cfg.timeout_secs, timeout_cap_secs));
@@ -220,6 +227,9 @@ pub fn build_recording_live_client_bounded(
     }
     if let Some(secs) = bounded.timeout_secs {
         live = live.with_timeout(secs);
+    }
+    if let Some(dir) = usage_ledger {
+        live = live.with_usage_ledger(dir);
     }
     let retrying = RetryingModelClient::new(live, max_retries, LIVE_RETRY_BACKOFF);
     // NO budget escalation here: it silently issues a SECOND provider

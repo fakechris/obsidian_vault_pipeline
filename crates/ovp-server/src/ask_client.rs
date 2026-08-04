@@ -92,6 +92,7 @@ fn build_ask_client_bounded(
     let key = resolve_api_key(&lookup)?;
     let cfg = LiveClientConfig::from_lookup(&lookup)?;
     let cache_dir = vault_root.join(".ovp/cassettes/ask");
+    let usage_ledger = vault_root.join(".ovp/usage");
     build_recording_live_client_bounded(
         &key,
         &cfg,
@@ -99,6 +100,7 @@ fn build_ask_client_bounded(
         ARTICLE_PROMPT_ID,
         timeout_cap_secs,
         0,
+        Some(&usage_ledger),
     )
 }
 
@@ -131,7 +133,8 @@ fn build_ask_client(vault_root: &Path) -> Result<Box<dyn ovp_llm::ModelClient>, 
     let key = resolve_api_key(&lookup)?;
     let cfg = LiveClientConfig::from_lookup(&lookup)?;
     let cache_dir = vault_root.join(".ovp/cassettes/ask");
-    build_recording_live_client(&key, &cfg, &cache_dir, ARTICLE_PROMPT_ID)
+    let usage_ledger = vault_root.join(".ovp/usage");
+    build_recording_live_client(&key, &cfg, &cache_dir, ARTICLE_PROMPT_ID, Some(&usage_ledger))
 }
 
 #[cfg(test)]

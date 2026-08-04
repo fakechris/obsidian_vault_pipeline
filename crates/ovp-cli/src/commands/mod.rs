@@ -43,4 +43,5 @@ pub mod schedule;
 pub mod scheduler;
 pub mod serve;
 pub mod source_work_cmd;
+pub mod usage_cmd;
 pub mod evolve;

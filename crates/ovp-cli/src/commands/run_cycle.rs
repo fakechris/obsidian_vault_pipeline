@@ -35,7 +35,7 @@ pub fn run(args: RunCycleArgs) -> Result<(), CliError> {
     })?;
     let spec = DomainPipelineSpec::parse(&toml_str).map_err(CliError::Assembly)?;
 
-    let client = build_client(args.client_kind, &args.cache_dir)?;
+    let client = build_client(args.client_kind, &args.cache_dir, None)?;
     let registry = match &args.concept_registry {
         Some(path) => ConceptRegistry::load_from_file(path)
             .map_err(|e| CliError::Io(format!("loading concept registry: {e}")))?,
