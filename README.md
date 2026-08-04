@@ -171,6 +171,7 @@ Only leave the machine when **you** configure them:
 |---|---|
 | [`docs/install.md`](docs/install.md) | Installers, desktop, versions |
 | [`docs/operator-runbook.md`](docs/operator-runbook.md) | Real-vault operation, failures, recovery |
+| [`CLAUDE.md`](CLAUDE.md) | **Contributors: what to rebuild after which change** — a machine with the desktop app installed runs four independent artifacts, and updating the wrong one looks exactly like "my change did nothing" |
 | [`docs/ovp-to-ovp2.md`](docs/ovp-to-ovp2.md) | Story of the rewrite & migration ([中文](docs/ovp-to-ovp2.zh-CN.md)) |
 | [`docs/architecture.md`](docs/architecture.md) | Crate map & dataflow (engineers) |
 | [`docs/product-state-layout.md`](docs/product-state-layout.md) | Where state lives on disk |

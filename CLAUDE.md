@@ -8,18 +8,75 @@ Only gotchas below. Anything derivable by reading the code is deliberately absen
 
 ---
 
+# 改完之后要做什么
+
+**先查这张表,再去测。** 装了 OVP2.app 的机器上跑着四份互相独立的产物,改了 A 却
+只更新了 B,现象是"改动完全没生效",而代码、测试、构建全是绿的——这是本仓库最贵的
+时间浪费来源。
+
+| 你改了什么 | 要做的动作 | 重启 app? |
+|---|---|---|
+| `crates/*`(**除** `ovp-server`)<br>daily / intake / scheduler / reader / CLI | `INSTALL_APP=/Applications/OVP2.app scripts/build-desktop-sidecar.sh` | 否 |
+| `crates/ovp-server` | 重建整个 desktop app(见下) | **是** |
+| `apps/desktop/src-tauri/*`<br>scheduler 间隔 / boot / 窗口 / 菜单 | 重建整个 desktop app | **是** |
+| `console-ui/*` | `scripts/deploy-portal.sh <vault>`(见下) | 否,硬刷新页面 |
+| `.ovp/schedule.json` | 无——下次 tick 自动读 | 否 |
+| `.ovp/providers.toml` | 无——每次调用重读 | 否 |
+
+## 为什么 `ovp-server` 不在 sidecar 那一行
+
+`apps/desktop/src-tauri/Cargo.toml` **直接依赖 `ovp-server`**,它被编译进 `ovp2-desktop`
+并在进程内运行。改了 server 去重建 sidecar 是**完全无效**的——sidecar 是 CLI(`ovp2 serve`
+才用它那份),和门户 API 走的不是同一份代码。
+
 ## 定时任务跑的是 app sidecar,不是 `target/release/ovp2`
 
 Desktop 的 scheduler exec `resolve_ovp2_bin()`(`apps/desktop/src-tauri/src/lib.rs:309`):
 `OVP2_BIN` → app 内 sidecar → dev fallback。**`cargo build --release` 到不了定时任务。**
 
+不用重启 app——每次 tick 都重新 spawn 进程,读的是磁盘上当前那个文件。验收方式是比对
+sidecar 的 mtime/哈希与目标提交,**不是看 `cargo build` 成功**。dev fallback 尤其危险:
+它会命中一个可能没编 live features 的 `target/release/ovp2`,然后把
+`--features web-fetch-live` 这种构建期错误抛给 GUI 用户。
+
+## 前端有两份,vault 那份优先
+
+两份都能独立工作,`read_app_file`(`ovp-server/src/lib.rs:4557`)**逐文件**决定用哪份:
+
+| 位置 | 角色 | 什么时候更新 |
+|---|---|---|
+| `<vault>/.ovp/console/app/` | **优先**。存在就赢 | 手动部署(`deploy-portal.sh`) |
+| app 包 `Contents/Resources/console-ui/dist` | 兜底(经 `--viz-dir`) | 重新打包 app 时 |
+
+最终用户的 vault 里**没有**第一份,门户就吃 app 包那份——这是正常路径。第一份是给
+"不重新打包就要看到前端改动"用的,也就是开发迭代。
+
+这个优先级是 `2987cebb` 有意定的:已部署副本让 vault 自成一体(`ovp2 serve` 时代的需求),
+`--viz-dir` 让 dev checkout 能服务任意 vault。**两者是不同场景,不是替代关系。**
+
+坑在于开发机上两份都在:**重新打包 desktop app 不会改变门户显示的东西。** vault 那份
+`index.html` 赢,它引用旧的 asset 哈希,那些 asset 也从同一份旧副本解析出来——整页都是旧
+构建,而构建日志全绿。不想要这个优先级就删掉 vault 那份,门户立刻回到 app 包那份。
+
+所以改完前端要跑:
+
 ```bash
-INSTALL_APP=/Applications/OVP2.app scripts/build-desktop-sidecar.sh
+scripts/deploy-portal.sh <vault-root>
 ```
 
-不用重启 app——每次 tick 都重新 spawn 进程。验收方式是比对 sidecar 的 mtime/哈希与目标提交,
-不是看 `cargo build` 成功。dev fallback 尤其危险:它会命中一个可能没编 live features 的
-`target/release/ovp2`,然后把 `--features web-fetch-live` 这种构建期错误抛给 GUI 用户。
+它构建、部署、然后**去跑着的门户上取实际 asset 哈希做比对**。验收看的是这个比对,
+**不是 `npm run build` 的退出码**——后者正是让这个错误活过一整轮调试的东西。
+
+完整背景和手工步骤见 `docs/operator-runbook.md` 的 "Portal SPA deploy"。
+
+## 重建整个 desktop app
+
+```bash
+npm --prefix apps/desktop run tauri build
+```
+
+产物要装回 `/Applications/OVP2.app` 才算数,并且**必须退出再重开**——`ovp2-desktop` 是
+常驻进程,替换磁盘上的文件不影响已经跑着的那个。
 
 ## cadence 语法比二进制新 = 整个 tick 停摆
 
