@@ -37,12 +37,14 @@ pub fn run(args: IntakeArgs) -> Result<(), CliError> {
         .chain(&sweep.duplicates)
         .chain(&sweep.needs_content)
         .chain(&sweep.unparseable)
+        .chain(&sweep.skipped)
     {
         let verb = match rec.action {
             IntakeAction::Ingested => "ingested",
             IntakeAction::Duplicate => "duplicate",
             IntakeAction::NeedsContent => "needs-content",
             IntakeAction::Unparseable => "unparseable",
+            IntakeAction::Skipped => "skipped",
         };
         match &rec.to {
             Some(to) => println!("  {verb:13} {} → {to}", rec.from),

@@ -25,6 +25,17 @@ pub enum IntakeAction {
     NeedsContent,
     /// Frontmatter does not parse; left in place for the operator to fix.
     Unparseable,
+    /// The capture carries the reserved skip tag: the operator bookmarked it as
+    /// a quick entry point, not as something to read. Terminal and hash-keyed —
+    /// removing the tag changes the hash and re-evaluates the file.
+    ///
+    /// This is INTENT, which no page heuristic can recover. A measurement over
+    /// the real 1448-source corpus found structural signals (sentence density,
+    /// separator density) could not separate brand/gallery pages from long
+    /// technical articles: a conservative threshold flagged a 73k-char
+    /// knowledge-base writeup and a 46k-char CUDA article alongside the three
+    /// real navigation pages. So the operator says so, and the pipeline obeys.
+    Skipped,
 }
 
 /// One capture-file disposition.
@@ -82,17 +93,36 @@ pub fn known_urls(records: &[IntakeRecord]) -> HashSet<String> {
         .collect()
 }
 
-/// Hashes previously flagged NeedsContent / Unparseable — skipped quietly on
-/// later sweeps (the record exists once; editing the file changes its hash
-/// and re-evaluates it).
+/// Hashes previously flagged NeedsContent / Unparseable / Skipped — skipped
+/// quietly on later sweeps (the record exists once; editing the file changes
+/// its hash and re-evaluates it).
+///
+/// The three are NOT equivalent downstream: NeedsContent/Unparseable are
+/// PENDING (enrichment retries them), while Skipped is TERMINAL by operator
+/// decision. Callers must branch on the returned action — see
+/// [`is_pending_flag`].
 pub fn flagged_hashes(records: &[IntakeRecord]) -> HashMap<String, IntakeAction> {
     records
         .iter()
         .filter(|r| {
-            matches!(r.action, IntakeAction::NeedsContent | IntakeAction::Unparseable)
+            matches!(
+                r.action,
+                IntakeAction::NeedsContent | IntakeAction::Unparseable | IntakeAction::Skipped
+            )
         })
         .map(|r| (r.sha256.clone(), r.action))
         .collect()
+}
+
+/// Whether a flagged capture is still WAITING on something (enrichment, an
+/// operator fix) rather than closed. `Skipped` is closed: re-fetching a page
+/// the operator has excluded is exactly the waste this tag exists to stop.
+pub fn is_pending_flag(action: IntakeAction) -> bool {
+    match action {
+        IntakeAction::NeedsContent | IntakeAction::Unparseable => true,
+        IntakeAction::Skipped => false,
+        IntakeAction::Ingested | IntakeAction::Duplicate => false,
+    }
 }
 
 #[cfg(test)]

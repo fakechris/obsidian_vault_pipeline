@@ -25,6 +25,12 @@ pub enum SourceStatus {
     Processed,
     /// Parked as a duplicate of known content/URL.
     Duplicate,
+    /// Excluded by the operator's `ovp/skip` tag — a bookmark kept as a quick
+    /// entry point, not to be read. Its OWN status, deliberately: folding it
+    /// into `NeedsContent` would put it back in the enrichment queue, and
+    /// folding it into `Duplicate` would lie about why it is here. The
+    /// operator must be able to see, and undo, what they excluded.
+    Skipped,
 }
 
 /// Timeline axes for a source (do not collapse these into one field):

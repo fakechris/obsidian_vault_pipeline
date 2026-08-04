@@ -215,6 +215,7 @@ fn build_sources(
             IntakeAction::Duplicate => SourceStatus::Duplicate,
             IntakeAction::NeedsContent => SourceStatus::NeedsContent,
             IntakeAction::Unparseable => SourceStatus::Unparseable,
+            IntakeAction::Skipped => SourceStatus::Skipped,
         };
         // Precedence: a later Duplicate record for the same hash means another
         // COPY was parked — it must not mask the canonical copy still queued

@@ -420,6 +420,7 @@ pub fn source_status_str(s: SourceStatus) -> &'static str {
         SourceStatus::NeedsContent => "needs_content",
         SourceStatus::Unparseable => "unparseable",
         SourceStatus::Duplicate => "duplicate",
+        SourceStatus::Skipped => "skipped",
     }
 }
 
