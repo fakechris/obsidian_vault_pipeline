@@ -253,9 +253,17 @@ fn run_inner(
         let done = succeeded_hashes(&read_daily_ledger(&ledger_path).map_err(CliError::Io)?);
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
         sayln!(
-            "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}{}",
+            "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}{}{}",
             sweep.ingested.len(), sweep.duplicates.len(), sweep.needs_content.len(),
             sweep.unparseable.len(),
+            // Surfaced, not silent: a capture the pipeline declined to read
+            // must show up in the run's own summary, or `ovp/skip` becomes a
+            // place where bookmarks quietly disappear.
+            if sweep.skipped.is_empty() {
+                String::new()
+            } else {
+                format!(", {} skipped by tag", sweep.skipped.len())
+            },
             if sweep.already_flagged > 0 {
                 format!(" ({} previously flagged)", sweep.already_flagged)
             } else {

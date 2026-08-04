@@ -316,3 +316,70 @@ fn pinboard_first_sync_guard_exempts_dry_run_but_reports_it() {
     assert!(!root.join("50-Inbox/02-Pinboard").exists(), "dry run writes nothing");
     assert!(!root.join(".ovp/pinboard-sync.jsonl").exists());
 }
+
+/// `ovp/skip` is a TERMINAL disposition, and `ovp/force` overrides the size
+/// gate. Both are operator intent, which no page heuristic can recover: a
+/// measurement over the real 1448-source corpus found that structural signals
+/// flagged a 73k-char knowledge-base writeup and a 46k-char CUDA article
+/// alongside the three genuine navigation pages, so the operator says so.
+#[test]
+fn reserved_tags_skip_terminally_and_force_past_the_size_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let clippings = root.join("Clippings");
+    std::fs::create_dir_all(&clippings).unwrap();
+
+    let tagged = |title: &str, url: &str, body: &str, tag: &str| {
+        format!(
+            "---\ntitle: \"{title}\"\nsource: \"{url}\"\npublished: 2026-06-01\n\
+             created: 2026-06-08\ntags:\n  - \"clippings\"\n  - \"{tag}\"\n---\n{body}\n"
+        )
+    };
+
+    // A brand homepage the operator keeps as a quick entry point. Body is LONG,
+    // so no automatic gate would have caught it — only the tag does.
+    std::fs::write(
+        clippings.join("Brand Home.md"),
+        tagged("Brand Home", "https://e.x/brand", LONG_BODY, "ovp/skip"),
+    )
+    .unwrap();
+    // A deliberately terse note the operator wants read anyway (below the
+    // 200-char gate, which would otherwise park it as needs-content).
+    std::fs::write(
+        clippings.join("Short But Wanted.md"),
+        tagged("Short But Wanted", "https://e.x/short", "Two sentences. That is all.", "ovp/force"),
+    )
+    .unwrap();
+
+    let sweep = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(sweep.skipped.len(), 1, "the tagged homepage is skipped");
+    assert_eq!(sweep.skipped[0].title.as_deref(), Some("Brand Home"));
+    assert_eq!(sweep.needs_content.len(), 0, "force beat the size gate");
+    assert_eq!(sweep.ingested.len(), 1, "only the forced note was ingested");
+    assert_eq!(sweep.ingested[0].title.as_deref(), Some("Short But Wanted"));
+
+    // Re-sweep: the skipped capture is recognised by hash and NOT re-recorded.
+    // Critically it must not land in `flagged_pending` either — that list is
+    // what enrichment re-fetches, and re-fetching a skipped page every run is
+    // exactly the waste this tag exists to stop (six times a day at `every 4h`).
+    let again = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(again.skipped.len(), 0, "no duplicate skip record");
+    assert_eq!(again.already_flagged, 1);
+    assert!(
+        again.flagged_pending.is_empty(),
+        "a skipped capture must never be handed back to enrichment: {:?}",
+        again.flagged_pending
+    );
+
+    // The ledger carries the reason, so the disposition is auditable.
+    let ledger = read_intake_ledger(&root.join(".ovp/intake.jsonl")).unwrap();
+    let skip_rec = ledger
+        .iter()
+        .find(|r| r.title.as_deref() == Some("Brand Home"))
+        .expect("skip record persisted");
+    assert!(
+        skip_rec.note.as_deref().unwrap_or("").contains("ovp/skip"),
+        "note names the tag: {:?}",
+        skip_rec.note
+    );
+}

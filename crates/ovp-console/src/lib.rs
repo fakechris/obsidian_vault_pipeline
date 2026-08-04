@@ -67,6 +67,7 @@ pub(crate) fn source_status_label(s: SourceStatus) -> (&'static str, &'static st
         SourceStatus::NeedsContent => ("needs content", "待补内容", "warn"),
         SourceStatus::Unparseable => ("unparseable", "无法解析", "warn"),
         SourceStatus::Duplicate => ("duplicate", "重复", "dim"),
+        SourceStatus::Skipped => ("skipped by tag", "已按标签跳过", "dim"),
     }
 }
 

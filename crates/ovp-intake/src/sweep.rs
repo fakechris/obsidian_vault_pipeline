@@ -35,6 +35,54 @@ use crate::vaultops::{append_pipeline_event, hex_sha256, rel_to, safe_move, Pipe
 /// enrich (typical case: a bare pinboard bookmark with a one-line note).
 pub const MIN_READER_BODY_CHARS: usize = 200;
 
+/// Reserved capture tag: do not process this bookmark at all.
+pub const TAG_SKIP: &str = "ovp/skip";
+/// Reserved capture tag: process even when an automatic gate would hold it
+/// back (today: [`MIN_READER_BODY_CHARS`]).
+pub const TAG_FORCE: &str = "ovp/force";
+
+/// What the operator's reserved tags say about one capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagDirective {
+    /// No reserved tag — the automatic gates decide.
+    None,
+    /// `ovp/skip`: a bookmark kept as a quick entry point, not to be read.
+    Skip,
+    /// `ovp/force`: read it even if a gate would hold it back.
+    Force,
+}
+
+/// Read the reserved tags off a capture.
+///
+/// Forgiving about shape — `#ovp/skip`, `ovp-skip`, `OVP/Skip` and `ovp_skip`
+/// all count — because these are typed by hand into Pinboard and Obsidian,
+/// which disagree about leading `#` and about which separators are legal. The
+/// forgiveness is one normalization, not a list of accepted spellings.
+///
+/// `Skip` beats `Force` when both are present: the two are contradictory, and
+/// the safe reading of a contradiction is "leave it alone" — a wrongly skipped
+/// capture is one tag edit away from being read, while a wrongly read one has
+/// already spent the LLM call.
+pub fn tag_directive(tags: &[String]) -> TagDirective {
+    let norm = |t: &String| {
+        t.trim()
+            .trim_start_matches('#')
+            .to_ascii_lowercase()
+            .replace(['-', '_'], "/")
+    };
+    let mut force = false;
+    for t in tags {
+        let t = norm(t);
+        if t == TAG_SKIP {
+            return TagDirective::Skip;
+        }
+        if t == TAG_FORCE {
+            force = true;
+        }
+    }
+    if force { TagDirective::Force } else { TagDirective::None }
+}
+
 #[derive(Debug, Clone)]
 pub struct IntakeConfig {
     pub vault_root: PathBuf,
@@ -58,8 +106,10 @@ pub struct SweepOutcome {
     pub duplicates: Vec<IntakeRecord>,
     pub needs_content: Vec<IntakeRecord>,
     pub unparseable: Vec<IntakeRecord>,
-    /// Files whose hash was already flagged needs_content/unparseable on an
-    /// earlier sweep — still sitting in a capture dir, skipped quietly.
+    /// Captures the operator excluded with `ovp/skip`.
+    pub skipped: Vec<IntakeRecord>,
+    /// Files whose hash was already flagged needs_content/unparseable/skipped
+    /// on an earlier sweep — still sitting in a capture dir, skipped quietly.
     pub already_flagged: usize,
     /// The already-flagged files as `(from, url)` pairs, so the enrichment
     /// phases can RETRY them (a fetch that failed on an earlier run, or a
@@ -72,7 +122,7 @@ pub struct SweepOutcome {
 impl SweepOutcome {
     pub fn total_new_records(&self) -> usize {
         self.ingested.len() + self.duplicates.len() + self.needs_content.len()
-            + self.unparseable.len()
+            + self.unparseable.len() + self.skipped.len()
     }
 }
 
@@ -107,15 +157,21 @@ pub fn sweep_intake(
             let sha256 = hex_sha256(&bytes);
             let from = rel_to(&cfg.vault_root, &path);
 
-            if flagged.contains_key(&sha256) {
+            if let Some(prev) = flagged.get(&sha256) {
                 outcome.already_flagged += 1;
-                // Parse best-effort for the URL so enrichment can retry this
-                // previously-flagged capture (it is still pending, not done).
-                let url = read_source_from_path(&path)
-                    .ok()
-                    .filter(|s| !s.source_url.is_empty())
-                    .map(|s| s.source_url);
-                outcome.flagged_pending.push((from.clone(), url));
+                // Only PENDING flags go back to enrichment. A capture the
+                // operator skipped is closed: re-fetching it every run is the
+                // waste `ovp/skip` exists to stop, and at `every 4h` that waste
+                // is six times a day.
+                if crate::ledger::is_pending_flag(*prev) {
+                    // Parse best-effort for the URL so enrichment can retry this
+                    // previously-flagged capture (it is still pending, not done).
+                    let url = read_source_from_path(&path)
+                        .ok()
+                        .filter(|s| !s.source_url.is_empty())
+                        .map(|s| s.source_url);
+                    outcome.flagged_pending.push((from.clone(), url));
+                }
                 continue;
             }
             if known_hashes.contains(&sha256) {
@@ -153,8 +209,24 @@ pub fn sweep_intake(
                     continue;
                 }
 
+            // Operator intent first: `ovp/skip` closes the capture before any
+            // gate or fetch spends anything on it.
+            let directive = tag_directive(&source.tags);
+            if directive == TagDirective::Skip {
+                let rec = record(cfg, IntakeAction::Skipped, &from, None, url, &sha256,
+                    Some(source.title.clone()),
+                    Some(format!("tagged {TAG_SKIP}")));
+                if !dry_run {
+                    append_intake_record(&ledger_path, &rec)?;
+                }
+                outcome.skipped.push(rec);
+                continue;
+            }
+
             let body_chars = source.body_markdown.trim().chars().count();
-            if body_chars < cfg.min_reader_body_chars {
+            // `ovp/force` overrides the size gate — the escape hatch that keeps
+            // an automatic threshold from becoming a silent trap.
+            if body_chars < cfg.min_reader_body_chars && directive != TagDirective::Force {
                 let rec = record(cfg, IntakeAction::NeedsContent, &from, None, url, &sha256,
                     Some(source.title.clone()),
                     Some(format!("body {body_chars} chars < {}", cfg.min_reader_body_chars)));
@@ -359,5 +431,56 @@ mod tests {
         assert_eq!(pick_date(Some("2026-05-30T01:02:03Z"), "2026-06-09"), "2026-05-30");
         assert_eq!(pick_date(Some("not a date"), "2026-06-09"), "2026-06-09");
         assert_eq!(pick_date(None, "2026-06-09"), "2026-06-09");
+    }
+
+    fn tags(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn tag_directive_ignores_ordinary_tags() {
+        assert_eq!(tag_directive(&[]), TagDirective::None);
+        assert_eq!(
+            tag_directive(&tags(&["clippings", "pinboard", "design"])),
+            TagDirective::None
+        );
+        // Near-misses must NOT match: these are real tags someone could use.
+        assert_eq!(tag_directive(&tags(&["ovp"])), TagDirective::None);
+        assert_eq!(tag_directive(&tags(&["skip"])), TagDirective::None);
+        assert_eq!(tag_directive(&tags(&["ovp/skipped"])), TagDirective::None);
+        assert_eq!(tag_directive(&tags(&["not-ovp/skip"])), TagDirective::None);
+    }
+
+    #[test]
+    fn tag_directive_accepts_the_shapes_pinboard_and_obsidian_produce() {
+        // Leading `#`, case, and `-`/`_` separators all normalize.
+        for t in ["ovp/skip", "#ovp/skip", "OVP/Skip", "ovp-skip", "ovp_skip", "  #OVP-SKIP  "] {
+            assert_eq!(tag_directive(&tags(&[t])), TagDirective::Skip, "{t}");
+        }
+        for t in ["ovp/force", "#ovp/force", "OVP-Force", "ovp_force"] {
+            assert_eq!(tag_directive(&tags(&[t])), TagDirective::Force, "{t}");
+        }
+        assert_eq!(
+            tag_directive(&tags(&["clippings", "ovp/force", "ai"])),
+            TagDirective::Force
+        );
+    }
+
+    #[test]
+    fn skip_beats_force_when_the_operator_tagged_both() {
+        // Contradictory input; the safe reading is "leave it alone". A wrongly
+        // skipped capture costs one tag edit; a wrongly read one has already
+        // spent the call.
+        assert_eq!(tag_directive(&tags(&["ovp/force", "ovp/skip"])), TagDirective::Skip);
+        assert_eq!(tag_directive(&tags(&["ovp/skip", "ovp/force"])), TagDirective::Skip);
+    }
+
+    #[test]
+    fn skipped_is_terminal_but_pending_flags_still_retry() {
+        use crate::ledger::is_pending_flag;
+        assert!(is_pending_flag(IntakeAction::NeedsContent));
+        assert!(is_pending_flag(IntakeAction::Unparseable));
+        // The whole point: enrichment must never re-fetch a skipped capture.
+        assert!(!is_pending_flag(IntakeAction::Skipped));
     }
 }

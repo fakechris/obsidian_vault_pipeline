@@ -210,6 +210,9 @@ pub fn candidates_from_index(
             | SourceStatus::NeedsContent
             | SourceStatus::Queued
             | SourceStatus::Unparseable
+            // Operator-excluded: it never became a readable source, and
+            // queueing it here would spend on exactly what `ovp/skip` declined.
+            | SourceStatus::Skipped
             | SourceStatus::Failed => continue,
             SourceStatus::Processed | SourceStatus::Duplicate => {}
         }
