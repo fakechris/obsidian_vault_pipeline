@@ -1,4 +1,9 @@
-//! Ask-agent system policy (candidate `ask_agent_policy-v1`, surface: prompt).
+//! Ask-agent system policy (candidate `ask_agent_policy-v4`, surface: prompt).
+//!
+//! Keep this revision in step with `agent.rs`'s `cache_namespace` — the two
+//! together are what stop a cassette recorded under an older prompt from being
+//! replayed against this one. (The header had drifted to v1 while the
+//! namespace was already v3; v4 is this PR's policy edit.)
 //!
 //! The DISCIPLINE text for the vault agent: role, tool boundaries, evidence
 //! policy, failure recovery, coverage honesty, and the untrusted-content rule.

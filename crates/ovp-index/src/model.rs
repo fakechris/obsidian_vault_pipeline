@@ -54,11 +54,12 @@ pub struct SourceRow {
     /// (`[[Cerebras]]` → `Cerebras`; a list is joined with commas).
     ///
     /// Carried because "the article by X" is a way people actually look for
-    /// things, and without this field there was no query path for it at all:
-    /// 55% of this corpus has an author and none of it was reachable except
-    /// by a full-corpus body scan. `author_handle` is deliberately NOT a
-    /// second field — it is a strict subset (zero sources carry a handle
-    /// without an author), so it would add plumbing and no reach.
+    /// things, and the field was not part of any query path: on the dogfood
+    /// vault 699 of 1453 sources (48%) resolve an author, and none of it was
+    /// searchable except incidentally, when the name happened to appear in
+    /// the URL. `author_handle` is deliberately NOT a second field — it is a
+    /// strict subset (zero sources carry a handle without an author), so it
+    /// would add plumbing and no reach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
