@@ -180,7 +180,10 @@ impl CanonicalFsStoreApplier {
             return Err("key_empty".into());
         }
         let rel = Path::new(key);
-        if rel.is_absolute() {
+        // See `vault_fs::resolve_vault_path` — `is_absolute()` is false for a
+        // `/`-rooted path on Windows, so check `has_root()` too and keep the
+        // reason code the same on every platform.
+        if rel.is_absolute() || rel.has_root() {
             return Err(format!("key_absolute: {key}"));
         }
         for c in rel.components() {

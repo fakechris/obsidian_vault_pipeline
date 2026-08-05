@@ -102,9 +102,15 @@ impl ScheduleConfig {
         format!("{:02}:{:02}", self.hour, self.minute)
     }
 
+    /// Joined one segment at a time, not `join(".ovp/logs")`: on Windows the
+    /// embedded `/` survives verbatim, so the wrapper `.cmd` ended up testing
+    /// `if not exist "C:\v\.ovp/logs"` and then handing `mkdir` a mixed-separator
+    /// path — and cmd.exe's `mkdir` rejects `/`. With `2>nul` on that line the
+    /// failure is invisible and every tick's output goes nowhere.
     pub fn log_path(&self, flavor: Flavor) -> PathBuf {
         self.vault_root
-            .join(".ovp/logs")
+            .join(".ovp")
+            .join("logs")
             .join(log_file_name(flavor))
     }
 }
@@ -197,12 +203,16 @@ fn home_dir() -> Result<PathBuf, CliError> {
 /// First entry is the one `status` parses (the plist / the .service / the .cmd).
 pub fn unit_paths(home: &Path, flavor: Flavor) -> Vec<PathBuf> {
     match flavor {
+        // Segment-wise joins (not `join("Library/LaunchAgents")`) so the
+        // rendered path uses one separator throughout on every platform —
+        // `status` compares these against paths it builds itself.
         Flavor::Launchd => vec![
-            home.join("Library/LaunchAgents")
+            home.join("Library")
+                .join("LaunchAgents")
                 .join(format!("{LAUNCHD_LABEL}.plist")),
         ],
         Flavor::Systemd => {
-            let dir = home.join(".config/systemd/user");
+            let dir = home.join(".config").join("systemd").join("user");
             vec![
                 dir.join(format!("{SYSTEMD_UNIT}.service")),
                 dir.join(format!("{SYSTEMD_UNIT}.timer")),
@@ -747,7 +757,8 @@ fn remove_legacy_unit(
     match flavor {
         Flavor::Launchd => {
             let plist = home
-                .join("Library/LaunchAgents")
+                .join("Library")
+                .join("LaunchAgents")
                 .join(format!("{LEGACY_LAUNCHD_LABEL}.plist"));
             stop_launchd(LEGACY_LAUNCHD_LABEL, &plist, runner)?;
             if plist.exists() {
@@ -758,7 +769,7 @@ fn remove_legacy_unit(
         }
         Flavor::Systemd => {
             stop_systemd(LEGACY_SYSTEMD_UNIT, runner)?;
-            let dir = home.join(".config/systemd/user");
+            let dir = home.join(".config").join("systemd").join("user");
             for p in [
                 dir.join(format!("{LEGACY_SYSTEMD_UNIT}.timer")),
                 dir.join(format!("{LEGACY_SYSTEMD_UNIT}.service")),
@@ -1840,6 +1851,16 @@ mod tests {
 
     // -- launchd plist ------------------------------------------------------
 
+    // The three tests below assert the exact TEXT of a launchd plist / systemd
+    // unit built from a POSIX fixture path (`/Users/op/ovp-vault`). Everything
+    // else about these renderers is platform-neutral, but the log line is not:
+    // it comes from `log_path`, which joins with the host's separator, so on
+    // Windows the fixture renders `\Users\op\...`. Rather than assert a
+    // separator-normalized string (which would test the generator against
+    // itself), they are scoped to the platforms that can actually reach this
+    // code — `detect_flavor` only ever returns Launchd/Systemd on unix, and
+    // SchTasks has its own text tests above that DO run everywhere.
+    #[cfg(unix)]
     #[test]
     fn plist_carries_label_interval_logs_and_header() {
         let plist = render_launchd_plist(&cfg());
@@ -1873,6 +1894,7 @@ mod tests {
 
     // -- systemd units ------------------------------------------------------
 
+    #[cfg(unix)] // see `plist_carries_label_interval_logs_and_header`
     #[test]
     fn systemd_service_runs_tick_oneshot() {
         let svc = render_systemd_service(&cfg());
@@ -1963,6 +1985,7 @@ mod tests {
         assert_eq!(meta.vault_root, PathBuf::from("/Users/op/A&B <vault>"));
     }
 
+    #[cfg(unix)] // see `plist_carries_label_interval_logs_and_header`
     #[test]
     fn systemd_log_paths_escape_percent_specifiers() {
         let mut c = cfg();
@@ -2039,7 +2062,9 @@ mod tests {
 
         let plist = home
             .path()
-            .join("Library/LaunchAgents/com.ovp2.scheduler.plist");
+            .join("Library")
+            .join("LaunchAgents")
+            .join("com.ovp2.scheduler.plist");
         assert_eq!(report.unit_files, vec![plist.clone()]);
         assert!(report.env_created);
         assert_eq!(report.registry, RegistryOutcome::Seeded, "install seeds the registry");

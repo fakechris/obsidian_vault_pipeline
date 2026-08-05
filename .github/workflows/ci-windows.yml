@@ -58,8 +58,12 @@ jobs:
       # Run this BEFORE the app builds: it is the fastest signal on the
       # cfg(windows) branches (probe_pid, the schtasks flavor, the direct-spawn
       # job runner), and it needs no npm or WebView2.
+      # `--no-fail-fast`: cargo normally stops at the first failing test binary.
+      # With ~25 minutes per Windows run and no other Windows environment, that
+      # turns a handful of independent failures into a handful of round trips.
+      # The step still fails — it just reports everything first.
       - name: Test the workspace (offline)
-        run: cargo test --workspace --exclude ovp2-desktop
+        run: cargo test --workspace --exclude ovp2-desktop --no-fail-fast
 
       # NOT `-D warnings`: the workspace carries pre-existing lint debt from
       # newer clippy releases (collapsible let-chains, nonminimal_bool, …) that
