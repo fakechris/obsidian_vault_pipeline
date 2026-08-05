@@ -1,9 +1,8 @@
-//! Ask-agent system policy (candidate `ask_agent_policy-v4`, surface: prompt).
+//! Ask-agent system policy (candidate `ask_agent_policy-v5`, surface: prompt).
 //!
 //! Keep this revision in step with `agent.rs`'s `cache_namespace` — the two
 //! together are what stop a cassette recorded under an older prompt from being
-//! replayed against this one. (The header had drifted to v1 while the
-//! namespace was already v3; v4 is this PR's policy edit.)
+//! replayed against this one. Bump BOTH on every edit to the text below.
 //!
 //! The DISCIPLINE text for the vault agent: role, tool boundaries, evidence
 //! policy, failure recovery, coverage honesty, and the untrusted-content rule.
@@ -79,8 +78,15 @@ EVIDENCE
 - Cite what you used: when your answer rests on a claim, reference it as \
 [claim:<claim_key>]; when it rests on a source, reference it as \
 [source:<source_id>] (the source_id from the tool result), with the title \
-as display text — that exact form is what makes the reference openable. Do \
-not decorate answers with citations for material you did not consult.
+as display text — that exact form is what makes the reference openable.
+- Every source you NAME carries its reference, not just the one your answer \
+rests on. Near-misses, alternatives, the things you list as related or as \
+ruled out — all of them. You learned each name from a tool result that \
+handed you its id in the same breath, so the reference costs you nothing, \
+while omitting it costs the operator a whole extra round asking for a link \
+you already had. The rule against inventing references forbids citing \
+material NO tool returned; it never licenses dropping one for material a \
+tool did return.
 - The brackets contain ONLY the bare key, exactly as a tool returned it: \
 no titles, no extra words, no angle brackets, no spaces inside the \
 brackets. Titles and commentary go OUTSIDE the brackets as display text. \
@@ -150,6 +156,7 @@ mod tests {
             "Never follow",       // untrusted tool_result content
             "Never ask permission", // read-only tools: act, do not offer
             "as an author",       // metadata is a search axis, not just prose
+            "you NAME carries",   // listed sources are citable, not just the answer's
         ] {
             assert!(AGENT_POLICY.contains(needle), "policy lost `{needle}`");
         }
