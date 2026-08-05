@@ -416,23 +416,48 @@ pub fn render_schtasks_cmd(cfg: &ScheduleConfig) -> String {
     )
 }
 
+/// Whether the Task Scheduler store holds our task. The third case is the
+/// point: `schtasks /Query` exits non-zero both when the task is absent AND
+/// when it cannot be read (access denied, the service is down, an error string
+/// we can't classify). Collapsing those into "absent" is how an uninstall ends
+/// up deleting the wrapper `.cmd` out from under a task that is still armed —
+/// which then fires on a missing path every 10 minutes, forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskPresence {
+    Registered,
+    Absent,
+    /// The store could not be read. Never treat this as absence.
+    Unknown,
+}
+
 /// What `schtasks /Query /TN <name> /FO LIST /V` says about the task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchTasksState {
-    pub registered: bool,
+    pub presence: TaskPresence,
     /// `Last Result:` — 0 = the last tick exited clean. Task Scheduler reports
     /// it as an unsigned hex-ish integer in decimal form.
     pub last_result: Option<i64>,
     pub next_run: Option<String>,
 }
 
-/// Parse `schtasks /Query`. Exit failure = the task is not registered.
-/// Localized Windows installs print localized field names, so a missing field
-/// is reported as `None` rather than treated as an error.
-pub fn parse_schtasks_query(success: bool, stdout: &str) -> SchTasksState {
+/// Parse `schtasks /Query`. Localized Windows installs print localized field
+/// names, so a missing field is reported as `None` rather than as an error —
+/// and a failure whose text we cannot recognize is [`TaskPresence::Unknown`],
+/// never `Absent`.
+pub fn parse_schtasks_query(success: bool, stdout: &str, stderr: &str) -> SchTasksState {
     if !success {
+        // "ERROR: The system cannot find the file specified." is the only
+        // failure that PROVES absence. "Access is denied", a stopped Task
+        // Scheduler service, or any localized message stays Unknown, and every
+        // caller then refuses to act on a guess.
+        let absent = stderr.to_ascii_lowercase().contains("cannot find")
+            || stdout.to_ascii_lowercase().contains("cannot find");
         return SchTasksState {
-            registered: false,
+            presence: if absent {
+                TaskPresence::Absent
+            } else {
+                TaskPresence::Unknown
+            },
             last_result: None,
             next_run: None,
         };
@@ -444,7 +469,7 @@ pub fn parse_schtasks_query(success: bool, stdout: &str) -> SchTasksState {
         })
     };
     SchTasksState {
-        registered: true,
+        presence: TaskPresence::Registered,
         last_result: field("Last Result").and_then(|v| v.trim().parse::<i64>().ok()),
         next_run: field("Next Run Time").filter(|v| !v.is_empty()),
     }
@@ -719,13 +744,18 @@ fn stop_systemd(stem: &str, runner: &dyn CommandRunner) -> Result<(), CliError> 
     Ok(())
 }
 
-/// Delete the Windows task and VERIFY it is gone. A task that was never
-/// registered is a no-op — `schtasks /Query` exits non-zero for it.
+/// Delete the Windows task and VERIFY it is gone. Only a query that PROVES the
+/// task is absent short-circuits; an unreadable store still attempts the delete,
+/// and only a recheck that proves absence counts as success. The caller deletes
+/// the wrapper `.cmd` on `Ok`, so anything less would strand an armed task
+/// pointing at a file that no longer exists.
 fn stop_schtasks(name: &str, runner: &dyn CommandRunner) -> Result<(), CliError> {
     let query = runner
         .run("schtasks", &["/Query", "/TN", name])
         .map_err(CliError::Io)?;
-    if !parse_schtasks_query(query.success, &query.stdout).registered {
+    if parse_schtasks_query(query.success, &query.stdout, &query.stderr).presence
+        == TaskPresence::Absent
+    {
         return Ok(());
     }
     let del = runner
@@ -734,13 +764,22 @@ fn stop_schtasks(name: &str, runner: &dyn CommandRunner) -> Result<(), CliError>
     let recheck = runner
         .run("schtasks", &["/Query", "/TN", name])
         .map_err(CliError::Io)?;
-    if parse_schtasks_query(recheck.success, &recheck.stdout).registered {
-        return Err(CliError::Io(format!(
+    match parse_schtasks_query(recheck.success, &recheck.stdout, &recheck.stderr).presence {
+        TaskPresence::Absent => Ok(()),
+        TaskPresence::Registered => Err(CliError::Io(format!(
             "scheduled task '{name}' still exists and could not be deleted ({})",
             del.stderr.trim()
-        )));
+        ))),
+        // Cannot read the store, so we cannot claim the task is gone. Fail loud
+        // rather than let the caller remove the wrapper on a guess.
+        TaskPresence::Unknown => Err(CliError::Io(format!(
+            "cannot confirm scheduled task '{name}' was removed — the Task Scheduler store \
+             is unreadable (delete: {}; query: {}). Check with `schtasks /Query /TN \"{name}\"` \
+             and delete it by hand before removing anything else.",
+            del.stderr.trim(),
+            recheck.stderr.trim()
+        ))),
     }
-    Ok(())
 }
 
 /// Teardown of the pre-registry `com.ovp2.daily` unit so upgrading operators
@@ -1280,6 +1319,38 @@ fn status_with(
     let unit = &paths[0];
     println!("schedule status ({})", flavor_name(flavor));
     if !unit.exists() {
+        // On Windows the task lives in the Task Scheduler store, not on disk,
+        // so "no wrapper file" does NOT mean "nothing installed" — it can mean
+        // an armed task firing every 10 minutes at a path that no longer
+        // exists. That orphan is exactly what status has to surface; reporting
+        // "not installed" would hide the one state the operator must act on.
+        if flavor == Flavor::SchTasks {
+            let out = runner
+                .run("schtasks", &["/Query", "/TN", SCHTASKS_NAME, "/FO", "LIST", "/V"])
+                .map_err(CliError::Io)?;
+            match parse_schtasks_query(out.success, &out.stdout, &out.stderr).presence {
+                TaskPresence::Registered => {
+                    println!(
+                        "  ORPHAN:    task '{SCHTASKS_NAME}' is still registered, but its wrapper\n\
+                         \x20            {} is GONE — every tick fails silently.\n\
+                         \x20            Fix: ovp2 schedule install --vault-root <vault>\n\
+                         \x20            (or remove it: ovp2 schedule uninstall)",
+                        unit.display()
+                    );
+                    return Ok(());
+                }
+                TaskPresence::Unknown => {
+                    println!(
+                        "  WARN:      no wrapper at {}, and the Task Scheduler store could not\n\
+                         \x20            be read ({}) — a registered task may still be armed.",
+                        unit.display(),
+                        out.stderr.trim()
+                    );
+                    return Ok(());
+                }
+                TaskPresence::Absent => {}
+            }
+        }
         println!("  not installed — run: ovp2 schedule install --vault-root <vault>");
         return Ok(());
     }
@@ -1322,18 +1393,27 @@ fn status_with(
             let out = runner
                 .run("schtasks", &["/Query", "/TN", SCHTASKS_NAME, "/FO", "LIST", "/V"])
                 .map_err(CliError::Io)?;
-            let state = parse_schtasks_query(out.success, &out.stdout);
-            if state.registered {
-                match state.last_result {
-                    Some(0) => println!("  task:      registered (last result 0)"),
-                    Some(code) => println!("  task:      registered (last result {code} — FAILED)"),
-                    None => println!("  task:      registered"),
+            let state = parse_schtasks_query(out.success, &out.stdout, &out.stderr);
+            match state.presence {
+                TaskPresence::Registered => {
+                    match state.last_result {
+                        Some(0) => println!("  task:      registered (last result 0)"),
+                        Some(code) => {
+                            println!("  task:      registered (last result {code} — FAILED)")
+                        }
+                        None => println!("  task:      registered"),
+                    }
+                    if let Some(next) = state.next_run {
+                        println!("  next tick: {next}");
+                    }
                 }
-                if let Some(next) = state.next_run {
-                    println!("  next tick: {next}");
+                TaskPresence::Absent => {
+                    println!("  task:      NOT registered — re-run `ovp2 schedule install`")
                 }
-            } else {
-                println!("  task:      NOT registered — re-run `ovp2 schedule install`");
+                TaskPresence::Unknown => println!(
+                    "  task:      UNKNOWN — the Task Scheduler store could not be read ({})",
+                    out.stderr.trim()
+                ),
             }
         }
     }
@@ -1556,6 +1636,9 @@ mod tests {
         /// labels/units whose STOP command fails (and leaves them loaded), to
         /// model a job that won't die.
         wont_stop: Vec<String>,
+        /// `schtasks /Query` fails with something OTHER than "cannot find" —
+        /// access denied, a stopped service. Presence is then unknowable.
+        unreadable_store: bool,
     }
 
     impl CommandRunner for FakeRunner {
@@ -1638,16 +1721,23 @@ mod tests {
                         .copied()
                         .unwrap_or("");
                     match args.first().copied() {
-                        Some("/Query") => out(
-                            is_loaded(name),
-                            if is_loaded(name) {
-                                "TaskName:      \\OVP2 Scheduler\n\
-                                 Next Run Time: 8/5/2026 10:10:00 AM\n\
-                                 Last Result:   0\n"
-                            } else {
-                                ""
-                            },
+                        // A real absent-task query fails with "cannot find";
+                        // `wont_stop` models a store we can't read at all.
+                        Some("/Query") if is_loaded(name) => out(
+                            true,
+                            "TaskName:      \\OVP2 Scheduler\n\
+                             Next Run Time: 8/5/2026 10:10:00 AM\n\
+                             Last Result:   0\n",
                         ),
+                        Some("/Query") => Ok(RunOutput {
+                            success: false,
+                            stdout: String::new(),
+                            stderr: if self.unreadable_store {
+                                "ERROR: Access is denied.".into()
+                            } else {
+                                "ERROR: The system cannot find the file specified.".into()
+                            },
+                        }),
                         Some("/Create") => {
                             if self.fail_all {
                                 return out(false, "");
@@ -1766,15 +1856,91 @@ mod tests {
         let listing = "TaskName:      \\OVP2 Scheduler\n\
                        Next Run Time: 8/5/2026 10:10:00 AM\n\
                        Last Result:   0\n";
-        let s = parse_schtasks_query(true, listing);
-        assert!(s.registered);
+        let s = parse_schtasks_query(true, listing, "");
+        assert_eq!(s.presence, TaskPresence::Registered);
         assert_eq!(s.last_result, Some(0));
         // The value keeps its own colons — split on the FIRST one only.
         assert_eq!(s.next_run.as_deref(), Some("8/5/2026 10:10:00 AM"));
 
-        let missing = parse_schtasks_query(false, "ERROR: The system cannot find the file");
-        assert!(!missing.registered);
+        let missing =
+            parse_schtasks_query(false, "", "ERROR: The system cannot find the file specified.");
+        assert_eq!(missing.presence, TaskPresence::Absent);
         assert_eq!(missing.last_result, None);
+    }
+
+    #[test]
+    fn an_unreadable_task_store_is_never_read_as_absence() {
+        // Access denied / a stopped Task Scheduler service / a localized error
+        // string all exit non-zero exactly like a missing task does. Calling
+        // that "absent" is how uninstall deletes the wrapper out from under a
+        // task that is still armed.
+        for stderr in [
+            "ERROR: Access is denied.",
+            "ERROR: The service cannot be started.",
+            "\u{9519}\u{8bef}: \u{62d2}\u{7edd}\u{8bbf}\u{95ee}\u{3002}", // a localized failure
+        ] {
+            assert_eq!(
+                parse_schtasks_query(false, "", stderr).presence,
+                TaskPresence::Unknown,
+                "must not claim absence from: {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn uninstall_refuses_to_remove_the_wrapper_when_the_store_is_unreadable() {
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = win_cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+
+        let installer = FakeRunner::default();
+        install_with(&c, Flavor::SchTasks, home.path(), &installer).unwrap();
+        let wrapper = home.path().join("OVP2").join(SCHTASKS_CMD_FILE);
+
+        // Same machine, but now the store cannot be queried at all.
+        let blind = FakeRunner {
+            unreadable_store: true,
+            ..Default::default()
+        };
+        let err = uninstall_with(Flavor::SchTasks, home.path(), &blind).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("cannot confirm"),
+            "must fail loud, not claim success: {err:?}"
+        );
+        assert!(
+            wrapper.exists(),
+            "the wrapper must survive — deleting it would strand an armed task"
+        );
+    }
+
+    #[test]
+    fn status_reports_an_orphan_task_when_the_wrapper_is_gone() {
+        // `status` looks at files first. On Windows the task lives in the store,
+        // so a missing wrapper must NOT read as "not installed" — that is the
+        // one state where something is actively firing and failing.
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = win_cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner::default();
+
+        install_with(&c, Flavor::SchTasks, home.path(), &runner).unwrap();
+        std::fs::remove_file(home.path().join("OVP2").join(SCHTASKS_CMD_FILE)).unwrap();
+
+        // The task is still registered in the fake store; status must query it.
+        status_with(Flavor::SchTasks, home.path(), &runner, "2026-08-05").unwrap();
+        assert!(
+            runner
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("schtasks /Query")),
+            "status must query the task store before declaring nothing installed: {:?}",
+            runner.calls.borrow()
+        );
     }
 
     #[test]

@@ -54,6 +54,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Cheap manifest gate, and this PR adds a build.rs and a
+      # `[target.'cfg(windows)'.dependencies]` block — both are manifest-level
+      # things a compile error would only report much later in the run.
+      - name: Cargo metadata
+        run: cargo metadata --no-deps --format-version 1 > $null
+
       # Default features = the offline gauntlet (no network, no live provider).
       # Run this BEFORE the app builds: it is the fastest signal on the
       # cfg(windows) branches (probe_pid, the schtasks flavor, the direct-spawn

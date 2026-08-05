@@ -116,10 +116,12 @@ Three bugs only that runner could have found, all fixed in this PR:
 
 ## Deliberate limits (not bugs)
 
-- **No env-file sourcing.** There is no portable `. daily.env`. Windows uses
-  `.ovp/providers.toml`, which supersedes `daily.env` on every platform anyway.
-  A Windows vault that still has only `daily.env` gets a printed warning naming
-  the file — it will not silently run live jobs unauthenticated.
+- **No env-file sourcing.** macOS/Linux dispatch each job through `/bin/sh -c`
+  and source `<vault>/.ovp/daily.env` when `.ovp/providers.toml` is absent;
+  that path still works and is not going away. Windows has no shell to source
+  with, so credentials there MUST be in `.ovp/providers.toml`. A Windows vault
+  carrying only `daily.env` gets a printed warning naming the file — it will
+  not silently run live jobs unauthenticated.
 - **No permission hardening on written files.** `chmod 600` is a no-op on
   Windows; restricting the ACL would mean a real dependency for a file that
   already inherits a per-user profile ACL. Credentials belong in
