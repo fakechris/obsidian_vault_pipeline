@@ -2115,6 +2115,15 @@ fn source_search_hit(source: &SourceRow, query_lower: &str) -> Value {
     {
         "url"
     } else if source
+        .author
+        .as_deref()
+        .is_some_and(|value| value.to_lowercase().contains(query_lower))
+    {
+        // Named before rel_path: when a query matches the author, that is
+        // what the model needs to see to explain the hit — "matched the
+        // author" is an answer, "matched the file path" is noise.
+        "author"
+    } else if source
         .rel_path
         .as_deref()
         .is_some_and(|value| value.to_lowercase().contains(query_lower))
@@ -2129,6 +2138,7 @@ fn source_search_hit(source: &SourceRow, query_lower: &str) -> Value {
         "title".into(),
         json!(source.title.as_deref().unwrap_or("(untitled)")),
     );
+    insert_option(&mut out, "author", source.author.as_deref());
     insert_option(&mut out, "url", source.url.as_deref());
     insert_option(&mut out, "rel_path", source.rel_path.as_deref());
     insert_option(&mut out, "date", source.date.as_deref());
@@ -2723,6 +2733,7 @@ mod tests {
             sha256: sha256.into(),
             status: SourceStatus::Processed,
             title: Some(title.into()),
+            author: None,
             url: Some(format!("https://example.test/{sha256}")),
             origin: None,
             rel_path: rel_path.map(str::to_string),
@@ -2753,6 +2764,38 @@ mod tests {
             run_date: None,
             lane: None,
         }
+    }
+
+    /// Locating an article by WHO wrote it. The reported miss: a source whose
+    /// subject appears nowhere in its own title, but whose author is in the
+    /// frontmatter — unreachable while the haystack was title + url + path,
+    /// and 55% of the real corpus carries an author.
+    #[test]
+    fn search_sources_matches_the_author_and_says_so() {
+        let mut by_author = source("aaaa1111", "How we built our knowledge base", None, None);
+        by_author.author = Some("Cerebras".into());
+        let unrelated = source("bbbb2222", "Notes on retrieval", None, None);
+        let model = fixture_model(vec![by_author, unrelated], vec![], vec![]);
+
+        let out = search_sources(&model, "cerebras", 10);
+        let hits = out["hits"].as_array().expect("hits array");
+        assert_eq!(hits.len(), 1, "only the authored source matches: {out}");
+        assert_eq!(hits[0]["source_id"], "aaaa1111");
+        assert_eq!(hits[0]["author"], "Cerebras", "author travels to the model");
+        // The model has to be able to explain the hit; "matched the author"
+        // is an answer, "matched the file path" would be noise.
+        assert_eq!(hits[0]["match_reason"], "author");
+    }
+
+    /// Title still wins when both could match — the reason string must name
+    /// the strongest signal, not merely the first branch that happens to hit.
+    #[test]
+    fn title_match_outranks_author_in_the_reason() {
+        let mut row = source("cccc3333", "Cerebras wafer-scale notes", None, None);
+        row.author = Some("Cerebras".into());
+        let model = fixture_model(vec![row], vec![], vec![]);
+        let out = search_sources(&model, "cerebras", 10);
+        assert_eq!(out["hits"][0]["match_reason"], "title");
     }
 
     fn fixture_model(

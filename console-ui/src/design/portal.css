@@ -2262,12 +2262,22 @@ body {
   color: var(--accent, #3b82f6);
   background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
 }
-/* Center column fills the viewport: the thread scrolls internally while the
- * composer stays pinned on screen (60vh thread forced constant paging). */
+/* The composer stays reachable without the column guessing where it starts.
+ *
+ * It used to be `height: calc(100vh - 7rem)`, where 7rem was a hand-measured
+ * stand-in for everything above: the sticky run banner, .shell-head padding,
+ * the nav, the page title. Any of those growing — or just a short window —
+ * pushed the bottom of the column past the fold and took the composer with
+ * it, while an empty thread stretched to fill the gap. That is the "huge
+ * blank space and no input box" report.
+ *
+ * Sticky needs no such constant: the page scrolls normally, so a short thread
+ * occupies only its own height, and a long one keeps the composer pinned to
+ * the viewport bottom — the original intent, minus the measurement. */
 .ask-main {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 7rem);
+  min-height: 0;
 }
 .chat-thread {
   display: flex;
@@ -2275,20 +2285,16 @@ body {
   gap: 0.9rem;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
   padding-right: 0.25rem;
 }
 .ask-composer {
   flex: none;
-}
-/* Collapsed (single-column) layout: no fixed height, the page scrolls. */
-@media (max-width: 900px) {
-  .ask-main {
-    height: auto;
-  }
-  .ask-main .chat-thread {
-    max-height: 60vh;
-  }
+  position: sticky;
+  bottom: 0;
+  /* Opaque: the thread scrolls UNDER this, so a transparent composer would
+   * show message text through the textarea. */
+  background: var(--surface);
+  padding-bottom: 0.5rem;
 }
 .chat-turn {
   display: flex;

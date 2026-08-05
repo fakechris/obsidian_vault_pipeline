@@ -110,7 +110,7 @@ pub fn build_index_at_with_progress(
     enrich_titles_from_packs(&mut sources, &packs);
     // Duplicates / ledger-only rows often have null title — re-read the note
     // (or use the filename stem) so the Library never shows a bare 64-char hash.
-    enrich_missing_titles(vault_root, &mut sources);
+    enrich_missing_metadata(vault_root, &mut sources);
     let tagged = attach_tags(vault_root, &mut sources)?;
     on_phase(&format!("tagged {tagged} source(s)"));
     let originated = attach_origins(vault_root, &layout, &mut sources)?;
@@ -302,17 +302,19 @@ fn build_sources(
                 std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
             let sha = hex_sha256(&bytes);
             rows.entry(sha.clone()).or_insert_with(|| {
-                let (title, url) = match read_source_from_path(&path) {
+                let (title, url, author) = match read_source_from_path(&path) {
                     Ok(doc) => (
                         Some(doc.title),
                         (!doc.source_url.is_empty()).then_some(doc.source_url),
+                        doc.author.filter(|a| !a.trim().is_empty()),
                     ),
-                    Err(_) => (None, None),
+                    Err(_) => (None, None, None),
                 };
                 let rel = rel_to(vault_root, &path);
                 let mut row = SourceRow::blank(sha, SourceStatus::Queued);
                 row.title = title;
                 row.url = url;
+                row.author = author;
                 row.rel_path = Some(rel.clone());
                 row.content_date = first_iso_day_in(&rel);
                 row
@@ -673,13 +675,20 @@ fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
     }
 }
 
-/// Fill empty titles (and urls when missing) from the note on disk.
+/// Fill missing title / url / author from the note on disk.
+///
 /// Duplicate intake rows historically wrote `title: null` — without this the
 /// portal falls back to the 64-char content hash as the only label.
-fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
+///
+/// Author is unconditional, unlike the other two: it lives ONLY in frontmatter
+/// (no ledger carries it), so a row that already has a title and a url still
+/// needs its file read to learn who wrote it. Skipping healthy rows here is
+/// what left the author field empty on every already-complete source — which
+/// is to say, on almost all of them.
+fn enrich_missing_metadata(vault_root: &Path, sources: &mut [SourceRow]) {
     for s in sources.iter_mut() {
         let title_empty = s.title.as_ref().is_none_or(|t| t.trim().is_empty());
-        if !title_empty && s.url.is_some() {
+        if !title_empty && s.url.is_some() && s.author.is_some() {
             continue;
         }
         let Some(rel) = s.rel_path.as_deref() else {
@@ -692,6 +701,13 @@ fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
             }
             if s.url.is_none() && !doc.source_url.is_empty() {
                 s.url = Some(doc.source_url);
+            }
+            // Backfill on rebuild: rows written before this field existed
+            // carry None, and a full rebuild IS the migration story.
+            if s.author.is_none()
+                && let Some(a) = doc.author.filter(|a| !a.trim().is_empty())
+            {
+                s.author = Some(a);
             }
         }
         if s.title.as_ref().is_none_or(|t| t.trim().is_empty())

@@ -553,6 +553,7 @@ mod tests {
             sha256: sha.into(),
             status,
             title: Some(format!("Src {sha}")),
+            author: None,
             url: Some(format!("https://ex.com/{sha}")),
             origin: None,
             rel_path: Some("50-Inbox/01-Raw/x.md".into()),
