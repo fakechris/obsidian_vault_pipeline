@@ -133,28 +133,10 @@ fn collision_free(to: &Path) -> Result<PathBuf, String> {
 }
 
 /// Vault-relative display path: strip `root` when `p` is under it, else the
-/// full path.
-///
-/// Separators are normalized to `/` on every platform. These strings are not
-/// display-only — they are persisted as `source_path` / `rel_path` / `moved_to`
-/// in the ledgers, the index and the portal read-model, and they are matched
-/// against the forward-slash literals `ovp_domain::layout` hands out. A Windows
-/// run that wrote `50-Inbox\01-Raw\a.md` would produce a ledger no other
-/// platform (and no `layout`-derived lookup) could resolve, and the symptom
-/// would be a silently empty portal rather than an error.
-///
-/// The rewrite is `cfg(windows)`-only on purpose: `\` is a legal character in a
-/// Unix filename, so an unconditional replace would corrupt real paths on
-/// macOS/Linux. On Windows it cannot appear in a name at all, so there it is
-/// lossless.
+/// full path. Thin alias for [`ovp_domain::vault_rel`], which owns the
+/// separator convention (these strings are persisted, not just displayed).
 pub fn rel_to(root: &Path, p: &Path) -> String {
-    let rel = p
-        .strip_prefix(root)
-        .map(|q| q.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| p.to_string_lossy().into_owned());
-    #[cfg(windows)]
-    let rel = rel.replace('\\', "/");
-    rel
+    ovp_domain::vault_rel(root, p)
 }
 
 /// Single-writer guard for the vault's product state. Two overlapping runs

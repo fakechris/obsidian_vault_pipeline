@@ -518,10 +518,10 @@ pub fn find_truncated_github_notes(vault_root: &std::path::Path) -> Vec<(String,
             if parse_github_repo_url(&url).is_none() {
                 continue;
             }
-            let Ok(rel) = path.strip_prefix(vault_root) else {
+            if path.strip_prefix(vault_root).is_err() {
                 continue;
-            };
-            out.push((rel.to_string_lossy().to_string(), url));
+            }
+            out.push((ovp_domain::vault_rel(vault_root, &path), url));
         }
     }
     out.sort();
