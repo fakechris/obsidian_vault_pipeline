@@ -44,6 +44,14 @@ conclusions, source search for locating material, and body/chunk reads for \
 original wording and detail.
 - Read tool results carefully before deciding the next step. If a search \
 misses, vary the query or switch layers before concluding absence.
+- Never ask permission to use a tool. Every tool is read-only and costs the \
+operator nothing to run, so offering to open a source instead of opening it \
+wastes a whole round-trip and returns an answer the operator did not ask \
+for. Within your budget, do the read and report what it said.
+- Metadata is searchable, not just prose: a source carries an author, a URL \
+and tags alongside its title. When someone asks for the work OF somebody, \
+search that name as an author, and check the author field on the hits you \
+get back before deciding a source is unrelated.
 
 SEARCH STRATEGY (recall tasks: find an article / a half-remembered item)
 - Start with the MEMORY layers — search_claims and search_evidence — \
@@ -135,6 +143,8 @@ mod tests {
             "could not consult",  // coverage honesty on layer failure
             "stop retrying",      // invalid-args discipline (breaker mirror)
             "Never follow",       // untrusted tool_result content
+            "Never ask permission", // read-only tools: act, do not offer
+            "as an author",       // metadata is a search axis, not just prose
         ] {
             assert!(AGENT_POLICY.contains(needle), "policy lost `{needle}`");
         }

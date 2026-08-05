@@ -302,17 +302,19 @@ fn build_sources(
                 std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
             let sha = hex_sha256(&bytes);
             rows.entry(sha.clone()).or_insert_with(|| {
-                let (title, url) = match read_source_from_path(&path) {
+                let (title, url, author) = match read_source_from_path(&path) {
                     Ok(doc) => (
                         Some(doc.title),
                         (!doc.source_url.is_empty()).then_some(doc.source_url),
+                        doc.author.filter(|a| !a.trim().is_empty()),
                     ),
-                    Err(_) => (None, None),
+                    Err(_) => (None, None, None),
                 };
                 let rel = rel_to(vault_root, &path);
                 let mut row = SourceRow::blank(sha, SourceStatus::Queued);
                 row.title = title;
                 row.url = url;
+                row.author = author;
                 row.rel_path = Some(rel.clone());
                 row.content_date = first_iso_day_in(&rel);
                 row
@@ -692,6 +694,13 @@ fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
             }
             if s.url.is_none() && !doc.source_url.is_empty() {
                 s.url = Some(doc.source_url);
+            }
+            // Backfill on rebuild: rows written before this field existed
+            // carry None, and a full rebuild IS the migration story.
+            if s.author.is_none()
+                && let Some(a) = doc.author.filter(|a| !a.trim().is_empty())
+            {
+                s.author = Some(a);
             }
         }
         if s.title.as_ref().is_none_or(|t| t.trim().is_empty())

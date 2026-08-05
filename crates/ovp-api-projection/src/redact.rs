@@ -41,6 +41,11 @@ impl PublicView {
             // effect of the tag facet landing on the live portal.
             s.tags.clear();
             s.tags_inferred.clear();
+            // `author` is KEPT, deliberately: it is the byline of an article
+            // that is already public, and the `url` beside it names the same
+            // person or org anyway. This scrubber works by deletion, so every
+            // new SourceRow field publishes unless someone decides otherwise
+            // here — that decision is this comment.
         }
         let public_shas: std::collections::HashSet<&str> =
             m.sources.iter().map(|s| s.sha256.as_str()).collect();
@@ -132,6 +137,7 @@ mod tests {
             sha256: sha.into(),
             status,
             title: Some("t".into()),
+            author: Some("A. Byline".into()),
             url: Some("https://example.com".into()),
             origin: None,
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
@@ -217,6 +223,10 @@ mod tests {
         assert_eq!(m.packs[0].pack_dir, "case");
         assert!(m.packs[0].card_titles.is_empty());
         assert_eq!(m.sources[0].pack_dir.as_deref(), Some("case"));
+        // The byline PUBLISHES, on purpose (see from_model). Asserted so the
+        // choice is visible in the test surface: flipping it should break a
+        // test and force a decision, not slip through as a diff nobody read.
+        assert_eq!(m.sources[0].author.as_deref(), Some("A. Byline"));
         // Totals recomputed — no backlog/failure leakage.
         assert_eq!(m.totals.sources, 1);
         assert_eq!(m.totals.blocked, 0);

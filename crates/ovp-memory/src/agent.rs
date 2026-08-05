@@ -94,6 +94,46 @@ pub struct ToolTraceEntry {
     pub hits: Vec<ProgressHit>,
 }
 
+/// Sent back when [`corpus_walk_incomplete`] fires. Deliberately states the
+/// OBSERVATION and hands the decision back, rather than dictating a tool: the
+/// model may legitimately conclude the vault does not have it — but it has to
+/// look first, and then say so plainly instead of asking the operator to pick
+/// from a list it never grounded.
+const CORPUS_GATE_NUDGE: &str = "\
+Coverage check before this answer is delivered: you searched the vault but \
+the full-text corpus walk never ran, and your answer cites nothing. Either \
+finish the walk (search_fulltext, following next_cursor until the corpus is \
+exhausted) and answer with the sources you find, or state plainly that the \
+vault does not contain it and say what you searched. Do not ask the operator \
+which candidate to open — you have read-only tools and can open it yourself. \
+Every candidate you do offer must carry its title and its source citation.";
+
+/// Whether a would-be final answer must be sent back for more work.
+///
+/// True only when ALL of these hold, so a legitimate answer is never delayed:
+/// - the turn actually queried the vault (a capabilities question calls no
+///   tools at all, and must be allowed to finish with zero citations);
+/// - `search_fulltext` never ran, so the corpus was never walked;
+/// - the answer carries no citation, i.e. it rests on nothing openable.
+///
+/// Note what this does NOT do: it never inspects the answer for phrases like
+/// "I could not find". Classifying prose as an absence claim is a judgment
+/// call, and judgment calls do not belong in a gate — the citation count and
+/// the tool trace are facts.
+fn corpus_walk_incomplete(trace: &[ToolTraceEntry], answer: &str) -> bool {
+    let searched_vault = trace.iter().any(|t| !t.is_error && t.tool.starts_with("search_"));
+    if !searched_vault {
+        return false;
+    }
+    let walked_corpus = trace
+        .iter()
+        .any(|t| !t.is_error && t.tool == "search_fulltext");
+    if walked_corpus {
+        return false;
+    }
+    !answer.contains("[claim:") && !answer.contains("[source:")
+}
+
 /// Generic result introspection for the trail: hits/scanned/truncated are the
 /// shared vocabulary of every search-shaped tool result. Non-JSON or
 /// keyless results narrate nothing (None), never a guess.
@@ -441,6 +481,8 @@ pub fn run_agent_turn_with_progress(
     // Per-tool CONSECUTIVE invalid-args counter (`invalid_args_breaker`).
     let mut invalid_streak: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
+    // `corpus_gate`: fires at most once per turn (see `corpus_walk_incomplete`).
+    let mut corpus_nudged = false;
 
     let stopped = 'turn: loop {
         // `deadline_authority`: no model call STARTS after exhaustion.
@@ -535,6 +577,32 @@ pub fn run_agent_turn_with_progress(
                 break 'turn StoppedReason::ModelError;
             }
             // No executable tools → the reply is the turn's terminal state.
+            // `corpus_gate`: the policy already says to finish the corpus
+            // before concluding absence, and the runtime already KNOWS whether
+            // the walk happened — it just never acted on it. An answer that
+            // searched the vault, cited nothing, and never scanned the corpus
+            // is the shape of "I could not find it" delivered as if it were a
+            // finding. Send the receipt back once and let the model continue.
+            //
+            // Every condition here is mechanically decidable, which is why
+            // this is a gate and not another paragraph of policy.
+            if !corpus_nudged
+                && matches!(
+                    reply.stop_reason,
+                    StopReason::EndTurn | StopReason::StopSequence
+                )
+                && corpus_walk_incomplete(&trace, &reply.text)
+            {
+                corpus_nudged = true;
+                let nudge = ModelMessage::User { content: CORPUS_GATE_NUDGE.to_string() };
+                messages.push(nudge.clone());
+                events.push(TranscriptEvent::Message {
+                    turn_id: turn_id.clone(),
+                    message: nudge,
+                });
+                continue 'turn;
+            }
+
             // Record the terminal assistant text as a Message event: later
             // turns project THIS turn and must see its answer, or multi-turn
             // continuity breaks and the audit is incomplete.
@@ -875,6 +943,74 @@ fn floor_char_boundary(s: &str, max: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+#[cfg(test)]
+mod corpus_gate_tests {
+    use super::*;
+
+    fn t(tool: &str, is_error: bool) -> ToolTraceEntry {
+        ToolTraceEntry {
+            tool: tool.into(),
+            tool_call_id: "c1".into(),
+            is_error,
+            summary: String::new(),
+            arguments: serde_json::Value::Null,
+            result_note: None,
+            hits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fires_on_the_observed_failure_shape() {
+        // Searched the vault, never walked the corpus, cited nothing, and
+        // handed the choice back to the operator. This is the exact answer
+        // that could not find an article whose author was in the frontmatter.
+        let trace = [t("search_sources", false), t("search_claims", false)];
+        let answer = "I found a few related articles. Which one did you mean?";
+        assert!(corpus_walk_incomplete(&trace, answer));
+    }
+
+    #[test]
+    fn a_cited_answer_is_never_delayed() {
+        let trace = [t("search_sources", false)];
+        for answer in [
+            "The knowledge base writeup [source:8e2da9a4] covers it.",
+            "That rests on [claim:agent-memory-1].",
+        ] {
+            assert!(!corpus_walk_incomplete(&trace, answer), "{answer}");
+        }
+    }
+
+    #[test]
+    fn a_completed_corpus_walk_is_never_delayed() {
+        // Having looked and found nothing IS an acceptable answer — the gate
+        // exists to force the looking, not to demand a result.
+        let trace = [t("search_sources", false), t("search_fulltext", false)];
+        assert!(!corpus_walk_incomplete(&trace, "The vault does not contain it."));
+    }
+
+    #[test]
+    fn a_capabilities_question_never_trips_the_gate() {
+        // Zero tools by design (the policy's no-tools path). Requiring a
+        // corpus walk here would make the agent scan the vault to answer
+        // what it can do.
+        assert!(!corpus_walk_incomplete(&[], "I can search claims and sources."));
+    }
+
+    #[test]
+    fn a_failed_fulltext_call_does_not_count_as_walked() {
+        // Otherwise a tool that errored would satisfy the gate and let an
+        // ungrounded answer through — the failure mode the gate exists for.
+        let trace = [t("search_sources", false), t("search_fulltext", true)];
+        assert!(corpus_walk_incomplete(&trace, "Not sure which one you mean."));
+    }
+
+    #[test]
+    fn a_failed_search_alone_does_not_count_as_querying_the_vault() {
+        let trace = [t("search_sources", true)];
+        assert!(!corpus_walk_incomplete(&trace, "Something went wrong."));
+    }
 }
 
 #[cfg(test)]

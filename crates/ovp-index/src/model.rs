@@ -50,6 +50,17 @@ pub struct SourceRow {
     pub status: SourceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Frontmatter author, wikilinks already stripped by the inbox parser
+    /// (`[[Cerebras]]` → `Cerebras`; a list is joined with commas).
+    ///
+    /// Carried because "the article by X" is a way people actually look for
+    /// things, and without this field there was no query path for it at all:
+    /// 55% of this corpus has an author and none of it was reachable except
+    /// by a full-corpus body scan. `author_handle` is deliberately NOT a
+    /// second field — it is a strict subset (zero sources carry a handle
+    /// without an author), so it would add plumbing and no reach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Capture-origin facet: which capture mechanism brought this content in
@@ -117,6 +128,7 @@ impl SourceRow {
             sha256: sha256.into(),
             status,
             title: None,
+            author: None,
             url: None,
             origin: None,
             rel_path: None,

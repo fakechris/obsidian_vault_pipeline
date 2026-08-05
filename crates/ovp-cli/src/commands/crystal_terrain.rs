@@ -560,6 +560,7 @@ mod tests {
             sha256: sha.into(),
             status: ovp_index::SourceStatus::Processed,
             title: None,
+            author: None,
             url: None,
             origin: None,
             rel_path: None,

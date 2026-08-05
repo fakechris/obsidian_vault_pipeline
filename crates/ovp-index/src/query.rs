@@ -195,10 +195,18 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
             let title = s.title.as_deref().unwrap_or("(untitled)");
             let url = s.url.as_deref().unwrap_or("");
             let path = s.rel_path.as_deref().unwrap_or("");
-            if !matches(&[title, url, path]) {
+            // Author is part of the haystack: "the article by X" was
+            // unanswerable while the only searchable fields were title, url
+            // and path — an article whose subject never appears in its own
+            // title could only be reached by scanning the whole corpus.
+            let author = s.author.as_deref().unwrap_or("");
+            if !matches(&[title, url, path, author]) {
                 continue;
             }
             let mut line = format!("{title} [{status}]");
+            if let Some(a) = &s.author {
+                line.push_str(&format!(" — {a}"));
+            }
             if let Some(d) = &s.date {
                 line.push_str(&format!(" {d}"));
             }
