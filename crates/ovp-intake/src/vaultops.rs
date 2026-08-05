@@ -371,14 +371,55 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
     }
 
-    #[cfg(unix)]
+    /// A PID that is definitely gone: spawn the shortest-lived process the host
+    /// has, reap it, and DROP the handle before returning.
+    ///
+    /// Dropping matters on Windows. While a `Child` is alive it holds an open
+    /// process handle, so `OpenProcess` still succeeds against a process that
+    /// has exited and `probe_pid` answers from the exit code instead of from
+    /// `ERROR_INVALID_PARAMETER` — a different branch than the crashed-run case
+    /// these tests exist to cover.
+    fn reaped_dead_pid() -> u32 {
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        drop(child);
+        pid
+    }
+
+    /// `probe_pid` is the single liveness primitive behind the run lock, the
+    /// daily heartbeat, the source-work queue and the agent transcript, and its
+    /// Windows implementation (`OpenProcess`/`GetExitCodeProcess`) shares no
+    /// code with the Unix one. Until this test existed, both dead-process tests
+    /// below were `cfg(unix)`-gated on `Command::new("true")`, so the Windows
+    /// branch had NO coverage at all — a `None` there would mean every stale
+    /// lock is kept forever, which looks exactly like a run that never ends.
+    #[test]
+    fn probe_pid_answers_definitively_for_live_dead_and_zero() {
+        assert_eq!(probe_pid(0), Some(false), "pid 0 is never a process");
+        assert_eq!(
+            probe_pid(std::process::id()),
+            Some(true),
+            "this very process is alive"
+        );
+        assert_eq!(
+            probe_pid(reaped_dead_pid()),
+            Some(false),
+            "a reaped child must read as GONE, not as `None`/unknown"
+        );
+    }
+
     #[test]
     fn run_lock_reclaims_stale_lock_from_dead_process() {
         let dir = tempfile::tempdir().unwrap();
         // Fabricate a crash: a lock file naming a process that has exited.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
+        let dead_pid = reaped_dead_pid();
         let lock_path = dir.path().join(".ovp/run.lock");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
@@ -392,16 +433,13 @@ mod tests {
         assert!(!lock_path.exists(), "reclaimed lock still releases on drop");
     }
 
-    #[cfg(unix)]
     #[test]
     fn run_lock_recovers_from_a_stranded_reclaim_guard() {
         // Crash DURING a previous reclaim: both the lock and the reclaim
         // guard are stranded with dead owners. Acquire must recover through
         // both layers (guard reclaimed by the same dead-owner rule).
         let dir = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
+        let dead_pid = reaped_dead_pid();
         let lock_path = dir.path().join(".ovp/run.lock");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
