@@ -11,9 +11,11 @@ in.
 
 ## What CI has actually proven
 
-`ci-windows` is green as of `fb0cda78`
-([run 31015660415](https://github.com/fakechris/obsidian_vault_pipeline/actions/runs/31015660415)).
-That run executed, on `windows-latest`:
+`.github/workflows/ci-windows.yml` went green for the first time during PR #419
+and has stayed green since — check the
+[latest run](https://github.com/fakechris/obsidian_vault_pipeline/actions/workflows/ci-windows.yml)
+rather than trusting this paragraph, which cannot know about the commit after
+the one that wrote it. Each run executes, on `windows-latest`:
 
 - the full offline test gauntlet — 1300+ tests, every `cfg(windows)` branch that
   has a test, including `probe_pid`, the schtasks flavor and the direct-spawn
@@ -167,10 +169,13 @@ they are fixed.
    WebView2 (a fresh Windows 10 image is the honest test) and confirm the
    bootstrapper installs it. Pick a vault when prompted; the portal must render.
 5. **Sidecar resolution.** In the installed app directory, confirm `ovp2.exe`
-   sits next to `OVP2.exe`. Then confirm the scheduler found it: the app logs
-   `no ovp2 binary found` to stderr when it did not, and stderr is swallowed
-   when launched from Explorer — so check for a `.ovp/schedule-state.json`
-   that actually advances instead.
+   sits next to `ovp2-desktop.exe` — the GUI shell keeps its Cargo binary name
+   because `tauri.conf.json` sets no `mainBinaryName`, and that is load-bearing:
+   Windows filenames are case-insensitive, so an `OVP2.exe` shell could not
+   share a directory with an `ovp2.exe` sidecar at all. Then confirm the
+   scheduler found it: the app logs `no ovp2 binary found` to stderr when it did
+   not, and stderr is swallowed when launched from Explorer — so check for a
+   `.ovp/schedule-state.json` that actually advances instead.
 6. **A tick fires, with no console flash.** Wait out one 10-minute interval (or
    temporarily shorten the cadence). Nothing should blink on screen.
 7. **`ovp2 schedule install`** from a terminal, then:
@@ -180,7 +185,17 @@ they are fixed.
    GONE, not just the wrapper).
 8. **A vault path with a space and a `%`** (e.g. `C:\Users\Some One\100% notes`)
    through the whole of 7. This is what `bat_quote` exists for and it is
-   unit-tested, but the batch parser is the real judge.
+   unit-tested, but the batch parser is the real judge. Check `schedule status`
+   too — the `ovp2:` metadata comments are deliberately left UNescaped so it can
+   read the real path back.
+8b. **The orphan path, against real `schtasks`.** Install, delete
+   `%LOCALAPPDATA%\OVP2\ovp2-scheduler-tick.cmd` by hand, then `ovp2 schedule
+   status` — it must report ORPHAN, not "not installed". Then `ovp2 schedule
+   uninstall` and confirm the task is actually gone. The fake runner covers the
+   logic; what it cannot cover is the real error TEXT: absence is detected by
+   matching "cannot find" in `schtasks` stderr, and a non-English Windows will
+   fall through to `Unknown` (which fails loud rather than guessing — verify it
+   does exactly that if you have a localized machine).
 9. **`ovp2 daily --vault-root <v> --client live`** end to end against a real
    vault, with credentials in `.ovp/providers.toml`. Confirm the run appears in
    the ledger and the portal.
