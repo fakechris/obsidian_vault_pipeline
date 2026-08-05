@@ -11,9 +11,12 @@ use ovp_scheduler::{JobConfig, JobRunner, plan_tick, run_now_with};
 // Re-export the engine items the sibling `schedule` module (installer) and the
 // CLI dispatch reference, so call sites keep using `commands::scheduler::…`.
 pub use ovp_scheduler::{
-    Cadence, Registry, State, VAULT_PLACEHOLDER, default_registry, is_due, job_shell_command,
-    registry_path, resolve_vault,
+    Cadence, Registry, State, VAULT_PLACEHOLDER, default_registry, is_due, registry_path,
+    resolve_vault,
 };
+// Unix-only: Windows dispatch never builds a shell string (see `ShellRunner`).
+#[cfg(not(windows))]
+pub use ovp_scheduler::job_shell_command;
 
 use crate::CliError;
 
@@ -39,6 +42,10 @@ pub fn save_state(vault_root: &Path, state: &State) -> Result<(), CliError> {
 /// scheduler's stdout/stderr (which the OS unit redirects to the log).
 pub struct ShellRunner {
     pub ovp2_path: PathBuf,
+    /// Sourced before each job on Unix. Windows has no shell to source it with,
+    /// so `shell_runner` warns at construction and this stays unread there —
+    /// `.ovp/providers.toml` is the Windows path (see `docs/windows-port.md`).
+    #[cfg_attr(windows, allow(dead_code))]
     pub env_file: Option<PathBuf>,
     pub vault_root: PathBuf,
 }
@@ -71,10 +78,20 @@ impl JobRunner for ShellRunner {
     /// argv→command-line escaping itself.
     #[cfg(windows)]
     fn run(&self, job: &JobConfig) -> bool {
+        use std::os::windows::process::CommandExt;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let (program, args) =
             ovp_scheduler::job_direct_command(&self.ovp2_path, &self.vault_root, job, &today);
-        match std::process::Command::new(&program).args(&args).status() {
+        let mut cmd = std::process::Command::new(&program);
+        cmd.args(&args);
+        // The tick itself is already spawned with CREATE_NO_WINDOW by the
+        // desktop app, but creation flags are NOT inherited: without this, a
+        // due `daily` would allocate its own console and sit visible on screen
+        // for the whole run. Output is unaffected — `status()` inherits this
+        // process's stdio handles explicitly, so the job's logs still land
+        // wherever the tick's do.
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        match cmd.status() {
             Ok(status) => status.success(),
             Err(e) => {
                 eprintln!("scheduler: job '{}' failed to spawn: {e}", job.id);

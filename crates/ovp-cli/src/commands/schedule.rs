@@ -377,8 +377,13 @@ pub fn bat_quote(s: &str) -> String {
 pub fn render_schtasks_cmd(cfg: &ScheduleConfig) -> String {
     let mut meta = String::new();
     for (k, v) in metadata_pairs(cfg) {
-        // Metadata is REM-commented, so it must survive cmd's parser too.
-        meta.push_str(&format!("REM ovp2:{k}={}\n", v.replace('%', "%%")));
+        // Deliberately NOT `bat_quote`d/`%%`-escaped: `status` reads these
+        // comments back verbatim through `parse_unit_metadata`, so an escaped
+        // `100%% notes` would send it looking for a vault that does not exist.
+        // A REM line is safe unescaped — cmd may expand `%…%` while parsing it,
+        // but REM discards the result and no expansion can make it a syntax
+        // error.
+        meta.push_str(&format!("REM ovp2:{k}={v}\n"));
     }
     format!(
         "@echo off\r\n\
@@ -1726,12 +1731,21 @@ mod tests {
             body.contains("\"C:\\Program Files\\OVP2\\ovp2.exe\" schedule tick --vault-root"),
             "binary path must be quoted: {body}"
         );
-        assert!(body.contains("100%% notes"), "percent must be escaped: {body}");
+        // Escaped where cmd EXECUTES it...
+        assert!(
+            body.contains(r#"--vault-root "C:\Users\Some One\100%% notes""#),
+            "percent must be escaped in the executed line: {body}"
+        );
         assert!(body.contains(">>"), "the wrapper IS the scheduler log");
 
-        // `status` recovers the install-time config from these comments — and
-        // must see the REAL path, not the batch-escaped one.
-        let meta = parse_unit_metadata(&body.replace("%%", "%")).expect("metadata");
+        // ...and UNESCAPED in the metadata comments, because `status` reads
+        // those back verbatim. Parse the file exactly as `status_with` does —
+        // no unescaping step — or a `%` vault silently reports itself missing.
+        assert!(
+            body.contains(r"REM ovp2:vault-root=C:\Users\Some One\100% notes"),
+            "metadata must carry the real path: {body}"
+        );
+        let meta = parse_unit_metadata(&body).expect("metadata");
         assert_eq!(meta.vault_root, win_cfg().vault_root);
         assert_eq!(meta.env_file, win_cfg().env_file);
     }

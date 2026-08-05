@@ -45,8 +45,13 @@ try {
     Write-Host "wrote $out ($((Get-Item $out).Length) bytes)"
 
     if ($InstallApp) {
-        if (-not (Test-Path (Join-Path $InstallApp 'OVP2.exe'))) {
-            Write-Error "INSTALL_APP=$InstallApp has no OVP2.exe — point it at the installed app directory"
+        # `ovp2-desktop.exe`, not `OVP2.exe`: tauri.conf.json sets no
+        # `mainBinaryName`, so the shell keeps its Cargo bin name. That is also
+        # what keeps the sidecar installable at all — Windows filenames are
+        # case-insensitive, so an `OVP2.exe` shell could not coexist with an
+        # `ovp2.exe` sidecar in the same directory.
+        if (-not (Test-Path (Join-Path $InstallApp 'ovp2-desktop.exe'))) {
+            Write-Error "INSTALL_APP=$InstallApp has no ovp2-desktop.exe — point it at the installed app directory"
         }
         $dest = Join-Path $InstallApp 'ovp2.exe'
         Copy-Item -Force $out $dest
