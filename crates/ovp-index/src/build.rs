@@ -110,7 +110,7 @@ pub fn build_index_at_with_progress(
     enrich_titles_from_packs(&mut sources, &packs);
     // Duplicates / ledger-only rows often have null title — re-read the note
     // (or use the filename stem) so the Library never shows a bare 64-char hash.
-    enrich_missing_titles(vault_root, &mut sources);
+    enrich_missing_metadata(vault_root, &mut sources);
     let tagged = attach_tags(vault_root, &mut sources)?;
     on_phase(&format!("tagged {tagged} source(s)"));
     let originated = attach_origins(vault_root, &layout, &mut sources)?;
@@ -675,13 +675,20 @@ fn enrich_titles_from_packs(sources: &mut [SourceRow], packs: &[PackRow]) {
     }
 }
 
-/// Fill empty titles (and urls when missing) from the note on disk.
+/// Fill missing title / url / author from the note on disk.
+///
 /// Duplicate intake rows historically wrote `title: null` — without this the
 /// portal falls back to the 64-char content hash as the only label.
-fn enrich_missing_titles(vault_root: &Path, sources: &mut [SourceRow]) {
+///
+/// Author is unconditional, unlike the other two: it lives ONLY in frontmatter
+/// (no ledger carries it), so a row that already has a title and a url still
+/// needs its file read to learn who wrote it. Skipping healthy rows here is
+/// what left the author field empty on every already-complete source — which
+/// is to say, on almost all of them.
+fn enrich_missing_metadata(vault_root: &Path, sources: &mut [SourceRow]) {
     for s in sources.iter_mut() {
         let title_empty = s.title.as_ref().is_none_or(|t| t.trim().is_empty());
-        if !title_empty && s.url.is_some() {
+        if !title_empty && s.url.is_some() && s.author.is_some() {
             continue;
         }
         let Some(rel) = s.rel_path.as_deref() else {
