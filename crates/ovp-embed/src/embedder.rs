@@ -7,7 +7,8 @@
 //! because the validated geometry depends on it.
 //!
 //! Model files download once (checksummed by hf-hub) into the fastembed
-//! cache: `$FASTEMBED_CACHE_DIR` if set, else `~/.cache/ovp/models`. Offline
+//! cache: `$FASTEMBED_CACHE_DIR` if set, else `~/.cache/ovp/models`
+//! (`%LOCALAPPDATA%\ovp\models` on Windows). Offline
 //! with a cold cache, construction fails with a clear error — callers degrade
 //! gracefully (skip themes, everything Unclassified) instead of blocking.
 
@@ -17,19 +18,45 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use crate::{EMBED_DIM, EMBED_MAX_TOKENS, EMBED_MODEL_ID, EMBED_TEXT_PREFIX};
 
-/// Where model files live. `$FASTEMBED_CACHE_DIR` wins; otherwise
-/// `~/.cache/ovp/models`; otherwise (no HOME) a local `.fastembed_cache`.
+/// Where model files live. `$FASTEMBED_CACHE_DIR` wins; otherwise the
+/// platform cache root (`~/.cache/ovp/models`, `%LOCALAPPDATA%\ovp\models`);
+/// otherwise a local `.fastembed_cache`.
 pub fn model_cache_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("FASTEMBED_CACHE_DIR")
         && !dir.trim().is_empty()
     {
         return PathBuf::from(dir);
     }
-    match std::env::var("HOME") {
-        Ok(home) if !home.trim().is_empty() => {
-            PathBuf::from(home).join(".cache").join("ovp").join("models")
+    match cache_root() {
+        Some(root) => root.join("ovp").join("models"),
+        // Last resort: relative to the cwd. A ~450MB download landing in the
+        // vault would be worse, but there is nowhere else to put it.
+        None => PathBuf::from(".fastembed_cache"),
+    }
+}
+
+/// The per-user cache root. Windows has no `HOME` and no `~/.cache`
+/// convention — a 450MB model belongs in Local (never-roaming) AppData.
+fn cache_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        // LOCALAPPDATA is always set for an interactive user; USERPROFILE
+        // covers the stripped service-account case.
+        for var in ["LOCALAPPDATA", "USERPROFILE"] {
+            if let Ok(v) = std::env::var(var)
+                && !v.trim().is_empty()
+            {
+                return Some(PathBuf::from(v));
+            }
         }
-        _ => PathBuf::from(".fastembed_cache"),
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var("HOME")
+            .ok()
+            .filter(|h| !h.trim().is_empty())?;
+        Some(PathBuf::from(home).join(".cache"))
     }
 }
 

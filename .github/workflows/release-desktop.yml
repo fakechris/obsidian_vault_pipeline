@@ -1,11 +1,18 @@
-# Build + publish the OVP2 desktop DMGs on a `desktop-v*` tag.
+# Build + publish the OVP2 desktop installers (macOS DMG + Windows NSIS) on a
+# `desktop-v*` tag.
 #
 # Separate tag namespace from the CLI release (`release.yml`, cargo-dist, on
 # `v*`) so the two never race on creating/announcing the same GitHub Release.
 # Cut a desktop release with:  git tag desktop-v2.1.0 && git push origin desktop-v2.1.0
 #
-# Ad-hoc signed (signingIdentity "-" in tauri.conf.json); NOT notarized — the
-# release notes carry the first-run "right-click → Open" caveat.
+# ONE workflow, not one per OS: two tag-triggered workflows would both try to
+# create/edit the same GitHub Release and overwrite each other's SHA256SUMS.txt.
+# Every build job only uploads a workflow artifact; a single `release` job waits
+# for all platforms, then creates the draft, uploads once, and publishes.
+#
+# macOS is ad-hoc signed (signingIdentity "-" in tauri.conf.json) and NOT
+# notarized; the Windows installer is UNSIGNED, so SmartScreen warns on first
+# run. Both caveats live in docs/desktop-release-notes.md.
 name: release-desktop
 
 on:
@@ -93,8 +100,77 @@ jobs:
           name: dmg-${{ matrix.arch }}
           path: release-assets/*
 
+  # Windows is a separate job, not a matrix row: the toolchain (PowerShell, NSIS)
+  # and the bundle layout differ enough that sharing steps would be all `if:`.
+  # x64 only — Tauri/WebView2 on ARM64 Windows is untested here, and an untested
+  # arch in a release is worse than an absent one.
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: "0"
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Stamp version from tag
+        run: node scripts/release/set-desktop-version.mjs "$env:TAG"
+
+      # Same contract as the macOS sidecar step: the in-app scheduler exec's
+      # THIS binary, so its feature set is what decides whether live jobs work.
+      # `embed` stays off here too, for parity with the DMGs.
+      - name: Build ovp2 sidecar
+        run: ./scripts/build-desktop-sidecar.ps1 -Triple $env:TARGET
+
+      - name: Build the portal (embedded by ovp-server)
+        working-directory: console-ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the NSIS installer (unsigned)
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run tauri -- build --target $env:TARGET --bundles nsis
+
+      - name: Collect + checksum
+        run: |
+          $bundle = "target/$env:TARGET/release/bundle/nsis"
+          $setup = Get-ChildItem "$bundle/*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "no NSIS installer under $bundle" }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $out = "OVP2-$env:TAG-x64-setup.exe"
+          Copy-Item $setup.FullName "release-assets/$out"
+          # Match the macOS `shasum -a 256` line format EXACTLY — the release job
+          # concatenates both platforms' files into one SHA256SUMS.txt.
+          $hash = (Get-FileHash "release-assets/$out" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $out" | Out-File -Encoding ascii -NoNewline "release-assets/$out.sha256"
+          "`n" | Out-File -Encoding ascii -Append "release-assets/$out.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsis-x64
+          path: release-assets/*
+
   release:
-    needs: build
+    # Waits for EVERY platform: a release that publishes the moment macOS
+    # finishes would ship a half-populated SHA256SUMS.txt and a Windows asset
+    # that arrives after the announcement.
+    needs: [build, build-windows]
     runs-on: macos-15
     permissions:
       contents: write
@@ -107,15 +183,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: downloaded
-          pattern: dmg-*
+          pattern: "{dmg-*,nsis-*}"
           merge-multiple: true
 
       - name: Assemble release assets
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          cp downloaded/*.dmg release-assets/
+          cp downloaded/*.dmg downloaded/*.exe release-assets/
           cat downloaded/*.sha256 > release-assets/SHA256SUMS.txt
+          # Fail loud on a missing platform rather than announcing a partial
+          # release: `needs` guarantees the jobs RAN, not that both uploaded.
+          test "$(ls release-assets/*.dmg | wc -l)" -eq 2
+          test "$(ls release-assets/*.exe | wc -l)" -eq 1
           ls -la release-assets
 
       - name: Publish GitHub Release
@@ -131,5 +211,8 @@ jobs:
               --title "OVP2 Desktop $version" \
               --notes-file docs/desktop-release-notes.md
           fi
-          gh release upload "$TAG" release-assets/*.dmg release-assets/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" \
+            release-assets/*.dmg \
+            release-assets/*.exe \
+            release-assets/SHA256SUMS.txt --clobber
           gh release edit "$TAG" --draft=false

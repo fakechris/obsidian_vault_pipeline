@@ -1,0 +1,21 @@
+# Windows checkouts must not get CRLF: the Rust tests, the vault fixtures and
+# the shell scripts all compare/parse `\n`-terminated text, and a CRLF checkout
+# turns that into a wall of failures that look like logic bugs.
+* text=auto eol=lf
+
+# Batch files are the one exception — cmd.exe mis-parses labels/goto in an
+# LF-only .cmd, and the scheduler writes one of these (see `ovp2 schedule
+# install` on Windows).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never touched by line-ending normalization.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

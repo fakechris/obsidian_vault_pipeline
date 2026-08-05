@@ -34,7 +34,8 @@ pub fn save_state(vault_root: &Path, state: &State) -> Result<(), CliError> {
 
 // -- the process runner (the one impl of the engine's JobRunner trait) ------
 
-/// Runs a job as `/bin/sh -c <job_shell_command>`, output inherited to the
+/// Runs a job as `/bin/sh -c <job_shell_command>` (Windows: a direct spawn,
+/// see [`ovp_scheduler::job_direct_command`]), output inherited to the
 /// scheduler's stdout/stderr (which the OS unit redirects to the log).
 pub struct ShellRunner {
     pub ovp2_path: PathBuf,
@@ -43,6 +44,7 @@ pub struct ShellRunner {
 }
 
 impl JobRunner for ShellRunner {
+    #[cfg(not(windows))]
     fn run(&self, job: &JobConfig) -> bool {
         let cmd = job_shell_command(
             &self.ovp2_path,
@@ -55,6 +57,24 @@ impl JobRunner for ShellRunner {
             .arg(&cmd)
             .status()
         {
+            Ok(status) => status.success(),
+            Err(e) => {
+                eprintln!("scheduler: job '{}' failed to spawn: {e}", job.id);
+                false
+            }
+        }
+    }
+
+    /// Windows has no `/bin/sh`, and routing through `cmd.exe /C` would hand
+    /// the carefully sh-quoted string to a parser with entirely different
+    /// quoting rules. Spawn the binary directly instead — `Command` does the
+    /// argv→command-line escaping itself.
+    #[cfg(windows)]
+    fn run(&self, job: &JobConfig) -> bool {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let (program, args) =
+            ovp_scheduler::job_direct_command(&self.ovp2_path, &self.vault_root, job, &today);
+        match std::process::Command::new(&program).args(&args).status() {
             Ok(status) => status.success(),
             Err(e) => {
                 eprintln!("scheduler: job '{}' failed to spawn: {e}", job.id);
@@ -94,9 +114,24 @@ fn resolved_env_file(vault_root: &Path, reg: &Registry) -> Option<PathBuf> {
 fn shell_runner(vault_root: &Path, reg: &Registry) -> Result<ShellRunner, CliError> {
     let ovp2_path = std::env::current_exe()
         .map_err(|e| CliError::Io(format!("cannot resolve the ovp2 binary path: {e}")))?;
+    let env_file = resolved_env_file(vault_root, reg);
+    // Fail LOUD, not silently-unconfigured: on Windows the direct-spawn runner
+    // cannot source an env file, so a vault carrying only `daily.env` would run
+    // every live job with no credentials and blame the provider.
+    #[cfg(windows)]
+    if let Some(env) = env_file.as_ref()
+        && !vault_root.join(".ovp/providers.toml").is_file()
+    {
+        eprintln!(
+            "scheduler: {} is NOT sourced on Windows (no /bin/sh) — move its values into \
+             {}\\.ovp\\providers.toml or the live jobs will run unauthenticated",
+            env.display(),
+            vault_root.display()
+        );
+    }
     Ok(ShellRunner {
         ovp2_path,
-        env_file: resolved_env_file(vault_root, reg),
+        env_file,
         vault_root: vault_root.to_path_buf(),
     })
 }

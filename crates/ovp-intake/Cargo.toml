@@ -21,5 +21,14 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 reqwest = { workspace = true, optional = true }
 
+# `probe_pid` — Windows has no `kill -0`, and the alternatives (`tasklist`
+# parsing) are localized and therefore unreliable. Already in the tree via
+# tempfile/tauri, so this adds no build cost.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1464,6 +1464,14 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
     let job_id = job.clone();
     std::thread::spawn(move || {
         let mut cmd = std::process::Command::new(&bin);
+        // This server runs IN-PROCESS inside the desktop GUI, so a console
+        // subsystem child would flash a black window over the operator's screen
+        // on every "Run now" click.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         cmd.args([
             "schedule",
             "run-now",

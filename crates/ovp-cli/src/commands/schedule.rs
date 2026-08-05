@@ -4,6 +4,8 @@
 //!
 //! - macOS: a launchd user agent (`~/Library/LaunchAgents/com.ovp2.scheduler.plist`).
 //! - Linux: a systemd user service + timer (`~/.config/systemd/user/ovp2-scheduler.*`).
+//! - Windows: a Task Scheduler task (`OVP2 Scheduler`) running a generated
+//!   `%LOCALAPPDATA%\OVP2\ovp2-scheduler-tick.cmd`.
 //! - Anything else: a clear "not supported" error.
 //!
 //! The OS entry runs `ovp2 schedule tick --vault-root <v>` every
@@ -29,6 +31,13 @@ use crate::CliError;
 pub const LAUNCHD_LABEL: &str = "com.ovp2.scheduler";
 /// systemd unit stem: `ovp2-scheduler.service` + `ovp2-scheduler.timer`.
 pub const SYSTEMD_UNIT: &str = "ovp2-scheduler";
+/// Windows Task Scheduler task name (`schtasks /TN`). No folder prefix: a
+/// `\OVP2\…` path would need the folder created first, and this is one task.
+pub const SCHTASKS_NAME: &str = "OVP2 Scheduler";
+/// The generated batch wrapper the task runs. The task itself only names this
+/// file, so vault paths, log redirection and quoting live in ONE place instead
+/// of being squeezed through `schtasks /TR` (261-char limit, its own quoting).
+pub const SCHTASKS_CMD_FILE: &str = "ovp2-scheduler-tick.cmd";
 
 /// The pre-registry label this scheduler superseded. `install` unloads/removes
 /// it so an operator upgrading from the single hardwired `daily` unit does not
@@ -57,6 +66,8 @@ pub enum ScheduleClient {
 pub enum Flavor {
     Launchd,
     Systemd,
+    /// Windows Task Scheduler (`schtasks.exe`).
+    SchTasks,
 }
 
 pub struct InstallArgs {
@@ -102,6 +113,7 @@ fn log_file_name(flavor: Flavor) -> &'static str {
     match flavor {
         Flavor::Launchd => "scheduler-launchd.log",
         Flavor::Systemd => "scheduler-systemd.log",
+        Flavor::SchTasks => "scheduler-schtasks.log",
     }
 }
 
@@ -141,16 +153,38 @@ fn detect_flavor() -> Result<Flavor, CliError> {
         Ok(Flavor::Launchd)
     } else if cfg!(target_os = "linux") {
         Ok(Flavor::Systemd)
+    } else if cfg!(target_os = "windows") {
+        Ok(Flavor::SchTasks)
     } else {
         Err(CliError::Io(
-            "ovp2 schedule is not supported on this platform — only macOS (launchd) \
-             and Linux (systemd user timers). Run `ovp2 daily` from your own scheduler."
+            "ovp2 schedule is not supported on this platform — only macOS (launchd), \
+             Linux (systemd user timers) and Windows (Task Scheduler). Run `ovp2 daily` \
+             from your own scheduler."
                 .into(),
         ))
     }
 }
 
+/// The per-user root the generated unit files live under. On Unix that is
+/// `$HOME` (the unit paths carry their own `Library/…` / `.config/…` prefix);
+/// on Windows there is no `HOME` and no dotfile convention, so it is
+/// `%LOCALAPPDATA%` — machine-local, never roamed onto another PC where the
+/// pinned binary and vault paths would be wrong.
 fn home_dir() -> Result<PathBuf, CliError> {
+    #[cfg(windows)]
+    {
+        for var in ["LOCALAPPDATA", "USERPROFILE"] {
+            if let Some(v) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+                return Ok(PathBuf::from(v));
+            }
+        }
+        Err(CliError::Io(
+            "neither LOCALAPPDATA nor USERPROFILE is set — cannot locate the user data \
+             directory for the scheduler task"
+                .into(),
+        ))
+    }
+    #[cfg(not(windows))]
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
@@ -160,7 +194,7 @@ fn home_dir() -> Result<PathBuf, CliError> {
 }
 
 /// The unit file(s) `install` writes for a flavor, under the given home dir.
-/// First entry is the one `status` parses (the plist / the .service).
+/// First entry is the one `status` parses (the plist / the .service / the .cmd).
 pub fn unit_paths(home: &Path, flavor: Flavor) -> Vec<PathBuf> {
     match flavor {
         Flavor::Launchd => vec![
@@ -174,6 +208,10 @@ pub fn unit_paths(home: &Path, flavor: Flavor) -> Vec<PathBuf> {
                 dir.join(format!("{SYSTEMD_UNIT}.timer")),
             ]
         }
+        // The task itself lives in the Task Scheduler store, not on disk; this
+        // is the batch wrapper it runs, and it carries the `ovp2:` metadata
+        // `status` reads back.
+        Flavor::SchTasks => vec![home.join("OVP2").join(SCHTASKS_CMD_FILE)],
     }
 }
 
@@ -321,6 +359,80 @@ pub fn render_systemd_timer(cfg: &ScheduleConfig) -> String {
         "{meta}\n[Unit]\nDescription=OVP2 scheduler tick timer\n\n[Timer]\nOnCalendar=*:0/{minutes}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
         meta = systemd_metadata(cfg),
     )
+}
+
+/// Quote one path for a `.cmd` file. Windows paths cannot contain `"`, so
+/// wrapping in quotes is enough for spaces — the one live hazard left is `%`,
+/// which cmd.exe would expand as a variable reference (`C:\100%notes` →
+/// `C:\100` + garbage), and `%%` is its literal form inside a batch file.
+pub fn bat_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('%', "%%"))
+}
+
+/// The batch wrapper the Windows task runs. Everything the task needs is here
+/// (paths, log redirection) so `schtasks /TR` only ever names one file.
+///
+/// `>>` not `>`: Task Scheduler gives no log of its own, so this file IS the
+/// scheduler log `status` tails.
+pub fn render_schtasks_cmd(cfg: &ScheduleConfig) -> String {
+    let mut meta = String::new();
+    for (k, v) in metadata_pairs(cfg) {
+        // Metadata is REM-commented, so it must survive cmd's parser too.
+        meta.push_str(&format!("REM ovp2:{k}={}\n", v.replace('%', "%%")));
+    }
+    format!(
+        "@echo off\r\n\
+         REM {header}\r\n\
+         {meta}\
+         if not exist {logdir} mkdir {logdir} 2>nul\r\n\
+         {bin} schedule tick --vault-root {vault} >> {log} 2>&1\r\n",
+        header = GENERATED_HEADER,
+        meta = meta.replace('\n', "\r\n"),
+        logdir = bat_quote(
+            &cfg.vault_root
+                .join(".ovp")
+                .join("logs")
+                .display()
+                .to_string()
+        ),
+        bin = bat_quote(&cfg.ovp2_path.display().to_string()),
+        vault = bat_quote(&cfg.vault_root.display().to_string()),
+        log = bat_quote(&cfg.log_path(Flavor::SchTasks).display().to_string()),
+    )
+}
+
+/// What `schtasks /Query /TN <name> /FO LIST /V` says about the task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchTasksState {
+    pub registered: bool,
+    /// `Last Result:` — 0 = the last tick exited clean. Task Scheduler reports
+    /// it as an unsigned hex-ish integer in decimal form.
+    pub last_result: Option<i64>,
+    pub next_run: Option<String>,
+}
+
+/// Parse `schtasks /Query`. Exit failure = the task is not registered.
+/// Localized Windows installs print localized field names, so a missing field
+/// is reported as `None` rather than treated as an error.
+pub fn parse_schtasks_query(success: bool, stdout: &str) -> SchTasksState {
+    if !success {
+        return SchTasksState {
+            registered: false,
+            last_result: None,
+            next_run: None,
+        };
+    }
+    let field = |name: &str| -> Option<String> {
+        stdout.lines().find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            (k.trim().eq_ignore_ascii_case(name)).then(|| v.trim().to_string())
+        })
+    };
+    SchTasksState {
+        registered: true,
+        last_result: field("Last Result").and_then(|v| v.trim().parse::<i64>().ok()),
+        next_run: field("Next Run Time").filter(|v| !v.is_empty()),
+    }
 }
 
 /// The env-file template `install` creates when `--env-file` does not exist.
@@ -480,6 +592,11 @@ fn chmod_600(path: &Path) -> Result<(), String> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("chmod 600 {}: {e}", path.display()))?;
     }
+    // Windows has no mode bits. The equivalent would be rewriting the file's
+    // ACL, which is a real dependency (`windows-acl`/`windows-sys`) for a file
+    // that already inherits a per-user profile ACL — so the env-file template
+    // is left at its inherited permissions, and `.ovp/providers.toml` (which
+    // Windows uses instead) is the documented place for credentials.
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
@@ -587,6 +704,30 @@ fn stop_systemd(stem: &str, runner: &dyn CommandRunner) -> Result<(), CliError> 
     Ok(())
 }
 
+/// Delete the Windows task and VERIFY it is gone. A task that was never
+/// registered is a no-op — `schtasks /Query` exits non-zero for it.
+fn stop_schtasks(name: &str, runner: &dyn CommandRunner) -> Result<(), CliError> {
+    let query = runner
+        .run("schtasks", &["/Query", "/TN", name])
+        .map_err(CliError::Io)?;
+    if !parse_schtasks_query(query.success, &query.stdout).registered {
+        return Ok(());
+    }
+    let del = runner
+        .run("schtasks", &["/Delete", "/TN", name, "/F"])
+        .map_err(CliError::Io)?;
+    let recheck = runner
+        .run("schtasks", &["/Query", "/TN", name])
+        .map_err(CliError::Io)?;
+    if parse_schtasks_query(recheck.success, &recheck.stdout).registered {
+        return Err(CliError::Io(format!(
+            "scheduled task '{name}' still exists and could not be deleted ({})",
+            del.stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
 /// Teardown of the pre-registry `com.ovp2.daily` unit so upgrading operators
 /// don't run two schedulers — from BOTH install and uninstall, since an upgraded
 /// vault may only have the old unit (codex P2). Stops+verifies the job is gone
@@ -624,6 +765,9 @@ fn remove_legacy_unit(
                 }
             }
         }
+        // Windows never had a pre-registry unit — the port landed after the
+        // job registry, so there is nothing to migrate away from.
+        Flavor::SchTasks => {}
     }
     Ok(removed)
 }
@@ -642,6 +786,7 @@ fn rollback_new_unit(
     match flavor {
         Flavor::Launchd => stop_launchd(LAUNCHD_LABEL, &paths[0], runner)?,
         Flavor::Systemd => stop_systemd(SYSTEMD_UNIT, runner)?,
+        Flavor::SchTasks => stop_schtasks(SCHTASKS_NAME, runner)?,
     }
     for p in &paths {
         std::fs::remove_file(p)
@@ -823,6 +968,42 @@ pub fn install_with(
                 }
             }
         }
+        Flavor::SchTasks => {
+            write_file_600(&paths[0], &render_schtasks_cmd(cfg)).map_err(CliError::Io)?;
+            let cmd_path = paths[0].display().to_string();
+            // `/TR` gets the wrapper path re-quoted INSIDE the argument:
+            // Task Scheduler parses the value again, and an unquoted
+            // `C:\Users\Some One\…` would register as program `C:\Users\Some`.
+            // `/RL LIMITED` keeps the tick at the user's own privileges;
+            // `/F` makes reinstall idempotent (overwrite, no prompt).
+            let tr = format!("\"{cmd_path}\"");
+            let minutes = (TICK_INTERVAL_SECS / 60).max(1).to_string();
+            let args = [
+                "/Create",
+                "/TN",
+                SCHTASKS_NAME,
+                "/TR",
+                tr.as_str(),
+                "/SC",
+                "MINUTE",
+                "/MO",
+                minutes.as_str(),
+                "/RL",
+                "LIMITED",
+                "/F",
+            ];
+            let out = runner.run("schtasks", &args).map_err(|e| {
+                cleanup_failed_activation(flavor, home, runner);
+                CliError::Io(e)
+            })?;
+            if !out.success {
+                cleanup_failed_activation(flavor, home, runner);
+                return Err(CliError::Io(format!(
+                    "schtasks /Create /TN \"{SCHTASKS_NAME}\" failed: {}",
+                    out.stderr.trim()
+                )));
+            }
+        }
     }
     // Retire the pre-registry unit ONLY now that the new scheduler is written
     // and loaded — an earlier failure (bad registry, unwritable state, failed
@@ -858,6 +1039,14 @@ pub fn uninstall_with(
     // and never re-installed only has `com.ovp2.daily`, and uninstall must not
     // leave it running (codex P2).
     let mut removed = remove_legacy_unit(flavor, home, runner)?;
+    // The Windows task lives in the Task Scheduler store, NOT on disk, so it can
+    // outlive its wrapper .cmd — and then fires every 10 minutes on a missing
+    // file. Delete it BEFORE the "nothing installed" early return below, which
+    // only looks at files. Unlike the best-effort unload/disable further down,
+    // this one is verified and propagates its error.
+    if flavor == Flavor::SchTasks {
+        stop_schtasks(SCHTASKS_NAME, runner)?;
+    }
     let paths = unit_paths(home, flavor);
     let installed: Vec<&PathBuf> = paths.iter().filter(|p| p.exists()).collect();
     if installed.is_empty() {
@@ -872,6 +1061,7 @@ pub fn uninstall_with(
             let timer = format!("{SYSTEMD_UNIT}.timer");
             let _ = runner.run("systemctl", &["--user", "disable", "--now", &timer]);
         }
+        Flavor::SchTasks => {} // already deleted above
     }
     for p in installed {
         std::fs::remove_file(p)
@@ -1060,6 +1250,7 @@ fn flavor_name(flavor: Flavor) -> &'static str {
     match flavor {
         Flavor::Launchd => "launchd",
         Flavor::Systemd => "systemd user timer",
+        Flavor::SchTasks => "Windows Task Scheduler",
     }
 }
 
@@ -1109,6 +1300,24 @@ fn status_with(
             );
             if !enabled.success || !active.success {
                 println!("             not fully enabled — re-run `ovp2 schedule install`");
+            }
+        }
+        Flavor::SchTasks => {
+            let out = runner
+                .run("schtasks", &["/Query", "/TN", SCHTASKS_NAME, "/FO", "LIST", "/V"])
+                .map_err(CliError::Io)?;
+            let state = parse_schtasks_query(out.success, &out.stdout);
+            if state.registered {
+                match state.last_result {
+                    Some(0) => println!("  task:      registered (last result 0)"),
+                    Some(code) => println!("  task:      registered (last result {code} — FAILED)"),
+                    None => println!("  task:      registered"),
+                }
+                if let Some(next) = state.next_run {
+                    println!("  next tick: {next}");
+                }
+            } else {
+                println!("  task:      NOT registered — re-run `ovp2 schedule install`");
             }
         }
     }
@@ -1404,6 +1613,42 @@ mod tests {
                     drop_loaded(unit);
                     out(true, "")
                 }
+                // -- Windows Task Scheduler (task name modeled as "loaded") --
+                ("schtasks", _) => {
+                    let name = args
+                        .iter()
+                        .position(|a| *a == "/TN")
+                        .and_then(|i| args.get(i + 1))
+                        .copied()
+                        .unwrap_or("");
+                    match args.first().copied() {
+                        Some("/Query") => out(
+                            is_loaded(name),
+                            if is_loaded(name) {
+                                "TaskName:      \\OVP2 Scheduler\n\
+                                 Next Run Time: 8/5/2026 10:10:00 AM\n\
+                                 Last Result:   0\n"
+                            } else {
+                                ""
+                            },
+                        ),
+                        Some("/Create") => {
+                            if self.fail_all {
+                                return out(false, "");
+                            }
+                            self.loaded.borrow_mut().push(name.to_string());
+                            out(true, "")
+                        }
+                        Some("/Delete") => {
+                            if resists(name) {
+                                return out(false, "");
+                            }
+                            drop_loaded(name);
+                            out(true, "")
+                        }
+                        _ => out(true, ""),
+                    }
+                }
                 // -- everything else (e.g. daemon-reload) --
                 _ => out(!self.fail_all, ""),
             }
@@ -1448,6 +1693,135 @@ mod tests {
         );
         assert!(!cmd.contains("set -a"), "unit must not source env");
         assert!(!cmd.contains("--date"), "date is per-job, not per-tick");
+    }
+
+    // -- Windows Task Scheduler --------------------------------------------
+
+    fn win_cfg() -> ScheduleConfig {
+        ScheduleConfig {
+            vault_root: PathBuf::from(r"C:\Users\Some One\100% notes"),
+            hour: 9,
+            minute: 0,
+            max_sources: None,
+            client: ScheduleClient::Live,
+            env_file: PathBuf::from(r"C:\Users\Some One\100% notes\.ovp\daily.env"),
+            enrich: true,
+            ovp2_path: PathBuf::from(r"C:\Program Files\OVP2\ovp2.exe"),
+        }
+    }
+
+    #[test]
+    fn bat_quote_neutralizes_percent_expansion() {
+        // `C:\100%notes` unquoted would have cmd expand `%notes...%` and hand
+        // the tick a truncated vault path.
+        assert_eq!(bat_quote(r"C:\a b"), "\"C:\\a b\"");
+        assert_eq!(bat_quote(r"C:\100%notes"), "\"C:\\100%%notes\"");
+    }
+
+    #[test]
+    fn schtasks_cmd_quotes_paths_and_round_trips_metadata() {
+        let body = render_schtasks_cmd(&win_cfg());
+        assert!(body.starts_with("@echo off\r\n"), "batch needs CRLF: {body:?}");
+        assert!(
+            body.contains("\"C:\\Program Files\\OVP2\\ovp2.exe\" schedule tick --vault-root"),
+            "binary path must be quoted: {body}"
+        );
+        assert!(body.contains("100%% notes"), "percent must be escaped: {body}");
+        assert!(body.contains(">>"), "the wrapper IS the scheduler log");
+
+        // `status` recovers the install-time config from these comments — and
+        // must see the REAL path, not the batch-escaped one.
+        let meta = parse_unit_metadata(&body.replace("%%", "%")).expect("metadata");
+        assert_eq!(meta.vault_root, win_cfg().vault_root);
+        assert_eq!(meta.env_file, win_cfg().env_file);
+    }
+
+    #[test]
+    fn parse_schtasks_query_reads_result_and_next_run() {
+        let listing = "TaskName:      \\OVP2 Scheduler\n\
+                       Next Run Time: 8/5/2026 10:10:00 AM\n\
+                       Last Result:   0\n";
+        let s = parse_schtasks_query(true, listing);
+        assert!(s.registered);
+        assert_eq!(s.last_result, Some(0));
+        // The value keeps its own colons — split on the FIRST one only.
+        assert_eq!(s.next_run.as_deref(), Some("8/5/2026 10:10:00 AM"));
+
+        let missing = parse_schtasks_query(false, "ERROR: The system cannot find the file");
+        assert!(!missing.registered);
+        assert_eq!(missing.last_result, None);
+    }
+
+    #[test]
+    fn schtasks_install_registers_the_task_and_uninstall_removes_it() {
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = win_cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner::default();
+
+        let report = install_with(&c, Flavor::SchTasks, home.path(), &runner).unwrap();
+        let wrapper = home.path().join("OVP2").join(SCHTASKS_CMD_FILE);
+        assert_eq!(report.unit_files, vec![wrapper.clone()]);
+        assert!(wrapper.exists(), "the wrapper .cmd must be written");
+        let calls = runner.calls.borrow().join("\n");
+        assert!(
+            calls.contains("/Create /TN OVP2 Scheduler") && calls.contains("/SC MINUTE /MO 10"),
+            "must register a 10-minute task: {calls}"
+        );
+        assert!(calls.contains("/RL LIMITED"), "tick runs unelevated: {calls}");
+
+        let removed = uninstall_with(Flavor::SchTasks, home.path(), &runner).unwrap();
+        assert_eq!(removed, vec![wrapper.clone()]);
+        assert!(!wrapper.exists());
+        assert!(
+            runner.calls.borrow().iter().any(|c| c.contains("/Delete")),
+            "uninstall must delete the task, not just the wrapper"
+        );
+    }
+
+    #[test]
+    fn schtasks_uninstall_deletes_a_task_whose_wrapper_is_already_gone() {
+        // The task lives in the Task Scheduler store, not on disk. If uninstall
+        // only looked at files, a hand-deleted wrapper would leave a task
+        // firing on a missing path every 10 minutes, forever.
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = win_cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner::default();
+
+        install_with(&c, Flavor::SchTasks, home.path(), &runner).unwrap();
+        std::fs::remove_file(home.path().join("OVP2").join(SCHTASKS_CMD_FILE)).unwrap();
+
+        uninstall_with(Flavor::SchTasks, home.path(), &runner).unwrap();
+        assert!(
+            runner.calls.borrow().iter().any(|c| c.contains("/Delete")),
+            "the orphaned task must still be deleted"
+        );
+    }
+
+    #[test]
+    fn schtasks_install_failure_leaves_no_orphan_wrapper() {
+        // A wrapper left behind with no task is harmless; a wrapper left behind
+        // that a LATER install/uninstall reports as "installed" is not.
+        let home = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let mut c = win_cfg();
+        c.vault_root = vault.path().to_path_buf();
+        c.env_file = vault.path().join(".ovp/daily.env");
+        let runner = FakeRunner {
+            fail_all: true,
+            ..Default::default()
+        };
+
+        assert!(install_with(&c, Flavor::SchTasks, home.path(), &runner).is_err());
+        assert!(
+            !home.path().join("OVP2").join(SCHTASKS_CMD_FILE).exists(),
+            "a failed /Create must roll the wrapper back"
+        );
     }
 
     // -- launchd plist ------------------------------------------------------

@@ -251,8 +251,8 @@ impl RunLock {
 
     /// True only when the lock file names a PID that is verifiably no longer
     /// running. Conservative on every uncertainty (unreadable file, no PID,
-    /// probe failure, non-unix): treat the owner as alive and keep refusing —
-    /// the manual-deletion instruction in the error still applies.
+    /// probe failure): treat the owner as alive and keep refusing — the
+    /// manual-deletion instruction in the error still applies.
     fn owner_is_dead(path: &Path) -> bool {
         let Some(pid) = std::fs::read_to_string(path)
             .ok()
@@ -261,24 +261,69 @@ impl RunLock {
         else {
             return false;
         };
-        #[cfg(unix)]
-        {
-            // `kill -0` probes liveness without signaling; exit 0 = alive.
-            // (A live process owned by another user also reports non-zero,
-            // but a vault lock under $HOME is always same-user.)
-            std::process::Command::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| !s.success())
-                .unwrap_or(false)
+        probe_pid(pid) == Some(false)
+    }
+}
+
+/// Three-valued process-liveness probe, shared by every stale-owner check in
+/// the workspace (run lock, daily heartbeat, source-work queue, agent
+/// transcript). It answers ONLY the OS question; each caller keeps its own
+/// conservative default for `None`, because "assume alive" and "assume gone"
+/// are the safe answers in different places.
+///
+/// - `Some(true)`  — the process exists.
+/// - `Some(false)` — no process has that PID.
+/// - `None`        — the probe could not tell (no `kill`, access denied, …).
+///
+/// PID reuse reads as alive, which is the conservative direction: at worst a
+/// stale lock survives one more run and the operator deletes it by hand.
+pub fn probe_pid(pid: u32) -> Option<bool> {
+    if pid == 0 {
+        return Some(false);
+    }
+    #[cfg(unix)]
+    {
+        // `kill -0` probes liveness without signaling; exit 0 = alive.
+        // (A live process owned by another user also reports non-zero, but a
+        // vault lock under $HOME is always same-user.)
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .map(|s| s.success())
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // STILL_ACTIVE (STATUS_PENDING). A process that genuinely exited with
+        // code 259 reads as alive — same conservative direction as PID reuse.
+        const STILL_ACTIVE: u32 = 259;
+        // SAFETY: OpenProcess/GetExitCodeProcess/CloseHandle are called with a
+        // valid pid, a stack-owned out-param, and a handle this function owns
+        // and closes exactly once on every path.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                // Only "no such process" is a definite answer. ACCESS_DENIED
+                // means the process EXISTS and is simply out of reach.
+                return (GetLastError() == ERROR_INVALID_PARAMETER).then_some(false);
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            (ok != 0).then(|| code == STILL_ACTIVE)
         }
-        #[cfg(not(unix))]
-        {
-            false
-        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        None
     }
 }
 
