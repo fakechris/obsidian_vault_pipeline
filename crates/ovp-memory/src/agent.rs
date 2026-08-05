@@ -497,11 +497,11 @@ pub fn run_agent_turn_with_progress(
             temperature: cfg.temperature,
             tools: (!tool_defs.is_empty()).then(|| tool_defs.clone()),
             // Bumped with each ACCEPTED policy version (prompt-version
-            // isolation for recorded cassettes): v4 = ask_agent_policy-v4,
-            // which added the no-permission-seeking and metadata-is-searchable
-            // rules. Replaying a v3 cassette against the v4 prompt would
-            // answer a question that was never asked.
-            cache_namespace: Some("ask_agent/v4".into()),
+            // isolation for recorded cassettes): v5 = ask_agent_policy-v5,
+            // which requires a reference on every source the answer NAMES,
+            // not only the one it rests on. Replaying an older cassette
+            // against a newer prompt answers a question never asked.
+            cache_namespace: Some("ask_agent/v5".into()),
         };
         let reply = match client.call(&request) {
             Ok(r) => r,

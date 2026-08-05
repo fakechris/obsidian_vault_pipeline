@@ -700,11 +700,21 @@ fn flags_registry(cfg: &ScheduleConfig) -> super::scheduler::Registry {
 /// built-in job config (cadence/argv) from the flags, so `install --time 09:30`
 /// still reconfigures the daily job (codex P1) — while preserving operator edits
 /// (each job's `enabled` state and any custom jobs they added).
-fn ensure_registry(cfg: &ScheduleConfig) -> Result<RegistryOutcome, CliError> {
+/// `reconcile` distinguishes the two callers, and the distinction is the whole
+/// point: `install` is an explicit operator command carrying flags (`--time`,
+/// `--max-sources`), so re-running it SHOULD rewrite the built-in job config.
+/// `init` is not — the desktop app runs it on every single launch, flagless.
+/// Reconciling there silently resets the operator's cadence and argv to the
+/// hard-coded defaults on every restart, which means no schedule edit can
+/// survive closing the app. Seed-if-absent is all `init` ever promised.
+fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutcome, CliError> {
     let fresh = flags_registry(cfg);
     if !super::scheduler::registry_path(&cfg.vault_root).exists() {
         super::scheduler::save_registry(&cfg.vault_root, &fresh)?;
         return Ok(RegistryOutcome::Seeded);
+    }
+    if !reconcile {
+        return Ok(RegistryOutcome::Unchanged);
     }
     let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
         .expect("registry_path exists but load returned None");
@@ -750,7 +760,8 @@ pub fn install_with(
     // race the shared temp file (codex P2).
     let registry = {
         let _lock = super::scheduler::acquire_dispatch_lock(&cfg.vault_root)?;
-        let registry = ensure_registry(cfg)?;
+        // install carries the operator's flags — reconciling is the point.
+        let registry = ensure_registry(cfg, true)?;
         // Give any job lacking state a "seeded" entry so it first runs at its
         // next occurrence, not immediately (covers a fresh install and a
         // restored built-in); also validates an existing state file (codex P2).
@@ -937,7 +948,9 @@ pub fn run_init(args: InstallArgs) -> Result<(), CliError> {
     let env_created = ensure_env_file(&cfg.env_file).map_err(CliError::Io)?;
     let outcome = {
         let _lock = super::scheduler::acquire_dispatch_lock(&cfg.vault_root)?;
-        let outcome = ensure_registry(&cfg)?;
+        // init runs on EVERY desktop launch with no flags: seed only, never
+        // rewrite what the operator has since edited.
+        let outcome = ensure_registry(&cfg, false)?;
         super::scheduler::seed_missing_state(&cfg.vault_root)?;
         outcome
     };
@@ -1269,6 +1282,42 @@ mod tests {
             enrich: true,
             ovp2_path: PathBuf::from("/opt/homebrew/bin/ovp2"),
         }
+    }
+
+    /// `init` runs on every desktop launch, flagless. It must never rewrite a
+    /// registry the operator has edited — the reported symptom was a cadence of
+    /// `every 4h` and a `--max-sources 20` silently reverting to the built-in
+    /// `daily 09:00` the moment the app was restarted.
+    #[test]
+    fn init_seeds_but_never_reconciles_an_edited_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.vault_root = dir.path().to_path_buf();
+        c.env_file = dir.path().join(".ovp/daily.env");
+
+        assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Seeded);
+
+        // Operator edits the daily job the way the portal/CLI allows.
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let daily = reg.get_mut("daily").unwrap();
+        daily.cadence = "every 4h".into();
+        daily.argv.push("--max-sources".into());
+        daily.argv.push("20".into());
+        let edited = reg.clone();
+        super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
+
+        // Every subsequent app launch.
+        for _ in 0..3 {
+            assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Unchanged);
+        }
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        assert_eq!(after, edited, "init must leave an edited registry alone");
+
+        // install still reconciles — it carries the operator's flags, so
+        // re-running it IS how you change the built-in job.
+        assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
+        let reconciled = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        assert_eq!(reconciled.get("daily").unwrap().cadence, "daily 09:00");
     }
 
     #[derive(Default)]
