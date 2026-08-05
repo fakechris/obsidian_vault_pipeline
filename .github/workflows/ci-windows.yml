@@ -11,12 +11,13 @@
 # (release-desktop.yml).
 name: ci-windows
 
+# `pull_request` only, not `push` to the feature branch as well: both would fire
+# for the same commit into different concurrency groups, and a Windows runner
+# costs ~25 minutes. Use `workflow_dispatch` for a branch with no PR yet.
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - "**windows**"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
