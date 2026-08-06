@@ -442,7 +442,14 @@ mod tests {
         let got = scan_inbox(&inbox).unwrap();
         let names: Vec<_> = got
             .iter()
-            .map(|p| p.strip_prefix(&inbox).unwrap().to_string_lossy().into_owned())
+            .map(|p| {
+                // `\` on Windows; the expectations below are vault-relative
+                // paths, which this project always spells with `/`.
+                p.strip_prefix(&inbox)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
             .collect();
         assert_eq!(names, vec!["a.md", "b.md", "sub/c.md"]);
     }

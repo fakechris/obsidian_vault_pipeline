@@ -537,6 +537,36 @@ pub fn job_shell_command(
     cmd
 }
 
+/// The same job as a program + argv, with no shell in between — what Windows
+/// dispatch uses (`/bin/sh` does not exist there, and routing through cmd.exe
+/// would re-introduce quoting bugs that `sh_quote` exists to avoid).
+///
+/// The one capability this drops is env-file sourcing: there is no portable
+/// `. daily.env`. That is deliberate rather than missing — `.ovp/providers.toml`
+/// already supersedes `daily.env` on every platform (the child process reads it
+/// itself), so Windows simply never gets the legacy path. `run_with` surfaces
+/// this as a warning when a Windows registry still names an env file.
+///
+/// `today` is the caller's local `YYYY-MM-DD`; the shell form computes it with
+/// `$(date +%F)` at dispatch, and this is the same value.
+pub fn job_direct_command(
+    ovp2_path: &Path,
+    vault_root: &Path,
+    job: &JobConfig,
+    today: &str,
+) -> (PathBuf, Vec<String>) {
+    let mut args: Vec<String> = job
+        .argv
+        .iter()
+        .map(|a| resolve_vault(a, vault_root))
+        .collect();
+    if job.stamp_date {
+        args.push("--date".into());
+        args.push(today.to_string());
+    }
+    (ovp2_path.to_path_buf(), args)
+}
+
 pub trait JobRunner {
     /// Run one job; return whether it exited successfully.
     fn run(&self, job: &JobConfig) -> bool;

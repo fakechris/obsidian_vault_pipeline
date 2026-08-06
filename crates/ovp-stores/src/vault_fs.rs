@@ -188,7 +188,13 @@ impl VaultFsPlanApplier {
         }
         let p = Path::new(raw);
 
-        if p.is_absolute() {
+        // `has_root()` as well as `is_absolute()`: on Windows `/etc/passwd` is
+        // rooted but NOT absolute (no drive prefix), so `is_absolute` alone
+        // would let it fall through to the component loop and come back as
+        // `path_root_component`. The op is rejected either way, but the reason
+        // code is written into the apply report, and a code that changes with
+        // the host makes those reports incomparable across platforms.
+        if p.is_absolute() || p.has_root() {
             return Err(format!("path_absolute: {raw}"));
         }
         // Reject any `..` or root component. Plain `.` is OK and gets stripped.

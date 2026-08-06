@@ -20,13 +20,11 @@ fn main() {
         "cargo:rustc-env=OVP_GIT_HASH={git}{}",
         if dirty { "+dirty" } else { "" }
     );
-    let built = std::process::Command::new("date")
-        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".into());
+    // In-process, not `date -u`: Windows has no `date` executable (it is a
+    // cmd.exe builtin with a different syntax), so shelling out stamped every
+    // Windows build "unknown" — the exact undiagnosable-stale-build hole this
+    // file exists to close.
+    let built = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     println!("cargo:rustc-env=OVP_BUILD_TIME={built}");
     // rerun-if-changed REPLACES Cargo's default tracking — list the crate
     // sources back in, plus the git state the stamp derives from (HEAD for

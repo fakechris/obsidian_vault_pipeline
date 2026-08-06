@@ -1,0 +1,119 @@
+# The ONLY Windows environment this project has.
+#
+# The repo's normal gate is local (`codex` before push) plus PR bots — there is
+# deliberately no push CI. Windows is the exception, because no maintainer has a
+# Windows machine: every cfg(windows) branch, the NSIS bundle and the MSVC link
+# are unverifiable anywhere else. Treat a red run here the way you'd treat a
+# failing local build.
+#
+# Deliberately NOT a release job: it builds the installer to prove the bundle
+# links, and throws it away. Publishing happens on a `desktop-v*` tag
+# (release-desktop.yml).
+name: ci-windows
+
+# `pull_request` only, not `push` to the feature branch as well: both would fire
+# for the same commit into different concurrency groups, and a Windows runner
+# costs ~25 minutes. Use `workflow_dispatch` for a branch with no PR yet.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build:
+    name: Build + test (Windows x64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Cheap manifest gate, and this PR adds a build.rs and a
+      # `[target.'cfg(windows)'.dependencies]` block — both are manifest-level
+      # things a compile error would only report much later in the run.
+      - name: Cargo metadata
+        run: cargo metadata --no-deps --format-version 1 > $null
+
+      # Default features = the offline gauntlet (no network, no live provider).
+      # Run this BEFORE the app builds: it is the fastest signal on the
+      # cfg(windows) branches (probe_pid, the schtasks flavor, the direct-spawn
+      # job runner), and it needs no npm or WebView2.
+      # `--no-fail-fast`: cargo normally stops at the first failing test binary.
+      # With ~25 minutes per Windows run and no other Windows environment, that
+      # turns a handful of independent failures into a handful of round trips.
+      # The step still fails — it just reports everything first.
+      - name: Test the workspace (offline)
+        run: cargo test --workspace --exclude ovp2-desktop --no-fail-fast
+
+      # NOT `-D warnings`: the workspace carries pre-existing lint debt from
+      # newer clippy releases (collapsible let-chains, nonminimal_bool, …) that
+      # this port neither caused nor should be blocked on. A gate that is red on
+      # day one gets switched off. This runs for the Windows-only signal —
+      # cfg(windows) code no other job ever lints.
+      - name: Clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --workspace --exclude ovp2-desktop --all-targets
+
+      # The live feature set the shipped sidecar is built with. `cargo check`,
+      # not `test`: the live paths need credentials, so this only proves they
+      # COMPILE on MSVC (rustls/ring, reqwest, the enrich clients).
+      - name: Check the live feature set
+        working-directory: crates/ovp-cli
+        run: cargo check --features "anthropic,pinboard-live,web-fetch-live,github-live"
+
+      - name: Portal (console-ui)
+        working-directory: console-ui
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      # The sidecar must exist before the desktop crate builds at all: Tauri's
+      # externalBin makes it a build-time resource, so a missing
+      # binaries/ovp2-<triple>.exe fails tauri-build, not the linker.
+      - name: Build ovp2 sidecar
+        run: ./scripts/build-desktop-sidecar.ps1 -Triple $env:TARGET
+
+      - name: Build the NSIS installer
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run tauri -- build --target $env:TARGET --bundles nsis
+
+      # Uploaded for MANUAL smoke-testing on a real Windows desktop — the parts
+      # CI cannot check (install, first launch, WebView2 bootstrap, the portal
+      # rendering, a scheduler tick actually firing). Unsigned: SmartScreen will
+      # warn.
+      - name: Upload the installer for manual verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovp2-windows-x64-setup-${{ github.sha }}
+          path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          if-no-files-found: warn

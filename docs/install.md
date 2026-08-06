@@ -20,7 +20,16 @@ end-to-end.
      https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
    ```
 
-2. **Homebrew** — the public tap `fakechris/homebrew-ovp2` exists and carries
+2. **PowerShell installer (Windows x64)** — same story, no toolchain:
+
+   ```powershell
+   irm https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.ps1 | iex
+   ```
+
+   Unsigned, like every other channel here. See `docs/windows-port.md` for what
+   is and isn't verified on Windows.
+
+3. **Homebrew** — the public tap `fakechris/homebrew-ovp2` exists and carries
    the generated formula:
 
    ```sh
@@ -34,9 +43,11 @@ end-to-end.
 
 Verify either channel with `ovp2 --version` (→ `ovp2 2.0.1`).
 
-Prebuilt targets: `aarch64-apple-darwin` (Apple Silicon macOS) and
+Prebuilt targets: `aarch64-apple-darwin` (Apple Silicon macOS),
 `x86_64-unknown-linux-gnu` (Linux x86_64, **glibc ≥ 2.38** — ort's prebuilt
-ONNX Runtime demands it; release builds run on `ubuntu-24.04`, glibc 2.39).
+ONNX Runtime demands it; release builds run on `ubuntu-24.04`, glibc 2.39) and
+`x86_64-pc-windows-msvc` (Windows 10/11 x64 — ort does ship a prebuilt ONNX
+Runtime here, so `embed` stays on; ARM64 Windows is deliberately absent).
 An npm wrapper (`npx ovp2` style, binary-download shim) is a possible future
 third channel; skipped for now.
 

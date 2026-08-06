@@ -13,6 +13,11 @@ default = []
 # enable it (dist-workspace, desktop app).
 anthropic = ["ovp-llm/anthropic"]
 
+[build-dependencies]
+# Only for the build-time UTC stamp in build.rs — already in the dep tree, so
+# this costs nothing to compile.
+chrono = { workspace = true }
+
 [dependencies]
 ovp-api-projection = { path = "../ovp-api-projection" }
 ovp-index = { path = "../ovp-index" }

@@ -363,13 +363,16 @@ pub fn process_pack_images(
 
             let result = downloader.download_image(&img_ref.url, &real_config);
             if let Some(local_path) = &result.local_path {
-                let vault_rel = format!(
-                    "{}",
-                    config.attachments_dir.join(
-                        Path::new(local_path)
-                            .file_name()
-                            .unwrap_or_default()
-                    ).display()
+                // This string becomes the TARGET of a Markdown link written
+                // into the note. `attachments\pic.jpg` is not a link Obsidian
+                // (or the portal renderer) resolves on any platform, including
+                // the Windows box that wrote it.
+                let vault_rel = ovp_domain::normalize_vault_rel(
+                    config
+                        .attachments_dir
+                        .join(Path::new(local_path).file_name().unwrap_or_default())
+                        .display()
+                        .to_string(),
                 );
                 replacements.push((img_ref.url.clone(), vault_rel));
                 total_bytes += result.bytes_downloaded;
@@ -384,9 +387,8 @@ pub fn process_pack_images(
             let _ = std::fs::write(&md_file, rewritten);
         }
 
-        let rel_file = md_file.strip_prefix(vault_root).unwrap_or(&md_file);
         results.push(PackImageResult {
-            pack_file: rel_file.to_string_lossy().to_string(),
+            pack_file: ovp_domain::vault_rel(vault_root, &md_file),
             images_found: image_refs.len(),
             images_downloaded: downloaded,
             images_failed: failed,

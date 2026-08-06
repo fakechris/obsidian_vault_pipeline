@@ -1888,6 +1888,14 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
     let job_id = job.clone();
     std::thread::spawn(move || {
         let mut cmd = std::process::Command::new(&bin);
+        // This server runs IN-PROCESS inside the desktop GUI, so a console
+        // subsystem child would flash a black window over the operator's screen
+        // on every "Run now" click.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         cmd.args([
             "schedule",
             "run-now",
@@ -5347,8 +5355,18 @@ mod tests {
             Resolved::BadRequest
         ));
         std::fs::write(root.join("secret.txt"), "nope").unwrap();
+        // An absolute path smuggled in behind `/viz/`. What this asserts is
+        // that the file is never SERVED; the refusal code legitimately differs,
+        // because the smuggled path itself does. On Unix it is
+        // `/viz//tmp/…/secret.txt` — plain-relative, so it survives the guard
+        // and simply misses on disk (404). On Windows it is
+        // `/viz/C:\…\secret.txt`, whose drive prefix trips `is_plain_relative`
+        // first — a stricter refusal, one step earlier.
         let abs = format!("/viz/{}", root.join("secret.txt").display());
-        assert!(is_not_found(resolve_static(&st, &abs)));
+        assert!(
+            !matches!(resolve_static(&st, &abs), Resolved::File { .. }),
+            "an absolute path behind /viz must never be served: {abs}"
+        );
         assert!(is_not_found(resolve_static(&st, "/viz//etc/hosts")));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -6099,7 +6117,14 @@ mod tests {
         let site = vault.parent().unwrap().join("publish-site");
         std::fs::write(
             vault.join(".ovp/publish.toml"),
-            format!("out = \"{}\"\n", site.display()),
+            // A TOML BASIC string treats `\` as an escape, so an unescaped
+            // Windows path (`C:\Users\…`) is a parse error, not a path. The
+            // loader reports that honestly — as a 400 whose body names the file
+            // — which is why this test failed with `publish_not_configured`
+            // rather than publishing to the wrong place. Escape it here; the
+            // same trap is waiting for any operator hand-writing publish.toml
+            // on Windows (see docs/windows-port.md).
+            format!("out = \"{}\"\n", site.display().to_string().replace('\\', "\\\\")),
         )
         .unwrap();
         let resp = dispatch(&st, Method::Post, "/api/publish", "");

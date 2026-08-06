@@ -163,27 +163,10 @@ impl Drop for SessionLock {
     }
 }
 
+/// Conservative: if the OS can't confirm the PID is gone, assume alive so a
+/// real concurrent turn is never falsely stolen.
 fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        std::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            // Conservative: if the probe can't run, assume alive so a real
-            // concurrent turn is never falsely stolen.
-            .unwrap_or(true)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    ovp_intake::probe_pid(pid) != Some(false)
 }
 
 /// Errors the store distinguishes because callers behave differently on them.

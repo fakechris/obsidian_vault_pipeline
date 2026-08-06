@@ -200,11 +200,10 @@ fn collision_free(to: &Path) -> Result<PathBuf, String> {
 }
 
 /// Vault-relative display path: strip `root` when `p` is under it, else the
-/// full path.
+/// full path. Thin alias for [`ovp_domain::vault_rel`], which owns the
+/// separator convention (these strings are persisted, not just displayed).
 pub fn rel_to(root: &Path, p: &Path) -> String {
-    p.strip_prefix(root)
-        .map(|q| q.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| p.to_string_lossy().into_owned())
+    ovp_domain::vault_rel(root, p)
 }
 
 /// Single-writer guard for the vault's product state. Two overlapping runs
@@ -318,8 +317,8 @@ impl RunLock {
 
     /// True only when the lock file names a PID that is verifiably no longer
     /// running. Conservative on every uncertainty (unreadable file, no PID,
-    /// probe failure, non-unix): treat the owner as alive and keep refusing —
-    /// the manual-deletion instruction in the error still applies.
+    /// probe failure): treat the owner as alive and keep refusing — the
+    /// manual-deletion instruction in the error still applies.
     fn owner_is_dead(path: &Path) -> bool {
         let Some(pid) = std::fs::read_to_string(path)
             .ok()
@@ -328,24 +327,69 @@ impl RunLock {
         else {
             return false;
         };
-        #[cfg(unix)]
-        {
-            // `kill -0` probes liveness without signaling; exit 0 = alive.
-            // (A live process owned by another user also reports non-zero,
-            // but a vault lock under $HOME is always same-user.)
-            std::process::Command::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| !s.success())
-                .unwrap_or(false)
+        probe_pid(pid) == Some(false)
+    }
+}
+
+/// Three-valued process-liveness probe, shared by every stale-owner check in
+/// the workspace (run lock, daily heartbeat, source-work queue, agent
+/// transcript). It answers ONLY the OS question; each caller keeps its own
+/// conservative default for `None`, because "assume alive" and "assume gone"
+/// are the safe answers in different places.
+///
+/// - `Some(true)`  — the process exists.
+/// - `Some(false)` — no process has that PID.
+/// - `None`        — the probe could not tell (no `kill`, access denied, …).
+///
+/// PID reuse reads as alive, which is the conservative direction: at worst a
+/// stale lock survives one more run and the operator deletes it by hand.
+pub fn probe_pid(pid: u32) -> Option<bool> {
+    if pid == 0 {
+        return Some(false);
+    }
+    #[cfg(unix)]
+    {
+        // `kill -0` probes liveness without signaling; exit 0 = alive.
+        // (A live process owned by another user also reports non-zero, but a
+        // vault lock under $HOME is always same-user.)
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .map(|s| s.success())
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // STILL_ACTIVE (STATUS_PENDING). A process that genuinely exited with
+        // code 259 reads as alive — same conservative direction as PID reuse.
+        const STILL_ACTIVE: u32 = 259;
+        // SAFETY: OpenProcess/GetExitCodeProcess/CloseHandle are called with a
+        // valid pid, a stack-owned out-param, and a handle this function owns
+        // and closes exactly once on every path.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                // Only "no such process" is a definite answer. ACCESS_DENIED
+                // means the process EXISTS and is simply out of reach.
+                return (GetLastError() == ERROR_INVALID_PARAMETER).then_some(false);
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            (ok != 0).then(|| code == STILL_ACTIVE)
         }
-        #[cfg(not(unix))]
-        {
-            false
-        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -419,14 +463,55 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
     }
 
-    #[cfg(unix)]
+    /// A PID that is definitely gone: spawn the shortest-lived process the host
+    /// has, reap it, and DROP the handle before returning.
+    ///
+    /// Dropping matters on Windows. While a `Child` is alive it holds an open
+    /// process handle, so `OpenProcess` still succeeds against a process that
+    /// has exited and `probe_pid` answers from the exit code instead of from
+    /// `ERROR_INVALID_PARAMETER` — a different branch than the crashed-run case
+    /// these tests exist to cover.
+    fn reaped_dead_pid() -> u32 {
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        drop(child);
+        pid
+    }
+
+    /// `probe_pid` is the single liveness primitive behind the run lock, the
+    /// daily heartbeat, the source-work queue and the agent transcript, and its
+    /// Windows implementation (`OpenProcess`/`GetExitCodeProcess`) shares no
+    /// code with the Unix one. Until this test existed, both dead-process tests
+    /// below were `cfg(unix)`-gated on `Command::new("true")`, so the Windows
+    /// branch had NO coverage at all — a `None` there would mean every stale
+    /// lock is kept forever, which looks exactly like a run that never ends.
+    #[test]
+    fn probe_pid_answers_definitively_for_live_dead_and_zero() {
+        assert_eq!(probe_pid(0), Some(false), "pid 0 is never a process");
+        assert_eq!(
+            probe_pid(std::process::id()),
+            Some(true),
+            "this very process is alive"
+        );
+        assert_eq!(
+            probe_pid(reaped_dead_pid()),
+            Some(false),
+            "a reaped child must read as GONE, not as `None`/unknown"
+        );
+    }
+
     #[test]
     fn run_lock_reclaims_stale_lock_from_dead_process() {
         let dir = tempfile::tempdir().unwrap();
         // Fabricate a crash: a lock file naming a process that has exited.
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
+        let dead_pid = reaped_dead_pid();
         let lock_path = dir.path().join(".ovp/run.lock");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
@@ -440,16 +525,13 @@ mod tests {
         assert!(!lock_path.exists(), "reclaimed lock still releases on drop");
     }
 
-    #[cfg(unix)]
     #[test]
     fn run_lock_recovers_from_a_stranded_reclaim_guard() {
         // Crash DURING a previous reclaim: both the lock and the reclaim
         // guard are stranded with dead owners. Acquire must recover through
         // both layers (guard reclaimed by the same dead-owner rule).
         let dir = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
+        let dead_pid = reaped_dead_pid();
         let lock_path = dir.path().join(".ovp/run.lock");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
