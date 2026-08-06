@@ -2892,6 +2892,7 @@ mod tests {
             last_reason: None,
             tags: vec!["agent-memory".into()],
             tags_inferred: vec!["retrieval".into()],
+            tags_implied: vec![],
             entities: vec![],
         }
     }

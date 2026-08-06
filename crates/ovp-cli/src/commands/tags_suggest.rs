@@ -245,6 +245,110 @@ pub(crate) fn merge_proposals(
     (out, suppressed)
 }
 
+/// Schmitz subsumption thresholds (T3, docs §4): a specific tag implies a
+/// generic when almost every specific-source also carries the generic, but
+/// not vice versa (a hierarchy signal, not synonymy).
+const IMPLY_FORWARD: f64 = 0.7; // P(generic | specific) ≥
+const IMPLY_REVERSE: f64 = 0.3; // P(specific | generic) ≤
+const IMPLY_MIN_SPECIFIC: usize = 2; // ignore singleton specifics (noise)
+/// A real `specific ⇒ generic` also has RELATED NAMES (agentic-engineering /
+/// agent, creative-writing / writing, asr / voice). Pure co-occurrence with
+/// no name relation is base-rate noise — in an all-AI corpus every rare tag
+/// co-occurs with `ai`, but `business` is not a KIND of `ai`. Gate on the
+/// same name embeddings the merge candidates use.
+const IMPLY_NAME_COSINE: f64 = 0.35;
+
+/// One proposed `specific ⇒ generic` implication, evidence attached.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub(crate) struct ImplicationProposal {
+    pub(crate) specific: String,
+    pub(crate) specific_count: usize,
+    pub(crate) generic: String,
+    pub(crate) generic_count: usize,
+    /// P(generic | specific) — how reliably the specific rolls up.
+    pub(crate) forward: f64,
+    /// P(specific | generic) — low = the generic is genuinely broader.
+    pub(crate) reverse: f64,
+    /// Name-embedding cosine — the semantic-relatedness evidence; the list is
+    /// sorted by it so the true is-a-kind-of pairs float above base-rate
+    /// co-occurrence (`business ⇒ ai` sinks below `agentic-engineering ⇒ agent`).
+    pub(crate) name_cosine: f64,
+}
+
+/// Count the intersection of two ASCENDING source-index lists (the vocab
+/// pushes indices in source order, so they're pre-sorted).
+fn sorted_intersection(a: &[usize], b: &[usize]) -> usize {
+    let (mut i, mut j, mut n) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                n += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Implication candidates over `tags` = (name, ascending source indices),
+/// gated by co-occurrence subsumption AND name-embedding relatedness
+/// (`name_vectors[i]` aligns with `tags[i]`). Pure, unit-tested. Proposes
+/// `specific ⇒ generic` when the specific is strictly rarer, forward ≥
+/// [`IMPLY_FORWARD`], reverse ≤ [`IMPLY_REVERSE`], names cosine ≥
+/// [`IMPLY_NAME_COSINE`].
+pub(crate) fn implication_proposals(
+    tags: &[(String, Vec<usize>)],
+    name_vectors: &[Vec<f32>],
+) -> Vec<ImplicationProposal> {
+    let mut out = Vec::new();
+    for i in 0..tags.len() {
+        let si = tags[i].1.len();
+        if si < IMPLY_MIN_SPECIFIC {
+            continue;
+        }
+        for (j, (jname, jsrcs)) in tags.iter().enumerate() {
+            let sj = jsrcs.len();
+            // specific (i) must be strictly rarer than the generic (j).
+            if *jname == tags[i].0 || si >= sj {
+                continue;
+            }
+            let both = sorted_intersection(&tags[i].1, jsrcs);
+            if both == 0 {
+                continue;
+            }
+            let forward = both as f64 / si as f64;
+            let reverse = both as f64 / sj as f64;
+            let name_cos = cosine(&name_vectors[i], &name_vectors[j]);
+            if forward >= IMPLY_FORWARD && reverse <= IMPLY_REVERSE && name_cos >= IMPLY_NAME_COSINE
+            {
+                out.push(ImplicationProposal {
+                    specific: tags[i].0.clone(),
+                    specific_count: si,
+                    generic: jname.clone(),
+                    generic_count: sj,
+                    forward: (forward * 1000.0).round() / 1000.0,
+                    reverse: (reverse * 1000.0).round() / 1000.0,
+                    name_cosine: (name_cos * 1000.0).round() / 1000.0,
+                });
+            }
+        }
+    }
+    // Strongest name relation first (base-rate co-occurrence sinks), then
+    // rarest specific, then name for determinism.
+    out.sort_by(|a, b| {
+        b.name_cosine
+            .partial_cmp(&a.name_cosine)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.specific_count.cmp(&b.specific_count))
+            .then_with(|| a.specific.cmp(&b.specific))
+            .then_with(|| a.generic.cmp(&b.generic))
+    });
+    out
+}
+
 pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     if !(-1.0..=1.0).contains(&args.merge_threshold) {
         return Err(CliError::Io(format!(
@@ -449,12 +553,36 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
             })
         })
         .collect();
+    // Implication candidates (specific ⇒ generic) over the same source-index
+    // sets. Drop pairs already implied (operator + UI table) or UI-rejected.
+    let aliases = ovp_domain::tags::TagAliases::load(&args.vault_root).map_err(CliError::Io)?;
+    let mut implications = implication_proposals(&counts, &name_vectors);
+    implications.retain(|p| {
+        !decisions.is_ignored(&p.specific, &p.generic)
+            && !aliases.implied_generics(&p.specific).contains(&p.generic)
+    });
+    implications.truncate(MAX_MERGE_PROPOSALS);
+    let implications_json: Vec<serde_json::Value> = implications
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "specific": p.specific,
+                "specific_count": p.specific_count,
+                "generic": p.generic,
+                "generic_count": p.generic_count,
+                "forward": p.forward,
+                "reverse": p.reverse,
+                "name_cosine": p.name_cosine,
+            })
+        })
+        .collect();
     let proposals_json = serde_json::json!({
         "schema": "ovp.tags-proposals/v1",
         "date": model.date,
         "merge_threshold": args.merge_threshold,
         "suppressed_co_occurrence": suppressed,
         "proposals": proposals_with_titles,
+        "implications": implications_json,
     });
     let json_path = args.vault_root.join(layout.tags_proposals_json_file());
     // Atomic write: the live portal polls this file — a truncated read (or a
@@ -506,6 +634,32 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     }
     report.push_str("```\n");
     report.push_str(&format!(
+        "\n## Implication candidates ({}) — `specific ⇒ generic` (specific rolls \
+         up under generic; accept in the /tags inbox or paste below)\n\n\
+         | name cos | forward | reverse | specific (count) | ⇒ generic (count) |\n\
+         |---|---|---|---|---|\n",
+        implications.len()
+    ));
+    for p in &implications {
+        report.push_str(&format!(
+            "| {:.2} | {:.2} | {:.2} | {} ({}) | {} ({}) |\n",
+            p.name_cosine, p.forward, p.reverse, p.specific, p.specific_count, p.generic, p.generic_count
+        ));
+    }
+    if !implications.is_empty() {
+        report.push_str("\n```toml\n[implications]\n");
+        // Group generics per specific for the paste-ready block.
+        let mut by_specific: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for p in &implications {
+            by_specific.entry(&p.specific).or_default().push(&p.generic);
+        }
+        for (s, generics) in by_specific {
+            let list: Vec<String> = generics.iter().map(|g| toml_basic_string(g)).collect();
+            report.push_str(&format!("{} = [{}]\n", toml_basic_string(s), list.join(", ")));
+        }
+        report.push_str("```\n");
+    }
+    report.push_str(&format!(
         "\n## Backfill\n\n{covered}/{} untagged sources received inferred tags \
          (`.ovp/tags/inferred.json`); they surface as `tags_inferred`, never as \
          operator tags. Regenerate anytime; delete the file to turn backfill off.\n",
@@ -519,8 +673,9 @@ pub fn run(args: TagsSuggestArgs) -> Result<(), CliError> {
     std::fs::write(&report_path, report)
         .map_err(|e| CliError::Io(format!("writing {}: {e}", report_path.display())))?;
     println!(
-        "  merges: {} candidate pair(s) → {}",
+        "  merges: {} candidate pair(s), {} implication(s) → {}",
         proposals.len(),
+        implications.len(),
         report_path.display()
     );
     println!("tags-suggest: done. Rebuild the index (`ovp2 index`) to surface inferred tags.");
@@ -604,6 +759,35 @@ mod tests {
         assert!(!name_evidence("ios", "ai", 0.94, 0.242));
         assert!(!name_evidence("git", "go", 0.93, 0.544));
         assert!(!name_evidence("tiptap", "nodejs", 0.94, 0.9));
+    }
+
+    #[test]
+    fn implication_proposals_fire_on_subsumption_only() {
+        // autogen (3 srcs) ⊂ agent (10 srcs): every autogen source is also
+        // agent (forward 1.0), but agent is much broader (reverse 0.3).
+        // rust (4 srcs) overlaps agent partially — NOT a subsumption.
+        let tags = vec![
+            ("agent".to_string(), (0..10).collect::<Vec<usize>>()),
+            ("autogen".to_string(), vec![0, 1, 2]),
+            ("rust".to_string(), vec![0, 1, 20, 21]),
+        ];
+        // Name vectors aligned with `tags`: agent≈autogen (related), rust ⟂.
+        let v = vec![vec![1.0, 0.0], vec![0.9, 0.44], vec![0.0, 1.0]];
+        let got = implication_proposals(&tags, &v);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].specific, "autogen");
+        assert_eq!(got[0].generic, "agent");
+        assert_eq!(got[0].forward, 1.0);
+        assert!(got[0].reverse <= 0.3);
+        // Same subsumption but UNRELATED names (business ⟂ agent) → rejected.
+        let unrelated = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.0, 1.0]];
+        assert!(implication_proposals(&tags, &unrelated).is_empty());
+        // A singleton specific is ignored (noise floor).
+        let single = vec![
+            ("agent".to_string(), (0..10).collect::<Vec<usize>>()),
+            ("x".to_string(), vec![5]),
+        ];
+        assert!(implication_proposals(&single, &[vec![1.0], vec![1.0]]).is_empty());
     }
 
     #[test]

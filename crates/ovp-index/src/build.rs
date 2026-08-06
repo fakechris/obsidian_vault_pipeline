@@ -482,6 +482,16 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         } else if row.content_date.is_none() {
             row.content_date = first_iso_day_in(rel);
         }
+        // Roll-up: the generics every own/inferred tag implies (transitive),
+        // minus any already present. Separate field so operator tags stay pure.
+        let mut implied: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.extend(aliases.implied_generics(t));
+        }
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.remove(t);
+        }
+        row.tags_implied = implied.into_iter().collect();
         // Tier-0 URL entities from the SAME per-source read (no extra I/O):
         // the reverse index (entity → sources) is derived on demand from
         // these forward lists, so nothing else is persisted.
