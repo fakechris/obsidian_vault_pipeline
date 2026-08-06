@@ -47,7 +47,11 @@ homepage = "https://github.com/fakechris/obsidian_vault_pipeline"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: the sqlite read-model stores display state (ops/totals)
+# as JSON and the parity gate requires f64-exact reconstruction — serde_json's
+# default fast float parser can be 1 ULP off from ryu's shortest output
+# (found live: success_rate_pct 97.47634069400631 → …632).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
