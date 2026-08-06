@@ -42,7 +42,7 @@ evidence.json ≈ 5.1 GB、console HTML ≈ 440 MB,进程 OOM,不可行。
 
 ## 3. 架构:文件 ledger 唯一权威,SQLite 事务化 read-model,索引是有版本的投影
 
-```
+```text
 Notes / packs / JSONL ledgers      ← 权威层,可同步、可审计(不变,A0 契约)
         │
         ▼

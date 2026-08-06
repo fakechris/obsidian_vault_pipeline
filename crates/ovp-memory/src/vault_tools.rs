@@ -1144,6 +1144,18 @@ fn search_fulltext_at_with_budget(
     corpus_budget: usize,
 ) -> Value {
     let (terms, terms_capped) = tokenize_search_terms_capped(query);
+    // The agent path rejects zero-term queries at parse; the portal path
+    // reaches here directly — an empty matcher must not burn a corpus scan
+    // it can never match.
+    if terms.is_empty() {
+        return json!({
+            "hits": [],
+            "scanned_sources": 0,
+            "total_sources": fulltext_candidate_count(model),
+            "truncated": false,
+            "note": "query contains no searchable terms (punctuation only) — nothing was scanned",
+        });
+    }
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut candidates = model
         .sources
@@ -2688,7 +2700,18 @@ fn required_search_query(object: &Map<String, Value>) -> Result<String, String> 
     // distinct terms rather than rejecting: an invalid-args bounce costs a
     // whole agent round (and feeds the breaker) for a fault the tool can
     // resolve losslessly enough — matched_terms shows what actually ran.
-    required_string(object, "query")
+    let query = required_string(object, "query")?;
+    // Zero terms is different: nothing CAN run, and an empty-matcher pass
+    // would read as an honest complete miss (search_source_chunks already
+    // rejects this state — the term tools must match).
+    if tokenize_search_terms(&query).is_empty() {
+        return Err(
+            "`query` contains no searchable terms (punctuation only) — include at least \
+             one word, CJK character, or identifier"
+                .into(),
+        );
+    }
+    Ok(query)
 }
 
 fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<String>, String> {
@@ -3984,6 +4007,16 @@ mod tests {
                 call(&mut invalid_tools, name, json!({"query": ""})),
                 ToolOutcome::InvalidArgs(_)
             ));
+            // Punctuation-only queries tokenize to ZERO terms — an empty
+            // matcher would read as an honest complete miss (and the portal
+            // path would burn a corpus scan on it), so they bounce like the
+            // empty query, matching search_source_chunks.
+            for junk in ["《》", "!!!", "、。"] {
+                assert!(matches!(
+                    call(&mut invalid_tools, name, json!({"query": junk})),
+                    ToolOutcome::InvalidArgs(_)
+                ));
+            }
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
         // Over-long term lists soft-truncate to the first MAX_SEARCH_TERMS

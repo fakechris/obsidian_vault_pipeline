@@ -35,6 +35,9 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 /// even though the write inside it returned `Ok`. The missing suffix is
 /// collected BEFORE creation so only genuinely new entries pay an fsync.
 pub fn create_dirs_synced(dir: &Path) -> Result<(), String> {
+    // An empty path means the current directory (a bare relative filename's
+    // `parent()` is `Some("")`) — `exists()`/`File::open` both fail on "".
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
     let mut missing: Vec<PathBuf> = Vec::new();
     let mut probe = dir.to_path_buf();
     while !probe.exists() {
@@ -71,24 +74,42 @@ pub fn create_dirs_synced(dir: &Path) -> Result<(), String> {
 /// caller was just told is durable. One fsync per appended record is cheap
 /// at ledger write rates.
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        create_dirs_synced(parent)?;
-    }
+    let parent = ledger_parent(path);
+    create_dirs_synced(parent)?;
     let line = serde_json::to_string(value).map_err(|e| format!("serializing record: {e}"))?;
-    let created = !path.exists();
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    // Creation is derived from the ATOMIC open, not an exists() probe — a
+    // concurrent creator between probe and open would otherwise skip the
+    // directory fsync exactly when a new entry needed it (TOCTOU).
+    let (mut f, created) = match OpenOptions::new().create_new(true).append(true).open(path) {
+        Ok(f) => (f, true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let f = OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(|e| format!("opening {}: {e}", path.display()))?;
+            (f, false)
+        }
+        Err(e) => return Err(format!("opening {}: {e}", path.display())),
+    };
     writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
     f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))?;
-    if let Some(parent) = path.parent().filter(|_| created) {
+    if created {
         std::fs::File::open(parent)
             .and_then(|d| d.sync_all())
             .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
     }
     Ok(())
+}
+
+/// Parent directory of a ledger path for creation/sync purposes. A bare
+/// relative filename has `Some("")` as its parent — which `create_dir_all`,
+/// `exists()`, and `File::open` all reject — and an empty path means the
+/// current directory.
+fn ledger_parent(path: &Path) -> &Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    }
 }
 
 /// Read a whole JSONL ledger. Missing file → empty (first run); a malformed
@@ -337,6 +358,31 @@ impl Drop for RunLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ledger_parent_normalizes_bare_relative_filenames() {
+        // A bare filename's parent() is Some("") — create_dir_all, exists(),
+        // and File::open all reject "", so the sync path must use ".".
+        assert_eq!(ledger_parent(Path::new("ledger.jsonl")), Path::new("."));
+        assert_eq!(ledger_parent(Path::new("sub/ledger.jsonl")), Path::new("sub"));
+        assert_eq!(
+            ledger_parent(Path::new("/abs/ledger.jsonl")),
+            Path::new("/abs")
+        );
+        // The empty-path guard in create_dirs_synced covers direct callers.
+        create_dirs_synced(Path::new("")).expect("empty path means cwd");
+    }
+
+    #[test]
+    fn append_jsonl_creates_deep_chain_and_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("a/b/ledger.jsonl");
+        append_jsonl(&ledger, &serde_json::json!({"n": 1})).expect("first append creates");
+        append_jsonl(&ledger, &serde_json::json!({"n": 2})).expect("second append");
+        let rows: Vec<serde_json::Value> = read_jsonl(&ledger).expect("read back");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1]["n"], 2);
+    }
 
     #[test]
     fn hex_sha256_is_stable() {
