@@ -1077,6 +1077,35 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
             );
         }
     }
+    // Same class for implication accepts: absorb can silently discard the
+    // edge (self-loop after alias resolution, or the generic is dropped /
+    // boilerplate) — detect the no-op, roll the decision back, and 409
+    // instead of a false success that leaves the proposal card stuck
+    // (CodeRabbit on PR #347).
+    if action == "accept_implication" {
+        let ns = ovp_domain::tags::normalize_tag(alias).unwrap_or_default();
+        let ng = ovp_domain::tags::normalize_tag(canonical).unwrap_or_default();
+        let merged = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+        let s = merged.resolve(&ns).to_string();
+        let g = merged.resolve(&ng).to_string();
+        let effective =
+            !ns.is_empty() && !ng.is_empty() && merged.implied_generics(&s).contains(&g);
+        if !effective {
+            let mut d = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
+            d.remove_implication(alias, canonical);
+            let _ = d.save(&state.vault_root);
+            return json_response(
+                409,
+                &format!(
+                    r#"{{"error":{}}}"#,
+                    json_str(&format!(
+                        "implication #{alias} ⇒ #{canonical} cannot take effect (self-loop after \
+                         alias resolution, or the generic is dropped/boilerplate)"
+                    ))
+                ),
+            );
+        }
+    }
     match rebuild_index_now(state) {
         Ok(_) => json_response(200, r#"{"ok":true,"changed":true}"#),
         Err(e) => json_response(500, &format!(r#"{{"error":{}}}"#, json_str(&e))),

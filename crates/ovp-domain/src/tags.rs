@@ -334,7 +334,8 @@ impl TagAliases {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        // Implication-only configuration is still configuration (CodeRabbit).
+        self.map.is_empty() && self.implications.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -758,6 +759,18 @@ impl TagDecisions {
         self.ignore.remove(&Self::pair(&s, &g));
         self.implications.entry(s).or_default().insert(g);
         Ok(())
+    }
+
+    /// Remove a recorded implication decision — the rollback for an accept
+    /// that turned out to be a no-op after absorb (mirrors `remove_alias`).
+    pub fn remove_implication(&mut self, specific: &str, generic: &str) -> bool {
+        match (normalize_tag(specific), normalize_tag(generic)) {
+            (Some(s), Some(g)) => self
+                .implications
+                .get_mut(&s)
+                .is_some_and(|set| set.remove(&g)),
+            _ => false,
+        }
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -1243,6 +1256,26 @@ mod tests {
         // Merged into TagAliases via load (no operator file needed).
         let merged = TagAliases::load(dir.path()).unwrap();
         assert!(merged.implied_generics("autogen").contains("agent"));
+        // Rollback helper: the just-accepted edge is removable (CodeRabbit's
+        // no-op-accept 409 path in the server uses it).
+        assert!(d.remove_implication("autogen", "agent"));
+        assert!(!d.remove_implication("autogen", "agent"), "already gone");
+    }
+
+    /// `is_empty` must see implication-only configuration (CodeRabbit): a
+    /// parsed `[implications]` table with no alias entries is NOT empty.
+    #[test]
+    fn implication_only_config_is_not_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ovp/tags")).unwrap();
+        std::fs::write(
+            dir.path().join(".ovp/tags/aliases.toml"),
+            "[implications]\n\"autogen\" = [\"agent\"]\n",
+        )
+        .unwrap();
+        let merged = TagAliases::load(dir.path()).unwrap();
+        assert!(!merged.is_empty());
+        assert_eq!(merged.len(), 0, "no alias map entries though");
     }
 
     #[test]
