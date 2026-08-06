@@ -19,6 +19,7 @@
 //! Deliberately NOT here yet: incremental cursors (full rebuild is minutes at
 //! 100x scale, measured), FTS tables (stage 3c), vector columns (stage 5).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
@@ -29,7 +30,7 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -187,8 +188,9 @@ CREATE TABLE claims(
   status TEXT NOT NULL, strength TEXT, run_id TEXT, run_date TEXT, lane TEXT);
 CREATE INDEX idx_claims_id ON claims(claim_id);
 CREATE INDEX idx_claims_status ON claims(status);
-CREATE TABLE claim_sources(claim_id TEXT NOT NULL, sha256 TEXT NOT NULL);
+CREATE TABLE claim_sources(claim_rowid INTEGER NOT NULL, claim_id TEXT NOT NULL, sha256 TEXT NOT NULL);
 CREATE INDEX idx_claim_sources ON claim_sources(claim_id);
+CREATE INDEX idx_claim_sources_rowid ON claim_sources(claim_rowid);
 CREATE INDEX idx_claim_sources_sha ON claim_sources(sha256);
 CREATE TABLE runs(
   run_id TEXT NOT NULL, date TEXT NOT NULL, report_file TEXT NOT NULL,
@@ -321,6 +323,34 @@ fn build_into(
             ("date", model.date.clone()),
             ("built_at", model.built_at.clone().unwrap_or_default()),
             ("run_id", model.run_id.clone().unwrap_or_default()),
+            // Display-state blobs (small, no query need) so the FULL
+            // IndexModel/EvidenceModel reconstruct from this file alone —
+            // stage 4 serves from here, JSON is only the fallback.
+            (
+                "totals_json",
+                serde_json::to_string(&model.totals).map_err(|e| format!("totals: {e}"))?,
+            ),
+            (
+                "ops_json",
+                serde_json::to_string(&model.ops).map_err(|e| format!("ops: {e}"))?,
+            ),
+            (
+                "has_evidence",
+                if evidence.is_some() { "1" } else { "0" }.to_string(),
+            ),
+            (
+                "evidence_schema",
+                evidence.map(|e| e.schema.clone()).unwrap_or_default(),
+            ),
+            (
+                "evidence_date",
+                evidence.map(|e| e.date.clone()).unwrap_or_default(),
+            ),
+            (
+                "evidence_warnings_json",
+                serde_json::to_string(&evidence.map(|e| e.warnings.clone()).unwrap_or_default())
+                    .map_err(|e| format!("warnings: {e}"))?,
+            ),
         ] {
             meta.execute((k, v)).map_err(|e| format!("meta {k}: {e}"))?;
         }
@@ -427,7 +457,7 @@ fn build_into(
             )
             .map_err(|e| format!("prepare claims: {e}"))?;
         let mut claim_src = tx
-            .prepare("INSERT INTO claim_sources(claim_id, sha256) VALUES(?1,?2)")
+            .prepare("INSERT INTO claim_sources(claim_rowid, claim_id, sha256) VALUES(?1,?2,?3)")
             .map_err(|e| format!("prepare claim_sources: {e}"))?;
         let mut claims_fts = tx
             .prepare("INSERT INTO claims_fts(rowid, text) VALUES(?1,?2)")
@@ -453,7 +483,7 @@ fn build_into(
                 .map_err(|e| format!("claims_fts {}: {e}", c.claim_id))?;
             for sha in &c.sources {
                 claim_src
-                    .execute((&c.claim_id, sha))
+                    .execute((rowid, &c.claim_id, sha))
                     .map_err(|e| format!("claim source {}: {e}", c.claim_id))?;
             }
         }
@@ -778,6 +808,330 @@ fn fts_search_on(
     run(&terms.join(" OR "))
 }
 
+/// Reconstruct the FULL `IndexModel` from the shadow database — the stage-4
+/// serving path. Row order is insertion order (`ORDER BY rowid`), which is
+/// the model order the projection was built from, so a round-trip is
+/// `PartialEq`-identical to the model that produced the file (and the
+/// parity gate asserts exactly that on every build).
+pub fn read_index_sqlite(vault_root: &Path) -> Result<IndexModel, String> {
+    read_index_sqlite_at(&sqlite_path(vault_root)?)
+}
+
+fn meta_value(conn: &Connection, key: &str) -> Result<String, String> {
+    conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        .map_err(|e| format!("reading meta {key}: {e}"))
+}
+
+fn parse_enum<T: serde::de::DeserializeOwned>(s: &str, what: &str) -> Result<T, String> {
+    serde_json::from_value(Value::String(s.to_string()))
+        .map_err(|e| format!("parsing {what} `{s}`: {e}"))
+}
+
+fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    if meta_value(&conn, "schema_version")? != SCHEMA_VERSION {
+        return Err(format!(
+            "shadow schema is not v{SCHEMA_VERSION} — rebuild the projection (`ovp2 index`)"
+        ));
+    }
+
+    // Child rows first, grouped by their owner, insertion order preserved.
+    type TagKinds = (Vec<String>, Vec<String>, Vec<String>);
+    let mut tags_by_sha: HashMap<String, TagKinds> = HashMap::new();
+    conn.prepare("SELECT sha256, tag, kind FROM source_tags ORDER BY rowid")
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading source_tags: {e}"))?
+        .into_iter()
+        .for_each(|(sha, tag, kind)| {
+            let entry = tags_by_sha.entry(sha).or_default();
+            match kind.as_str() {
+                "inferred" => entry.1.push(tag),
+                "implied" => entry.2.push(tag),
+                _ => entry.0.push(tag),
+            }
+        });
+    let mut entities_by_sha: HashMap<String, Vec<String>> = HashMap::new();
+    conn.prepare("SELECT sha256, entity FROM source_entities ORDER BY rowid")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading source_entities: {e}"))?
+        .into_iter()
+        .for_each(|(sha, entity)| entities_by_sha.entry(sha).or_default().push(entity));
+
+    let sources = conn
+        .prepare(
+            "SELECT sha256, status, title, author, url, origin, rel_path, date, content_date,
+             captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason
+             FROM sources ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                    r.get::<_, Option<String>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, Option<String>>(12)?,
+                    r.get::<_, i64>(13)?,
+                    r.get::<_, Option<String>>(14)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading sources: {e}"))?
+        .into_iter()
+        .map(|row| {
+            let (tags, tags_inferred, tags_implied) =
+                tags_by_sha.remove(&row.0).unwrap_or_default();
+            Ok(crate::model::SourceRow {
+                entities: entities_by_sha.remove(&row.0).unwrap_or_default(),
+                sha256: row.0,
+                status: parse_enum(&row.1, "source status")?,
+                title: row.2,
+                author: row.3,
+                url: row.4,
+                origin: row.5,
+                rel_path: row.6,
+                date: row.7,
+                content_date: row.8,
+                captured_on: row.9,
+                processed_on: row.10,
+                last_run_id: row.11,
+                pack_dir: row.12,
+                fail_count: row.13 as usize,
+                last_reason: row.14,
+                tags,
+                tags_inferred,
+                tags_implied,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let mut titles_by_pack: HashMap<String, Vec<String>> = HashMap::new();
+    conn.prepare("SELECT pack_dir, title FROM pack_card_titles ORDER BY pack_dir, idx")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading pack_card_titles: {e}"))?
+        .into_iter()
+        .for_each(|(pack, title)| titles_by_pack.entry(pack).or_default().push(title));
+
+    let packs = conn
+        .prepare(
+            "SELECT pack_dir, title, date, units, cards, json_repaired, source_sha256
+             FROM packs ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok(crate::model::PackRow {
+                    pack_dir: r.get(0)?,
+                    title: r.get(1)?,
+                    date: r.get(2)?,
+                    units: r.get::<_, i64>(3)? as usize,
+                    cards: r.get::<_, i64>(4)? as usize,
+                    json_repaired: r.get::<_, i64>(5)? != 0,
+                    card_titles: Vec::new(),
+                    source_sha256: r.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading packs: {e}"))?
+        .into_iter()
+        .map(|mut pack| {
+            pack.card_titles = titles_by_pack.remove(&pack.pack_dir).unwrap_or_default();
+            pack
+        })
+        .collect::<Vec<_>>();
+
+    let mut sources_by_claim_rowid: HashMap<i64, Vec<String>> = HashMap::new();
+    conn.prepare("SELECT claim_rowid, sha256 FROM claim_sources ORDER BY rowid")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading claim_sources: {e}"))?
+        .into_iter()
+        .for_each(|(rowid, sha)| sources_by_claim_rowid.entry(rowid).or_default().push(sha));
+
+    let claims = conn
+        .prepare(
+            "SELECT rowid, claim_id, claim_key, claim, theme, status, strength, run_id,
+             run_date, lane FROM claims ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    crate::model::ClaimRow {
+                        claim_id: r.get(1)?,
+                        claim_key: r.get(2)?,
+                        claim: r.get(3)?,
+                        theme: r.get(4)?,
+                        status: crate::model::ClaimStatus::Caveated,
+                        sources: Vec::new(),
+                        strength: r.get(6)?,
+                        run_id: r.get(7)?,
+                        run_date: r.get(8)?,
+                        lane: r.get(9)?,
+                    },
+                    r.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading claims: {e}"))?
+        .into_iter()
+        .map(|(rowid, mut claim, status)| {
+            claim.status = parse_enum(&status, "claim status")?;
+            claim.sources = sources_by_claim_rowid.remove(&rowid).unwrap_or_default();
+            Ok(claim)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let runs = conn
+        .prepare(
+            "SELECT run_id, date, report_file, succeeded, failed, skipped, blocked, ingested,
+             pinboard_new, lifecycle_warnings FROM runs ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok(crate::model::RunRow {
+                    run_id: r.get(0)?,
+                    date: r.get(1)?,
+                    report_file: r.get(2)?,
+                    succeeded: r.get::<_, i64>(3)? as usize,
+                    failed: r.get::<_, i64>(4)? as usize,
+                    skipped: r.get::<_, i64>(5)? as usize,
+                    blocked: r.get::<_, i64>(6)? as usize,
+                    ingested: r.get::<_, i64>(7)? as usize,
+                    pinboard_new: r.get::<_, i64>(8)? as usize,
+                    lifecycle_warnings: r.get::<_, i64>(9)? as usize,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading runs: {e}"))?;
+
+    let built_at = meta_value(&conn, "built_at")?;
+    let run_id = meta_value(&conn, "run_id")?;
+    Ok(IndexModel {
+        schema: meta_value(&conn, "index_schema")?,
+        date: meta_value(&conn, "date")?,
+        built_at: (!built_at.is_empty()).then_some(built_at),
+        run_id: (!run_id.is_empty()).then_some(run_id),
+        totals: serde_json::from_str(&meta_value(&conn, "totals_json")?)
+            .map_err(|e| format!("parsing totals: {e}"))?,
+        sources,
+        packs,
+        claims,
+        runs,
+        ops: serde_json::from_str(&meta_value(&conn, "ops_json")?)
+            .map_err(|e| format!("parsing ops: {e}"))?,
+    })
+}
+
+/// Reconstruct the evidence sidecar — `Ok(None)` mirrors a build without an
+/// evidence model (the JSON path's "legitimately absent" case).
+pub fn read_evidence_sqlite(vault_root: &Path) -> Result<Option<EvidenceModel>, String> {
+    read_evidence_sqlite_at(&sqlite_path(vault_root)?)
+}
+
+fn read_evidence_sqlite_at(path: &Path) -> Result<Option<EvidenceModel>, String> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    // Same guard as the index reader — both caches must fall back TOGETHER
+    // on an unsupported generation, never serve evidence from one schema
+    // and the model from another.
+    if meta_value(&conn, "schema_version")? != SCHEMA_VERSION {
+        return Err(format!(
+            "shadow schema is not v{SCHEMA_VERSION} — rebuild the projection (`ovp2 index`)"
+        ));
+    }
+    if meta_value(&conn, "has_evidence")? != "1" {
+        return Ok(None);
+    }
+    let cards = conn
+        .prepare(
+            "SELECT id, pack_dir, source_sha256, source_title, title, content, unit_type,
+             cited_unit_ids FROM cards ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    crate::evidence::CardEvidenceRow {
+                        id: r.get(0)?,
+                        pack_dir: r.get(1)?,
+                        source_sha256: r.get(2)?,
+                        source_title: r.get(3)?,
+                        title: r.get(4)?,
+                        content: r.get(5)?,
+                        unit_type: r.get(6)?,
+                        cited_unit_ids: Vec::new(),
+                    },
+                    r.get::<_, String>(7)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading cards: {e}"))?
+        .into_iter()
+        .map(|(mut card, cited)| {
+            card.cited_unit_ids = serde_json::from_str(&cited)
+                .map_err(|e| format!("parsing cited_unit_ids for {}: {e}", card.id))?;
+            Ok(card)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let units = conn
+        .prepare(
+            "SELECT id, pack_dir, source_sha256, source_title, unit_id, text, quote, line,
+             attribution, modality FROM units ORDER BY rowid",
+        )
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok(crate::evidence::UnitEvidenceRow {
+                    id: r.get(0)?,
+                    pack_dir: r.get(1)?,
+                    source_sha256: r.get(2)?,
+                    source_title: r.get(3)?,
+                    unit_id: r.get(4)?,
+                    text: r.get(5)?,
+                    quote: r.get(6)?,
+                    line: r.get::<_, Option<i64>>(7)?.map(|l| l as usize),
+                    attribution: r.get(8)?,
+                    modality: r.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading units: {e}"))?;
+    Ok(Some(EvidenceModel {
+        schema: meta_value(&conn, "evidence_schema")?,
+        date: meta_value(&conn, "evidence_date")?,
+        cards,
+        units,
+        warnings: serde_json::from_str(&meta_value(&conn, "evidence_warnings_json")?)
+            .map_err(|e| format!("parsing warnings: {e}"))?,
+    }))
+}
+
 /// Parity report between a shadow database and the in-memory projections it
 /// was built from. Counts must ALL match and every sampled row — INCLUDING
 /// its child-table rows — must round-trip field-for-field; any mismatch is an
@@ -794,17 +1148,6 @@ pub struct ShadowParity {
     pub sampled: usize,
 }
 
-/// Evenly-spaced sample indices — deterministic, no clock/randomness (cheap
-/// to rerun in tests and on every build).
-fn sample_indices(len: usize, want: usize) -> Vec<usize> {
-    if len == 0 {
-        return Vec::new();
-    }
-    let want = want.min(len);
-    (0..want).map(|i| i * len / want).collect()
-}
-
-const SAMPLES_PER_SURFACE: usize = 20;
 
 /// Compare two full-row JSON encodings, naming the surface and key on drift.
 fn expect_row(surface: &str, key: &str, got: &Value, want: &Value) -> Result<(), String> {
@@ -922,265 +1265,116 @@ fn verify_at(
         ("date".to_string(), model.date.clone()),
         ("built_at".to_string(), model.built_at.clone().unwrap_or_default()),
         ("run_id".to_string(), model.run_id.clone().unwrap_or_default()),
+        (
+            "totals_json".to_string(),
+            serde_json::to_string(&model.totals).unwrap_or_default(),
+        ),
+        (
+            "ops_json".to_string(),
+            serde_json::to_string(&model.ops).unwrap_or_default(),
+        ),
+        (
+            "has_evidence".to_string(),
+            if evidence.is_some() { "1" } else { "0" }.to_string(),
+        ),
+        (
+            "evidence_schema".to_string(),
+            evidence.map(|e| e.schema.clone()).unwrap_or_default(),
+        ),
+        (
+            "evidence_date".to_string(),
+            evidence.map(|e| e.date.clone()).unwrap_or_default(),
+        ),
+        (
+            "evidence_warnings_json".to_string(),
+            serde_json::to_string(&evidence.map(|e| e.warnings.clone()).unwrap_or_default())
+                .unwrap_or_default(),
+        ),
     ];
     want_meta.sort();
     expect_row("meta", "scalars", &json!(got_meta), &json!(want_meta))?;
 
-    let mut sampled = 0usize;
-
-    // --- sources: every column + ordered (tag, kind) pairs + entities ---
-    for i in sample_indices(model.sources.len(), SAMPLES_PER_SURFACE) {
-        let s = &model.sources[i];
-        let got = conn
-            .query_row(
-                "SELECT status, title, author, url, origin, rel_path, date, content_date,
-                 captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason
-                 FROM sources WHERE sha256 = ?1",
-                [&s.sha256],
-                |r| {
-                    Ok(json!({
-                        "status": r.get::<_, String>(0)?,
-                        "title": r.get::<_, Option<String>>(1)?,
-                        "author": r.get::<_, Option<String>>(2)?,
-                        "url": r.get::<_, Option<String>>(3)?,
-                        "origin": r.get::<_, Option<String>>(4)?,
-                        "rel_path": r.get::<_, Option<String>>(5)?,
-                        "date": r.get::<_, Option<String>>(6)?,
-                        "content_date": r.get::<_, Option<String>>(7)?,
-                        "captured_on": r.get::<_, Option<String>>(8)?,
-                        "processed_on": r.get::<_, Option<String>>(9)?,
-                        "last_run_id": r.get::<_, Option<String>>(10)?,
-                        "pack_dir": r.get::<_, Option<String>>(11)?,
-                        "fail_count": r.get::<_, i64>(12)?,
-                        "last_reason": r.get::<_, Option<String>>(13)?,
-                    }))
-                },
-            )
-            .map_err(|e| format!("sampling source {}: {e}", s.sha256))?;
-        let want = json!({
-            "status": enum_str(&s.status),
-            "title": s.title, "author": s.author, "url": s.url, "origin": s.origin,
-            "rel_path": s.rel_path, "date": s.date, "content_date": s.content_date,
-            "captured_on": s.captured_on, "processed_on": s.processed_on,
-            "last_run_id": s.last_run_id, "pack_dir": s.pack_dir,
-            "fail_count": s.fail_count, "last_reason": s.last_reason,
-        });
-        expect_row("source", &s.sha256, &got, &want)?;
-
-        let got_tags: Vec<(String, String)> = conn
-            .prepare("SELECT tag, kind FROM source_tags WHERE sha256 = ?1 ORDER BY rowid")
-            .and_then(|mut st| {
-                st.query_map([&s.sha256], |r| Ok((r.get(0)?, r.get(1)?)))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|e| format!("sampling tags {}: {e}", s.sha256))?;
-        let want_tags: Vec<(String, String)> = s
-            .tags
+    // FULL-model equality: reconstruct both projections from this database
+    // through the exact stage-4 serving readers and require PartialEq with
+    // the models that produced it — the gate proves the serving path, not a
+    // sample of it. Section-by-section comparison names the divergence.
+    // Name the FIRST divergent row (vec sections) or dump both sides
+    // (scalar sections) — "diverges in ops" alone is undebuggable.
+    fn first_diff<T: PartialEq + Serialize>(
+        name: &str,
+        rebuilt: &[T],
+        want: &[T],
+    ) -> Result<(), String> {
+        if rebuilt == want {
+            return Ok(());
+        }
+        let i = rebuilt
             .iter()
-            .map(|t| (t.clone(), "tag".to_string()))
-            .chain(s.tags_inferred.iter().map(|t| (t.clone(), "inferred".to_string())))
-            .chain(s.tags_implied.iter().map(|t| (t.clone(), "implied".to_string())))
-            .collect();
-        expect_row("source_tags", &s.sha256, &json!(got_tags), &json!(want_tags))?;
-
-        let got_entities: Vec<String> = conn
-            .prepare("SELECT entity FROM source_entities WHERE sha256 = ?1 ORDER BY rowid")
-            .and_then(|mut st| {
-                st.query_map([&s.sha256], |r| r.get(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|e| format!("sampling entities {}: {e}", s.sha256))?;
-        expect_row("source_entities", &s.sha256, &json!(got_entities), &json!(s.entities))?;
-        sampled += 1;
+            .zip(want.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(rebuilt.len().min(want.len()));
+        Err(format!(
+            "reconstructed index diverges in {name}[{i}]:\n  sqlite: {}\n  model:  {}",
+            rebuilt
+                .get(i)
+                .and_then(|v| serde_json::to_string(v).ok())
+                .unwrap_or_else(|| "<missing>".into()),
+            want.get(i)
+                .and_then(|v| serde_json::to_string(v).ok())
+                .unwrap_or_else(|| "<missing>".into()),
+        ))
     }
-
-    // --- packs: every column + ordered card titles ---
-    for i in sample_indices(model.packs.len(), SAMPLES_PER_SURFACE) {
-        let p = &model.packs[i];
-        let got = conn
-            .query_row(
-                "SELECT title, date, units, cards, json_repaired, source_sha256
-                 FROM packs WHERE pack_dir = ?1",
-                [&p.pack_dir],
-                |r| {
-                    Ok(json!({
-                        "title": r.get::<_, String>(0)?,
-                        "date": r.get::<_, Option<String>>(1)?,
-                        "units": r.get::<_, i64>(2)?,
-                        "cards": r.get::<_, i64>(3)?,
-                        "json_repaired": r.get::<_, i64>(4)? != 0,
-                        "source_sha256": r.get::<_, Option<String>>(5)?,
-                    }))
-                },
-            )
-            .map_err(|e| format!("sampling pack {}: {e}", p.pack_dir))?;
-        let want = json!({
-            "title": p.title, "date": p.date, "units": p.units, "cards": p.cards,
-            "json_repaired": p.json_repaired, "source_sha256": p.source_sha256,
-        });
-        expect_row("pack", &p.pack_dir, &got, &want)?;
-
-        let got_titles: Vec<String> = conn
-            .prepare("SELECT title FROM pack_card_titles WHERE pack_dir = ?1 ORDER BY idx")
-            .and_then(|mut st| {
-                st.query_map([&p.pack_dir], |r| r.get(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|e| format!("sampling card titles {}: {e}", p.pack_dir))?;
-        expect_row("pack_card_titles", &p.pack_dir, &json!(got_titles), &json!(p.card_titles))?;
-        sampled += 1;
-    }
-
-    // --- runs: every column. Keyed by report_file, NOT run_id — same-day
-    // reruns share a run_id (`daily-<date>`), so run_id is ambiguous on real
-    // vaults; the report file is one-per-run.
-    for i in sample_indices(model.runs.len(), SAMPLES_PER_SURFACE) {
-        let r0 = &model.runs[i];
-        let got = conn
-            .query_row(
-                "SELECT run_id, date, succeeded, failed, skipped, blocked, ingested,
-                 pinboard_new, lifecycle_warnings FROM runs WHERE report_file = ?1",
-                [&r0.report_file],
-                |r| {
-                    Ok(json!({
-                        "run_id": r.get::<_, String>(0)?,
-                        "date": r.get::<_, String>(1)?,
-                        "succeeded": r.get::<_, i64>(2)?,
-                        "failed": r.get::<_, i64>(3)?,
-                        "skipped": r.get::<_, i64>(4)?,
-                        "blocked": r.get::<_, i64>(5)?,
-                        "ingested": r.get::<_, i64>(6)?,
-                        "pinboard_new": r.get::<_, i64>(7)?,
-                        "lifecycle_warnings": r.get::<_, i64>(8)?,
-                    }))
-                },
-            )
-            .map_err(|e| format!("sampling run {}: {e}", r0.report_file))?;
-        let want = json!({
-            "run_id": r0.run_id, "date": r0.date, "succeeded": r0.succeeded,
-            "failed": r0.failed, "skipped": r0.skipped, "blocked": r0.blocked,
-            "ingested": r0.ingested, "pinboard_new": r0.pinboard_new,
-            "lifecycle_warnings": r0.lifecycle_warnings,
-        });
-        expect_row("run", &r0.report_file, &got, &want)?;
-        sampled += 1;
-    }
-
-    // --- claims: every column + ordered source list ---
-    for i in sample_indices(model.claims.len(), SAMPLES_PER_SURFACE) {
-        let c = &model.claims[i];
-        let n: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM claims WHERE claim_id = ?1 AND claim = ?2
-                 AND status = ?3 AND coalesce(claim_key,'') = coalesce(?4,'')
-                 AND coalesce(theme,'') = coalesce(?5,'')
-                 AND coalesce(strength,'') = coalesce(?6,'')
-                 AND coalesce(run_id,'') = coalesce(?7,'')
-                 AND coalesce(run_date,'') = coalesce(?8,'')
-                 AND coalesce(lane,'') = coalesce(?9,'')",
-                (
-                    &c.claim_id,
-                    &c.claim,
-                    enum_str(&c.status),
-                    &c.claim_key,
-                    &c.theme,
-                    &c.strength,
-                    &c.run_id,
-                    &c.run_date,
-                    &c.lane,
-                ),
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("sampling claim {}: {e}", c.claim_id))?;
-        if n == 0 {
-            return Err(format!("claim {} missing or diverges", c.claim_id));
+    let rebuilt = read_index_sqlite_at(path)?;
+    if rebuilt != *model {
+        first_diff("sources", &rebuilt.sources, &model.sources)?;
+        first_diff("packs", &rebuilt.packs, &model.packs)?;
+        first_diff("claims", &rebuilt.claims, &model.claims)?;
+        first_diff("runs", &rebuilt.runs, &model.runs)?;
+        for (name, differs, got, want) in [
+            (
+                "totals",
+                rebuilt.totals != model.totals,
+                serde_json::to_string(&rebuilt.totals).unwrap_or_default(),
+                serde_json::to_string(&model.totals).unwrap_or_default(),
+            ),
+            (
+                "ops",
+                rebuilt.ops != model.ops,
+                serde_json::to_string(&rebuilt.ops).unwrap_or_default(),
+                serde_json::to_string(&model.ops).unwrap_or_default(),
+            ),
+        ] {
+            if differs {
+                return Err(format!(
+                    "reconstructed index diverges in {name}:\n  sqlite: {got}\n  model:  {want}"
+                ));
+            }
         }
-        let got_sources: Vec<String> = conn
-            .prepare("SELECT sha256 FROM claim_sources WHERE claim_id = ?1 ORDER BY rowid")
-            .and_then(|mut st| {
-                st.query_map([&c.claim_id], |r| r.get(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|e| format!("sampling claim sources {}: {e}", c.claim_id))?;
-        // claim_id is NOT unique on real vaults (a claim can appear in both
-        // the durable and caveated lanes) — compare the AGGREGATE source list
-        // across every model row sharing this id, in model order (insertion
-        // order preserves it).
-        let want_sources: Vec<&String> = model
-            .claims
-            .iter()
-            .filter(|other| other.claim_id == c.claim_id)
-            .flat_map(|other| other.sources.iter())
-            .collect();
-        expect_row("claim_sources", &c.claim_id, &json!(got_sources), &json!(want_sources))?;
-        sampled += 1;
+        return Err("reconstructed index diverges in header fields".into());
+    }
+    let rebuilt_evidence = read_evidence_sqlite_at(path)?;
+    match (rebuilt_evidence.as_ref(), evidence) {
+        (Some(a), Some(b)) if a == b => {}
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            for (name, differs) in [
+                ("cards", a.cards != b.cards),
+                ("units", a.units != b.units),
+                ("warnings", a.warnings != b.warnings),
+            ] {
+                if differs {
+                    return Err(format!("reconstructed evidence diverges in {name}"));
+                }
+            }
+            return Err("reconstructed evidence diverges in header fields".into());
+        }
+        _ => return Err("reconstructed evidence presence diverges".into()),
     }
 
-    if let Some(ev) = evidence {
-        // --- cards: every column ---
-        for i in sample_indices(ev.cards.len(), SAMPLES_PER_SURFACE) {
-            let c = &ev.cards[i];
-            let got = conn
-                .query_row(
-                    "SELECT pack_dir, source_sha256, source_title, title, content, unit_type,
-                     cited_unit_ids FROM cards WHERE id = ?1",
-                    [&c.id],
-                    |r| {
-                        Ok(json!({
-                            "pack_dir": r.get::<_, String>(0)?,
-                            "source_sha256": r.get::<_, Option<String>>(1)?,
-                            "source_title": r.get::<_, String>(2)?,
-                            "title": r.get::<_, String>(3)?,
-                            "content": r.get::<_, String>(4)?,
-                            "unit_type": r.get::<_, Option<String>>(5)?,
-                            "cited_unit_ids": r.get::<_, String>(6)?,
-                        }))
-                    },
-                )
-                .map_err(|e| format!("sampling card {}: {e}", c.id))?;
-            let want = json!({
-                "pack_dir": c.pack_dir, "source_sha256": c.source_sha256,
-                "source_title": c.source_title, "title": c.title, "content": c.content,
-                "unit_type": c.unit_type,
-                "cited_unit_ids": serde_json::to_string(&c.cited_unit_ids).unwrap_or_else(|_| "[]".into()),
-            });
-            expect_row("card", &c.id, &got, &want)?;
-            sampled += 1;
-        }
-        // --- units: every column ---
-        for i in sample_indices(ev.units.len(), SAMPLES_PER_SURFACE) {
-            let u = &ev.units[i];
-            let got = conn
-                .query_row(
-                    "SELECT pack_dir, source_sha256, source_title, unit_id, text, quote, line,
-                     attribution, modality FROM units WHERE id = ?1",
-                    [&u.id],
-                    |r| {
-                        Ok(json!({
-                            "pack_dir": r.get::<_, String>(0)?,
-                            "source_sha256": r.get::<_, Option<String>>(1)?,
-                            "source_title": r.get::<_, String>(2)?,
-                            "unit_id": r.get::<_, String>(3)?,
-                            "text": r.get::<_, String>(4)?,
-                            "quote": r.get::<_, String>(5)?,
-                            "line": r.get::<_, Option<i64>>(6)?,
-                            "attribution": r.get::<_, String>(7)?,
-                            "modality": r.get::<_, String>(8)?,
-                        }))
-                    },
-                )
-                .map_err(|e| format!("sampling unit {}: {e}", u.id))?;
-            let want = json!({
-                "pack_dir": u.pack_dir, "source_sha256": u.source_sha256,
-                "source_title": u.source_title, "unit_id": u.unit_id, "text": u.text,
-                "quote": u.quote, "line": u.line, "attribution": u.attribution,
-                "modality": u.modality,
-            });
-            expect_row("unit", &u.id, &got, &want)?;
-            sampled += 1;
-        }
-    }
-
+    // `sampled` now reports FULLY-compared rows (the equality pass covers
+    // every row, not a sample).
+    let sampled =
+        parity.sources + parity.packs + parity.claims + parity.runs + parity.cards + parity.units;
     Ok(ShadowParity { sampled, ..parity })
 }
 
@@ -1474,12 +1668,21 @@ mod tests {
     }
 
     #[test]
-    fn sample_indices_are_bounded_and_deterministic() {
-        assert!(sample_indices(0, 20).is_empty());
-        assert_eq!(sample_indices(3, 20), vec![0, 1, 2]);
-        let s = sample_indices(1000, 20);
-        assert_eq!(s.len(), 20);
-        assert!(s.windows(2).all(|w| w[0] < w[1]));
-        assert!(*s.last().unwrap() < 1000);
+    fn readers_reconstruct_models_identically() {
+        let tmp = test_dir();
+        let m = model();
+        let ev = evidence();
+        let db = tmp.path().join("candidate.sqlite");
+        build_into(&db, &m, Some(&ev)).unwrap();
+        // The stage-4 serving readers must round-trip PartialEq-identically.
+        assert_eq!(read_index_sqlite_at(&db).unwrap(), m);
+        assert_eq!(read_evidence_sqlite_at(&db).unwrap(), Some(ev));
+
+        // An evidence-less build reconstructs as legitimately-absent.
+        let db2 = tmp.path().join("no-evidence.sqlite");
+        build_into(&db2, &m, None).unwrap();
+        assert_eq!(read_evidence_sqlite_at(&db2).unwrap(), None);
+        assert_eq!(read_index_sqlite_at(&db2).unwrap(), m);
     }
+
 }

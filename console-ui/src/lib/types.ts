@@ -409,6 +409,9 @@ export interface SettingsPayload {
    * the server-computed age. Null when no index is built yet. */
   built_at: string | null;
   run_id: string | null;
+  /** Stage-4 observation window: which store served the model —
+   * 'sqlite' or 'json' (the legacy fallback). */
+  serving_backend?: string;
   age_seconds: number | null;
   counts: SettingsCounts | null;
   /** LIVE queued backlog (01-Raw walk at serve time) — the authoritative-now
@@ -536,6 +539,18 @@ export interface IndexModel {
   /** Live-server overlay: the tool-loop agent serves /api/ask. The SPA
    * pre-generates a chat id and polls the progress feed from turn 1. */
   ask_agent?: boolean;
+  /** Live-server overlay (stage 4): which store the model was served from —
+   * 'sqlite' (the read-model shadow) or 'json' (the legacy fallback).
+   * Absent in static snapshots. */
+  serving_backend?: string;
+  /** Live-server overlay: the last sqlite load failure, null when healthy.
+   * Non-null drives the repair banner (rebuild button). */
+  sqlite_error?: string | null;
+  /** Live-server overlay: the portal-triggered projection rebuild state. */
+  index_rebuild?: {
+    running: boolean;
+    last?: { ok?: boolean; exit?: number | null; error?: string; stderr_tail?: string } | null;
+  };
   schema: string;
   date: string;
   /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the

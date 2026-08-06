@@ -750,6 +750,13 @@ export const en = {
   'system.vaultRoot': 'vault',
   'system.schema': 'index schema',
   'system.indexDate': 'index date',
+  'indexHealth.error':
+    'Knowledge index store failed to load — serving the JSON fallback. Data stays correct; search relevance may degrade.',
+  'indexHealth.rebuild': 'Rebuild index',
+  'indexHealth.rebuilding': 'Rebuilding the index store…',
+  'indexHealth.rebuildFailed': 'Rebuild failed: {err}',
+  'indexHealth.rebuildDone': 'Rebuild finished — data refreshes on the next poll.',
+  'system.servingBackend': 'serving backend',
   'system.builtAt': 'built',
   'system.runId': 'run id',
   'system.counts': 'counts',

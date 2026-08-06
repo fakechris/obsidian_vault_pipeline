@@ -220,6 +220,28 @@ export async function startRunNow(job: string): Promise<void> {
   }
 }
 
+/** Trigger the sqlite-repair projection rebuild (`ovp2 index` under the
+ * hood: JSON + shadow + whole-model parity). 409 = already running. */
+export async function startIndexRebuild(): Promise<void> {
+  const resp = await fetch('/api/index/rebuild', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!resp.ok && resp.status !== 202) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `rebuild failed (${resp.status})`);
+  }
+}
+
+export interface IndexRebuildStatus {
+  running: boolean;
+  last?: { ok?: boolean; exit?: number | null; error?: string; stderr_tail?: string } | null;
+}
+export function fetchIndexRebuildStatus(): Promise<IndexRebuildStatus> {
+  return fetchJson<IndexRebuildStatus>('/api/index/rebuild/status');
+}
+
 /** LLM provider config (a GUI over .ovp/providers.toml; secrets masked). */
 export interface ProvidersPayload {
   env: Record<string, string>;

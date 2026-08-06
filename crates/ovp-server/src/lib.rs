@@ -296,6 +296,19 @@ struct AppState {
     evidence: RwLock<Cached<EvidenceModel>>,
     /// Folded crystal-ledger projections — see [`CrystalCache`].
     crystal: RwLock<CrystalCache>,
+    /// Which store the LAST model load actually served — surfaced on
+    /// /api/model as `serving_backend` so the stage-4 observation window
+    /// has a visible signal (desktop swallows stderr, so the fallback
+    /// warning alone is invisible in the GUI).
+    serving_backend: RwLock<&'static str>,
+    /// The last sqlite load FAILURE (None after a healthy load) — the
+    /// portal's repair banner reads this; once the JSON fallback is retired
+    /// this is the difference between "silently degraded" and "the operator
+    /// was told and offered the rebuild button".
+    sqlite_error: RwLock<Option<String>>,
+    /// The one in-flight portal-triggered projection rebuild (repair flow):
+    /// double-click protection + last-outcome surface, mirroring ManualRun.
+    index_rebuild: Arc<std::sync::Mutex<IndexRebuild>>,
     /// Bilingual sidecars for `/api/source/:sha` — `cards_zh.json` alone is
     /// over 10 MB on the live vault and was parsed from disk on EVERY source
     /// request; same mtime-keyed reload as the model.
@@ -358,6 +371,15 @@ struct AppState {
     _source_work_worker_lock: Option<ovp_intake::RunLock>,
     /// True when this process runs the background source-work worker.
     source_work_worker_here: bool,
+}
+
+/// State of the portal-triggered projection rebuild (the sqlite repair
+/// flow: `ovp2 index` rebuilds JSON + shadow from the ledgers and packs).
+#[derive(Default)]
+struct IndexRebuild {
+    running: bool,
+    /// Last finished rebuild: `{ok, exit, finished, stderr_tail}`.
+    last: Option<serde_json::Value>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -516,35 +538,92 @@ impl AppState {
     /// `daily` process rebuilding the index is picked up on the next request
     /// — the portal is never stuck on the startup snapshot.
     fn current_model(&self) -> Option<Arc<IndexModel>> {
-        let path = self.index_path();
-        freshen(&self.model, &path, || read_index(&self.vault_root).ok())
+        let stamp = self.projection_stamp();
+        freshen_with(&self.model, &stamp, || self.load_model_projection())
     }
 
-    /// The cached evidence sidecar, same mtime-keyed auto-reload as the model
-    /// (keyed on `evidence.json`). Legitimately absent on pre-M31 vaults; a
-    /// missing file caches `None` without re-reading every request, yet
-    /// reloads the instant one appears.
+    /// The cached evidence sidecar, same stamp-keyed auto-reload as the
+    /// model. Legitimately absent on pre-M31 vaults; a missing file caches
+    /// `None` without re-reading every request, yet reloads the instant one
+    /// appears.
     fn current_evidence(&self) -> Option<Arc<EvidenceModel>> {
-        let path = self.evidence_path();
-        freshen(&self.evidence, &path, || {
-            read_evidence(&self.vault_root).ok()
-        })
+        let stamp = self.projection_stamp();
+        freshen_with(&self.evidence, &stamp, || self.load_evidence_projection())
+    }
+
+    /// Freshness stamp for the serving projections: the NEWEST of the sqlite
+    /// shadow and the JSON files — whichever store a rebuild touched last
+    /// invalidates the cache, in both backends and through fallback flips.
+    fn projection_stamp(&self) -> Option<SystemTime> {
+        let db = ovp_index::sqlite::sqlite_path(&self.vault_root)
+            .ok()
+            .and_then(|p| mtime_of(&p));
+        let json = mtime_of(&self.index_path()).max(mtime_of(&self.evidence_path()));
+        db.max(json)
+    }
+
+    /// True when the sqlite shadow is at least as new as the JSON files —
+    /// a JSON-only rebuild (portal tag curation calls `rebuild_index_now`,
+    /// which does not re-shadow) must serve the NEWER JSON, never a valid
+    /// but older shadow generation.
+    fn sqlite_is_newest(&self) -> bool {
+        let db = ovp_index::sqlite::sqlite_path(&self.vault_root)
+            .ok()
+            .and_then(|p| mtime_of(&p));
+        let json = mtime_of(&self.index_path()).max(mtime_of(&self.evidence_path()));
+        match (db, json) {
+            (Some(db), Some(json)) => db >= json,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// Stage-4 loader: the sqlite read-model is the serving store (operator
+    /// decision 2026-08-06 — direct switch) WHEN it is the newest
+    /// generation; the JSON projection serves otherwise and remains the
+    /// fallback until the observation window closes. `OVP_INDEX_BACKEND=json`
+    /// forces the old path.
+    fn load_model_projection(&self) -> Option<IndexModel> {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
+            match ovp_index::sqlite::read_index_sqlite(&self.vault_root) {
+                Ok(model) => {
+                    *self.serving_backend.write().unwrap() = "sqlite";
+                    *self.sqlite_error.write().unwrap() = None;
+                    return Some(model);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: sqlite read-model unavailable ({e}); serving the JSON fallback"
+                    );
+                    *self.sqlite_error.write().unwrap() = Some(e);
+                }
+            }
+        }
+        *self.serving_backend.write().unwrap() = "json";
+        read_index(&self.vault_root).ok()
+    }
+
+    fn load_evidence_projection(&self) -> Option<EvidenceModel> {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
+            match ovp_index::sqlite::read_evidence_sqlite(&self.vault_root) {
+                // Ok(None) = the shadow generation was built without an
+                // evidence model — mirror the JSON absent case, no fallback.
+                Ok(evidence) => return evidence,
+                Err(e) => eprintln!(
+                    "warning: sqlite evidence unavailable ({e}); serving the JSON fallback"
+                ),
+            }
+        }
+        read_evidence(&self.vault_root).ok()
     }
 
     /// Force-reload both caches from disk regardless of mtime. `/api/refresh`
     /// keeps this for scripts; with mtime auto-reload it is now optional
     /// (every accessor already freshens on its own).
     fn refresh_model(&self) {
-        force_reload(
-            &self.model,
-            &self.index_path(),
-            read_index(&self.vault_root).ok(),
-        );
-        force_reload(
-            &self.evidence,
-            &self.evidence_path(),
-            read_evidence(&self.vault_root).ok(),
-        );
+        let stamp = self.projection_stamp();
+        force_reload_with(&self.model, stamp, self.load_model_projection());
+        force_reload_with(&self.evidence, stamp, self.load_evidence_projection());
         force_reload(
             &self.last_run,
             &self.last_run_path(),
@@ -643,34 +722,51 @@ fn freshen<T>(
     path: &Path,
     load: impl FnOnce() -> Option<T>,
 ) -> Option<Arc<T>> {
-    let disk = mtime_of(path);
+    let stamp = mtime_of(path);
+    freshen_with(cache, &stamp, load)
+}
+
+/// [`freshen`] against a PRE-COMPUTED stamp — for caches whose freshness
+/// spans more than one file (the serving projections watch both the sqlite
+/// shadow and the JSON fallback).
+fn freshen_with<T>(
+    cache: &RwLock<Cached<T>>,
+    stamp: &Option<SystemTime>,
+    load: impl FnOnce() -> Option<T>,
+) -> Option<Arc<T>> {
     {
         let guard = cache.read().unwrap();
-        if guard.loaded && guard.stamp == disk {
+        if guard.loaded && guard.stamp == *stamp {
             return guard.data.clone();
         }
     }
     let mut guard = cache.write().unwrap();
     // Re-check under the write lock: another thread may have just reloaded.
-    // Re-stat too — the file could have changed again between the read
-    // guard's stat and acquiring the write lock.
-    let disk = mtime_of(path);
-    if guard.loaded && guard.stamp == disk {
+    if guard.loaded && guard.stamp == *stamp {
         return guard.data.clone();
     }
     let data = load().map(Arc::new);
     *guard = Cached {
         loaded: true,
-        stamp: disk,
+        stamp: *stamp,
         data: data.clone(),
     };
     data
 }
 
+/// `OVP_INDEX_BACKEND`: `sqlite` (the default — operator decision
+/// 2026-08-06, direct switch) or `json` to force the legacy path.
+fn index_backend_is_sqlite() -> bool {
+    !std::env::var("OVP_INDEX_BACKEND").is_ok_and(|v| v == "json")
+}
+
 /// Force-store a freshly-read value with the file's current mtime, bypassing
 /// the freshness check. Used by `/api/refresh`.
 fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
-    let stamp = mtime_of(path);
+    force_reload_with(cache, mtime_of(path), data);
+}
+
+fn force_reload_with<T>(cache: &RwLock<Cached<T>>, stamp: Option<SystemTime>, data: Option<T>) {
     *cache.write().unwrap() = Cached {
         loaded: true,
         stamp,
@@ -734,6 +830,9 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
         crystal: RwLock::new(CrystalCache::default()),
+        serving_backend: RwLock::new("unloaded"),
+        sqlite_error: RwLock::new(None),
+        index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
         cards_zh: RwLock::new(Cached::default()),
         claims_zh: RwLock::new(Cached::default()),
         last_run: RwLock::new(Cached::default()),
@@ -839,6 +938,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             if p == "/api/tags/decision"
                 || p == "/api/publish"
                 || p == "/api/schedule/run"
+                || p == "/api/index/rebuild"
                 || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
@@ -970,6 +1070,8 @@ fn dispatch(
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Get, "/api/index/rebuild/status") => handle_index_rebuild_status(state),
+        (Method::Post, "/api/index/rebuild") => handle_index_rebuild_start(state),
         (Method::Get, "/api/schedule") => handle_schedule(state),
         (Method::Post, "/api/schedule/features") => handle_schedule_features(state, body),
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
@@ -1664,6 +1766,71 @@ fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>>
 
 /// Jobs the portal may trigger — the registry's built-ins.
 const MANUAL_RUN_JOBS: &[&str] = &["daily", "crystallize"];
+
+fn handle_index_rebuild_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+    let body = serde_json::json!({"running": rebuild.running, "last": rebuild.last});
+    json_response(200, &body.to_string())
+}
+
+/// The sqlite REPAIR flow: rebuild every projection (JSON + shadow, with the
+/// whole-model parity gate) by running `ovp2 index` as a child — the same
+/// battle-tested path daily uses, never a second in-process implementation.
+/// The shadow's verify-then-promote contract means a failed rebuild leaves
+/// last-good untouched; success is picked up by the mtime stamps on the next
+/// request, no cache poke needed.
+fn handle_index_rebuild_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.running {
+            return json_response(
+                409,
+                r#"{"error":"an index rebuild is already in progress","code":"rebuild_running"}"#,
+            );
+        }
+        slot.running = true;
+    }
+    let bin = state
+        .ovp2_bin
+        .clone()
+        .or_else(|| std::env::current_exe().ok());
+    let Some(bin) = bin else {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        return json_response(500, r#"{"error":"cannot resolve the ovp2 binary"}"#);
+    };
+    let vault_root = state.vault_root.clone();
+    let slot = Arc::clone(&state.index_rebuild);
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&bin)
+            .args(["index", "--vault-root", &vault_root.display().to_string()])
+            .output();
+        let last = match out {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let tail: String = stderr
+                    .lines()
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::json!({
+                    "ok": out.status.success(),
+                    "exit": out.status.code(),
+                    "stderr_tail": tail,
+                })
+            }
+            Err(e) => serde_json::json!({"ok": false, "error": format!("spawn: {e}")}),
+        };
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        slot.last = Some(last);
+    });
+    json_response(202, r#"{"started":true}"#)
+}
 
 fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let job = if body.trim().is_empty() {
@@ -2437,6 +2604,28 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // Agent-mode discovery: the SPA pre-generates a session id and polls
         // /api/ask/progress from turn 1 only when the agent path is live.
         obj.insert("ask_agent".into(), serde_json::json!(state.ask_agent));
+        // Stage-4 observability: which store the model actually came from
+        // (sqlite | json | unloaded). The desktop swallows stderr, so the
+        // fallback warning alone is invisible — this field is the visible
+        // signal the JSON-retirement observation window reads.
+        obj.insert(
+            "serving_backend".into(),
+            serde_json::json!(*state.serving_backend.read().unwrap()),
+        );
+        // Repair surface: the last sqlite failure (null when healthy) and
+        // whether a portal-triggered rebuild is in flight — the SPA banner
+        // derives entirely from these plus serving_backend.
+        obj.insert(
+            "sqlite_error".into(),
+            serde_json::json!(*state.sqlite_error.read().unwrap()),
+        );
+        {
+            let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+            obj.insert(
+                "index_rebuild".into(),
+                serde_json::json!({"running": rebuild.running, "last": rebuild.last}),
+            );
+        }
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -3460,6 +3649,9 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // freshness.
         "built_at": model.as_deref().and_then(|m| m.built_at.clone()),
         "run_id": model.as_deref().and_then(|m| m.run_id.clone()),
+        // Stage-4 observation window: which store served the model. Reading
+        // it AFTER current_model() above means it reflects this very load.
+        "serving_backend": *state.serving_backend.read().unwrap(),
         "age_seconds": model.as_deref().and_then(|m| age_seconds(m.built_at.as_deref())),
         "counts": model.as_deref().map(|m| serde_json::json!({
             "sources": m.totals.sources,
@@ -4993,6 +5185,9 @@ mod tests {
             model: RwLock::new(Cached::default()),
             evidence: RwLock::new(Cached::default()),
             crystal: RwLock::new(CrystalCache::default()),
+            serving_backend: RwLock::new("unloaded"),
+            sqlite_error: RwLock::new(None),
+            index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
             cards_zh: RwLock::new(Cached::default()),
             claims_zh: RwLock::new(Cached::default()),
             last_run: RwLock::new(Cached::default()),
@@ -7450,6 +7645,59 @@ mod tests {
     }
 
     // ---- mtime-based cache auto-reload (fix/serve-mtime-reload) ----
+
+    #[test]
+    fn serves_from_sqlite_shadow_even_without_json() {
+        // Stage 4: the sqlite shadow is the serving store. Keep the test
+        // cache out of the developer's real platform cache (OnceLock,
+        // first-call-wins; other tests resolve misses to the JSON fallback
+        // either way).
+        ovp_index::sqlite::override_cache_base(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/stage4-tests-server"),
+        );
+        let root = temp_root("sqlite-serving");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let model = index_dated("2026-03-03");
+        let evidence = evidence_dated("2026-03-03");
+        ovp_index::write_index(&vault, &model).unwrap();
+        ovp_index::write_evidence(&vault, &evidence).unwrap();
+        // Round-trip through the JSON readers so the shadow is built from
+        // the EXACT on-disk generation (write normalizes formatting).
+        let model = read_index(&vault).unwrap();
+        let evidence = ovp_index::read_evidence(&vault).unwrap();
+        ovp_index::sqlite::write_shadow(&vault, &model, Some(&evidence)).unwrap();
+
+        // Remove the JSON projections: only the shadow can serve now.
+        std::fs::remove_file(vault.join(".ovp/index/index.json")).unwrap();
+        std::fs::remove_file(vault.join(".ovp/index/evidence.json")).unwrap();
+
+        let st = state(vault.clone(), None);
+        assert_eq!(st.current_model().expect("model from sqlite").date, "2026-03-03");
+        assert_eq!(
+            st.current_evidence().expect("evidence from sqlite").date,
+            "2026-03-03"
+        );
+        assert_eq!(*st.serving_backend.read().unwrap(), "sqlite");
+
+        // A JSON-only rebuild (the tag-curation path re-writes index.json
+        // without re-shadowing) must flip serving to the NEWER JSON — a
+        // valid but OLDER shadow generation must not shadow it.
+        ovp_index::write_index(&vault, &index_dated("2026-04-04")).unwrap();
+        set_mtime(
+            &vault.join(".ovp/index/index.json"),
+            SystemTime::now() + Duration::from_secs(5),
+        );
+        assert_eq!(
+            st.current_model().expect("model from json").date,
+            "2026-04-04",
+            "newer JSON must win over an older valid shadow"
+        );
+        assert_eq!(*st.serving_backend.read().unwrap(), "json");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A minimal index whose `date` field labels the version, so tests can
     /// assert WHICH on-disk model an accessor returned.
