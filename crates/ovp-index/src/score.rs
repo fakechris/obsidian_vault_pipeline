@@ -70,7 +70,10 @@ pub fn lexical_score(query: &str, fields: &[&str]) -> f64 {
     score
 }
 
-fn is_cjk(ch: char) -> bool {
+/// CJK-ideograph range shared by index-side bigram tokenization and the
+/// agent's query-side term expansion — both sides must segment identically
+/// or query bigrams stop matching indexed bigrams.
+pub fn is_cjk(ch: char) -> bool {
     matches!(
         ch as u32,
         0x3400..=0x4DBF

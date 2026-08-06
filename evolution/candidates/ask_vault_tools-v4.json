@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v4",
+  "base_version": "v3",
+  "target_version": "v4",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one recall fix: query-side CJK segmentation. v3 fixed RANKING for mixed-language queries but tokenization still split on whitespace only — an unsegmented Chinese query (the normal way Chinese is typed: no spaces) becomes ONE verbatim substring term that essentially never matches, and the failure is silent (`0 hits, truncated: false`, indistinguishable from an honest miss). The only mitigation was a prompt instruction asking the model to pre-segment its queries. Fix: `tokenize_search_terms` expands CJK-ideograph runs into overlapping character bigrams, mirroring the index-side granularity of `ovp_index::score::tokenize_for_search` (the legacy ask path's tokenizer, so both paths now segment identically); embedded Latin runs stay whole (URLs, paths, foo-bar identifiers keep punctuation); punctuation-only fragments (《》 around a run) are dropped; `search_source_chunks` adopts the same tokenizer so a query that found a source drills in with identical terms; MAX_SEARCH_TERMS rises 8→16 because bigram expansion inflates term counts (a 9-char run is already 8 bigrams). Predicted: unsegmented and partially-segmented Chinese queries recall where they structurally could not; Latin-only queries tokenize byte-identically to v3.",
+  "predicted_delta": {
+    "coverage": "fixture replay (falsifiable now): every unsegmented-CJK fixture query that recalls 0 hits under v3 recalls >=1 correct hit under v4, across all three term tools (search_evidence, search_fulltext, search_source_chunks) — 0 fixture regressions allowed on the v2/v3 replay set. Live gate (phase-3 qrels of docs/design/storage-read-model.md): CJK Recall@20 >= 1.3x the v3 substring baseline on the mixed中英 qrels set, else rollback.",
+    "operational_reliability": "ask transcripts on the live vault: zero-hit tool rounds for CJK-containing queries drop >= 50% vs the trailing 2-week v3 baseline; query_terms_truncated appears on < 5% of rounds (cap correctly sized); InvalidArgs bounces do not rise (punctuation-only rejection replaces silent empty passes, not valid queries)."
+  },
+  "guardrails": {
+    "latin_queries_unchanged": "tokens without CJK chars take the exact v3 path (whole lowercased whitespace token, punctuation preserved) — existing Latin ranking/cursor fixtures pass unmodified",
+    "short_cjk_terms_unchanged": "1- and 2-char CJK terms are their own bigram/char — the v3 U+3000 ideographic-space fixture passes unmodified",
+    "ranking_semantics_unchanged": "language_grouped_score still scores best-group fraction; bigrams land in the CJK group, so grouping semantics are identical, only term granularity is finer",
+    "cursor_honesty": "fulltext cursor fingerprints hash the term list, so a v3-issued cursor over a CJK query bounces with the explicit 'different query' message — an honest invalidation, never a silently wrong walk",
+    "term_cap_honest": "queries past 16 distinct terms soft-truncate AND surface it: results carry query_terms_truncated=true plus query_terms_used, so a zero-hit result over a capped query cannot read as a clean miss; duplicates do not set the flag",
+    "boundary_punctuation": "CJK separators glued to a Latin word (手写、transformer) trim off segment EDGES only — internal and ASCII punctuation survive, so URLs, paths, foo-bar, and c++ tokenize byte-identically to v3"
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures: unsegmented bilingual query 手写transformer求职笔记 → [手写, transformer, 求职, 职笔, 笔记]; punctuation dropping 《转型》 foo-bar → [转型, foo-bar]; v3 U+3000 parity fixture unmodified; 16-term soft-truncation (17th term dropped, run succeeds, query_terms_truncated=true + query_terms_used surfaced); 18-ideograph run caps at 16 bigrams with the flag set; duplicate-only overflow stays flagless; boundary-punctuation fixture 手写、transformer。/c++/URL; all prior v2/v3 fixtures (flood ranking, cursor walk, budgets, frontmatter, language-grouped ranking) pass unmodified. Live qrels for CJK recall quality are the phase-3 gate of docs/design/storage-read-model.md.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert tokenize_search_terms to the whitespace-only split and MAX_SEARCH_TERMS to 8 — query-side tokenization only, no persisted state; stale cursors self-invalidate via fingerprint mismatch in both directions.",
+  "ablation_required": false
+}
