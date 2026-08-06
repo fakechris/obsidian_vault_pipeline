@@ -34,7 +34,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 TRIPLE="${1:-$(rustc -vV | awk '/^host:/{print $2}')}"
-FEATURES="${OVP2_SIDECAR_FEATURES:-anthropic,pinboard-live,web-fetch-live,github-live}"
+FEATURES="${OVP2_SIDECAR_FEATURES:-anthropic,pinboard-live,web-fetch-live,github-live,embed}"
 OUT_DIR="apps/desktop/src-tauri/binaries"
 OUT="$OUT_DIR/ovp2-${TRIPLE}"
 

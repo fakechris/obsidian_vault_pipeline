@@ -2626,6 +2626,35 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                 serde_json::json!({"running": rebuild.running, "last": rebuild.last}),
             );
         }
+        // Splice claim_zh onto EVERY claim row (fresh-by-en_hash semantics).
+        // The theme-pages lookup only covers claims cited by real community
+        // pages, so Unclassified claims read "0/N 中文就绪" even when their
+        // translations exist on disk — row-level splice makes the zh surface
+        // independent of theme membership.
+        if let Some((claims_zh, rows)) = state
+            .current_claims_zh()
+            .zip(obj.get_mut("claims").and_then(|c| c.as_array_mut()))
+        {
+            for row in rows {
+                let Some(claim_obj) = row.as_object_mut() else {
+                    continue;
+                };
+                let en = claim_obj
+                    .get("claim")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let key = claim_obj
+                    .get("claim_key")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| claim_obj.get("claim_id").and_then(|v| v.as_str()))
+                    .unwrap_or_default()
+                    .to_string();
+                if let Some(zh) = claims_zh.get_fresh(&key, &en) {
+                    claim_obj.insert("claim_zh".into(), serde_json::json!(zh));
+                }
+            }
+        }
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -7645,6 +7674,77 @@ mod tests {
     }
 
     // ---- mtime-based cache auto-reload (fix/serve-mtime-reload) ----
+
+    #[test]
+    fn model_splices_claim_zh_on_every_row_including_unclassified() {
+        let root = temp_root("claim-zh-splice");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let mut model = index_dated("2026-08-06");
+        model.claims = vec![
+            ovp_index::ClaimRow {
+                claim_id: "m1-01".into(),
+                claim_key: Some("ck-fresh".into()),
+                claim: "Agents need memory".into(),
+                theme: Some("Unclassified".into()),
+                status: ovp_index::ClaimStatus::Durable,
+                sources: vec![],
+                strength: None,
+                run_id: None,
+                run_date: None,
+                lane: None,
+            },
+            ovp_index::ClaimRow {
+                claim_id: "m1-02".into(),
+                claim_key: Some("ck-stale".into()),
+                claim: "This text was edited after translation".into(),
+                theme: Some("Unclassified".into()),
+                status: ovp_index::ClaimStatus::Caveated,
+                sources: vec![],
+                strength: None,
+                run_id: None,
+                run_date: None,
+                lane: None,
+            },
+        ];
+        ovp_index::write_index(&vault, &model).unwrap();
+
+        let mut zh = ovp_memory::bilingual::ClaimsZhFile::default();
+        let hash =
+            |en: &str| ovp_intake::vaultops::hex_sha256(en.trim().as_bytes())[..16].to_string();
+        zh.entries.insert(
+            "ck-fresh".into(),
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "智能体需要记忆".into(),
+                en_hash: hash("Agents need memory"),
+                model: None,
+                translated_at: None,
+            },
+        );
+        // Stale: en_hash no longer matches the live claim text — must NOT
+        // splice (fresh-by-en_hash is the honesty contract).
+        zh.entries.insert(
+            "ck-stale".into(),
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "过期翻译".into(),
+                en_hash: hash("some OLD text"),
+                model: None,
+                translated_at: None,
+            },
+        );
+        zh.save(&vault).unwrap();
+
+        let st = state(vault.clone(), None);
+        let body = body_json(handle_model(&st));
+        let claims = body["claims"].as_array().expect("claims");
+        // Unclassified membership is irrelevant: the splice is row-level,
+        // not routed through theme-page citation.
+        assert_eq!(claims[0]["claim_zh"], serde_json::json!("智能体需要记忆"));
+        assert!(claims[1].get("claim_zh").is_none(), "stale zh must not splice");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn serves_from_sqlite_shadow_even_without_json() {
