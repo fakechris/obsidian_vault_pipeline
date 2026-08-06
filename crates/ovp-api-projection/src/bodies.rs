@@ -266,7 +266,12 @@ pub fn claim_body_with_lineage(
         .and_then(|m| m.get(&rec.claim_key).or_else(|| m.get(&rec.claim_id)));
 
     let mut body = json!({
+        // Historical field name: the endpoint's public `claim_id` has always
+        // carried the CANONICAL claim_key (kept for client compat);
+        // `claim_key` states it explicitly so key-based consumers (the zh
+        // lookup rule shared with /api/model) need no folklore.
         "claim_id": rec.claim_key,
+        "claim_key": rec.claim_key,
         "claim": rec.claim,
         "theme": rec.theme,
         "strength": format!("{:?}", rec.strength).to_lowercase(),

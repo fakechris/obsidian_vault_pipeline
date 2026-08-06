@@ -2585,6 +2585,18 @@ fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// The zh-translation lookup key for a claim JSON object: canonical
+/// `claim_key` when present, else `claim_id` — ONE rule for every endpoint,
+/// or /api/model and /api/claim disagree on whether a translation exists.
+fn claim_zh_lookup_key(obj: &serde_json::Map<String, serde_json::Value>) -> String {
+    obj.get("claim_key")
+        .and_then(|v| v.as_str())
+        .filter(|k| !k.is_empty())
+        .or_else(|| obj.get("claim_id").and_then(|v| v.as_str()))
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     // Overlay the LIVE heartbeat over the baked `ops.last_run` so the SPA banner
     // never reads a stale "running" snapshot baked into index.json.
@@ -2644,12 +2656,7 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                let key = claim_obj
-                    .get("claim_key")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| claim_obj.get("claim_id").and_then(|v| v.as_str()))
-                    .unwrap_or_default()
-                    .to_string();
+                let key = claim_zh_lookup_key(claim_obj);
                 if let Some(zh) = claims_zh.get_fresh(&key, &en) {
                     claim_obj.insert("claim_zh".into(), serde_json::json!(zh));
                 }
@@ -2845,19 +2852,16 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         Some(mut v) => {
             // Rebuildable bilingual projection — authority claim stays English.
             if let Some(obj) = v.as_object_mut() {
-                let key = obj
-                    .get("claim_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                // Same key rule as /api/model (claim_key, else claim_id) —
+                // the two endpoints must agree on whether a zh exists; and
+                // the mtime-cached file, not a per-request disk parse.
+                let key = claim_zh_lookup_key(obj);
                 let en = obj
                     .get("claim")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Ok(zh_file) =
-                    ovp_memory::bilingual::ClaimsZhFile::load(&state.vault_root)
-                {
+                if let Some(zh_file) = state.current_claims_zh() {
                     if let Some(zh) = zh_file.get_fresh(&key, &en) {
                         obj.insert("claim_zh".into(), serde_json::json!(zh));
                     }
@@ -5198,8 +5202,14 @@ mod tests {
     }
 
     fn temp_root(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ovp-server-test-{}-{name}", std::process::id()));
+        // Gitignored repo-local artifact root (never /tmp — repo rule).
+        // Canonicalized: handlers legitimately reject paths containing `..`
+        // (the publish out-dir guard), and static resolution compares
+        // absolute forms.
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/server-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        let base = base.canonicalize().expect("canonicalize test root");
+        let dir = base.join(format!("{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -7674,6 +7684,44 @@ mod tests {
     }
 
     // ---- mtime-based cache auto-reload (fix/serve-mtime-reload) ----
+
+    #[test]
+    fn claim_endpoint_zh_lookup_uses_the_same_key_rule_as_model() {
+        // write_ledger records carry DISTINCT claim_key ("a") and claim_id
+        // ("id-a") — the regression CodeRabbit asked for: both endpoints
+        // must key zh by claim_key first, or /api/model shows a translation
+        // /api/claim/{id} omits.
+        let vault = portal_vault("claim-zh-key", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        let key = v["claim_key"].as_str().expect("claim_key in body").to_string();
+        let en = v["claim"].as_str().expect("claim text").to_string();
+        // The fixture's UNDERLYING record has claim_id "id-a" ≠ claim_key
+        // "a"; the body's public `claim_id` field historically carries the
+        // KEY (see claim_body) — the explicit claim_key field states it.
+        assert_eq!(key, "a");
+        assert!(v.get("claim_zh").is_none(), "no zh yet");
+
+        let mut zh = ovp_memory::bilingual::ClaimsZhFile::default();
+        zh.entries.insert(
+            key,
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "键一致性翻译".into(),
+                en_hash: ovp_intake::vaultops::hex_sha256(en.trim().as_bytes())[..16].to_string(),
+                model: None,
+                translated_at: None,
+            },
+        );
+        zh.save(&vault).unwrap();
+
+        // Fresh state (the zh cache is mtime-keyed; a new file loads clean).
+        let st = state(vault.clone(), None);
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        assert_eq!(v["claim_zh"], serde_json::json!("键一致性翻译"));
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
 
     #[test]
     fn model_splices_claim_zh_on_every_row_including_unclassified() {

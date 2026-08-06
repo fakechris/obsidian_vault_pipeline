@@ -42,10 +42,13 @@ TRIPLE="${1:-$(rustc -vV | awk '/^host:/{print $2}')}"
 # release-desktop.yml — this default never changes shipped DMGs.
 if [ -n "${OVP2_SIDECAR_FEATURES:-}" ]; then
   FEATURES="$OVP2_SIDECAR_FEATURES"
-elif [ "$TRIPLE" = "x86_64-apple-darwin" ]; then
-  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live"
-else
+elif [ "$TRIPLE" = "aarch64-apple-darwin" ]; then
+  # The documented local-staging target gets the embedder by default.
   FEATURES="anthropic,pinboard-live,web-fetch-live,github-live,embed"
+else
+  # Everything else (x86_64-apple-darwin release job, any third-party
+  # triple) keeps the lean set — opt in via OVP2_SIDECAR_FEATURES.
+  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live"
 fi
 OUT_DIR="apps/desktop/src-tauri/binaries"
 OUT="$OUT_DIR/ovp2-${TRIPLE}"
