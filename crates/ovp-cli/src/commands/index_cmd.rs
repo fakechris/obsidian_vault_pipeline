@@ -45,6 +45,32 @@ pub(crate) fn shadow_sqlite(
     }
 }
 
+/// `ovp2 index --verify-sqlite` (stage 3b): re-verify the CURRENT shadow
+/// generation against the CURRENT on-disk JSON projections. Read-only — no
+/// rebuild; a divergence is a HARD error (non-zero exit) because this is the
+/// soak check an operator or cron runs on purpose, unlike the best-effort
+/// build-time shadow.
+pub fn run_verify_sqlite(vault_root: &std::path::Path) -> Result<(), CliError> {
+    let model = read_index(vault_root).map_err(CliError::Io)?;
+    // A PRESENT evidence.json must parse — silently downgrading a corrupt
+    // file to None would let an empty shadow print "parity OK" while the
+    // evidence projection was never verified. Genuinely absent (pre-M31
+    // vault) stays a legitimate None.
+    let evidence = if ovp_index::evidence_path(vault_root).exists() {
+        Some(read_evidence(vault_root).map_err(CliError::Io)?)
+    } else {
+        None
+    };
+    let parity = ovp_index::sqlite::verify_shadow(vault_root, &model, evidence.as_ref())
+        .map_err(|e| CliError::Io(format!("sqlite shadow parity FAILED: {e}")))?;
+    println!(
+        "sqlite shadow parity OK (sources={} packs={} claims={} runs={} cards={} units={} sampled={})",
+        parity.sources, parity.packs, parity.claims, parity.runs, parity.cards, parity.units,
+        parity.sampled
+    );
+    Ok(())
+}
+
 pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
     // Coarse phase lines (flushed) so a large-vault rebuild shows the
     // scan/hash/fold boundaries instead of one silent pause under nohup.
