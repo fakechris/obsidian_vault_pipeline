@@ -281,25 +281,30 @@ impl VaultTools {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("evidence index unavailable: {e}"))
                 })?;
-                // Index-backed lane (v5): fetch generously past the display
-                // limit so pack aggregation and RRF have candidates to fuse;
-                // None (no shadow / stale generation / kill switch) = v4 path.
-                let fts = fts_lane(
-                    &self.vault_root,
-                    &model,
-                    ovp_index::sqlite::FtsSurface::Cards,
-                    &query,
-                    FTS_EVIDENCE_FETCH,
-                )
-                .and_then(|cards| {
-                    fts_lane(
-                        &self.vault_root,
-                        &model,
-                        ovp_index::sqlite::FtsSurface::Units,
-                        &query,
-                        FTS_EVIDENCE_FETCH,
-                    )
-                    .map(|units| EvidenceFtsLane {
+                // Index-backed lane (v5): ONE snapshot reader for both
+                // surfaces; the fts query is built from the SAME capped term
+                // list the scan lane reports as query_terms_used, so a
+                // result can never be driven by a term the payload says was
+                // omitted. Fetch generously past the display limit so pack
+                // aggregation and RRF have candidates. None (no shadow /
+                // stale generation / kill switch) = v4 path.
+                let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    let cards = reader
+                        .fts_search(
+                            ovp_index::sqlite::FtsSurface::Cards,
+                            &capped_query,
+                            FTS_EVIDENCE_FETCH,
+                        )
+                        .ok()?;
+                    let units = reader
+                        .fts_search(
+                            ovp_index::sqlite::FtsSurface::Units,
+                            &capped_query,
+                            FTS_EVIDENCE_FETCH,
+                        )
+                        .ok()?;
+                    Some(EvidenceFtsLane {
                         saturated: cards.len() == FTS_EVIDENCE_FETCH
                             || units.len() == FTS_EVIDENCE_FETCH,
                         cards,
@@ -375,32 +380,35 @@ impl VaultTools {
                 let records = self.cached_records().map_err(|e| {
                     DispatchError::Unavailable(format!("claim ledger unavailable: {e}"))
                 })?;
-                // bm25 rank from the claims FTS surface as (claim_id, status)
-                // pairs — claim_id alone conflates lanes — with status
-                // eligibility applied IN the query before the top-k; deduped
-                // preserving order. None = v4 filter.
+                // bm25 rank from the claims FTS surface as canonical rank
+                // keys (claim_key when present, else claim_id+status) with
+                // status eligibility applied IN the query before the top-k;
+                // deduped preserving order; the fts query uses the SAME
+                // capped term list the scan lane reports. None = v4 filter.
                 let statuses: Vec<&str> = match status.as_deref() {
                     Some(one) => vec![one],
                     None => vec!["durable", "caveated"],
                 };
-                let fts_rank = if fts_lane_open(&self.vault_root, &model) {
-                    ovp_index::sqlite::fts_claims_rank(
-                        &self.vault_root,
-                        &query,
-                        MAX_SEARCH_LIMIT * 2,
-                        &statuses,
-                    )
-                    .ok()
-                    .map(|ranked| {
-                        let mut seen = BTreeSet::new();
-                        ranked
-                            .into_iter()
-                            .filter(|pair| seen.insert(pair.clone()))
-                            .collect::<Vec<_>>()
-                    })
-                } else {
-                    None
-                };
+                let fts_rank = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    reader
+                        .fts_claims_rank(&capped_query, MAX_SEARCH_LIMIT * 2, &statuses)
+                        .ok()
+                        .map(|ranked| {
+                            let mut seen = BTreeSet::new();
+                            ranked
+                                .into_iter()
+                                .map(|hit| {
+                                    claim_rank_key(
+                                        hit.claim_key.as_deref(),
+                                        &hit.claim_id,
+                                        &hit.status,
+                                    )
+                                })
+                                .filter(|key| seen.insert(key.clone()))
+                                .collect::<Vec<_>>()
+                        })
+                });
                 Ok(search_claims_ranked(
                     &model,
                     &records,
@@ -575,7 +583,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings (unspaced Chinese runs auto-expand into character bigrams, so unsegmented Chinese queries work); hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 16 distinct terms only the first 16 are used. When the local search index is available (result lane: fts), card BODIES and unit text/quotes are searched too and relevance fuses with the title ranking — such hits carry matched_via (body/unit) and matched_cards_body, and their matched_terms may be empty (the match lives in text this tool does not echo). Without the index (lane: scan), matching is titles-only. Never searches raw source bodies (use search_fulltext).",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings (unspaced Chinese runs auto-expand into character bigrams, so unsegmented Chinese queries work); hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 16 distinct terms only the first 16 are used. When the local search index is available (result lane: fts), card bodies and unit text/quotes are searched too and relevance fuses with the title ranking — index-lane hits carry matched_via (cards/units — the SURFACE that matched; cards covers title and content without field-level provenance) and matched_cards_fts, and their matched_terms may be empty (the match lives in text this tool does not echo). Without the index (lane: scan), matching is titles-only. Never searches raw source bodies (use search_fulltext).",
             json!({
                 "type": "object",
                 "properties": {
@@ -1003,27 +1011,32 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
 /// can legitimately lag the JSON generation, and serving it would rank
 /// current queries against a previous corpus. Any failure → the exact v4
 /// scan path. Read-only; ask can never write or rebuild the projection.
-fn fts_lane_open(vault_root: &Path, model: &IndexModel) -> bool {
-    if std::env::var("OVP_ASK_FTS").is_ok_and(|v| v == "0") {
-        return false;
-    }
-    ovp_index::sqlite::shadow_generation(vault_root).is_ok_and(|(built_at, run_id)| {
-        built_at == model.built_at.clone().unwrap_or_default()
-            && run_id == model.run_id.clone().unwrap_or_default()
-    })
-}
-
-fn fts_lane(
+fn shadow_reader_for(
     vault_root: &Path,
     model: &IndexModel,
-    surface: ovp_index::sqlite::FtsSurface,
-    query: &str,
-    limit: usize,
-) -> Option<Vec<ovp_index::sqlite::FtsHit>> {
-    if !fts_lane_open(vault_root, model) {
+) -> Option<ovp_index::sqlite::ShadowReader> {
+    if std::env::var("OVP_ASK_FTS").is_ok_and(|v| v == "0") {
         return None;
     }
-    ovp_index::sqlite::fts_search(vault_root, surface, query, limit).ok()
+    // ONE reader = one snapshot: the open fd survives a concurrent
+    // promotion, so the generation check and every surface query in this
+    // tool call see the same file — checking on one connection and
+    // searching on another could straddle a rename.
+    let reader = ovp_index::sqlite::ShadowReader::open(vault_root).ok()?;
+    let (built_at, run_id) = reader.generation().ok()?;
+    let current = built_at == model.built_at.clone().unwrap_or_default()
+        && run_id == model.run_id.clone().unwrap_or_default();
+    current.then_some(reader)
+}
+
+/// The rank identity for one claim row: canonical `claim_key` when the row
+/// has one (the claim-key contract), else the `(claim_id, status)` legacy
+/// fallback — claim_id alone can repeat even within a status.
+fn claim_rank_key(claim_key: Option<&str>, claim_id: &str, status: &str) -> String {
+    match claim_key.filter(|key| !key.is_empty()) {
+        Some(key) => format!("k:{key}"),
+        None => format!("i:{claim_id}:{status}"),
+    }
 }
 
 /// How many FTS rows the evidence lane fetches per surface BEFORE pack
@@ -1131,11 +1144,14 @@ struct PackFtsDetail {
 }
 
 impl PackFtsDetail {
+    /// SURFACE-level provenance: cards_fts indexes title+content and cannot
+    /// say which field matched, so the label names the surface (cards /
+    /// units / cards+units), never claims body-level support.
     fn matched_via(&self) -> &'static str {
         match (!self.card_idxs.is_empty(), self.from_units) {
-            (true, true) => "body+unit",
-            (false, true) => "unit",
-            _ => "body",
+            (true, true) => "cards+units",
+            (false, true) => "units",
+            _ => "cards",
         }
     }
 }
@@ -1309,15 +1325,10 @@ fn search_evidence_fused(
                         })
                         .cloned()
                         .collect();
-                    let matched_via = fts_detail_by_pack
-                        .get(&pack_dir)
-                        .map(|d| d.matched_via())
-                        .unwrap_or("body");
                     let mut hit = Map::new();
                     hit.insert("pack_title".into(), json!(pack.title));
                     hit.insert("matched_cards".into(), json!([] as [&str; 0]));
                     hit.insert("matched_terms".into(), json!(matched_terms));
-                    hit.insert("matched_via".into(), json!(matched_via));
                     if let Some(source_id) = pack.source_sha256.as_deref() {
                         hit.insert("source_id".into(), json!(source_id));
                         hit.insert("open_ref".into(), json!(format!("/library/{source_id}")));
@@ -1326,35 +1337,43 @@ fn search_evidence_fused(
                     Value::Object(hit)
                 }
             };
-            // Card titles whose BODY matched, from the fts card hits (title
-            // matches already sit in matched_cards). Detail caps propagate
-            // to truncation — omitted match detail must not read complete.
-            let mut body_truncated = false;
-            let body_titles: Vec<String> = fts_detail_by_pack
-                .get(&pack_dir)
-                .zip(pack_by_dir.get(pack_dir.as_str()))
-                .map(|(detail, pack)| {
-                    body_truncated |= detail.card_idxs.len() > MAX_MATCHED_CARDS_PER_HIT;
-                    detail
-                        .card_idxs
-                        .iter()
-                        .filter_map(|idx| pack.card_titles.get(*idx))
-                        .take(MAX_MATCHED_CARDS_PER_HIT)
-                        .map(|title| {
-                            let (title, capped) = cap_chars(title, MAX_MATCHED_CARD_TITLE_CHARS);
-                            body_truncated |= capped;
-                            title
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            if let Some(obj) = hit.as_object_mut().filter(|_| !body_titles.is_empty()) {
-                obj.insert("matched_cards_body".into(), json!(body_titles));
-                if body_truncated {
-                    obj.insert("matched_cards_body_truncated".into(), json!(true));
+            // Index-lane detail applies to EVERY pack it ranked — including
+            // packs the title lane also hit, where hiding a unit
+            // contribution would contradict the tool contract. Card titles
+            // come from the fts card hits (cards_fts matches title OR
+            // content — the field name says fts, not body). Detail caps
+            // propagate to truncation.
+            if let Some(detail) = fts_detail_by_pack.get(&pack_dir) {
+                let mut detail_truncated = false;
+                let fts_titles: Vec<String> = pack_by_dir
+                    .get(pack_dir.as_str())
+                    .map(|pack| {
+                        detail_truncated |= detail.card_idxs.len() > MAX_MATCHED_CARDS_PER_HIT;
+                        detail
+                            .card_idxs
+                            .iter()
+                            .filter_map(|idx| pack.card_titles.get(*idx))
+                            .take(MAX_MATCHED_CARDS_PER_HIT)
+                            .map(|title| {
+                                let (title, capped) =
+                                    cap_chars(title, MAX_MATCHED_CARD_TITLE_CHARS);
+                                detail_truncated |= capped;
+                                title
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(obj) = hit.as_object_mut() {
+                    obj.insert("matched_via".into(), json!(detail.matched_via()));
+                    if !fts_titles.is_empty() {
+                        obj.insert("matched_cards_fts".into(), json!(fts_titles));
+                    }
+                    if detail_truncated {
+                        obj.insert("matched_cards_fts_truncated".into(), json!(true));
+                    }
                 }
+                fts_detail_truncated |= detail_truncated;
             }
-            fts_detail_truncated |= body_truncated;
             ordered.push(hit);
         }
         ordered
@@ -2356,34 +2375,38 @@ fn search_claims_ranked(
     query: &str,
     limit: usize,
     status: Option<&str>,
-    fts_rank: Option<&[(String, String)]>,
+    fts_rank: Option<&[String]>,
 ) -> Value {
     let lane = if fts_rank.is_some() { "fts" } else { "scan" };
-    let fts_pos: Option<HashMap<(&str, &str), usize>> = fts_rank.map(|ranked| {
+    let fts_pos: Option<HashMap<&str, usize>> = fts_rank.map(|ranked| {
         ranked
             .iter()
             .enumerate()
-            .map(|(pos, (id, st))| ((id.as_str(), st.as_str()), pos))
+            .map(|(pos, key)| (key.as_str(), pos))
             .collect()
     });
     // A candidate is in when the substring filter matches (v4) OR the fts
-    // lane ranked THIS row's (claim_id, status) — id alone would conflate
-    // the lanes a claim_id can legitimately span. Sort key = fts position;
-    // substring-only extras after (usize::MAX keeps their relative order
-    // via stable sort).
-    let claim_matches =
-        |claim: &str, theme: &str, claim_id: &str, row_status: &str, q: &str| -> Option<usize> {
-            let by_text = claim.to_lowercase().contains(q) || theme.to_lowercase().contains(q);
-            match &fts_pos {
-                Some(pos) => match pos.get(&(claim_id, row_status)) {
-                    Some(p) => Some(*p),
-                    None if by_text => Some(usize::MAX),
-                    None => None,
-                },
+    // lane ranked THIS row's canonical rank key (see claim_rank_key — id
+    // alone conflates rows). Sort key = fts position; substring-only extras
+    // after (usize::MAX keeps their relative order via stable sort).
+    let claim_matches = |claim: &str,
+                         theme: &str,
+                         claim_key: Option<&str>,
+                         claim_id: &str,
+                         row_status: &str,
+                         q: &str|
+     -> Option<usize> {
+        let by_text = claim.to_lowercase().contains(q) || theme.to_lowercase().contains(q);
+        match &fts_pos {
+            Some(pos) => match pos.get(claim_rank_key(claim_key, claim_id, row_status).as_str()) {
+                Some(p) => Some(*p),
                 None if by_text => Some(usize::MAX),
                 None => None,
-            }
-        };
+            },
+            None if by_text => Some(usize::MAX),
+            None => None,
+        }
+    };
     let query = query.to_lowercase();
     let mut hits: Vec<(usize, Value)> = Vec::new();
     let mut any_capped = false;
@@ -2394,9 +2417,14 @@ fn search_claims_ranked(
             let theme = row
                 .and_then(|row| row.theme.as_deref())
                 .unwrap_or(record.theme.as_str());
-            let Some(pos) =
-                claim_matches(&record.claim, theme, &record.claim_id, "durable", &query)
-            else {
+            let Some(pos) = claim_matches(
+                &record.claim,
+                theme,
+                Some(&record.claim_key),
+                &record.claim_id,
+                "durable",
+                &query,
+            ) else {
                 continue;
             };
             let (claim, capped) = cap_chars(&record.claim, MAX_CLAIM_CHARS);
@@ -2434,9 +2462,14 @@ fn search_claims_ranked(
             .filter(|row| row.status == ClaimStatus::Caveated)
         {
             let theme = row.theme.as_deref().unwrap_or("");
-            let Some(pos) =
-                claim_matches(&row.claim, theme, &row.claim_id, "caveated", &query)
-            else {
+            let Some(pos) = claim_matches(
+                &row.claim,
+                theme,
+                row.claim_key.as_deref(),
+                &row.claim_id,
+                "caveated",
+                &query,
+            ) else {
                 continue;
             };
             let (claim, capped) = cap_chars(&row.claim, MAX_CLAIM_CHARS);
@@ -3482,7 +3515,8 @@ mod tests {
         // description must state BOTH lanes and never claim titles-only
         // unconditionally.
         assert!(evidence.contains("lane: fts"));
-        assert!(evidence.contains("card BODIES and unit text/quotes"));
+        assert!(evidence.contains("card bodies and unit text/quotes"));
+        assert!(evidence.contains("the SURFACE that matched"));
         assert!(evidence.contains("lane: scan"));
         assert!(evidence.contains("Never searches raw source bodies"));
         let fulltext = description("search_fulltext");
@@ -3695,8 +3729,8 @@ mod tests {
         let hits = fused["hits"].as_array().expect("hits");
         assert_eq!(hits.len(), 2);
         let beta = hits.iter().find(|h| h["pack_title"] == "Beta pack").expect("beta");
-        assert_eq!(beta["matched_via"], json!("body"));
-        assert_eq!(beta["matched_cards_body"], json!(["Unrelated title"]));
+        assert_eq!(beta["matched_via"], json!("cards"));
+        assert_eq!(beta["matched_cards_fts"], json!(["Unrelated title"]));
         let alpha = hits.iter().find(|h| h["pack_title"] == "Alpha pack").expect("alpha");
         assert_eq!(alpha["matched_terms"], json!(["needle"]));
 
@@ -3751,7 +3785,7 @@ mod tests {
 
         // fts rank leads by relevance; the substring-only extra (c-1, not in
         // the shadow's rank) appends after — union, never a recall loss.
-        let rank = vec![("c-2".to_string(), "caveated".to_string())];
+        let rank = vec![claim_rank_key(None, "c-2", "caveated")];
         let ranked = search_claims_ranked(&model, &[], "memory", 10, None, Some(&rank));
         assert_eq!(ranked["lane"], json!("fts"));
         let ids: Vec<_> = ranked["hits"]
@@ -3808,7 +3842,7 @@ mod tests {
         let hits = out["hits"].as_array().expect("hits");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["pack_title"], "Alpha pack");
-        assert_eq!(hits[0]["matched_via"], json!("body"));
+        assert_eq!(hits[0]["matched_via"], json!("cards"));
 
         // Generation guard: when the JSON projections move on but the shadow
         // kept last-good (failed rebuild), the lane must fall back — serving
