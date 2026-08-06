@@ -296,6 +296,11 @@ struct AppState {
     evidence: RwLock<Cached<EvidenceModel>>,
     /// Folded crystal-ledger projections — see [`CrystalCache`].
     crystal: RwLock<CrystalCache>,
+    /// Which store the LAST model load actually served — surfaced on
+    /// /api/model as `serving_backend` so the stage-4 observation window
+    /// has a visible signal (desktop swallows stderr, so the fallback
+    /// warning alone is invisible in the GUI).
+    serving_backend: RwLock<&'static str>,
     /// Bilingual sidecars for `/api/source/:sha` — `cards_zh.json` alone is
     /// over 10 MB on the live vault and was parsed from disk on EVERY source
     /// request; same mtime-keyed reload as the model.
@@ -540,24 +545,45 @@ impl AppState {
         db.max(json)
     }
 
+    /// True when the sqlite shadow is at least as new as the JSON files —
+    /// a JSON-only rebuild (portal tag curation calls `rebuild_index_now`,
+    /// which does not re-shadow) must serve the NEWER JSON, never a valid
+    /// but older shadow generation.
+    fn sqlite_is_newest(&self) -> bool {
+        let db = ovp_index::sqlite::sqlite_path(&self.vault_root)
+            .ok()
+            .and_then(|p| mtime_of(&p));
+        let json = mtime_of(&self.index_path()).max(mtime_of(&self.evidence_path()));
+        match (db, json) {
+            (Some(db), Some(json)) => db >= json,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
     /// Stage-4 loader: the sqlite read-model is the serving store (operator
-    /// decision 2026-08-06 — direct switch); the JSON projection remains the
+    /// decision 2026-08-06 — direct switch) WHEN it is the newest
+    /// generation; the JSON projection serves otherwise and remains the
     /// fallback until the observation window closes. `OVP_INDEX_BACKEND=json`
     /// forces the old path.
     fn load_model_projection(&self) -> Option<IndexModel> {
-        if index_backend_is_sqlite() {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
             match ovp_index::sqlite::read_index_sqlite(&self.vault_root) {
-                Ok(model) => return Some(model),
+                Ok(model) => {
+                    *self.serving_backend.write().unwrap() = "sqlite";
+                    return Some(model);
+                }
                 Err(e) => eprintln!(
                     "warning: sqlite read-model unavailable ({e}); serving the JSON fallback"
                 ),
             }
         }
+        *self.serving_backend.write().unwrap() = "json";
         read_index(&self.vault_root).ok()
     }
 
     fn load_evidence_projection(&self) -> Option<EvidenceModel> {
-        if index_backend_is_sqlite() {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
             match ovp_index::sqlite::read_evidence_sqlite(&self.vault_root) {
                 // Ok(None) = the shadow generation was built without an
                 // evidence model — mirror the JSON absent case, no fallback.
@@ -783,6 +809,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
         crystal: RwLock::new(CrystalCache::default()),
+        serving_backend: RwLock::new("unloaded"),
         cards_zh: RwLock::new(Cached::default()),
         claims_zh: RwLock::new(Cached::default()),
         last_run: RwLock::new(Cached::default()),
@@ -2486,6 +2513,14 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // Agent-mode discovery: the SPA pre-generates a session id and polls
         // /api/ask/progress from turn 1 only when the agent path is live.
         obj.insert("ask_agent".into(), serde_json::json!(state.ask_agent));
+        // Stage-4 observability: which store the model actually came from
+        // (sqlite | json | unloaded). The desktop swallows stderr, so the
+        // fallback warning alone is invisible — this field is the visible
+        // signal the JSON-retirement observation window reads.
+        obj.insert(
+            "serving_backend".into(),
+            serde_json::json!(*state.serving_backend.read().unwrap()),
+        );
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -5042,6 +5077,7 @@ mod tests {
             model: RwLock::new(Cached::default()),
             evidence: RwLock::new(Cached::default()),
             crystal: RwLock::new(CrystalCache::default()),
+            serving_backend: RwLock::new("unloaded"),
             cards_zh: RwLock::new(Cached::default()),
             claims_zh: RwLock::new(Cached::default()),
             last_run: RwLock::new(Cached::default()),
@@ -7533,6 +7569,22 @@ mod tests {
             st.current_evidence().expect("evidence from sqlite").date,
             "2026-03-03"
         );
+        assert_eq!(*st.serving_backend.read().unwrap(), "sqlite");
+
+        // A JSON-only rebuild (the tag-curation path re-writes index.json
+        // without re-shadowing) must flip serving to the NEWER JSON — a
+        // valid but OLDER shadow generation must not shadow it.
+        ovp_index::write_index(&vault, &index_dated("2026-04-04")).unwrap();
+        set_mtime(
+            &vault.join(".ovp/index/index.json"),
+            SystemTime::now() + Duration::from_secs(5),
+        );
+        assert_eq!(
+            st.current_model().expect("model from json").date,
+            "2026-04-04",
+            "newer JSON must win over an older valid shadow"
+        );
+        assert_eq!(*st.serving_backend.read().unwrap(), "json");
 
         let _ = std::fs::remove_dir_all(&root);
     }

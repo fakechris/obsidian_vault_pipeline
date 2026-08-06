@@ -1057,6 +1057,14 @@ pub fn read_evidence_sqlite(vault_root: &Path) -> Result<Option<EvidenceModel>, 
 fn read_evidence_sqlite_at(path: &Path) -> Result<Option<EvidenceModel>, String> {
     let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    // Same guard as the index reader — both caches must fall back TOGETHER
+    // on an unsupported generation, never serve evidence from one schema
+    // and the model from another.
+    if meta_value(&conn, "schema_version")? != SCHEMA_VERSION {
+        return Err(format!(
+            "shadow schema is not v{SCHEMA_VERSION} — rebuild the projection (`ovp2 index`)"
+        ));
+    }
     if meta_value(&conn, "has_evidence")? != "1" {
         return Ok(None);
     }
