@@ -301,6 +301,14 @@ struct AppState {
     /// has a visible signal (desktop swallows stderr, so the fallback
     /// warning alone is invisible in the GUI).
     serving_backend: RwLock<&'static str>,
+    /// The last sqlite load FAILURE (None after a healthy load) — the
+    /// portal's repair banner reads this; once the JSON fallback is retired
+    /// this is the difference between "silently degraded" and "the operator
+    /// was told and offered the rebuild button".
+    sqlite_error: RwLock<Option<String>>,
+    /// The one in-flight portal-triggered projection rebuild (repair flow):
+    /// double-click protection + last-outcome surface, mirroring ManualRun.
+    index_rebuild: Arc<std::sync::Mutex<IndexRebuild>>,
     /// Bilingual sidecars for `/api/source/:sha` — `cards_zh.json` alone is
     /// over 10 MB on the live vault and was parsed from disk on EVERY source
     /// request; same mtime-keyed reload as the model.
@@ -363,6 +371,15 @@ struct AppState {
     _source_work_worker_lock: Option<ovp_intake::RunLock>,
     /// True when this process runs the background source-work worker.
     source_work_worker_here: bool,
+}
+
+/// State of the portal-triggered projection rebuild (the sqlite repair
+/// flow: `ovp2 index` rebuilds JSON + shadow from the ledgers and packs).
+#[derive(Default)]
+struct IndexRebuild {
+    running: bool,
+    /// Last finished rebuild: `{ok, exit, finished, stderr_tail}`.
+    last: Option<serde_json::Value>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -571,11 +588,15 @@ impl AppState {
             match ovp_index::sqlite::read_index_sqlite(&self.vault_root) {
                 Ok(model) => {
                     *self.serving_backend.write().unwrap() = "sqlite";
+                    *self.sqlite_error.write().unwrap() = None;
                     return Some(model);
                 }
-                Err(e) => eprintln!(
-                    "warning: sqlite read-model unavailable ({e}); serving the JSON fallback"
-                ),
+                Err(e) => {
+                    eprintln!(
+                        "warning: sqlite read-model unavailable ({e}); serving the JSON fallback"
+                    );
+                    *self.sqlite_error.write().unwrap() = Some(e);
+                }
             }
         }
         *self.serving_backend.write().unwrap() = "json";
@@ -810,6 +831,8 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         evidence: RwLock::new(Cached::default()),
         crystal: RwLock::new(CrystalCache::default()),
         serving_backend: RwLock::new("unloaded"),
+        sqlite_error: RwLock::new(None),
+        index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
         cards_zh: RwLock::new(Cached::default()),
         claims_zh: RwLock::new(Cached::default()),
         last_run: RwLock::new(Cached::default()),
@@ -915,6 +938,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             if p == "/api/tags/decision"
                 || p == "/api/publish"
                 || p == "/api/schedule/run"
+                || p == "/api/index/rebuild"
                 || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
@@ -1046,6 +1070,8 @@ fn dispatch(
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Get, "/api/index/rebuild/status") => handle_index_rebuild_status(state),
+        (Method::Post, "/api/index/rebuild") => handle_index_rebuild_start(state),
         (Method::Get, "/api/schedule") => handle_schedule(state),
         (Method::Post, "/api/schedule/features") => handle_schedule_features(state, body),
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
@@ -1740,6 +1766,71 @@ fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>>
 
 /// Jobs the portal may trigger — the registry's built-ins.
 const MANUAL_RUN_JOBS: &[&str] = &["daily", "crystallize"];
+
+fn handle_index_rebuild_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+    let body = serde_json::json!({"running": rebuild.running, "last": rebuild.last});
+    json_response(200, &body.to_string())
+}
+
+/// The sqlite REPAIR flow: rebuild every projection (JSON + shadow, with the
+/// whole-model parity gate) by running `ovp2 index` as a child — the same
+/// battle-tested path daily uses, never a second in-process implementation.
+/// The shadow's verify-then-promote contract means a failed rebuild leaves
+/// last-good untouched; success is picked up by the mtime stamps on the next
+/// request, no cache poke needed.
+fn handle_index_rebuild_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.running {
+            return json_response(
+                409,
+                r#"{"error":"an index rebuild is already in progress","code":"rebuild_running"}"#,
+            );
+        }
+        slot.running = true;
+    }
+    let bin = state
+        .ovp2_bin
+        .clone()
+        .or_else(|| std::env::current_exe().ok());
+    let Some(bin) = bin else {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        return json_response(500, r#"{"error":"cannot resolve the ovp2 binary"}"#);
+    };
+    let vault_root = state.vault_root.clone();
+    let slot = Arc::clone(&state.index_rebuild);
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&bin)
+            .args(["index", "--vault-root", &vault_root.display().to_string()])
+            .output();
+        let last = match out {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let tail: String = stderr
+                    .lines()
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::json!({
+                    "ok": out.status.success(),
+                    "exit": out.status.code(),
+                    "stderr_tail": tail,
+                })
+            }
+            Err(e) => serde_json::json!({"ok": false, "error": format!("spawn: {e}")}),
+        };
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        slot.last = Some(last);
+    });
+    json_response(202, r#"{"started":true}"#)
+}
 
 fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let job = if body.trim().is_empty() {
@@ -2521,6 +2612,20 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             "serving_backend".into(),
             serde_json::json!(*state.serving_backend.read().unwrap()),
         );
+        // Repair surface: the last sqlite failure (null when healthy) and
+        // whether a portal-triggered rebuild is in flight — the SPA banner
+        // derives entirely from these plus serving_backend.
+        obj.insert(
+            "sqlite_error".into(),
+            serde_json::json!(*state.sqlite_error.read().unwrap()),
+        );
+        {
+            let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+            obj.insert(
+                "index_rebuild".into(),
+                serde_json::json!({"running": rebuild.running, "last": rebuild.last}),
+            );
+        }
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -3544,6 +3649,9 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // freshness.
         "built_at": model.as_deref().and_then(|m| m.built_at.clone()),
         "run_id": model.as_deref().and_then(|m| m.run_id.clone()),
+        // Stage-4 observation window: which store served the model. Reading
+        // it AFTER current_model() above means it reflects this very load.
+        "serving_backend": *state.serving_backend.read().unwrap(),
         "age_seconds": model.as_deref().and_then(|m| age_seconds(m.built_at.as_deref())),
         "counts": model.as_deref().map(|m| serde_json::json!({
             "sources": m.totals.sources,
@@ -5078,6 +5186,8 @@ mod tests {
             evidence: RwLock::new(Cached::default()),
             crystal: RwLock::new(CrystalCache::default()),
             serving_backend: RwLock::new("unloaded"),
+            sqlite_error: RwLock::new(None),
+            index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
             cards_zh: RwLock::new(Cached::default()),
             claims_zh: RwLock::new(Cached::default()),
             last_run: RwLock::new(Cached::default()),

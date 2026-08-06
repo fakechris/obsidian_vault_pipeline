@@ -713,6 +713,13 @@ export const zh: Record<keyof typeof en, string> = {
   'system.vaultRoot': 'vault 路径',
   'system.schema': '索引 schema',
   'system.indexDate': '索引日期',
+  'indexHealth.error':
+    '知识索引库读取失败——已自动降级到 JSON 后备通路。数据仍然正确,检索相关性可能下降。',
+  'indexHealth.rebuild': '重建索引库',
+  'indexHealth.rebuilding': '索引库重建中…',
+  'indexHealth.rebuildFailed': '重建失败:{err}',
+  'indexHealth.rebuildDone': '重建完成——数据将在下次轮询刷新。',
+  'system.servingBackend': '服务后端',
   'system.builtAt': '构建时刻',
   'system.runId': '运行 id',
   'system.counts': '统计',

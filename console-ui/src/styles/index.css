@@ -19,3 +19,32 @@
   --color-source-deep: #22c55e;
   --color-highlight: #fbbf24;
 }
+
+/* Stage-4 index-store repair banner (IndexHealthBanner): thin strip under
+ * the run banner; visible ONLY when the sqlite read-model failed (amber) or
+ * a rebuild just finished (quiet confirmation). House rules: no shadows. */
+.index-health {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+  padding: 6px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.index-health.warn {
+  background: var(--warn-bg, #fdf3e3);
+  color: var(--warn-fg, #7a4d05);
+}
+.index-health.ok {
+  background: var(--surface-2, #f6f4ef);
+  color: var(--muted, #6b6459);
+}
+.index-health button {
+  font: inherit;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}

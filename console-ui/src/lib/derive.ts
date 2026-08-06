@@ -1223,3 +1223,19 @@ export function closureNodeIds(
   }
   return out;
 }
+
+/** Index-store health for the stage-4 repair banner. Pure so the node-env
+ * tests can pin the truth table: a REBUILD in flight outranks the error
+ * (the operator already acted), and only a recorded sqlite failure — not a
+ * mere 'json' serving_backend, which is legitimate right after a JSON-only
+ * rebuild — raises the banner. */
+export type IndexHealth = 'ok' | 'error' | 'rebuilding';
+
+export function indexHealth(
+  sqliteError: string | null | undefined,
+  rebuildRunning: boolean,
+): IndexHealth {
+  if (rebuildRunning) return 'rebuilding';
+  if (sqliteError) return 'error';
+  return 'ok';
+}
