@@ -751,6 +751,34 @@ fn verify_at(
     expect("claims_fts", count("claims_fts")?, model.claims.len())?;
     expect("cards_fts", count("cards_fts")?, want_cards)?;
     expect("units_fts", count("units_fts")?, want_units)?;
+    // Equal counts can still hide a diverged ROWID SET (a base row with no
+    // postings plus an orphaned posting) — and fts_search joins by rowid, so
+    // that state silently drops results. Check set equality both ways.
+    for (fts, base) in [
+        ("sources_fts", "sources"),
+        ("claims_fts", "claims"),
+        ("cards_fts", "cards"),
+        ("units_fts", "units"),
+    ] {
+        let orphans: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT (SELECT COUNT(*) FROM {base} b WHERE NOT EXISTS \
+                       (SELECT 1 FROM {fts} f WHERE f.rowid = b.rowid)) \
+                     + (SELECT COUNT(*) FROM {fts} f WHERE NOT EXISTS \
+                       (SELECT 1 FROM {base} b WHERE b.rowid = f.rowid))"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("checking {fts} rowid alignment: {e}"))?;
+        if orphans != 0 {
+            return Err(format!(
+                "{fts}/{base} rowid sets diverge ({orphans} orphaned row(s)) — \
+                 postings and projection rows are misaligned"
+            ));
+        }
+    }
 
     // meta scalars: built_at exists precisely so a stale projection cannot
     // render like a fresh one — the verifier must not skip the one surface
@@ -1038,6 +1066,14 @@ mod tests {
     use crate::evidence::{CardEvidenceRow, UnitEvidenceRow};
     use crate::model::{ClaimRow, ClaimStatus, OpsState, PackRow, SourceRow, SourceStatus, Totals};
 
+    /// Unique self-cleaning test dir under the repo's gitignored `.run/`
+    /// (run-artifact rule: never the system temp dir).
+    fn test_dir() -> tempfile::TempDir {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/stage3-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        tempfile::Builder::new().prefix("sqlite-").tempdir_in(base).unwrap()
+    }
+
     /// In-process tests pin the db path explicitly (no env: parallel tests
     /// share the process environment); the CLI e2e covers env resolution.
     fn shadow_at(
@@ -1149,7 +1185,7 @@ mod tests {
 
     #[test]
     fn shadow_round_trips_and_verifies_all_surfaces() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_dir();
         let m = model();
         let ev = evidence();
         let (_, parity) = shadow_at(tmp.path(), &m, Some(&ev)).unwrap();
@@ -1169,7 +1205,7 @@ mod tests {
 
     #[test]
     fn verify_catches_divergence_in_unsampled_looking_fields() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_dir();
         let m = model();
         let ev = evidence();
         let db = tmp.path().join("candidate.sqlite");
@@ -1216,7 +1252,7 @@ mod tests {
         // that fails parity must never replace the previous generation.
         // (write_shadow wires cache-path resolution + this exact sequence;
         // the e2e exercises it end-to-end through the binary.)
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_dir();
         let m = model();
         let ev = evidence();
         let (good, _) = shadow_at(tmp.path(), &m, Some(&ev)).unwrap();
@@ -1249,7 +1285,7 @@ mod tests {
 
     #[test]
     fn fts_search_recalls_cjk_and_latin_with_or_fallback() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_dir();
         let m = model();
         let ev = evidence();
         let db = tmp.path().join("candidate.sqlite");
@@ -1289,6 +1325,28 @@ mod tests {
         drop(conn);
         let err = fts_search_at(&db, FtsSurface::Units, "quoted", 10).unwrap_err();
         assert!(err.contains("rebuild"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn verify_catches_fts_rowid_drift_with_equal_counts() {
+        let tmp = test_dir();
+        let m = model();
+        let ev = evidence();
+        let db = tmp.path().join("candidate.sqlite");
+        build_into(&db, &m, Some(&ev)).unwrap();
+        verify_at(&db, &m, Some(&ev)).unwrap();
+
+        // Shift a BASE rowid: counts stay identical on both sides, but the
+        // rowid sets diverge — postings point at nothing, and the base row
+        // has no postings. The count checks alone cannot see this.
+        let conn = Connection::open(&db).unwrap();
+        conn.execute("UPDATE units SET rowid = rowid + 100", []).unwrap();
+        drop(conn);
+        let err = verify_at(&db, &m, Some(&ev)).unwrap_err();
+        assert!(
+            err.contains("rowid sets diverge"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
