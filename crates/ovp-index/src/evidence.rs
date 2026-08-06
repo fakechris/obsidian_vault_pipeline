@@ -142,14 +142,9 @@ pub fn build_evidence(
 
 pub fn write_evidence(vault_root: &Path, evidence: &EvidenceModel) -> Result<String, String> {
     let target = vault_root.join(EVIDENCE_FILE);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
-    }
     let body =
         serde_json::to_string_pretty(evidence).map_err(|e| format!("serializing evidence: {e}"))?;
-    std::fs::write(&target, format!("{body}\n"))
-        .map_err(|e| format!("writing {}: {e}", target.display()))?;
+    crate::build::write_atomic(&target, &format!("{body}\n"))?;
     Ok(rel_to(vault_root, &target))
 }
 
@@ -296,11 +291,22 @@ mod tests {
             build_evidence(tmp.path(), "2026-07-06", &index_with_pack(pack_dir)).unwrap();
 
         let rel = write_evidence(tmp.path(), &evidence).unwrap();
+        // Overwrite once more: the atomic tmp+rename path must leave no
+        // stray `.tmp` siblings behind on repeated writes.
+        write_evidence(tmp.path(), &evidence).unwrap();
         let read_back = read_evidence(tmp.path()).unwrap();
 
         assert_eq!(rel, ".ovp/index/evidence.json");
         assert_eq!(read_back.schema, EVIDENCE_SCHEMA);
         assert_eq!(read_back.cards[0].title, "Memory as state");
         assert_eq!(read_back.units[0].text, "Agent memory is persistent state.");
+
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path().join(".ovp/index"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "evidence.json")
+            .collect();
+        assert!(leftovers.is_empty(), "stray files after write: {leftovers:?}");
     }
 }

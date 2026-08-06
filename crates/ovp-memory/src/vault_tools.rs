@@ -52,7 +52,9 @@ const MAX_PASSAGE_BYTES: usize = 2 * 1024;
 const MAX_CLAIM_CHARS: usize = 500;
 const CURSOR_PREFIX: &str = "c1:";
 const FULLTEXT_CURSOR_PREFIX: &str = "f1:";
-const MAX_SEARCH_TERMS: usize = 8;
+/// CJK bigram expansion inflates term counts (a 9-char Chinese run is already
+/// 8 bigrams), so the cap leaves room for a bilingual query's Latin terms too.
+const MAX_SEARCH_TERMS: usize = 16;
 const MAX_MATCHED_CARDS_PER_HIT: usize = 8;
 const MAX_MATCHED_CARD_TITLE_CHARS: usize = 200;
 /// Aggregate serialized-size budget for multi-hit results. Individually-capped
@@ -701,18 +703,66 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
     json!({"hits": hits, "truncated": truncated})
 }
 
+fn push_search_term(term: &str, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
+    if terms.len() < MAX_SEARCH_TERMS && !term.is_empty() && seen.insert(term.to_string()) {
+        terms.push(term.to_string());
+    }
+}
+
+fn flush_cjk_run(run: &mut Vec<char>, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
+    match run.len() {
+        0 => {}
+        1 => push_search_term(&run[0].to_string(), terms, seen),
+        _ => {
+            for pair in run.windows(2) {
+                push_search_term(&pair.iter().collect::<String>(), terms, seen);
+            }
+        }
+    }
+    run.clear();
+}
+
+fn flush_other_run(buf: &mut String, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
+    // Punctuation-only fragments (stray 《》/、 around a CJK run) would match
+    // half the corpus as substrings; segments must carry at least one
+    // alphanumeric to count as a term.
+    if buf.chars().any(char::is_alphanumeric) {
+        push_search_term(buf, terms, seen);
+    }
+    buf.clear();
+}
+
 fn tokenize_search_terms(query: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut terms = Vec::new();
     // Unicode-aware split: CJK IME input separates terms with U+3000
     // ideographic spaces, which split_ascii_whitespace would glue into one
     // unmatchable token (parity with search_source_chunks).
-    for term in query.split_whitespace().map(str::to_lowercase) {
-        if !term.is_empty() && seen.insert(term.clone()) {
-            terms.push(term);
-            if terms.len() == MAX_SEARCH_TERMS {
-                break;
+    //
+    // CJK-ideograph runs then expand into overlapping character bigrams: an
+    // unsegmented Chinese query kept as one verbatim substring essentially
+    // never hits, and the failure is silent (`0 hits, truncated: false`).
+    // Bigrams mirror the index-side granularity of
+    // `ovp_index::score::tokenize_for_search`, so substring matching (CJK is
+    // contiguous in UTF-8) recovers recall without a segmenter. Non-CJK
+    // segments stay whole — URLs, paths, and `foo-bar` identifiers keep
+    // their punctuation, exactly as before.
+    for token in query.split_whitespace() {
+        let mut cjk_run: Vec<char> = Vec::new();
+        let mut other = String::new();
+        for ch in token.to_lowercase().chars() {
+            if ovp_index::score::is_cjk(ch) {
+                flush_other_run(&mut other, &mut terms, &mut seen);
+                cjk_run.push(ch);
+            } else {
+                flush_cjk_run(&mut cjk_run, &mut terms, &mut seen);
+                other.push(ch);
             }
+        }
+        flush_cjk_run(&mut cjk_run, &mut terms, &mut seen);
+        flush_other_run(&mut other, &mut terms, &mut seen);
+        if terms.len() == MAX_SEARCH_TERMS {
+            break;
         }
     }
     terms
@@ -1682,11 +1732,9 @@ pub fn search_source_chunks(
     query: &str,
     limit: usize,
 ) -> Result<Value, VaultToolError> {
-    let terms: BTreeSet<String> = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .filter(|term| !term.is_empty())
-        .collect();
+    // Same tokenizer as the search tools (CJK bigram expansion included) so
+    // a query that found a source can drill into it with identical terms.
+    let terms: BTreeSet<String> = tokenize_search_terms(query).into_iter().collect();
     if terms.is_empty() {
         return Err(VaultToolError::InvalidArgs(
             "`query` must not be empty".into(),
@@ -3864,14 +3912,16 @@ mod tests {
             ));
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
-        // Over-long term lists soft-truncate to the first 8 distinct terms —
-        // an invalid-args bounce would burn an agent round (and feed the
-        // breaker) for a fault the tool resolves losslessly enough. The ninth
-        // term does not match anything, and the run still succeeds.
+        // Over-long term lists soft-truncate to the first MAX_SEARCH_TERMS
+        // distinct terms — an invalid-args bounce would burn an agent round
+        // (and feed the breaker) for a fault the tool resolves losslessly
+        // enough. The 17th term does not match anything, and the run still
+        // succeeds.
         let mut soft_tools = VaultTools::new(temp.path());
+        let filler = (1..=16).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
         let soft = ok_json(soft_tools.execute(
             "search_fulltext",
-            &json!({"query": "one two three four five six seven eight NEEDLE"}),
+            &json!({"query": format!("{filler} NEEDLE")}),
             Duration::from_secs(10),
         ));
         assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
@@ -3880,6 +3930,19 @@ mod tests {
         // the tokenizer must split on Unicode whitespace, not ASCII only.
         let ideographic = tokenize_search_terms("\u{624b}\u{5199}\u{3000}transformer\u{3000}\u{7b14}\u{8bb0}");
         assert_eq!(ideographic, vec!["\u{624b}\u{5199}", "transformer", "\u{7b14}\u{8bb0}"]);
+
+        // An UNSEGMENTED bilingual query expands: CJK runs become overlapping
+        // bigrams (mirroring index-side tokenize_for_search granularity),
+        // embedded Latin stays whole. Before bigram expansion this whole
+        // token was one unmatchable substring — silent zero recall.
+        let unsegmented = tokenize_search_terms("手写transformer求职笔记");
+        assert_eq!(
+            unsegmented,
+            vec!["手写", "transformer", "求职", "职笔", "笔记"]
+        );
+        // CJK punctuation fragments carry no alphanumerics and are dropped;
+        // Latin identifiers keep their internal punctuation.
+        assert_eq!(tokenize_search_terms("《转型》 foo-bar"), vec!["转型", "foo-bar"]);
 
         let mut dedupe_tools = VaultTools::new(temp.path());
         let deduped = ok_json(call(

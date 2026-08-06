@@ -163,19 +163,42 @@ pub fn build_index_at_with_progress(
     })
 }
 
+/// Atomic whole-file write: unique tmp + rename. The index and evidence
+/// projections are the two LARGEST files in the vault (tens of MB) — a crash
+/// mid-`fs::write` leaves a truncated JSON that the serving cache reads as a
+/// parse error and silently degrades to "no projection". Rename makes torn
+/// output impossible; the tmp name is unique per process+write so concurrent
+/// writers cannot rename each other's half-written file.
+pub(crate) fn write_atomic(target: &Path, body: &str) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut tmp_os = target.to_path_buf().into_os_string();
+    tmp_os.push(format!(".tmp.{}-{nanos}", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp_os);
+    if let Err(e) = std::fs::write(&tmp, body) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("writing {}: {e}", tmp.display()));
+    }
+    std::fs::rename(&tmp, target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("renaming {} into place: {e}", target.display())
+    })
+}
+
 /// Persist the model to `.ovp/index/index.json`. Overwrite is CORRECT here —
 /// the index is derived, rebuildable state, not a ledger.
 pub fn write_index(vault_root: &Path, model: &IndexModel) -> Result<String, String> {
     let layout = VaultLayout::new();
     let target = vault_root.join(layout.index_file());
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
-    }
     let body =
         serde_json::to_string_pretty(model).map_err(|e| format!("serializing index: {e}"))?;
-    std::fs::write(&target, format!("{body}\n"))
-        .map_err(|e| format!("writing {}: {e}", target.display()))?;
+    write_atomic(&target, &format!("{body}\n"))?;
     Ok(rel_to(vault_root, &target))
 }
 

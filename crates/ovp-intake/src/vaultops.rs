@@ -29,7 +29,11 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 /// Append one serialized record as a JSONL line (creating parent dirs on
-/// first use), flushed before returning.
+/// first use), fsynced before returning. `flush()` on a bare `File` is a
+/// no-op — every ledger goes through here, and without `sync_data` a power
+/// loss can drop the tail of any of them (intake dedup state, daily attempts,
+/// the crystal ledger). One fsync per appended record is cheap at ledger
+/// write rates.
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -42,7 +46,7 @@ pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
         .open(path)
         .map_err(|e| format!("opening {}: {e}", path.display()))?;
     writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
-    f.flush().map_err(|e| format!("flushing {}: {e}", path.display()))
+    f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))
 }
 
 /// Read a whole JSONL ledger. Missing file → empty (first run); a malformed
