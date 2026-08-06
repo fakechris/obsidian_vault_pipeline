@@ -182,8 +182,7 @@ pub(crate) fn write_atomic(target: &Path, body: &str) -> Result<(), String> {
     let parent = target
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", target.display()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    ovp_intake::vaultops::create_dirs_synced(parent)?;
     let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut tmp_os = target.to_path_buf().into_os_string();
     tmp_os.push(format!(".tmp.{}-{seq}", std::process::id()));

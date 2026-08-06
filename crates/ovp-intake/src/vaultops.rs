@@ -28,6 +28,33 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
     s
 }
 
+/// `create_dir_all` with durability: after creating, fsync the parent of
+/// every directory this call actually created. Syncing a file (or a
+/// directory's contents) does not persist the *entry* naming it in its
+/// parent — a power loss can otherwise erase a freshly created `.ovp/` chain
+/// even though the write inside it returned `Ok`. The missing suffix is
+/// collected BEFORE creation so only genuinely new entries pay an fsync.
+pub fn create_dirs_synced(dir: &Path) -> Result<(), String> {
+    let mut missing: Vec<PathBuf> = Vec::new();
+    let mut probe = dir.to_path_buf();
+    while !probe.exists() {
+        missing.push(probe.clone());
+        match probe.parent() {
+            Some(p) if !p.as_os_str().is_empty() => probe = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    for created in &missing {
+        if let Some(parent) = created.parent() {
+            std::fs::File::open(parent)
+                .and_then(|d| d.sync_all())
+                .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Append one serialized record as a JSONL line (creating parent dirs on
 /// first use), fsynced before returning. `flush()` on a bare `File` is a
 /// no-op — every ledger goes through here, and without `sync_data` a power
@@ -39,8 +66,7 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 /// at ledger write rates.
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        create_dirs_synced(parent)?;
     }
     let line = serde_json::to_string(value).map_err(|e| format!("serializing record: {e}"))?;
     let created = !path.exists();

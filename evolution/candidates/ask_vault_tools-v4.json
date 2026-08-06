@@ -15,10 +15,11 @@
     "short_cjk_terms_unchanged": "1- and 2-char CJK terms are their own bigram/char — the v3 U+3000 ideographic-space fixture passes unmodified",
     "ranking_semantics_unchanged": "language_grouped_score still scores best-group fraction; bigrams land in the CJK group, so grouping semantics are identical, only term granularity is finer",
     "cursor_honesty": "fulltext cursor fingerprints hash the term list, so a v3-issued cursor over a CJK query bounces with the explicit 'different query' message — an honest invalidation, never a silently wrong walk",
-    "term_cap_honest": "queries past 16 distinct terms still soft-truncate with matched_terms showing what ran; tool descriptions state the limit from the constant"
+    "term_cap_honest": "queries past 16 distinct terms soft-truncate AND surface it: results carry query_terms_truncated=true plus query_terms_used, so a zero-hit result over a capped query cannot read as a clean miss; duplicates do not set the flag",
+    "boundary_punctuation": "CJK separators glued to a Latin word (手写、transformer) trim off segment EDGES only — internal and ASCII punctuation survive, so URLs, paths, foo-bar, and c++ tokenize byte-identically to v3"
   },
   "eval_plan": {
-    "replay_set": "unit fixtures: unsegmented bilingual query 手写transformer求职笔记 → [手写, transformer, 求职, 职笔, 笔记]; punctuation dropping 《转型》 foo-bar → [转型, foo-bar]; v3 U+3000 parity fixture unmodified; 16-term soft-truncation (17th term ignored, run succeeds); all prior v2/v3 fixtures (flood ranking, cursor walk, budgets, frontmatter, language-grouped ranking) pass unmodified. Live qrels for CJK recall quality are the phase-3 gate of docs/design/storage-read-model.md.",
+    "replay_set": "unit fixtures: unsegmented bilingual query 手写transformer求职笔记 → [手写, transformer, 求职, 职笔, 笔记]; punctuation dropping 《转型》 foo-bar → [转型, foo-bar]; v3 U+3000 parity fixture unmodified; 16-term soft-truncation (17th term dropped, run succeeds, query_terms_truncated=true + query_terms_used surfaced); 18-ideograph run caps at 16 bigrams with the flag set; duplicate-only overflow stays flagless; boundary-punctuation fixture 手写、transformer。/c++/URL; all prior v2/v3 fixtures (flood ranking, cursor walk, budgets, frontmatter, language-grouped ranking) pass unmodified. Live qrels for CJK recall quality are the phase-3 gate of docs/design/storage-read-model.md.",
     "paired_sources": 0,
     "soak": false
   },

@@ -703,38 +703,73 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
     json!({"hits": hits, "truncated": truncated})
 }
 
-fn push_search_term(term: &str, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
-    if terms.len() < MAX_SEARCH_TERMS && !term.is_empty() && seen.insert(term.to_string()) {
-        terms.push(term.to_string());
+fn push_search_term(
+    term: &str,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
+    if term.is_empty() || seen.contains(term) {
+        return;
     }
+    if terms.len() == MAX_SEARCH_TERMS {
+        // A DISTINCT term is being dropped — that is real truncation the
+        // caller must be able to surface (duplicates are not).
+        *capped = true;
+        return;
+    }
+    seen.insert(term.to_string());
+    terms.push(term.to_string());
 }
 
-fn flush_cjk_run(run: &mut Vec<char>, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
+fn flush_cjk_run(
+    run: &mut Vec<char>,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
     match run.len() {
         0 => {}
-        1 => push_search_term(&run[0].to_string(), terms, seen),
+        1 => push_search_term(&run[0].to_string(), terms, seen, capped),
         _ => {
             for pair in run.windows(2) {
-                push_search_term(&pair.iter().collect::<String>(), terms, seen);
+                push_search_term(&pair.iter().collect::<String>(), terms, seen, capped);
             }
         }
     }
     run.clear();
 }
 
-fn flush_other_run(buf: &mut String, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
-    // Punctuation-only fragments (stray 《》/、 around a CJK run) would match
+fn flush_other_run(
+    buf: &mut String,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
+    // Boundary punctuation from CJK separators (、。《》 glued to an adjacent
+    // Latin word, e.g. `手写、transformer` → `、transformer`) would both fail
+    // to match the bare word AND misclassify the term as CJK in
+    // language_grouped_score. Trim non-ASCII punctuation at the EDGES only —
+    // internal punctuation stays, and ASCII punctuation is never trimmed, so
+    // URLs, paths, `foo-bar`, and `c++` tokenize exactly as before.
+    let trimmed = buf.trim_matches(|c: char| !c.is_ascii() && !c.is_alphanumeric());
+    // Punctuation-only fragments (stray 《》 around a CJK run) would match
     // half the corpus as substrings; segments must carry at least one
     // alphanumeric to count as a term.
-    if buf.chars().any(char::is_alphanumeric) {
-        push_search_term(buf, terms, seen);
+    if trimmed.chars().any(char::is_alphanumeric) {
+        push_search_term(trimmed, terms, seen, capped);
     }
     buf.clear();
 }
 
-fn tokenize_search_terms(query: &str) -> Vec<String> {
+/// Tokenize plus an honest cap flag: `true` means at least one DISTINCT term
+/// past `MAX_SEARCH_TERMS` was dropped. Consumers surface it — a corpus hit
+/// that only an omitted term would have matched otherwise reads as a clean
+/// miss (`0 hits, truncated: false`), which coverage honesty forbids.
+fn tokenize_search_terms_capped(query: &str) -> (Vec<String>, bool) {
     let mut seen = BTreeSet::new();
     let mut terms = Vec::new();
+    let mut capped = false;
     // Unicode-aware split: CJK IME input separates terms with U+3000
     // ideographic spaces, which split_ascii_whitespace would glue into one
     // unmatchable token (parity with search_source_chunks).
@@ -752,20 +787,21 @@ fn tokenize_search_terms(query: &str) -> Vec<String> {
         let mut other = String::new();
         for ch in token.to_lowercase().chars() {
             if ovp_index::score::is_cjk(ch) {
-                flush_other_run(&mut other, &mut terms, &mut seen);
+                flush_other_run(&mut other, &mut terms, &mut seen, &mut capped);
                 cjk_run.push(ch);
             } else {
-                flush_cjk_run(&mut cjk_run, &mut terms, &mut seen);
+                flush_cjk_run(&mut cjk_run, &mut terms, &mut seen, &mut capped);
                 other.push(ch);
             }
         }
-        flush_cjk_run(&mut cjk_run, &mut terms, &mut seen);
-        flush_other_run(&mut other, &mut terms, &mut seen);
-        if terms.len() == MAX_SEARCH_TERMS {
-            break;
-        }
+        flush_cjk_run(&mut cjk_run, &mut terms, &mut seen, &mut capped);
+        flush_other_run(&mut other, &mut terms, &mut seen, &mut capped);
     }
-    terms
+    (terms, capped)
+}
+
+fn tokenize_search_terms(query: &str) -> Vec<String> {
+    tokenize_search_terms_capped(query).0
 }
 
 fn update_fnv1a64(hash: &mut u64, bytes: &[u8]) {
@@ -909,7 +945,7 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
 }
 
 pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
-    let terms = tokenize_search_terms(query);
+    let (terms, terms_capped) = tokenize_search_terms_capped(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut matches = Vec::new();
     let mut any_matched_cards_truncated = false;
@@ -987,7 +1023,22 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
         .map(|(_, _, hit)| hit)
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut hits);
-    json!({"hits": hits, "truncated": truncated})
+    let mut out = json!({"hits": hits, "truncated": truncated});
+    annotate_capped_terms(&mut out, terms_capped, &terms);
+    out
+}
+
+/// Mark a result whose QUERY lost distinct terms to `MAX_SEARCH_TERMS`: a
+/// document matching only an omitted term reads as a clean miss otherwise,
+/// and `matched_terms` cannot expose the omission when there are no hits.
+fn annotate_capped_terms(out: &mut Value, capped: bool, terms: &[String]) {
+    if !capped {
+        return;
+    }
+    if let Some(map) = out.as_object_mut() {
+        map.insert("query_terms_truncated".into(), json!(true));
+        map.insert("query_terms_used".into(), json!(terms));
+    }
 }
 
 #[derive(Debug)]
@@ -1092,7 +1143,7 @@ fn search_fulltext_at_with_budget(
     remaining: Duration,
     corpus_budget: usize,
 ) -> Value {
-    let terms = tokenize_search_terms(query);
+    let (terms, terms_capped) = tokenize_search_terms_capped(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut candidates = model
         .sources
@@ -1207,6 +1258,10 @@ fn search_fulltext_at_with_budget(
     out.insert("scanned_sources".into(), json!(scanned_sources));
     out.insert("total_sources".into(), json!(total_sources));
     out.insert("truncated".into(), json!(truncated));
+    if terms_capped {
+        out.insert("query_terms_truncated".into(), json!(true));
+        out.insert("query_terms_used".into(), json!(&terms));
+    }
     if stopped_before_end {
         out.insert(
             "next_cursor".into(),
@@ -1734,7 +1789,8 @@ pub fn search_source_chunks(
 ) -> Result<Value, VaultToolError> {
     // Same tokenizer as the search tools (CJK bigram expansion included) so
     // a query that found a source can drill into it with identical terms.
-    let terms: BTreeSet<String> = tokenize_search_terms(query).into_iter().collect();
+    let (term_list, terms_capped) = tokenize_search_terms_capped(query);
+    let terms: BTreeSet<String> = term_list.iter().cloned().collect();
     if terms.is_empty() {
         return Err(VaultToolError::InvalidArgs(
             "`query` must not be empty".into(),
@@ -1897,7 +1953,9 @@ pub fn search_source_chunks(
         })
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut chunks);
-    Ok(json!({"chunks": chunks, "truncated": truncated}))
+    let mut out = json!({"chunks": chunks, "truncated": truncated});
+    annotate_capped_terms(&mut out, terms_capped, &term_list);
+    Ok(out)
 }
 
 /// Search ACTIVE durable ledger records plus caveated index rows. The ledger is
@@ -3915,8 +3973,9 @@ mod tests {
         // Over-long term lists soft-truncate to the first MAX_SEARCH_TERMS
         // distinct terms — an invalid-args bounce would burn an agent round
         // (and feed the breaker) for a fault the tool resolves losslessly
-        // enough. The 17th term does not match anything, and the run still
-        // succeeds.
+        // enough. The run still succeeds, and the DROPPED 17th term is
+        // surfaced: without the flag a document matching only the omitted
+        // term reads as a clean miss (`0 hits, truncated: false`).
         let mut soft_tools = VaultTools::new(temp.path());
         let filler = (1..=16).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
         let soft = ok_json(soft_tools.execute(
@@ -3925,6 +3984,19 @@ mod tests {
             Duration::from_secs(10),
         ));
         assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
+        assert_eq!(soft["query_terms_truncated"], json!(true));
+        assert_eq!(
+            soft["query_terms_used"].as_array().expect("terms").len(),
+            16
+        );
+        // An unspaced 18-ideograph run alone exceeds the cap (17 bigrams).
+        let cjk_run: String = "一二三四五六七八九十百千万亿兆京垓秭".chars().collect();
+        let (cjk_terms, cjk_capped) = tokenize_search_terms_capped(&cjk_run);
+        assert_eq!(cjk_terms.len(), 16);
+        assert!(cjk_capped);
+        // Duplicates are NOT truncation: 16 distinct terms repeated stay flagless.
+        let (_, dup_capped) = tokenize_search_terms_capped(&format!("{filler} {filler}"));
+        assert!(!dup_capped);
 
         // CJK IME queries separate terms with U+3000 ideographic spaces -
         // the tokenizer must split on Unicode whitespace, not ASCII only.
@@ -3943,6 +4015,14 @@ mod tests {
         // CJK punctuation fragments carry no alphanumerics and are dropped;
         // Latin identifiers keep their internal punctuation.
         assert_eq!(tokenize_search_terms("《转型》 foo-bar"), vec!["转型", "foo-bar"]);
+        // CJK separators glued to a Latin word trim off the EDGES (otherwise
+        // `、transformer` never matches a plain-English source and the term
+        // misclassifies as CJK in language grouping); internal and ASCII
+        // punctuation survive (URLs, c++).
+        assert_eq!(
+            tokenize_search_terms("手写、transformer。 c++ https://a.b/c"),
+            vec!["手写", "transformer", "c++", "https://a.b/c"]
+        );
 
         let mut dedupe_tools = VaultTools::new(temp.path());
         let deduped = ok_json(call(
