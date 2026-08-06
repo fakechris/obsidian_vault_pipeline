@@ -1,0 +1,27 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "scheduler-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "runtime",
+  "component": "runtime.scheduler",
+  "hypothesis": "RUNTIME surface, one automation addition + one registry-lifecycle fix, closing the 2026-08-06 stale-themes incident class (themes.json quietly a month stale; 203 unclustered packs put 202 claims in Unclassified while daily printed its hint into a swallowed stderr). (1) NEW BUILT-IN JOB `themes`: `crystal-themes --client live`, weekly Sun 09:30 — positioned BEFORE crystallize's Sun 10:00 in the registry because registry order is catch-up execution order, so a tick that missed both slots still re-clusters before the weekly synthesis batches by community. A runner without the `embed` feature skips gracefully (warn + exit 0) and never fails the tick. (2) INIT-TIME MIGRATION: `schedule init` (which the desktop runs on every launch) now inserts missing BUILT-IN jobs at their default positions while preserving every operator edit — without this, existing registries never receive a new built-in because init's seed-if-absent contract returns Unchanged. Predicted: fresh installs and upgrades both carry the weekly themes job; operator cadence/argv/enabled edits survive migration byte-for-byte; catch-up ticks run themes before crystallize.",
+  "predicted_delta": {
+    "coverage": "themes projection staleness is bounded at 7 days by schedule instead of unbounded-until-manual-run; the Unclassified bucket tracks corpus noise (~2%) instead of accumulating every new pack's claims (was 17% of all claims after 4 stale weeks)",
+    "operational_reliability": "zero new tick failure modes: embed-less runners no-op with exit 0; migration is idempotent (second init returns Unchanged) and edit-preserving (existing-job configs untouched)"
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "edits_survive": "migration only INSERTS jobs whose id is absent; cadence/argv/enabled of every existing job are byte-identical after init — pinned by init_migrates_missing_builtin_jobs_preserving_edits_and_order",
+    "catchup_order": "default registry order is daily, themes, crystallize; plan_tick executes in registry order, so a missed-Sunday catch-up re-clusters before synthesis",
+    "lean_runner_safe": "crystal-themes without `embed` warns and exits 0 — a scheduled run on a lean sidecar is a no-op, never a failed tick (the portal attention hint stays up until a capable runner clears it)",
+    "cadence_vocabulary_unchanged": "the job uses the existing `weekly <Day> <HH:MM>` syntax — no new cadence grammar, so older sidecars parsing the registry never stall the tick"
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures: default registry seeds daily+themes+crystallize in that order; catch-up tick at Sun 10:30 runs all three with themes before crystallize; migration inserts themes before crystallize into a pre-v2 registry while preserving an operator's edited daily cadence, and is idempotent; schedule-endpoint lists the third job. Live vault: registry updated and validated via `schedule list` on the installed sidecar.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "ovp2 schedule disable themes (per-vault, instant) or revert — the job is additive; migration touches only absent ids, so rollback leaves registries exactly as edited.",
+  "ablation_required": false
+}

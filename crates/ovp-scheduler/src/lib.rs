@@ -381,20 +381,20 @@ pub fn default_registry(
                 stamp_date: true,
             },
             JobConfig {
-                id: "crystallize".to_string(),
-                cadence: "weekly Sun 10:00".to_string(),
-                argv: crystallize_argv,
-                enabled: true,
-                description: "Cross-source synthesis into durable crystal claims".to_string(),
-                stamp_date: true,
-            },
-            JobConfig {
                 id: "themes".to_string(),
                 cadence: "weekly Sun 09:30".to_string(),
                 argv: themes_argv,
                 enabled: true,
                 description: "Re-cluster semantic themes (embeddings + labels)".to_string(),
                 stamp_date: false,
+            },
+            JobConfig {
+                id: "crystallize".to_string(),
+                cadence: "weekly Sun 10:00".to_string(),
+                argv: crystallize_argv,
+                enabled: true,
+                description: "Cross-source synthesis into durable crystal claims".to_string(),
+                stamp_date: true,
             },
         ],
     }

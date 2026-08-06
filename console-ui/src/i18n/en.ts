@@ -758,7 +758,7 @@ export const en = {
   'indexHealth.rebuildDone': 'Rebuild finished — data refreshes on the next poll.',
   'system.servingBackend': 'serving backend',
   'today.themesStale':
-    '{n} reader pack(s) are not clustered into themes yet — their claims sit in Unclassified. The weekly themes job (Sun 09:30) will re-cluster, or run `ovp2 crystal-themes` now.',
+    '{n} reader pack(s) are not clustered into themes yet — their claims sit in Unclassified. The weekly themes job (Sun 09:30) re-clusters when its runner includes the embedder; otherwise run `ovp2 crystal-themes` with an embed-capable build.',
   'knowledge.sortCount': 'Count',
   'knowledge.sortName': 'Name',
   'knowledge.sortDir.asc': '↑',
