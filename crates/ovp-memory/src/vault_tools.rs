@@ -1016,7 +1016,7 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
             .cmp(&left.0)
             .then_with(|| left.1.cmp(&right.1))
     });
-    let mut truncated = matches.len() > limit || any_matched_cards_truncated;
+    let mut truncated = matches.len() > limit || any_matched_cards_truncated || terms_capped;
     let mut hits = matches
         .into_iter()
         .take(limit)
@@ -1252,7 +1252,10 @@ fn search_fulltext_at_with_budget(
         .map(|(_, _, hit)| hit)
         .collect();
     let aggregate_capped = cap_aggregate(&mut hits);
-    let truncated = stopped_before_end || incomplete_file || hit_limit_drop || aggregate_capped;
+    // terms_capped counts as truncation: the dropped terms were never
+    // searched anywhere in the corpus, so coverage must read partial.
+    let truncated =
+        stopped_before_end || incomplete_file || hit_limit_drop || aggregate_capped || terms_capped;
     let mut out = Map::new();
     out.insert("hits".into(), json!(hits));
     out.insert("scanned_sources".into(), json!(scanned_sources));
@@ -1812,7 +1815,7 @@ pub fn search_source_chunks(
     // newlines (single-byte, never mid-char); the passage cap may land
     // mid-char, so the flush trims to the valid prefix.
     let mut reader = std::io::BufReader::new(file);
-    let mut matches: Vec<(usize, usize, String)> = Vec::new();
+    let mut matches: Vec<((usize, usize), usize, String)> = Vec::new();
     let mut passage_capped = false;
     let mut scan_capped = false;
     let mut scanned: usize = 0;
@@ -1823,7 +1826,7 @@ pub fn search_source_chunks(
     let flush = |paragraph: &mut Vec<u8>,
                  over_cap: &mut bool,
                  index: &mut usize,
-                 matches: &mut Vec<(usize, usize, String)>,
+                 matches: &mut Vec<((usize, usize), usize, String)>,
                  passage_capped: &mut bool| {
         let text = match std::str::from_utf8(paragraph) {
             Ok(s) => s,
@@ -1837,8 +1840,17 @@ pub fn search_source_chunks(
             // honest miss with complete coverage.
             *passage_capped |= *over_cap;
             let lower = text.to_lowercase();
-            let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
-            if score > 0 {
+            // Distinct-term coverage ranks BEFORE raw frequency: with bigram
+            // expansion a passage repeating one common bigram must not
+            // outrank a passage matching every term of the query.
+            let matched: usize = terms
+                .iter()
+                .filter(|term| lower.contains(term.as_str()))
+                .count();
+            let occurrences: usize =
+                terms.iter().map(|term| lower.matches(term.as_str()).count()).sum();
+            let score = (matched, occurrences);
+            if matched > 0 {
                 let trimmed = text.trim_end();
                 // A paragraph capped DURING accumulation already fits the
                 // byte budget — still mark it visibly (the same … marker a
@@ -1940,15 +1952,19 @@ pub fn search_source_chunks(
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let limit = limit.clamp(1, MAX_CHUNK_LIMIT);
-    let mut truncated = passage_capped || matches.len() > limit;
+    // A term-capped query never searched the dropped terms — that is partial
+    // coverage, not a complete pass (the executor's coverage accounting
+    // reads `truncated`).
+    let mut truncated = passage_capped || matches.len() > limit || terms_capped;
     let mut chunks = matches
         .into_iter()
         .take(limit)
-        .map(|(score, index, passage)| {
+        .map(|((matched, occurrences), index, passage)| {
             json!({
                 "index": index,
                 "passage": passage,
-                "score": score
+                "matched_terms": matched,
+                "score": occurrences
             })
         })
         .collect::<Vec<_>>();
@@ -3984,6 +4000,9 @@ mod tests {
             Duration::from_secs(10),
         ));
         assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
+        // Dropped terms were never searched → the pass is PARTIAL, not a
+        // clean complete miss (coverage accounting reads `truncated`).
+        assert_eq!(soft["truncated"], json!(true));
         assert_eq!(soft["query_terms_truncated"], json!(true));
         assert_eq!(
             soft["query_terms_used"].as_array().expect("terms").len(),

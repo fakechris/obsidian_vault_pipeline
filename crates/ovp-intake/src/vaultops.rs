@@ -46,11 +46,17 @@ pub fn create_dirs_synced(dir: &Path) -> Result<(), String> {
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     for created in &missing {
-        if let Some(parent) = created.parent() {
-            std::fs::File::open(parent)
-                .and_then(|d| d.sync_all())
-                .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
-        }
+        // A relative chain's top-level component has the EMPTY path as its
+        // parent — `File::open("")` fails after the dirs already exist,
+        // turning a successful create into a spurious error. Empty means
+        // the current directory.
+        let parent = match created.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        std::fs::File::open(parent)
+            .and_then(|d| d.sync_all())
+            .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
     }
     Ok(())
 }
