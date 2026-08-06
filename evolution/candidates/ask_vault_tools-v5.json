@@ -11,6 +11,7 @@
     "operational_reliability": "zero new failure modes on missing/stale shadow (lane falls back, result says so); search_claims results ordered by bm25 relevance instead of ledger order — fewer rounds burned paging past irrelevant claims; OVP_ASK_FTS=0 restores v4 behavior without a rebuild."
   },
   "guardrails": {
+    "accepted_without_quote": 0,
     "fallback_is_v4": "with no shadow db, an analyzer-stamp mismatch, or OVP_ASK_FTS=0, both tools execute the unmodified v4 scan path — all prior v2/v3/v4 fixtures pass against the fallback lane",
     "lane_honesty": "every search_evidence/search_claims result carries lane: fts|scan; a silent lane flip cannot masquerade as a recall change in transcripts",
     "coverage_semantics_unchanged": "truncated, query_terms_truncated, matched_terms, and the executor's coverage accounting keep their v4 meanings in both lanes",
