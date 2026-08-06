@@ -550,6 +550,16 @@ impl AppState {
             &self.last_run_path(),
             read_last_run_model(&self.vault_root).ok().flatten(),
         );
+        // The crystal + bilingual caches key on mtimes too — a same-mtime
+        // rewrite (the case /api/refresh exists for) must reset them as
+        // well, or graph/claim/source responses stay stale after a 200.
+        *self.crystal.write().unwrap() = CrystalCache::default();
+        force_reload(&self.cards_zh, &self.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL), {
+            ovp_memory::bilingual::CardsZhFile::load(&self.vault_root).ok()
+        });
+        force_reload(&self.claims_zh, &self.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL), {
+            ovp_memory::bilingual::ClaimsZhFile::load(&self.vault_root).ok()
+        });
     }
 
     fn console_dir(&self) -> PathBuf {
@@ -7452,6 +7462,14 @@ mod tests {
         std::fs::write(&ledger, "").unwrap();
         set_mtime(&ledger, t0 + Duration::from_secs(60));
         assert_eq!(st.crystal_projections().0.len(), 0);
+
+        // A SAME-mtime rewrite is invisible to the stamp — /api/refresh must
+        // force the refold (the case the endpoint exists for).
+        write_ledger(&vault);
+        set_mtime(&ledger, t0 + Duration::from_secs(60));
+        assert_eq!(st.crystal_projections().0.len(), 0, "stamp hides the rewrite");
+        st.refresh_model();
+        assert_eq!(st.crystal_projections().0.len(), 2, "refresh forces the refold");
 
         let _ = std::fs::remove_dir_all(&root);
     }

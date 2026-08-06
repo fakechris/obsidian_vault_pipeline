@@ -166,7 +166,23 @@ fn sources_section(sources: &[SourceRow]) -> String {
     if sources.is_empty() {
         return "<section><h2>Sources <span class=\"zh\">来源</span></h2><p class=\"empty\">No sources yet — drop clippings into the vault or run pinboard-sync. 暂无来源。</p></section>\n".into();
     }
-    let (sources, cap_note) = tail_window(sources, MAX_SOURCES_SHOWN);
+    // Sources are ordered by (status, title, sha) — the vector tail is NOT
+    // the newest rows, so the over-cap window selects by date instead
+    // (stable sort: same-date rows keep their status/title order).
+    let total = sources.len();
+    let (sources, cap_note): (Vec<&SourceRow>, String) = if total <= MAX_SOURCES_SHOWN {
+        (sources.iter().collect(), String::new())
+    } else {
+        let mut by_date: Vec<&SourceRow> = sources.iter().collect();
+        by_date.sort_by(|a, b| b.date.cmp(&a.date));
+        by_date.truncate(MAX_SOURCES_SHOWN);
+        (
+            by_date,
+            format!(
+                "<p class=\"hint\">showing newest {MAX_SOURCES_SHOWN} of {total} by date · 按日期仅显示最新 {MAX_SOURCES_SHOWN} 条(共 {total} 条)</p>"
+            ),
+        )
+    };
     let mut rows = String::new();
     for s in sources {
         let (en, zh, class) = source_status_label(s.status);
@@ -378,25 +394,30 @@ mod tests {
     }
 
     #[test]
-    fn sources_section_caps_rows_with_note() {
+    fn sources_section_caps_rows_newest_by_date() {
         let mut m = model();
         let template = m.sources[0].clone();
-        m.sources = (0..MAX_SOURCES_SHOWN + 5)
+        // Ascending dates with SHUFFLED vector order — the cap must select by
+        // date, not by position (build orders sources by status/title, so the
+        // vector tail is not the newest rows).
+        let n = MAX_SOURCES_SHOWN + 5;
+        m.sources = (0..n)
             .map(|i| {
                 let mut s = template.clone();
                 s.sha256 = format!("sha-{i}");
-                s.title = Some(format!("t{i}"));
+                s.title = Some(format!("t{i}."));
+                s.date = Some(format!("{:04}-01-01", 1000 + i));
                 s
             })
             .collect();
+        m.sources.reverse(); // newest FIRST in the vector — tail would be oldest
         let html = sources_section(&m.sources);
         assert!(html.contains(&format!(
-            "showing {MAX_SOURCES_SHOWN} of {}",
-            MAX_SOURCES_SHOWN + 5
+            "showing newest {MAX_SOURCES_SHOWN} of {n}"
         )));
-        // The tail survives; the head is cut.
-        assert!(html.contains("t504"));
-        assert!(!html.contains(">t4<"));
+        // The newest-by-date rows survive; the 5 oldest are cut.
+        assert!(html.contains(&format!("t{}.", n - 1)));
+        assert!(!html.contains("t4."));
     }
 
     fn model() -> IndexModel {
