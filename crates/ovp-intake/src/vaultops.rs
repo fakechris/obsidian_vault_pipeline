@@ -32,21 +32,31 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 /// first use), fsynced before returning. `flush()` on a bare `File` is a
 /// no-op — every ledger goes through here, and without `sync_data` a power
 /// loss can drop the tail of any of them (intake dedup state, daily attempts,
-/// the crystal ledger). One fsync per appended record is cheap at ledger
-/// write rates.
+/// the crystal ledger). When this append CREATES the ledger, the parent
+/// directory is fsynced too: syncing file contents does not persist the new
+/// directory entry, and losing it would silently erase the whole ledger the
+/// caller was just told is durable. One fsync per appended record is cheap
+/// at ledger write rates.
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
     let line = serde_json::to_string(value).map_err(|e| format!("serializing record: {e}"))?;
+    let created = !path.exists();
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| format!("opening {}: {e}", path.display()))?;
     writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
-    f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))
+    f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))?;
+    if let Some(parent) = path.parent().filter(|_| created) {
+        std::fs::File::open(parent)
+            .and_then(|d| d.sync_all())
+            .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
+    }
+    Ok(())
 }
 
 /// Read a whole JSONL ledger. Missing file → empty (first run); a malformed
