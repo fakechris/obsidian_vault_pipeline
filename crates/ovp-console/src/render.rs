@@ -10,6 +10,33 @@ use crate::{claim_status_label, source_status_label};
 /// `.ovp/reports/` — the truncation is announced, never silent.
 const MAX_RUNS_SHOWN: usize = 20;
 
+/// Row caps for the corpus-proportional sections. The console is a static
+/// snapshot page rewritten every run — uncapped, it grows linearly with the
+/// corpus (a 100x vault would render a HTML file no browser opens). The
+/// portal SPA is the surface for full browsing; here the TAIL of each list
+/// is kept (chronological inputs → newest survive) and the truncation is
+/// announced, never silent.
+const MAX_SOURCES_SHOWN: usize = 500;
+const MAX_PACKS_SHOWN: usize = 200;
+const MAX_CLAIMS_SHOWN: usize = 500;
+
+/// The trailing `cap` window of a list plus a bilingual "showing N of M"
+/// hint (empty when nothing was cut) — the shared shape for every capped
+/// section.
+fn tail_window<T>(items: &[T], cap: usize) -> (&[T], String) {
+    let total = items.len();
+    if total <= cap {
+        return (items, String::new());
+    }
+    let shown = &items[total - cap..];
+    let note = format!(
+        "<p class=\"hint\">showing {} of {total} · 仅显示 {} 条(共 {total} 条)</p>",
+        shown.len(),
+        shown.len()
+    );
+    (shown, note)
+}
+
 /// From `.ovp/console/index.html` back up to the vault root.
 const VAULT_REL: &str = "../..";
 
@@ -139,6 +166,7 @@ fn sources_section(sources: &[SourceRow]) -> String {
     if sources.is_empty() {
         return "<section><h2>Sources <span class=\"zh\">来源</span></h2><p class=\"empty\">No sources yet — drop clippings into the vault or run pinboard-sync. 暂无来源。</p></section>\n".into();
     }
+    let (sources, cap_note) = tail_window(sources, MAX_SOURCES_SHOWN);
     let mut rows = String::new();
     for s in sources {
         let (en, zh, class) = source_status_label(s.status);
@@ -162,7 +190,7 @@ fn sources_section(sources: &[SourceRow]) -> String {
         ));
     }
     format!(
-        "<section><h2>Sources <span class=\"zh\">来源</span></h2>\n<table><thead><tr><th>status · 状态</th><th>title · 标题</th><th>date · 日期</th><th>location · 位置</th><th>provenance · 溯源</th></tr></thead><tbody>\n{rows}</tbody></table>\n</section>\n"
+        "<section><h2>Sources <span class=\"zh\">来源</span></h2>\n<table><thead><tr><th>status · 状态</th><th>title · 标题</th><th>date · 日期</th><th>location · 位置</th><th>provenance · 溯源</th></tr></thead><tbody>\n{rows}</tbody></table>{cap_note}\n</section>\n"
     )
 }
 
@@ -170,6 +198,7 @@ fn packs_section(packs: &[PackRow]) -> String {
     if packs.is_empty() {
         return "<section><h2>Reader Packs <span class=\"zh\">阅读包</span></h2><p class=\"empty\">No reader packs yet. 暂无阅读包。</p></section>\n".into();
     }
+    let (packs, cap_note) = tail_window(packs, MAX_PACKS_SHOWN);
     let mut cards = String::new();
     for p in packs {
         let mut titles = String::new();
@@ -188,7 +217,7 @@ fn packs_section(packs: &[PackRow]) -> String {
         ));
     }
     format!(
-        "<section><h2>Reader Packs <span class=\"zh\">阅读包</span></h2>\n<div class=\"cards\">{cards}</div>\n</section>\n"
+        "<section><h2>Reader Packs <span class=\"zh\">阅读包</span></h2>\n<div class=\"cards\">{cards}</div>{cap_note}\n</section>\n"
     )
 }
 
@@ -208,6 +237,7 @@ fn crystal_section(model: &IndexModel) -> String {
     }
     let mut out = String::from("<section><h2>Crystal <span class=\"zh\">结晶主张</span></h2>\n");
     if !durable.is_empty() {
+        let (durable, cap_note) = tail_window(&durable, MAX_CLAIMS_SHOWN);
         out.push_str("<h3>Durable <span class=\"zh\">持久化</span></h3><ul class=\"feed\">\n");
         for c in durable {
             out.push_str(&format!(
@@ -223,8 +253,10 @@ fn crystal_section(model: &IndexModel) -> String {
             ));
         }
         out.push_str("</ul>\n");
+        out.push_str(&cap_note);
     }
     if !rest.is_empty() {
+        let (rest, cap_note) = tail_window(&rest, MAX_CLAIMS_SHOWN);
         out.push_str("<h3>Under review / lifecycle <span class=\"zh\">复核与生命周期</span></h3><ul class=\"feed\">\n");
         for c in rest {
             let (en, zh, class) = claim_status_label(c.status);
@@ -239,6 +271,7 @@ fn crystal_section(model: &IndexModel) -> String {
             ));
         }
         out.push_str("</ul>\n");
+        out.push_str(&cap_note);
     }
     out.push_str("</section>\n");
     out
@@ -328,6 +361,43 @@ footer{margin-top:40px;color:var(--dim);font-size:11px}
 mod tests {
     use super::*;
     use ovp_index::{ClaimRow, OpsState, PackRow, RunRow, SourceRow, Totals};
+
+    #[test]
+    fn tail_window_keeps_tail_and_announces_truncation() {
+        let items: Vec<usize> = (0..10).collect();
+        // Under the cap: untouched slice, no note — byte-identical rendering.
+        let (shown, note) = tail_window(&items, 10);
+        assert_eq!(shown.len(), 10);
+        assert!(note.is_empty());
+        // Over the cap: the TAIL survives (chronological input → newest kept)
+        // and the cut is announced.
+        let (shown, note) = tail_window(&items, 3);
+        assert_eq!(shown, &[7, 8, 9]);
+        assert!(note.contains("showing 3 of 10"));
+        assert!(note.contains("共 10 条"));
+    }
+
+    #[test]
+    fn sources_section_caps_rows_with_note() {
+        let mut m = model();
+        let template = m.sources[0].clone();
+        m.sources = (0..MAX_SOURCES_SHOWN + 5)
+            .map(|i| {
+                let mut s = template.clone();
+                s.sha256 = format!("sha-{i}");
+                s.title = Some(format!("t{i}"));
+                s
+            })
+            .collect();
+        let html = sources_section(&m.sources);
+        assert!(html.contains(&format!(
+            "showing {MAX_SOURCES_SHOWN} of {}",
+            MAX_SOURCES_SHOWN + 5
+        )));
+        // The tail survives; the head is cut.
+        assert!(html.contains("t504"));
+        assert!(!html.contains(">t4<"));
+    }
 
     fn model() -> IndexModel {
         IndexModel {
