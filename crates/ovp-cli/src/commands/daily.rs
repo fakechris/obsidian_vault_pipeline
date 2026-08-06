@@ -704,6 +704,7 @@ fn run_inner(
     let index_rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
+    crate::commands::index_cmd::shadow_sqlite(&args.vault_root, &model, &evidence);
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
     let _ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
 

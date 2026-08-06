@@ -306,6 +306,7 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     for state in [
         ".ovp/daily-runs.jsonl", ".ovp/intake.jsonl", ".ovp/pinboard-sync.jsonl",
         ".ovp/reports/daily-e2e.json", ".ovp/index/index.json", ".ovp/index/evidence.json",
+        ".ovp/index/read-model.sqlite", // stage-3 shadow, built beside the JSON projections
         ".ovp/console/index.html", "60-Logs/pipeline.jsonl",
     ] {
         assert!(vault.join(state).exists(), "missing {state}");

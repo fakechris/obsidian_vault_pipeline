@@ -18,6 +18,32 @@ pub struct IndexArgs {
     pub date: String,
 }
 
+/// Shadow-build the SQLite read-model and verify parity against the JSON
+/// projections it was built from (stage 3 of storage-read-model.md). Never
+/// fails the pipeline: the JSON files remain the serving projection during
+/// the shadow soak — a shadow failure is a LOUD warning to investigate, not
+/// a reason to lose a daily run. Skipped for mid-run refreshes (transient
+/// projections; the terminal write always shadows).
+pub(crate) fn shadow_sqlite(
+    vault_root: &std::path::Path,
+    model: &ovp_index::IndexModel,
+    evidence: &ovp_index::EvidenceModel,
+) {
+    let outcome = ovp_index::sqlite::write_shadow(vault_root, model, Some(evidence)).and_then(
+        |rel| {
+            ovp_index::sqlite::verify_shadow(vault_root, model, Some(evidence))
+                .map(|parity| (rel, parity))
+        },
+    );
+    match outcome {
+        Ok((rel, p)) => println!(
+            "  sqlite shadow: {rel} (sources={} packs={} claims={} cards={} units={} sampled={})",
+            p.sources, p.packs, p.claims, p.cards, p.units, p.sampled
+        ),
+        Err(e) => eprintln!("warning: sqlite shadow projection FAILED PARITY OR BUILD: {e}"),
+    }
+}
+
 pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
     // Coarse phase lines (flushed) so a large-vault rebuild shows the
     // scan/hash/fold boundaries instead of one silent pause under nohup.
@@ -27,6 +53,7 @@ pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
     let rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
+    shadow_sqlite(&args.vault_root, &model, &evidence);
     let t = &model.totals;
     println!("index [{}]: {rel}", args.date);
     println!(
