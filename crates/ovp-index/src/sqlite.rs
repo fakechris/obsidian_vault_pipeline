@@ -598,24 +598,123 @@ pub fn fts_search(
     fts_search_at(&path, surface, query, limit)
 }
 
-fn fts_search_at(
-    path: &Path,
-    surface: FtsSurface,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<FtsHit>, String> {
-    let tokens = tokenize_for_fts(query);
-    let terms: Vec<String> = tokens
+/// A read-only handle on ONE shadow generation. The underlying fd survives
+/// a concurrent promotion (POSIX rename keeps open files alive), so every
+/// query through one reader sees the SAME snapshot — checking the generation
+/// on one connection and searching on another could straddle a promotion.
+/// Opening validates the analyzer stamp once.
+pub struct ShadowReader {
+    conn: Connection,
+}
+
+/// One ranked claim hit from the claims surface. `claim_key` is the
+/// canonical identity when the row has one; `(claim_id, status)` is the
+/// legacy fallback — claim_id alone can repeat even within a status.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimRankHit {
+    pub claim_key: Option<String>,
+    pub claim_id: String,
+    pub status: String,
+}
+
+impl ShadowReader {
+    pub fn open(vault_root: &Path) -> Result<Self, String> {
+        let path = sqlite_path(vault_root)?;
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("opening {}: {e}", path.display()))?;
+        check_analyzer(&conn)?;
+        Ok(Self { conn })
+    }
+
+    /// This snapshot's generation stamps — (built_at, run_id) from meta.
+    /// Callers compare with the projections they actually loaded: the
+    /// promotion contract keeps last-good when a rebuild fails, so the
+    /// shadow can legitimately lag the JSON generation and MUST NOT serve
+    /// for it.
+    pub fn generation(&self) -> Result<(String, String), String> {
+        let get = |key: &str| -> Result<String, String> {
+            self.conn
+                .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+                .map_err(|e| format!("reading meta {key}: {e}"))
+        };
+        Ok((get("built_at")?, get("run_id")?))
+    }
+
+    /// BM25 top-k over one surface — see [`fts_search`] for the contract.
+    pub fn fts_search(
+        &self,
+        surface: FtsSurface,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FtsHit>, String> {
+        fts_search_on(&self.conn, surface, query, limit)
+    }
+
+    /// bm25-ranked claim hits with status eligibility applied IN the query,
+    /// BEFORE the top-k — the claims surface also indexes superseded and
+    /// retracted rows, and a pile of better-scoring ineligible rows must not
+    /// eat the cap while the payload reads complete. `statuses` must come
+    /// from the fixed vocabulary (defense against SQL splicing).
+    pub fn fts_claims_rank(
+        &self,
+        query: &str,
+        limit: usize,
+        statuses: &[&str],
+    ) -> Result<Vec<ClaimRankHit>, String> {
+        const ALLOWED: [&str; 4] = ["durable", "caveated", "superseded", "retracted"];
+        if statuses.is_empty() || statuses.iter().any(|s| !ALLOWED.contains(s)) {
+            return Err(format!("invalid claim status filter: {statuses:?}"));
+        }
+        let terms = fts_query_terms(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let status_list = statuses
+            .iter()
+            .map(|s| format!("'{s}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let run = |match_expr: &str| -> Result<Vec<ClaimRankHit>, String> {
+            let sql = format!(
+                "SELECT b.claim_key, b.claim_id, b.status FROM claims_fts
+                 JOIN claims b ON b.rowid = claims_fts.rowid
+                 WHERE claims_fts MATCH ?1 AND b.status IN ({status_list})
+                 ORDER BY bm25(claims_fts) LIMIT ?2"
+            );
+            self.conn
+                .prepare(&sql)
+                .and_then(|mut st| {
+                    st.query_map((match_expr, limit as i64), |r| {
+                        Ok(ClaimRankHit {
+                            claim_key: r.get(0)?,
+                            claim_id: r.get(1)?,
+                            status: r.get(2)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(|e| format!("fts claims rank: {e}"))
+        };
+        let hits = run(&terms.join(" "))?;
+        if !hits.is_empty() || terms.len() == 1 {
+            return Ok(hits);
+        }
+        run(&terms.join(" OR "))
+    }
+}
+
+/// Quote each analyzer token into an fts5 string term (no query-syntax
+/// injection) — shared by every fts query entry point.
+fn fts_query_terms(query: &str) -> Vec<String> {
+    tokenize_for_fts(query)
         .split_whitespace()
         .map(|t| format!("\"{}\"", t.replace('"', "")))
-        .collect();
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("opening {}: {e}", path.display()))?;
-    // Enforce the analyzer stamp BEFORE matching: new query tokens against
-    // old postings silently miss — the whole point of the version stamp.
+        .collect()
+}
+
+/// Enforce the analyzer stamp BEFORE matching: new query tokens against old
+/// postings silently miss — the whole point of the version stamp.
+fn check_analyzer(conn: &Connection) -> Result<(), String> {
     let analyzer: String = conn
         .query_row("SELECT value FROM meta WHERE key = 'fts_analyzer'", [], |r| r.get(0))
         .map_err(|e| format!("reading fts_analyzer stamp: {e}"))?;
@@ -624,6 +723,31 @@ fn fts_search_at(
             "shadow was built with analyzer {analyzer}, this binary speaks \
              {FTS_ANALYZER_VERSION} — rebuild the projection (`ovp2 index`) first"
         ));
+    }
+    Ok(())
+}
+
+fn fts_search_at(
+    path: &Path,
+    surface: FtsSurface,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FtsHit>, String> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    check_analyzer(&conn)?;
+    fts_search_on(&conn, surface, query, limit)
+}
+
+fn fts_search_on(
+    conn: &Connection,
+    surface: FtsSurface,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FtsHit>, String> {
+    let terms = fts_query_terms(query);
+    if terms.is_empty() {
+        return Ok(Vec::new());
     }
     let (fts, base, id_col) = surface.tables();
 
