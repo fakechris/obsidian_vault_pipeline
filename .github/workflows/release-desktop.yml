@@ -57,12 +57,17 @@ jobs:
         run: node scripts/release/set-desktop-version.mjs "$TAG"
 
       # The sidecar the in-app scheduler exec's. Live enrichment features on;
-      # `embed` (ONNX semantic themes) is OFF — its `ort` tree has no clean
-      # x86_64-apple-darwin build (why dist dropped that target) and it bloats
-      # the DMG. Themes stay a follow-up (lazy model download). Keeps both
-      # arches identical and small. Uses scripts/build-desktop-sidecar.sh so
-      # local rebuilds can't silently ship a no-feature binary (2026-07-31).
+      # `embed` (ONNX semantic themes) is OFF FOR RELEASES — its `ort` tree
+      # has no clean x86_64-apple-darwin build (why dist dropped that target)
+      # and it bloats the DMG; both arches stay identical and small. The
+      # feature set is PINNED here because the script's local default now
+      # includes embed on arm64 (2026-08-06: a lean locally-staged sidecar
+      # couldn't run crystal-themes, and the themes projection silently went
+      # a month stale). Uses scripts/build-desktop-sidecar.sh so local
+      # rebuilds can't silently ship a no-feature binary (2026-07-31).
       - name: Build ovp2 sidecar
+        env:
+          OVP2_SIDECAR_FEATURES: anthropic,pinboard-live,web-fetch-live,github-live
         run: bash scripts/build-desktop-sidecar.sh ${{ matrix.target }}
 
       - name: Build the portal (embedded by ovp-server)

@@ -34,7 +34,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 TRIPLE="${1:-$(rustc -vV | awk '/^host:/{print $2}')}"
-FEATURES="${OVP2_SIDECAR_FEATURES:-anthropic,pinboard-live,web-fetch-live,github-live,embed}"
+# Per-target default for LOCAL staging: `embed` pulls in `ort`, which has no
+# clean Intel-mac build — x64 keeps the lean set, arm64 (every dev/operator
+# machine) gets the embedder so a locally staged sidecar can run
+# crystal-themes (2026-08-06: a lean sidecar left themes.json a month stale).
+# RELEASES pin their own lean set via OVP2_SIDECAR_FEATURES in
+# release-desktop.yml — this default never changes shipped DMGs.
+if [ -n "${OVP2_SIDECAR_FEATURES:-}" ]; then
+  FEATURES="$OVP2_SIDECAR_FEATURES"
+elif [ "$TRIPLE" = "x86_64-apple-darwin" ]; then
+  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live"
+else
+  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live,embed"
+fi
 OUT_DIR="apps/desktop/src-tauri/binaries"
 OUT="$OUT_DIR/ovp2-${TRIPLE}"
 
