@@ -209,7 +209,7 @@ Only leave the machine when **you** configure them:
 
 - **LLM calls** — text you process is sent to the provider behind your API key (or local endpoint). No key → offline/replay only.
 - **Pinboard** — only with `--live` and your token (never logged).
-- **Web / GitHub enrichment** — fetches bookmarked URLs (and repo metadata for GitHub links) when enabled.
+- **Web / GitHub enrichment** — fetches bookmarked URLs (and repo metadata for GitHub links) when enabled. Set `XQUIK_API_KEY` to resolve X/Twitter status bookmarks through Xquik.
 - **Manual diagnostic compare** — only if you run the compare command against an external service you choose; not part of `daily`.
 - **Publishing** — `ovp2 publish` is the only command that pushes anything outward, only to a
   repo you name, and only durable claims.
@@ -218,6 +218,8 @@ What it costs is visible too: every metered LLM call lands in `.ovp/usage/`, and
 `ovp2 usage` reports tokens by day and by lane against your budget line. The budget is
 **soft** — it reports, it does not cut you off mid-run. Per-run limits are the throttle
 (`--max-sources`, the enrichment queue's own cap).
+
+Xquik is an independent third-party service. Not affiliated with X Corp. "Twitter" and "X" are trademarks of X Corp.
 
 ---
 
