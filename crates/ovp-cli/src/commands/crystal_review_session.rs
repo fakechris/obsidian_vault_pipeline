@@ -1250,10 +1250,12 @@ mod tests {
     fn legacy_crystal_review_rejects_queue_state_actions() {
         // This test drives the product `run()`, which (via run_index) builds
         // the sqlite shadow — keep it out of the developer's REAL platform
-        // cache. Constant value: benign if a parallel test sets it too.
-        unsafe {
-            std::env::set_var("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-test-cache"));
-        }
+        // cache without touching the process environment (set_var races
+        // parallel test threads). Gitignored target/ path; OnceLock is
+        // first-call-wins so concurrent setters are benign.
+        ovp_index::sqlite::override_cache_base(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/ovp-test-cache"),
+        );
         let tmp = tempfile::tempdir().unwrap();
         let cand = tmp.path().join("candidate.json");
         fs::write(

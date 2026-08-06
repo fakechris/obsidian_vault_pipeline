@@ -31,9 +31,23 @@ use crate::model::IndexModel;
 const SQLITE_FILE: &str = "read-model.sqlite";
 const SCHEMA_VERSION: &str = "1";
 
-/// The machine-local cache root: `OVP_CACHE_DIR` when set (tests, portable
-/// setups), else the platform cache directory.
+/// Process-wide cache-base override, first call wins. For EMBEDDERS and
+/// in-process tests: mutating `OVP_CACHE_DIR` via `set_var` is unsafe under
+/// parallel test threads (the race is on the environment block itself), and
+/// the env var only reliably covers child processes.
+static CACHE_BASE_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn override_cache_base(path: PathBuf) {
+    let _ = CACHE_BASE_OVERRIDE.set(path);
+}
+
+/// The machine-local cache root: the in-process override, else
+/// `OVP_CACHE_DIR` (child processes, portable setups), else the platform
+/// cache directory.
 fn cache_base() -> Result<PathBuf, String> {
+    if let Some(dir) = CACHE_BASE_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     if let Some(dir) = std::env::var_os("OVP_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
     }
@@ -68,10 +82,17 @@ fn vault_fingerprint(vault_root: &Path) -> String {
 
 /// Where this vault's shadow database lives on THIS machine.
 pub fn sqlite_path(vault_root: &Path) -> Result<PathBuf, String> {
-    Ok(cache_base()?
+    Ok(sqlite_path_in(&cache_base()?, vault_root))
+}
+
+/// [`sqlite_path`] under an EXPLICIT cache base — no env/override resolution.
+/// Lets a test that handed `OVP_CACHE_DIR` to a child process locate the
+/// promoted database without mutating its own environment.
+pub fn sqlite_path_in(cache_base: &Path, vault_root: &Path) -> PathBuf {
+    cache_base
         .join("ovp")
         .join(vault_fingerprint(vault_root))
-        .join(SQLITE_FILE))
+        .join(SQLITE_FILE)
 }
 
 /// serde's snake_case string for a status enum — the SAME strings the JSON
@@ -153,19 +174,31 @@ pub fn write_shadow(
         .ok_or_else(|| format!("{} has no parent directory", target.display()))?;
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("creating {}: {e}", parent.display()))?;
-    // Sweep stale tmp generations from crashed builds before making a new one.
+    // Sweep stale tmp generations from crashed builds. Scoped: only OUR
+    // pid's leftover (a same-pid concurrent build cannot exist) plus foreign
+    // tmps old enough to be certainly dead — `index`/`console` do not hold
+    // daily's RunLock, so a blanket sweep could unlink a live concurrent
+    // candidate mid-build and fail its verify for no reason.
+    const FOREIGN_TMP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+    let own_tmp_name = format!("read-model.sqlite.tmp.{}", std::process::id());
     if let Ok(entries) = std::fs::read_dir(parent) {
         for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("read-model.sqlite.tmp.")
-            {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("read-model.sqlite.tmp.") {
+                continue;
+            }
+            let dead_foreign = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .is_some_and(|age| age > FOREIGN_TMP_MAX_AGE);
+            if name == own_tmp_name || dead_foreign {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
-    let tmp = parent.join(format!("read-model.sqlite.tmp.{}", std::process::id()));
+    let tmp = parent.join(own_tmp_name);
 
     let outcome = build_into(&tmp, model, evidence)
         // Flush the candidate BEFORE validating/promoting: the build runs
@@ -503,6 +536,27 @@ fn verify_at(
     expect("pack_card_titles", count("pack_card_titles")?, want_card_titles)?;
     let want_claim_sources: usize = model.claims.iter().map(|c| c.sources.len()).sum();
     expect("claim_sources", count("claim_sources")?, want_claim_sources)?;
+
+    // meta scalars: built_at exists precisely so a stale projection cannot
+    // render like a fresh one — the verifier must not skip the one surface
+    // it writes but never reads.
+    let mut got_meta: Vec<(String, String)> = conn
+        .prepare("SELECT key, value FROM meta ORDER BY key")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading meta: {e}"))?;
+    got_meta.sort();
+    let mut want_meta = vec![
+        ("schema_version".to_string(), SCHEMA_VERSION.to_string()),
+        ("index_schema".to_string(), model.schema.clone()),
+        ("date".to_string(), model.date.clone()),
+        ("built_at".to_string(), model.built_at.clone().unwrap_or_default()),
+        ("run_id".to_string(), model.run_id.clone().unwrap_or_default()),
+    ];
+    want_meta.sort();
+    expect_row("meta", "scalars", &json!(got_meta), &json!(want_meta))?;
 
     let mut sampled = 0usize;
 

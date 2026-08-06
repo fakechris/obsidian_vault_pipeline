@@ -86,12 +86,26 @@ fn seed_cassettes(cache_dir: &Path, source: &SourceDoc, quote: &str, text: &str)
     rec.call(&card_model_request(&accepted)).unwrap();
 }
 
+thread_local! {
+    /// Per-test cache root for the sqlite shadow (each #[test] runs on its
+    /// own thread). Set from the test's OWN tempdir so the cache self-cleans
+    /// on drop — never the developer's real platform cache, never an
+    /// accumulating fixed path in the system temp dir, and no process-env
+    /// mutation (unsafe under parallel test threads).
+    static TEST_CACHE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn set_test_cache(dir: &std::path::Path) {
+    TEST_CACHE.with(|c| *c.borrow_mut() = Some(dir.to_path_buf()));
+}
+
 fn bin() -> Command {
+    let cache = TEST_CACHE
+        .with(|c| c.borrow().clone())
+        .expect("test must call set_test_cache(tempdir) before bin()");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ovp2"));
-    // Derived-database cache must never land in the developer's real
-    // platform cache dir during tests — point it into the system temp dir
-    // (per-vault fingerprint subdirs keep parallel tests apart).
-    cmd.env("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-e2e-cache"));
+    cmd.env("OVP_CACHE_DIR", &cache);
     cmd
 }
 
@@ -148,6 +162,8 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
 /// runs report instead of aborting.
 #[test]
 fn daily_and_pinboard_sync_inherit_first_sync_flood_guard() {
+    let cache = tempfile::tempdir().unwrap();
+    set_test_cache(cache.path());
     let tmp = tempfile::tempdir().unwrap();
     let vault = tmp.path().join("vault");
     // A real vault always has the raw inbox; the plan phase requires it.
@@ -255,6 +271,8 @@ fn daily_and_pinboard_sync_inherit_first_sync_flood_guard() {
 
 #[test]
 fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
+    let cache = tempfile::tempdir().unwrap();
+    set_test_cache(cache.path());
     let tmp = tempfile::tempdir().unwrap();
     let vault = tmp.path().join("vault");
     let cache_dir = tmp.path().join("cassettes");
@@ -316,13 +334,10 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         assert!(vault.join(state).exists(), "missing {state}");
     }
     // Stage-3 shadow: in the MACHINE-LOCAL cache (never inside the synced
-    // vault), resolved through the same library path the binary uses.
-    let shadow = {
-        // SAFETY-of-parity: set the same override the child process ran with
-        // so sqlite_path resolves identically. Test-process-local.
-        unsafe { std::env::set_var("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-e2e-cache")) };
-        ovp_index::sqlite::sqlite_path(&vault).expect("cache path resolves")
-    };
+    // vault), located through the same library helper the binary's env
+    // resolution feeds into — no process-env mutation needed.
+    let cache_root = TEST_CACHE.with(|c| c.borrow().clone()).expect("cache set");
+    let shadow = ovp_index::sqlite::sqlite_path_in(&cache_root, &vault);
     assert!(shadow.exists(), "missing sqlite shadow at {}", shadow.display());
     assert!(
         !vault.join(".ovp/index/read-model.sqlite").exists(),
@@ -546,6 +561,8 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
 /// duration. `--refresh-every 0` preserves the old behavior: no mid-run rebuild.
 #[test]
 fn daily_periodic_refresh_rebuilds_projection_mid_run() {
+    let cache = tempfile::tempdir().unwrap();
+    set_test_cache(cache.path());
     let tmp = tempfile::tempdir().unwrap();
     let cache_dir = tmp.path().join("cassettes");
 
