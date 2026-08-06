@@ -574,6 +574,7 @@ mod tests {
             last_reason: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             tags_inferred: inferred.iter().map(|t| t.to_string()).collect(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         }
     }
