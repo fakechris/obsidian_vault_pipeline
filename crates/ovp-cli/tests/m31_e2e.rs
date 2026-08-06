@@ -87,7 +87,12 @@ fn seed_cassettes(cache_dir: &Path, source: &SourceDoc, quote: &str, text: &str)
 }
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ovp2"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ovp2"));
+    // Derived-database cache must never land in the developer's real
+    // platform cache dir during tests — point it into the system temp dir
+    // (per-vault fingerprint subdirs keep parallel tests apart).
+    cmd.env("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-e2e-cache"));
+    cmd
 }
 
 fn run_ok(cmd: &mut Command) -> String {
@@ -306,11 +311,23 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     for state in [
         ".ovp/daily-runs.jsonl", ".ovp/intake.jsonl", ".ovp/pinboard-sync.jsonl",
         ".ovp/reports/daily-e2e.json", ".ovp/index/index.json", ".ovp/index/evidence.json",
-        ".ovp/index/read-model.sqlite", // stage-3 shadow, built beside the JSON projections
         ".ovp/console/index.html", "60-Logs/pipeline.jsonl",
     ] {
         assert!(vault.join(state).exists(), "missing {state}");
     }
+    // Stage-3 shadow: in the MACHINE-LOCAL cache (never inside the synced
+    // vault), resolved through the same library path the binary uses.
+    let shadow = {
+        // SAFETY-of-parity: set the same override the child process ran with
+        // so sqlite_path resolves identically. Test-process-local.
+        unsafe { std::env::set_var("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-e2e-cache")) };
+        ovp_index::sqlite::sqlite_path(&vault).expect("cache path resolves")
+    };
+    assert!(shadow.exists(), "missing sqlite shadow at {}", shadow.display());
+    assert!(
+        !vault.join(".ovp/index/read-model.sqlite").exists(),
+        "shadow must NOT be written inside the synced vault"
+    );
     let console = std::fs::read_to_string(vault.join(".ovp/console/index.html")).unwrap();
     assert!(console.contains("The Chunk Problem"), "console shows sources");
     assert!(console.contains("Benchmark Maxxing"));

@@ -1248,6 +1248,12 @@ mod tests {
 
     #[test]
     fn legacy_crystal_review_rejects_queue_state_actions() {
+        // This test drives the product `run()`, which (via run_index) builds
+        // the sqlite shadow — keep it out of the developer's REAL platform
+        // cache. Constant value: benign if a parallel test sets it too.
+        unsafe {
+            std::env::set_var("OVP_CACHE_DIR", std::env::temp_dir().join("ovp-test-cache"));
+        }
         let tmp = tempfile::tempdir().unwrap();
         let cand = tmp.path().join("candidate.json");
         fs::write(

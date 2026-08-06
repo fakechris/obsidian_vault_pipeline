@@ -18,27 +18,28 @@ pub struct IndexArgs {
     pub date: String,
 }
 
-/// Shadow-build the SQLite read-model and verify parity against the JSON
-/// projections it was built from (stage 3 of storage-read-model.md). Never
-/// fails the pipeline: the JSON files remain the serving projection during
-/// the shadow soak — a shadow failure is a LOUD warning to investigate, not
-/// a reason to lose a daily run. Skipped for mid-run refreshes (transient
-/// projections; the terminal write always shadows).
+/// Shadow-build the SQLite read-model (stage 3 of storage-read-model.md).
+/// `write_shadow` verifies the CANDIDATE and promotes only on parity, so the
+/// last-good generation survives any failure. Never fails the pipeline: the
+/// JSON files remain the serving projection during the shadow soak — a
+/// shadow failure is a LOUD warning to investigate, not a reason to lose a
+/// daily run. Every projection write shadows, including mid-run refreshes —
+/// a JSON-only refresh would leave the shadow stale for the rest of the run.
 pub(crate) fn shadow_sqlite(
     vault_root: &std::path::Path,
     model: &ovp_index::IndexModel,
     evidence: &ovp_index::EvidenceModel,
 ) {
-    let outcome = ovp_index::sqlite::write_shadow(vault_root, model, Some(evidence)).and_then(
-        |rel| {
-            ovp_index::sqlite::verify_shadow(vault_root, model, Some(evidence))
-                .map(|parity| (rel, parity))
-        },
-    );
-    match outcome {
-        Ok((rel, p)) => println!(
-            "  sqlite shadow: {rel} (sources={} packs={} claims={} cards={} units={} sampled={})",
-            p.sources, p.packs, p.claims, p.cards, p.units, p.sampled
+    match ovp_index::sqlite::write_shadow(vault_root, model, Some(evidence)) {
+        Ok((path, p)) => println!(
+            "  sqlite shadow: {} (sources={} packs={} claims={} cards={} units={} sampled={})",
+            path.display(),
+            p.sources,
+            p.packs,
+            p.claims,
+            p.cards,
+            p.units,
+            p.sampled
         ),
         Err(e) => eprintln!("warning: sqlite shadow projection FAILED PARITY OR BUILD: {e}"),
     }

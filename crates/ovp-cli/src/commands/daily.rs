@@ -880,6 +880,10 @@ fn rebuild_projection(
     write_index(vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(vault_root, date, &model).map_err(CliError::Io)?;
     write_evidence(vault_root, &evidence).map_err(CliError::Io)?;
+    // The shadow follows EVERY projection write (incl. this refresh and the
+    // post-tags-bootstrap rebuild) — a JSON-only refresh would leave the
+    // sqlite generation stale for the rest of the run.
+    crate::commands::index_cmd::shadow_sqlite(vault_root, &model, &evidence);
     write_console(vault_root, &model).map_err(CliError::Io)?;
     write_ops_pages(vault_root, &model).map_err(CliError::Io)?;
     Ok(())
