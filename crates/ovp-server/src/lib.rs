@@ -203,7 +203,10 @@ impl Drop for AskSlot {
 struct Cached<T> {
     loaded: bool,
     stamp: Option<SystemTime>,
-    data: Option<T>,
+    /// `Arc`, not `T`: accessors hand out a refcount bump, NOT a deep clone.
+    /// The evidence model is ~tens of MB — cloning it per request was the
+    /// portal's single largest per-request cost (storage-read-model.md §1).
+    data: Option<Arc<T>>,
 }
 
 impl<T> Default for Cached<T> {
@@ -221,6 +224,26 @@ impl<T> Default for Cached<T> {
 fn mtime_of(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
+
+/// Crystal-ledger projections (active records + claim lineage), folded once
+/// per (ledger.jsonl, themes.json) mtime pair instead of per request. Before
+/// this cache, `/api/themes`, `/api/graph`, `/api/claim/*`, and subgraph
+/// search each re-read and re-folded the ENTIRE event ledger from disk on
+/// every request — `/api/claim` did it twice (records + lineage). Both
+/// projections derive from the same files, so one cache and one invalidation
+/// rule covers them; two stamps because the theme relabel reads themes.json.
+#[derive(Default)]
+struct CrystalCache {
+    loaded: bool,
+    ledger_stamp: Option<SystemTime>,
+    themes_stamp: Option<SystemTime>,
+    /// Empty until `loaded` — both are always rebuilt together on reload.
+    records: Arc<Vec<DurableRecord>>,
+    lineage: Arc<ClaimLineageIndex>,
+}
+
+type ClaimLineageIndex =
+    std::collections::BTreeMap<String, ovp_domain::crystal::lineage::ClaimLineage>;
 
 /// Count `.md` files under `dir` recursively, skipping dotfiles/dot-dirs.
 /// Mirrors `ovp_index::build`'s `walk` (the same rule that feeds the
@@ -271,6 +294,13 @@ struct AppState {
     /// Card/unit bodies for the /api/source/:sha memory layer — same
     /// mtime-keyed auto-reload as the model, keyed on `evidence.json`.
     evidence: RwLock<Cached<EvidenceModel>>,
+    /// Folded crystal-ledger projections — see [`CrystalCache`].
+    crystal: RwLock<CrystalCache>,
+    /// Bilingual sidecars for `/api/source/:sha` — `cards_zh.json` alone is
+    /// over 10 MB on the live vault and was parsed from disk on EVERY source
+    /// request; same mtime-keyed reload as the model.
+    cards_zh: RwLock<Cached<ovp_memory::bilingual::CardsZhFile>>,
+    claims_zh: RwLock<Cached<ovp_memory::bilingual::ClaimsZhFile>>,
     /// The run-liveness heartbeat (`.ovp/last-run.json`), read LIVE (mtime
     /// auto-reload) — NOT the baked `index.json` snapshot. The heartbeat is a
     /// live sidecar: `daily` writes it before the index is rebuilt (and a crash
@@ -458,17 +488,24 @@ impl AppState {
     /// fail-loud gate for corruption.
     fn current_last_run(&self) -> Option<LastRunModel> {
         let path = self.last_run_path();
+        // The heartbeat is a few hundred bytes — unwrapping the Arc with a
+        // clone keeps every caller's `ops.last_run: Option<LastRunModel>`
+        // assignment untouched.
         freshen(&self.last_run, &path, || {
             read_last_run_model(&self.vault_root).ok().flatten()
         })
+        .map(|arc| (*arc).clone())
     }
 
     /// The index model with its `ops.last_run` field OVERLAID by the live
     /// heartbeat sidecar — so `/api/model` (and the SPA banner reading it) never
     /// sees a stale baked "running". Returns None only when there is no index
     /// at all.
+    /// The ONE accessor that still deep-clones: it must mutate `ops.last_run`
+    /// with the live heartbeat overlay. Only `/api/model` pays this; the
+    /// phase-4 summary/pagination rework removes it entirely.
     fn model_with_live_last_run(&self) -> Option<IndexModel> {
-        let mut model = self.current_model()?;
+        let mut model = (*self.current_model()?).clone();
         model.ops.last_run = self.current_last_run();
         Some(model)
     }
@@ -478,7 +515,7 @@ impl AppState {
     /// the file actually changed (or was never loaded), so a separate
     /// `daily` process rebuilding the index is picked up on the next request
     /// — the portal is never stuck on the startup snapshot.
-    fn current_model(&self) -> Option<IndexModel> {
+    fn current_model(&self) -> Option<Arc<IndexModel>> {
         let path = self.index_path();
         freshen(&self.model, &path, || read_index(&self.vault_root).ok())
     }
@@ -487,7 +524,7 @@ impl AppState {
     /// (keyed on `evidence.json`). Legitimately absent on pre-M31 vaults; a
     /// missing file caches `None` without re-reading every request, yet
     /// reloads the instant one appears.
-    fn current_evidence(&self) -> Option<EvidenceModel> {
+    fn current_evidence(&self) -> Option<Arc<EvidenceModel>> {
         let path = self.evidence_path();
         freshen(&self.evidence, &path, || {
             read_evidence(&self.vault_root).ok()
@@ -513,10 +550,86 @@ impl AppState {
             &self.last_run_path(),
             read_last_run_model(&self.vault_root).ok().flatten(),
         );
+        // The crystal + bilingual caches key on mtimes too — a same-mtime
+        // rewrite (the case /api/refresh exists for) must reset them as
+        // well, or graph/claim/source responses stay stale after a 200.
+        *self.crystal.write().unwrap() = CrystalCache::default();
+        force_reload(&self.cards_zh, &self.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL), {
+            ovp_memory::bilingual::CardsZhFile::load(&self.vault_root).ok()
+        });
+        force_reload(&self.claims_zh, &self.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL), {
+            ovp_memory::bilingual::ClaimsZhFile::load(&self.vault_root).ok()
+        });
     }
 
     fn console_dir(&self) -> PathBuf {
         self.vault_root.join(self.layout.console_dir())
+    }
+
+    /// Folded crystal projections, reloaded only when `ledger.jsonl` or
+    /// `themes.json` changed on disk. Same double-checked locking shape as
+    /// [`freshen`]; both projections rebuild together so a caller can never
+    /// pair records from one ledger generation with lineage from another.
+    fn crystal_projections(&self) -> (Arc<Vec<DurableRecord>>, Arc<ClaimLineageIndex>) {
+        let store = self.vault_root.join(self.layout.crystal_store_dir());
+        let ledger = store.join("ledger.jsonl");
+        let themes = store.join("themes.json");
+
+        let hit = |cache: &CrystalCache,
+                   ledger_stamp: &Option<SystemTime>,
+                   themes_stamp: &Option<SystemTime>| {
+            if cache.loaded
+                && cache.ledger_stamp == *ledger_stamp
+                && cache.themes_stamp == *themes_stamp
+            {
+                Some((cache.records.clone(), cache.lineage.clone()))
+            } else {
+                None
+            }
+        };
+
+        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        {
+            let guard = self.crystal.read().unwrap();
+            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+                return pair;
+            }
+        }
+        let mut guard = self.crystal.write().unwrap();
+        // Re-stat under the write lock — the files could have changed between
+        // the read guard's stat and acquiring the write lock.
+        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+            return pair;
+        }
+        let records = Arc::new(readers::load_active_records(&self.vault_root, &self.layout));
+        let lineage = Arc::new(readers::load_lineage_index(&self.vault_root, &self.layout));
+        *guard = CrystalCache {
+            loaded: true,
+            ledger_stamp,
+            themes_stamp,
+            records: records.clone(),
+            lineage: lineage.clone(),
+        };
+        (records, lineage)
+    }
+
+    /// Cached `cards_zh.json`, mtime-keyed. A missing file loads as the empty
+    /// default (bilingual sidecars are optional) without re-reading per
+    /// request, and reloads the moment a translate run writes one.
+    fn current_cards_zh(&self) -> Option<Arc<ovp_memory::bilingual::CardsZhFile>> {
+        let path = self.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL);
+        freshen(&self.cards_zh, &path, || {
+            ovp_memory::bilingual::CardsZhFile::load(&self.vault_root).ok()
+        })
+    }
+
+    /// Cached `claims_zh.json` — same shape as [`Self::current_cards_zh`].
+    fn current_claims_zh(&self) -> Option<Arc<ovp_memory::bilingual::ClaimsZhFile>> {
+        let path = self.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL);
+        freshen(&self.claims_zh, &path, || {
+            ovp_memory::bilingual::ClaimsZhFile::load(&self.vault_root).ok()
+        })
     }
 }
 
@@ -525,11 +638,11 @@ impl AppState {
 /// take the write guard and RE-CHECK the mtime under it (double-checked
 /// locking) so a burst of concurrent requests reloads once, not N times.
 /// `load` re-reads+parses the file and returns `None` if absent/invalid.
-fn freshen<T: Clone>(
+fn freshen<T>(
     cache: &RwLock<Cached<T>>,
     path: &Path,
     load: impl FnOnce() -> Option<T>,
-) -> Option<T> {
+) -> Option<Arc<T>> {
     let disk = mtime_of(path);
     {
         let guard = cache.read().unwrap();
@@ -545,7 +658,7 @@ fn freshen<T: Clone>(
     if guard.loaded && guard.stamp == disk {
         return guard.data.clone();
     }
-    let data = load();
+    let data = load().map(Arc::new);
     *guard = Cached {
         loaded: true,
         stamp: disk,
@@ -561,7 +674,7 @@ fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
     *cache.write().unwrap() = Cached {
         loaded: true,
         stamp,
-        data,
+        data: data.map(Arc::new),
     };
 }
 
@@ -620,6 +733,9 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         layout: VaultLayout::new(),
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
+        crystal: RwLock::new(CrystalCache::default()),
+        cards_zh: RwLock::new(Cached::default()),
+        claims_zh: RwLock::new(Cached::default()),
         last_run: RwLock::new(Cached::default()),
         viz_dir: config.viz_dir,
         ask_client: config.ask_client,
@@ -688,6 +804,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
 /// immediately, so every other request stays snappy while an ask is in
 /// flight.
 fn serve_loop(server: &Server, state: &Arc<AppState>) {
+    let pool_tx = spawn_request_pool(state);
     for mut request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
@@ -746,14 +863,74 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 continue;
             }
         }
-        let body = if method == Method::Post {
-            read_post_body(&mut request)
-        } else {
-            String::new()
-        };
-        let resp = dispatch(state, method, &path, &body);
-        let _ = request.respond(resp);
+        // Everything else — every GET and the remaining POSTs — goes to the
+        // bounded worker pool. Inline dispatch on the accept loop meant ONE
+        // slow handler (a cold model reload, a fulltext scan) stalled the
+        // whole portal; now it stalls one worker. try_send gives backpressure:
+        // a full queue answers 503 immediately instead of buffering without
+        // bound.
+        match pool_tx.try_send(request) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(request)) => {
+                let body = serde_json::json!({
+                    "error": "server busy — request queue full, retry shortly"
+                });
+                let _ = request.respond(json_response(503, &body.to_string()));
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(mut request)) => {
+                // Workers only exit when the sender drops — reaching here
+                // means the pool died; answer inline rather than hanging.
+                let path = request.url().to_string();
+                let method = request.method().clone();
+                let body = if method == Method::Post {
+                    read_post_body(&mut request)
+                } else {
+                    String::new()
+                };
+                let resp = dispatch(state, method, &path, &body);
+                let _ = request.respond(resp);
+            }
+        }
     }
+}
+
+/// Worker count for the general request pool — enough that a handful of slow
+/// reads cannot freeze the portal, small enough that per-thread stacks and
+/// cache contention stay negligible on a desktop machine.
+const GET_WORKER_THREADS: usize = 8;
+/// Accept-queue depth before try_send answers 503 — bounds memory when a
+/// client floods faster than workers drain.
+const GET_QUEUE_DEPTH: usize = 128;
+
+/// Spawn the bounded worker pool: N threads draining one sync channel. Each
+/// worker reads the body (slow bodies pin a worker, never the accept loop)
+/// and dispatches. The pool lives for the server's lifetime; the channel
+/// disconnects only if the accept loop exits first.
+fn spawn_request_pool(state: &Arc<AppState>) -> std::sync::mpsc::SyncSender<tiny_http::Request> {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<tiny_http::Request>(GET_QUEUE_DEPTH);
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    for _ in 0..GET_WORKER_THREADS {
+        let rx = Arc::clone(&rx);
+        let state = Arc::clone(state);
+        std::thread::spawn(move || {
+            loop {
+                let next = rx.lock().unwrap().recv();
+                let Ok(mut request) = next else {
+                    break;
+                };
+                let path = request.url().to_string();
+                let method = request.method().clone();
+                let body = if method == Method::Post {
+                    read_post_body(&mut request)
+                } else {
+                    String::new()
+                };
+                let resp = dispatch(&state, method, &path, &body);
+                let _ = request.respond(resp);
+            }
+        });
+    }
+    tx
 }
 
 /// Read a POST body up to one byte past [`MAX_POST_BODY_BYTES`] — the
@@ -1300,9 +1477,9 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         // same freshness — the stamp pairs them.
         let model = state.current_model();
         let records = load_active_records(state);
-        let resp = graph::search_subgraph(&records, model.as_ref(), term.trim());
+        let resp = graph::search_subgraph(&records, model.as_deref(), term.trim());
         let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-        return json_stamped(200, &body, model.as_ref());
+        return json_stamped(200, &body, model.as_deref());
     }
 
     let model = match state.current_model() {
@@ -1387,7 +1564,7 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let records = load_active_records(state);
     let body = bodies::themes_body(&records).to_string();
-    json_stamped(200, &body, model.as_ref())
+    json_stamped(200, &body, model.as_deref())
 }
 
 /// `POST /api/publish` — kick off ONE background publish run using
@@ -2129,7 +2306,7 @@ fn handle_theme_pages(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut body = bodies::theme_pages_body(pages.as_ref(), &records);
     // Splice rebuildable zh projections (claims_zh + theme_pages_zh).
     splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
-    json_stamped(200, &body.to_string(), model.as_ref())
+    json_stamped(200, &body.to_string(), model.as_deref())
 }
 
 /// Attach `claim_zh` / `sections_zh` when bilingual projections are fresh.
@@ -2291,8 +2468,8 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_stamped(200, &body, Some(&model))
 }
 
-fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
-    readers::load_active_records(&state.vault_root, &state.layout)
+fn load_active_records(state: &AppState) -> Arc<Vec<DurableRecord>> {
+    state.crystal_projections().0
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -2325,7 +2502,7 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                 let records = load_active_records(state);
                 // Evidence sidecar feeds the memory-layer card nodes (B5).
                 let evidence = state.current_evidence();
-                graph::source_neighborhood(&records, model.as_ref(), evidence.as_ref(), sha)
+                graph::source_neighborhood(&records, model.as_deref(), evidence.as_deref(), sha)
             }
             "global" => {
                 let limit = query
@@ -2346,14 +2523,14 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     persp,
                 };
                 let records = load_active_records(state);
-                graph::build_graph(&records, model.as_ref(), &params)
+                graph::build_graph(&records, model.as_deref(), &params)
             }
             "theme" => {
                 let Some(theme) = query.get("theme").filter(|t| !t.is_empty()) else {
                     return json_response(400, r#"{"error":"scope=theme requires theme=<theme>"}"#);
                 };
                 let records = load_active_records(state);
-                graph::theme_subgraph(&records, model.as_ref(), theme)
+                graph::theme_subgraph(&records, model.as_deref(), theme)
             }
             other => {
                 let body = serde_json::json!({
@@ -2365,7 +2542,7 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         return match result {
             Ok(resp) => {
                 let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-                json_stamped(200, &body, model.as_ref())
+                json_stamped(200, &body, model.as_deref())
             }
             Err(e) => {
                 let body = serde_json::json!({ "error": e.message });
@@ -2384,10 +2561,10 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
 
     let records = load_active_records(state);
 
-    match graph::build_graph(&records, model.as_ref(), &params) {
+    match graph::build_graph(&records, model.as_deref(), &params) {
         Ok(resp) => {
             let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-            json_stamped(200, &body, model.as_ref())
+            json_stamped(200, &body, model.as_deref())
         }
         Err(e) => {
             let body = serde_json::json!({ "error": e.message });
@@ -2437,12 +2614,11 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     // (torn-read fix): the auto-freshen keeps them paired, and the stamp on the
     // response lets the client see the pairing.
     let model = state.current_model();
-    let records = load_active_records(state);
+    let (records, lineage) = state.crystal_projections();
     let reader_root = state.vault_root.join(state.layout.reader_root());
-    let lineage = ovp_api_projection::readers::load_lineage_index(&state.vault_root, &state.layout);
     match bodies::claim_body_with_lineage(
         &records,
-        model.as_ref(),
+        model.as_deref(),
         &reader_root,
         &id,
         true,
@@ -2469,7 +2645,7 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     }
                 }
             }
-            json_stamped(200, &v.to_string(), model.as_ref())
+            json_stamped(200, &v.to_string(), model.as_deref())
         }
         None => json_response(404, r#"{"error":"claim not found"}"#),
     }
@@ -2519,9 +2695,9 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
         });
 
     let evidence = state.current_evidence();
-    match bodies::source_body(&model, evidence.as_ref(), &sha, doc) {
+    match bodies::source_body(&model, evidence.as_deref(), &sha, doc) {
         Some(mut v) => {
-            splice_source_memory_zh(&state.vault_root, evidence.as_ref(), &sha, &mut v);
+            splice_source_memory_zh(state, evidence.as_deref(), &sha, &mut v);
             json_response(200, &v.to_string())
         }
         None => {
@@ -2533,12 +2709,12 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
 
 /// Attach card_zh fields when `.ovp/crystal/cards_zh.json` has a fresh entry.
 fn splice_source_memory_zh(
-    vault_root: &std::path::Path,
+    state: &AppState,
     evidence: Option<&ovp_index::EvidenceModel>,
     sha: &str,
     body: &mut serde_json::Value,
 ) {
-    let Ok(cards_zh) = ovp_memory::bilingual::CardsZhFile::load(vault_root) else {
+    let Some(cards_zh) = state.current_cards_zh() else {
         return;
     };
     let Some(ev) = evidence else {
@@ -2549,7 +2725,7 @@ fn splice_source_memory_zh(
         .and_then(|s| s.get("pack_dir"))
         .and_then(|p| p.as_str())
         .map(|s| s.to_string());
-    let claims_zh = ovp_memory::bilingual::ClaimsZhFile::load(vault_root).unwrap_or_default();
+    let claims_zh = state.current_claims_zh().unwrap_or_default();
 
     let mut enriched_cards = Vec::new();
     if !cards_zh.entries.is_empty() {
@@ -2693,7 +2869,7 @@ fn build_source_focus_pack(
 
     let mut cards_block = String::new();
     let mut card_n = 0usize;
-    if let Some(ev) = evidence.as_ref() {
+    if let Some(ev) = evidence.as_deref() {
         for c in ev
             .cards
             .iter()
@@ -2719,7 +2895,7 @@ fn build_source_focus_pack(
 
     let mut units_block = String::new();
     let mut unit_n = 0usize;
-    if let Some(ev) = evidence.as_ref() {
+    if let Some(ev) = evidence.as_deref() {
         for u in ev
             .units
             .iter()
@@ -3276,16 +3452,16 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let body = serde_json::json!({
         "vault_root": state.vault_root.display().to_string(),
-        "schema_version": model.as_ref().map(|m| m.schema.clone()),
-        "index_date": model.as_ref().map(|m| m.date.clone()),
+        "schema_version": model.as_deref().map(|m| m.schema.clone()),
+        "index_date": model.as_deref().map(|m| m.date.clone()),
         // Provenance stamp (P1): the wall-clock build instant, its run id, and
         // the server-computed age. The System page shows "as of <built_at> ·
         // N min ago" so `index_date` (a day string) can no longer stand in for
         // freshness.
-        "built_at": model.as_ref().and_then(|m| m.built_at.clone()),
-        "run_id": model.as_ref().and_then(|m| m.run_id.clone()),
-        "age_seconds": model.as_ref().and_then(|m| age_seconds(m.built_at.as_deref())),
-        "counts": model.as_ref().map(|m| serde_json::json!({
+        "built_at": model.as_deref().and_then(|m| m.built_at.clone()),
+        "run_id": model.as_deref().and_then(|m| m.run_id.clone()),
+        "age_seconds": model.as_deref().and_then(|m| age_seconds(m.built_at.as_deref())),
+        "counts": model.as_deref().map(|m| serde_json::json!({
             "sources": m.totals.sources,
             "packs": m.totals.packs,
             "claims": m.totals.claims_durable + m.totals.claims_caveated,
@@ -3295,8 +3471,8 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // inbox. `queued_at_build` is the projection's frozen end-of-run value,
         // kept for provenance ("live 159 · projection 175 as of <date>"); the
         // two legitimately differ mid-run. `queued_at_build` is null pre-index.
-        "queued_live": state.live_queued_count(model.as_ref()),
-        "queued_at_build": model.as_ref().map(|m| m.totals.queued),
+        "queued_live": state.live_queued_count(model.as_deref()),
+        "queued_at_build": model.as_deref().map(|m| m.totals.queued),
         // Factory present (anthropic feature) AND a non-empty key in env or
         // providers.toml — matches when POST /api/ask will accept work.
         "llm_configured": state.ask_client.is_some()
@@ -3315,7 +3491,7 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // was a bare package version; now version+git+built.
         "version": server_version(),
     });
-    json_stamped(200, &body.to_string(), model.as_ref())
+    json_stamped(200, &body.to_string(), model.as_deref())
 }
 
 /// The request headers `POST /api/ask` validates — the endpoint triggers
@@ -3595,7 +3771,7 @@ fn handle_ask(
         let result = run_ask(
             &factory,
             &model,
-            evidence.as_ref(),
+            evidence.as_deref(),
             &question,
             chat.as_deref(),
             &history,
@@ -4816,6 +4992,9 @@ mod tests {
             layout: VaultLayout::new(),
             model: RwLock::new(Cached::default()),
             evidence: RwLock::new(Cached::default()),
+            crystal: RwLock::new(CrystalCache::default()),
+            cards_zh: RwLock::new(Cached::default()),
+            claims_zh: RwLock::new(Cached::default()),
             last_run: RwLock::new(Cached::default()),
             viz_dir,
             ask_client: None,
@@ -6140,7 +6319,7 @@ mod tests {
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault, None);
-        let live = st.live_queued_count(st.current_model().as_ref());
+        let live = st.live_queued_count(st.current_model().as_deref());
         assert_eq!(
             live, 2,
             "the 3 departed Processed rows must NOT be subtracted"
@@ -6190,7 +6369,7 @@ mod tests {
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault.clone(), None);
-        let live = st.live_queued_count(st.current_model().as_ref());
+        let live = st.live_queued_count(st.current_model().as_deref());
         assert_eq!(
             live, 3,
             "6 files − (blocked + dup + processed-in-raw) = 3 queued"
@@ -6237,14 +6416,14 @@ mod tests {
         let st = state(vault.clone(), None);
 
         // At rest: 3 files − 1 blocked = 2 queued.
-        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 2);
+        assert_eq!(st.live_queued_count(st.current_model().as_deref()), 2);
 
         // A run processes one queued source: its file leaves 01-Raw. The
         // projection is NOT rebuilt (blocked row still known).
         std::fs::remove_file(raw.join("q0.md")).unwrap();
         st.live_queued.write().unwrap().computed_at = None;
         // 2 files (q1 + blocked) − 1 blocked = 1 queued. Not 2, not 0.
-        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 1);
+        assert_eq!(st.live_queued_count(st.current_model().as_deref()), 1);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7332,6 +7511,47 @@ mod tests {
         ovp_index::write_index(&vault, &index_dated("2026-02-02")).unwrap();
         set_mtime(&index, t0 + Duration::from_secs(60));
         assert_eq!(st.current_model().unwrap().date, "2026-02-02");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn crystal_projections_cache_by_ledger_mtime() {
+        let root = temp_root("crystal-mtime");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+
+        // Absent ledger caches empty — and the appearance of one reloads.
+        assert_eq!(st.crystal_projections().0.len(), 0);
+        write_ledger(&vault);
+        let ledger = vault
+            .join(VaultLayout::new().crystal_store_dir())
+            .join("ledger.jsonl");
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        set_mtime(&ledger, t0);
+        let (records, lineage) = st.crystal_projections();
+        assert_eq!(records.len(), 2);
+        assert!(!lineage.is_empty());
+
+        // Unchanged mtime → the SAME Arc back, no refold.
+        let again = st.crystal_projections();
+        assert!(Arc::ptr_eq(&records, &again.0));
+        assert!(Arc::ptr_eq(&lineage, &again.1));
+
+        // A crystal-synth run rewrites the ledger with a bumped mtime — the
+        // running server must refold.
+        std::fs::write(&ledger, "").unwrap();
+        set_mtime(&ledger, t0 + Duration::from_secs(60));
+        assert_eq!(st.crystal_projections().0.len(), 0);
+
+        // A SAME-mtime rewrite is invisible to the stamp — /api/refresh must
+        // force the refold (the case the endpoint exists for).
+        write_ledger(&vault);
+        set_mtime(&ledger, t0 + Duration::from_secs(60));
+        assert_eq!(st.crystal_projections().0.len(), 0, "stamp hides the rewrite");
+        st.refresh_model();
+        assert_eq!(st.crystal_projections().0.len(), 2, "refresh forces the refold");
 
         let _ = std::fs::remove_dir_all(&root);
     }
