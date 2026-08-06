@@ -720,6 +720,12 @@ export const zh: Record<keyof typeof en, string> = {
   'indexHealth.rebuildFailed': '重建失败:{err}',
   'indexHealth.rebuildDone': '重建完成——数据将在下次轮询刷新。',
   'system.servingBackend': '服务后端',
+  'today.themesStale':
+    '{n} 个阅读包尚未聚类进主题——它们的主张暂在 Unclassified。每周主题任务(周日 09:30)会自动重聚类,也可立即运行 `ovp2 crystal-themes`。',
+  'knowledge.sortCount': '数量',
+  'knowledge.sortName': '名称',
+  'knowledge.sortDir.asc': '↑',
+  'knowledge.sortDir.desc': '↓',
   'system.builtAt': '构建时刻',
   'system.runId': '运行 id',
   'system.counts': '统计',
