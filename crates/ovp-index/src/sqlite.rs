@@ -29,7 +29,12 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
+/// The FTS analyzer version, stamped into `meta` — index-side and query-side
+/// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
+/// and the next build re-tokenizes everything (fresh-file builds make that
+/// automatic; the stamp exists so a reader can detect a mismatched db).
+pub const FTS_ANALYZER_VERSION: &str = "fts-v1";
 
 /// Process-wide cache-base override, first call wins. For EMBEDDERS and
 /// in-process tests: mutating `OVP_CACHE_DIR` via `set_var` is unsafe under
@@ -95,6 +100,56 @@ pub fn sqlite_path_in(cache_base: &Path, vault_root: &Path) -> PathBuf {
         .join(SQLITE_FILE)
 }
 
+/// Pre-tokenization for the FTS surfaces (stage 3c): ASCII/word runs
+/// lowercase, CJK-ideograph runs expand into ORDERED overlapping bigrams
+/// with duplicates kept — unlike `score::tokenize_for_search` (a dedup'd
+/// BTreeSet for lexical scoring), BM25 needs term frequency and position, so
+/// nothing is deduplicated or reordered. Output is space-joined tokens fed
+/// to fts5's unicode61 (each han bigram survives as one token; words as
+/// themselves). Applied identically at index time and query time —
+/// [`FTS_ANALYZER_VERSION`] names this contract.
+pub fn tokenize_for_fts(input: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut cjk: Vec<char> = Vec::new();
+
+    fn flush_word(word: &mut String, out: &mut Vec<String>) {
+        if !word.is_empty() {
+            out.push(std::mem::take(word));
+        }
+    }
+    fn flush_cjk(cjk: &mut Vec<char>, out: &mut Vec<String>) {
+        match cjk.len() {
+            0 => {}
+            1 => out.push(cjk[0].to_string()),
+            _ => {
+                for pair in cjk.windows(2) {
+                    out.push(pair.iter().collect());
+                }
+            }
+        }
+        cjk.clear();
+    }
+
+    for ch in input.chars() {
+        if crate::score::is_cjk(ch) {
+            flush_word(&mut word, &mut out);
+            cjk.push(ch);
+        } else if ch.is_alphanumeric() {
+            flush_cjk(&mut cjk, &mut out);
+            for lower in ch.to_lowercase() {
+                word.push(lower);
+            }
+        } else {
+            flush_word(&mut word, &mut out);
+            flush_cjk(&mut cjk, &mut out);
+        }
+    }
+    flush_word(&mut word, &mut out);
+    flush_cjk(&mut cjk, &mut out);
+    out.join(" ")
+}
+
 /// serde's snake_case string for a status enum — the SAME strings the JSON
 /// projection carries, so parity comparison is byte-for-byte.
 fn enum_str<T: Serialize>(v: &T) -> String {
@@ -156,6 +211,10 @@ CREATE TABLE units(
 CREATE INDEX idx_units_id ON units(id);
 CREATE INDEX idx_units_pack ON units(pack_dir);
 CREATE INDEX idx_units_source ON units(source_sha256);
+CREATE VIRTUAL TABLE sources_fts USING fts5(text, content='');
+CREATE VIRTUAL TABLE claims_fts USING fts5(text, content='');
+CREATE VIRTUAL TABLE cards_fts USING fts5(text, content='');
+CREATE VIRTUAL TABLE units_fts USING fts5(text, content='');
 ";
 
 /// Build a fresh shadow, verify it, and promote it — see the module docs for
@@ -258,6 +317,7 @@ fn build_into(
             .map_err(|e| format!("prepare meta: {e}"))?;
         for (k, v) in [
             ("schema_version", SCHEMA_VERSION.to_string()),
+            ("fts_analyzer", FTS_ANALYZER_VERSION.to_string()),
             ("index_schema", model.schema.clone()),
             ("date", model.date.clone()),
             ("built_at", model.built_at.clone().unwrap_or_default()),
@@ -280,6 +340,9 @@ fn build_into(
         let mut ent = tx
             .prepare("INSERT INTO source_entities(sha256, entity) VALUES(?1,?2)")
             .map_err(|e| format!("prepare source_entities: {e}"))?;
+        let mut src_fts = tx
+            .prepare("INSERT INTO sources_fts(rowid, text) VALUES(?1,?2)")
+            .map_err(|e| format!("prepare sources_fts: {e}"))?;
         for s in &model.sources {
             src.execute((
                 &s.sha256,
@@ -299,6 +362,22 @@ fn build_into(
                 &s.last_reason,
             ))
             .map_err(|e| format!("source {}: {e}", s.sha256))?;
+            let rowid = tx.last_insert_rowid();
+            let mut fts_text = String::new();
+            for part in [s.title.as_deref(), s.author.as_deref(), s.url.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                fts_text.push_str(part);
+                fts_text.push(' ');
+            }
+            for t in s.tags.iter().chain(&s.tags_inferred).chain(&s.tags_implied).chain(&s.entities) {
+                fts_text.push_str(t);
+                fts_text.push(' ');
+            }
+            src_fts
+                .execute((rowid, tokenize_for_fts(&fts_text)))
+                .map_err(|e| format!("sources_fts {}: {e}", s.sha256))?;
             for (kind, list) in [
                 ("tag", &s.tags),
                 ("inferred", &s.tags_inferred),
@@ -351,6 +430,9 @@ fn build_into(
         let mut claim_src = tx
             .prepare("INSERT INTO claim_sources(claim_id, sha256) VALUES(?1,?2)")
             .map_err(|e| format!("prepare claim_sources: {e}"))?;
+        let mut claims_fts = tx
+            .prepare("INSERT INTO claims_fts(rowid, text) VALUES(?1,?2)")
+            .map_err(|e| format!("prepare claims_fts: {e}"))?;
         for c in &model.claims {
             claim
                 .execute((
@@ -365,6 +447,11 @@ fn build_into(
                     &c.lane,
                 ))
                 .map_err(|e| format!("claim {}: {e}", c.claim_id))?;
+            let rowid = tx.last_insert_rowid();
+            let fts_text = format!("{} {}", c.claim, c.theme.as_deref().unwrap_or(""));
+            claims_fts
+                .execute((rowid, tokenize_for_fts(&fts_text)))
+                .map_err(|e| format!("claims_fts {}: {e}", c.claim_id))?;
             for sha in &c.sources {
                 claim_src
                     .execute((&c.claim_id, sha))
@@ -403,6 +490,9 @@ fn build_into(
                      VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 )
                 .map_err(|e| format!("prepare cards: {e}"))?;
+            let mut cards_fts = tx
+                .prepare("INSERT INTO cards_fts(rowid, text) VALUES(?1,?2)")
+                .map_err(|e| format!("prepare cards_fts: {e}"))?;
             for c in &ev.cards {
                 card.execute((
                     &c.id,
@@ -415,6 +505,10 @@ fn build_into(
                     serde_json::to_string(&c.cited_unit_ids).unwrap_or_else(|_| "[]".into()),
                 ))
                 .map_err(|e| format!("card {}: {e}", c.id))?;
+                let rowid = tx.last_insert_rowid();
+                cards_fts
+                    .execute((rowid, tokenize_for_fts(&format!("{} {}", c.title, c.content))))
+                    .map_err(|e| format!("cards_fts {}: {e}", c.id))?;
             }
             let mut unit = tx
                 .prepare(
@@ -423,6 +517,9 @@ fn build_into(
                      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                 )
                 .map_err(|e| format!("prepare units: {e}"))?;
+            let mut units_fts = tx
+                .prepare("INSERT INTO units_fts(rowid, text) VALUES(?1,?2)")
+                .map_err(|e| format!("prepare units_fts: {e}"))?;
             for u in &ev.units {
                 unit.execute((
                     &u.id,
@@ -437,11 +534,108 @@ fn build_into(
                     &u.modality,
                 ))
                 .map_err(|e| format!("unit {}: {e}", u.id))?;
+                let rowid = tx.last_insert_rowid();
+                units_fts
+                    .execute((rowid, tokenize_for_fts(&format!("{} {}", u.text, u.quote))))
+                    .map_err(|e| format!("units_fts {}: {e}", u.id))?;
             }
         }
     }
     tx.commit().map_err(|e| format!("commit: {e}"))?;
     Ok(())
+}
+
+/// The four FTS surfaces (stage 3c). One combined text column per surface —
+/// field weighting is a later quality pass; v1 is the recall floor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FtsSurface {
+    /// title + author + url + all tag kinds + entities → `sources.sha256`
+    Sources,
+    /// claim + theme → `claims.claim_id`
+    Claims,
+    /// title + content → `cards.id`
+    Cards,
+    /// text + quote → `units.id`
+    Units,
+}
+
+impl FtsSurface {
+    fn tables(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            FtsSurface::Sources => ("sources_fts", "sources", "sha256"),
+            FtsSurface::Claims => ("claims_fts", "claims", "claim_id"),
+            FtsSurface::Cards => ("cards_fts", "cards", "id"),
+            FtsSurface::Units => ("units_fts", "units", "id"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FtsHit {
+    /// The surface's stable id (`sha256` / `claim_id` / card / unit id).
+    pub id: String,
+    /// bm25 rank — LOWER is better (fts5's native ordering, preserved
+    /// untransformed so callers can RRF-fuse without re-deriving ranks).
+    pub rank: f64,
+}
+
+/// BM25 top-k over one surface. The query goes through the SAME
+/// [`tokenize_for_fts`] as the index side; each token is quoted into an fts5
+/// string term (no query-syntax injection). Tokens are AND-matched first —
+/// when that yields nothing, an OR pass catches partial matches so a long
+/// bilingual query degrades to best-effort instead of a silent zero.
+pub fn fts_search(
+    vault_root: &Path,
+    surface: FtsSurface,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FtsHit>, String> {
+    let path = sqlite_path(vault_root)?;
+    fts_search_at(&path, surface, query, limit)
+}
+
+fn fts_search_at(
+    path: &Path,
+    surface: FtsSurface,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FtsHit>, String> {
+    let tokens = tokenize_for_fts(query);
+    let terms: Vec<String> = tokens
+        .split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let (fts, base, id_col) = surface.tables();
+
+    let run = |match_expr: &str| -> Result<Vec<FtsHit>, String> {
+        let sql = format!(
+            "SELECT b.{id_col}, bm25({fts}) AS rank FROM {fts}
+             JOIN {base} b ON b.rowid = {fts}.rowid
+             WHERE {fts} MATCH ?1 ORDER BY rank LIMIT ?2"
+        );
+        conn.prepare(&sql)
+            .and_then(|mut st| {
+                st.query_map((match_expr, limit as i64), |r| {
+                    Ok(FtsHit {
+                        id: r.get(0)?,
+                        rank: r.get(1)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| format!("fts search {base}: {e}"))
+    };
+
+    let hits = run(&terms.join(" "))?;
+    if !hits.is_empty() || terms.len() == 1 {
+        return Ok(hits);
+    }
+    run(&terms.join(" OR "))
 }
 
 /// Parity report between a shadow database and the in-memory projections it
@@ -536,6 +730,11 @@ fn verify_at(
     expect("pack_card_titles", count("pack_card_titles")?, want_card_titles)?;
     let want_claim_sources: usize = model.claims.iter().map(|c| c.sources.len()).sum();
     expect("claim_sources", count("claim_sources")?, want_claim_sources)?;
+    // Every base row must have exactly one FTS row (rowid-aligned).
+    expect("sources_fts", count("sources_fts")?, model.sources.len())?;
+    expect("claims_fts", count("claims_fts")?, model.claims.len())?;
+    expect("cards_fts", count("cards_fts")?, want_cards)?;
+    expect("units_fts", count("units_fts")?, want_units)?;
 
     // meta scalars: built_at exists precisely so a stale projection cannot
     // render like a fresh one — the verifier must not skip the one surface
@@ -550,6 +749,7 @@ fn verify_at(
     got_meta.sort();
     let mut want_meta = vec![
         ("schema_version".to_string(), SCHEMA_VERSION.to_string()),
+        ("fts_analyzer".to_string(), FTS_ANALYZER_VERSION.to_string()),
         ("index_schema".to_string(), model.schema.clone()),
         ("date".to_string(), model.date.clone()),
         ("built_at".to_string(), model.built_at.clone().unwrap_or_default()),
@@ -1014,6 +1214,46 @@ mod tests {
         assert!(verify_at(&candidate, &m, Some(&ev)).is_err());
         // Last-good is still readable and still passes.
         assert!(verify_at(&good, &m, Some(&ev)).is_ok());
+    }
+
+    #[test]
+    fn tokenize_for_fts_keeps_order_and_frequency() {
+        // Ordered bigrams, embedded Latin lowercased, duplicates KEPT (BM25
+        // term frequency), punctuation drops as separators.
+        assert_eq!(tokenize_for_fts("手写Transformer求职笔记"), "手写 transformer 求职 职笔 笔记");
+        assert_eq!(tokenize_for_fts("Memory memory MEMORY"), "memory memory memory");
+        assert_eq!(tokenize_for_fts("《转型》foo-bar"), "转型 foo bar");
+        assert_eq!(tokenize_for_fts("记"), "记");
+        assert_eq!(tokenize_for_fts("  !!!  "), "");
+    }
+
+    #[test]
+    fn fts_search_recalls_cjk_and_latin_with_or_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = model();
+        let ev = evidence();
+        let db = tmp.path().join("candidate.sqlite");
+        build_into(&db, &m, Some(&ev)).unwrap();
+
+        // Unsegmented Chinese over claims: 记忆 is a bigram of the claim text.
+        let hits = fts_search_at(&db, FtsSurface::Claims, "记忆", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "m1-01");
+
+        // Latin over units (quote text), case-insensitive.
+        let hits = fts_search_at(&db, FtsSurface::Units, "QUOTED", 10).unwrap();
+        assert_eq!(hits[0].id, "unit:40-Resources/Reader/a:u-1");
+
+        // Sources surface covers tags + entities.
+        let hits = fts_search_at(&db, FtsSurface::Sources, "anthropic", 10).unwrap();
+        assert_eq!(hits[0].id, "sha-a");
+
+        // AND misses (one term absent) → OR fallback still recalls.
+        let hits = fts_search_at(&db, FtsSurface::Cards, "body 不存在词", 10).unwrap();
+        assert_eq!(hits.len(), 1, "OR fallback must recall the partial match");
+
+        // Zero-term query is an honest empty, not an error.
+        assert!(fts_search_at(&db, FtsSurface::Units, "!!!", 10).unwrap().is_empty());
     }
 
     #[test]
