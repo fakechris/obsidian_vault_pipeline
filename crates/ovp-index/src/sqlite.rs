@@ -102,11 +102,13 @@ pub fn sqlite_path_in(cache_base: &Path, vault_root: &Path) -> PathBuf {
 
 /// Pre-tokenization for the FTS surfaces (stage 3c): ASCII/word runs
 /// lowercase, CJK-ideograph runs expand into ORDERED overlapping bigrams
-/// with duplicates kept — unlike `score::tokenize_for_search` (a dedup'd
-/// BTreeSet for lexical scoring), BM25 needs term frequency and position, so
-/// nothing is deduplicated or reordered. Output is space-joined tokens fed
-/// to fts5's unicode61 (each han bigram survives as one token; words as
-/// themselves). Applied identically at index time and query time —
+/// PLUS per-character unigrams (interleaved by position) with duplicates
+/// kept — unlike `score::tokenize_for_search` (a dedup'd BTreeSet for
+/// lexical scoring), BM25 needs term frequency and position, and the
+/// unigrams keep single-character queries (`记` against indexed `记忆`)
+/// recalling, which bigrams alone cannot. Output is space-joined tokens fed
+/// to fts5's unicode61 (each han token survives whole; words as themselves).
+/// Applied identically at index time and query time —
 /// [`FTS_ANALYZER_VERSION`] names this contract.
 pub fn tokenize_for_fts(input: &str) -> String {
     let mut out: Vec<String> = Vec::new();
@@ -119,13 +121,10 @@ pub fn tokenize_for_fts(input: &str) -> String {
         }
     }
     fn flush_cjk(cjk: &mut Vec<char>, out: &mut Vec<String>) {
-        match cjk.len() {
-            0 => {}
-            1 => out.push(cjk[0].to_string()),
-            _ => {
-                for pair in cjk.windows(2) {
-                    out.push(pair.iter().collect());
-                }
+        for (i, ch) in cjk.iter().enumerate() {
+            out.push(ch.to_string());
+            if i + 1 < cjk.len() {
+                out.push(cjk[i..=i + 1].iter().collect());
             }
         }
         cjk.clear();
@@ -573,7 +572,12 @@ impl FtsSurface {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FtsHit {
     /// The surface's stable id (`sha256` / `claim_id` / card / unit id).
+    /// NOT guaranteed unique for claims — a claim_id can legitimately exist
+    /// in more than one lane; `rowid` is the unambiguous row identity.
     pub id: String,
+    /// The base-table rowid — unique within this database generation; the
+    /// hydration/RRF key when ids collide.
+    pub rowid: i64,
     /// bm25 rank — LOWER is better (fts5's native ordering, preserved
     /// untransformed so callers can RRF-fuse without re-deriving ranks).
     pub rank: f64,
@@ -610,11 +614,22 @@ fn fts_search_at(
     }
     let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    // Enforce the analyzer stamp BEFORE matching: new query tokens against
+    // old postings silently miss — the whole point of the version stamp.
+    let analyzer: String = conn
+        .query_row("SELECT value FROM meta WHERE key = 'fts_analyzer'", [], |r| r.get(0))
+        .map_err(|e| format!("reading fts_analyzer stamp: {e}"))?;
+    if analyzer != FTS_ANALYZER_VERSION {
+        return Err(format!(
+            "shadow was built with analyzer {analyzer}, this binary speaks \
+             {FTS_ANALYZER_VERSION} — rebuild the projection (`ovp2 index`) first"
+        ));
+    }
     let (fts, base, id_col) = surface.tables();
 
     let run = |match_expr: &str| -> Result<Vec<FtsHit>, String> {
         let sql = format!(
-            "SELECT b.{id_col}, bm25({fts}) AS rank FROM {fts}
+            "SELECT b.{id_col}, b.rowid, bm25({fts}) AS rank FROM {fts}
              JOIN {base} b ON b.rowid = {fts}.rowid
              WHERE {fts} MATCH ?1 ORDER BY rank LIMIT ?2"
         );
@@ -623,7 +638,8 @@ fn fts_search_at(
                 st.query_map((match_expr, limit as i64), |r| {
                     Ok(FtsHit {
                         id: r.get(0)?,
-                        rank: r.get(1)?,
+                        rowid: r.get(1)?,
+                        rank: r.get(2)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
@@ -1217,12 +1233,16 @@ mod tests {
     }
 
     #[test]
-    fn tokenize_for_fts_keeps_order_and_frequency() {
-        // Ordered bigrams, embedded Latin lowercased, duplicates KEPT (BM25
-        // term frequency), punctuation drops as separators.
-        assert_eq!(tokenize_for_fts("手写Transformer求职笔记"), "手写 transformer 求职 职笔 笔记");
+    fn tokenize_for_fts_keeps_order_frequency_and_unigrams() {
+        // Interleaved unigrams + bigrams per position (single-char queries
+        // must recall against multi-char runs), embedded Latin lowercased,
+        // duplicates KEPT (BM25 term frequency), punctuation separates.
+        assert_eq!(
+            tokenize_for_fts("手写Transformer求职"),
+            "手 手写 写 transformer 求 求职 职"
+        );
         assert_eq!(tokenize_for_fts("Memory memory MEMORY"), "memory memory memory");
-        assert_eq!(tokenize_for_fts("《转型》foo-bar"), "转型 foo bar");
+        assert_eq!(tokenize_for_fts("《转型》foo-bar"), "转 转型 型 foo bar");
         assert_eq!(tokenize_for_fts("记"), "记");
         assert_eq!(tokenize_for_fts("  !!!  "), "");
     }
@@ -1239,6 +1259,12 @@ mod tests {
         let hits = fts_search_at(&db, FtsSurface::Claims, "记忆", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m1-01");
+        assert!(hits[0].rowid > 0, "rowid is the unambiguous row identity");
+
+        // A SINGLE Han character must recall against the multi-char run
+        // (the unigram postings exist exactly for this).
+        let hits = fts_search_at(&db, FtsSurface::Claims, "记", 10).unwrap();
+        assert_eq!(hits.len(), 1, "unigram query must hit 记忆");
 
         // Latin over units (quote text), case-insensitive.
         let hits = fts_search_at(&db, FtsSurface::Units, "QUOTED", 10).unwrap();
@@ -1254,6 +1280,15 @@ mod tests {
 
         // Zero-term query is an honest empty, not an error.
         assert!(fts_search_at(&db, FtsSurface::Units, "!!!", 10).unwrap().is_empty());
+
+        // An analyzer-version mismatch refuses to search: new query tokens
+        // against old postings would silently miss.
+        let conn = Connection::open(&db).unwrap();
+        conn.execute("UPDATE meta SET value = 'fts-v0' WHERE key = 'fts_analyzer'", [])
+            .unwrap();
+        drop(conn);
+        let err = fts_search_at(&db, FtsSurface::Units, "quoted", 10).unwrap_err();
+        assert!(err.contains("rebuild"), "unexpected error: {err}");
     }
 
     #[test]
