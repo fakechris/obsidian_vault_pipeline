@@ -28,7 +28,9 @@ import {
   citationsInOrder,
   citeLinkTarget,
   displayUserQuestion,
+  groundCitesOnSource,
   normalizeCiteToken,
+  parseChatFocus,
   parseChatTranscript,
 } from '../lib/chatTranscript';
 import { failureHintKey } from '../lib/derive';
@@ -172,7 +174,7 @@ function humanizeLegacyPath(path: string): string | null {
 export function makeCitationTitleLookup(
   model: {
     sources: { sha256: string; title?: string; rel_path?: string }[];
-    claims: { claim_key?: string; claim: string }[];
+    claims: { claim_id: string; claim_key?: string; claim: string }[];
   } | null,
 ): CitationTitleLookup {
   const rows = model?.sources ?? [];
@@ -182,11 +184,17 @@ export function makeCitationTitleLookup(
       .filter((s) => s.rel_path)
       .map((s) => [(s.rel_path as string).replace(/\.md$/, ''), s]),
   );
-  const claims = new Map(
-    (model?.claims ?? [])
-      .filter((c) => c.claim_key)
-      .map((c) => [c.claim_key as string, c.claim]),
-  );
+  // Both identities resolve: claim_key (ck-…, stable across runs) and the
+  // run-scoped claim_id — old transcripts cite ids from the run that was
+  // current when they were written, and a re-crystallize must not strand
+  // them (operator report 2026-08-07). Keys inserted last so they win.
+  const claims = new Map<string, string>();
+  for (const c of model?.claims ?? []) {
+    claims.set(c.claim_id, c.claim);
+  }
+  for (const c of model?.claims ?? []) {
+    if (c.claim_key) claims.set(c.claim_key, c.claim);
+  }
   const sourceRow = (token: string) => {
     const exact = bySha.get(token);
     if (exact) return exact;
@@ -767,56 +775,72 @@ export default function AskPage() {
     // Agent chats replay from the AUDIT transcript (full per-turn trails
     // survive a reload — operator finding: History lost the 复盘 detail);
     // legacy chats keep the markdown parse.
-    fetchAskSession(openChat)
-      // An older server (no session endpoint) or a replay-read failure must
-      // not kill the page — markdown replay still works.
-      .catch(() => ({ turns: [] }))
-      .then((session) => {
-        if (cancelled || openChatRef.current !== openChat) return null;
-        if (session.turns.length === 0) return fetchChatMarkdown(openChat);
-        setSavedTurns(
-          session.turns.map((turn) => ({
-            question: displayUserQuestion(turn.question),
-            errorKey: null,
-            response: {
-              answer: turn.answer,
-              citations: citationsFromAnswerText(turn.answer, citeLookupRef.current),
-              verified: null,
-              context_hits: 0,
-              chat: openChat,
-              agent: true,
-              stopped_reason: turn.stopped_reason,
-              turn_id: turn.turn_id,
-              tool_trace: turn.tool_trace,
-            },
-          })),
-        );
-        return null;
-      })
+    // Markdown FIRST: its header carries the session's focus markers
+    // (ovp:focus_source/theme), and a focused session's unit/card cites only
+    // resolve when grounded onto that source's page — exactly what the live
+    // dock did. Without this, replay showed "No detail page in this vault"
+    // for every unit (operator report 2026-08-07).
+    fetchChatMarkdown(openChat)
+      .catch(() => '')
       .then((md) => {
-        if (md == null || cancelled || openChatRef.current !== openChat) return;
-        const parsed = parseChatTranscript(md);
-        if (parsed.length === 0) {
-          setSavedError(t('ask.chatParseEmpty'));
-          setSavedTurns([]);
-          return;
-        }
-        setSavedTurns(
-          parsed.map((turn) => {
-            const citations = citationsFromAnswerText(turn.answer, citeLookupRef.current);
-            return {
-              question: turn.question,
-              errorKey: null,
-              response: {
-                answer: turn.answer,
-                citations,
-                verified: null,
-                context_hits: citations.length,
-                chat: openChat,
-              },
-            };
-          }),
-        );
+        if (cancelled || openChatRef.current !== openChat) return;
+        const focus = parseChatFocus(md);
+        const ground = (cites: AskCitation[]) =>
+          focus.sha ? groundCitesOnSource(cites, focus.sha) : cites;
+        // Agent chats replay from the AUDIT transcript; legacy chats fall
+        // back to the markdown parse. An older server (no session endpoint)
+        // or a replay-read failure must not kill the page.
+        return fetchAskSession(openChat)
+          .catch(() => ({ turns: [] }))
+          .then((session) => {
+            if (cancelled || openChatRef.current !== openChat) return;
+            if (session.turns.length > 0) {
+              setSavedTurns(
+                session.turns.map((turn) => ({
+                  question: displayUserQuestion(turn.question),
+                  errorKey: null,
+                  response: {
+                    answer: turn.answer,
+                    citations: ground(
+                      citationsFromAnswerText(turn.answer, citeLookupRef.current),
+                    ),
+                    verified: null,
+                    context_hits: 0,
+                    chat: openChat,
+                    agent: true,
+                    stopped_reason: turn.stopped_reason,
+                    turn_id: turn.turn_id,
+                    tool_trace: turn.tool_trace,
+                  },
+                })),
+              );
+              return;
+            }
+            const parsed = parseChatTranscript(md);
+            if (parsed.length === 0) {
+              setSavedError(t('ask.chatParseEmpty'));
+              setSavedTurns([]);
+              return;
+            }
+            setSavedTurns(
+              parsed.map((turn) => {
+                const citations = ground(
+                  citationsFromAnswerText(turn.answer, citeLookupRef.current),
+                );
+                return {
+                  question: turn.question,
+                  errorKey: null,
+                  response: {
+                    answer: turn.answer,
+                    citations,
+                    verified: null,
+                    context_hits: citations.length,
+                    chat: openChat,
+                  },
+                };
+              }),
+            );
+          });
       })
       .catch(() => {
         if (!cancelled && openChatRef.current === openChat) {

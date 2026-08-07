@@ -11,7 +11,9 @@ import {
 const SHA = '6dc988d1d27614055ed13de8010eddbd44f107635061e25c7a6a5647f887a0a3';
 const model = {
   sources: [{ sha256: SHA, title: 'The Actual Article Title' }],
-  claims: [{ claim_key: 'ck-abc', claim: 'The claim text as indexed' }],
+  claims: [
+    { claim_id: 'agents-b001-3', claim_key: 'ck-abc', claim: 'The claim text as indexed' },
+  ],
 };
 
 describe('citationsFromAnswerText with an index lookup', () => {
@@ -28,6 +30,16 @@ describe('citationsFromAnswerText with an index lookup', () => {
   it('resolves claim keys to claim text', () => {
     const [c] = citationsFromAnswerText(
       'as shown [claim:ck-abc]',
+      makeCitationTitleLookup(model),
+    );
+    expect(c.title).toBe('The claim text as indexed');
+  });
+
+  it('resolves run-scoped claim_ids too — old transcripts cite them', () => {
+    // Operator regression 2026-08-07: a re-crystallize renumbered claim_ids
+    // and every pre-rerun chat lost its claim titles (lookup was key-only).
+    const [c] = citationsFromAnswerText(
+      'as shown [claim:agents-b001-3]',
       makeCitationTitleLookup(model),
     );
     expect(c.title).toBe('The claim text as indexed');

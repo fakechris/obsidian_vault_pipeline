@@ -43,6 +43,48 @@ export function normalizeCiteToken(token: string): string {
 /** Best-effort portal link for a citation key when replaying a saved chat
  * (no live evidence sidecar). Claims deep-link by key; cards/units have no
  * stable sha without the index. */
+/** Ground unit/card/source cites onto a focused source's library page when
+ * the generic index lookup has no link (modern unit ids have no standalone
+ * page — their home is the source's memory tab). Shared by the focus chat
+ * dock and Ask-page replay of focused sessions. */
+export function groundCitesOnSource<
+  T extends { id: string; kind?: string; link_target?: string | null },
+>(cites: T[], sha: string): T[] {
+  return cites.map((c) => {
+    if (c.link_target) return c;
+    const kind = c.kind || (c.id.includes(':') ? c.id.slice(0, c.id.indexOf(':')) : '');
+    if (kind === 'source') {
+      const token = c.id.slice(c.id.indexOf(':') + 1).split(/\s+/)[0] ?? '';
+      if (!token || token === sha || token.startsWith(sha.slice(0, 12))) {
+        return { ...c, link_target: `/library/${encodeURIComponent(sha)}` };
+      }
+    }
+    if (kind === 'unit' || kind === 'card') {
+      return {
+        ...c,
+        link_target: `/library/${encodeURIComponent(sha)}?tab=memory`,
+      };
+    }
+    return c;
+  });
+}
+
+/** Focus markers from a saved chat's header (`ovp:focus_source` /
+ * `ovp:focus_theme`) — the replay surface needs them to ground citations
+ * exactly like the live dock did. */
+export function parseChatFocus(md: string): { sha: string | null; theme: string | null } {
+  let sha: string | null = null;
+  let theme: string | null = null;
+  for (const line of md.split('\n', 40)) {
+    const l = line.trim();
+    const src = l.match(/^<!-- ovp:focus_source=(.+?) -->$/);
+    if (src) sha = src[1].trim() || null;
+    const th = l.match(/^<!-- ovp:focus_theme=(.+?) -->$/);
+    if (th) theme = th[1].trim() || null;
+  }
+  return { sha, theme };
+}
+
 export function citeLinkTarget(id: string): string | null {
   if (id.startsWith('claim:')) {
     const key = id.slice('claim:'.length);
