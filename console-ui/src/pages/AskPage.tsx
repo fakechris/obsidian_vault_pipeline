@@ -9,7 +9,7 @@
  *
  * The textarea sets `data-omnibox-suppress` so the Shell's global ⌘K
  * handler leaves it alone while composing. */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import AskProcessGraph from '../components/AskProcessGraph';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
@@ -47,6 +47,27 @@ import type {
   AskTraceEntry,
   ChatEntry,
 } from '../lib/types';
+
+const ASK_LEFT_KEY = 'ovp.ask.leftCollapsed';
+const ASK_RIGHT_KEY = 'ovp.ask.rightCollapsed';
+
+function readCollapsed(key: string, fallback = false): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    return raw === '1' || raw === 'true';
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCollapsed(key: string, value: boolean) {
+  try {
+    localStorage.setItem(key, value ? '1' : '0');
+  } catch {
+    /* private mode */
+  }
+}
 
 interface Turn {
   question: string;
@@ -751,6 +772,27 @@ export default function AskPage() {
   const [pollChat, setPollChat] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatEntry[]>([]);
+  /** Fold side rails so the reading column can breathe. */
+  const [leftCollapsed, setLeftCollapsed] = useState(() =>
+    readCollapsed(ASK_LEFT_KEY, false),
+  );
+  const [rightCollapsed, setRightCollapsed] = useState(() =>
+    readCollapsed(ASK_RIGHT_KEY, false),
+  );
+  const toggleLeft = useCallback(() => {
+    setLeftCollapsed((v) => {
+      const next = !v;
+      writeCollapsed(ASK_LEFT_KEY, next);
+      return next;
+    });
+  }, []);
+  const toggleRight = useCallback(() => {
+    setRightCollapsed((v) => {
+      const next = !v;
+      writeCollapsed(ASK_RIGHT_KEY, next);
+      return next;
+    });
+  }, []);
   /** History rail filter: all | source-grounded only | vault-wide only. */
   const [historyFilter, setHistoryFilter] = useState<'all' | 'source' | 'vault'>(
     'all',
@@ -1156,108 +1198,152 @@ export default function AskPage() {
         </div>
       )}
 
-      <div className="grid ask">
-        {/* left: saved chat history — one row per conversation session */}
-        <div>
-          <div className="facet-group">
-            <h3>{t('ask.historyTitle')}</h3>
-            {(turns.length > 0 || sessionChat || viewingSaved) && (
-              <button
-                type="button"
-                className="tiny"
-                style={{ marginBottom: '0.5rem' }}
-                onClick={startNewConversation}
-              >
-                {t('ask.newConversation')}
-              </button>
-            )}
-            {chats.length > 0 && (
-              <div className="chat-history-filters" role="tablist">
-                {(
-                  [
-                    ['all', 'ask.historyFilterAll'],
-                    ['source', 'ask.historyFilterSource'],
-                    ['vault', 'ask.historyFilterVault'],
-                  ] as const
-                ).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    role="tab"
-                    aria-selected={historyFilter === key}
-                    className={historyFilter === key ? 'active' : undefined}
-                    onClick={() => setHistoryFilter(key)}
-                  >
-                    {t(label)}
-                  </button>
-                ))}
+      <div
+        className={[
+          'grid ask',
+          leftCollapsed ? 'left-collapsed' : '',
+          rightCollapsed ? 'right-collapsed' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {/* left: saved chat history — collapsible rail */}
+        <aside
+          className={`ask-side ask-side-left${leftCollapsed ? ' is-collapsed' : ''}`}
+          aria-label={t('ask.historyTitle')}
+        >
+          {leftCollapsed ? (
+            <button
+              type="button"
+              className="ask-side-rail-btn"
+              onClick={toggleLeft}
+              title={t('ask.expandHistory')}
+              aria-label={t('ask.expandHistory')}
+              aria-expanded={false}
+            >
+              <span className="ask-side-rail-chevron" aria-hidden="true">
+                ›
+              </span>
+              <span className="ask-side-rail-label">{t('ask.historyTitle')}</span>
+            </button>
+          ) : (
+            <div className="facet-group ask-side-body">
+              <div className="ask-side-head">
+                <h3>{t('ask.historyTitle')}</h3>
+                <button
+                  type="button"
+                  className="ask-side-toggle"
+                  onClick={toggleLeft}
+                  title={t('ask.collapseHistory')}
+                  aria-label={t('ask.collapseHistory')}
+                  aria-expanded={true}
+                >
+                  ‹
+                </button>
               </div>
-            )}
-            {chats.length === 0 ? (
-              <p className="tiny muted">{t('ask.historyEmpty')}</p>
-            ) : filteredChats.length === 0 ? (
-              <p className="tiny muted">{t('ask.historyFilterEmpty')}</p>
-            ) : (
-              <ul className="facet-list chat-list">
-                {filteredChats.map((entry) => (
-                  <li key={entry.name}>
-                    <Link
-                      to={`/ask/chat/${encodeURIComponent(entry.name)}`}
-                      className={
-                        openChat === entry.name ||
-                        (!viewingSaved && sessionChat === entry.name)
-                          ? 'active'
-                          : undefined
-                      }
+              {(turns.length > 0 || sessionChat || viewingSaved) && (
+                <button
+                  type="button"
+                  className="tiny"
+                  style={{ marginBottom: '0.5rem' }}
+                  onClick={startNewConversation}
+                >
+                  {t('ask.newConversation')}
+                </button>
+              )}
+              {chats.length > 0 && (
+                <div className="chat-history-filters" role="tablist">
+                  {(
+                    [
+                      ['all', 'ask.historyFilterAll'],
+                      ['source', 'ask.historyFilterSource'],
+                      ['vault', 'ask.historyFilterVault'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={historyFilter === key}
+                      className={historyFilter === key ? 'active' : undefined}
+                      onClick={() => setHistoryFilter(key)}
                     >
-                      {entry.focus_source ? (
-                        <span className="chat-focus-badge" title={entry.focus_title ?? entry.focus_source}>
-                          {t('ask.historyOnSource')}
+                      {t(label)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {chats.length === 0 ? (
+                <p className="tiny muted">{t('ask.historyEmpty')}</p>
+              ) : filteredChats.length === 0 ? (
+                <p className="tiny muted">{t('ask.historyFilterEmpty')}</p>
+              ) : (
+                <ul className="facet-list chat-list">
+                  {filteredChats.map((entry) => (
+                    <li key={entry.name}>
+                      <Link
+                        to={`/ask/chat/${encodeURIComponent(entry.name)}`}
+                        className={
+                          openChat === entry.name ||
+                          (!viewingSaved && sessionChat === entry.name)
+                            ? 'active'
+                            : undefined
+                        }
+                      >
+                        {entry.focus_source ? (
+                          <span
+                            className="chat-focus-badge"
+                            title={entry.focus_title ?? entry.focus_source}
+                          >
+                            {t('ask.historyOnSource')}
+                          </span>
+                        ) : (
+                          <span className="chat-vault-badge">
+                            {t('ask.historyVault')}
+                          </span>
+                        )}
+                        <span className="chat-preview">
+                          {entry.preview ||
+                            entry.focus_title ||
+                            chatDate(entry)}
                         </span>
-                      ) : (
-                        <span className="chat-vault-badge">{t('ask.historyVault')}</span>
-                      )}
-                      <span className="chat-preview">
-                        {entry.preview ||
-                          entry.focus_title ||
-                          chatDate(entry)}
-                      </span>
-                      <span className="chat-date">{chatDate(entry)}</span>
-                      {entry.focus_source && (
-                        <span
-                          className="chat-focus-link"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            navigate(
-                              `/library/${encodeURIComponent(entry.focus_source!)}?chat=${encodeURIComponent(entry.name)}`,
-                            );
-                          }}
-                          role="link"
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
+                        <span className="chat-date">{chatDate(entry)}</span>
+                        {entry.focus_source && (
+                          <span
+                            className="chat-focus-link"
+                            onClick={(e) => {
                               e.preventDefault();
+                              e.stopPropagation();
                               navigate(
                                 `/library/${encodeURIComponent(entry.focus_source!)}?chat=${encodeURIComponent(entry.name)}`,
                               );
-                            }
-                          }}
-                        >
-                          {entry.focus_title
-                            ? entry.focus_title.length > 28
-                              ? `${entry.focus_title.slice(0, 28)}…`
-                              : entry.focus_title
-                            : entry.focus_source.slice(0, 10)}
-                        </span>
-                      )}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+                            }}
+                            role="link"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                navigate(
+                                  `/library/${encodeURIComponent(entry.focus_source!)}?chat=${encodeURIComponent(entry.name)}`,
+                                );
+                              }
+                            }}
+                          >
+                            {entry.focus_title
+                              ? entry.focus_title.length > 28
+                                ? `${entry.focus_title.slice(0, 28)}…`
+                                : entry.focus_title
+                              : entry.focus_source.slice(0, 10)}
+                          </span>
+                        )}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </aside>
 
         {/* center: conversation thread + composer (multi-turn always on) */}
         <div className="ask-main">
@@ -1361,29 +1447,64 @@ export default function AskPage() {
           )}
         </div>
 
-        {/* right rail: process graph + citations for the latest answer */}
-        <div className="ask-rail">
-          <div className="card ask-process-card">
-            <h3 style={{ marginBottom: '0.4rem' }}>{t('ask.processTitle')}</h3>
-            <p className="tiny muted ask-process-help">{t('ask.processHelp')}</p>
-            <AskProcessGraph
-              events={processEvents}
-              toolTrace={processTrace}
-              citations={processCitations}
-              hoverId={hoverId}
-              height={220}
-            />
-          </div>
-          <div className="card">
-            <h3 style={{ marginBottom: '0.6rem' }}>{t('ask.citationsTitle')}</h3>
-            <CitationPanel
-              citations={citations}
-              hoverId={hoverId}
-              onOpen={openCitation}
-              lookup={citeTitleLookup}
-            />
-          </div>
-        </div>
+        {/* right rail: process + citations — collapsible */}
+        <aside
+          className={`ask-side ask-side-right ask-rail${rightCollapsed ? ' is-collapsed' : ''}`}
+          aria-label={t('ask.processTitle')}
+        >
+          {rightCollapsed ? (
+            <button
+              type="button"
+              className="ask-side-rail-btn"
+              onClick={toggleRight}
+              title={t('ask.expandRail')}
+              aria-label={t('ask.expandRail')}
+              aria-expanded={false}
+            >
+              <span className="ask-side-rail-chevron" aria-hidden="true">
+                ‹
+              </span>
+              <span className="ask-side-rail-label">
+                {t('ask.railCollapsedLabel')}
+              </span>
+            </button>
+          ) : (
+            <div className="ask-side-body">
+              <div className="ask-side-head ask-side-head-end">
+                <button
+                  type="button"
+                  className="ask-side-toggle"
+                  onClick={toggleRight}
+                  title={t('ask.collapseRail')}
+                  aria-label={t('ask.collapseRail')}
+                  aria-expanded={true}
+                >
+                  ›
+                </button>
+              </div>
+              <div className="card ask-process-card">
+                <h3 style={{ marginBottom: '0.4rem' }}>{t('ask.processTitle')}</h3>
+                <p className="tiny muted ask-process-help">{t('ask.processHelp')}</p>
+                <AskProcessGraph
+                  events={processEvents}
+                  toolTrace={processTrace}
+                  citations={processCitations}
+                  hoverId={hoverId}
+                  height={220}
+                />
+              </div>
+              <div className="card">
+                <h3 style={{ marginBottom: '0.6rem' }}>{t('ask.citationsTitle')}</h3>
+                <CitationPanel
+                  citations={citations}
+                  hoverId={hoverId}
+                  onOpen={openCitation}
+                  lookup={citeTitleLookup}
+                />
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
     </>
   );

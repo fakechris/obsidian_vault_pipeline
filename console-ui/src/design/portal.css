@@ -2409,12 +2409,138 @@ html[data-tauri-drag-region] .source-chat-panel {
   /* Give the conversation a real reading stage, not a cramped strip. */
   min-height: calc(100vh - 9.5rem);
   gap: 1rem 1.15rem;
+  transition: grid-template-columns 180ms var(--ease, ease);
+}
+/* Fold side rails → thin expand strips so the center reading column grows. */
+.grid.ask.left-collapsed {
+  grid-template-columns: 2.65rem minmax(0, 1fr) minmax(240px, 300px);
+}
+.grid.ask.right-collapsed {
+  grid-template-columns: minmax(170px, 210px) minmax(0, 1fr) 2.65rem;
+}
+.grid.ask.left-collapsed.right-collapsed {
+  grid-template-columns: 2.65rem minmax(0, 1fr) 2.65rem;
 }
 @media (max-width: 900px) {
-  .grid.ask {
+  .grid.ask,
+  .grid.ask.left-collapsed,
+  .grid.ask.right-collapsed,
+  .grid.ask.left-collapsed.right-collapsed {
     grid-template-columns: 1fr;
     min-height: 0;
   }
+  /* On narrow viewports sides stack — collapsed strips are full-width toggles. */
+  .ask-side.is-collapsed {
+    min-height: 2.5rem;
+  }
+  .ask-side-rail-btn {
+    flex-direction: row !important;
+    writing-mode: horizontal-tb !important;
+    width: 100%;
+    justify-content: center;
+    gap: 0.4rem;
+  }
+  .ask-side-rail-label {
+    transform: none !important;
+  }
+}
+/* Collapsible side columns */
+.ask-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.ask-side.is-collapsed {
+  align-items: stretch;
+}
+.ask-side-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.ask-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.ask-side-head h3 {
+  margin: 0;
+  min-width: 0;
+}
+.ask-side-head-end {
+  justify-content: flex-end;
+}
+.ask-side-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-input, 8px);
+  background: var(--surface-2, transparent);
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ask-side-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.ask-side-toggle:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Collapsed strip: full-height click target with vertical label. */
+.ask-side-rail-btn {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 8rem;
+  margin: 0;
+  padding: 0.65rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-card, 12px);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+.ask-side-rail-btn:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.ask-side-rail-btn:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.ask-side-rail-chevron {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.ask-side-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: var(--ovp-text-xs, 0.78rem);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 .chat-list .chat-date {
   font-family: var(--ovp-font-mono);
