@@ -43,25 +43,81 @@ pub struct ShellRunner {
 }
 
 impl JobRunner for ShellRunner {
-    fn run(&self, job: &JobConfig) -> bool {
+    fn run(&self, job: &JobConfig) -> ovp_scheduler::JobResult {
         let cmd = job_shell_command(
             &self.ovp2_path,
             self.env_file.as_deref(),
             &self.vault_root,
             job,
         );
-        match std::process::Command::new("/bin/sh")
+        // stderr is TEE'd: streamed through to the scheduler's own stderr
+        // (the OS-unit / desktop log keeps its live view) AND kept as a
+        // bounded tail, so a failed job's state entry carries its evidence —
+        // the 2026-08-03 crystallize failure was undiagnosable because the
+        // tick inherited-and-lost it.
+        let child = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&cmd)
-            .status()
-        {
-            Ok(status) => status.success(),
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
             Err(e) => {
                 eprintln!("scheduler: job '{}' failed to spawn: {e}", job.id);
-                false
+                return ovp_scheduler::JobResult {
+                    ok: false,
+                    error_tail: Some(format!("failed to spawn: {e}")),
+                };
+            }
+        };
+        // Strictly bounded rolling BYTE tail (codex P1/P2): a line-based
+        // reader would buffer an entire newline-free line, and truncating a
+        // joined string can panic mid-UTF-8-char and keeps the OLDEST bytes.
+        // Raw bytes + lossy decode keep the newest evidence, panic-free.
+        let mut tail_bytes: std::collections::VecDeque<u8> =
+            std::collections::VecDeque::with_capacity(STDERR_TAIL_MAX_BYTES);
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 8192];
+            let mut own_stderr = std::io::stderr();
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        let _ = own_stderr.write_all(chunk);
+                        for &b in chunk {
+                            if tail_bytes.len() == STDERR_TAIL_MAX_BYTES {
+                                tail_bytes.pop_front();
+                            }
+                            tail_bytes.push_back(b);
+                        }
+                    }
+                }
             }
         }
+        let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+        let error_tail = (!ok && !tail_bytes.is_empty()).then(|| {
+            let bytes: Vec<u8> = tail_bytes.into_iter().collect();
+            render_stderr_tail(&bytes)
+        });
+        ovp_scheduler::JobResult { ok, error_tail }
     }
+}
+
+/// Bounds on the recorded stderr tail — enough to diagnose, small enough for
+/// a state file read on every portal poll.
+const STDERR_TAIL_LINES: usize = 12;
+const STDERR_TAIL_MAX_BYTES: usize = 2048;
+
+/// The last [`STDERR_TAIL_LINES`] lines of the rolling byte tail. Lossy
+/// decoding tolerates the tail starting mid-UTF-8-character (the rolling
+/// window cuts at an arbitrary byte).
+fn render_stderr_tail(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(STDERR_TAIL_LINES);
+    lines[start..].join("\n")
 }
 
 pub fn local_now() -> NaiveDateTime {
@@ -222,8 +278,9 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     let mut failed = Vec::new();
     for id in &plan.due {
         let job = reg.get(id).expect("plan ids come from the registry");
-        let ok = runner.run(job);
-        state.record(id, now, if ok { "ok" } else { "error" });
+        let result = runner.run(job);
+        let ok = result.ok;
+        state.record_outcome(id, now, if ok { "ok" } else { "error" }, result.error_tail);
         // Persist after EACH job so an interrupted tick never reruns a completed
         // (possibly expensive/non-idempotent) job on the next tick.
         save_state(vault_root, &state)?;
@@ -370,6 +427,23 @@ mod tests {
                 .last_run,
             before
         );
+    }
+
+    #[test]
+    fn stderr_tail_is_boundary_safe_and_keeps_the_newest_lines() {
+        // A rolling window that starts mid-CJK-character must not panic and
+        // must keep the NEWEST lines (the actual diagnostics).
+        let mut lines: Vec<String> = (0..20).map(|i| format!("错误行 line {i}")).collect();
+        let joined = lines.join("\n");
+        let bytes = joined.as_bytes();
+        // Cut mid-multibyte: skip one byte into the first 3-byte char.
+        let tail = render_stderr_tail(&bytes[1..]);
+        assert!(tail.contains("line 19"), "newest line kept: {tail}");
+        assert!(!tail.contains("line 7"), "only the last 12 lines survive");
+        assert_eq!(tail.lines().count(), STDERR_TAIL_LINES);
+        // Plain small input passes through whole.
+        lines.truncate(2);
+        assert_eq!(render_stderr_tail(lines.join("\n").as_bytes()), lines.join("\n"));
     }
 
     #[test]

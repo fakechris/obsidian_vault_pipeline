@@ -295,6 +295,11 @@ pub struct AgentOutcome {
     /// True when this outcome was REPLAYED from a completed turn matching the
     /// caller's idempotency key — nothing was executed.
     pub idempotent_replay: bool,
+    /// On `ModelError`: the [`ovp_llm::failure_class`] slug (auth,
+    /// rate_limited, context_exceeded, …) so surfaces can show a targeted fix
+    /// hint instead of raw provider text. None for other stop reasons and for
+    /// replayed outcomes (the transcript keeps the class in `ModelFailed`).
+    pub failure_class: Option<&'static str>,
 }
 
 pub struct AgentConfig {
@@ -426,6 +431,7 @@ pub fn run_agent_turn_with_progress(
             input_tokens_total: done.input_tokens_total,
             output_tokens_total: done.output_tokens_total,
             idempotent_replay: true,
+            failure_class: None,
         });
     }
 
@@ -453,6 +459,7 @@ pub fn run_agent_turn_with_progress(
             input_tokens_total: done.input_tokens_total,
             output_tokens_total: done.output_tokens_total,
             idempotent_replay: true,
+            failure_class: None,
         });
     }
 
@@ -483,6 +490,8 @@ pub fn run_agent_turn_with_progress(
         std::collections::BTreeMap::new();
     // `corpus_gate`: fires at most once per turn (see `corpus_walk_incomplete`).
     let mut corpus_nudged = false;
+    // Set when the turn stops with `ModelError` (see `AgentOutcome::failure_class`).
+    let mut failure_class: Option<&'static str> = None;
 
     let stopped = 'turn: loop {
         // `deadline_authority`: no model call STARTS after exhaustion.
@@ -508,10 +517,13 @@ pub fn run_agent_turn_with_progress(
             // Mid-turn model failure ends the turn with an honest reason —
             // audited (`ModelFailed`), and the trail still gets TurnFinished.
             Err(e) => {
+                let class = ovp_llm::failure_class(&e);
+                failure_class = Some(class);
                 events.push(TranscriptEvent::ModelFailed {
                     turn_id: turn_id.clone(),
                     round: rounds,
                     detail: e.to_string(),
+                    class: class.to_string(),
                 });
                 break 'turn StoppedReason::ModelError;
             }
@@ -891,6 +903,7 @@ pub fn run_agent_turn_with_progress(
         input_tokens_total: in_total,
         output_tokens_total: out_total,
         idempotent_replay: false,
+        failure_class,
     })
 }
 
@@ -1701,13 +1714,20 @@ mod tests {
         let out =
             run_agent_turn(&mut client, &mut tools, &mut st, "q?", None, &cfg()).unwrap();
         assert_eq!(out.stopped_reason, StoppedReason::ModelError);
+        assert_eq!(
+            out.failure_class,
+            Some("network"),
+            "the outcome carries the actionable classification"
+        );
         let st2 = store(dir.path());
         assert_eq!(st2.next_turn_id(), "t2", "failed turn is still a complete audit record");
         assert!(
-            st2.events()
-                .iter()
-                .any(|e| matches!(e, TranscriptEvent::ModelFailed { detail, .. } if detail.contains("conn reset"))),
-            "the failure reason is audited"
+            st2.events().iter().any(|e| matches!(
+                e,
+                TranscriptEvent::ModelFailed { detail, class, .. }
+                    if detail.contains("conn reset") && class == "network"
+            )),
+            "the failure reason and class are audited"
         );
     }
 

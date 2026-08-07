@@ -158,6 +158,7 @@ function formatWhen(iso: string | null | undefined): string {
 
 function jobTitle(t: (k: MsgKey, v?: Record<string, string | number>) => string, job: ScheduleJob) {
   if (job.id === 'daily') return t('auto.job.daily');
+  if (job.id === 'themes') return t('auto.job.themes');
   if (job.id === 'crystallize') return t('auto.job.crystallize');
   return t('auto.job.other', { id: job.id });
 }
@@ -540,6 +541,27 @@ export default function AutomationPanel() {
             activeId={activeJob.id}
             onSelect={(id) => selectJob(data.jobs.find((j) => j.id === id))}
           />
+
+          {activeJob.last_status === 'error' && (
+            <div className="auto-fail" role="alert">
+              <p className="sm warn" style={{ margin: 0 }}>
+                {/* Legacy state (pre-counter) reports 0 — the status alone
+                    proves at least one failure, so floor the streak at 1. */}
+                {t('auto.failHead', { n: Math.max(1, activeJob.consecutive_failures ?? 1) })}
+                {' · '}
+                {activeJob.enabled ? t('auto.failNoRetry') : t('auto.failDisabled')}
+                {(activeJob.runs_total ?? 0) > 0
+                  ? ` · ${t('auto.failCounts', {
+                      fails: activeJob.failures_total ?? 0,
+                      runs: activeJob.runs_total ?? 0,
+                    })}`
+                  : ''}
+              </p>
+              {activeJob.last_error && (
+                <pre className="auto-fail-tail mono tiny">{activeJob.last_error}</pre>
+              )}
+            </div>
+          )}
 
           <div className="auto-graph-row">
             <PipelineGraph

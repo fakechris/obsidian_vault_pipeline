@@ -305,6 +305,10 @@ export interface AskResponse {
   tool_trace?: AskTraceEntry[];
   /** final | need_user | refusal | max_rounds | timeout | tool_error | model_error. */
   stopped_reason?: string;
+  /** On model_error only: ovp_llm failure_class slug (auth | rate_limited |
+   * context_exceeded | budget_exhausted | overloaded | network | …) — the UI
+   * maps the actionable ones to a targeted fix hint. */
+  failure_class?: string | null;
   turn_id?: string;
   usage?: { input_tokens: number; output_tokens: number };
 }

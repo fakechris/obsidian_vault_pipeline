@@ -460,14 +460,42 @@ function stopNoticeKey(reason: string | undefined): MsgKey | null {
   }
 }
 
+/** Targeted fix hint for a model_error, keyed by the server's failure_class
+ * slug. Unactionable classes (decode/protocol/internal/…) return null — the
+ * generic stop note already covers them. */
+export function failureHintKey(cls: string | null | undefined): MsgKey | null {
+  switch (cls) {
+    case 'auth':
+      return 'ask.fail.auth';
+    case 'rate_limited':
+      return 'ask.fail.rateLimited';
+    case 'context_exceeded':
+      return 'ask.fail.contextExceeded';
+    case 'budget_exhausted':
+      return 'ask.fail.budgetExhausted';
+    case 'overloaded':
+      return 'ask.fail.overloaded';
+    case 'network':
+      return 'ask.fail.network';
+    default:
+      return null;
+  }
+}
+
 /** Receipts under an agent answer: stop notice, coverage, collapsed trail. */
 function AgentMeta({ response }: { response: AskResponse }) {
   const { t } = useI18n();
   const stopKey = stopNoticeKey(response.stopped_reason);
+  const hintKey = failureHintKey(response.failure_class);
   const trace = response.tool_trace ?? [];
   return (
     <div className="ask-agent-meta">
-      {stopKey && <div className="ask-stop-note">{t(stopKey)}</div>}
+      {stopKey && (
+        <div className="ask-stop-note">
+          {t(stopKey)}
+          {hintKey ? ` — ${t(hintKey)}` : ''}
+        </div>
+      )}
       {response.coverage && <CoverageBadges coverage={response.coverage} />}
       {trace.length > 0 && (
         <details className="ask-trail-details">

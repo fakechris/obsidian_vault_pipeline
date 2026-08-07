@@ -118,7 +118,7 @@
     {
       "id": "runtime.scheduler",
       "surface": "runtime",
-      "current_version": "v2",
+      "current_version": "v3",
       "file": "crates/ovp-scheduler/src/lib.rs",
       "quality_buckets": [
         "operational_reliability"
@@ -156,7 +156,7 @@
     {
       "id": "runtime.ask_agent",
       "surface": "runtime",
-      "current_version": "v1.2",
+      "current_version": "v1.3",
       "file": "crates/ovp-memory/src/ask.rs",
       "quality_buckets": [
         "coverage",

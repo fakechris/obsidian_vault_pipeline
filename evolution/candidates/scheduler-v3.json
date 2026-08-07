@@ -1,0 +1,29 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "scheduler-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "runtime",
+  "component": "runtime.scheduler",
+  "hypothesis": "RUNTIME surface, trigger-level observability, closing the 2026-08-03 crystallize incident class: the job failed at 19:50, the desktop swallowed the child's stderr into eprintln (invisible from Finder), state recorded only status=error, and the exact error was UNRECOVERABLE — plus is_due never retries, so the failure sat silent until the next weekly slot. Three additive layers: (1) JobRun gains `last_error` (stderr tail of the last failed run, cleared on success), `runs_total`, `failures_total`, `consecutive_failures` — recorded by a single `State::record_outcome` used by both tick and run-now, seeded runs don't count, counters carry over across state rewrites. (2) ShellRunner tees the child's stderr line-by-line (still forwarded to eprintln for launchd logs) while keeping a bounded tail (12 lines / 2048 bytes) that becomes JobResult.error_tail — bounded so schedule-state.json can never bloat on a runaway child. (3) /api/schedule exposes the four fields and the System page's automation panel shows a failure strip on last_status=error: consecutive count, lifetime fail ratio, the stderr tail, and the honest 'no automatic retry — waits for the next scheduled window' note (the is_due contract, previously documented only in CLAUDE.md). Predicted: the next scheduled failure is diagnosable from the portal alone — no ssh, no log spelunking, no rerun-and-hope.",
+  "predicted_delta": {
+    "operational_reliability": "'alive but failing every tick' becomes visible with evidence at the surface the operator actually looks at; post-mortems get the stderr tail instead of 'exact error unrecoverable'"
+  },
+  "guardrails": {
+    "additive_state": "all four JobRun fields are serde-default — existing schedule-state.json files load unchanged and old binaries ignore the new fields on read",
+    "bounded_evidence": "the stderr tail is capped at 12 lines / 2048 bytes BEFORE it enters state; a runaway child cannot bloat schedule-state.json",
+    "stderr_still_flows": "teeing must not eat the stream — every line is still forwarded to the parent's stderr for launchd/log-file capture",
+    "seeded_neutrality": "the seeded placeholder run counts as neither a run nor a failure; counters start at the first real execution",
+    "success_clears": "an ok run clears last_error and resets consecutive_failures but never rewinds runs_total/failures_total"
+  },
+  "eval_plan": {
+    "tests": [
+      "ovp-scheduler record_outcome_tracks_counters_and_error_evidence — counters across ok/error/ok sequences, seeded neutrality, error-tail set/clear",
+      "ovp-server schedule_endpoint test — /api/schedule payload carries last_error/runs_total/failures_total/consecutive_failures",
+      "console-ui typecheck (ScheduleJob type + failure strip against the MsgKey union)"
+    ],
+    "live_check": "force a failing run-now (bad argv) → the System automation panel shows the strip with the stderr tail; a following ok run clears it"
+  },
+  "rollback": "revert the commit; schedule-state.json written with the new fields loads fine on the old binary (serde ignores unknown fields)",
+  "ablation_required": false
+}

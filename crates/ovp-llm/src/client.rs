@@ -110,6 +110,60 @@ pub fn is_transient(err: &CallError) -> bool {
     }
 }
 
+/// Coarse, user-actionable classification of a call failure. The slugs are a
+/// stable wire vocabulary — surfaces (portal, CLI hints) map each to a
+/// targeted fix suggestion instead of showing raw provider text:
+///
+/// `auth` | `rate_limited` | `context_exceeded` | `budget_exhausted` |
+/// `overloaded` | `network` | `decode` | `protocol` | `cache_miss` |
+/// `provider_error` | `internal`
+///
+/// Anthropic's client stamps `Provider.code` with the structured error type
+/// (`authentication_error`, `overloaded_error`, `api_error`, …) when the body
+/// parses, the raw HTTP status as a string when it doesn't, or `"no_api_key"`
+/// — so both the numeric and the keyword branch must cover the same classes.
+/// The prose fallback catches context overflow reported under a generic
+/// `invalid_request_error` ("prompt is too long: …").
+pub fn failure_class(err: &CallError) -> &'static str {
+    match err {
+        CallError::Provider { code, detail } => {
+            let d = detail.to_ascii_lowercase();
+            let context_exceeded =
+                d.contains("too long") || d.contains("context length") || d.contains("context window");
+            if let Ok(n) = code.parse::<u16>() {
+                match n {
+                    401 | 403 => "auth",
+                    429 => "rate_limited",
+                    400 | 413 if context_exceeded => "context_exceeded",
+                    500..=599 => "overloaded",
+                    _ => "provider_error",
+                }
+            } else {
+                let c = code.to_ascii_lowercase();
+                if c.contains("api_key") || c.contains("auth") || c.contains("permission") {
+                    "auth"
+                } else if c.contains("rate_limit") {
+                    "rate_limited"
+                // `api_error` is Anthropic's structured 5xx ("internal server
+                // error") — same retry-later advice as overloaded.
+                } else if c.contains("overloaded") || c.contains("unavailable") || c == "api_error" {
+                    "overloaded"
+                } else if c.contains("context") || c == "request_too_large" || context_exceeded {
+                    "context_exceeded"
+                } else {
+                    "provider_error"
+                }
+            }
+        }
+        CallError::Transport { .. } => "network",
+        CallError::Decode { .. } => "decode",
+        CallError::Protocol { .. } => "protocol",
+        CallError::BudgetExhausted { .. } => "budget_exhausted",
+        CallError::CacheMiss { .. } => "cache_miss",
+        CallError::Unexpected { .. } => "internal",
+    }
+}
+
 /// A `ModelClient` wrapper that retries the inner client on transient failures
 /// (see [`is_transient`]) up to `max_retries` times, with a linear backoff
 /// (`backoff * attempt`). Non-transient errors fail immediately.
@@ -341,5 +395,62 @@ mod retry_tests {
         let mut client = BudgetEscalatingModelClient::new(flaky, 48_000);
         assert!(matches!(client.call(&req()).unwrap_err(), CallError::Transport { .. }));
         assert_eq!(client.inner.calls, 1, "non-budget error not retried by escalator");
+    }
+
+    #[test]
+    fn failure_class_covers_the_wire_vocabulary() {
+        let provider = |code: &str, detail: &str| CallError::Provider {
+            code: code.into(),
+            detail: detail.into(),
+        };
+        // Anthropic stamps numeric HTTP codes…
+        assert_eq!(failure_class(&provider("401", "authentication_error")), "auth");
+        assert_eq!(failure_class(&provider("403", "permission_error")), "auth");
+        assert_eq!(failure_class(&provider("429", "rate_limit_error")), "rate_limited");
+        assert_eq!(failure_class(&provider("529", "overloaded_error")), "overloaded");
+        assert_eq!(failure_class(&provider("500", "api_error")), "overloaded");
+        assert_eq!(
+            failure_class(&provider("400", "prompt is too long: 250000 tokens")),
+            "context_exceeded"
+        );
+        assert_eq!(failure_class(&provider("400", "invalid model")), "provider_error");
+        // …or the structured `no_api_key` sentinel.
+        assert_eq!(failure_class(&provider("no_api_key", "ANTHROPIC_API_KEY unset")), "auth");
+        // Structured error types (the LIVE path when the body parses —
+        // anthropic.rs keeps /error/type and drops the HTTP status).
+        assert_eq!(failure_class(&provider("authentication_error", "bad key")), "auth");
+        assert_eq!(failure_class(&provider("permission_error", "no access")), "auth");
+        assert_eq!(failure_class(&provider("rate_limit_error", "slow down")), "rate_limited");
+        assert_eq!(failure_class(&provider("overloaded_error", "busy")), "overloaded");
+        assert_eq!(failure_class(&provider("api_error", "internal server error")), "overloaded");
+        assert_eq!(
+            failure_class(&provider("request_too_large", "request exceeds size limit")),
+            "context_exceeded"
+        );
+        assert_eq!(
+            failure_class(&provider(
+                "invalid_request_error",
+                "prompt is too long: 210000 tokens > 200000 maximum"
+            )),
+            "context_exceeded"
+        );
+        // Output-token validation is NOT context exhaustion (codex P2: the
+        // old `maximum && token` heuristic misfiled it).
+        assert_eq!(
+            failure_class(&provider(
+                "invalid_request_error",
+                "max_tokens: 999999 exceeds the maximum allowed number of output tokens"
+            )),
+            "provider_error"
+        );
+        assert_eq!(failure_class(&CallError::Transport { detail: "timeout".into() }), "network");
+        assert_eq!(
+            failure_class(&CallError::BudgetExhausted { detail: "thinking".into() }),
+            "budget_exhausted"
+        );
+        assert_eq!(failure_class(&CallError::Decode { detail: "bad json".into() }), "decode");
+        assert_eq!(failure_class(&CallError::Protocol { detail: "adjacency".into() }), "protocol");
+        assert_eq!(failure_class(&CallError::CacheMiss { key: "k".into() }), "cache_miss");
+        assert_eq!(failure_class(&CallError::Unexpected { detail: "never".into() }), "internal");
     }
 }

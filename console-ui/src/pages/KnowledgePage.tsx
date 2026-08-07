@@ -70,6 +70,22 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
           durable: group.durable,
           caveated: group.caveated,
         })}
+        {/* sources come from indexed claims only — during ledger/index drift
+            (or a ledger-only theme) the count is UNKNOWN (0), so omit it
+            rather than show a false zero or a false single-source flag. */}
+        {group.sources > 0 && (
+          <>
+            {' · '}
+            <span
+              className={
+                group.sources === 1 && active > 1 ? 'theme-card-single-source' : undefined
+              }
+              title={t('knowledge.sourceCountTip')}
+            >
+              {t('knowledge.sourceCount', { n: group.sources })}
+            </span>
+          </>
+        )}
       </div>
       {misc && (
         <p className="theme-card-ratio tiny muted">

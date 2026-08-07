@@ -1000,6 +1000,9 @@ export interface ThemeGroup {
   total: number;
   durable: number;
   caveated: number;
+  /** Distinct sources (case ids) across the theme's active claims — a theme
+   * with many claims but sources=1 rests on a single document. */
+  sources: number;
   /** First durable (else first caveated) claim text — the wall snippet. */
   topClaim?: string;
 }
@@ -1048,11 +1051,13 @@ export function themeWall(
   ledgerThemes: { theme: string; count: number }[],
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
+  const caseSets = new Map<string, Set<string>>();
   const ensure = (theme: string): ThemeGroup => {
     let g = groups.get(theme);
     if (!g) {
-      g = { theme, total: 0, durable: 0, caveated: 0 };
+      g = { theme, total: 0, durable: 0, caveated: 0, sources: 0 };
       groups.set(theme, g);
+      caseSets.set(theme, new Set());
     }
     return g;
   };
@@ -1061,6 +1066,7 @@ export function themeWall(
   }
   for (const c of activeClaims(claims)) {
     const g = ensure(c.theme ?? '');
+    for (const s of c.sources) caseSets.get(g.theme)?.add(s);
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1079,10 +1085,27 @@ export function themeWall(
   }
   for (const g of groups.values()) {
     g.total = Math.max(g.total, g.durable + g.caveated);
+    g.sources = caseSets.get(g.theme)?.size ?? 0;
   }
   return [...groups.values()].sort(
     (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
   );
+}
+
+/** Distinct themes the source's citing claims land in — the source page's
+ * "supports this crystal knowledge" rail. Count = active citing claims in
+ * that theme; theme order follows count desc then name. */
+export function sourceThemes(
+  citing: ClaimRow[],
+): { theme: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const c of activeClaims(citing)) {
+    const theme = c.theme ?? '';
+    counts.set(theme, (counts.get(theme) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([theme, count]) => ({ theme, count }))
+    .sort((a, b) => b.count - a.count || a.theme.localeCompare(b.theme));
 }
 
 /** Theme claims for the detail page: durable first, then caveated;
