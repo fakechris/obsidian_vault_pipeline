@@ -9,12 +9,14 @@
  * legacy case ids whose pack has no source sha render as plain text
  * (handoff note 5: never navigate to a 404). */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
+import FocusChatPanel from '../components/FocusChatPanel';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemePages } from '../lib/api';
 import {
+  caseCanonicalIds,
   isMiscTheme,
   parsePageBody,
   sourcesByCase,
@@ -28,6 +30,7 @@ import type {
   ThemePagesResponse,
 } from '../lib/types';
 import { useModel } from '../model';
+import { STATIC_MODE } from '../lib/api';
 
 function TopicOverview({ theme }: { theme: string }) {
   const { t, lang } = useI18n();
@@ -237,11 +240,45 @@ function ClaimCard({
   );
 }
 
-function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
+function ThemeBody({
+  model,
+  theme,
+  displayName,
+}: {
+  model: IndexModel;
+  theme: string;
+  displayName: string;
+}) {
   const { t, lang, setLang } = useI18n();
   const location = useLocation();
   const claims = useMemo(() => themeClaims(model.claims, theme), [model, theme]);
   const byCase = useMemo(() => sourcesByCase(model), [model]);
+  // Chat-on-this-knowledge dock (same URL contract as the source page:
+  // ?chat=1 opens empty; ?chat=<stem> resumes that session in-context).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const chatParam = searchParams.get('chat');
+  const chatOpen = chatParam != null && chatParam !== '';
+  const resumeChat =
+    chatParam && chatParam !== '1' && chatParam !== 'true' ? chatParam : null;
+  const setChatOpen = (open: boolean) => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (!open) p.delete('chat');
+        else p.set('chat', '1');
+        return p;
+      },
+      { replace: true },
+    );
+  };
+  const sourceCount = useMemo(() => {
+    const canonical = caseCanonicalIds(model);
+    const distinct = new Set<string>();
+    for (const c of claims) {
+      for (const s of c.sources) distinct.add(canonical.get(s) ?? s);
+    }
+    return distinct.size;
+  }, [model, claims]);
   // theme-pages payload carries claim_zh keyed by claim_key when
   // .ovp/crystal/claims_zh.json exists — reuse for cards (index model may not
   // splice claim_zh on every claim row yet).
@@ -374,12 +411,34 @@ function ThemeBody({ model, theme }: { model: IndexModel; theme: string }) {
         )}
       </div>
       <aside className="theme-rail">
+        {!STATIC_MODE && claims.length > 0 && (
+          <button
+            type="button"
+            className="action-btn theme-chat-open"
+            onClick={() => setChatOpen(true)}
+          >
+            {t('theme.chatOnThis')}
+          </button>
+        )}
         <div className="card theme-rail-card">
           <h3 style={{ marginBottom: '0.6rem' }}>{t('theme.graph')}</h3>
           <KnowledgeGraph scope="theme" id={theme} height={360} />
           <div className="graph-caption">{t('theme.graphCaption')}</div>
         </div>
       </aside>
+      {!STATIC_MODE && claims.length > 0 && (
+        <FocusChatPanel
+          focus={{ kind: 'theme', theme }}
+          title={displayName}
+          metaLine={t('theme.chatMetaLine', {
+            claims: claims.length,
+            sources: sourceCount,
+          })}
+          open={chatOpen}
+          resumeChat={resumeChat}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -412,7 +471,7 @@ export default function ThemeDetailPage() {
               {t('theme.unclassifiedNote')}
             </p>
           )}
-          <ThemeBody model={model} theme={theme} />
+          <ThemeBody model={model} theme={theme} displayName={displayName} />
         </>
       )}
     </ModelGate>

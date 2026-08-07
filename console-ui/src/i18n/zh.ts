@@ -472,6 +472,16 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.backToKnowledge': '全部主题',
   'theme.graph': '主题图谱',
   'theme.graphCaption': '本主题的主张与其引用的源。单击节点看摘要并打开；悬停高亮其邻域。',
+  'theme.chatOnThis': '就这个知识对话',
+  'theme.chatPanelTitle': '就这个知识对话',
+  'theme.chatGroundedIn': '基于',
+  'theme.chatMetaLine': '已自动带入 {claims} 条主张 · {sources} 个来源',
+  'theme.chatNewOnTheme': '就这个知识新开对话',
+  'theme.chatEmpty': '问问这块知识——主题综述、主张和来源已经在上下文里。',
+  'theme.chatSeed1': '总结这块知识讲了什么,来源之间有哪些分歧?',
+  'theme.chatSeed2': '这里哪些主张的证据最薄弱?',
+  'theme.chatSeed3': '这个主题最近有什么变化?',
+  'theme.chatPlaceholder': '问问这块知识……',
 
   // search page + ⌘K overlay
   'search.title': '搜索',

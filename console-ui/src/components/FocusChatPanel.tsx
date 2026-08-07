@@ -1,10 +1,14 @@
-/** Source-grounded chat dock — lives on `/library/:sha`, not a jump to Ask.
+/** Focus-grounded chat dock — lives on the focused page, not a jump to Ask.
  *
- * Product model: the user is reading a source; chat auto-injects body +
- * memory + crystal on the server via `focus_source`. Sessions are the same
- * `.ovp/chats` spine as Ask, tagged with focus metadata for unified history.
+ * Two focus targets share one dock:
+ * - source (`/library/:sha`): server injects body + memory + crystal via
+ *   `focus_source`.
+ * - theme (`/knowledge/theme/:t`): server injects topic page + active claims
+ *   + cited sources via `focus_theme`.
+ * Sessions are the same `.ovp/chats` spine as Ask, tagged with focus
+ * metadata for unified history.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -100,8 +104,8 @@ interface Turn {
   errorKey: MsgKey | null;
 }
 
-function genChatId(): string {
-  return `src-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+function genChatId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function errorKeyFor(err: unknown): MsgKey {
@@ -117,28 +121,31 @@ function errorKeyFor(err: unknown): MsgKey {
   return 'ask.errGeneric';
 }
 
-export interface SourceChatPanelProps {
-  sha: string;
+export type ChatFocusTarget =
+  | { kind: 'source'; sha: string }
+  | { kind: 'theme'; theme: string };
+
+export interface FocusChatPanelProps {
+  focus: ChatFocusTarget;
   title: string;
-  cardCount: number;
-  unitCount: number;
-  claimCount: number;
+  /** Compact, already-localized context meta line ("8 cards · 12 units · …"). */
+  metaLine: string;
   open: boolean;
   onClose: () => void;
   /** Optional session stem from URL (`?chat=`) to resume. */
   resumeChat?: string | null;
 }
 
-export default function SourceChatPanel({
-  sha,
+export default function FocusChatPanel({
+  focus,
   title,
-  cardCount,
-  unitCount,
-  claimCount,
+  metaLine,
   open,
   onClose,
   resumeChat = null,
-}: SourceChatPanelProps) {
+}: FocusChatPanelProps) {
+  const sha = focus.kind === 'source' ? focus.sha : null;
+  const themeName = focus.kind === 'theme' ? focus.theme : null;
   const { t, lang } = useI18n();
   const navigate = useNavigate();
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -154,7 +161,8 @@ export default function SourceChatPanel({
   const askStatusRef = useRef<boolean | null>(null);
 
   const toTurn = (question: string, answer: string, chat: string | null, extra?: Partial<AskResponse>): Turn => {
-    const citations = groundCitesOnSource(citationsFromAnswerText(answer), sha);
+    const raw = citationsFromAnswerText(answer);
+    const citations = sha ? groundCitesOnSource(raw, sha) : raw;
     return {
       question: displayUserQuestion(question),
       errorKey: null,
@@ -171,7 +179,15 @@ export default function SourceChatPanel({
 
   const refreshRecents = () => {
     fetchChats()
-      .then((all) => setRecents(all.filter((c) => c.focus_source === sha).slice(0, 8)))
+      .then((all) =>
+        setRecents(
+          all
+            .filter((c) =>
+              sha ? c.focus_source === sha : c.focus_theme === themeName,
+            )
+            .slice(0, 8),
+        ),
+      )
       .catch(() => setRecents([]));
   };
 
@@ -185,7 +201,7 @@ export default function SourceChatPanel({
       .catch(() => {
         /* submit re-reads */
       });
-  }, [open, sha]);
+  }, [open, sha, themeName]);
 
   // Resume a saved session from deep link or recent list.
   useEffect(() => {
@@ -219,7 +235,7 @@ export default function SourceChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, resumeChat, sha]);
+  }, [open, resumeChat, sha, themeName]);
 
   useEffect(() => {
     if (!open) return;
@@ -313,23 +329,21 @@ export default function SourceChatPanel({
         })
         .catch(() => askStatusRef.current ?? false);
       if (agent && !chat) {
-        chat = genChatId();
+        chat = genChatId(sha ? 'src' : 'thm');
         setSessionChat(chat);
       }
       setPollChat(agent ? chat : null);
       return postAsk(question, {
         chat,
         history,
-        focus_source: sha,
+        ...(sha ? { focus_source: sha } : { focus_theme: themeName! }),
       });
     })()
       .then((response) => {
-        const citations = groundCitesOnSource(
-          response.citations?.length
-            ? response.citations
-            : citationsFromAnswerText(response.answer),
-          sha,
-        );
+        const rawCites = response.citations?.length
+          ? response.citations
+          : citationsFromAnswerText(response.answer);
+        const citations = sha ? groundCitesOnSource(rawCites, sha) : rawCites;
         setTurns((prev) =>
           prev.map((turn, i) =>
             i === prev.length - 1
@@ -366,11 +380,9 @@ export default function SourceChatPanel({
     }
   };
 
-  const seeds: MsgKey[] = [
-    'source.chatSeed1',
-    'source.chatSeed2',
-    'source.chatSeed3',
-  ];
+  const seeds: MsgKey[] = sha
+    ? ['source.chatSeed1', 'source.chatSeed2', 'source.chatSeed3']
+    : ['theme.chatSeed1', 'theme.chatSeed2', 'theme.chatSeed3'];
 
   const chatDate = (entry: ChatEntry) =>
     entry.mtime > 0
@@ -380,28 +392,20 @@ export default function SourceChatPanel({
         )
       : entry.name;
 
-  const packSummary = useMemo(
-    () =>
-      t('source.chatPackSummary', {
-        cards: cardCount,
-        units: unitCount,
-        claims: claimCount,
-      }),
-    [t, cardCount, unitCount, claimCount],
-  );
+
 
   return (
     <aside
       className={`source-chat-panel${open ? '' : ' is-hidden'}`}
-      aria-label={t('source.chatPanelTitle')}
+      aria-label={t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}
       aria-hidden={!open}
       hidden={!open}
     >
       <header className="source-chat-head">
         <div>
-          <h3 style={{ margin: 0 }}>{t('source.chatPanelTitle')}</h3>
+          <h3 style={{ margin: 0 }}>{t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}</h3>
           <p className="tiny muted" style={{ margin: '0.2rem 0 0' }}>
-            {t('source.chatGroundedIn')}{' '}
+            {t(sha ? 'source.chatGroundedIn' : 'theme.chatGroundedIn')}{' '}
             <strong title={title}>{title.length > 48 ? `${title.slice(0, 48)}…` : title}</strong>
           </p>
         </div>
@@ -413,7 +417,7 @@ export default function SourceChatPanel({
           )}
           {viewingSaved && (
             <button type="button" className="tiny" onClick={startNew}>
-              {t('source.chatNewOnSource')}
+              {t(sha ? 'source.chatNewOnSource' : 'theme.chatNewOnTheme')}
             </button>
           )}
           <Link
@@ -431,14 +435,8 @@ export default function SourceChatPanel({
 
       {/* Context is injected server-side — UI only shows a compact meta line,
           never the raw body/memory/crystal dump. */}
-      <div className="source-chat-pack" title={packSummary}>
-        <span className="source-chat-meta mono tiny">
-          {t('source.chatMetaLine', {
-            cards: cardCount,
-            units: unitCount,
-            claims: claimCount,
-          })}
-        </span>
+      <div className="source-chat-pack" title={metaLine}>
+        <span className="source-chat-meta mono tiny">{metaLine}</span>
         <span className="tiny muted source-chat-pack-hint">{t('source.chatPackHint')}</span>
       </div>
 
@@ -467,7 +465,7 @@ export default function SourceChatPanel({
       <div className="source-chat-thread" ref={threadRef}>
         {turns.length === 0 && (
           <div className="source-chat-empty">
-            <p className="sm">{t('source.chatEmpty')}</p>
+            <p className="sm">{t(sha ? 'source.chatEmpty' : 'theme.chatEmpty')}</p>
             <ul className="example-list">
               {seeds.map((key) => (
                 <li key={key}>
@@ -543,7 +541,7 @@ export default function SourceChatPanel({
             ref={composerRef}
             data-omnibox-suppress
             value={draft}
-            placeholder={t('source.chatPlaceholder')}
+            placeholder={t(sha ? 'source.chatPlaceholder' : 'theme.chatPlaceholder')}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
             disabled={pending}

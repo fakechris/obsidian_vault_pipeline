@@ -3255,6 +3255,148 @@ url: {url}\n\n\
     let meta = ChatFocusMeta {
         source_sha: sha.to_string(),
         title: source.title.clone(),
+        theme: None,
+    };
+    Some((pack, meta))
+}
+
+/// Caps for the theme-grounded chat pack — the claims ARE the content here,
+/// so the claim budget is far larger than the source pack's.
+const FOCUS_THEME_CLAIM_MAX: usize = 40;
+const FOCUS_THEME_SOURCE_MAX: usize = 24;
+
+/// Build the auto-injected context pack for "chat on this crystal theme":
+/// the grounded topic-page synthesis (when one exists) + the theme's active
+/// claims + the distinct sources they cite. Mirrors `build_source_focus_pack`.
+/// Returns None for a theme with no active claims (nothing to ground on).
+fn build_theme_focus_pack(
+    state: &AppState,
+    model: &IndexModel,
+    theme: &str,
+) -> Option<(String, ChatFocusMeta)> {
+    let mut claims: Vec<&ovp_index::ClaimRow> = model
+        .claims
+        .iter()
+        .filter(|c| {
+            c.theme.as_deref() == Some(theme)
+                && matches!(
+                    c.status,
+                    ovp_index::ClaimStatus::Durable | ovp_index::ClaimStatus::Caveated
+                )
+        })
+        .collect();
+    if claims.is_empty() {
+        return None;
+    }
+    claims.sort_by_key(|c| {
+        (
+            match c.status {
+                ovp_index::ClaimStatus::Durable => 0u8,
+                _ => 1,
+            },
+            c.claim_id.clone(),
+        )
+    });
+    let claim_total = claims.len();
+
+    // case id → source row, for the distinct-source roster.
+    let by_sha: HashMap<&str, &ovp_index::SourceRow> =
+        model.sources.iter().map(|s| (s.sha256.as_str(), s)).collect();
+    let case_to_sha: HashMap<&str, &str> = model
+        .packs
+        .iter()
+        .filter_map(|p| {
+            let case = p
+                .pack_dir
+                .trim_end_matches(['/', '\\'])
+                .rsplit(['/', '\\'])
+                .next()?;
+            Some((case, p.source_sha256.as_deref()?))
+        })
+        .collect();
+
+    let mut claims_block = String::new();
+    let mut seen_sources: Vec<&str> = Vec::new();
+    for c in claims.iter().take(FOCUS_THEME_CLAIM_MAX) {
+        let key = c
+            .claim_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .unwrap_or(c.claim_id.as_str());
+        let status = match c.status {
+            ovp_index::ClaimStatus::Durable => "durable",
+            _ => "caveated",
+        };
+        claims_block.push_str(&format!("- [claim:{key}] ({status}) {}\n", c.claim.trim()));
+        for case in &c.sources {
+            if let Some(sha) = case_to_sha.get(case.as_str())
+                && !seen_sources.contains(sha)
+            {
+                seen_sources.push(sha);
+            }
+        }
+    }
+    let claim_note = if claim_total > FOCUS_THEME_CLAIM_MAX {
+        format!("…({} more claims omitted)\n", claim_total - FOCUS_THEME_CLAIM_MAX)
+    } else {
+        String::new()
+    };
+
+    let mut sources_block = String::new();
+    let source_n = seen_sources.len();
+    for sha in seen_sources.iter().take(FOCUS_THEME_SOURCE_MAX) {
+        let title = by_sha
+            .get(*sha)
+            .and_then(|s| s.title.as_deref())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or("(untitled)");
+        sources_block.push_str(&format!("- [source:{sha}] {title}\n"));
+    }
+    if sources_block.is_empty() {
+        sources_block.push_str("(no linked sources)\n");
+    }
+
+    // Grounded topic-page synthesis, when crystal-theme-pages has woven one.
+    let page_block = ovp_domain::crystal::theme_pages::ThemePagesFile::load(
+        &state
+            .vault_root
+            .join(".ovp")
+            .join("crystal")
+            .join("theme_pages.json"),
+    )
+    .ok()
+    .flatten()
+    .and_then(|f| f.pages.into_iter().find(|p| p.label == theme))
+    .map(|p| {
+        let mut out = String::new();
+        for sec in &p.sections {
+            out.push_str(&format!("### {}\n{}\n\n", sec.heading, sec.body));
+        }
+        out
+    })
+    .filter(|s| !s.trim().is_empty())
+    .unwrap_or_else(|| "(no synthesized topic page yet — reason from the claims)\n".into());
+
+    let pack = format!(
+        "[FOCUS CONTEXT — theme-grounded chat]\n\
+You are answering questions about ONE crystal knowledge theme. Prefer the \
+material below (topic-page synthesis, active claims, their sources). Cite \
+with [claim:…] or [source:…] when used. Vault-wide tools are allowed for \
+comparison, but the primary answer must stay grounded in this theme.\n\n\
+## Theme\n\
+{theme}\n\n\
+## Topic page\n\
+{page_block}\n\
+## Active claims ({claim_total})\n\
+{claims_block}{claim_note}\n\
+## Cited sources ({source_n})\n\
+{sources_block}"
+    );
+
+    let meta = ChatFocusMeta {
+        source_sha: String::new(),
+        title: Some(theme.to_string()),
+        theme: Some(theme.to_string()),
     };
     Some((pack, meta))
 }
@@ -3894,11 +4036,28 @@ fn handle_ask(
         .map(str::trim)
         .filter(|s| !s.is_empty() && s.len() <= 128)
         .map(str::to_string);
-    let focus_built = focus_source.as_deref().and_then(|sha| {
-        state
-            .current_model()
-            .and_then(|model| build_source_focus_pack(state, &model, sha))
-    });
+    // Theme-grounded variant ("chat on this knowledge"): claims + topic page
+    // instead of one document. focus_source wins when both are sent.
+    let focus_theme = parsed
+        .get("focus_theme")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 256)
+        .map(str::to_string);
+    let focus_built = focus_source
+        .as_deref()
+        .and_then(|sha| {
+            state
+                .current_model()
+                .and_then(|model| build_source_focus_pack(state, &model, sha))
+        })
+        .or_else(|| {
+            focus_theme.as_deref().and_then(|theme| {
+                state
+                    .current_model()
+                    .and_then(|model| build_theme_focus_pack(state, &model, theme))
+            })
+        });
     let focus_meta = focus_built.as_ref().map(|(_, m)| m.clone());
     // Agent path: full pack + user question as one user message (tools still
     // available). Legacy path: pack goes in context_prefix so retrieval still
@@ -4833,14 +4992,18 @@ fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let list: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(mtime, name, path)| {
-            let (focus_source, focus_title, preview) = std::fs::read_to_string(&path)
-                .ok()
-                .map(|md| parse_chat_surface_meta(&md))
-                .unwrap_or((None, None, None));
+            let (focus_source, focus_theme, focus_title, preview) =
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .map(|md| parse_chat_surface_meta(&md))
+                    .unwrap_or((None, None, None, None));
             let mut obj = serde_json::json!({ "name": name, "mtime": mtime });
             if let Some(map) = obj.as_object_mut() {
                 if let Some(sha) = focus_source {
                     map.insert("focus_source".into(), serde_json::json!(sha));
+                }
+                if let Some(theme) = focus_theme {
+                    map.insert("focus_theme".into(), serde_json::json!(theme));
                 }
                 if let Some(title) = focus_title {
                     map.insert("focus_title".into(), serde_json::json!(title));
@@ -5599,6 +5762,51 @@ mod tests {
         };
         ovp_index::write_evidence(&vault, &evidence).unwrap();
         vault
+    }
+
+    #[test]
+    fn theme_focus_pack_grounds_on_claims_sources_and_topic_page() {
+        let vault = portal_vault(
+            "theme-focus",
+            "50-Inbox/03-Processed/good.md",
+            "# Good\n\nbody text\n",
+        );
+        std::fs::create_dir_all(vault.join(".ovp/crystal")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/crystal/theme_pages.json"),
+            serde_json::json!({
+                "schema": "ovp.theme_pages/v1",
+                "pages": [{
+                    "community_id": 1,
+                    "label": "memory",
+                    "label_zh": "",
+                    "claim_keys": ["c01"],
+                    "sections": [{
+                        "heading": "Overview",
+                        "body": "Filesystems act as memory [claim:c01]."
+                    }]
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let st = state(vault, None);
+        let model = st.current_model().expect("fixture model");
+
+        let (pack, meta) =
+            build_theme_focus_pack(&st, &model, "memory").expect("theme has claims");
+        // Claims block with status + stable key fallback (claim_id here).
+        assert!(pack.contains("[claim:c01] (durable)"), "{pack}");
+        // Distinct-source roster resolved case -> sha -> title.
+        assert!(pack.contains("[source:aaaa1111] Good Article"), "{pack}");
+        // Topic-page synthesis included verbatim.
+        assert!(pack.contains("Filesystems act as memory [claim:c01]."));
+        // Meta tags the transcript as theme-focused, never source-focused.
+        assert_eq!(meta.theme.as_deref(), Some("memory"));
+        assert!(meta.source_sha.is_empty());
+
+        // A theme with no active claims has nothing to ground on.
+        assert!(build_theme_focus_pack(&st, &model, "no-such-theme").is_none());
     }
 
     #[test]

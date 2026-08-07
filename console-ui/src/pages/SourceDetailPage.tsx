@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
-import SourceChatPanel from '../components/SourceChatPanel';
+import FocusChatPanel from '../components/FocusChatPanel';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
@@ -1114,12 +1114,14 @@ export default function SourceDetailPage() {
       </div>
 
       {!STATIC_MODE && (
-        <SourceChatPanel
-          sha={source.sha256}
+        <FocusChatPanel
+          focus={{ kind: 'source', sha: source.sha256 }}
           title={title}
-          cardCount={memory.cards.length}
-          unitCount={memory.units.length}
-          claimCount={citing.length}
+          metaLine={t('source.chatMetaLine', {
+            cards: memory.cards.length,
+            units: memory.units.length,
+            claims: citing.length,
+          })}
           open={chatOpen}
           resumeChat={resumeChat}
           onClose={() => setChatOpen(false)}
