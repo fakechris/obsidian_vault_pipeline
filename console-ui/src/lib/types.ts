@@ -358,6 +358,9 @@ export interface AskSessionTurn {
   question: string;
   answer: string;
   stopped_reason: string;
+  /** Server-resolved citation receipts (same resolver as live answers).
+   * Absent only on pre-consolidation servers — clients then reconstruct. */
+  citations?: AskCitation[];
   tool_trace: AskTraceEntry[];
 }
 

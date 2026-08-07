@@ -462,7 +462,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             &ovp_domain::vault_layout::VaultLayout::new(),
         );
         let citations = match read_index(&state.vault_root).ok() {
-            Some(m) => ovp_memory::receipts::agent_citations(&done.answer, &m, &records),
+            Some(m) => ovp_memory::receipts::agent_citations(&done.answer, &m, &records, ovp_index::read_evidence(&state.vault_root).ok().as_ref()),
             None => ovp_memory::receipts::agent_citations_unindexed(&done.answer, &records),
         };
         let verified = citations.iter().filter(|c| c["verified"] == true).count();
@@ -590,7 +590,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         &ovp_domain::vault_layout::VaultLayout::new(),
     );
     let citations = match tools.index_snapshot().as_deref() {
-        Some(m) => ovp_memory::receipts::agent_citations(&outcome.answer, m, &records),
+        Some(m) => ovp_memory::receipts::agent_citations(&outcome.answer, m, &records, ovp_index::read_evidence(&state.vault_root).ok().as_ref()),
         None => ovp_memory::receipts::agent_citations_unindexed(&outcome.answer, &records),
     };
     // A racing process completed this keyed turn between the preflight

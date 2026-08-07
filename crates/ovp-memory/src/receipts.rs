@@ -5,6 +5,7 @@
 
 use crate::verify::citations_in_order;
 use ovp_domain::crystal::DurableRecord;
+use ovp_index::evidence::EvidenceModel;
 use ovp_index::IndexModel;
 
 /// Models decorate citation ids in the wild — `[source:<sha> Some Title]`,
@@ -86,6 +87,7 @@ pub fn agent_citations(
     answer: &str,
     model: &IndexModel,
     records: &[DurableRecord],
+    evidence: Option<&EvidenceModel>,
 ) -> Vec<serde_json::Value> {
     citations_in_order(answer)
         .into_iter()
@@ -131,6 +133,66 @@ pub fn agent_citations(
                         "kind": "source",
                         "title": title,
                         "link_target": hit.map(|s| format!("/library/{}", s.sha256)),
+                        "verified": hit.is_some(),
+                    })
+                }
+                // Units/cards live in the evidence sidecar — the sidecar rows
+                // carry their source sha, so resolution needs NO focus
+                // context (2026-08-07 operator report: every surface that
+                // reconstructed these client-side showed raw ids; resolve
+                // them HERE, once). Fail-closed on ambiguity, like claims.
+                "unit" => {
+                    let hits: Vec<_> = evidence
+                        .map(|ev| ev.units.iter().filter(|u| u.unit_id == id).collect())
+                        .unwrap_or_default();
+                    let hit = (hits.len() == 1).then(|| hits[0]);
+                    let title = hit
+                        .map(|u| {
+                            let body = if u.quote.trim().is_empty() { &u.text } else { &u.quote };
+                            body.trim().chars().take(120).collect::<String>()
+                        })
+                        .filter(|t| !t.is_empty())
+                        .or(decorated);
+                    let link = hit.and_then(|u| {
+                        u.source_sha256
+                            .as_deref()
+                            .map(|sha| format!("/library/{sha}?tab=memory"))
+                    });
+                    serde_json::json!({
+                        "id": stable_id,
+                        "kind": "unit",
+                        "title": title,
+                        "link_target": link,
+                        "verified": hit.is_some(),
+                    })
+                }
+                "card" => {
+                    // Evidence card ids are already `card:`-prefixed; markers
+                    // appear both bare and doubled in the wild — accept
+                    // either, resolution stays exact.
+                    let hits: Vec<_> = evidence
+                        .map(|ev| {
+                            ev.cards
+                                .iter()
+                                .filter(|c| c.id == stable_id || c.id == id)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let hit = (hits.len() == 1).then(|| hits[0]);
+                    let title = hit
+                        .map(|c| c.title.trim().chars().take(120).collect::<String>())
+                        .filter(|t| !t.is_empty())
+                        .or(decorated);
+                    let link = hit.and_then(|c| {
+                        c.source_sha256
+                            .as_deref()
+                            .map(|sha| format!("/library/{sha}?tab=memory"))
+                    });
+                    serde_json::json!({
+                        "id": stable_id,
+                        "kind": "card",
+                        "title": title,
+                        "link_target": link,
                         "verified": hit.is_some(),
                     })
                 }

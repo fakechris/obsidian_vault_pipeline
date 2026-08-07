@@ -33,6 +33,7 @@ import {
   themeRoute,
   type LibraryFilter,
 } from '../lib/derive';
+import { buildMemoryTitleMap } from '../lib/chatTranscript';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, sourceImageCandidates } from '../lib/markdown';
 import { companionLinks, isPrimarilyEnglish } from '../lib/sourceLinks';
@@ -1117,6 +1118,7 @@ export default function SourceDetailPage() {
         <FocusChatPanel
           focus={{ kind: 'source', sha: source.sha256 }}
           title={title}
+          citeTitles={buildMemoryTitleMap(memory)}
           metaLine={t('source.chatMetaLine', {
             cards: memory.cards.length,
             units: memory.units.length,

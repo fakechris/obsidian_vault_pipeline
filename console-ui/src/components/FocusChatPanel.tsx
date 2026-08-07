@@ -23,6 +23,7 @@ import {
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type CiteMarks } from '../lib/markdown';
 import {
+  applyMemoryTitles,
   displayUserQuestion,
   groundCitesOnSource,
   parseChatTranscript,
@@ -109,6 +110,9 @@ export interface FocusChatPanelProps {
   title: string;
   /** Compact, already-localized context meta line ("8 cards · 12 units · …"). */
   metaLine: string;
+  /** Readable titles for unit/card cite chips (canonical id → snippet) —
+   * the source page builds this from its memory payload. */
+  citeTitles?: Map<string, string> | null;
   open: boolean;
   onClose: () => void;
   /** Optional session stem from URL (`?chat=`) to resume. */
@@ -119,6 +123,7 @@ export default function FocusChatPanel({
   focus,
   title,
   metaLine,
+  citeTitles = null,
   open,
   onClose,
   resumeChat = null,
@@ -141,7 +146,8 @@ export default function FocusChatPanel({
 
   const toTurn = (question: string, answer: string, chat: string | null, extra?: Partial<AskResponse>): Turn => {
     const raw = citationsFromAnswerText(answer);
-    const citations = sha ? groundCitesOnSource(raw, sha) : raw;
+    const grounded = sha ? groundCitesOnSource(raw, sha) : raw;
+    const citations = citeTitles ? applyMemoryTitles(grounded, citeTitles) : grounded;
     return {
       question: displayUserQuestion(question),
       errorKey: null,
@@ -201,6 +207,7 @@ export default function FocusChatPanel({
                 stopped_reason: turn.stopped_reason,
                 turn_id: turn.turn_id,
                 tool_trace: turn.tool_trace,
+                ...(turn.citations?.length ? { citations: turn.citations } : {}),
               }),
             ),
           );
@@ -273,6 +280,7 @@ export default function FocusChatPanel({
                 stopped_reason: turn.stopped_reason,
                 turn_id: turn.turn_id,
                 tool_trace: turn.tool_trace,
+                ...(turn.citations?.length ? { citations: turn.citations } : {}),
               }),
             ),
           );
@@ -322,7 +330,10 @@ export default function FocusChatPanel({
         const rawCites = response.citations?.length
           ? response.citations
           : citationsFromAnswerText(response.answer);
-        const citations = sha ? groundCitesOnSource(rawCites, sha) : rawCites;
+        const grounded = sha ? groundCitesOnSource(rawCites, sha) : rawCites;
+        const citations = citeTitles
+          ? applyMemoryTitles(grounded, citeTitles)
+          : grounded;
         setTurns((prev) =>
           prev.map((turn, i) =>
             i === prev.length - 1

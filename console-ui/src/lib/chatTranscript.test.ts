@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyMemoryTitles,
+  buildMemoryTitleMap,
   citationsInOrder,
   groundCitesOnSource,
   parseChatFocus,
@@ -146,5 +148,40 @@ describe('savedReplayPlan — replay source + error priority', () => {
     expect(savedReplayPlan(null, 0).kind).toBe('loadError');
     // …but a live audit session still replays even without markdown.
     expect(savedReplayPlan(null, 3).kind).toBe('session');
+  });
+});
+
+describe('memory titles on replayed citation chips', () => {
+  const memory = {
+    cards: [{ id: 'c-1', title: 'The Leverage Card' }],
+    units: [
+      { unit_id: 'u-011-ecc4bc16', text: 'fallback text', quote: '基金与国际投行签TRS合同,付Swap Spread换每日2倍收益现金流', line: 14 },
+      { unit_id: 'u-empty', text: '  ', quote: '', line: null },
+    ],
+  };
+
+  it('buildMemoryTitleMap keys canonical ids, prefers quotes, skips empties', () => {
+    const m = buildMemoryTitleMap(memory);
+    expect(m.get('unit:u-011-ecc4bc16')).toContain('基金与国际投行签TRS合同');
+    expect(m.get('card:c-1')).toBe('The Leverage Card');
+    expect(m.has('unit:u-empty')).toBe(false);
+  });
+
+  it('applyMemoryTitles fills bare-id chips, never overwrites real titles', () => {
+    // Operator report 2026-08-07: chips read "u-011-ecc4bc16" — the raw id.
+    const m = buildMemoryTitleMap(memory);
+    const out = applyMemoryTitles(
+      [
+        { id: 'unit:u-011-ecc4bc16', title: 'unit:u-011-ecc4bc16' },
+        { id: 'unit:u-011-ecc4bc16', title: 'u-011-ecc4bc16' },
+        { id: 'card:c-1', title: 'Server-provided real title' },
+        { id: 'unit:u-unknown', title: 'unit:u-unknown' },
+      ],
+      m,
+    );
+    expect(out[0].title).toContain('TRS');
+    expect(out[1].title).toContain('TRS');
+    expect(out[2].title).toBe('Server-provided real title');
+    expect(out[3].title).toBe('unit:u-unknown');
   });
 });
