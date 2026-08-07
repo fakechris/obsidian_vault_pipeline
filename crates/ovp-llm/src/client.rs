@@ -97,7 +97,12 @@ pub fn is_transient(err: &CallError) -> bool {
                 n == 429 || (500..=599).contains(&n)
             } else {
                 let c = code.to_ascii_lowercase();
-                c.contains("rate_limit") || c.contains("overloaded") || c.contains("unavailable")
+                // `api_error` is Anthropic's structured 5xx — same retry
+                // posture as its numeric form (failure_class agrees).
+                c.contains("rate_limit")
+                    || c.contains("overloaded")
+                    || c.contains("unavailable")
+                    || c == "api_error"
             }
         }
         // Protocol violations are caller bugs — retrying resends the same
@@ -338,6 +343,9 @@ mod retry_tests {
         assert!(is_transient(&CallError::Provider { code: "429".into(), detail: "x".into() }));
         assert!(is_transient(&CallError::Provider { code: "503".into(), detail: "x".into() }));
         assert!(is_transient(&CallError::Provider { code: "overloaded_error".into(), detail: "x".into() }));
+        // Structured 5xx (parsed body keeps /error/type, drops the status) —
+        // retry posture must match failure_class="overloaded".
+        assert!(is_transient(&CallError::Provider { code: "api_error".into(), detail: "x".into() }));
         assert!(!is_transient(&CallError::Provider { code: "400".into(), detail: "x".into() }));
         assert!(!is_transient(&CallError::Provider { code: "401".into(), detail: "x".into() }));
         assert!(!is_transient(&CallError::Decode { detail: "no text".into() }));

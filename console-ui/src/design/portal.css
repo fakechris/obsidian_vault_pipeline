@@ -2802,7 +2802,7 @@ body {
   max-height: 9rem;
   overflow: auto;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   color: var(--warn-fg, #7a4d05);
 }
 .auto-graph-row {

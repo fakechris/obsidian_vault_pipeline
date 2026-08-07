@@ -26,6 +26,7 @@ import {
   type ScheduleJob,
   type SchedulePayload,
 } from '../lib/api';
+import { scheduleFailureStrip } from '../lib/derive';
 
 type StageState = 'on' | 'off' | 'always';
 
@@ -497,6 +498,7 @@ export default function AutomationPanel() {
 
   const activeJob =
     data?.jobs.find((j) => j.id === activeJobId) ?? data?.jobs[0] ?? null;
+  const failStrip = activeJob ? scheduleFailureStrip(activeJob) : null;
 
   const onTogglePinboard = (next: boolean) => {
     setBusy(true);
@@ -542,20 +544,15 @@ export default function AutomationPanel() {
             onSelect={(id) => selectJob(data.jobs.find((j) => j.id === id))}
           />
 
-          {activeJob.last_status === 'error' && (
+          {failStrip && (
             <div className="auto-fail" role="alert">
               <p className="sm warn" style={{ margin: 0 }}>
-                {/* Legacy state (pre-counter) reports 0 — the status alone
-                    proves at least one failure, so floor the streak at 1. */}
-                {t('auto.failHead', { n: Math.max(1, activeJob.consecutive_failures ?? 1) })}
+                {t('auto.failHead', { n: failStrip.streak })}
                 {' · '}
-                {activeJob.enabled ? t('auto.failNoRetry') : t('auto.failDisabled')}
-                {(activeJob.runs_total ?? 0) > 0
-                  ? ` · ${t('auto.failCounts', {
-                      fails: activeJob.failures_total ?? 0,
-                      runs: activeJob.runs_total ?? 0,
-                    })}`
-                  : ''}
+                {failStrip.noteKey === 'noRetry'
+                  ? t('auto.failNoRetry')
+                  : t('auto.failDisabled')}
+                {failStrip.counts ? ` · ${t('auto.failCounts', failStrip.counts)}` : ''}
               </p>
               {activeJob.last_error && (
                 <pre className="auto-fail-tail mono tiny">{activeJob.last_error}</pre>

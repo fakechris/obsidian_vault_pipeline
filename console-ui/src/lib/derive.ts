@@ -1092,6 +1092,81 @@ export function themeWall(
   );
 }
 
+/** Theme-card source badge: null hides it. `sources` counts only INDEXED
+ * claims, so 0 means "unknown" (ledger/index drift or a ledger-only theme) —
+ * omit rather than show a false zero. `single` flags a multi-claim theme
+ * resting on one document (deserves extra scrutiny). */
+export function themeSourceBadge(group: {
+  sources: number;
+  durable: number;
+  caveated: number;
+}): { n: number; single: boolean } | null {
+  if (group.sources <= 0) return null;
+  const active = group.durable + group.caveated;
+  return { n: group.sources, single: group.sources === 1 && active > 1 };
+}
+
+/** Failure strip for a schedule job on the System automation panel — null
+ * means no strip. Legacy state (pre-counter) reports 0 everywhere; the error
+ * status alone proves at least one failure, so the streak floors at 1 and
+ * lifetime counts show only when actually recorded (`runs_total > 0`). */
+export interface ScheduleFailureStrip {
+  streak: number;
+  /** 'noRetry' = enabled job waiting for its next window (is_due never
+   * retries); 'disabled' = will not run again until re-enabled. */
+  noteKey: 'noRetry' | 'disabled';
+  counts: { fails: number; runs: number } | null;
+}
+export function scheduleFailureStrip(job: {
+  last_status: string;
+  enabled: boolean;
+  consecutive_failures?: number;
+  failures_total?: number;
+  runs_total?: number;
+}): ScheduleFailureStrip | null {
+  if (job.last_status !== 'error') return null;
+  return {
+    streak: Math.max(1, job.consecutive_failures ?? 1),
+    noteKey: job.enabled ? 'noRetry' : 'disabled',
+    counts:
+      (job.runs_total ?? 0) > 0
+        ? { fails: job.failures_total ?? 0, runs: job.runs_total ?? 0 }
+        : null,
+  };
+}
+
+/** Targeted fix hint for an ask model_error, keyed by the server's
+ * failure_class slug. Unactionable classes (decode/protocol/internal/…)
+ * return null — the generic stop note already covers them. Keys live in the
+ * i18n catalogs as `ask.fail.*`. */
+export function failureHintKey(
+  cls: string | null | undefined,
+):
+  | 'ask.fail.auth'
+  | 'ask.fail.rateLimited'
+  | 'ask.fail.contextExceeded'
+  | 'ask.fail.budgetExhausted'
+  | 'ask.fail.overloaded'
+  | 'ask.fail.network'
+  | null {
+  switch (cls) {
+    case 'auth':
+      return 'ask.fail.auth';
+    case 'rate_limited':
+      return 'ask.fail.rateLimited';
+    case 'context_exceeded':
+      return 'ask.fail.contextExceeded';
+    case 'budget_exhausted':
+      return 'ask.fail.budgetExhausted';
+    case 'overloaded':
+      return 'ask.fail.overloaded';
+    case 'network':
+      return 'ask.fail.network';
+    default:
+      return null;
+  }
+}
+
 /** Distinct themes the source's citing claims land in — the source page's
  * "supports this crystal knowledge" rail. Count = active citing claims in
  * that theme; theme order follows count desc then name. */

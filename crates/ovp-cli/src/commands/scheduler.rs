@@ -96,10 +96,23 @@ impl JobRunner for ShellRunner {
                 }
             }
         }
-        let ok = child.wait().map(|s| s.success()).unwrap_or(false);
-        let error_tail = (!ok && !tail_bytes.is_empty()).then(|| {
+        // A wait() failure is itself evidence — don't collapse it into a bare
+        // ok=false with no last_error (codex/CodeRabbit: the portal could
+        // not explain the failed execution).
+        let (ok, wait_err) = match child.wait() {
+            Ok(status) => (status.success(), None),
+            Err(e) => (false, Some(format!("wait() failed: {e}"))),
+        };
+        let error_tail = (!ok && !(tail_bytes.is_empty() && wait_err.is_none())).then(|| {
             let bytes: Vec<u8> = tail_bytes.into_iter().collect();
-            render_stderr_tail(&bytes)
+            let mut tail = render_stderr_tail(&bytes);
+            if let Some(we) = wait_err {
+                if !tail.is_empty() {
+                    tail.push('\n');
+                }
+                tail.push_str(&we);
+            }
+            tail
         });
         ovp_scheduler::JobResult { ok, error_tail }
     }
