@@ -1345,6 +1345,113 @@ export function closureNodeIds(
   return out;
 }
 
+/** Community anchors for the global knowledge graph (VZ, 2026-08-07).
+ *
+ * The force layout alone produced an ugly silhouette: a dense central
+ * hairball (short strong links + centroid pull) with unaffiliated nodes
+ * blasted to the far periphery by unopposed repulsion. Instead, every node
+ * gets a HOME in an organic packed-cloud silhouette (the hand-drawn tree
+ * reference the operator liked):
+ *
+ * - Communities are disks (radius ∝ sqrt(member count)) greedily packed on
+ *   an archimedean spiral — largest at the center, no empty donut middle.
+ * - Packing ORDER is affinity-greedy: after the largest, always the
+ *   unplaced community most connected to the placed ones, so heavy
+ *   cross-community chords stay short instead of spanning the layout.
+ * - Unclustered nodes (cluster <= 0) get evenly spaced, id-sorted seats on
+ *   a ring just outside the cloud — visible periphery, never strays.
+ *
+ * Deterministic and pure — vitest-covered; the graph component only seeds
+ * positions and applies the pull force toward these anchors. */
+export interface RadialAnchors {
+  radius: number;
+  byCluster: Map<number, { x: number; y: number }>;
+  byId: Map<string, { x: number; y: number }>;
+}
+
+export function radialAnchors(
+  clusterSizes: Map<number, number>,
+  unclusteredIds: string[],
+  affinity?: Map<number, Map<number, number>>,
+  nodeRadius = 7,
+): RadialAnchors {
+  const byCluster = new Map<number, { x: number; y: number }>();
+  const byId = new Map<string, { x: number; y: number }>();
+  const entries = [...clusterSizes.entries()].filter(([, n]) => n > 0);
+  // Blob footprint: disk radius grows with sqrt(member count) + padding.
+  const blobR = (n: number) => nodeRadius * Math.sqrt(n) * 1.45 + 10;
+
+  // AFFINITY-GREEDY placement order: largest first, then always the unplaced
+  // community most connected (by cross-edge weight) to anything already
+  // placed — the spiral packs consecutive picks adjacently, so the heavy
+  // inter-community chords stay SHORT instead of spanning the silhouette.
+  const remaining = new Map(entries);
+  const order: [number, number][] = [];
+  const first = entries.slice().sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+  if (first) {
+    order.push(first);
+    remaining.delete(first[0]);
+    while (remaining.size > 0) {
+      let best: [number, number] | null = null;
+      let bestScore = -1;
+      for (const [c, n] of remaining) {
+        let score = 0;
+        for (const [placed] of order) {
+          score += affinity?.get(c)?.get(placed) ?? 0;
+        }
+        // Ties (incl. no affinity data at all) fall back to size desc, id asc.
+        if (
+          best === null ||
+          score > bestScore ||
+          (score === bestScore && (n > best[1] || (n === best[1] && c < best[0])))
+        ) {
+          best = [c, n];
+          bestScore = score;
+        }
+      }
+      order.push(best!);
+      remaining.delete(best![0]);
+    }
+  }
+
+  // Greedy spiral packing: largest at the origin, each next community walks
+  // an archimedean spiral to the first spot clear of every placed disk —
+  // compact organic cloud, no empty donut middle.
+  const placed: { c: number; x: number; y: number; r: number }[] = [];
+  for (const [c, n] of order) {
+    const r = blobR(n);
+    if (placed.length === 0) {
+      placed.push({ c, x: 0, y: 0, r });
+      byCluster.set(c, { x: 0, y: 0 });
+      continue;
+    }
+    let theta = 0;
+    for (;;) {
+      theta += 0.22;
+      const rad = 6 * theta;
+      const x = rad * Math.cos(theta);
+      const y = rad * Math.sin(theta);
+      if (placed.every((p) => Math.hypot(x - p.x, y - p.y) >= r + p.r)) {
+        placed.push({ c, x, y, r });
+        byCluster.set(c, { x, y });
+        break;
+      }
+    }
+  }
+
+  const extent = placed.reduce((m, p) => Math.max(m, Math.hypot(p.x, p.y) + p.r), 0);
+  const radius = Math.max(60, extent);
+  // Unclustered nodes: deterministic seats on a ring just OUTSIDE the packed
+  // cloud — visible periphery, never repulsion-flung strays.
+  const outer = radius + 26;
+  const ids = [...unclusteredIds].sort();
+  for (let i = 0; i < ids.length; i++) {
+    const a = ((i + 0.5) / Math.max(1, ids.length)) * 2 * Math.PI;
+    byId.set(ids[i], { x: outer * Math.cos(a), y: outer * Math.sin(a) });
+  }
+  return { radius, byCluster, byId };
+}
+
 /** Index-store health for the stage-4 repair banner. Pure so the node-env
  * tests can pin the truth table: a REBUILD in flight outranks the error
  * (the operator already acted), and only a recorded sqlite failure — not a

@@ -26,7 +26,13 @@ import {
   fetchSourceNeighborhood,
   fetchThemeGraph,
 } from '../lib/api';
-import { closureNodeIds, isMiscTheme, themeRoute } from '../lib/derive';
+import {
+  closureNodeIds,
+  isMiscTheme,
+  radialAnchors,
+  themeRoute,
+  type RadialAnchors,
+} from '../lib/derive';
 import type { ClaimDetail, GraphNode, GraphResponse } from '../lib/types';
 import { useModel } from '../model';
 import { EmptyState } from './ui';
@@ -116,34 +122,28 @@ function shouldLabel(n: GraphNode, zoom: number, forced: boolean): boolean {
 // react-force-graph mutates node objects with x/y/z at runtime.
 type FGNode = GraphNode & { x?: number; y?: number; z?: number; vx?: number; vy?: number };
 
-/** A custom d3 force that pulls every node toward its community's live centroid,
- * so communities settle into DISTINCT spatial regions (clean, separated hulls)
- * instead of intermixing. Weak enough that links still shape the within-cluster
- * structure. */
-function clusterForce(strength: number) {
+/** A custom d3 force that pulls every node toward its FIXED radial anchor
+ * (see `radialAnchors` in derive.ts): community members toward their petal,
+ * unclustered nodes toward their outer-ring seat. Fixed anchors — unlike the
+ * old live-centroid pull — give strays a home instead of letting repulsion
+ * blast them to the periphery, and stop the big communities from collapsing
+ * into one central hairball. */
+function radialAnchorForce(
+  anchors: RadialAnchors,
+  strength: number,
+  singleStrength: number,
+) {
   let nodes: FGNode[] = [];
   const force = (alpha: number) => {
-    const cen = new Map<number, { x: number; y: number; n: number }>();
     for (const nd of nodes) {
-      if (nd.cluster > 0) {
-        const c = cen.get(nd.cluster) ?? { x: 0, y: 0, n: 0 };
-        c.x += nd.x ?? 0;
-        c.y += nd.y ?? 0;
-        c.n += 1;
-        cen.set(nd.cluster, c);
-      }
-    }
-    for (const c of cen.values()) {
-      c.x /= c.n;
-      c.y /= c.n;
-    }
-    const k = strength * alpha;
-    for (const nd of nodes) {
-      const c = cen.get(nd.cluster);
-      if (c) {
-        nd.vx = (nd.vx ?? 0) + (c.x - (nd.x ?? 0)) * k;
-        nd.vy = (nd.vy ?? 0) + (c.y - (nd.y ?? 0)) * k;
-      }
+      const a =
+        nd.cluster > 0 ? anchors.byCluster.get(nd.cluster) : anchors.byId.get(nd.id);
+      if (!a) continue;
+      // Singles have NO link holding them — they need a firmer hand than
+      // community members (whose links do most of the local shaping).
+      const k = (nd.cluster > 0 ? strength : singleStrength) * alpha;
+      nd.vx = (nd.vx ?? 0) + (a.x - (nd.x ?? 0)) * k;
+      nd.vy = (nd.vy ?? 0) + (a.y - (nd.y ?? 0)) * k;
     }
   };
   force.initialize = (n: FGNode[]) => {
@@ -272,11 +272,65 @@ export default function KnowledgeGraph({
     };
   }, [scope, id, persp]);
 
+  // Packed community anchors (+ cross-community affinity for the packing
+  // order) — shared by the position seeding below and the pull force.
+  const anchors = useMemo(() => {
+    if (!data || scope !== 'global') return null;
+    const sizes = new Map<number, number>();
+    const singles: string[] = [];
+    const clusterOf = new Map<string, number>();
+    for (const n of data.nodes) {
+      clusterOf.set(n.id, n.cluster);
+      if (n.cluster > 0) sizes.set(n.cluster, (sizes.get(n.cluster) ?? 0) + 1);
+      else singles.push(n.id);
+    }
+    const affinity = new Map<number, Map<number, number>>();
+    const bump = (a: number, b: number, w: number) => {
+      const m = affinity.get(a) ?? new Map<number, number>();
+      m.set(b, (m.get(b) ?? 0) + w);
+      affinity.set(a, m);
+    };
+    for (const e of data.edges) {
+      const a = clusterOf.get(e.source) ?? 0;
+      const b = clusterOf.get(e.target) ?? 0;
+      if (a > 0 && b > 0 && a !== b) {
+        const w = e.weight ?? 1;
+        bump(a, b, w);
+        bump(b, a, w);
+      }
+    }
+    return radialAnchors(sizes, singles, affinity);
+  }, [data, scope]);
+  // Ref mirror for setFg, which can fire before OR after the data arrives.
+  const anchorsRef = useRef<RadialAnchors | null>(null);
+  anchorsRef.current = anchors;
+
   // Fresh node/link objects per dataset (react-force-graph owns their physics).
   const graphData = useMemo(() => {
     if (!data) return { nodes: [] as FGNode[], links: [] };
+    const nodes = data.nodes.map((n) => ({ ...n })) as FGNode[];
+    if (anchors) {
+      // SEED positions on the packed silhouette instead of random scatter —
+      // a force pull alone cannot untangle 400 randomly-initialized nodes
+      // out of the central hairball, but from a seeded start it only has to
+      // RELAX. Community members pack a deterministic sunflower spiral
+      // (golden angle) around their anchor; singles start on their
+      // outer-ring seat.
+      const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+      const seat = new Map<number, number>();
+      for (const n of nodes) {
+        const a =
+          n.cluster > 0 ? anchors.byCluster.get(n.cluster) : anchors.byId.get(n.id);
+        if (!a) continue;
+        const k = seat.get(n.cluster) ?? 0;
+        seat.set(n.cluster, k + 1);
+        const r = n.cluster > 0 ? 7 * Math.sqrt(k + 0.5) : 0;
+        n.x = a.x + r * Math.cos(k * GOLDEN);
+        n.y = a.y + r * Math.sin(k * GOLDEN);
+      }
+    }
     return {
-      nodes: data.nodes.map((n) => ({ ...n })) as FGNode[],
+      nodes,
       links: data.edges.map((e) => ({
         source: e.source,
         target: e.target,
@@ -284,7 +338,7 @@ export default function KnowledgeGraph({
         weight: e.weight,
       })),
     };
-  }, [data]);
+  }, [data, anchors]);
 
   // id → neighbor ids, for hover dimming.
   const adjacency = useMemo(() => {
@@ -345,19 +399,39 @@ export default function KnowledgeGraph({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = fg as any;
     if (!g?.d3Force) return;
-    // Tight, well-spaced clusters: GENTLE repulsion (the old -140 blew clusters
-    // apart AND stretched each one), SHORT STRONG links so connected/related
-    // claims pull together, and a COLLIDE force so nodes sit close without
-    // overlapping. The default center force keeps the whole thing compact.
-    g.d3Force('charge')?.strength(-34).distanceMax(240);
-    g.d3Force('link')?.distance(16).strength(1);
+    // LOCAL repulsion only (distanceMax keeps it from flinging weakly-held
+    // nodes across the canvas), roomier links than the old 16 so the center
+    // decompresses, and collide with breathing space.
+    g.d3Force('charge')?.strength(-46).distanceMax(150);
+    const sameCluster = (l: { source: FGNode | string; target: FGNode | string }) => {
+      const s = l.source as FGNode;
+      const tgt = l.target as FGNode;
+      return typeof s !== 'string' && typeof tgt !== 'string' && s.cluster === tgt.cluster;
+    };
+    if (scope === 'global') {
+      // Within a community links do the shaping; ACROSS communities they are
+      // reference threads, not springs — near-zero strength, generous length.
+      // Strong cross links were exactly what collapsed the petals into one
+      // central hairball.
+      g.d3Force('link')
+        ?.distance((l: never) => (sameCluster(l) ? 24 : 80))
+        .strength((l: never) => (sameCluster(l) ? 0.5 : 0.015));
+    } else {
+      g.d3Force('link')?.distance(20).strength(0.8);
+    }
     g.d3Force(
       'collide',
-      forceCollide((n: FGNode) => nodeRadius(n, n.id === focusId) + 2).strength(0.9),
+      forceCollide((n: FGNode) => nodeRadius(n, n.id === focusId) + 3).strength(0.9),
     );
-    // Global scope colors by community — pull each community together so the
-    // hull blobs are compact + separated. Focused scopes have no communities.
-    g.d3Force('cluster', scope === 'global' ? clusterForce(0.22) : null);
+    // Global scope: every node pulled to its fixed packed anchor (community
+    // disk or outer-ring seat) — the organic-cloud silhouette. Focused scopes
+    // have no communities, links alone shape them. Anchors live in a ref:
+    // the instance can mount before OR after the data arrives.
+    const a = anchorsRef.current;
+    g.d3Force(
+      'cluster',
+      scope === 'global' && a ? radialAnchorForce(a, 0.12, 0.2) : null,
+    );
     g.d3ReheatSimulation?.();
   }, [focusId, scope]);
 
@@ -365,6 +439,19 @@ export default function KnowledgeGraph({
   useEffect(() => {
     fittedRef.current = false;
   }, [data, mode]);
+
+  // Keep the anchor force in sync when the DATA changes on a live instance
+  // (setFg only fires on mount / 2D-3D swap).
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = fgRef.current as any;
+    if (!g?.d3Force) return;
+    g.d3Force(
+      'cluster',
+      scope === 'global' && anchors ? radialAnchorForce(anchors, 0.12, 0.2) : null,
+    );
+    g.d3ReheatSimulation?.();
+  }, [anchors, scope, mode]);
 
   /** ~15% alpha variant of a color — the out-of-closure fade for 3D nodes
    * and 2D links, matching drawNode's globalAlpha dim. Handles #rgb/#rrggbb
@@ -693,6 +780,9 @@ export default function KnowledgeGraph({
                   fgRef.current?.zoomToFit(400, 36);
                 }}
                 nodeRelSize={4}
+                // Slight arc echoes the hand-drawn reference; straight lines
+                // read as circuit wiring at this density.
+                linkCurvature={0.2}
                 nodeCanvasObjectMode={() => 'replace'}
                 nodeCanvasObject={drawNode}
                 onRenderFramePre={drawHulls}
