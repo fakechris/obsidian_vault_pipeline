@@ -62,6 +62,8 @@ const MAX_QUOTE_LENGTH = 160;
  * be zoomed in further. Below this the graph reads as a labelled constellation
  * of only its most important nodes — the level-of-detail the old view lacked. */
 const LABEL_BASE_ZOOM = 1.9;
+/** Legend rows shown before the "+N more" toggle expands the full list. */
+const LEGEND_COLLAPSED_COUNT = 8;
 
 interface DsTokens {
   link: string;
@@ -199,6 +201,7 @@ export default function KnowledgeGraph({
   const [closure, setClosure] = useState<{ forId: string; detail: ClaimDetail } | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
   const [no3d, setNo3d] = useState(false);
   const [dims, setDims] = useState({ w: 0, h: height });
@@ -737,8 +740,14 @@ export default function KnowledgeGraph({
   };
 
   const empty = !error && data && data.nodes.length === 0;
-  const communitiesForLegend =
-    scope === 'global' ? (data?.communities ?? []).slice(0, 8) : [];
+  // Crystal growth pushed the community count past what a fixed strip can
+  // hold (40 live communities vs the old top-8 cut) — default stays compact,
+  // the "+N" toggle opens the FULL scrollable list with member counts.
+  const allCommunities = scope === 'global' ? (data?.communities ?? []) : [];
+  const communitiesForLegend = legendOpen
+    ? allCommunities
+    : allCommunities.slice(0, LEGEND_COLLAPSED_COUNT);
+  const legendHidden = allCommunities.length - communitiesForLegend.length;
 
   return (
     <div
@@ -887,7 +896,7 @@ export default function KnowledgeGraph({
             <div className="graph-note graph-controls-hint">{t('graph.controls3d')}</div>
           )}
           {communitiesForLegend.length > 0 && (
-            <div className="graph-legend">
+            <div className={`graph-legend${legendOpen ? ' graph-legend--open' : ''}`}>
               {communitiesForLegend.map((c) => (
                 <button
                   key={c.id}
@@ -905,9 +914,21 @@ export default function KnowledgeGraph({
                   />
                   <span className="tiny">
                     {isMiscTheme(c.label) ? t('theme.unclassified') : c.label}
+                    {legendOpen ? ` · ${c.size}` : ''}
                   </span>
                 </button>
               ))}
+              {(legendHidden > 0 || legendOpen) && (
+                <button
+                  type="button"
+                  className="graph-legend-item graph-legend-toggle tiny"
+                  onClick={() => setLegendOpen((v) => !v)}
+                >
+                  {legendOpen
+                    ? t('graph.legendLess')
+                    : t('graph.legendMore', { n: legendHidden })}
+                </button>
+              )}
             </div>
           )}
           {selected && (

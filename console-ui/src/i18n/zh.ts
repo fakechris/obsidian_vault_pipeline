@@ -572,6 +572,8 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.fail.budgetExhausted': '模型把输出预算都花在思考上——重试或简化问题。',
   'ask.fail.overloaded': '提供商过载——稍后重试。',
   'ask.fail.network': '连接提供商的网络失败——检查网络或代理。',
+  'graph.legendMore': '还有 {n} 个社区',
+  'graph.legendLess': '收起',
 
   // automation / schedule explainer (System)
   'auto.title': '自动化',
