@@ -1239,3 +1239,23 @@ export function indexHealth(
   if (sqliteError) return 'error';
   return 'ok';
 }
+
+/** Knowledge-wall sort control (operator request 2026-08-06): by claim
+ * count or theme name, either direction. Ties always break by name asc so
+ * the order is deterministic under every mode; the default ('count'/'desc')
+ * reproduces the wall's historical order exactly. */
+export type ThemeSortKey = 'count' | 'name';
+export type ThemeSortDir = 'asc' | 'desc';
+
+export function sortThemeWall(
+  groups: ThemeGroup[],
+  key: ThemeSortKey,
+  dir: ThemeSortDir,
+): ThemeGroup[] {
+  return [...groups].sort((a, b) => {
+    const primary =
+      key === 'count' ? a.total - b.total : a.theme.localeCompare(b.theme);
+    const signed = dir === 'asc' ? primary : -primary;
+    return signed || a.theme.localeCompare(b.theme);
+  });
+}

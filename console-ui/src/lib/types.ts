@@ -546,6 +546,10 @@ export interface IndexModel {
   /** Live-server overlay: the last sqlite load failure, null when healthy.
    * Non-null drives the repair banner (rebuild button). */
   sqlite_error?: string | null;
+  /** Live-server overlay: packs the semantic-themes projection has never
+   * clustered. Non-zero surfaces in the Today attention feed — the daily
+   * CLI printed this hint into a swallowed stderr for a month once. */
+  themes_stale_packs?: number;
   /** Live-server overlay: the portal-triggered projection rebuild state. */
   index_rebuild?: {
     running: boolean;

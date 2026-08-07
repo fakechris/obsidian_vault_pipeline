@@ -2585,6 +2585,30 @@ fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// How many packs the semantic-themes projection has never clustered —
+/// mirrors daily's `stale_theme_packs` (a missing/corrupt themes.json counts
+/// every pack as unthemed; that IS the signal to run crystal-themes).
+fn stale_theme_packs_count(vault_root: &Path, model: &IndexModel) -> usize {
+    if model.packs.is_empty() {
+        return 0;
+    }
+    let themes =
+        ovp_domain::crystal::themes::ThemesFile::load(&vault_root.join(".ovp/crystal/themes.json"))
+            .ok()
+            .flatten();
+    match &themes {
+        Some(t) => model
+            .packs
+            .iter()
+            .filter(|p| {
+                let case_id = ovp_domain::vault_layout::pack_case_id(&p.pack_dir);
+                !t.packs.contains_key(case_id)
+            })
+            .count(),
+        None => model.packs.len(),
+    }
+}
+
 /// The zh-translation lookup key for a claim JSON object: canonical
 /// `claim_key` when present, else `claim_id` — ONE rule for every endpoint,
 /// or /api/model and /api/claim disagree on whether a translation exists.
@@ -2623,6 +2647,15 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         obj.insert(
             "serving_backend".into(),
             serde_json::json!(*state.serving_backend.read().unwrap()),
+        );
+        // Themes-staleness overlay: packs missing from the semantic-themes
+        // projection. The daily CLI has printed this hint since 95d9be14 —
+        // into a stderr the desktop swallows, which is how the projection
+        // once went a month stale unnoticed. The portal attention feed reads
+        // THIS field instead. None→0 packs is not staleness (fresh vault).
+        obj.insert(
+            "themes_stale_packs".into(),
+            serde_json::json!(stale_theme_packs_count(&state.vault_root, &model)),
         );
         // Repair surface: the last sqlite failure (null when healthy) and
         // whether a portal-triggered rebuild is in flight — the SPA banner
@@ -6053,7 +6086,10 @@ mod tests {
         let v = body_json(dispatch(&st, Method::Get, "/api/schedule", ""));
         assert_eq!(v["present"], true);
         let jobs = v["jobs"].as_array().unwrap();
-        assert_eq!(jobs.len(), 2);
+        // daily + weekly crystallize + weekly themes (2026-08-06).
+        assert_eq!(jobs.len(), 3);
+        let themes = jobs.iter().find(|j| j["id"] == "themes").unwrap();
+        assert_eq!(themes["cadence"], "weekly Sun 09:30");
         let daily = jobs.iter().find(|j| j["id"] == "daily").unwrap();
         assert_eq!(daily["cadence"], "daily 09:00");
         assert_eq!(daily["enabled"], true);

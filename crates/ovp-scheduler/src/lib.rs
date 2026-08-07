@@ -355,6 +355,19 @@ pub fn default_registry(
         "--work-dir".to_string(),
         format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth"),
     ];
+    // Semantic-theme re-clustering: BEFORE crystallize's Sunday slot so the
+    // weekly synthesis batches over fresh communities, and weekly at all so
+    // the themes projection can never quietly go a month stale again
+    // (2026-08-06 incident: 203 unclustered packs → 202 claims in
+    // Unclassified). A build without the `embed` feature skips gracefully
+    // (warn + exit 0), so lean sidecars never fail the tick.
+    let themes_argv = vec![
+        "crystal-themes".to_string(),
+        "--vault-root".to_string(),
+        VAULT_PLACEHOLDER.to_string(),
+        "--client".to_string(),
+        client.to_string(),
+    ];
     Registry {
         version: 1,
         env_file: Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env")),
@@ -366,6 +379,14 @@ pub fn default_registry(
                 enabled: true,
                 description: "Ingest captures + build reader packs".to_string(),
                 stamp_date: true,
+            },
+            JobConfig {
+                id: "themes".to_string(),
+                cadence: "weekly Sun 09:30".to_string(),
+                argv: themes_argv,
+                enabled: true,
+                description: "Re-cluster semantic themes (embeddings + labels)".to_string(),
+                stamp_date: false,
             },
             JobConfig {
                 id: "crystallize".to_string(),
@@ -830,7 +851,7 @@ mod tests {
     // -- registry ------------------------------------------------------------
 
     #[test]
-    fn default_registry_has_daily_and_weekly_crystallize() {
+    fn default_registry_has_daily_weekly_crystallize_and_weekly_themes() {
         let reg = default_registry("live", (9, 0), true, Some(40));
         reg.validate().unwrap();
         let daily = reg.get("daily").unwrap();
@@ -854,6 +875,15 @@ mod tests {
             reg.env_file.as_deref(),
             Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env").as_str())
         );
+        // The themes job runs BEFORE crystallize's slot and skips gracefully
+        // on embed-less builds — weekly by default so the projection can
+        // never quietly go a month stale again.
+        let themes = reg.get("themes").unwrap();
+        assert_eq!(themes.cadence, "weekly Sun 09:30");
+        assert!(themes.argv.contains(&"crystal-themes".to_string()));
+        assert!(themes.argv.contains(&VAULT_PLACEHOLDER.to_string()));
+        assert!(!themes.stamp_date);
+
     }
 
     #[test]
@@ -1003,35 +1033,38 @@ mod tests {
         }
     }
 
-    fn two_job_registry() -> Registry {
+    /// The full default registry (daily + weekly crystallize + weekly themes).
+    fn default_jobs_registry() -> Registry {
         default_registry("live", (9, 0), false, None)
     }
 
     #[test]
     fn plan_tick_partitions_due_disabled_and_not_due() {
-        let mut reg = two_job_registry();
+        let mut reg = default_jobs_registry();
         reg.get_mut("crystallize").unwrap().enabled = false;
-        let now = dt("2026-07-12T09:30:00"); // Sunday, daily due, crystallize off
+        let now = dt("2026-07-12T09:30:00"); // Sunday: daily + themes due, crystallize off
         let plan = plan_tick(&reg, &State::default(), now);
-        assert_eq!(plan.due, vec!["daily".to_string()]);
+        assert_eq!(plan.due, vec!["daily".to_string(), "themes".to_string()]);
         assert_eq!(plan.skipped_disabled, vec!["crystallize".to_string()]);
         assert!(plan.skipped_not_due.is_empty());
-        // Once daily has run, the next plan has nothing due.
+        // Once both have run, the next plan has nothing due.
         let mut state = State::default();
         state.record("daily", now, "ok");
+        state.record("themes", now, "ok");
         assert!(plan_tick(&reg, &state, now).due.is_empty());
     }
 
     #[test]
     fn tick_runs_due_jobs_and_records_state() {
-        let reg = two_job_registry();
-        let now = dt("2026-07-12T10:30:00"); // both due
+        let reg = default_jobs_registry();
+        let now = dt("2026-07-12T10:30:00"); // all three due (Sunday past 10:00)
         let runner = FakeRunner {
             fail: vec!["crystallize".into()],
             ..Default::default()
         };
         let (new_state, report) = tick_with(&reg, &State::default(), now, &runner);
-        assert_eq!(report.ran.len(), 2);
+        assert_eq!(report.ran.len(), 3);
+        assert_eq!(new_state.runs.get("themes").unwrap().last_status, "ok");
         assert_eq!(new_state.runs.get("daily").unwrap().last_status, "ok");
         assert_eq!(
             new_state.runs.get("crystallize").unwrap().last_status,
@@ -1041,7 +1074,7 @@ mod tests {
 
     #[test]
     fn run_now_ignores_cadence() {
-        let reg = two_job_registry();
+        let reg = default_jobs_registry();
         let now = dt("2026-07-12T08:00:00"); // crystallize NOT due
         let runner = FakeRunner::default();
         let (new_state, ok) =

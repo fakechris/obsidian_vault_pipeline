@@ -670,6 +670,10 @@ pub enum RegistryOutcome {
     /// the flags) were reconciled, preserving operator edits (enabled state +
     /// custom jobs).
     Reconciled,
+    /// Existed; missing BUILT-IN jobs were inserted at their default
+    /// positions (init-time migration for upgrades), everything else
+    /// untouched.
+    Migrated,
     /// Existed and already matched — left untouched.
     Unchanged,
 }
@@ -714,6 +718,29 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
         return Ok(RegistryOutcome::Seeded);
     }
     if !reconcile {
+        // Seed-if-absent is init's promise — but a NEW built-in job must
+        // still reach existing registries, or upgrades never get it (the
+        // desktop only ever runs `init`). This is an edit-preserving
+        // MIGRATION: only jobs whose id the registry lacks are inserted, at
+        // their default-registry position (registry order is catch-up
+        // execution order — `themes` must run before `crystallize`).
+        // Operators turn a built-in off with `schedule disable`, not by
+        // deleting it; a deleted built-in is restored disabled? No — it is
+        // restored as the default ships it; disable it again if unwanted.
+        let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
+            .expect("registry_path exists but load returned None");
+        let mut inserted = false;
+        for (pos, fresh_job) in fresh.jobs.iter().enumerate() {
+            if reg.get(&fresh_job.id).is_none() {
+                let at = pos.min(reg.jobs.len());
+                reg.jobs.insert(at, fresh_job.clone());
+                inserted = true;
+            }
+        }
+        if inserted {
+            super::scheduler::save_registry(&cfg.vault_root, &reg)?;
+            return Ok(RegistryOutcome::Migrated);
+        }
         return Ok(RegistryOutcome::Unchanged);
     }
     let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
@@ -725,7 +752,7 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
     // built-in except `daily` — only `--time` owns a cadence, so a reinstall
     // must not reset the operator's crystallize slot to the hard-coded default
     // (codex P2). Custom jobs are left untouched.
-    for fresh_job in fresh.jobs {
+    for (pos, fresh_job) in fresh.jobs.into_iter().enumerate() {
         match reg.get_mut(&fresh_job.id) {
             Some(existing) => {
                 let enabled = existing.enabled;
@@ -738,7 +765,14 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
                 existing.enabled = enabled;
                 existing.cadence = cadence;
             }
-            None => reg.jobs.push(fresh_job), // a built-in the operator removed — restore it
+            // A built-in the operator removed (or one newer than this
+            // registry) — restore/insert at its DEFAULT position: registry
+            // order is catch-up execution order (themes before crystallize),
+            // same rule as the init migration.
+            None => {
+                let at = pos.min(reg.jobs.len());
+                reg.jobs.insert(at, fresh_job);
+            }
         }
     }
     if reg == before {
@@ -956,8 +990,9 @@ pub fn run_init(args: InstallArgs) -> Result<(), CliError> {
     };
     let reg_path = super::scheduler::registry_path(&cfg.vault_root);
     let state = match outcome {
-        RegistryOutcome::Seeded => "seeded (daily + weekly crystallize)",
+        RegistryOutcome::Seeded => "seeded (daily + weekly themes + weekly crystallize)",
         RegistryOutcome::Reconciled => "reconciled (built-in jobs + env-file; edits kept)",
+        RegistryOutcome::Migrated => "migrated (new built-in job(s) added; edits kept)",
         RegistryOutcome::Unchanged => "already up to date",
     };
     println!("schedule init: {} — registry {}", state, reg_path.display());
@@ -998,6 +1033,9 @@ pub fn run_install(args: InstallArgs) -> Result<(), CliError> {
         }
         RegistryOutcome::Reconciled => {
             println!("  registry:  {reg_path} (built-in jobs + env-file reconciled; edits kept)");
+        }
+        RegistryOutcome::Migrated => {
+            println!("  registry:  {reg_path} (new built-in job(s) added; edits kept)");
         }
         RegistryOutcome::Unchanged => {
             println!("  registry:  {reg_path} (existing, left untouched)");
@@ -1318,6 +1356,44 @@ mod tests {
         assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
         let reconciled = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
         assert_eq!(reconciled.get("daily").unwrap().cadence, "daily 09:00");
+    }
+
+    #[test]
+    fn init_migrates_missing_builtin_jobs_preserving_edits_and_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.vault_root = dir.path().to_path_buf();
+        c.env_file = dir.path().join(".ovp/daily.env");
+        assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Seeded);
+
+        // Model an upgrade: a registry from before the `themes` built-in,
+        // carrying operator edits that must survive the migration.
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        reg.jobs.retain(|j| j.id != "themes");
+        let daily = reg.get_mut("daily").unwrap();
+        daily.cadence = "every 4h".into();
+        super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
+
+        assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Migrated);
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        // Inserted at its default position: BEFORE crystallize (registry
+        // order is catch-up execution order — themes must re-cluster first).
+        let ids: Vec<&str> = after.jobs.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["daily", "themes", "crystallize"]);
+        assert_eq!(after.get("daily").unwrap().cadence, "every 4h", "edits survive");
+
+        // Migration is idempotent.
+        assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Unchanged);
+
+        // Reinstall (reconcile) restores a missing built-in at its default
+        // position too — never appended after crystallize.
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        reg.jobs.retain(|j| j.id != "themes");
+        super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
+        assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let ids: Vec<&str> = after.jobs.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["daily", "themes", "crystallize"]);
     }
 
     #[derive(Default)]

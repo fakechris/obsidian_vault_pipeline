@@ -118,7 +118,7 @@
     {
       "id": "runtime.scheduler",
       "surface": "runtime",
-      "current_version": "v1",
+      "current_version": "v2",
       "file": "crates/ovp-scheduler/src/lib.rs",
       "quality_buckets": [
         "operational_reliability"

@@ -19,7 +19,15 @@ const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
-import { isMiscTheme, themeRoute, themeWall, type ThemeGroup } from '../lib/derive';
+import {
+  isMiscTheme,
+  sortThemeWall,
+  themeRoute,
+  themeWall,
+  type ThemeGroup,
+  type ThemeSortDir,
+  type ThemeSortKey,
+} from '../lib/derive';
 import type { IndexModel, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
 
@@ -121,7 +129,22 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     };
   }, []);
 
-  const wall = themeWall(model.claims, themes);
+  // Sort control (URL-parameterized like the view toggle; default = the
+  // historical count-desc wall).
+  const sortKey: ThemeSortKey = params.get('sort') === 'name' ? 'name' : 'count';
+  const sortDir: ThemeSortDir =
+    params.get('dir') === 'asc' ? 'asc' : params.get('dir') === 'desc' ? 'desc' : sortKey === 'name' ? 'asc' : 'desc';
+  const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
+    setParams(
+      (p) => {
+        p.set('sort', key);
+        p.set('dir', dir);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+  const wall = sortThemeWall(themeWall(model.claims, themes), sortKey, sortDir);
 
   return (
     <>
@@ -149,6 +172,34 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
           {t('knowledge.viewTerrain')}
         </button>
         </div>
+
+        {/* Sort control (list view only): key toggle + direction, same
+            seg-toggle vocabulary as the perspective switch. */}
+        {view === 'list' && (
+          <div className="seg-toggle persp-toggle" role="group">
+            <button
+              type="button"
+              className={sortKey === 'count' ? 'active' : ''}
+              onClick={() => setSort('count', sortKey === 'count' ? sortDir : 'desc')}
+            >
+              {t('knowledge.sortCount')}
+            </button>
+            <button
+              type="button"
+              className={sortKey === 'name' ? 'active' : ''}
+              onClick={() => setSort('name', sortKey === 'name' ? sortDir : 'asc')}
+            >
+              {t('knowledge.sortName')}
+            </button>
+            <button
+              type="button"
+              aria-label={t('knowledge.sortDirLabel')}
+              onClick={() => setSort(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}
+            >
+              {sortDir === 'asc' ? t('knowledge.sortDir.asc') : t('knowledge.sortDir.desc')}
+            </button>
+          </div>
+        )}
 
         {/* Perspective switch — a SIBLING of .tab-row (not nested), so the
             .tab-row button rules don't clobber the .seg-toggle contrast. Shares
