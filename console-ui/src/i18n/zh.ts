@@ -722,6 +722,7 @@ export const zh: Record<keyof typeof en, string> = {
   'system.servingBackend': '服务后端',
   'today.themesStale':
     '{n} 个阅读包尚未聚类进主题——它们的主张暂在 Unclassified。每周主题任务(周日 09:30)在运行器带嵌入器时自动重聚类;否则请用带 embed 的构建手动运行 `ovp2 crystal-themes`。',
+  'knowledge.sortDirLabel': '排序方向',
   'knowledge.sortCount': '数量',
   'knowledge.sortName': '名称',
   'knowledge.sortDir.asc': '↑',

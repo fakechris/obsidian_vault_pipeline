@@ -193,7 +193,7 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
             </button>
             <button
               type="button"
-              aria-label="sort direction"
+              aria-label={t('knowledge.sortDirLabel')}
               onClick={() => setSort(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}
             >
               {sortDir === 'asc' ? t('knowledge.sortDir.asc') : t('knowledge.sortDir.desc')}

@@ -752,7 +752,7 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
     // built-in except `daily` — only `--time` owns a cadence, so a reinstall
     // must not reset the operator's crystallize slot to the hard-coded default
     // (codex P2). Custom jobs are left untouched.
-    for fresh_job in fresh.jobs {
+    for (pos, fresh_job) in fresh.jobs.into_iter().enumerate() {
         match reg.get_mut(&fresh_job.id) {
             Some(existing) => {
                 let enabled = existing.enabled;
@@ -765,7 +765,14 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
                 existing.enabled = enabled;
                 existing.cadence = cadence;
             }
-            None => reg.jobs.push(fresh_job), // a built-in the operator removed — restore it
+            // A built-in the operator removed (or one newer than this
+            // registry) — restore/insert at its DEFAULT position: registry
+            // order is catch-up execution order (themes before crystallize),
+            // same rule as the init migration.
+            None => {
+                let at = pos.min(reg.jobs.len());
+                reg.jobs.insert(at, fresh_job);
+            }
         }
     }
     if reg == before {
@@ -1377,6 +1384,16 @@ mod tests {
 
         // Migration is idempotent.
         assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Unchanged);
+
+        // Reinstall (reconcile) restores a missing built-in at its default
+        // position too — never appended after crystallize.
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        reg.jobs.retain(|j| j.id != "themes");
+        super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
+        assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let ids: Vec<&str> = after.jobs.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["daily", "themes", "crystallize"]);
     }
 
     #[derive(Default)]

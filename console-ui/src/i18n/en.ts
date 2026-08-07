@@ -759,6 +759,7 @@ export const en = {
   'system.servingBackend': 'serving backend',
   'today.themesStale':
     '{n} reader pack(s) are not clustered into themes yet — their claims sit in Unclassified. The weekly themes job (Sun 09:30) re-clusters when its runner includes the embedder; otherwise run `ovp2 crystal-themes` with an embed-capable build.',
+  'knowledge.sortDirLabel': 'sort direction',
   'knowledge.sortCount': 'Count',
   'knowledge.sortName': 'Name',
   'knowledge.sortDir.asc': '↑',
