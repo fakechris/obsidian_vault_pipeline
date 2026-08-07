@@ -24,6 +24,7 @@ import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type CiteMarks } from '../lib/markdown';
 import {
   displayUserQuestion,
+  groundCitesOnSource,
   parseChatTranscript,
 } from '../lib/chatTranscript';
 import { citationsFromAnswerText } from '../pages/AskPage';
@@ -32,28 +33,6 @@ import type { AskCitation, AskProgress, AskResponse, ChatEntry } from '../lib/ty
 /** Same marker set as Ask — claim/card/unit/source + bare ck-. */
 const CITE_RE =
   /\[\s*((?:claim|card|unit|source):[^\]\n]+?|ck-[^\]\s:]+)\s*\]/g;
-
-/** Ground unit/card/source cites back onto this library page when the
- * generic index lookup has no link (common for bare unit ids). */
-function groundCitesOnSource(cites: AskCitation[], sha: string): AskCitation[] {
-  return cites.map((c) => {
-    if (c.link_target) return c;
-    const kind = c.kind || (c.id.includes(':') ? c.id.slice(0, c.id.indexOf(':')) : '');
-    if (kind === 'source') {
-      const token = c.id.slice(c.id.indexOf(':') + 1).split(/\s+/)[0] ?? '';
-      if (!token || token === sha || token.startsWith(sha.slice(0, 12))) {
-        return { ...c, link_target: `/library/${encodeURIComponent(sha)}` };
-      }
-    }
-    if (kind === 'unit' || kind === 'card') {
-      return {
-        ...c,
-        link_target: `/library/${encodeURIComponent(sha)}?tab=memory`,
-      };
-    }
-    return c;
-  });
-}
 
 function citeLookupKey(id: string): string {
   const norm = id.startsWith('ck-') ? `claim:${id}` : id;

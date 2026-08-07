@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   citationsInOrder,
+  groundCitesOnSource,
+  parseChatFocus,
+  savedReplayPlan,
   citeLinkTarget,
   displayUserQuestion,
   normalizeCiteToken,
@@ -88,5 +91,60 @@ describe('displayUserQuestion', () => {
     expect(displayUserQuestion('What is agent memory?')).toBe(
       'What is agent memory?',
     );
+  });
+});
+
+describe('focused-session replay grounding', () => {
+  const SHA = '816380d615c63038a3aae393ecaa8a2c624045a5a03200111d46e0f860183519';
+
+  it('parseChatFocus reads the header markers', () => {
+    const md = `# Ask — ts\n<!-- ovp:focus_source=${SHA} -->\n<!-- ovp:focus_title=事关7709 -->\n\n**Q:** hi`;
+    expect(parseChatFocus(md)).toEqual({ sha: SHA, theme: null });
+    expect(parseChatFocus('# Ask\n<!-- ovp:focus_theme=Agent Memory -->\n')).toEqual({
+      sha: null,
+      theme: 'Agent Memory',
+    });
+    expect(parseChatFocus('# Ask\n\n**Q:** hi')).toEqual({ sha: null, theme: null });
+  });
+
+  it('groundCitesOnSource sends units/cards to the memory tab, keeps links', () => {
+    // Operator regression 2026-08-07: /ask/chat/src-… showed "No detail
+    // page" for every unit — the focus sha grounds them like the live dock.
+    const out = groundCitesOnSource(
+      [
+        { id: 'unit:u-004-723d01f2', kind: 'unit', link_target: null },
+        { id: `source:${SHA}`, kind: 'source', link_target: null },
+        { id: 'claim:ck-x', kind: 'claim', link_target: '/knowledge#ck-x' },
+      ],
+      SHA,
+    );
+    expect(out[0].link_target).toBe(`/library/${SHA}?tab=memory`);
+    expect(out[1].link_target).toBe(`/library/${SHA}`);
+    expect(out[2].link_target).toBe('/knowledge#ck-x');
+  });
+});
+
+describe('savedReplayPlan — replay source + error priority', () => {
+  const MD = '# Ask — ts\n<!-- ovp:focus_source=abc123 -->\n\n**Q:** hi\n\n**A:** there [unit:u-1]\n';
+
+  it('audit session wins when it has turns (focus still parsed)', () => {
+    const plan = savedReplayPlan(MD, 2);
+    expect(plan.kind).toBe('session');
+    expect(plan.focus.sha).toBe('abc123');
+  });
+
+  it('falls back to markdown turns when the session is empty', () => {
+    const plan = savedReplayPlan(MD, 0);
+    expect(plan.kind).toBe('markdown');
+    expect(plan.parsedTurns).toHaveLength(1);
+    expect(plan.parsedTurns[0].question).toBe('hi');
+  });
+
+  it('markdown loaded but turn-less is EMPTY; load failure is LOAD ERROR', () => {
+    expect(savedReplayPlan('# Ask — ts\n', 0).kind).toBe('empty');
+    // Both fetches failed: must NOT masquerade as an empty-but-fine chat.
+    expect(savedReplayPlan(null, 0).kind).toBe('loadError');
+    // …but a live audit session still replays even without markdown.
+    expect(savedReplayPlan(null, 3).kind).toBe('session');
   });
 });
