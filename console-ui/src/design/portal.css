@@ -1895,6 +1895,12 @@ body {
   border-radius: 8px;
   padding: 0.25rem;
 }
+/* The legend is a flex column: without this, max-height makes flex SHRINK
+   the rows to fit (scrollHeight == clientHeight — nothing to scroll, rows
+   squashed) instead of overflowing into the scrollbar. */
+.graph-legend--open .graph-legend-item {
+  flex-shrink: 0;
+}
 .graph-legend-toggle {
   color: var(--accent);
   font-family: var(--mono, monospace);

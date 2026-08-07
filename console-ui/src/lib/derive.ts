@@ -1452,6 +1452,38 @@ export function radialAnchors(
   return { radius, byCluster, byId };
 }
 
+/** One knowledge-graph legend row — possibly MERGING several graph clusters.
+ * Louvain clustering is finer-grained than the theme taxonomy, so distinct
+ * clusters often share a dominant-theme label ('Agent Harness Architecture'
+ * ×4 on the live vault); one row per label matches the reader's mental model,
+ * and a click frames ALL of that label's clusters. */
+export interface LegendRow {
+  /** Cluster ids sharing the label, largest first — ids[0] drives the dot. */
+  ids: number[];
+  label: string;
+  /** Summed member count across the merged clusters. */
+  size: number;
+}
+
+/** Merge same-label communities into legend rows, total size desc. Pure. */
+export function groupCommunities(
+  communities: { id: number; label: string; size: number }[],
+): LegendRow[] {
+  const byLabel = new Map<string, LegendRow>();
+  for (const c of communities) {
+    const row = byLabel.get(c.label);
+    if (row) {
+      row.ids.push(c.id);
+      row.size += c.size;
+    } else {
+      byLabel.set(c.label, { ids: [c.id], label: c.label, size: c.size });
+    }
+  }
+  return [...byLabel.values()].sort(
+    (a, b) => b.size - a.size || a.label.localeCompare(b.label),
+  );
+}
+
 /** Knowledge-graph legend rows: compact top-N strip by default, the full
  * list when open. `hidden` drives the "+N more" toggle (0 hides it). Pure —
  * the component only renders the returned slice. */

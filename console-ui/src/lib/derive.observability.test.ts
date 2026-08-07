@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureHintKey,
+  groupCommunities,
   legendCommunities,
   scheduleFailureStrip,
   themeSourceBadge,
@@ -79,6 +80,36 @@ describe('themeSourceBadge', () => {
       n: 4,
       single: false,
     });
+  });
+});
+
+describe('groupCommunities', () => {
+  it('merges same-label clusters, summing sizes, largest cluster first', () => {
+    // Live-vault case: Louvain splits one theme across several clusters —
+    // 'Agent Harness Architecture' appeared 4× in the legend.
+    const rows = groupCommunities([
+      { id: 2, label: 'Harness', size: 16 },
+      { id: 5, label: 'Harness', size: 14 },
+      { id: 1, label: 'Memory', size: 32 },
+      { id: 9, label: 'Harness', size: 5 },
+      { id: 4, label: 'Memory', size: 11 },
+    ]);
+    expect(rows).toEqual([
+      { ids: [1, 4], label: 'Memory', size: 43 },
+      { ids: [2, 5, 9], label: 'Harness', size: 35 },
+    ]);
+  });
+
+  it('keeps distinct labels apart and sorts ties by name', () => {
+    const rows = groupCommunities([
+      { id: 1, label: 'B', size: 5 },
+      { id: 2, label: 'A', size: 5 },
+    ]);
+    expect(rows.map((r) => r.label)).toEqual(['A', 'B']);
+  });
+
+  it('empty input stays safe', () => {
+    expect(groupCommunities([])).toEqual([]);
   });
 });
 
