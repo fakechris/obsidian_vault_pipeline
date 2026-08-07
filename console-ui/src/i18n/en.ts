@@ -606,6 +606,7 @@ export const en = {
   'ask.fail.overloaded': 'The provider is overloaded — retry shortly.',
   'ask.fail.network': 'Network failure reaching the provider — check connectivity or proxy.',
   'graph.legendMore': '+{n} more communities',
+  'graph.legendMoreOne': '+1 more community',
   'graph.legendLess': 'Show fewer',
 
   // automation / schedule explainer (System)

@@ -1452,6 +1452,18 @@ export function radialAnchors(
   return { radius, byCluster, byId };
 }
 
+/** Knowledge-graph legend rows: compact top-N strip by default, the full
+ * list when open. `hidden` drives the "+N more" toggle (0 hides it). Pure —
+ * the component only renders the returned slice. */
+export function legendCommunities<T>(
+  all: T[],
+  open: boolean,
+  collapsedCount = 8,
+): { visible: T[]; hidden: number } {
+  const visible = open ? all : all.slice(0, collapsedCount);
+  return { visible, hidden: all.length - visible.length };
+}
+
 /** Index-store health for the stage-4 repair banner. Pure so the node-env
  * tests can pin the truth table: a REBUILD in flight outranks the error
  * (the operator already acted), and only a recorded sqlite failure — not a

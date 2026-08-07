@@ -29,6 +29,7 @@ import {
 import {
   closureNodeIds,
   isMiscTheme,
+  legendCommunities,
   radialAnchors,
   themeRoute,
   type RadialAnchors,
@@ -743,11 +744,11 @@ export default function KnowledgeGraph({
   // Crystal growth pushed the community count past what a fixed strip can
   // hold (40 live communities vs the old top-8 cut) — default stays compact,
   // the "+N" toggle opens the FULL scrollable list with member counts.
-  const allCommunities = scope === 'global' ? (data?.communities ?? []) : [];
-  const communitiesForLegend = legendOpen
-    ? allCommunities
-    : allCommunities.slice(0, LEGEND_COLLAPSED_COUNT);
-  const legendHidden = allCommunities.length - communitiesForLegend.length;
+  const { visible: communitiesForLegend, hidden: legendHidden } = legendCommunities(
+    scope === 'global' ? (data?.communities ?? []) : [],
+    legendOpen,
+    LEGEND_COLLAPSED_COUNT,
+  );
 
   return (
     <div
@@ -922,11 +923,14 @@ export default function KnowledgeGraph({
                 <button
                   type="button"
                   className="graph-legend-item graph-legend-toggle tiny"
+                  aria-expanded={legendOpen}
                   onClick={() => setLegendOpen((v) => !v)}
                 >
                   {legendOpen
                     ? t('graph.legendLess')
-                    : t('graph.legendMore', { n: legendHidden })}
+                    : legendHidden === 1
+                      ? t('graph.legendMoreOne')
+                      : t('graph.legendMore', { n: legendHidden })}
                 </button>
               )}
             </div>
