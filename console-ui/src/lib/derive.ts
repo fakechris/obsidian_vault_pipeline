@@ -1452,6 +1452,70 @@ export function radialAnchors(
   return { radius, byCluster, byId };
 }
 
+/** Centroid + bounding radius of a 3D fly-to target — the camera distance
+ * must come from the SPATIAL extent of the selected nodes (two far-apart
+ * clusters, or one wide cluster, must both fit the viewport), never from
+ * the cluster count. Pure — vitest-covered. */
+export function focusBounds(
+  pts: { x?: number; y?: number; z?: number }[],
+): { x: number; y: number; z: number; radius: number } | null {
+  if (pts.length === 0) return null;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const p of pts) {
+    cx += p.x ?? 0;
+    cy += p.y ?? 0;
+    cz += p.z ?? 0;
+  }
+  cx /= pts.length;
+  cy /= pts.length;
+  cz /= pts.length;
+  let radius = 0;
+  for (const p of pts) {
+    radius = Math.max(
+      radius,
+      Math.hypot((p.x ?? 0) - cx, (p.y ?? 0) - cy, (p.z ?? 0) - cz),
+    );
+  }
+  return { x: cx, y: cy, z: cz, radius };
+}
+
+/** One knowledge-graph legend row — possibly MERGING several graph clusters.
+ * Louvain clustering is finer-grained than the theme taxonomy, so distinct
+ * clusters often share a dominant-theme label ('Agent Harness Architecture'
+ * ×4 on the live vault); one row per label matches the reader's mental model,
+ * and a click frames ALL of that label's clusters. */
+export interface LegendRow {
+  /** Cluster ids sharing the label, largest first — ids[0] drives the dot. */
+  ids: number[];
+  label: string;
+  /** Summed member count across the merged clusters. */
+  size: number;
+}
+
+/** Merge same-label communities into legend rows, total size desc. Pure. */
+export function groupCommunities(
+  communities: { id: number; label: string; size: number }[],
+): LegendRow[] {
+  const byLabel = new Map<string, LegendRow>();
+  // Size-desc walk (stable id tie-break) ENFORCES the ids-largest-first
+  // contract instead of trusting the caller's order.
+  const ordered = [...communities].sort((a, b) => b.size - a.size || a.id - b.id);
+  for (const c of ordered) {
+    const row = byLabel.get(c.label);
+    if (row) {
+      row.ids.push(c.id);
+      row.size += c.size;
+    } else {
+      byLabel.set(c.label, { ids: [c.id], label: c.label, size: c.size });
+    }
+  }
+  return [...byLabel.values()].sort(
+    (a, b) => b.size - a.size || a.label.localeCompare(b.label),
+  );
+}
+
 /** Knowledge-graph legend rows: compact top-N strip by default, the full
  * list when open. `hidden` drives the "+N more" toggle (0 hides it). Pure —
  * the component only renders the returned slice. */

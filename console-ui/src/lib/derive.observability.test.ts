@@ -3,6 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureHintKey,
+  focusBounds,
+  groupCommunities,
   legendCommunities,
   scheduleFailureStrip,
   themeSourceBadge,
@@ -79,6 +81,61 @@ describe('themeSourceBadge', () => {
       n: 4,
       single: false,
     });
+  });
+});
+
+describe('groupCommunities', () => {
+  it('merges same-label clusters, summing sizes, largest cluster first', () => {
+    // Live-vault case: Louvain splits one theme across several clusters —
+    // 'Agent Harness Architecture' appeared 4× in the legend. Input order is
+    // deliberately NOT size-desc: the ids contract must not trust the caller.
+    const rows = groupCommunities([
+      { id: 9, label: 'Harness', size: 5 },
+      { id: 5, label: 'Harness', size: 14 },
+      { id: 4, label: 'Memory', size: 11 },
+      { id: 2, label: 'Harness', size: 16 },
+      { id: 1, label: 'Memory', size: 32 },
+    ]);
+    expect(rows).toEqual([
+      { ids: [1, 4], label: 'Memory', size: 43 },
+      { ids: [2, 5, 9], label: 'Harness', size: 35 },
+    ]);
+  });
+
+  it('keeps distinct labels apart and sorts ties by name', () => {
+    const rows = groupCommunities([
+      { id: 1, label: 'B', size: 5 },
+      { id: 2, label: 'A', size: 5 },
+    ]);
+    expect(rows.map((r) => r.label)).toEqual(['A', 'B']);
+  });
+
+  it('empty input stays safe', () => {
+    expect(groupCommunities([])).toEqual([]);
+  });
+});
+
+describe('focusBounds', () => {
+  it('centroid + bounding radius cover far-apart clusters', () => {
+    // Two clusters 200 apart: the radius must reach both, so the 3D camera
+    // frames them (a cluster-count heuristic under-shot exactly here).
+    const b = focusBounds([
+      { x: -100, y: 0, z: 0 },
+      { x: 100, y: 0, z: 0 },
+    ])!;
+    expect(b).toEqual({ x: 0, y: 0, z: 0, radius: 100 });
+    const wide = focusBounds([
+      { x: 0, y: 0 },
+      { x: 0, y: 300 },
+      { x: 0, y: 600 },
+    ])!;
+    expect(wide.y).toBe(300);
+    expect(wide.radius).toBe(300);
+  });
+
+  it('a single point has zero radius; empty input is null', () => {
+    expect(focusBounds([{ x: 5, y: -2, z: 1 }])).toEqual({ x: 5, y: -2, z: 1, radius: 0 });
+    expect(focusBounds([])).toBeNull();
   });
 });
 

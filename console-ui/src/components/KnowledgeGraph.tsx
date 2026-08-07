@@ -28,6 +28,8 @@ import {
 } from '../lib/api';
 import {
   closureNodeIds,
+  focusBounds,
+  groupCommunities,
   isMiscTheme,
   legendCommunities,
   radialAnchors,
@@ -715,28 +717,34 @@ export default function KnowledgeGraph({
     fg?.cameraPosition(to, node, 600);
   };
 
-  // Legend click → fly to that community's centroid so you don't have to hunt
-  // for it (2D: center + zoom; 3D: pull the camera in on the cluster).
-  const focusCommunity = (cluster: number) => {
+  // Legend click → fly to a legend row's clusterS (same-label clusters merge
+  // into one row) so you don't have to hunt for them. 2D: zoom-to-fit the
+  // member nodes; 3D: pull the camera in on their combined centroid.
+  const focusCommunities = (clusters: number[]) => {
+    const want = new Set(clusters);
     const pts = (graphData.nodes as FGNode[]).filter(
-      (n) => n.cluster === cluster && n.x != null,
+      (n) => want.has(n.cluster) && n.x != null,
     );
     if (!pts.length) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fg = fgRef.current as any;
     if (!fg) return;
-    const cx = pts.reduce((s, n) => s + (n.x ?? 0), 0) / pts.length;
-    const cy = pts.reduce((s, n) => s + (n.y ?? 0), 0) / pts.length;
     setHoverId(null);
     if (mode === '3d') {
-      const cz = pts.reduce((s, n) => s + (n.z ?? 0), 0) / pts.length;
-      const d = Math.hypot(cx, cy, cz) || 1;
-      const dist = 110;
+      // Distance from the SPATIAL bounds of the selected nodes — a cluster
+      // count would under-shoot for two far-apart clusters or one wide one.
+      const b = focusBounds(pts);
+      if (!b) return;
+      const d = Math.hypot(b.x, b.y, b.z) || 1;
+      const dist = Math.max(110, b.radius * 2.4);
       const r = 1 + dist / d;
-      fg.cameraPosition({ x: cx * r, y: cy * r, z: cz * r }, { x: cx, y: cy, z: cz }, 700);
+      fg.cameraPosition(
+        { x: b.x * r, y: b.y * r, z: b.z * r },
+        { x: b.x, y: b.y, z: b.z },
+        700,
+      );
     } else {
-      fg.centerAt(cx, cy, 600);
-      fg.zoom(Math.max(2.6, fg.zoom?.() ?? 2.6), 600);
+      fg.zoomToFit(600, 48, (n: FGNode) => want.has(n.cluster));
     }
   };
 
@@ -745,7 +753,7 @@ export default function KnowledgeGraph({
   // hold (40 live communities vs the old top-8 cut) — default stays compact,
   // the "+N" toggle opens the FULL scrollable list with member counts.
   const { visible: communitiesForLegend, hidden: legendHidden } = legendCommunities(
-    scope === 'global' ? (data?.communities ?? []) : [],
+    groupCommunities(scope === 'global' ? (data?.communities ?? []) : []),
     legendOpen,
     LEGEND_COLLAPSED_COUNT,
   );
@@ -900,17 +908,17 @@ export default function KnowledgeGraph({
             <div className={`graph-legend${legendOpen ? ' graph-legend--open' : ''}`}>
               {communitiesForLegend.map((c) => (
                 <button
-                  key={c.id}
+                  key={c.label}
                   type="button"
                   className="graph-legend-item"
                   title={t('graph.focusCommunity')}
-                  onClick={() => focusCommunity(c.id)}
+                  onClick={() => focusCommunities(c.ids)}
                 >
                   <span
                     className="graph-legend-dot"
                     style={{
                       background:
-                        tokens.community[(c.id - 1) % tokens.community.length],
+                        tokens.community[(c.ids[0] - 1) % tokens.community.length],
                     }}
                   />
                   <span className="tiny">
