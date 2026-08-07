@@ -376,6 +376,8 @@ export interface ChatEntry {
   mtime: number;
   /** Source sha when this session was started via Chat-on-this. */
   focus_source?: string | null;
+  /** Crystal theme when this session was started via Chat-on-this-knowledge. */
+  focus_theme?: string | null;
   focus_title?: string | null;
   /** First user question preview (truncated). */
   preview?: string | null;

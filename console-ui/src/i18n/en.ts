@@ -496,6 +496,17 @@ export const en = {
   'theme.graph': 'Theme graph',
   'theme.graphCaption':
     'This theme’s claims and the sources they cite. Click a node for a summary and an open link; hover to highlight its neighborhood.',
+  'theme.chatOnThis': 'Chat on this knowledge',
+  'theme.chatPanelTitle': 'Chat on this knowledge',
+  'theme.chatGroundedIn': 'Grounded in',
+  'theme.chatMetaLine': '{claims} claims · {sources} sources auto-included',
+  'theme.chatNewOnTheme': 'New chat on this knowledge',
+  'theme.chatEmpty':
+    'Ask about this knowledge — the topic synthesis, its claims, and their sources are already in context.',
+  'theme.chatSeed1': 'Summarize what this knowledge says, and where the sources disagree.',
+  'theme.chatSeed2': 'Which claims here rest on the weakest evidence?',
+  'theme.chatSeed3': 'What changed most recently in this theme?',
+  'theme.chatPlaceholder': 'Ask about this knowledge…',
 
   // search page + ⌘K overlay
   'search.title': 'Search',

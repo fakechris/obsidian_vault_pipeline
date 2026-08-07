@@ -575,6 +575,8 @@ export interface PostAskOptions {
   history?: AskHistoryTurn[];
   /** Pin the turn to one library source (chat-on-this). */
   focus_source?: string;
+  /** Theme-grounded chat: server injects topic page + active claims. */
+  focus_theme?: string;
 }
 
 /** POST /api/ask — cited answer over the grounded evidence index. The
@@ -593,6 +595,7 @@ export async function postAsk(
   if (opts.chat) body.chat = opts.chat;
   if (opts.history && opts.history.length > 0) body.history = opts.history;
   if (opts.focus_source) body.focus_source = opts.focus_source;
+  if (opts.focus_theme) body.focus_theme = opts.focus_theme;
   const res = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

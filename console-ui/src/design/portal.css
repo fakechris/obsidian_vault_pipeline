@@ -2049,6 +2049,10 @@ body {
   top: 1rem;
   align-self: start;
 }
+.theme-chat-open {
+  width: 100%;
+  margin-bottom: 0.6rem;
+}
 .theme-rail-card {
   /* Keep the rail card from stretching taller than the viewport when the
      left column is long; graph stays reachable without scrolling the page. */
