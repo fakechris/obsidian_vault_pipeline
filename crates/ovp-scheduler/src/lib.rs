@@ -77,7 +77,9 @@ fn parse_hm(s: &str) -> Result<(u8, u8), String> {
 /// 00:00` (use that — it says what it means), and 0 would divide by zero.
 fn parse_every_hours(s: &str) -> Result<u8, String> {
     let bad = || {
-        format!("invalid interval '{s}': expected <N>h with N in 1..=23, e.g. 4h (24h = 'daily 00:00')")
+        format!(
+            "invalid interval '{s}': expected <N>h with N in 1..=23, e.g. 4h (24h = 'daily 00:00')"
+        )
     };
     let n = s.strip_suffix('h').ok_or_else(bad)?;
     if n.is_empty() || n.len() > 2 {
@@ -411,6 +413,29 @@ pub struct JobRun {
     /// `ok`, `error`, or `seeded` (install placeholder so a fresh job runs at
     /// its next occurrence, not immediately).
     pub last_status: String,
+    /// Tail of the child's stderr from the last FAILED run, cleared on ok.
+    /// The 2026-08-03 crystallize failure was undiagnosable because the tick
+    /// discarded stderr — a failure must carry its own evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Trigger-level counters (never reset): a scheduler that is alive but
+    /// failing every trigger must be distinguishable from one that never
+    /// fires at all.
+    #[serde(default)]
+    pub runs_total: u64,
+    #[serde(default)]
+    pub failures_total: u64,
+    /// Consecutive failures since the last ok — the portal escalation signal.
+    #[serde(default)]
+    pub consecutive_failures: u32,
+}
+
+/// One job execution's outcome as seen by the runner.
+#[derive(Debug, Clone, Default)]
+pub struct JobResult {
+    pub ok: bool,
+    /// Bounded stderr tail when the job failed (None on ok/spawn-fail-known).
+    pub error_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -442,12 +467,37 @@ impl State {
     }
 
     /// Record a job's terminal outcome at `now` (formatted local wall-clock).
+    /// Counters carry over from the previous entry; `seeded` placeholders do
+    /// not count as runs.
     pub fn record(&mut self, id: &str, now: NaiveDateTime, status: &str) {
+        self.record_outcome(id, now, status, None);
+    }
+
+    pub fn record_outcome(
+        &mut self,
+        id: &str,
+        now: NaiveDateTime,
+        status: &str,
+        error_tail: Option<String>,
+    ) {
+        let prev = self.runs.get(id).cloned().unwrap_or_default();
+        let counted = status == "ok" || status == "error";
+        let failed = status == "error";
         self.runs.insert(
             id.to_string(),
             JobRun {
                 last_run: now.format("%Y-%m-%dT%H:%M:%S").to_string(),
                 last_status: status.to_string(),
+                last_error: if failed { error_tail } else { None },
+                runs_total: prev.runs_total + u64::from(counted),
+                failures_total: prev.failures_total + u64::from(failed),
+                consecutive_failures: if failed {
+                    prev.consecutive_failures + 1
+                } else if status == "ok" {
+                    0
+                } else {
+                    prev.consecutive_failures
+                },
             },
         );
     }
@@ -559,8 +609,9 @@ pub fn job_shell_command(
 }
 
 pub trait JobRunner {
-    /// Run one job; return whether it exited successfully.
-    fn run(&self, job: &JobConfig) -> bool;
+    /// Run one job; the result carries success and, on failure, a bounded
+    /// stderr tail so the state file records WHY.
+    fn run(&self, job: &JobConfig) -> JobResult;
 }
 
 /// The pure decision of which jobs a tick should run, given `now` and the
@@ -625,9 +676,14 @@ pub fn tick_with(
     };
     for id in &plan.due {
         let job = reg.get(id).expect("plan ids come from the registry");
-        let ok = runner.run(job);
-        new_state.record(id, now, if ok { "ok" } else { "error" });
-        report.ran.push((id.clone(), ok));
+        let result = runner.run(job);
+        new_state.record_outcome(
+            id,
+            now,
+            if result.ok { "ok" } else { "error" },
+            result.error_tail.clone(),
+        );
+        report.ran.push((id.clone(), result.ok));
     }
     (new_state, report)
 }
@@ -643,9 +699,15 @@ pub fn run_now_with(
     let job = reg
         .get(id)
         .ok_or_else(|| format!("no job '{id}' in the registry"))?;
-    let ok = runner.run(job);
+    let result = runner.run(job);
+    let ok = result.ok;
     let mut new_state = state.clone();
-    new_state.record(&job.id, now, if ok { "ok" } else { "error" });
+    new_state.record_outcome(
+        &job.id,
+        now,
+        if ok { "ok" } else { "error" },
+        result.error_tail,
+    );
     Ok((new_state, ok))
 }
 
@@ -712,9 +774,14 @@ mod tests {
             assert_eq!(Cadence::parse(s).unwrap().to_display(), s, "round-trip {s}");
         }
         for bad in [
-            "every 0h",   // would divide by zero
-            "every 24h",  // that is `daily 00:00` — say what you mean
-            "every 25h", "every 4", "every h", "every -4h", "every 4hh", "every 4h 00:00",
+            "every 0h",  // would divide by zero
+            "every 24h", // that is `daily 00:00` — say what you mean
+            "every 25h",
+            "every 4",
+            "every h",
+            "every -4h",
+            "every 4hh",
+            "every 4h 00:00",
         ] {
             assert!(Cadence::parse(bad).is_err(), "{bad} should be rejected");
         }
@@ -883,7 +950,6 @@ mod tests {
         assert!(themes.argv.contains(&"crystal-themes".to_string()));
         assert!(themes.argv.contains(&VAULT_PLACEHOLDER.to_string()));
         assert!(!themes.stamp_date);
-
     }
 
     #[test]
@@ -1027,10 +1093,52 @@ mod tests {
         fail: Vec<String>,
     }
     impl JobRunner for FakeRunner {
-        fn run(&self, job: &JobConfig) -> bool {
+        fn run(&self, job: &JobConfig) -> JobResult {
             self.ran.borrow_mut().push(job.id.clone());
-            !self.fail.contains(&job.id)
+            let ok = !self.fail.contains(&job.id);
+            JobResult {
+                ok,
+                error_tail: (!ok).then(|| format!("stderr tail for {}", job.id)),
+            }
         }
+    }
+
+    #[test]
+    fn record_outcome_tracks_counters_and_error_evidence() {
+        let mut state = State::default();
+        let t = dt("2026-08-06T10:00:00");
+        // seeded placeholder: not a run.
+        state.record("daily", t, "seeded");
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (0, 0, 0)
+        );
+
+        state.record_outcome("daily", t, "error", Some("boom: refresh failed".into()));
+        state.record_outcome("daily", t, "error", Some("boom again".into()));
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (2, 2, 2)
+        );
+        assert_eq!(run.last_error.as_deref(), Some("boom again"));
+
+        // ok clears the error evidence and the consecutive streak, keeps totals.
+        state.record_outcome("daily", t, "ok", None);
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (3, 2, 0)
+        );
+        assert!(run.last_error.is_none());
+
+        // Old state files (no counter fields) deserialize with defaults.
+        let legacy: State = serde_json::from_str(
+            r#"{"runs":{"daily":{"last_run":"2026-08-03T19:41:37","last_status":"error"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.runs.get("daily").unwrap().runs_total, 0);
     }
 
     /// The full default registry (daily + weekly crystallize + weekly themes).

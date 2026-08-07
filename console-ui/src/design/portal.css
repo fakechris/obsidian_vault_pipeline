@@ -2000,6 +2000,9 @@ body {
   height: 100%;
   background: var(--c-3);
 }
+.theme-card-single-source {
+  color: var(--warn-fg, #7a4d05);
+}
 .theme-card-snippet {
   font-size: var(--ovp-text-sm);
   color: var(--text-soft);
@@ -2786,6 +2789,21 @@ body {
 .auto-job-tab-when {
   display: block;
   margin-top: 0.1rem;
+}
+.auto-fail {
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--warn-border, #e7c88a);
+  border-radius: 8px;
+  background: var(--warn-bg, #fdf3e3);
+}
+.auto-fail-tail {
+  margin: 0.45rem 0 0;
+  max-height: 9rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--warn-fg, #7a4d05);
 }
 .auto-graph-row {
   display: grid;

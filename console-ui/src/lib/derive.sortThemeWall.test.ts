@@ -6,6 +6,7 @@ const g = (theme: string, total: number): ThemeGroup => ({
   total,
   durable: total,
   caveated: 0,
+  sources: 1,
 });
 
 describe('sortThemeWall', () => {

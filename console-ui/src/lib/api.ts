@@ -176,6 +176,13 @@ export interface ScheduleJob {
   argv: string[];
   last_run: string;
   last_status: string;
+  /** stderr tail of the last failed run (absent when the last run was ok). */
+  last_error?: string | null;
+  runs_total?: number;
+  failures_total?: number;
+  /** Failures since the last success — the "alive but failing every tick"
+   * signal is_due retries never surface on their own. */
+  consecutive_failures?: number;
   next_run: string | null;
   due: boolean;
   features: ScheduleJobFeatures;

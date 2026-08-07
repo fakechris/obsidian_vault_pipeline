@@ -383,6 +383,8 @@ export const en = {
   'source.neighborhoodCaption':
     'This source → its memory cards → citing claims → sibling sources. Click a node for a summary and an open link; hover to highlight its neighborhood.',
   'source.citingClaims': 'Citing claims',
+  'source.supportedThemes': 'Supports crystal knowledge',
+  'source.supportedThemesCount': '{n} claims',
   'source.citingEmpty': 'No crystal claims cite this source yet.',
   'source.citingEmptyHint': '→ Knowledge: how claims crystallize',
 
@@ -457,6 +459,9 @@ export const en = {
   'knowledge.untitledTheme': '(no theme)',
   'knowledge.claimCount': '{n} claims',
   'knowledge.ratioLine': 'durable {durable} · caveated {caveated}',
+  'knowledge.sourceCount': '{n} sources',
+  'knowledge.sourceCountTip':
+    'Distinct sources behind this theme — many claims from a single source deserve extra scrutiny.',
   'knowledge.graphCaption':
     'All claims, colored by community. Zoom in to reveal labels, hover to highlight a neighborhood, click for a summary. Toggle 3D to rotate.',
   'knowledge.unknownClaim':
@@ -591,6 +596,15 @@ export const en = {
   'ask.stopModelError': 'The model call failed mid-turn — the answer may be incomplete.',
   'ask.stopMaxRounds':
     'The agent reached its round limit and answered with what it had.',
+  'ask.fail.auth':
+    'API credentials are invalid or expired — check the key in .ovp/providers.toml.',
+  'ask.fail.rateLimited': 'Provider rate limit hit — wait a minute and retry.',
+  'ask.fail.contextExceeded':
+    'The conversation exceeded the model context window — start a new chat or narrow the question.',
+  'ask.fail.budgetExhausted':
+    'The model spent its whole output budget thinking — retry, or simplify the question.',
+  'ask.fail.overloaded': 'The provider is overloaded — retry shortly.',
+  'ask.fail.network': 'Network failure reaching the provider — check connectivity or proxy.',
 
   // automation / schedule explainer (System)
   'auto.title': 'Automation',
@@ -632,8 +646,13 @@ export const en = {
   'auto.status.disabled': 'Disabled',
   'auto.status.idle': 'Idle',
   'auto.job.daily': 'Daily intake + reader',
+  'auto.job.themes': 'Weekly theme re-cluster',
   'auto.job.crystallize': 'Weekly crystallize',
   'auto.job.other': 'Job: {id}',
+  'auto.failHead': 'Last run failed ({n} in a row)',
+  'auto.failNoRetry': 'no automatic retry — waits for the next scheduled window',
+  'auto.failDisabled': 'the job is disabled — it will not run again until re-enabled',
+  'auto.failCounts': '{fails} of {runs} runs failed',
   'auto.job.noDesc': 'No description.',
   'auto.stage.pinboard': 'Pinboard capture',
   'auto.stage.pinboard.body':

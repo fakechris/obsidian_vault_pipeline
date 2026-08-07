@@ -368,6 +368,8 @@ export const zh: Record<keyof typeof en, string> = {
   'source.neighborhoodCaption':
     '本源 → 它的记忆卡片 → 引用它的主张 → 兄弟源。单击节点看摘要并打开；悬停高亮其邻域。',
   'source.citingClaims': '结晶引用',
+  'source.supportedThemes': '支撑的结晶知识',
+  'source.supportedThemesCount': '{n} 条主张',
   'source.citingEmpty': '暂无结晶主张引用本源。',
   'source.citingEmptyHint': '→ 知识：了解结晶如何产生',
 
@@ -437,6 +439,9 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',
   'knowledge.ratioLine': '持久 {durable} · 存疑 {caveated}',
+  'knowledge.sourceCount': '{n} 个来源',
+  'knowledge.sourceCountTip':
+    '该主题背后的独立来源数——很多主张却只有一个来源时值得多加审视。',
   'knowledge.graphCaption': '全部主张，按社区着色。放大显更多标签、悬停高亮邻域、单击看摘要，右上角可切 3D 旋转。',
   'knowledge.unknownClaim': '没有活跃主张 "{id}"——它可能已被取代或撤回。',
 
@@ -561,6 +566,12 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.stopToolError': 'vault 工具连续失败——回答可能不完整。',
   'ask.stopModelError': '模型调用中途失败——回答可能不完整。',
   'ask.stopMaxRounds': 'agent 达到轮次上限，用已有信息作答。',
+  'ask.fail.auth': 'API 凭证无效或过期——检查 .ovp/providers.toml 里的 key。',
+  'ask.fail.rateLimited': '命中提供商限流——稍等一分钟再试。',
+  'ask.fail.contextExceeded': '对话超出模型上下文窗口——新开会话或收窄问题。',
+  'ask.fail.budgetExhausted': '模型把输出预算都花在思考上——重试或简化问题。',
+  'ask.fail.overloaded': '提供商过载——稍后重试。',
+  'ask.fail.network': '连接提供商的网络失败——检查网络或代理。',
 
   // automation / schedule explainer (System)
   'auto.title': '自动化',
@@ -602,8 +613,13 @@ export const zh: Record<keyof typeof en, string> = {
   'auto.status.disabled': '已关闭',
   'auto.status.idle': '空闲',
   'auto.job.daily': '每日摄入 + 阅读',
+  'auto.job.themes': '每周主题重聚类',
   'auto.job.crystallize': '每周结晶',
   'auto.job.other': '任务：{id}',
+  'auto.failHead': '上次运行失败（连续 {n} 次）',
+  'auto.failNoRetry': '不会自动重试——等待下一个调度点',
+  'auto.failDisabled': '该任务已关闭——重新开启前不会再运行',
+  'auto.failCounts': '历史 {runs} 次运行，失败 {fails} 次',
   'auto.job.noDesc': '无描述。',
   'auto.stage.pinboard': 'Pinboard 抓取',
   'auto.stage.pinboard.body':

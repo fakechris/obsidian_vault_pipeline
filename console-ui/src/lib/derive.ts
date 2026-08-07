@@ -1000,6 +1000,9 @@ export interface ThemeGroup {
   total: number;
   durable: number;
   caveated: number;
+  /** Distinct sources (case ids) across the theme's active claims — a theme
+   * with many claims but sources=1 rests on a single document. */
+  sources: number;
   /** First durable (else first caveated) claim text — the wall snippet. */
   topClaim?: string;
 }
@@ -1048,11 +1051,13 @@ export function themeWall(
   ledgerThemes: { theme: string; count: number }[],
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
+  const caseSets = new Map<string, Set<string>>();
   const ensure = (theme: string): ThemeGroup => {
     let g = groups.get(theme);
     if (!g) {
-      g = { theme, total: 0, durable: 0, caveated: 0 };
+      g = { theme, total: 0, durable: 0, caveated: 0, sources: 0 };
       groups.set(theme, g);
+      caseSets.set(theme, new Set());
     }
     return g;
   };
@@ -1061,6 +1066,7 @@ export function themeWall(
   }
   for (const c of activeClaims(claims)) {
     const g = ensure(c.theme ?? '');
+    for (const s of c.sources) caseSets.get(g.theme)?.add(s);
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1079,10 +1085,102 @@ export function themeWall(
   }
   for (const g of groups.values()) {
     g.total = Math.max(g.total, g.durable + g.caveated);
+    g.sources = caseSets.get(g.theme)?.size ?? 0;
   }
   return [...groups.values()].sort(
     (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
   );
+}
+
+/** Theme-card source badge: null hides it. `sources` counts only INDEXED
+ * claims, so 0 means "unknown" (ledger/index drift or a ledger-only theme) —
+ * omit rather than show a false zero. `single` flags a multi-claim theme
+ * resting on one document (deserves extra scrutiny). */
+export function themeSourceBadge(group: {
+  sources: number;
+  durable: number;
+  caveated: number;
+}): { n: number; single: boolean } | null {
+  if (group.sources <= 0) return null;
+  const active = group.durable + group.caveated;
+  return { n: group.sources, single: group.sources === 1 && active > 1 };
+}
+
+/** Failure strip for a schedule job on the System automation panel — null
+ * means no strip. Legacy state (pre-counter) reports 0 everywhere; the error
+ * status alone proves at least one failure, so the streak floors at 1 and
+ * lifetime counts show only when actually recorded (`runs_total > 0`). */
+export interface ScheduleFailureStrip {
+  streak: number;
+  /** 'noRetry' = enabled job waiting for its next window (is_due never
+   * retries); 'disabled' = will not run again until re-enabled. */
+  noteKey: 'noRetry' | 'disabled';
+  counts: { fails: number; runs: number } | null;
+}
+export function scheduleFailureStrip(job: {
+  last_status: string;
+  enabled: boolean;
+  consecutive_failures?: number;
+  failures_total?: number;
+  runs_total?: number;
+}): ScheduleFailureStrip | null {
+  if (job.last_status !== 'error') return null;
+  return {
+    streak: Math.max(1, job.consecutive_failures ?? 1),
+    noteKey: job.enabled ? 'noRetry' : 'disabled',
+    counts:
+      (job.runs_total ?? 0) > 0
+        ? { fails: job.failures_total ?? 0, runs: job.runs_total ?? 0 }
+        : null,
+  };
+}
+
+/** Targeted fix hint for an ask model_error, keyed by the server's
+ * failure_class slug. Unactionable classes (decode/protocol/internal/…)
+ * return null — the generic stop note already covers them. Keys live in the
+ * i18n catalogs as `ask.fail.*`. */
+export function failureHintKey(
+  cls: string | null | undefined,
+):
+  | 'ask.fail.auth'
+  | 'ask.fail.rateLimited'
+  | 'ask.fail.contextExceeded'
+  | 'ask.fail.budgetExhausted'
+  | 'ask.fail.overloaded'
+  | 'ask.fail.network'
+  | null {
+  switch (cls) {
+    case 'auth':
+      return 'ask.fail.auth';
+    case 'rate_limited':
+      return 'ask.fail.rateLimited';
+    case 'context_exceeded':
+      return 'ask.fail.contextExceeded';
+    case 'budget_exhausted':
+      return 'ask.fail.budgetExhausted';
+    case 'overloaded':
+      return 'ask.fail.overloaded';
+    case 'network':
+      return 'ask.fail.network';
+    default:
+      return null;
+  }
+}
+
+/** Distinct themes the source's citing claims land in — the source page's
+ * "supports this crystal knowledge" rail. Count = active citing claims in
+ * that theme; theme order follows count desc then name. */
+export function sourceThemes(
+  citing: ClaimRow[],
+): { theme: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const c of activeClaims(citing)) {
+    const theme = c.theme ?? '';
+    counts.set(theme, (counts.get(theme) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([theme, count]) => ({ theme, count }))
+    .sort((a, b) => b.count - a.count || a.theme.localeCompare(b.theme));
 }
 
 /** Theme claims for the detail page: durable first, then caveated;

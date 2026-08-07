@@ -20,21 +20,19 @@ pub mod live;
 
 pub use cache::{CacheMode, CachedModelClient};
 pub use client::{
-    is_transient, BudgetEscalatingModelClient, CallError, ModelClient, NeverCallsClient,
-    RetryingModelClient,
+    BudgetEscalatingModelClient, CallError, ModelClient, NeverCallsClient, RetryingModelClient,
+    failure_class, is_transient,
 };
 pub use fixture::FixtureModelClient;
 pub use key::request_key;
 pub use reply::{ExecutableToolCall, ModelReply, ReplyBlock, StopReason, Usage};
-pub use request::{
-    AssistantBlock, ModelMessage, ModelRequest, ToolDef, ToolResultBlock,
-};
+pub use request::{AssistantBlock, ModelMessage, ModelRequest, ToolDef, ToolResultBlock};
 pub use usage::UsageRow;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicBlockingClient;
 #[cfg(feature = "anthropic")]
 pub use live::{
-    build_recording_live_client, build_recording_live_client_bounded, resolve_api_key,
-    LiveClientConfig, LLM_NOT_CONFIGURED,
+    LLM_NOT_CONFIGURED, LiveClientConfig, build_recording_live_client,
+    build_recording_live_client_bounded, resolve_api_key,
 };

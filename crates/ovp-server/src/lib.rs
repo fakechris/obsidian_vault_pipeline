@@ -2036,6 +2036,15 @@ fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                         "argv": job.argv,
                         "last_run": last_run,
                         "last_status": last_status,
+                        // Trigger-level observability (2026-08-06): a
+                        // scheduler that is alive but failing every trigger
+                        // must be visible, WITH its evidence — the 08-03
+                        // crystallize failure was undiagnosable because the
+                        // tick discarded stderr.
+                        "last_error": run.and_then(|r| r.last_error.clone()),
+                        "runs_total": run.map(|r| r.runs_total).unwrap_or(0),
+                        "failures_total": run.map(|r| r.failures_total).unwrap_or(0),
+                        "consecutive_failures": run.map(|r| r.consecutive_failures).unwrap_or(0),
                         "next_run": next_run,
                         "due": due,
                         "features": job_features_from_argv(&job.argv),
@@ -4238,6 +4247,10 @@ fn handle_ask_agent(
                     "chat": response_session,
                     "turn_id": done.turn_id,
                     "stopped_reason": done.stopped_reason,
+                    // Replay does not re-derive the class (execution artifact
+                    // — same rule as coverage): null, keeping the wire shape
+                    // identical to the live path.
+                    "failure_class": serde_json::Value::Null,
                     "idempotent_replay": true,
                     "usage": {
                         "input_tokens": done.input_tokens_total,
@@ -4421,6 +4434,10 @@ fn handle_ask_agent(
                 "chat": response_session,
                 "turn_id": outcome.turn_id,
                 "stopped_reason": outcome.stopped_reason.as_str(),
+                // Set on model_error only: ovp_llm::failure_class slug so the
+                // portal can show a targeted fix hint (auth/rate_limited/…)
+                // instead of a bare "model error".
+                "failure_class": outcome.failure_class,
                 "usage": {
                     "input_tokens": outcome.input_tokens_total,
                     "output_tokens": outcome.output_tokens_total,

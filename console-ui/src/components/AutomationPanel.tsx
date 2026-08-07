@@ -26,6 +26,7 @@ import {
   type ScheduleJob,
   type SchedulePayload,
 } from '../lib/api';
+import { scheduleFailureStrip } from '../lib/derive';
 
 type StageState = 'on' | 'off' | 'always';
 
@@ -158,6 +159,7 @@ function formatWhen(iso: string | null | undefined): string {
 
 function jobTitle(t: (k: MsgKey, v?: Record<string, string | number>) => string, job: ScheduleJob) {
   if (job.id === 'daily') return t('auto.job.daily');
+  if (job.id === 'themes') return t('auto.job.themes');
   if (job.id === 'crystallize') return t('auto.job.crystallize');
   return t('auto.job.other', { id: job.id });
 }
@@ -496,6 +498,7 @@ export default function AutomationPanel() {
 
   const activeJob =
     data?.jobs.find((j) => j.id === activeJobId) ?? data?.jobs[0] ?? null;
+  const failStrip = activeJob ? scheduleFailureStrip(activeJob) : null;
 
   const onTogglePinboard = (next: boolean) => {
     setBusy(true);
@@ -540,6 +543,22 @@ export default function AutomationPanel() {
             activeId={activeJob.id}
             onSelect={(id) => selectJob(data.jobs.find((j) => j.id === id))}
           />
+
+          {failStrip && (
+            <div className="auto-fail" role="alert">
+              <p className="sm warn" style={{ margin: 0 }}>
+                {t('auto.failHead', { n: failStrip.streak })}
+                {' · '}
+                {failStrip.noteKey === 'noRetry'
+                  ? t('auto.failNoRetry')
+                  : t('auto.failDisabled')}
+                {failStrip.counts ? ` · ${t('auto.failCounts', failStrip.counts)}` : ''}
+              </p>
+              {activeJob.last_error && (
+                <pre className="auto-fail-tail mono tiny">{activeJob.last_error}</pre>
+              )}
+            </div>
+          )}
 
           <div className="auto-graph-row">
             <PipelineGraph

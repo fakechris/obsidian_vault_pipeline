@@ -95,6 +95,10 @@ pub enum TranscriptEvent {
         turn_id: String,
         round: usize,
         detail: String,
+        /// [`ovp_llm::failure_class`] slug (auth, rate_limited, …). Default
+        /// covers transcripts written before the field existed.
+        #[serde(default)]
+        class: String,
     },
     /// A model reply was rejected by the runtime without entering the
     /// conversation (duplicate tool_use ids, over-cap round) — audit-only.

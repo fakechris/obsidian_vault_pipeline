@@ -31,6 +31,7 @@ import {
   normalizeCiteToken,
   parseChatTranscript,
 } from '../lib/chatTranscript';
+import { failureHintKey } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, type CiteMarks } from '../lib/markdown';
 import type {
@@ -460,14 +461,21 @@ function stopNoticeKey(reason: string | undefined): MsgKey | null {
   }
 }
 
+
 /** Receipts under an agent answer: stop notice, coverage, collapsed trail. */
 function AgentMeta({ response }: { response: AskResponse }) {
   const { t } = useI18n();
   const stopKey = stopNoticeKey(response.stopped_reason);
+  const hintKey = failureHintKey(response.failure_class);
   const trace = response.tool_trace ?? [];
   return (
     <div className="ask-agent-meta">
-      {stopKey && <div className="ask-stop-note">{t(stopKey)}</div>}
+      {stopKey && (
+        <div className="ask-stop-note">
+          {t(stopKey)}
+          {hintKey ? ` — ${t(hintKey)}` : ''}
+        </div>
+      )}
       {response.coverage && <CoverageBadges coverage={response.coverage} />}
       {trace.length > 0 && (
         <details className="ask-trail-details">
