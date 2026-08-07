@@ -1049,6 +1049,10 @@ export function activeClaims(claims: ClaimRow[]): ClaimRow[] {
 export function themeWall(
   claims: ClaimRow[],
   ledgerThemes: { theme: string; count: number }[],
+  // Optional case-id → canonical-identity map (see `caseCanonicalIds`):
+  // collapses re-captures of the same document so `sources` counts
+  // INDEPENDENT documents, not vault copies. Absent = raw case ids.
+  canonical?: Map<string, string>,
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
   const caseSets = new Map<string, Set<string>>();
@@ -1066,7 +1070,7 @@ export function themeWall(
   }
   for (const c of activeClaims(claims)) {
     const g = ensure(c.theme ?? '');
-    for (const s of c.sources) caseSets.get(g.theme)?.add(s);
+    for (const s of c.sources) caseSets.get(g.theme)?.add(canonical?.get(s) ?? s);
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1090,6 +1094,25 @@ export function themeWall(
   return [...groups.values()].sort(
     (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
   );
+}
+
+/** case id → canonical source identity for DISTINCT-source counting: the
+ * source URL when present (re-captures of the same article get different
+ * content shas but share the URL — 58 such pairs in the live vault when this
+ * shipped), else the content sha, else the case id itself. */
+export function caseCanonicalIds(model: {
+  sources: { sha256: string; url?: string | null }[];
+  packs: { pack_dir: string; source_sha256?: string | null }[];
+}): Map<string, string> {
+  const bySha = new Map(model.sources.map((s) => [s.sha256, s]));
+  const out = new Map<string, string>();
+  for (const p of model.packs) {
+    const caseId = p.pack_dir.split(/[/\\]/).filter(Boolean).pop();
+    if (!caseId) continue;
+    const src = p.source_sha256 ? bySha.get(p.source_sha256) : undefined;
+    out.set(caseId, src?.url?.trim() || p.source_sha256 || caseId);
+  }
+  return out;
 }
 
 /** Theme-card source badge: null hides it. `sources` counts only INDEXED
