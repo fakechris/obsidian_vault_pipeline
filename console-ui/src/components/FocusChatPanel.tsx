@@ -455,82 +455,113 @@ export default function FocusChatPanel({
 
 
 
+  // Esc always closes — header × can still be hard to spot if the user is
+  // mid-thread; the scrim is the other obvious exit.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
   return (
-    <aside
-      className={`source-chat-panel${open ? '' : ' is-hidden'}`}
-      aria-label={t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}
-      aria-hidden={!open}
-      hidden={!open}
-      style={{ width: panelWidth, maxWidth: '100vw' }}
-    >
-      <div
-        className="source-chat-resize"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('source.chatResize')}
-        aria-valuenow={panelWidth}
-        aria-valuemin={PANEL_WIDTH_MIN}
-        aria-valuemax={PANEL_WIDTH_MAX}
-        tabIndex={0}
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={onResizePointerUp}
-        onPointerCancel={onResizePointerUp}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            setPanelWidth((w) => {
-              const next = clampPanelWidth(w + 24);
-              try {
-                localStorage.setItem(PANEL_WIDTH_KEY, String(next));
-              } catch {
-                /* ignore */
-              }
-              return next;
-            });
-          } else if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            setPanelWidth((w) => {
-              const next = clampPanelWidth(w - 24);
-              try {
-                localStorage.setItem(PANEL_WIDTH_KEY, String(next));
-              } catch {
-                /* ignore */
-              }
-              return next;
-            });
-          }
-        }}
+    <>
+      <button
+        type="button"
+        className="source-chat-scrim"
+        aria-label={t('source.chatClose')}
+        onClick={onClose}
       />
-      <header className="source-chat-head">
-        <div className="source-chat-head-title">
-          <h3 style={{ margin: 0 }}>{t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}</h3>
-          <p className="tiny muted" style={{ margin: '0.2rem 0 0' }}>
-            {t(sha ? 'source.chatGroundedIn' : 'theme.chatGroundedIn')}{' '}
-            <strong title={title}>{title.length > 48 ? `${title.slice(0, 48)}…` : title}</strong>
-          </p>
-        </div>
-        <div className="source-chat-head-actions">
-          {(turns.length > 0 || sessionChat) && (
-            <button type="button" className="tiny" onClick={startNew}>
-              {fromHistory
-                ? t(sha ? 'source.chatNewOnSource' : 'theme.chatNewOnTheme')
-                : t('ask.newConversation')}
+      <aside
+        className="source-chat-panel"
+        aria-label={t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}
+        style={{ width: panelWidth, maxWidth: 'min(92vw, 880px)' }}
+      >
+        <div
+          className="source-chat-resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('source.chatResize')}
+          aria-valuenow={panelWidth}
+          aria-valuemin={PANEL_WIDTH_MIN}
+          aria-valuemax={PANEL_WIDTH_MAX}
+          tabIndex={0}
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          onPointerCancel={onResizePointerUp}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              setPanelWidth((w) => {
+                const next = clampPanelWidth(w + 24);
+                try {
+                  localStorage.setItem(PANEL_WIDTH_KEY, String(next));
+                } catch {
+                  /* ignore */
+                }
+                return next;
+              });
+            } else if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              setPanelWidth((w) => {
+                const next = clampPanelWidth(w - 24);
+                try {
+                  localStorage.setItem(PANEL_WIDTH_KEY, String(next));
+                } catch {
+                  /* ignore */
+                }
+                return next;
+              });
+            }
+          }}
+        />
+        <header className="source-chat-head">
+          <div className="source-chat-head-row">
+            <h3 className="source-chat-title">
+              {t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}
+            </h3>
+            <button
+              type="button"
+              className="source-chat-close-icon"
+              onClick={onClose}
+              aria-label={t('source.chatClose')}
+              title={t('source.chatClose')}
+            >
+              <span aria-hidden="true">×</span>
             </button>
-          )}
-          <Link
-            className="source-chat-open-ask"
-            to={`/ask${sessionChat ? `/chat/${encodeURIComponent(sessionChat)}` : ''}`}
-            title={t('source.chatOpenInAsk')}
-          >
-            {t('source.chatOpenInAsk')}
-            <span aria-hidden="true">↗</span>
-          </Link>
-          <button type="button" className="tiny source-chat-close" onClick={onClose}>
-            {t('source.chatClose')}
-          </button>
-        </div>
-      </header>
+          </div>
+          <p className="tiny muted source-chat-grounded">
+            {t(sha ? 'source.chatGroundedIn' : 'theme.chatGroundedIn')}{' '}
+            <strong title={title}>
+              {title.length > 48 ? `${title.slice(0, 48)}…` : title}
+            </strong>
+          </p>
+          <div className="source-chat-head-actions">
+            {(turns.length > 0 || sessionChat) && (
+              <button type="button" className="source-chat-secondary" onClick={startNew}>
+                {fromHistory
+                  ? t(sha ? 'source.chatNewOnSource' : 'theme.chatNewOnTheme')
+                  : t('ask.newConversation')}
+              </button>
+            )}
+            <Link
+              className="source-chat-open-ask"
+              to={`/ask${sessionChat ? `/chat/${encodeURIComponent(sessionChat)}` : ''}`}
+              title={t('source.chatOpenInAsk')}
+            >
+              {t('source.chatOpenInAsk')}
+              <span aria-hidden="true">↗</span>
+            </Link>
+          </div>
+        </header>
 
       {/* Context is injected server-side — UI only shows a compact meta line,
           never the raw body/memory/crystal dump. */}
@@ -634,29 +665,30 @@ export default function FocusChatPanel({
         })}
       </div>
 
-      <div className="source-chat-composer">
-        <textarea
-          ref={composerRef}
-          data-omnibox-suppress
-          value={draft}
-          placeholder={t(sha ? 'source.chatPlaceholder' : 'theme.chatPlaceholder')}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKey}
-          disabled={pending}
-          rows={3}
-        />
-        <div className="composer-foot">
-          <span className="tiny muted">{t('ask.hint')}</span>
-          <button
-            type="button"
-            className="send-btn"
-            onClick={submit}
-            disabled={pending || draft.trim() === ''}
-          >
-            {pending ? t('ask.pending') : t('ask.send')}
-          </button>
+        <div className="source-chat-composer">
+          <textarea
+            ref={composerRef}
+            data-omnibox-suppress
+            value={draft}
+            placeholder={t(sha ? 'source.chatPlaceholder' : 'theme.chatPlaceholder')}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKey}
+            disabled={pending}
+            rows={3}
+          />
+          <div className="composer-foot">
+            <span className="tiny muted">{t('ask.hint')}</span>
+            <button
+              type="button"
+              className="send-btn"
+              onClick={submit}
+              disabled={pending || draft.trim() === ''}
+            >
+              {pending ? t('ask.pending') : t('ask.send')}
+            </button>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }
