@@ -28,6 +28,7 @@ import {
 } from '../lib/api';
 import {
   closureNodeIds,
+  focusBounds,
   groupCommunities,
   isMiscTheme,
   legendCommunities,
@@ -730,13 +731,18 @@ export default function KnowledgeGraph({
     if (!fg) return;
     setHoverId(null);
     if (mode === '3d') {
-      const cx = pts.reduce((s, n) => s + (n.x ?? 0), 0) / pts.length;
-      const cy = pts.reduce((s, n) => s + (n.y ?? 0), 0) / pts.length;
-      const cz = pts.reduce((s, n) => s + (n.z ?? 0), 0) / pts.length;
-      const d = Math.hypot(cx, cy, cz) || 1;
-      const dist = 110 + 30 * Math.sqrt(clusters.length - 1);
+      // Distance from the SPATIAL bounds of the selected nodes — a cluster
+      // count would under-shoot for two far-apart clusters or one wide one.
+      const b = focusBounds(pts);
+      if (!b) return;
+      const d = Math.hypot(b.x, b.y, b.z) || 1;
+      const dist = Math.max(110, b.radius * 2.4);
       const r = 1 + dist / d;
-      fg.cameraPosition({ x: cx * r, y: cy * r, z: cz * r }, { x: cx, y: cy, z: cz }, 700);
+      fg.cameraPosition(
+        { x: b.x * r, y: b.y * r, z: b.z * r },
+        { x: b.x, y: b.y, z: b.z },
+        700,
+      );
     } else {
       fg.zoomToFit(600, 48, (n: FGNode) => want.has(n.cluster));
     }
