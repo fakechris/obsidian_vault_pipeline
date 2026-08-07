@@ -7,8 +7,18 @@
  *   + cited sources via `focus_theme`.
  * Sessions are the same `.ovp/chats` spine as Ask, tagged with focus
  * metadata for unified history.
+ *
+ * Multi-turn is always on: saved recents can be resumed with follow-ups.
+ * The panel width is user-resizable (persisted in localStorage).
  */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -30,6 +40,30 @@ import {
 } from '../lib/chatTranscript';
 import { citationsFromAnswerText } from '../pages/AskPage';
 import type { AskCitation, AskProgress, AskResponse, ChatEntry } from '../lib/types';
+
+const PANEL_WIDTH_KEY = 'ovp.sourceChatWidth';
+const PANEL_WIDTH_MIN = 320;
+const PANEL_WIDTH_MAX = 880;
+const PANEL_WIDTH_DEFAULT = 440;
+
+function clampPanelWidth(n: number): number {
+  const max = Math.min(
+    PANEL_WIDTH_MAX,
+    typeof window !== 'undefined' ? Math.floor(window.innerWidth * 0.92) : PANEL_WIDTH_MAX,
+  );
+  return Math.min(Math.max(Math.round(n), PANEL_WIDTH_MIN), max);
+}
+
+function readStoredPanelWidth(): number {
+  try {
+    const raw = localStorage.getItem(PANEL_WIDTH_KEY);
+    if (!raw) return PANEL_WIDTH_DEFAULT;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clampPanelWidth(n) : PANEL_WIDTH_DEFAULT;
+  } catch {
+    return PANEL_WIDTH_DEFAULT;
+  }
+}
 
 /** Same marker set as Ask — claim/card/unit/source + bare ck-. */
 const CITE_RE =
@@ -72,7 +106,7 @@ function SourceAnswerText({
     },
   };
   return (
-    <div className="answer-text">
+    <div className="answer-text reading">
       <MarkdownView markdown={answer} gutter={false} citeMarks={citeMarks} />
     </div>
   );
@@ -139,10 +173,13 @@ export default function FocusChatPanel({
   const [pollChat, setPollChat] = useState<string | null>(null);
   const [live, setLive] = useState<AskProgress | null>(null);
   const [recents, setRecents] = useState<ChatEntry[]>([]);
-  const [viewingSaved, setViewingSaved] = useState(false);
+  /** True when the open thread was loaded from history (still continuable). */
+  const [fromHistory, setFromHistory] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const askStatusRef = useRef<boolean | null>(null);
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
 
   const toTurn = (question: string, answer: string, chat: string | null, extra?: Partial<AskResponse>): Turn => {
     const raw = citationsFromAnswerText(answer);
@@ -192,7 +229,7 @@ export default function FocusChatPanel({
   useEffect(() => {
     if (!open || !resumeChat) return;
     let cancelled = false;
-    setViewingSaved(true);
+    setFromHistory(true);
     setSessionChat(resumeChat);
     setTurns([]);
     fetchAskSession(resumeChat)
@@ -222,6 +259,38 @@ export default function FocusChatPanel({
       cancelled = true;
     };
   }, [open, resumeChat, sha, themeName]);
+
+  const onResizePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeRef.current = { startX: e.clientX, startW: panelWidth };
+  }, [panelWidth]);
+
+  const onResizePointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const s = resizeRef.current;
+    if (!s) return;
+    // Dragging the left edge: moving left grows the panel.
+    setPanelWidth(clampPanelWidth(s.startW + (s.startX - e.clientX)));
+  }, []);
+
+  const onResizePointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizeRef.current) return;
+    resizeRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+    setPanelWidth((w) => {
+      const next = clampPanelWidth(w);
+      try {
+        localStorage.setItem(PANEL_WIDTH_KEY, String(next));
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -258,17 +327,18 @@ export default function FocusChatPanel({
   const startNew = () => {
     setTurns([]);
     setSessionChat(null);
-    setViewingSaved(false);
+    setFromHistory(false);
     setDraft('');
     setLive(null);
     setPollChat(null);
   };
 
   const openRecent = (name: string) => {
-    setViewingSaved(true);
+    setFromHistory(true);
     setSessionChat(name);
     setTurns([]);
     setLive(null);
+    setDraft('');
     fetchAskSession(name)
       .catch(() => ({ turns: [] }))
       .then(async (session) => {
@@ -295,7 +365,8 @@ export default function FocusChatPanel({
 
   const submit = () => {
     const question = draft.trim();
-    if (!question || pending || viewingSaved) return;
+    // Multi-turn always allowed — history threads resume with the same stem.
+    if (!question || pending) return;
     setDraft('');
     setPending(true);
     setPollChat(null);
@@ -390,9 +461,49 @@ export default function FocusChatPanel({
       aria-label={t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}
       aria-hidden={!open}
       hidden={!open}
+      style={{ width: panelWidth, maxWidth: '100vw' }}
     >
+      <div
+        className="source-chat-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('source.chatResize')}
+        aria-valuenow={panelWidth}
+        aria-valuemin={PANEL_WIDTH_MIN}
+        aria-valuemax={PANEL_WIDTH_MAX}
+        tabIndex={0}
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={onResizePointerUp}
+        onPointerCancel={onResizePointerUp}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            setPanelWidth((w) => {
+              const next = clampPanelWidth(w + 24);
+              try {
+                localStorage.setItem(PANEL_WIDTH_KEY, String(next));
+              } catch {
+                /* ignore */
+              }
+              return next;
+            });
+          } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            setPanelWidth((w) => {
+              const next = clampPanelWidth(w - 24);
+              try {
+                localStorage.setItem(PANEL_WIDTH_KEY, String(next));
+              } catch {
+                /* ignore */
+              }
+              return next;
+            });
+          }
+        }}
+      />
       <header className="source-chat-head">
-        <div>
+        <div className="source-chat-head-title">
           <h3 style={{ margin: 0 }}>{t(sha ? 'source.chatPanelTitle' : 'theme.chatPanelTitle')}</h3>
           <p className="tiny muted" style={{ margin: '0.2rem 0 0' }}>
             {t(sha ? 'source.chatGroundedIn' : 'theme.chatGroundedIn')}{' '}
@@ -400,22 +511,20 @@ export default function FocusChatPanel({
           </p>
         </div>
         <div className="source-chat-head-actions">
-          {(turns.length > 0 || sessionChat) && !viewingSaved && (
+          {(turns.length > 0 || sessionChat) && (
             <button type="button" className="tiny" onClick={startNew}>
-              {t('ask.newConversation')}
-            </button>
-          )}
-          {viewingSaved && (
-            <button type="button" className="tiny" onClick={startNew}>
-              {t(sha ? 'source.chatNewOnSource' : 'theme.chatNewOnTheme')}
+              {fromHistory
+                ? t(sha ? 'source.chatNewOnSource' : 'theme.chatNewOnTheme')
+                : t('ask.newConversation')}
             </button>
           )}
           <Link
-            className="tiny"
+            className="source-chat-open-ask"
             to={`/ask${sessionChat ? `/chat/${encodeURIComponent(sessionChat)}` : ''}`}
             title={t('source.chatOpenInAsk')}
           >
             {t('source.chatOpenInAsk')}
+            <span aria-hidden="true">↗</span>
           </Link>
           <button type="button" className="tiny source-chat-close" onClick={onClose}>
             {t('source.chatClose')}
@@ -525,31 +634,29 @@ export default function FocusChatPanel({
         })}
       </div>
 
-      {!viewingSaved && (
-        <div className="source-chat-composer">
-          <textarea
-            ref={composerRef}
-            data-omnibox-suppress
-            value={draft}
-            placeholder={t(sha ? 'source.chatPlaceholder' : 'theme.chatPlaceholder')}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKey}
-            disabled={pending}
-            rows={3}
-          />
-          <div className="composer-foot">
-            <span className="tiny muted">{t('ask.hint')}</span>
-            <button
-              type="button"
-              className="send-btn"
-              onClick={submit}
-              disabled={pending || draft.trim() === ''}
-            >
-              {pending ? t('ask.pending') : t('ask.send')}
-            </button>
-          </div>
+      <div className="source-chat-composer">
+        <textarea
+          ref={composerRef}
+          data-omnibox-suppress
+          value={draft}
+          placeholder={t(sha ? 'source.chatPlaceholder' : 'theme.chatPlaceholder')}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKey}
+          disabled={pending}
+          rows={3}
+        />
+        <div className="composer-foot">
+          <span className="tiny muted">{t('ask.hint')}</span>
+          <button
+            type="button"
+            className="send-btn"
+            onClick={submit}
+            disabled={pending || draft.trim() === ''}
+          >
+            {pending ? t('ask.pending') : t('ask.send')}
+          </button>
         </div>
-      )}
+      </div>
     </aside>
   );
 }

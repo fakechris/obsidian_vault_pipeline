@@ -552,7 +552,7 @@ function AnswerText({
     },
   };
   return (
-    <div className="answer-text">
+    <div className="answer-text reading">
       <MarkdownView markdown={answer} gutter={false} citeMarks={citeMarks} />
     </div>
   );
@@ -772,6 +772,19 @@ export default function AskPage() {
   };
   useEffect(refreshChats, []);
 
+  // Switching history rows (or leaving one) must not leak the previous
+  // live thread into the new view — multi-turn resume seeds from saved.
+  // Deliberately NOT tied to `t`: a language flip must not wipe the thread.
+  useEffect(() => {
+    setTurns([]);
+    setPending(false);
+    setPollChat(null);
+    liveRef.current = null;
+    setLive(null);
+    setSessionChat(openChat);
+    setDraft('');
+  }, [openChat]);
+
   // Load saved chat when the route points at one.
   useEffect(() => {
     openChatRef.current = openChat;
@@ -930,19 +943,24 @@ export default function AskPage() {
 
   const submit = () => {
     const question = draft.trim();
-    if (!question || pending || openChat) return;
+    if (!question || pending) return;
+    // Saved-chat routes used to be read-only; multi-turn resume seeds the
+    // live thread from the loaded transcript, keeps the same chat stem,
+    // and appends. Live sessions keep using in-memory turns as before.
+    const prior =
+      turns.length > 0 ? turns : openChat ? (savedTurns ?? []) : turns;
     setDraft('');
     setPending(true);
     setPollChat(null);
     liveRef.current = null;
     setLive(null);
-    const history = turns
+    const history = prior
       .filter((t) => t.response?.answer)
       .map((t) => ({
         question: t.question,
         answer: t.response!.answer,
       }));
-    setTurns((prev) => [...prev, { question, response: null, errorKey: null }]);
+    setTurns([...prior, { question, response: null, errorKey: null }]);
     const applyResponse = (response: AskResponse) => {
       setTurns((prev) =>
         prev.map((turn, i) =>
@@ -957,7 +975,8 @@ export default function AskPage() {
     // Hoisted so the catch path can attempt transcript recovery with the
     // SAME session id the POST used.
     let agent = false;
-    let chat = sessionChat;
+    // Prefer the URL stem (continuing a saved chat), then the live stem.
+    let chat = openChat ?? sessionChat;
     void (async () => {
       // Resolve agent mode PER SUBMISSION — a fresh read tracks server
       // restarts with the flag flipped; the mount-time discovery and the
@@ -973,12 +992,20 @@ export default function AskPage() {
       if (agent && !chat) {
         chat = genChatId();
         setSessionChat(chat);
+      } else if (chat) {
+        setSessionChat(chat);
       }
       setPollChat(agent ? chat : null);
+      // Focus from the live query string, or from the saved chat's focus
+      // markers so continuations stay grounded on the same source/theme.
+      const focusSha =
+        focusSource ?? openChatMeta?.focus_source ?? undefined;
+      const focusTheme = openChatMeta?.focus_theme ?? undefined;
       return postAsk(question, {
         chat,
         history,
-        focus_source: focusSource ?? undefined,
+        focus_source: focusSha,
+        focus_theme: focusSha ? undefined : focusTheme ?? undefined,
       });
     })()
       .then(applyResponse)
@@ -1070,7 +1097,14 @@ export default function AskPage() {
     }
   }
 
-  const displayTurns = openChat ? (savedTurns ?? []) : turns;
+  // Once the user continues a saved chat, `turns` is the live source of
+  // truth (includes prior + new). Until then, show the loaded transcript.
+  const continuingSaved = Boolean(openChat) && turns.length > 0;
+  const displayTurns = continuingSaved
+    ? turns
+    : openChat
+      ? (savedTurns ?? [])
+      : turns;
   const latest = [...displayTurns].reverse().find((turn) => turn.response);
   // Failed mid-flight turns keep a progress snapshot but no response —
   // still surface their process graph in the rail.
@@ -1089,6 +1123,13 @@ export default function AskPage() {
   const processCitations = pending ? [] : citations;
   const examples: MsgKey[] = ['ask.example1', 'ask.example2', 'ask.example3'];
   const viewingSaved = Boolean(openChat);
+  const savedLoading = viewingSaved && savedTurns == null && !continuingSaved;
+  const savedLoadFailed =
+    viewingSaved &&
+    !continuingSaved &&
+    savedTurns != null &&
+    savedError != null &&
+    savedTurns.length === 0;
 
   return (
     <>
@@ -1120,7 +1161,7 @@ export default function AskPage() {
         <div>
           <div className="facet-group">
             <h3>{t('ask.historyTitle')}</h3>
-            {(turns.length > 0 || sessionChat) && !viewingSaved && (
+            {(turns.length > 0 || sessionChat || viewingSaved) && (
               <button
                 type="button"
                 className="tiny"
@@ -1218,67 +1259,58 @@ export default function AskPage() {
           </div>
         </div>
 
-        {/* center: live thread or saved-chat replay (same bubble layout) */}
+        {/* center: conversation thread + composer (multi-turn always on) */}
         <div className="ask-main">
-          {viewingSaved ? (
-            <>
-              <div className="chat-reader-head">
-                <span className="tiny muted">
-                  {t('ask.savedChat')}
-                  {' · '}
-                  <span className="mono">
-                    {openChatMeta ? chatDate(openChatMeta) : openChat}
-                  </span>
-                  {openChatMeta?.focus_source && (
-                    <>
-                      {' · '}
-                      <Link
-                        to={`/library/${encodeURIComponent(openChatMeta.focus_source)}?chat=${encodeURIComponent(openChatMeta.name)}`}
-                      >
-                        {openChatMeta.focus_title || t('ask.historyOnSource')}
-                      </Link>
-                    </>
-                  )}
+          {viewingSaved && (
+            <div className="chat-reader-head">
+              <span className="tiny muted">
+                {t('ask.savedChat')}
+                {continuingSaved ? ` · ${t('ask.continuing')}` : ''}
+                {' · '}
+                <span className="mono">
+                  {openChatMeta ? chatDate(openChatMeta) : openChat}
                 </span>
-                <button
-                  type="button"
-                  className="tab-like"
-                  onClick={() => navigate('/ask')}
-                >
-                  ← {t('ask.closeChat')}
-                </button>
-              </div>
-              {savedTurns == null ? (
-                <div className="portal-note">{t('common.loading')}</div>
-              ) : savedError && savedTurns.length === 0 ? (
-                <EmptyState>
-                  <p>{savedError}</p>
-                </EmptyState>
-              ) : (
-                <ChatThread
-                  turns={displayTurns}
-                  pending={false}
-                  onHover={setHoverId}
-                  onOpen={openCitation}
-                  threadRef={threadRef}
-                  empty={
-                    <EmptyState>
-                      <p>{savedError ?? t('ask.chatParseEmpty')}</p>
-                    </EmptyState>
-                  }
-                />
-              )}
-            </>
+                {openChatMeta?.focus_source && (
+                  <>
+                    {' · '}
+                    <Link
+                      to={`/library/${encodeURIComponent(openChatMeta.focus_source)}?chat=${encodeURIComponent(openChatMeta.name)}`}
+                    >
+                      {openChatMeta.focus_title || t('ask.historyOnSource')}
+                    </Link>
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                className="tab-like"
+                onClick={startNewConversation}
+              >
+                ← {t('ask.closeChat')}
+              </button>
+            </div>
+          )}
+
+          {savedLoading ? (
+            <div className="portal-note">{t('common.loading')}</div>
+          ) : savedLoadFailed ? (
+            <EmptyState>
+              <p>{savedError}</p>
+            </EmptyState>
           ) : (
-            <>
-              <ChatThread
-                turns={turns}
-                pending={pending}
-                liveTrail={liveTrail}
-                onHover={setHoverId}
-                onOpen={openCitation}
-                threadRef={threadRef}
-                empty={
+            <ChatThread
+              turns={displayTurns}
+              pending={pending}
+              liveTrail={liveTrail}
+              onHover={setHoverId}
+              onOpen={openCitation}
+              threadRef={threadRef}
+              empty={
+                viewingSaved ? (
+                  <EmptyState>
+                    <p>{savedError ?? t('ask.chatParseEmpty')}</p>
+                  </EmptyState>
+                ) : (
                   <EmptyState>
                     <p>
                       <strong>{t('ask.emptyTitle')}</strong>
@@ -1297,33 +1329,35 @@ export default function AskPage() {
                       ))}
                     </ul>
                   </EmptyState>
-                }
-              />
+                )
+              }
+            />
+          )}
 
-              <div className="ask-composer">
-                <textarea
-                  ref={composerRef}
-                  data-omnibox-suppress
-                  value={draft}
-                  placeholder={t('ask.placeholder')}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={onComposerKey}
-                  disabled={pending}
-                  rows={3}
-                />
-                <div className="composer-foot">
-                  <span className="tiny muted mono">{t('ask.hint')}</span>
-                  <button
-                    type="button"
-                    className="send-btn"
-                    onClick={submit}
-                    disabled={pending || draft.trim() === ''}
-                  >
-                    {pending ? t('ask.pending') : t('ask.send')}
-                  </button>
-                </div>
+          {!savedLoading && !savedLoadFailed && (
+            <div className="ask-composer">
+              <textarea
+                ref={composerRef}
+                data-omnibox-suppress
+                value={draft}
+                placeholder={t('ask.placeholder')}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onComposerKey}
+                disabled={pending}
+                rows={3}
+              />
+              <div className="composer-foot">
+                <span className="tiny muted mono">{t('ask.hint')}</span>
+                <button
+                  type="button"
+                  className="send-btn"
+                  onClick={submit}
+                  disabled={pending || draft.trim() === ''}
+                >
+                  {pending ? t('ask.pending') : t('ask.send')}
+                </button>
               </div>
-            </>
+            </div>
           )}
         </div>
 

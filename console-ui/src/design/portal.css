@@ -806,7 +806,7 @@ body {
   background: color-mix(in srgb, var(--accent, #3b82f6) 8%, transparent);
 }
 
-/* ---------- source-grounded chat dock (Library detail) ---------- */
+/* ---------- source-grounded chat dock (Library / Knowledge detail) ---------- */
 .source-chat-panel {
   position: fixed;
   top: 0;
@@ -814,13 +814,15 @@ body {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  width: min(420px, 100vw);
+  /* width set inline (user-resizable); fallback for first paint */
+  width: min(440px, 100vw);
   height: 100vh;
   background: var(--bg, #0f1115);
   border-left: 1px solid var(--border, #333);
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.28);
   padding: 0.75rem 0.85rem 0.9rem;
   gap: 0.55rem;
+  min-width: 320px;
 }
 .source-chat-panel.is-hidden,
 .source-chat-panel[hidden] {
@@ -832,19 +834,86 @@ body {
     box-shadow: -12px 0 32px rgba(0, 0, 0, 0.08);
   }
 }
+/* Drag the left edge to resize the dock. */
+.source-chat-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  margin-left: -4px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+  background: transparent;
+}
+.source-chat-resize::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 2.5rem;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--border-strong, #666) 70%, transparent);
+  opacity: 0;
+  transition: opacity var(--dur-fast, 120ms) var(--ease, ease);
+}
+.source-chat-panel:hover .source-chat-resize::after,
+.source-chat-resize:hover::after,
+.source-chat-resize:focus-visible::after {
+  opacity: 1;
+}
+.source-chat-resize:hover,
+.source-chat-resize:focus-visible {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent);
+  outline: none;
+}
 .source-chat-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: 0.55rem;
   flex: none;
+}
+.source-chat-head-title {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .source-chat-head-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.4rem;
   justify-content: flex-end;
   align-items: center;
+  flex: none;
+}
+/* Primary escape hatch to the full Ask workspace — not a tiny text link. */
+.source-chat-open-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: var(--ovp-radius-pill, 999px);
+  border: 1px solid var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
+  color: var(--accent, #3b82f6);
+  font-size: var(--ovp-text-xs, 0.78rem);
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.source-chat-open-ask:hover {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 22%, transparent);
+  border-color: var(--accent-strong, var(--accent, #3b82f6));
+  color: var(--accent-strong, var(--accent, #3b82f6));
+}
+.source-chat-open-ask:focus-visible {
+  outline: 3px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
 }
 .source-chat-close {
   font-weight: 600;
@@ -945,8 +1014,19 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding-right: 0.15rem;
+  gap: 1rem;
+  padding-right: 0.2rem;
+  scroll-behavior: smooth;
+}
+.source-chat-thread .chat-turn {
+  max-width: none;
+}
+.source-chat-thread .chat-a {
+  padding: 0.85rem 0.95rem 0.95rem;
+}
+.source-chat-thread .answer-text.reading {
+  font-size: 0.98rem;
+  line-height: 1.68;
 }
 .source-chat-empty {
   padding: 0.5rem 0.15rem;
@@ -961,11 +1041,19 @@ body {
   resize: vertical;
   min-height: 4.5rem;
   font: inherit;
-  padding: 0.5rem 0.6rem;
-  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--ovp-radius-input, 10px);
   border: 1px solid var(--border, #444);
-  background: var(--card, transparent);
+  background: var(--surface-2, var(--card, transparent));
   color: inherit;
+}
+.source-chat-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.source-chat-composer textarea:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 .entity-chip {
   display: inline-flex;
@@ -2216,12 +2304,16 @@ body {
 /* ---------- ask page (B4): history | thread | citations ---------- */
 .grid.ask {
   grid-template-columns: minmax(170px, 210px) minmax(0, 1fr) minmax(240px, 300px);
-  align-items: start;
+  align-items: stretch;
   margin-top: 1.25rem;
+  /* Give the conversation a real reading stage, not a cramped strip. */
+  min-height: calc(100vh - 9.5rem);
+  gap: 1rem 1.15rem;
 }
 @media (max-width: 900px) {
   .grid.ask {
     grid-template-columns: 1fr;
+    min-height: 0;
   }
 }
 .chat-list .chat-date {
@@ -2315,14 +2407,23 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  /* Soft reading column in the center of the three-pane layout. */
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-card);
+  padding: 0.85rem 1rem 0.75rem;
+  gap: 0.65rem;
 }
 .chat-thread {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 1.15rem;
   flex: 1 1 auto;
   min-height: 0;
-  padding-right: 0.25rem;
+  overflow-y: auto;
+  padding: 0.15rem 0.35rem 0.5rem 0.1rem;
+  scroll-behavior: smooth;
 }
 .ask-composer {
   flex: none;
@@ -2331,28 +2432,36 @@ body {
   /* Opaque: the thread scrolls UNDER this, so a transparent composer would
    * show message text through the textarea. */
   background: var(--surface);
-  padding-bottom: 0.5rem;
+  padding: 0.55rem 0 0.15rem;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
 }
 .chat-turn {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.7rem;
+  max-width: 46rem;
 }
 .chat-q {
   align-self: flex-end;
-  max-width: 85%;
+  max-width: min(85%, 36rem);
   background: var(--accent-soft);
-  border: 1px solid var(--border);
-  border-radius: var(--ovp-radius-md);
-  padding: 0.55rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 14px 14px 4px 14px;
+  padding: 0.65rem 0.95rem;
   font-size: var(--ovp-text-sm);
+  line-height: var(--leading-normal, 1.55);
   overflow-wrap: anywhere;
+  color: var(--text);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
 }
 .chat-a {
+  align-self: stretch;
   border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: var(--ovp-radius-card);
-  padding: 0.9rem 1rem;
+  border-radius: 4px 16px 16px 16px;
+  padding: 1.05rem 1.2rem 1.15rem;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 3.5%, transparent);
 }
 .chat-a.chat-error {
   border-color: var(--warn-border);
@@ -2362,6 +2471,7 @@ body {
 }
 .chat-a.chat-pending {
   font-size: var(--ovp-text-sm);
+  color: var(--muted);
 }
 /* ---- agent live trail + receipts (A3c) ---- */
 .ask-trail {
@@ -2484,39 +2594,188 @@ body {
   margin-bottom: 0.6rem;
   color: var(--text);
 }
-/* Answer bodies render through the markdown reading view (gutterless) —
-   the renderer owns whitespace, so no pre-wrap here. */
+/* Answer bodies: reader-quality prose via MarkdownView (gutterless).
+   Uses the design-system .reading serif for long-form comfort, then
+   tightens block rhythm so chat answers don't look like raw dumps. */
 .answer-text {
-  font-size: var(--ovp-text-sm);
-  line-height: 1.65;
+  font-size: var(--text-base, 1rem);
+  line-height: var(--leading-relaxed, 1.7);
+  color: var(--text-soft, var(--text));
   overflow-wrap: anywhere;
+  letter-spacing: 0.005em;
+}
+.answer-text.reading {
+  /* Override the page-level .reading size — chat wants slightly smaller. */
+  font-size: 1.02rem;
+  line-height: 1.72;
+  color: var(--text-soft, var(--text));
+}
+.answer-text .md-preview.no-gut {
+  max-width: 40rem;
+}
+.answer-text .md-row {
+  margin: 0;
+}
+.answer-text .md-block > :first-child {
+  margin-top: 0;
 }
 .answer-text .md-block > :last-child {
   margin-bottom: 0;
 }
-.cite-marker {
+.answer-text .md-block p {
+  font-size: inherit;
+  line-height: inherit;
+  margin: 0 0 0.85em;
+  color: inherit;
+}
+.answer-text .md-block p:last-child {
+  margin-bottom: 0;
+}
+.answer-text .md-block h2,
+.answer-text .md-block h3,
+.answer-text .md-block h4 {
+  font-family: var(--font-sans, inherit);
+  font-weight: var(--weight-semibold, 600);
+  line-height: var(--leading-snug, 1.35);
+  letter-spacing: var(--tracking-tight, -0.02em);
+  color: var(--text);
+  margin: 1.2em 0 0.45em;
+}
+.answer-text .md-block h2 {
+  font-size: 1.18em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+}
+.answer-text .md-block h3 {
+  font-size: 1.08em;
+}
+.answer-text .md-block h4 {
+  font-size: 1em;
+  opacity: 0.95;
+}
+.answer-text .md-block ul,
+.answer-text .md-block ol {
+  margin: 0 0 0.9em;
+  padding-left: 1.35rem;
+}
+.answer-text .md-block li {
+  font-size: inherit;
+  line-height: inherit;
+  margin: 0.28em 0;
+}
+.answer-text .md-block li > p {
+  margin: 0.2em 0;
+}
+.answer-text .md-block li::marker {
+  color: var(--muted);
+}
+.answer-text .md-block blockquote {
+  margin: 0.85em 0;
+  padding: 0.4em 0 0.4em 0.95em;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 70%, var(--border));
+  color: var(--muted);
+  font-style: normal;
+}
+.answer-text .md-block blockquote p {
+  margin: 0.35em 0;
+}
+.answer-text .md-block code {
+  font-family: var(--ovp-font-mono);
+  font-size: 0.88em;
+  padding: 0.12em 0.38em;
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.answer-text .md-block pre {
+  margin: 0.9em 0;
+  padding: 0.9rem 1.05rem;
+  border-radius: 10px;
+  font-size: 0.84em;
+  line-height: 1.55;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+.answer-text .md-block pre code {
+  padding: 0;
   border: 0;
   background: transparent;
-  padding: 0 1px;
+  font-size: inherit;
+  border-radius: 0;
+}
+.answer-text .md-block table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-family: var(--font-sans, inherit);
+  font-size: 0.92em;
+  line-height: 1.45;
+}
+.answer-text .md-block th,
+.answer-text .md-block td {
+  border: 1px solid var(--border);
+  padding: 0.45em 0.7em;
+  text-align: left;
+  vertical-align: top;
+}
+.answer-text .md-block th {
+  background: var(--surface-2);
+  font-weight: var(--weight-semibold, 600);
+  color: var(--text);
+}
+.answer-text .md-block hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.2em 0;
+}
+.answer-text .md-block a {
+  color: var(--accent-2, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.answer-text .md-block a:hover {
+  color: var(--accent);
+}
+.answer-text .md-block strong {
+  font-weight: var(--weight-semibold, 600);
+  color: var(--text);
+}
+.answer-text .md-block em {
+  font-style: italic;
+}
+.answer-text .md-block img.md-img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.6em 0;
+}
+.cite-marker {
+  border: 0;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 0 0.28em;
+  margin: 0 0.08em;
   cursor: pointer;
   font-family: var(--ovp-font-mono);
-  font-size: var(--ovp-text-xs);
+  font-size: 0.78em;
   font-weight: 600;
   color: var(--accent);
   vertical-align: baseline;
+  border-radius: 4px;
+  line-height: 1.2;
 }
 .cite-marker:hover {
-  text-decoration: underline;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  text-decoration: none;
 }
 .cite-marker.warn {
   color: var(--c-4);
+  background: color-mix(in srgb, var(--c-4) 14%, transparent);
 }
 .chat-verify {
-  margin-top: 0.5rem;
+  margin-top: 0.65rem;
   letter-spacing: 0.02em;
-}
-.ask-composer {
-  margin-top: 1rem;
 }
 .ask-composer textarea {
   width: 100%;
@@ -2528,7 +2787,8 @@ body {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--ovp-radius-input);
-  padding: 0.55rem 0.8rem;
+  padding: 0.65rem 0.85rem;
+  min-height: 4.25rem;
 }
 .ask-composer textarea:focus {
   outline: none;
@@ -2708,8 +2968,9 @@ body {
   align-items: baseline;
   gap: 0.75rem;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 0.5rem;
-  margin-bottom: 1rem;
+  padding-bottom: 0.45rem;
+  margin: 0 0 0.15rem;
+  flex: none;
 }
 .tab-like {
   border: 0;
