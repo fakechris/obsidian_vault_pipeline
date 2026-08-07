@@ -1886,6 +1886,19 @@ body {
   gap: 0.05rem;
   max-width: 45%;
 }
+/* Expanded: the full community list scrolls inside the canvas instead of
+   covering it; a soft surface keeps rows readable over dense regions. */
+.graph-legend--open {
+  max-height: calc(100% - 3.5rem);
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface, #faf8f4) 88%, transparent);
+  border-radius: 8px;
+  padding: 0.25rem;
+}
+.graph-legend-toggle {
+  color: var(--accent);
+  font-family: var(--mono, monospace);
+}
 .graph-legend-item {
   display: flex;
   align-items: center;

@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureHintKey,
+  legendCommunities,
   scheduleFailureStrip,
   themeSourceBadge,
 } from './derive';
@@ -77,6 +78,29 @@ describe('themeSourceBadge', () => {
     expect(themeSourceBadge({ sources: 4, durable: 5, caveated: 2 })).toEqual({
       n: 4,
       single: false,
+    });
+  });
+});
+
+describe('legendCommunities', () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+
+  it('collapsed: top-N strip and the hidden remainder', () => {
+    expect(legendCommunities([], false, 8)).toEqual({ visible: [], hidden: 0 });
+    expect(legendCommunities(ids(8), false, 8)).toEqual({ visible: ids(8), hidden: 0 });
+    expect(legendCommunities(ids(9), false, 8)).toEqual({
+      visible: ids(8),
+      hidden: 1,
+    });
+    const forty = legendCommunities(ids(40), false, 8);
+    expect(forty.visible.length).toBe(8);
+    expect(forty.hidden).toBe(32);
+  });
+
+  it('open: the full list with nothing hidden', () => {
+    expect(legendCommunities(ids(40), true, 8)).toEqual({
+      visible: ids(40),
+      hidden: 0,
     });
   });
 });
