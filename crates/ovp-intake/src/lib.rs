@@ -34,7 +34,10 @@ pub use pinboard::{
 };
 #[cfg(feature = "pinboard-live")]
 pub use pinboard::LivePinboardFetch;
-pub use sweep::{sweep_intake, IntakeConfig, SweepOutcome, MIN_READER_BODY_CHARS};
+pub use sweep::{
+    park_legacy_url_duplicates, processed_tree_urls, sweep_intake, IntakeConfig, LegacyDupGroup,
+    SweepOutcome, MIN_READER_BODY_CHARS,
+};
 pub use vaultops::{
     append_jsonl, append_pipeline_event, hex_sha256, read_jsonl, rel_to, safe_move, write_new,
     PipelineLogEvent, RunLock,

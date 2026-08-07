@@ -383,3 +383,89 @@ fn reserved_tags_skip_terminally_and_force_past_the_size_gate() {
         skip_rec.note
     );
 }
+
+// -- legacy URL dedup (pre-intake copies) ------------------------------------
+
+#[test]
+fn sweep_dedups_against_pre_intake_processed_sources() {
+    // The intake ledger only reaches back to its go-live; a source processed
+    // BEFORE intake existed has no Ingested record. Re-clipping its URL must
+    // still park as a duplicate — the processed tree is the dedup authority
+    // the ledger can't be.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let processed = root.join("50-Inbox/03-Processed/2026-04");
+    std::fs::create_dir_all(&processed).unwrap();
+    std::fs::write(
+        processed.join("2026-04-05_Legacy Article.md"),
+        clip("Legacy Article", "https://e.x/legacy", LONG_BODY),
+    )
+    .unwrap();
+
+    let clippings = root.join("Clippings");
+    std::fs::create_dir_all(&clippings).unwrap();
+    std::fs::write(
+        clippings.join("reclip.md"),
+        clip("Legacy Article (reclipped)", "https://e.x/legacy", &format!("{LONG_BODY} v2")),
+    )
+    .unwrap();
+
+    let out = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(out.ingested.len(), 0, "{out:?}");
+    assert_eq!(out.duplicates.len(), 1);
+    assert_eq!(out.duplicates[0].dup_of.as_deref(), Some("url:https://e.x/legacy"));
+    // The legacy original stays untouched.
+    assert!(processed.join("2026-04-05_Legacy Article.md").exists());
+}
+
+#[test]
+fn park_legacy_url_duplicates_keeps_oldest_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let april = root.join("50-Inbox/03-Processed/2026-04");
+    let may = root.join("50-Inbox/03-Processed/2026-05");
+    std::fs::create_dir_all(&april).unwrap();
+    std::fs::create_dir_all(&may).unwrap();
+    // Same URL captured twice (different bytes), plus an unrelated unique.
+    std::fs::write(
+        april.join("2026-04-05_Twice.md"),
+        clip("Twice", "https://e.x/twice", LONG_BODY),
+    )
+    .unwrap();
+    std::fs::write(
+        may.join("2026-05-07_Twice.md"),
+        clip("Twice (reclip)", "https://e.x/twice", &format!("{LONG_BODY} v2")),
+    )
+    .unwrap();
+    std::fs::write(
+        may.join("2026-05-08_Unique.md"),
+        clip("Unique", "https://e.x/unique", LONG_BODY),
+    )
+    .unwrap();
+
+    // Dry-run: plans the park, moves nothing.
+    let plan = ovp_intake::park_legacy_url_duplicates(&cfg(root), true).unwrap();
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].url, "https://e.x/twice");
+    assert!(plan[0].kept.contains("2026-04-05_Twice"), "oldest kept: {}", plan[0].kept);
+    assert_eq!(plan[0].parked.len(), 1);
+    assert!(may.join("2026-05-07_Twice.md").exists(), "dry-run must not move");
+    assert!(read_intake_ledger(&root.join(".ovp/intake.jsonl")).unwrap().is_empty());
+
+    // Apply: newer copy parked with a normal Duplicate ledger record.
+    let done = ovp_intake::park_legacy_url_duplicates(&cfg(root), false).unwrap();
+    assert_eq!(done.len(), 1);
+    let to = done[0].parked[0].to.as_ref().unwrap();
+    assert!(to.starts_with("50-Inbox/03-Processed/duplicates/2026-06/"), "got {to}");
+    assert!(root.join(to).exists());
+    assert!(!may.join("2026-05-07_Twice.md").exists());
+    assert!(april.join("2026-04-05_Twice.md").exists());
+    assert!(may.join("2026-05-08_Unique.md").exists(), "unique untouched");
+    let ledger = read_intake_ledger(&root.join(".ovp/intake.jsonl")).unwrap();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].dup_of.as_deref(), Some("url:https://e.x/twice"));
+
+    // Second run: nothing left to do (parked copies are excluded from the walk).
+    let again = ovp_intake::park_legacy_url_duplicates(&cfg(root), false).unwrap();
+    assert!(again.is_empty(), "{again:?}");
+}
