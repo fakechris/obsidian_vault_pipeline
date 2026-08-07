@@ -1,7 +1,7 @@
 /** Distinct-source accounting on the knowledge wall + the source page's
  * "supports crystal knowledge" rail. Pure derive functions — no DOM. */
 import { describe, expect, it } from 'vitest';
-import { sourceThemes, themeWall } from './derive';
+import { caseCanonicalIds, sourceThemes, themeWall } from './derive';
 import type { ClaimRow } from './types';
 
 const claim = (
@@ -41,6 +41,40 @@ describe('themeWall source counts', () => {
     const wall = themeWall([], [{ theme: 'Ledger only', count: 4 }]);
     expect(wall[0].sources).toBe(0);
     expect(wall[0].total).toBe(4);
+  });
+
+  it('re-captures of the same document collapse to ONE source via the canonical map', () => {
+    // Live-vault case (2026-08-07): the same article clipped twice a month
+    // apart → two case ids, two content shas, ONE url. The theme showed
+    // "2 sources" while genuinely resting on one document.
+    const model = {
+      sources: [
+        { sha256: 'sha-april', url: 'https://example.com/a' },
+        { sha256: 'sha-may', url: 'https://example.com/a' },
+        { sha256: 'sha-other', url: 'https://example.com/b' },
+      ],
+      packs: [
+        { pack_dir: '40-Resources/Reader/case-april', source_sha256: 'sha-april' },
+        { pack_dir: '40-Resources/Reader/case-may', source_sha256: 'sha-may' },
+        { pack_dir: '40-Resources/Reader/case-other', source_sha256: 'sha-other' },
+        // Legacy pack without a source link falls back to the sha, then case id.
+        { pack_dir: '40-Resources/Reader/case-orphan', source_sha256: null },
+      ],
+    };
+    const canonical = caseCanonicalIds(model);
+    expect(canonical.get('case-april')).toBe('https://example.com/a');
+    expect(canonical.get('case-may')).toBe('https://example.com/a');
+    expect(canonical.get('case-orphan')).toBe('case-orphan');
+
+    const wall = themeWall(
+      [
+        claim('c1', 'T', ['case-april', 'case-may']),
+        claim('c2', 'T', ['case-april', 'case-other']),
+      ],
+      [],
+      canonical,
+    );
+    expect(wall[0].sources).toBe(2);
   });
 
   it('rejected/superseded claims do not contribute sources', () => {

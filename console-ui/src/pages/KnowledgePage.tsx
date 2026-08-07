@@ -20,6 +20,7 @@ import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
 import {
+  caseCanonicalIds,
   isMiscTheme,
   sortThemeWall,
   themeRoute,
@@ -157,7 +158,11 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
       { replace: true },
     );
   };
-  const wall = sortThemeWall(themeWall(model.claims, themes), sortKey, sortDir);
+  const wall = sortThemeWall(
+    themeWall(model.claims, themes, caseCanonicalIds(model)),
+    sortKey,
+    sortDir,
+  );
 
   return (
     <>
