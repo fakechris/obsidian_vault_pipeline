@@ -69,6 +69,43 @@ export function groundCitesOnSource<
   });
 }
 
+/** Human-readable titles for a focused source's memory layer, keyed by
+ * canonical cite id (`unit:<id>` / `card:<id>`). Units title with their
+ * verbatim quote (else text) snippet — the evidence sidecar isn't loaded in
+ * the SPA, but a focused session's `/api/source/:sha` payload carries it. */
+export function buildMemoryTitleMap(memory: {
+  cards: { id?: string; title: string }[];
+  units: { unit_id: string; text: string; quote: string; line: number | null }[];
+}): Map<string, string> {
+  const clip = (s: string, n = 90) => {
+    const t = s.trim().replace(/\s+/g, ' ');
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const out = new Map<string, string>();
+  for (const u of memory.units) {
+    const body = u.quote.trim() || u.text.trim();
+    if (!body) continue;
+    out.set(`unit:${u.unit_id}`, clip(body));
+  }
+  for (const c of memory.cards) {
+    if (c.id && c.title.trim()) out.set(`card:${c.id}`, clip(c.title, 90));
+  }
+  return out;
+}
+
+/** Fill readable titles into citation chips whose title degraded to the raw
+ * id (replay builds citations from answer text alone — server receipts have
+ * titles, reconstructed ones don't). Never overwrites a real title. */
+export function applyMemoryTitles<
+  T extends { id: string; title?: string | null },
+>(cites: T[], titles: Map<string, string>): T[] {
+  return cites.map((c) => {
+    const bare = !c.title || c.title === c.id || c.id.endsWith(`:${c.title}`);
+    const better = titles.get(c.id);
+    return bare && better ? { ...c, title: better } : c;
+  });
+}
+
 /** Replay-source decision for a saved chat (`/ask/chat/:id`) — pure, so the
  * error-priority matrix is testable without rendering:
  * - audit session has turns → replay those (richest: trails + stop reasons);

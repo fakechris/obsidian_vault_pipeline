@@ -21,6 +21,7 @@ import {
   fetchAskStatus,
   fetchChatMarkdown,
   fetchChats,
+  fetchSourceDetail,
   postAsk,
 } from '../lib/api';
 import { useModel } from '../model';
@@ -28,6 +29,8 @@ import {
   citationsInOrder,
   citeLinkTarget,
   displayUserQuestion,
+  applyMemoryTitles,
+  buildMemoryTitleMap,
   groundCitesOnSource,
   normalizeCiteToken,
   parseChatTranscript,
@@ -227,8 +230,13 @@ export function makeCitationTitleLookup(
       if (hit) {
         return { title: hit.title || null, link: `/library/${hit.sha256}` };
       }
+      // Only LEGACY ids embed a note path. A modern id (u-NNN-hash) fed
+      // through the humanizer comes back as itself — and a lookup result
+      // SHADOWS real titles from server receipts (2026-08-07 raw-id
+      // regression: every downstream fix was masked right here).
+      if (!body.includes('/')) return null;
       const human = humanizeLegacyPath(body);
-      return human ? { title: human } : null;
+      return human && human !== body ? { title: human } : null;
     }
     return null;
   };
@@ -788,11 +796,26 @@ export default function AskPage() {
       // replay-read failure must not kill the page.
       fetchAskSession(openChat).catch(() => ({ turns: [] })),
     ])
-      .then(([md, session]) => {
+      .then(async ([md, session]) => {
         if (cancelled || openChatRef.current !== openChat) return;
         const plan = savedReplayPlan(md, session.turns.length);
-        const ground = (cites: AskCitation[]) =>
-          plan.focus.sha ? groundCitesOnSource(cites, plan.focus.sha) : cites;
+        // Focused session: the source's memory payload supplies readable
+        // titles for unit/card chips (replay reconstructs citations from
+        // text alone, so without this they degrade to raw ids — operator
+        // report 2026-08-07). Best-effort; chips fall back to ids.
+        let memoryTitles: Map<string, string> | null = null;
+        if (plan.focus.sha && (plan.kind === 'session' || plan.kind === 'markdown')) {
+          memoryTitles = await fetchSourceDetail(plan.focus.sha)
+            .then((d) => buildMemoryTitleMap(d.memory))
+            .catch(() => null);
+          if (cancelled || openChatRef.current !== openChat) return;
+        }
+        const ground = (cites: AskCitation[]) => {
+          const grounded = plan.focus.sha
+            ? groundCitesOnSource(cites, plan.focus.sha)
+            : cites;
+          return memoryTitles ? applyMemoryTitles(grounded, memoryTitles) : grounded;
+        };
         if (plan.kind === 'loadError') {
           setSavedError(t('ask.chatLoadError'));
           setSavedTurns([]);
@@ -810,9 +833,11 @@ export default function AskPage() {
               errorKey: null,
               response: {
                 answer: turn.answer,
-                citations: ground(
-                  citationsFromAnswerText(turn.answer, citeLookupRef.current),
-                ),
+                // Server receipts are authoritative (one resolver for live +
+                // replay); text reconstruction only covers older servers.
+                citations: turn.citations?.length
+                  ? turn.citations
+                  : ground(citationsFromAnswerText(turn.answer, citeLookupRef.current)),
                 verified: null,
                 context_hits: 0,
                 chat: openChat,

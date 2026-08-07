@@ -4364,8 +4364,9 @@ fn handle_ask_agent(
                     &vault_root,
                     &VaultLayout::new(),
                 );
+                let evidence = ovp_index::read_evidence(&vault_root).ok();
                 let citations = match read_index(&vault_root).ok() {
-                    Some(m) => agent_citations(&done.answer, &m, &records),
+                    Some(m) => agent_citations(&done.answer, &m, &records, evidence.as_ref()),
                     None => agent_citations_unindexed(&done.answer, &records),
                 };
                 // Export REPAIR: a committed turn whose chat save failed
@@ -4559,8 +4560,9 @@ fn handle_ask_agent(
             // the model actually saw. No snapshot (unindexed vault) → source
             // citations resolve as unverified, honestly.
             let snapshot = tools.index_snapshot();
+            let evidence_for_receipts = ovp_index::read_evidence(&vault_root).ok();
             let citations = match snapshot.as_deref() {
-                Some(m) => agent_citations(&outcome.answer, m, &records),
+                Some(m) => agent_citations(&outcome.answer, m, &records, evidence_for_receipts.as_ref()),
                 None => agent_citations_unindexed(&outcome.answer, &records),
             };
             let coverage = tools.coverage();
@@ -4720,6 +4722,17 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
             );
         }
     };
+    // Server-resolved citation receipts per turn — the SAME resolver as the
+    // live answer path. Replay surfaces must never reconstruct citations
+    // from answer text with weaker data (2026-08-07 operator report: every
+    // client-side reconstruction showed raw unit ids / dead links; this is
+    // the one-resolver consolidation).
+    let records = ovp_api_projection::readers::load_active_records(
+        &state.vault_root,
+        &VaultLayout::new(),
+    );
+    let model = state.current_model();
+    let evidence = state.current_evidence();
     let turns: Vec<serde_json::Value> = store
         .completed_turns()
         .into_iter()
@@ -4738,11 +4751,16 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
             // Transcript may hold the full focus pack (model input). Product
             // surfaces only the human question after `[USER QUESTION]`.
             let visible_q = user_visible_ask_question(&question);
+            let citations = match model.as_deref() {
+                Some(m) => agent_citations(&answer, m, &records, evidence.as_deref()),
+                None => agent_citations_unindexed(&answer, &records),
+            };
             serde_json::json!({
                 "turn_id": turn_id,
                 "question": visible_q,
                 "answer": answer,
                 "stopped_reason": stopped_reason,
+                "citations": citations,
                 "tool_trace": trail,
             })
         })
@@ -5762,6 +5780,37 @@ mod tests {
         };
         ovp_index::write_evidence(&vault, &evidence).unwrap();
         vault
+    }
+
+    #[test]
+    fn agent_citations_resolve_units_and_cards_via_evidence() {
+        // The one-resolver consolidation (2026-08-07): unit/card cites get
+        // titles + memory-tab links from the evidence sidecar — no focus
+        // context needed, fail-closed on unknown ids.
+        let vault = portal_vault(
+            "citations-evidence",
+            "50-Inbox/03-Processed/good.md",
+            "# Good\n\nbody\n",
+        );
+        let model = ovp_index::read_index(&vault).unwrap();
+        let evidence = ovp_index::read_evidence(&vault).unwrap();
+        let cits = agent_citations(
+            "[unit:u-001] [card:40-Resources/Reader/good:0] [unit:u-nope]",
+            &model,
+            &[],
+            Some(&evidence),
+        );
+        assert_eq!(cits[0]["kind"], "unit");
+        assert_eq!(cits[0]["title"], "the exact quote");
+        assert_eq!(cits[0]["link_target"], "/library/aaaa1111?tab=memory");
+        assert_eq!(cits[0]["verified"], true);
+        assert_eq!(cits[1]["kind"], "card");
+        assert_eq!(cits[1]["title"], "Card One");
+        assert_eq!(cits[1]["link_target"], "/library/aaaa1111?tab=memory");
+        assert_eq!(cits[1]["verified"], true);
+        // Unknown unit: honest non-receipt, no fabricated link.
+        assert_eq!(cits[2]["verified"], false);
+        assert_eq!(cits[2]["link_target"], serde_json::Value::Null);
     }
 
     #[test]
@@ -7630,7 +7679,7 @@ mod tests {
         // A real (fixture-built) index: agent_citations only reads sources.
         let vault = portal_vault("agent-ambig", "50-Inbox/03-Processed/good.md", "body\n");
         let model = read_index(&vault).unwrap();
-        let cits = agent_citations("[claim:ck-a] [claim:ck-c]", &model, &records);
+        let cits = agent_citations("[claim:ck-a] [claim:ck-c]", &model, &records, None);
         let a = &cits[0];
         assert_eq!(a["verified"], true, "the key resolved uniquely");
         assert!(a["link_target"].is_null(), "shared claim_id anchor must be omitted");
@@ -7645,6 +7694,7 @@ mod tests {
              [claim: <ck-c> trailing words] [claim:xxxx]",
             &model,
             &records,
+            None,
         );
         assert_eq!(decorated[0]["verified"], true, "title-decorated sha resolves");
         assert_eq!(decorated[0]["link_target"], "/library/aaaa1111");

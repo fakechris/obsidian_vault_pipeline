@@ -140,3 +140,14 @@ describe('tolerant + legacy citation resolution', () => {
     expect(c.link_target).toBeNull();
   });
 });
+
+describe('modern unit/card ids never shadow real titles', () => {
+  it('lookup returns null for non-path unit ids (receipt title must win)', () => {
+    // 2026-08-07 regression: humanizeLegacyPath('u-006-b13dec99') returned
+    // the id itself, and lookup results outrank c.title in citationTitle —
+    // masking server-resolved quote titles on every replay surface.
+    const lookup = makeCitationTitleLookup({ sources: [], claims: [] });
+    expect(lookup('unit', 'u-006-b13dec99')).toBeNull();
+    expect(lookup('card', '40-Resources/Reader/good:0')).not.toBeUndefined();
+  });
+});
