@@ -821,20 +821,39 @@ body {
 }
 .source-chat-panel {
   position: fixed;
-  top: 0;
+  /* Clear desktop titlebar / traffic-light band so the title + × aren't
+     half-clipped under native chrome (operator report: "top row exists
+     but unreadable"). Overlay titlebars expose env(); plain chrome still
+     gets a floor via --desktop-chrome. */
+  top: var(
+    --desktop-chrome,
+    env(titlebar-area-height, env(safe-area-inset-top, 0px))
+  );
   right: 0;
   z-index: 40;
   display: flex;
   flex-direction: column;
   /* width set inline (user-resizable); fallback for first paint */
   width: min(480px, 100vw);
-  height: 100vh;
-  height: 100dvh;
+  height: calc(
+    100dvh -
+      var(
+        --desktop-chrome,
+        env(titlebar-area-height, env(safe-area-inset-top, 0px))
+      )
+  );
+  max-height: calc(
+    100dvh -
+      var(
+        --desktop-chrome,
+        env(titlebar-area-height, env(safe-area-inset-top, 0px))
+      )
+  );
   background: var(--surface, var(--bg, #0f1115));
   border-left: 1px solid var(--border, #333);
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.28);
-  padding: 0.85rem 1rem 0.95rem;
-  gap: 0.55rem;
+  padding: 1.15rem 1rem 0.95rem;
+  gap: 0.5rem;
   min-width: 320px;
   box-sizing: border-box;
   overflow: hidden;
@@ -844,6 +863,13 @@ body {
     background: var(--surface, var(--bg, #fafafa));
     box-shadow: -12px 0 32px rgba(0, 0, 0, 0.08);
   }
+}
+/* Desktop shell often has a ~36px native title strip that env() does not
+   report; floor the chrome offset so the title row is never half-clipped. */
+html.tauri .source-chat-panel,
+body.tauri .source-chat-panel,
+html[data-tauri-drag-region] .source-chat-panel {
+  --desktop-chrome: 36px;
 }
 /* Drag the left edge to resize the dock. */
 .source-chat-resize {
@@ -891,24 +917,34 @@ body {
 }
 .source-chat-head-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.55rem;
   min-width: 0;
+  width: 100%;
+  min-height: 2rem;
 }
 .source-chat-title {
   margin: 0;
-  font-size: var(--ovp-text-base, 1rem);
+  flex: 1 1 0;
+  min-width: 5rem; /* never collapse under the × */
+  font-size: var(--ovp-text-sm, 0.92rem);
   font-weight: 600;
-  line-height: 1.3;
-  min-width: 0;
+  line-height: 1.35;
+  color: var(--text);
+  /* Prefer wrap over ellipsis-into-nothing in a narrow dock. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .source-chat-grounded {
   margin: 0;
   min-width: 0;
+  font-size: var(--ovp-text-xs, 0.78rem);
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2658,25 +2694,25 @@ body {
   margin-bottom: 0.6rem;
   color: var(--text);
 }
-/* Answer bodies: reader-quality prose (Moss-like breathing room).
-   CJK reads denser than Latin — use sans + 1.85 line-height + generous
-   block spacing rather than the page-level .reading serif. */
+/* Answer bodies: reader-quality prose without looking "zoomed".
+   CJK denser than Latin → sans + ~1.75 leading; body size matches UI
+   (~0.94rem) so a narrow dock doesn't feel oversized. */
 .answer-text {
   font-family: var(--font-sans, var(--ovp-font-sans, inherit));
-  font-size: 1.05rem;
-  line-height: 1.85;
+  font-size: 0.94rem;
+  line-height: 1.75;
   color: var(--text, inherit);
   overflow-wrap: anywhere;
-  letter-spacing: 0.015em;
+  letter-spacing: 0.01em;
   word-break: break-word;
 }
 .answer-text.reading {
   /* Override design-system .reading serif — chat answers want airy sans. */
   font-family: var(--font-sans, var(--ovp-font-sans, inherit));
-  font-size: 1.05rem;
-  line-height: 1.85;
+  font-size: 0.94rem;
+  line-height: 1.75;
   color: var(--text, inherit);
-  letter-spacing: 0.015em;
+  letter-spacing: 0.01em;
 }
 .answer-text .md-preview.no-gut {
   max-width: 42rem;
@@ -2693,11 +2729,27 @@ body {
 .answer-text .md-block p {
   font-size: inherit;
   line-height: inherit;
-  margin: 0 0 1.15em;
+  margin: 0 0 0.95em;
   color: inherit;
 }
 .answer-text .md-block p:last-child {
   margin-bottom: 0;
+}
+/* Models often fake section titles as a lone **bold** line, not ##.
+   Give those the breathing room real headings get. */
+.answer-text .md-block p:has(> strong:only-child) {
+  margin-top: 1.35em;
+  margin-bottom: 0.45em;
+  font-size: 1.04em;
+  line-height: 1.45;
+  letter-spacing: 0.005em;
+  color: var(--text);
+}
+.answer-text .md-block p:has(> strong:only-child) strong {
+  font-weight: 650;
+}
+.answer-text .md-block p:has(> strong:only-child):first-child {
+  margin-top: 0;
 }
 .answer-text .md-block h2,
 .answer-text .md-block h3,
@@ -2707,35 +2759,35 @@ body {
   line-height: 1.4;
   letter-spacing: -0.01em;
   color: var(--text);
-  margin: 1.65em 0 0.7em;
+  margin: 1.35em 0 0.55em;
   border: 0;
   padding: 0;
 }
 .answer-text .md-block h2 {
-  font-size: 1.28em;
+  font-size: 1.12em;
   font-weight: 700;
 }
 .answer-text .md-block h3 {
-  font-size: 1.12em;
+  font-size: 1.05em;
 }
 .answer-text .md-block h4 {
-  font-size: 1.02em;
+  font-size: 1em;
   font-weight: 600;
   color: var(--text-soft, var(--text));
 }
 .answer-text .md-block ul,
 .answer-text .md-block ol {
-  margin: 0 0 1.15em;
-  padding-left: 1.5rem;
+  margin: 0 0 0.95em;
+  padding-left: 1.45rem;
 }
 .answer-text .md-block li {
   font-size: inherit;
   line-height: inherit;
-  margin: 0.45em 0;
+  margin: 0.4em 0;
   padding-left: 0.15rem;
 }
 .answer-text .md-block li > p {
-  margin: 0.35em 0;
+  margin: 0.3em 0;
 }
 .answer-text .md-block li::marker {
   color: var(--muted);
@@ -2827,18 +2879,19 @@ body {
 }
 /* Chat dock thread: a bit more padding so prose isn't edge-to-edge. */
 .source-chat-thread .chat-a {
-  padding: 1.15rem 1.2rem 1.25rem;
+  padding: 1rem 1.05rem 1.1rem;
   border-radius: 12px;
 }
 .source-chat-thread .chat-q {
-  line-height: 1.55;
-  padding: 0.7rem 0.95rem;
+  font-size: var(--ovp-text-sm, 0.92rem);
+  line-height: 1.5;
+  padding: 0.6rem 0.85rem;
 }
 .source-chat-thread .answer-text,
 .source-chat-thread .answer-text.reading {
-  font-size: 1.02rem;
-  line-height: 1.88;
-  letter-spacing: 0.02em;
+  font-size: 0.94rem;
+  line-height: 1.75;
+  letter-spacing: 0.01em;
 }
 .cite-marker {
   border: 0;
