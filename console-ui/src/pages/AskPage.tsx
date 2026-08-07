@@ -30,8 +30,8 @@ import {
   displayUserQuestion,
   groundCitesOnSource,
   normalizeCiteToken,
-  parseChatFocus,
   parseChatTranscript,
+  savedReplayPlan,
 } from '../lib/chatTranscript';
 import { failureHintKey } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
@@ -779,68 +779,70 @@ export default function AskPage() {
     // (ovp:focus_source/theme), and a focused session's unit/card cites only
     // resolve when grounded onto that source's page — exactly what the live
     // dock did. Without this, replay showed "No detail page in this vault"
-    // for every unit (operator report 2026-08-07).
-    fetchChatMarkdown(openChat)
-      .catch(() => '')
-      .then((md) => {
+    // for every unit (operator report 2026-08-07). `null` = load failed —
+    // savedReplayPlan keeps that distinct from an empty chat.
+    Promise.all([
+      fetchChatMarkdown(openChat).catch(() => null),
+      // Agent chats replay from the AUDIT transcript; legacy chats fall back
+      // to the markdown parse. An older server (no session endpoint) or a
+      // replay-read failure must not kill the page.
+      fetchAskSession(openChat).catch(() => ({ turns: [] })),
+    ])
+      .then(([md, session]) => {
         if (cancelled || openChatRef.current !== openChat) return;
-        const focus = parseChatFocus(md);
+        const plan = savedReplayPlan(md, session.turns.length);
         const ground = (cites: AskCitation[]) =>
-          focus.sha ? groundCitesOnSource(cites, focus.sha) : cites;
-        // Agent chats replay from the AUDIT transcript; legacy chats fall
-        // back to the markdown parse. An older server (no session endpoint)
-        // or a replay-read failure must not kill the page.
-        return fetchAskSession(openChat)
-          .catch(() => ({ turns: [] }))
-          .then((session) => {
-            if (cancelled || openChatRef.current !== openChat) return;
-            if (session.turns.length > 0) {
-              setSavedTurns(
-                session.turns.map((turn) => ({
-                  question: displayUserQuestion(turn.question),
-                  errorKey: null,
-                  response: {
-                    answer: turn.answer,
-                    citations: ground(
-                      citationsFromAnswerText(turn.answer, citeLookupRef.current),
-                    ),
-                    verified: null,
-                    context_hits: 0,
-                    chat: openChat,
-                    agent: true,
-                    stopped_reason: turn.stopped_reason,
-                    turn_id: turn.turn_id,
-                    tool_trace: turn.tool_trace,
-                  },
-                })),
-              );
-              return;
-            }
-            const parsed = parseChatTranscript(md);
-            if (parsed.length === 0) {
-              setSavedError(t('ask.chatParseEmpty'));
-              setSavedTurns([]);
-              return;
-            }
-            setSavedTurns(
-              parsed.map((turn) => {
-                const citations = ground(
+          plan.focus.sha ? groundCitesOnSource(cites, plan.focus.sha) : cites;
+        if (plan.kind === 'loadError') {
+          setSavedError(t('ask.chatLoadError'));
+          setSavedTurns([]);
+          return;
+        }
+        if (plan.kind === 'empty') {
+          setSavedError(t('ask.chatParseEmpty'));
+          setSavedTurns([]);
+          return;
+        }
+        if (plan.kind === 'session') {
+          setSavedTurns(
+            session.turns.map((turn) => ({
+              question: displayUserQuestion(turn.question),
+              errorKey: null,
+              response: {
+                answer: turn.answer,
+                citations: ground(
                   citationsFromAnswerText(turn.answer, citeLookupRef.current),
-                );
-                return {
-                  question: turn.question,
-                  errorKey: null,
-                  response: {
-                    answer: turn.answer,
-                    citations,
-                    verified: null,
-                    context_hits: citations.length,
-                    chat: openChat,
-                  },
-                };
-              }),
+                ),
+                verified: null,
+                context_hits: 0,
+                chat: openChat,
+                agent: true,
+                stopped_reason: turn.stopped_reason,
+                turn_id: turn.turn_id,
+                tool_trace: turn.tool_trace,
+              },
+            })),
+          );
+          return;
+        }
+        setSavedTurns(
+          plan.parsedTurns.map((turn) => {
+            const citations = ground(
+              citationsFromAnswerText(turn.answer, citeLookupRef.current),
             );
-          });
+            return {
+              question: turn.question,
+              errorKey: null,
+              response: {
+                answer: turn.answer,
+                citations,
+                verified: null,
+                context_hits: citations.length,
+                chat: openChat,
+              },
+            };
+          }),
+        );
       })
       .catch(() => {
         if (!cancelled && openChatRef.current === openChat) {

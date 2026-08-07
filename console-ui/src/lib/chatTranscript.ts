@@ -69,6 +69,40 @@ export function groundCitesOnSource<
   });
 }
 
+/** Replay-source decision for a saved chat (`/ask/chat/:id`) — pure, so the
+ * error-priority matrix is testable without rendering:
+ * - audit session has turns → replay those (richest: trails + stop reasons);
+ * - else markdown parses → replay the markdown turns;
+ * - else markdown LOADED but has no turns → honest "empty" state;
+ * - else (markdown load failed too) → load error, never "empty"
+ *   (CodeRabbit: a swallowed fetch failure must not masquerade as an
+ *   empty-but-fine chat).
+ * `md === null` means the markdown fetch failed. Focus markers ride along —
+ * the caller grounds citations with them. */
+export interface SavedReplayPlan {
+  focus: { sha: string | null; theme: string | null };
+  kind: 'session' | 'markdown' | 'empty' | 'loadError';
+  parsedTurns: { question: string; answer: string }[];
+}
+
+export function savedReplayPlan(
+  md: string | null,
+  sessionTurnCount: number,
+): SavedReplayPlan {
+  const focus = parseChatFocus(md ?? '');
+  if (sessionTurnCount > 0) {
+    return { focus, kind: 'session', parsedTurns: [] };
+  }
+  if (md === null) {
+    return { focus, kind: 'loadError', parsedTurns: [] };
+  }
+  const parsedTurns = parseChatTranscript(md);
+  if (parsedTurns.length === 0) {
+    return { focus, kind: 'empty', parsedTurns: [] };
+  }
+  return { focus, kind: 'markdown', parsedTurns };
+}
+
 /** Focus markers from a saved chat's header (`ovp:focus_source` /
  * `ovp:focus_theme`) — the replay surface needs them to ground citations
  * exactly like the live dock did. */

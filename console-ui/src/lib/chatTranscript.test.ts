@@ -3,6 +3,7 @@ import {
   citationsInOrder,
   groundCitesOnSource,
   parseChatFocus,
+  savedReplayPlan,
   citeLinkTarget,
   displayUserQuestion,
   normalizeCiteToken,
@@ -120,5 +121,30 @@ describe('focused-session replay grounding', () => {
     expect(out[0].link_target).toBe(`/library/${SHA}?tab=memory`);
     expect(out[1].link_target).toBe(`/library/${SHA}`);
     expect(out[2].link_target).toBe('/knowledge#ck-x');
+  });
+});
+
+describe('savedReplayPlan — replay source + error priority', () => {
+  const MD = '# Ask — ts\n<!-- ovp:focus_source=abc123 -->\n\n**Q:** hi\n\n**A:** there [unit:u-1]\n';
+
+  it('audit session wins when it has turns (focus still parsed)', () => {
+    const plan = savedReplayPlan(MD, 2);
+    expect(plan.kind).toBe('session');
+    expect(plan.focus.sha).toBe('abc123');
+  });
+
+  it('falls back to markdown turns when the session is empty', () => {
+    const plan = savedReplayPlan(MD, 0);
+    expect(plan.kind).toBe('markdown');
+    expect(plan.parsedTurns).toHaveLength(1);
+    expect(plan.parsedTurns[0].question).toBe('hi');
+  });
+
+  it('markdown loaded but turn-less is EMPTY; load failure is LOAD ERROR', () => {
+    expect(savedReplayPlan('# Ask — ts\n', 0).kind).toBe('empty');
+    // Both fetches failed: must NOT masquerade as an empty-but-fine chat.
+    expect(savedReplayPlan(null, 0).kind).toBe('loadError');
+    // …but a live audit session still replays even without markdown.
+    expect(savedReplayPlan(null, 3).kind).toBe('session');
   });
 });
