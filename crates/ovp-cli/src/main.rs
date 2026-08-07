@@ -260,6 +260,17 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// OPS — late URL dedup for pre-intake legacy sources: processed copies
+    /// sharing a URL are parked under the duplicates dir (oldest copy kept),
+    /// with normal Duplicate ledger records. Packs and crystal citations stay
+    /// resolvable. Dry-run by default; pass --apply to move files.
+    IntakeDedupUrls {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Actually move files and append ledger records (default: plan only).
+        #[arg(long)]
+        apply: bool,
+    },
     /// PRODUCT — materialize Pinboard bookmarks as notes in
     /// `50-Inbox/02-Pinboard/` (URL-deduped against `.ovp/pinboard-sync.jsonl`
     /// and the intake ledger). Offline via `--fixture <export.json>`; live API
@@ -1610,6 +1621,9 @@ fn main() -> ExitCode {
                 run_id,
                 dry_run,
             })
+        }
+        Cmd::IntakeDedupUrls { vault_root, apply } => {
+            commands::intake::run_dedup_urls(&vault_root, apply, today_iso())
         }
         Cmd::PinboardSync {
             vault_root,

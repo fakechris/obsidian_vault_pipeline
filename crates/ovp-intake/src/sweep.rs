@@ -142,6 +142,12 @@ pub fn sweep_intake(
     let mut known_hashes = known_content_hashes(&existing);
     known_hashes.extend(extra_known_hashes.iter().cloned());
     let mut urls = known_urls(&existing);
+    // The ledger only reaches back to its own go-live; sources processed
+    // BEFORE intake existed are invisible to `known_urls`, so a re-clip of a
+    // legacy article used to slip through as a second full copy (58 such
+    // pairs found in the live vault, 2026-08-07). The processed tree itself
+    // is the missing dedup authority.
+    urls.extend(processed_tree_urls(&cfg.vault_root, &layout)?);
     let flagged = flagged_hashes(&existing);
 
     let mut outcome = SweepOutcome { dry_run, ..Default::default() };
@@ -274,6 +280,105 @@ pub fn sweep_intake(
         }
     }
     Ok(outcome)
+}
+
+/// URLs of every source already living under the processed tree (including
+/// previously parked duplicates). Best-effort per file: an unparseable or
+/// URL-less note contributes nothing — this is a dedup net, not a validator.
+pub fn processed_tree_urls(
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<HashSet<String>, String> {
+    let root = vault_root.join(layout.processed_root());
+    let mut urls = HashSet::new();
+    if !root.is_dir() {
+        return Ok(urls);
+    }
+    for path in collect_markdown(&root)? {
+        if let Ok(s) = read_source_from_path(&path)
+            && !s.source_url.is_empty()
+        {
+            urls.insert(s.source_url);
+        }
+    }
+    Ok(urls)
+}
+
+/// One planned/performed parking from [`park_legacy_url_duplicates`].
+#[derive(Debug)]
+pub struct LegacyDupGroup {
+    pub url: String,
+    /// Vault-relative path of the copy KEPT (the oldest by path order —
+    /// processed paths embed `YYYY-MM/YYYY-MM-DD_…`, so path order is capture
+    /// order).
+    pub kept: String,
+    /// Ledger records for the parked newer copies.
+    pub parked: Vec<IntakeRecord>,
+}
+
+/// Late disposition for pre-intake legacy copies: find processed sources
+/// sharing a URL and park every copy but the oldest under the duplicates dir,
+/// with a normal `Duplicate` ledger record (`dup_of: url:<u>`). Exactly the
+/// disposition intake would have applied had the ledger existed at capture
+/// time. Parked copies KEEP their reader pack and source row, so crystal
+/// claims citing their case ids stay resolvable — this collapses the library
+/// and the counts, it never breaks provenance. Idempotent: a second run finds
+/// no groups (the walk excludes the duplicates dir).
+pub fn park_legacy_url_duplicates(
+    cfg: &IntakeConfig,
+    dry_run: bool,
+) -> Result<Vec<LegacyDupGroup>, String> {
+    let layout = VaultLayout::new();
+    let ledger_path = cfg.vault_root.join(layout.intake_ledger());
+    let log_path = cfg.vault_root.join(layout.pipeline_log());
+    let root = cfg.vault_root.join(layout.processed_root());
+    // The duplicates tree lives inside the processed root — exclude it from
+    // the walk (already-parked copies must not re-enter grouping).
+    let dup_root = root.join("duplicates");
+
+    let mut by_url: std::collections::BTreeMap<String, Vec<(PathBuf, String)>> =
+        std::collections::BTreeMap::new();
+    if root.is_dir() {
+        for path in collect_markdown(&root)? {
+            if path.starts_with(&dup_root) {
+                continue; // already parked
+            }
+            let Ok(s) = read_source_from_path(&path) else { continue };
+            if s.source_url.is_empty() {
+                continue;
+            }
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+            by_url.entry(s.source_url).or_default().push((path, hex_sha256(&bytes)));
+        }
+    }
+
+    let mut groups = Vec::new();
+    for (url, mut copies) in by_url {
+        if copies.len() < 2 {
+            continue;
+        }
+        copies.sort_by(|a, b| a.0.cmp(&b.0));
+        let kept = rel_to(&cfg.vault_root, &copies[0].0);
+        let mut parked = Vec::new();
+        for (path, sha256) in &copies[1..] {
+            let from = rel_to(&cfg.vault_root, path);
+            let rec = dispose_duplicate(
+                cfg,
+                &layout,
+                path,
+                &from,
+                sha256,
+                format!("url:{url}"),
+                &ledger_path,
+                &log_path,
+                dry_run,
+            )?;
+            parked.push(rec);
+        }
+        groups.push(LegacyDupGroup { url, kept, parked });
+    }
+    Ok(groups)
 }
 
 #[allow(clippy::too_many_arguments)]
