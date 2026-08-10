@@ -9,24 +9,28 @@
  * legacy case ids whose pack has no source sha render as plain text
  * (handoff note 5: never navigate to a 404). */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import FocusChatPanel from '../components/FocusChatPanel';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import { ClaimPill, EmptyState, ModelGate } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchThemePages } from '../lib/api';
+import { fetchThemePages, fetchThemes } from '../lib/api';
 import {
+  UNCLASSIFIED_ID,
   caseCanonicalIds,
   isMiscTheme,
   parsePageBody,
   sourcesByCase,
   themeClaims,
   themeFromRoute,
+  themeRoute,
+  type ThemeRouteKey,
 } from '../lib/derive';
 import type {
   ClaimRow,
   IndexModel,
   SourceRow,
+  ThemeCount,
   ThemePagesResponse,
 } from '../lib/types';
 import { useModel } from '../model';
@@ -242,16 +246,26 @@ function ClaimCard({
 
 function ThemeBody({
   model,
-  theme,
+  routeKey,
+  graphId,
   displayName,
+  renamed,
 }: {
   model: IndexModel;
-  theme: string;
+  routeKey: ThemeRouteKey;
+  /** Value sent to /api/graph?scope=theme&theme= — the id (as a string) for
+   * id routes, else the legacy label. The server matches numeric ids against
+   * `theme_id` and non-numeric against the label. */
+  graphId: string;
   displayName: string;
+  /** Honest empty-state signal: the route resolves to NO active claims. When
+   * true the page shows a "renamed or merged" message instead of the generic
+   * "no active claims" one (which reads like a data-loss bug). */
+  renamed?: { closest: ThemeCount[] };
 }) {
   const { t, lang, setLang } = useI18n();
   const location = useLocation();
-  const claims = useMemo(() => themeClaims(model.claims, theme), [model, theme]);
+  const claims = useMemo(() => themeClaims(model.claims, routeKey), [model, routeKey]);
   const byCase = useMemo(() => sourcesByCase(model), [model]);
   // Chat-on-this-knowledge dock (same URL contract as the source page:
   // ?chat=1 opens empty; ?chat=<stem> resumes that session in-context).
@@ -317,7 +331,7 @@ function ThemeBody({
     }
     return n;
   }, [claims, zhByKey]);
-  const pageMeta = themePages?.pages.find((p) => p.label === theme);
+  const pageMeta = themePages?.pages.find((p) => p.label === displayName);
   const hasSectionsZh = !!(pageMeta?.sections_zh && pageMeta.sections_zh.length > 0);
 
   // Anchor handling: #<claim_id> scrolls to + highlights the claim card
@@ -350,10 +364,30 @@ function ThemeBody({
   return (
     <div className="grid two-col theme-detail-layout">
       <div className="theme-main">
-        <TopicOverview theme={theme} />
+        <TopicOverview theme={displayName} />
         {claims.length === 0 ? (
           <EmptyState>
-            <p>{t('theme.empty')}</p>
+            <p>
+              {renamed
+                ? t('theme.renamed', { name: displayName })
+                : t('theme.empty')}
+            </p>
+            {renamed && renamed.closest.length > 0 && (
+              <p className="tiny muted" style={{ marginTop: '0.4rem' }}>
+                {t('theme.renamedHint')}
+              </p>
+            )}
+            {renamed && renamed.closest.length > 0 && (
+              <ul className="tiny" style={{ listStyle: 'none', padding: 0, margin: '0.4rem 0' }}>
+                {renamed.closest.slice(0, 5).map((c) => (
+                  <li key={c.id ?? c.theme} style={{ margin: '0.2rem 0' }}>
+                    <Link to={themeRoute({ id: c.id ?? null, theme: c.theme })}>
+                      {c.theme} ({c.count})
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
             <Link className="tiny" to="/knowledge">
               {t('theme.backToKnowledge')} →
             </Link>
@@ -422,13 +456,13 @@ function ThemeBody({
         )}
         <div className="card theme-rail-card">
           <h3 style={{ marginBottom: '0.6rem' }}>{t('theme.graph')}</h3>
-          <KnowledgeGraph scope="theme" id={theme} height={360} />
+          <KnowledgeGraph scope="theme" id={graphId} height={360} />
           <div className="graph-caption">{t('theme.graphCaption')}</div>
         </div>
       </aside>
       {!STATIC_MODE && claims.length > 0 && (
         <FocusChatPanel
-          focus={{ kind: 'theme', theme }}
+          focus={{ kind: 'theme', theme: displayName }}
           title={displayName}
           metaLine={t('theme.chatMetaLine', {
             claims: claims.length,
@@ -446,17 +480,99 @@ function ThemeBody({
 export default function ThemeDetailPage() {
   const { t } = useI18n();
   const { theme: rawTheme } = useParams<{ theme: string }>();
-  // The '' (no-theme) bucket travels as a sentinel segment — decode it back so
-  // themeClaims filters the unthemed claims and the page renders as Unclassified.
-  const theme = themeFromRoute(rawTheme);
+  const location = useLocation();
+  // Route key: numeric (incl. `-1` Unclassified) → stable community id;
+  // `~none` or a non-numeric string → a LEGACY label URL from before the
+  // id-routing switch (or a bookmark to a since-renamed theme).
+  const routeKey = themeFromRoute(rawTheme);
   const { model, error, loading } = useModel();
 
-  // 'misc' displays honestly as "Unclassified"; the route param and all
-  // claim data keep the literal theme key (display layer only).
-  const misc = isMiscTheme(theme);
+  // /api/themes carries id + label + count — used to (a) resolve an id route
+  // to its display label, and (b) redirect legacy label URLs to their current
+  // id route (so a renamed theme's old URL doesn't dead-end).
+  const [themes, setThemes] = useState<ThemeCount[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchThemes()
+      .then((list) => {
+        if (!cancelled) setThemes(list);
+      })
+      .catch(() => {
+        if (!cancelled) setThemes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // LEGACY label redirect: a non-numeric route param is an old label URL.
+  // Resolve it through /api/themes and redirect to the stable id route,
+  // preserving any #claim anchor. A label no longer in the projection is a
+  // renamed/merged theme → fall through to the honest empty state.
+  // COMPUTED, not early-returned: an early return here would skip the
+  // useMemo below once themes resolves and break the hook order (the
+  // SourceDetailPage 2026-07-29 white-screen failure mode) — the Navigate
+  // renders after every hook has run.
+  const redirectTo = (() => {
+    if (routeKey.kind !== 'label' || !themes) return null;
+    const hit = themes.find((th) => th.theme === routeKey.label);
+    return hit && hit.id != null
+      ? `${themeRoute({ id: hit.id, theme: hit.theme })}${location.hash}`
+      : null;
+  })();
+
+  // Resolve the display label for the route key. Id routes look the entry up
+  // by id; label routes (legacy, no redirect target) keep the raw label so
+  // the empty state can name what was lost.
+  const resolved =
+    routeKey.kind === 'id'
+      ? themes?.find((th) => th.id === routeKey.id)
+      : themes?.find((th) => th.theme === routeKey.label);
+  const label =
+    routeKey.kind === 'id' ? resolved?.theme ?? '' : routeKey.label;
+  const misc =
+    routeKey.kind === 'id'
+      ? routeKey.id === UNCLASSIFIED_ID
+      : isMiscTheme(routeKey.label);
   const displayName = misc
     ? t('theme.unclassified')
-    : theme || t('knowledge.untitledTheme');
+    : label || t('knowledge.untitledTheme');
+
+  // For the honest empty state: when the route resolves to no active claims,
+  // offer the closest surviving themes (by label similarity) as candidates
+  // for where the content may have moved.
+  const closest = useMemo(() => {
+    if (!themes) return [];
+    const needle = label.toLowerCase();
+    if (!needle) return [];
+    return themes
+      .map((th) => ({
+        th,
+        score: th.theme.toLowerCase().includes(needle)
+          ? 2
+          : needle.includes(th.theme.toLowerCase())
+            ? 1
+            : 0,
+      }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || b.th.count - a.th.count)
+      .slice(0, 5)
+      .map((x) => x.th);
+  }, [themes, label]);
+
+  const graphId = routeKey.kind === 'id' ? String(routeKey.id) : routeKey.label;
+
+  // "Renamed or merged" applies only when the route did NOT resolve to a
+  // live theme (unknown id, or a legacy label with no redirect target) —
+  // a resolved theme that merely has no active claims right now must keep
+  // the plain empty state. The unclassified bucket always counts as
+  // resolved (it may be absent from /api/themes).
+  const unresolved =
+    !misc && themes != null && resolved == null && redirectTo == null;
+
+  if (redirectTo) {
+    return <Navigate to={redirectTo} replace />;
+  }
 
   return (
     <ModelGate loading={loading} error={error}>
@@ -471,7 +587,13 @@ export default function ThemeDetailPage() {
               {t('theme.unclassifiedNote')}
             </p>
           )}
-          <ThemeBody model={model} theme={theme} displayName={displayName} />
+          <ThemeBody
+            model={model}
+            routeKey={routeKey}
+            graphId={graphId}
+            displayName={displayName}
+            renamed={unresolved ? { closest } : undefined}
+          />
         </>
       )}
     </ModelGate>

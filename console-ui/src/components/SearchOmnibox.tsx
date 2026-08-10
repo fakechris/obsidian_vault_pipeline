@@ -23,6 +23,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n, type MsgKey } from '../i18n';
 import { fetchSearchHits, fetchThemes } from '../lib/api';
+import { themeRoute } from '../lib/derive';
 import { isReactImeComposing } from '../lib/ime';
 import { EmptyState } from './ui';
 import type { FindHit, ThemeCount } from '../lib/types';
@@ -223,10 +224,10 @@ export default function SearchOmnibox({ variant, onClose }: SearchOmniboxProps) 
     for (const theme of themes) {
       if (theme.theme.toLowerCase().includes(q)) {
         push({
-          key: `theme:${theme.theme}`,
+          key: `theme:${theme.id ?? theme.theme}`,
           group: 'theme',
           label: `${theme.theme} (${theme.count})`,
-          to: `/knowledge/theme/${encodeURIComponent(theme.theme)}`,
+          to: themeRoute({ id: theme.id ?? null, theme: theme.theme }),
         });
       }
     }

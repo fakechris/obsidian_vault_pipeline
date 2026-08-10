@@ -375,6 +375,7 @@ mod tests {
             claim_id: format!("cl-{claim_key}"),
             claim: claim.into(),
             theme: "t".into(),
+            theme_id: None,
             source_cases: vec![],
             citations: vec![],
             provenance_score: 0.9,

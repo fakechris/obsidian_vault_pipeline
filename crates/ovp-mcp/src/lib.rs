@@ -1066,6 +1066,7 @@ mod tests {
             claim_id: id.into(),
             claim: format!("claim text for {key}"),
             theme: "Agent memory".into(),
+            theme_id: None,
             source_cases: vec![case.into()],
             citations: vec![DurableCitation {
                 case_id: case.into(),

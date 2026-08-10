@@ -479,11 +479,11 @@ export default function KnowledgeGraph({
       const sha = n.id.slice('source:'.length);
       if (knownShas.has(sha)) navigate(`/library/${sha}`);
     } else if (n.type === 'claim') {
-      // Straight to the claim's theme page, anchored to the claim card. Using
-      // the node's own `theme` skips the /knowledge# bounce (and its
-      // dead-end when a claim has no theme — themeRoute routes '' too).
+      // Straight to the claim's theme page, anchored to the claim card.
+      // Route by the stable community id (survives a relabel); fall back to
+      // the label for pre-theme projections where the node has no theme_id.
       const claimId = n.claim_id ?? n.id.slice('claim:'.length);
-      navigate(`${themeRoute(n.theme)}#${claimId}`);
+      navigate(`${themeRoute({ id: n.theme_id ?? null, theme: n.theme ?? '' })}#${claimId}`);
     }
   };
 

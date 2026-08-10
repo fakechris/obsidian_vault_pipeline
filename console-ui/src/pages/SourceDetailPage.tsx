@@ -31,6 +31,7 @@ import {
   sourceDisplayTitle,
   sourceThemes,
   themeRoute,
+  UNCLASSIFIED_ID,
   type LibraryFilter,
 } from '../lib/derive';
 import { buildMemoryTitleMap } from '../lib/chatTranscript';
@@ -237,10 +238,10 @@ function SupportedThemes({ citing }: { citing: ClaimRow[] }) {
     <div className="card">
       <h3 style={{ marginBottom: '0.6rem' }}>{t('source.supportedThemes')}</h3>
       <ul className="citing-list">
-        {themes.map(({ theme, count }) => (
-          <li key={theme || '(unclassified)'}>
-            <Link to={themeRoute(theme)}>
-              {isMiscTheme(theme)
+        {themes.map(({ id, theme, count }) => (
+          <li key={(id != null ? `i${id}` : `t${theme}`) || '(unclassified)'}>
+            <Link to={themeRoute({ id: id ?? null, theme })}>
+              {isMiscTheme(theme) || id === UNCLASSIFIED_ID
                 ? t('theme.unclassified')
                 : theme || t('knowledge.untitledTheme')}
             </Link>{' '}

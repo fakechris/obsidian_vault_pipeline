@@ -296,6 +296,7 @@ mod tests {
             claim_id: format!("id-{key}"),
             claim: claim.into(),
             theme: "t".into(),
+            theme_id: None,
             source_cases: cites.iter().map(|(c, _)| (*c).to_string()).collect(),
             citations: cites
                 .iter()
