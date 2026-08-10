@@ -770,11 +770,18 @@ fn source_overview_response(base: BaseGraph, params: &GraphParams) -> GraphRespo
     let theme_ok = |sid: &str| -> bool {
         match &params.theme {
             None => true,
+            // Same id-or-label matching as every other theme filter: the
+            // portal routes by numeric community id since the id-routing
+            // switch — a label-only comparison here returned zero sources
+            // for `?theme=<id>&persp=source` (CodeRabbit, PR #438).
             Some(t) => source_claims
                 .get(sid)
                 .map(|claims| {
                     claims.iter().any(|c| {
-                        base.nodes.get(c).and_then(|n| n.theme.as_deref()) == Some(t.as_str())
+                        base.nodes
+                            .get(c)
+                            .map(|n| theme_param_matches(t, n.theme.as_deref(), n.theme_id))
+                            .unwrap_or(false)
                     })
                 })
                 .unwrap_or(false),
@@ -1785,6 +1792,33 @@ mod tests {
         assert_eq!(resp.communities.len(), 1);
         assert_eq!(resp.communities[0].size, 2);
         assert_eq!(resp.communities[0].label, "alpha");
+    }
+
+    #[test]
+    fn source_overview_theme_filter_matches_numeric_ids() {
+        // The portal routes themes by community id since the id-routing
+        // switch — `?theme=<id>&persp=source` must filter by theme_id, not
+        // only the label (CodeRabbit, PR #438: label-only comparison
+        // returned zero sources for every id URL).
+        let mut records = sample_records();
+        for r in &mut records {
+            if r.theme == "alpha" {
+                r.theme_id = Some(7);
+            }
+        }
+        let mut p = params(GraphMode::Overview);
+        p.persp = Perspective::Source;
+        p.theme = Some("7".into());
+        let resp = build_graph(&records, None, &p).unwrap();
+        let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"source:case1"), "alpha-cited source kept: {ids:?}");
+        assert!(ids.contains(&"source:case2"));
+        assert!(!ids.contains(&"source:case9"), "gamma-only source filtered out");
+        // Label URLs (legacy) still work through the same filter.
+        p.theme = Some("gamma".into());
+        let resp = build_graph(&records, None, &p).unwrap();
+        let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["source:case9"]);
     }
 
     #[test]

@@ -269,8 +269,10 @@ pub struct ClaimRow {
     /// Stable semantic-theme community id (`themes.json` `majority_community`),
     /// additive: pre-existing indexes deserialize as None. The portal routes
     /// themes by this id (not the mutable `theme` label), so a `crystal-themes`
-    /// relabel doesn't orphan existing URLs. `None` on pre-theme indexes and
-    /// on claims whose cited packs all map to noise/unmapped.
+    /// relabel doesn't orphan existing URLs. `None` means a PRE-THEME
+    /// projection (no `themes.json` at build time); when the projection
+    /// exists, unmapped/noise claims get `Some(UNCLASSIFIED_ID)` — the
+    /// unclassified bucket, not `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_id: Option<i64>,
     pub status: ClaimStatus,

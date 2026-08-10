@@ -509,17 +509,17 @@ export default function ThemeDetailPage() {
   // Resolve it through /api/themes and redirect to the stable id route,
   // preserving any #claim anchor. A label no longer in the projection is a
   // renamed/merged theme → fall through to the honest empty state.
-  if (routeKey.kind === 'label' && themes) {
+  // COMPUTED, not early-returned: an early return here would skip the
+  // useMemo below once themes resolves and break the hook order (the
+  // SourceDetailPage 2026-07-29 white-screen failure mode) — the Navigate
+  // renders after every hook has run.
+  const redirectTo = (() => {
+    if (routeKey.kind !== 'label' || !themes) return null;
     const hit = themes.find((th) => th.theme === routeKey.label);
-    if (hit && hit.id != null) {
-      return (
-        <Navigate
-          to={`${themeRoute({ id: hit.id, theme: hit.theme })}${location.hash}`}
-          replace
-        />
-      );
-    }
-  }
+    return hit && hit.id != null
+      ? `${themeRoute({ id: hit.id, theme: hit.theme })}${location.hash}`
+      : null;
+  })();
 
   // Resolve the display label for the route key. Id routes look the entry up
   // by id; label routes (legacy, no redirect target) keep the raw label so
@@ -562,6 +562,18 @@ export default function ThemeDetailPage() {
 
   const graphId = routeKey.kind === 'id' ? String(routeKey.id) : routeKey.label;
 
+  // "Renamed or merged" applies only when the route did NOT resolve to a
+  // live theme (unknown id, or a legacy label with no redirect target) —
+  // a resolved theme that merely has no active claims right now must keep
+  // the plain empty state. The unclassified bucket always counts as
+  // resolved (it may be absent from /api/themes).
+  const unresolved =
+    !misc && themes != null && resolved == null && redirectTo == null;
+
+  if (redirectTo) {
+    return <Navigate to={redirectTo} replace />;
+  }
+
   return (
     <ModelGate loading={loading} error={error}>
       {model && (
@@ -580,7 +592,7 @@ export default function ThemeDetailPage() {
             routeKey={routeKey}
             graphId={graphId}
             displayName={displayName}
-            renamed={{ closest }}
+            renamed={unresolved ? { closest } : undefined}
           />
         </>
       )}

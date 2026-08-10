@@ -30,7 +30,11 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
-const SCHEMA_VERSION: &str = "3";
+// v4: claims.theme_id (stable community routing, 2026-08-09). A version
+// bump is MANDATORY for any DDL change: the reader trusts the stored
+// version, so an old shadow without the column would otherwise pass the
+// check and then fail at SELECT time instead of requesting a rebuild.
+const SCHEMA_VERSION: &str = "4";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -1523,6 +1527,30 @@ mod tests {
                 sampled: 6,
             }
         );
+    }
+
+    #[test]
+    fn old_schema_shadow_is_rejected_with_a_rebuild_hint() {
+        // v3 shadows lack claims.theme_id — the reader must reject them by
+        // VERSION (loud, actionable) instead of passing the check and dying
+        // at SELECT time (CodeRabbit, PR #438).
+        let tmp = test_dir();
+        let m = model();
+        let ev = evidence();
+        let db = tmp.path().join("candidate.sqlite");
+        build_into(&db, &m, Some(&ev)).unwrap();
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute(
+                "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+                [],
+            )
+            .unwrap();
+        }
+        let err = read_index_sqlite_at(&db).unwrap_err();
+        assert!(err.contains("rebuild the projection"), "unexpected error: {err}");
+        let err = read_evidence_sqlite_at(&db).unwrap_err();
+        assert!(err.contains("rebuild the projection"), "unexpected error: {err}");
     }
 
     #[test]

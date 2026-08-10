@@ -252,7 +252,10 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
           )}
           <div className="theme-wall">
             {wall.map((g) => (
-              <ThemeCard key={g.theme || '(untitled)'} group={g} />
+              <ThemeCard
+                key={g.id != null ? `id:${g.id}` : g.theme || '(untitled)'}
+                group={g}
+              />
             ))}
           </div>
         </>

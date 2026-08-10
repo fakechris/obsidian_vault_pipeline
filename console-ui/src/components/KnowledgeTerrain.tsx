@@ -264,7 +264,13 @@ export default function KnowledgeTerrain({
             // Include the claim TEXT: a rewrite can keep id/theme/sources yet
             // change what the tooltip must show, and claim_id can collide across
             // runs, so text is what makes the signature honest.
-            .map((c) => `${c.claim_id}:${c.theme ?? ''}:${c.claim}:${c.sources.join(',')}`)
+            // theme_id rides along: a projection rebuild can reassign the
+            // community id while keeping the label, and crystal clicks route
+            // by id — a stale id would open the previous community's page.
+            .map(
+              (c) =>
+                `${c.claim_id}:${c.theme ?? ''}:${c.theme_id ?? ''}:${c.claim}:${c.sources.join(',')}`,
+            )
             .join('|')
         : '',
     [model],
