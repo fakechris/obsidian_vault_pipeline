@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sortThemeWall, type ThemeGroup } from './derive';
 
 const g = (theme: string, total: number): ThemeGroup => ({
+  id: null,
   theme,
   total,
   durable: total,

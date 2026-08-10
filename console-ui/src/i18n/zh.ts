@@ -470,6 +470,8 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.legacySource': '旧源——该 vault 中没有对应的详情页。',
   'theme.strength': '强度',
   'theme.empty': '没有活跃主张属于这个主题。',
+  'theme.renamed': '此主题已更名或合并,不再以"{name}"存在。',
+  'theme.renamedHint': '相关主张可能已迁移到下列主题:',
   'theme.backToKnowledge': '全部主题',
   'theme.graph': '主题图谱',
   'theme.graphCaption': '本主题的主张与其引用的源。单击节点看摘要并打开；悬停高亮其邻域。',

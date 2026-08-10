@@ -531,6 +531,7 @@ mod tests {
             claim_id: "id-1".into(),
             claim: "A durable claim.".into(),
             theme: "Theme A".into(),
+            theme_id: None,
             source_cases: vec!["case1".into()],
             citations: vec![DurableCitation {
                 case_id: "case1".into(),
@@ -596,6 +597,7 @@ mod tests {
                     claim_key: Some("ck-abc123".into()),
                     claim: "A durable claim.".into(),
                     theme: Some("Theme A".into()),
+                    theme_id: None,
                     status: ClaimStatus::Durable,
                     sources: vec!["case1".into()],
                     strength: Some("supported".into()),
@@ -608,6 +610,7 @@ mod tests {
                     claim_key: None,
                     claim: "caveated".into(),
                     theme: Some("Theme A".into()),
+                    theme_id: None,
                     status: ClaimStatus::Caveated,
                     sources: vec!["case1".into()],
                     strength: None,

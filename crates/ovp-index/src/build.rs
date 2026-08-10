@@ -15,7 +15,7 @@ use std::path::Path;
 
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
-use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::read_source_from_path;
@@ -982,6 +982,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             claim_key: Some(rec.claim_key.clone()),
             claim: rec.claim.clone(),
             theme: (!rec.theme.is_empty()).then(|| rec.theme.clone()),
+            theme_id: None,
             status,
             sources: rec.source_cases.clone(),
             strength: enum_str(&rec.strength),
@@ -1013,6 +1014,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 claim_key: None,
                 claim: entry.claim,
                 theme: (!entry.theme.is_empty()).then_some(entry.theme),
+                theme_id: None,
                 status: ClaimStatus::Caveated,
                 sources,
                 strength: enum_str(&entry.strength),
@@ -1031,6 +1033,18 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     // every index build. Without themes.json the ledger theme passes through.
     if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
         for row in claims.iter_mut() {
+            // `majority_community` is the STABLE grouping identity (community
+            // id); `majority_label` resolves it to the presentation label.
+            // Store both so the portal can route by id while displaying the
+            // (mutable) label — a `crystal-themes` relabel changes the label
+            // but not the id, keeping existing theme URLs valid. Claims whose
+            // cited packs all map to noise/unmapped get the `UNCLASSIFIED_ID`
+            // sentinel so the Unclassified bucket has a routable id too.
+            row.theme_id = Some(
+                themes
+                    .majority_community(&row.sources)
+                    .unwrap_or(UNCLASSIFIED_ID),
+            );
             row.theme = Some(
                 themes
                     .majority_label(&row.sources)

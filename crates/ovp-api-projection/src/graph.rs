@@ -152,6 +152,11 @@ pub struct GNode {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Stable semantic-theme community id (claims only) — the portal routes
+    /// themes by this id, so graph node clicks survive a `crystal-themes`
+    /// relabel. None on unit/source nodes and pre-theme projections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strength: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,6 +283,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             node_type: "claim".into(),
             label: claim_label(&rec.claim),
             theme: Some(rec.theme.clone()),
+            theme_id: rec.theme_id,
             strength: Some(format!("{:?}", rec.strength).to_lowercase()),
             url: None,
             degree: 0,
@@ -299,6 +305,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     cit.quote.clone()
                 },
                 theme: None,
+                theme_id: None,
                 strength: None,
                 url: None,
                 degree: 0,
@@ -327,6 +334,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                         .and_then(|s| s.title.clone())
                         .unwrap_or_else(|| pack.title.clone()),
                     theme: None,
+                    theme_id: None,
                     strength: None,
                     url: src.and_then(|s| s.url.clone()),
                     degree: 0,
@@ -344,6 +352,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     node_type: "source".into(),
                     label: cit.case_id.clone(),
                     theme: None,
+                    theme_id: None,
                     strength: None,
                     url: None,
                     degree: 0,
@@ -1052,6 +1061,7 @@ fn memory_card_nodes(
                 c.title.clone()
             },
             theme: None,
+            theme_id: None,
             strength: None,
             url: None,
             degree: 1,
@@ -1124,6 +1134,7 @@ pub fn source_neighborhood(
             node_type: "source".into(),
             label: src.title.clone().unwrap_or_else(|| sha.to_string()),
             theme: None,
+            theme_id: None,
             strength: None,
             url: src.url.clone(),
             degree: 0,
@@ -1253,7 +1264,7 @@ fn caveated_theme_claims(
     };
     let ledger_ids: HashSet<&str> = records
         .iter()
-        .filter(|r| r.theme == theme)
+        .filter(|r| theme_param_matches(theme, Some(r.theme.as_str()), r.theme_id))
         .map(|r| r.claim_id.as_str())
         .collect();
     let source_lookup: HashMap<&str, &ovp_index::SourceRow> =
@@ -1268,7 +1279,7 @@ fn caveated_theme_claims(
     let mut synthetic: HashMap<String, GNode> = HashMap::new();
     for row in &model.claims {
         if row.status != ovp_index::ClaimStatus::Caveated
-            || row.theme.as_deref() != Some(theme)
+            || !theme_param_matches(theme, row.theme.as_deref(), row.theme_id)
             || ledger_ids.contains(row.claim_id.as_str())
         {
             continue;
@@ -1300,6 +1311,7 @@ fn caveated_theme_claims(
                     node_type: "source".into(),
                     label,
                     theme: None,
+                    theme_id: None,
                     strength: None,
                     url,
                     degree: 0,
@@ -1317,7 +1329,8 @@ fn caveated_theme_claims(
                 id: node_id.clone(),
                 node_type: "claim".into(),
                 label: claim_label(&row.claim),
-                theme: Some(theme.to_string()),
+                theme: row.theme.clone(),
+                theme_id: row.theme_id,
                 strength: row.strength.clone(),
                 url: None,
                 degree: sources.len(),
@@ -1334,6 +1347,18 @@ fn caveated_theme_claims(
     }
     extras.sort_by(|a, b| a.node.id.cmp(&b.node.id));
     (extras, synthetic)
+}
+
+/// Match a theme route param against a claim's theme. The portal routes by
+/// stable community id (`/knowledge/theme/:id`), so a numeric `param` matches
+/// `theme_id`; a non-numeric param is a legacy label URL and matches the
+/// (mutable) `theme` label. Keeps the graph rail consistent with the detail
+/// page under relabel drift.
+fn theme_param_matches(param: &str, theme_label: Option<&str>, theme_id: Option<i64>) -> bool {
+    match param.parse::<i64>() {
+        Ok(id) => theme_id == Some(id),
+        Err(_) => theme_label == Some(param),
+    }
 }
 
 /// Theme-scoped subgraph for the portal's KnowledgeGraph component
@@ -1361,7 +1386,7 @@ pub fn theme_subgraph(
     let mut ledger_claims: Vec<(String, f64)> = base
         .nodes
         .values()
-        .filter(|n| n.node_type == "claim" && n.theme.as_deref() == Some(theme))
+        .filter(|n| n.node_type == "claim" && theme_param_matches(theme, n.theme.as_deref(), n.theme_id))
         .map(|n| (n.id.clone(), n.importance))
         .collect();
     ledger_claims.sort_by(|a, b| {
@@ -1620,6 +1645,7 @@ mod tests {
             claim_id: format!("id-{key}"),
             claim: format!("claim text for {key}"),
             theme: theme.into(),
+            theme_id: None,
             source_cases: cites.iter().map(|(c, _)| (*c).to_string()).collect(),
             citations: cites
                 .iter()
@@ -2288,6 +2314,7 @@ mod tests {
             claim_key: None,
             claim: "caveated-only claim".into(),
             theme: Some("gamma".into()),
+            theme_id: None,
             status: ovp_index::ClaimStatus::Caveated,
             sources: vec!["case1".into()],
             strength: Some("weak".into()),

@@ -185,6 +185,7 @@ CREATE TABLE pack_card_titles(pack_dir TEXT NOT NULL, idx INTEGER NOT NULL, titl
 CREATE INDEX idx_pack_card_titles ON pack_card_titles(pack_dir, idx);
 CREATE TABLE claims(
   claim_id TEXT NOT NULL, claim_key TEXT, claim TEXT NOT NULL, theme TEXT,
+  theme_id INTEGER,
   status TEXT NOT NULL, strength TEXT, run_id TEXT, run_date TEXT, lane TEXT);
 CREATE INDEX idx_claims_id ON claims(claim_id);
 CREATE INDEX idx_claims_status ON claims(status);
@@ -452,8 +453,8 @@ fn build_into(
 
         let mut claim = tx
             .prepare(
-                "INSERT INTO claims(claim_id, claim_key, claim, theme, status, strength,
-                 run_id, run_date, lane) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO claims(claim_id, claim_key, claim, theme, theme_id, status, strength,
+                 run_id, run_date, lane) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             )
             .map_err(|e| format!("prepare claims: {e}"))?;
         let mut claim_src = tx
@@ -469,6 +470,7 @@ fn build_into(
                     &c.claim_key,
                     &c.claim,
                     &c.theme,
+                    &c.theme_id,
                     enum_str(&c.status),
                     &c.strength,
                     &c.run_id,
@@ -973,7 +975,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
 
     let claims = conn
         .prepare(
-            "SELECT rowid, claim_id, claim_key, claim, theme, status, strength, run_id,
+            "SELECT rowid, claim_id, claim_key, claim, theme, theme_id, status, strength, run_id,
              run_date, lane FROM claims ORDER BY rowid",
         )
         .and_then(|mut st| {
@@ -985,14 +987,15 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                         claim_key: r.get(2)?,
                         claim: r.get(3)?,
                         theme: r.get(4)?,
+                        theme_id: r.get(5)?,
                         status: crate::model::ClaimStatus::Caveated,
                         sources: Vec::new(),
-                        strength: r.get(6)?,
-                        run_id: r.get(7)?,
-                        run_date: r.get(8)?,
-                        lane: r.get(9)?,
+                        strength: r.get(7)?,
+                        run_id: r.get(8)?,
+                        run_date: r.get(9)?,
+                        lane: r.get(10)?,
                     },
-                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -1448,6 +1451,7 @@ mod tests {
                 claim_key: Some("ck-abc".into()),
                 claim: "记忆是持久状态 with \"quotes\"".into(),
                 theme: Some("agent-memory".into()),
+                theme_id: Some(0),
                 status: ClaimStatus::Durable,
                 sources: vec!["sha-a".into()],
                 strength: Some("well_supported".into()),

@@ -996,7 +996,14 @@ export function groupByMonth(sources: SourceRow[]): MonthGroup[] {
 
 /** One card of the Knowledge-home theme wall. */
 export interface ThemeGroup {
+  /** Stable community id — the routing key (`/knowledge/theme/:id`). Null
+   * only on pre-theme projections, where the wall falls back to `theme`
+   * (label) routing. */
+  id: number | null;
+  /** Display label (mutable under `crystal-themes` relabel). */
   theme: string;
+  /** Rebuildable Chinese label when the projection carries one. */
+  label_zh?: string;
   total: number;
   durable: number;
   caveated: number;
@@ -1006,6 +1013,18 @@ export interface ThemeGroup {
   /** First durable (else first caveated) claim text — the wall snippet. */
   topClaim?: string;
 }
+
+/** The crystal themes.json Unclassified sentinel — packs the clustering left
+ * unassigned. Routed as `/knowledge/theme/-1`. */
+export const UNCLASSIFIED_ID = -1;
+
+/** A parsed `/knowledge/theme/:theme` route key. The portal routes by stable
+ * community id; a non-numeric param is a LEGACY label URL (pre-id, or a
+ * bookmark from before the id-routing switch) and is resolved/redirected by
+ * the detail page via `/api/themes`. */
+export type ThemeRouteKey =
+  | { kind: 'id'; id: number }
+  | { kind: 'label'; label: string };
 
 /** The synthesizer's fallback bucket — sources that matched no keyword
  * bucket land under 'misc' (key) / 'Miscellaneous' (description). The
@@ -1017,22 +1036,36 @@ export function isMiscTheme(theme: string | null | undefined): boolean {
   return theme == null || theme === '' || theme === 'misc' || theme === 'Miscellaneous';
 }
 
-/** Route segment for the "no theme" bucket ('' theme key). A real theme is
- * never this literal, so it round-trips without colliding — and unthemed
- * claims/cards get a routable landing page instead of dead-ending on an empty
- * `/knowledge/theme/` segment (which falls through to the catch-all redirect). */
+/** Route segment for the "no theme" bucket ('' theme key) on LEGACY label
+ * routes. Id routes use the numeric `-1` (UNCLASSIFIED_ID) directly. */
 export const UNTHEMED_SEGMENT = '~none';
 
-/** Theme key → `/knowledge/theme/...` route, encoding the empty bucket as the
- * routable sentinel above. */
-export function themeRoute(theme: string | null | undefined): string {
-  const key = theme ?? '';
-  return `/knowledge/theme/${key === '' ? UNTHEMED_SEGMENT : encodeURIComponent(key)}`;
+/** Theme key → `/knowledge/theme/...` route. Prefers the stable community
+ * `id` (survives a relabel); falls back to the label for pre-theme
+ * projections (`id === null`), encoding the empty bucket as `~none`. */
+export function themeRoute(key: {
+  id: number | null;
+  theme: string;
+}): string {
+  if (key.id != null) return `/knowledge/theme/${key.id}`;
+  const label = key.theme ?? '';
+  return `/knowledge/theme/${label === '' ? UNTHEMED_SEGMENT : encodeURIComponent(label)}`;
 }
 
-/** Inverse of {@link themeRoute} for a decoded `:theme` route param. */
-export function themeFromRoute(param: string | null | undefined): string {
-  return param == null || param === UNTHEMED_SEGMENT ? '' : param;
+/** Inverse of {@link themeRoute} for a decoded `:theme` route param. Numeric
+ * (incl. `-1`) → id key; `~none` or a non-numeric string → legacy label key. */
+export function themeFromRoute(param: string | null | undefined): ThemeRouteKey {
+  if (param == null || param === UNTHEMED_SEGMENT) return { kind: 'label', label: '' };
+  if (/^-?\d+$/.test(param)) return { kind: 'id', id: Number(param) };
+  return { kind: 'label', label: param };
+}
+
+/** Does a claim belong to the route key? Id key → `theme_id` match (so a
+ * relabel that kept the community id still resolves); label key → legacy
+ * exact-string match against `theme`. */
+export function claimMatchesThemeKey(c: ClaimRow, key: ThemeRouteKey): boolean {
+  if (key.kind === 'id') return c.theme_id === key.id;
+  return (c.theme ?? '') === key.label;
 }
 
 /** Active claims only — the knowledge surface never lists superseded or
@@ -1043,12 +1076,25 @@ export function activeClaims(claims: ClaimRow[]): ClaimRow[] {
   );
 }
 
+/** Stable group key for a claim / a ledger theme entry: id when present,
+ * else the label. Two communities that share a display label but have
+ * distinct ids stay separate (the bug that routing-by-label created). */
+function themeGroupKey(id: number | null | undefined, label: string): string {
+  return id != null ? `i${id}` : `t${label}`;
+}
+
 /** Theme wall from /api/model claims + /api/themes: ledger themes keep the
- * ledger order (count desc); index-only themes append after. Claims without
- * a theme group under '' — the caller decides how to label it. */
+ * ledger order (count desc); index-only themes append after. Groups are
+ * keyed by the STABLE community id when present (so a relabel doesn't split
+ * a community into two cards); pre-theme entries fall back to the label. */
 export function themeWall(
   claims: ClaimRow[],
-  ledgerThemes: { theme: string; count: number }[],
+  ledgerThemes: {
+    id?: number | null;
+    theme: string;
+    count: number;
+    label_zh?: string;
+  }[],
   // Optional case-id → canonical-identity map (see `caseCanonicalIds`):
   // collapses re-captures of the same document so `sources` counts
   // INDEPENDENT documents, not vault copies. Absent = raw case ids.
@@ -1056,21 +1102,22 @@ export function themeWall(
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
   const caseSets = new Map<string, Set<string>>();
-  const ensure = (theme: string): ThemeGroup => {
-    let g = groups.get(theme);
+  const ensure = (id: number | null, theme: string, label_zh?: string): ThemeGroup => {
+    const key = themeGroupKey(id, theme);
+    let g = groups.get(key);
     if (!g) {
-      g = { theme, total: 0, durable: 0, caveated: 0, sources: 0 };
-      groups.set(theme, g);
-      caseSets.set(theme, new Set());
+      g = { id: id ?? null, theme, label_zh, total: 0, durable: 0, caveated: 0, sources: 0 };
+      groups.set(key, g);
+      caseSets.set(key, new Set());
     }
     return g;
   };
   for (const t of ledgerThemes) {
-    ensure(t.theme);
+    ensure(t.id ?? null, t.theme, t.label_zh);
   }
   for (const c of activeClaims(claims)) {
-    const g = ensure(c.theme ?? '');
-    for (const s of c.sources) caseSets.get(g.theme)?.add(canonical?.get(s) ?? s);
+    const g = ensure(c.theme_id ?? null, c.theme ?? '');
+    for (const s of c.sources) caseSets.get(themeGroupKey(g.id, g.theme))?.add(canonical?.get(s) ?? s);
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1082,14 +1129,14 @@ export function themeWall(
     }
   }
   for (const t of ledgerThemes) {
-    const g = groups.get(t.theme);
+    const g = groups.get(themeGroupKey(t.id ?? null, t.theme));
     // Ledger and index normally agree; when they drift mid-run, show the
     // larger count rather than hiding claims.
     if (g) g.total = Math.max(t.count, g.durable + g.caveated);
   }
   for (const g of groups.values()) {
     g.total = Math.max(g.total, g.durable + g.caveated);
-    g.sources = caseSets.get(g.theme)?.size ?? 0;
+    g.sources = caseSets.get(themeGroupKey(g.id, g.theme))?.size ?? 0;
   }
   return [...groups.values()].sort(
     (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
@@ -1192,26 +1239,32 @@ export function failureHintKey(
 
 /** Distinct themes the source's citing claims land in — the source page's
  * "supports this crystal knowledge" rail. Count = active citing claims in
- * that theme; theme order follows count desc then name. */
+ * that theme; theme order follows count desc then name. Each entry carries
+ * the stable community `id` (when present) so the rail links by id. */
 export function sourceThemes(
   citing: ClaimRow[],
-): { theme: string; count: number }[] {
-  const counts = new Map<string, number>();
+): { id: number | null; theme: string; count: number }[] {
+  const counts = new Map<string, { id: number | null; theme: string; count: number }>();
   for (const c of activeClaims(citing)) {
+    const id = c.theme_id ?? null;
     const theme = c.theme ?? '';
-    counts.set(theme, (counts.get(theme) ?? 0) + 1);
+    const key = themeGroupKey(id, theme);
+    const entry = counts.get(key);
+    if (entry) entry.count += 1;
+    else counts.set(key, { id, theme, count: 1 });
   }
-  return [...counts.entries()]
-    .map(([theme, count]) => ({ theme, count }))
-    .sort((a, b) => b.count - a.count || a.theme.localeCompare(b.theme));
+  return [...counts.values()].sort(
+    (a, b) => b.count - a.count || a.theme.localeCompare(b.theme),
+  );
 }
 
 /** Theme claims for the detail page: durable first, then caveated;
- * stable claim_id order within each band. */
-export function themeClaims(claims: ClaimRow[], theme: string): ClaimRow[] {
+ * stable claim_id order within each band. Matches by stable id when the
+ * route is an id route (survives a relabel), else by legacy label. */
+export function themeClaims(claims: ClaimRow[], key: ThemeRouteKey): ClaimRow[] {
   const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
   return activeClaims(claims)
-    .filter((c) => (c.theme ?? '') === theme)
+    .filter((c) => claimMatchesThemeKey(c, key))
     .sort((a, b) => rank(a) - rank(b) || a.claim_id.localeCompare(b.claim_id));
 }
 

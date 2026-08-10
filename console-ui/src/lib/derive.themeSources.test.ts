@@ -99,15 +99,15 @@ describe('sourceThemes', () => {
       { ...claim('c5', 'Zeta', ['case-a']), status: 'rejected' as ClaimRow['status'] },
     ]);
     expect(themes).toEqual([
-      { theme: 'Beta', count: 2 },
-      { theme: 'Alpha', count: 1 },
-      { theme: 'Zeta', count: 1 },
+      { id: null, theme: 'Beta', count: 2 },
+      { id: null, theme: 'Alpha', count: 1 },
+      { id: null, theme: 'Zeta', count: 1 },
     ]);
   });
 
   it('unthemed claims land in the "" bucket (displayed as Unclassified)', () => {
     const rows = [claim('c1', '', ['case-a'])];
-    expect(sourceThemes(rows)).toEqual([{ theme: '', count: 1 }]);
+    expect(sourceThemes(rows)).toEqual([{ id: null, theme: '', count: 1 }]);
   });
 
   it('returns empty for a source no active claim cites', () => {

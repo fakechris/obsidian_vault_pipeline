@@ -493,6 +493,8 @@ export const en = {
   'theme.legacySource': 'Legacy source — no detail page in this vault.',
   'theme.strength': 'strength',
   'theme.empty': 'No active claims carry this theme.',
+  'theme.renamed': 'This theme was renamed or merged and no longer exists as "{name}".',
+  'theme.renamedHint': 'The claims may now live under one of these themes:',
   'theme.backToKnowledge': 'All themes',
   'theme.graph': 'Theme graph',
   'theme.graphCaption':

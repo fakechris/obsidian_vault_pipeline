@@ -1474,6 +1474,7 @@ mod tests {
             claim_id: "old-1".into(),
             claim: "b, c and d already synthesized".into(),
             theme: "t".into(),
+            theme_id: None,
             source_cases: vec![
                 "2026-06-02_b".into(),
                 "2026-06-03_c".into(),
@@ -1620,6 +1621,7 @@ mod tests {
             claim_id: "old-1".into(),
             claim: "d already synthesized".into(),
             theme: "t".into(),
+            theme_id: None,
             source_cases: vec!["2026-06-04_d".into()],
             citations: vec![],
             provenance_score: 0.9,

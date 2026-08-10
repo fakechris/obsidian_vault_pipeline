@@ -14,15 +14,53 @@ use ovp_domain::units::Unit;
 use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, Query, SourceRow};
 use serde_json::{Value, json};
 
-use crate::graph::{last_path_segment, theme_counts};
+use crate::graph::last_path_segment;
 
-/// `/api/themes` — display themes with their active-claim counts.
+/// `/api/themes` — display themes with their active-claim counts, keyed by
+/// the STABLE community id (not the mutable label). Two communities that
+/// happen to share a display label produce two entries — the id is the
+/// routing key the portal links by, so label collisions must not pool.
+/// `theme`/`label_zh` are presentation only. Records without a `theme_id`
+/// (pre-theme indexes / projection before themes.json) fall back to the
+/// `theme` string so the wall still renders.
 pub fn themes_body(records: &[DurableRecord]) -> Value {
-    let themes: Vec<Value> = theme_counts(records)
+    use std::collections::BTreeMap;
+    // Key by the stable community id when present; fall back to the label
+    // string when `theme_id` is None (pre-theme projection / corrupt
+    // themes.json passthrough) so distinct labels stay distinct entries
+    // instead of collapsing into one null-id bucket.
+    let mut by_key: BTreeMap<String, (Option<i64>, String, usize)> = BTreeMap::new();
+    for r in records {
+        let key = match r.theme_id {
+            Some(id) => format!("i{id}"),
+            None => format!("t:{}", r.theme),
+        };
+        let entry = by_key
+            .entry(key)
+            .or_insert_with(|| (r.theme_id, r.theme.clone(), 0));
+        entry.2 += 1;
+    }
+    let mut themes: Vec<(Option<i64>, String, usize)> =
+        by_key.into_iter().map(|(_, v)| v).collect();
+    // Highest count first; ties break by id (None sorts first as the least),
+    // then by label so the order is deterministic.
+    themes.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+    let out: Vec<Value> = themes
         .into_iter()
-        .map(|(theme, count)| json!({ "theme": theme, "count": count }))
+        .map(|(id, label, count)| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("theme".into(), Value::String(label));
+            obj.insert("count".into(), Value::Number(count.into()));
+            // `id` is the stable routing key; null only on pre-theme
+            // projections (the client routes those by label as a legacy fallback).
+            obj.insert(
+                "id".into(),
+                id.map(|i| Value::Number(i.into())).unwrap_or(Value::Null),
+            );
+            Value::Object(obj)
+        })
         .collect();
-    Value::Array(themes)
+    Value::Array(out)
 }
 
 /// `/api/theme-pages` — the grounded topic pages plus a claim lookup for

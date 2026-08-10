@@ -1124,6 +1124,7 @@ mod tests {
                 claim_key: None,
                 claim: "Agent memory should be treated as persistent state.".into(),
                 theme: Some("memory".into()),
+                theme_id: None,
                 status: ClaimStatus::Durable,
                 sources: vec!["40-Resources/Reader/memory".into()],
                 strength: Some("supported".into()),

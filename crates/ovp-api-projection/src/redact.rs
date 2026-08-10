@@ -163,6 +163,7 @@ mod tests {
             claim_key: None,
             claim: "c".into(),
             theme: Some("Th".into()),
+            theme_id: None,
             status,
             sources: vec!["case".into()],
             strength: Some("supported".into()),

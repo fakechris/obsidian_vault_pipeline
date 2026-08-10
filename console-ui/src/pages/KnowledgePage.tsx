@@ -26,6 +26,7 @@ import {
   themeRoute,
   themeSourceBadge,
   themeWall,
+  UNCLASSIFIED_ID,
   type ThemeGroup,
   type ThemeSortDir,
   type ThemeSortKey,
@@ -42,10 +43,10 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
   const pct = active > 0 ? Math.round((group.durable / active) * 100) : 0;
   const sourceBadge = themeSourceBadge(group);
   // The 'misc' fallback bucket displays honestly as "Unclassified" — the
-  // link target keeps the literal theme key (display layer only).
-  const misc = isMiscTheme(group.theme);
+  // link target keeps the stable id (or the label on pre-theme projections).
+  const misc = isMiscTheme(group.theme) || group.id === UNCLASSIFIED_ID;
   return (
-    <Link className="theme-card" to={themeRoute(group.theme)}>
+    <Link className="theme-card" to={themeRoute(group)}>
       <div className="theme-card-head">
         <span className="theme-card-name">
           {misc
@@ -300,7 +301,7 @@ export default function KnowledgePage() {
       model.claims.find((c) => c.claim_key === anchor);
     if (claim) {
       return (
-        <Navigate to={`${themeRoute(claim.theme)}#${claim.claim_id}`} replace />
+        <Navigate to={`${themeRoute({ id: claim.theme_id ?? null, theme: claim.theme ?? '' })}#${claim.claim_id}`} replace />
       );
     }
   }

@@ -11,6 +11,10 @@ export interface GraphNode {
   hit?: boolean;
   label: string;
   theme?: string;
+  /** Stable semantic-theme community id (claims only) — the portal routes
+   * themes by this id so links survive a `crystal-themes` relabel. None on
+   * unit/source nodes and pre-theme projections. */
+  theme_id?: number | null;
   strength?: string;
   url?: string;
   degree: number;
@@ -127,8 +131,14 @@ export interface FindHit {
 }
 
 export interface ThemeCount {
+  /** Stable community id — the routing key the portal links by. Null on
+   * pre-theme projections (clients route those by `theme` label as a
+   * legacy fallback). */
+  id?: number | null;
   theme: string;
   count: number;
+  /** Rebuildable Chinese label when the live projection carries one. */
+  label_zh?: string;
 }
 
 export type SourceStatus =
@@ -205,6 +215,11 @@ export interface ClaimRow {
   /** Rebuildable Chinese projection when served by live API. */
   claim_zh?: string;
   theme?: string;
+  /** Stable semantic-theme community id — the portal routes themes by this
+   * id (not the mutable `theme` label), so a `crystal-themes` relabel doesn't
+   * orphan existing theme URLs. Absent on pre-theme indexes; `-1` is the
+   * Unclassified sentinel. */
+  theme_id?: number | null;
   status: ClaimStatus;
   sources: string[];
   strength?: string;

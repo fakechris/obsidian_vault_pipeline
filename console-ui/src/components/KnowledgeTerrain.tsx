@@ -29,7 +29,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 // A crystal also carries `sx`/`sy`: the LAYOUT positions of its cited sources,
 // so hovering it can draw evidence lines out to them (they scatter across
 // islands — that scatter IS the signal).
-type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; x: number; y: number; tags?: string[]; tags_inferred?: string[]; claim_id?: string; sx?: number[]; sy?: number[]; srcCount?: number; spanClusters?: number };
+type TPoint = { id: string; sha: string; title: string; date: string; theme: string; theme_id: number; community_id?: number | null; x: number; y: number; tags?: string[]; tags_inferred?: string[]; claim_id?: string; sx?: number[]; sy?: number[]; srcCount?: number; spanClusters?: number };
 type TTheme = { id: number; label: string; label_zh: string; cx: number; cy: number; count: number };
 type Terrain = {
   points: TPoint[];
@@ -114,6 +114,7 @@ function buildCrystals(data: Terrain | null, model: IndexModel | null): TPoint[]
       // dominant cluster name separately via `theme_id`.
       theme: c.theme ?? '',
       theme_id: domId,
+      community_id: c.theme_id ?? null,
       x: baseX + Math.cos(ang) * rr,
       y: baseY + Math.sin(ang) * rr,
       sx: srcPts.map((p) => p.x),
@@ -817,7 +818,7 @@ export default function KnowledgeTerrain({
       // NEW tab so the operator's tuned camera/timeline state survives (in-app
       // navigation would unmount the terrain and reset it).
       const path = p.claim_id
-        ? themeRoute(p.theme)
+        ? themeRoute({ id: p.community_id ?? null, theme: p.theme })
         : p.sha
           ? `/library/${encodeURIComponent(p.sha)}`
           : null;

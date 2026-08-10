@@ -106,6 +106,7 @@ fn main() {
                  support pattern {theme}."
             ),
             theme,
+            theme_id: None,
             source_cases: citations.iter().map(|c| c.case_id.clone()).collect(),
             citations,
             provenance_score,
