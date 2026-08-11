@@ -57,9 +57,7 @@ pub fn create_dirs_synced(dir: &Path) -> Result<(), String> {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
         };
-        std::fs::File::open(parent)
-            .and_then(|d| d.sync_all())
-            .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
+        sync_dir(parent)?;
     }
     Ok(())
 }
@@ -94,11 +92,29 @@ pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
     writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
     f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))?;
     if created {
-        std::fs::File::open(parent)
-            .and_then(|d| d.sync_all())
-            .map_err(|e| format!("syncing directory {}: {e}", parent.display()))?;
+        sync_dir(parent)?;
     }
     Ok(())
+}
+
+/// Persist directory-entry metadata where the host exposes directory fsync.
+///
+/// Windows rejects `File::open(directory)` with `ERROR_ACCESS_DENIED`, and its
+/// file APIs do not expose the Unix directory-fsync durability contract. File
+/// contents are still flushed before this helper is reached; skipping only
+/// the unsupported directory metadata flush keeps atomic writes usable there.
+pub fn sync_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(|e| format!("syncing directory {}: {e}", dir.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
 }
 
 /// Parent directory of a ledger path for creation/sync purposes. A bare

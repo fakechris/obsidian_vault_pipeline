@@ -1,5 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OVP2 Desktop",
   "bundle": {
     "targets": ["nsis"],
     "windows": {

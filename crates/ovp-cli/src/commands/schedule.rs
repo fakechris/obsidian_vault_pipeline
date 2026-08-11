@@ -882,7 +882,11 @@ pub enum RegistryOutcome {
 /// lives under the vault (portable), absolute otherwise.
 fn registry_env_value(cfg: &ScheduleConfig) -> String {
     match cfg.env_file.strip_prefix(&cfg.vault_root) {
-        Ok(rel) => format!("{}/{}", super::scheduler::VAULT_PLACEHOLDER, rel.display()),
+        Ok(rel) => format!(
+            "{}/{}",
+            super::scheduler::VAULT_PLACEHOLDER,
+            rel.to_string_lossy().replace('\\', "/")
+        ),
         Err(_) => cfg.env_file.display().to_string(),
     }
 }

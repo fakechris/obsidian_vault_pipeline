@@ -9,11 +9,11 @@
 # Usage:
 #   pwsh scripts/build-desktop-sidecar.ps1
 #   pwsh scripts/build-desktop-sidecar.ps1 -Triple x86_64-pc-windows-msvc
-#   $env:INSTALL_APP = "$env:LOCALAPPDATA\OVP2"; pwsh scripts/build-desktop-sidecar.ps1
+#   $env:INSTALL_APP = "$env:LOCALAPPDATA\OVP2 Desktop"; pwsh scripts/build-desktop-sidecar.ps1
 #
 # -InstallApp / $env:INSTALL_APP points at an INSTALLED app directory (the one
-# holding OVP2.exe). Copying the sidecar there updates the running install's
-# scheduler binary without repackaging — the app does NOT need a restart,
+# holding ovp2-desktop.exe). Copying the sidecar there updates the running
+# install's scheduler binary without repackaging — the app does NOT need a restart,
 # because every tick re-spawns the file currently on disk.
 [CmdletBinding()]
 param(

@@ -270,7 +270,13 @@ pub fn write_shadow(
         // with synchronous=OFF, so without this a post-rename power loss
         // could expose torn pages behind a rename that itself survived.
         .and_then(|_| {
-            std::fs::File::open(&tmp)
+            // Windows FlushFileBuffers requires a handle opened for writing;
+            // File::open creates a read-only handle and fails with
+            // ERROR_ACCESS_DENIED even though the SQLite build succeeded.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&tmp)
                 .and_then(|f| f.sync_all())
                 .map_err(|e| format!("syncing {}: {e}", tmp.display()))
         })

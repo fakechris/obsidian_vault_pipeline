@@ -234,9 +234,25 @@ pub fn is_due(cadence: Cadence, last_run: Option<NaiveDateTime>, now: NaiveDateT
     }
 }
 
-/// Resolve `{vault}` in a stored string against the live vault root.
+/// Resolve a vault-relative stored path against the live vault root.
+///
+/// Registry paths use `/` so they remain portable. Build the result through
+/// `PathBuf` instead of string replacement: Windows extended-length paths
+/// (`\\?\C:\...`) reject the mixed `\\?\C:\.../.ovp/...` form that a raw
+/// replacement would create.
 pub fn resolve_vault(s: &str, vault_root: &Path) -> String {
-    s.replace(VAULT_PLACEHOLDER, &vault_root.display().to_string())
+    let Some(rest) = s.strip_prefix(VAULT_PLACEHOLDER) else {
+        return s.replace(VAULT_PLACEHOLDER, &vault_root.display().to_string());
+    };
+    let mut resolved = vault_root.to_path_buf();
+    for component in rest
+        .trim_start_matches(['/', '\\'])
+        .split(['/', '\\'])
+        .filter(|component| !component.is_empty())
+    {
+        resolved.push(component);
+    }
+    resolved.display().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +1062,21 @@ mod tests {
 
     // -- shell command builder ----------------------------------------------
 
+    #[test]
+    fn vault_paths_resolve_with_native_separators() {
+        let root = Path::new(r"C:\vault root\100% notes");
+        assert_eq!(
+            PathBuf::from(resolve_vault("{vault}/.ovp/work/crystal-synth", root)),
+            root.join(".ovp").join("work").join("crystal-synth")
+        );
+        assert_eq!(
+            PathBuf::from(resolve_vault(r"{vault}\.ovp\daily.env", root)),
+            root.join(".ovp").join("daily.env")
+        );
+        assert_eq!(resolve_vault("literal", root), "literal");
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn shell_command_resolves_vault_sources_env_and_stamps_date() {
         let j = JobConfig {

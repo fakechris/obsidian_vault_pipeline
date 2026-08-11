@@ -24,14 +24,15 @@ the one that wrote it. Each run executes, on `windows-latest`:
 - an **MSVC link** of the live feature set (`rustls`/`ring`, `reqwest`, the
   enrich clients) — the thing no cross-compile can check;
 - `npm ci && npm test && npm run build` in `console-ui`;
-- `scripts/build-desktop-sidecar.ps1`, producing a 17 MB
+- `scripts/build-desktop-sidecar.ps1`, producing a 19.7 MB
   `ovp2-x86_64-pc-windows-msvc.exe`;
-- `npm run tauri -- build --bundles nsis`, producing an 18.6 MB
-  `OVP2_2.0.1_x64-setup.exe` — so `tauri.windows.conf.json`, the icon set, the
-  NSIS languages and the `externalBin` sidecar naming are all confirmed to
-  bundle. The installer is uploaded as a run artifact.
+- `npm run tauri -- build --bundles nsis`, producing a 20.5 MB NSIS
+  `OVP2 Desktop_2.0.1_x64-setup.exe` — so `tauri.windows.conf.json`, the icon
+  set, the NSIS languages and the `externalBin` sidecar naming are all
+  confirmed to bundle. The installer is uploaded as a run artifact.
 
-Three bugs only that runner could have found, all fixed in this PR:
+Windows-only bugs found by CI and the 2026-08-11 hardware pass, all fixed in
+this PR:
 
 1. **`ovp2.exe` overflowed its stack before `main` ran.** Windows bakes a 1 MB
    main-thread stack into the PE header; Unix gives 8. `ovp2`'s clap tree does
@@ -48,6 +49,18 @@ Three bugs only that runner could have found, all fixed in this PR:
 3. **`log_path` joined `".ovp/logs"` as one segment**, so the generated
    scheduler `.cmd` handed `mkdir` a mixed-separator path that cmd.exe rejects —
    behind a `2>nul` that made the failure invisible.
+4. **Durability flushes failed with access denied.** Windows cannot open a
+   directory through `File::open`, and `FlushFileBuffers` rejects a read-only
+   SQLite handle. Directory metadata sync now uses the platform-supported
+   contract, while the SQLite candidate is reopened read/write before flush.
+5. **Portable registry paths broke under `\\?\` long-path roots.** Raw string
+   replacement produced mixed `\\?\C:\vault/.ovp/...` paths, so status falsely
+   reported an existing `daily.env` as missing and the weekly work directory
+   could fail. `{vault}` paths now resolve component-by-component with native
+   separators.
+6. **The installer and scheduler shared `%LOCALAPPDATA%\OVP2`.** The Windows
+   package is now `OVP2 Desktop`, installed under its own directory; scheduler
+   runtime files remain under `%LOCALAPPDATA%\OVP2`.
 
 ## Compatibility policy
 
@@ -78,6 +91,9 @@ Three bugs only that runner could have found, all fixed in this PR:
   `status` all work; `status` reads `schtasks /Query` for registration and last
   result. The wrapper `.cmd` carries the same `ovp2:` metadata comments the
   plist and systemd units do, so `status` recovers the vault path from it.
+- The Windows package is named `OVP2 Desktop`, keeping its default current-user
+  install directory (`%LOCALAPPDATA%\OVP2 Desktop`) separate from the scheduler
+  runtime directory (`%LOCALAPPDATA%\OVP2`).
 - The job runner spawns the pinned binary **directly** on Windows
   (`job_direct_command`) instead of routing an sh-quoted string through a shell
   that parses differently. `--date` is stamped from the local clock in Rust
@@ -153,10 +169,14 @@ Three bugs only that runner could have found, all fixed in this PR:
 
 ## Verification checklist — run these on a real Windows 11 x64 box
 
-Steps 1–3 are **done** — `ci-windows` runs them on every PR (see "What CI has
-actually proven"). Everything from 4 down needs a human or an agent on a
-desktop, and none of it has been done. Record failures **in this file** until
-they are fixed.
+Steps 1–3 are **done** in `ci-windows`. A Windows 11 x64 hardware pass on
+2026-08-11 also completed install/launch, sidecar resolution, forced Task
+Scheduler execution, install/status/uninstall, a vault containing spaces and
+`%`, an empty replay `daily`, and the live portal deploy/hash check. The final
+installed app served its bundled portal with HTTP 200. Still outstanding are a
+fresh machine without WebView2, the full 10-minute no-flash observation, the
+real-credential `daily --client live`, hard-kill stale-lock recovery, the
+orphan-wrapper path on localized Windows, and a path beyond 260 characters.
 
 1. ~~`cargo test --workspace --exclude ovp2-desktop`~~ — CI, green.
 2. ~~`cargo clippy --workspace --exclude ovp2-desktop --all-targets`~~ — CI,
