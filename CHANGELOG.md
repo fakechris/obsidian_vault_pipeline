@@ -12,12 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run instead of being throttled to the daily enqueue budget
   (`auto_max_per_run`, default 30). The tail budget is a separate config key
   `auto_claim_zh_max_per_run` (default 0 = unlimited); provider outages stay
-  contained by the batch's consecutive-failure breaker.
+  contained by the batch's consecutive-failure breaker, and a
+  deterministically failing ("poison") claim is quarantined after 3
+  consecutive failed tail runs so it can no longer bleed one paid call per
+  run.
 
 ### Added
-- claims_zh observability: every tail run appends a record
-  (`translated`/`skipped`/`errors`/`remaining`) to
-  `.ovp/crystal/claims_zh_runs.jsonl`, and both the tail summary and
+- claims_zh observability: tail runs append a record
+  (`translated`/`skipped`/`errors`/`error_keys`/`quarantined`/`remaining`) to
+  `.ovp/crystal/claims_zh_runs.jsonl` — pure no-op runs leave no record, the
+  early-return failure gates (config/ledger/client build) record
+  `outcome: "skipped"` + `reason`, and writes are single-write +
+  `sync_data`'d with torn-line-tolerant reads; both the tail summary and
   `ovp2 source-work claims-zh` now print the remaining untranslated backlog.
 - `ovp2 schedule <install|uninstall|status>` — productized OS scheduler for
   the daily loop (launchd user agent on macOS, systemd user timer on Linux).

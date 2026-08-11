@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use ovp_index::build_index;
 use ovp_memory::bilingual::{
-    CACHE_REL, CORRUPT_PROJECTION_MARKER, ClaimsZhFile, GlossaryFile, topup_cards_zh,
-    topup_theme_pages_zh, translate_claims_batch,
+    CACHE_REL, CORRUPT_PROJECTION_MARKER, GlossaryFile, topup_cards_zh, topup_theme_pages_zh,
+    translate_claims_batch,
 };
 use ovp_memory::source_work_auto::candidates_from_index;
 use ovp_memory::source_work_config::SourceWorkConfig;
@@ -235,25 +235,19 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
                 Ok(())
             }
         });
+    // Corrupt projections already failed loud above, so an Err here is an IO
+    // surprise — report it instead of guessing a backlog number.
+    let remaining = match ovp_memory::bilingual::remaining_untranslated(&args.vault_root, &pairs) {
+        Ok(r) => r.to_string(),
+        Err(e) => format!("unknown ({e})"),
+    };
     sayln!(
-        "claims-zh done: translated={} skipped={} errors={} remaining={}",
+        "claims-zh done: translated={} skipped={} errors={} remaining={remaining}",
         done,
         skipped,
         errors.len(),
-        claims_zh_remaining(&args.vault_root, &pairs),
     );
     Ok(())
-}
-
-/// Active claims still missing a fresh zh projection — the backlog a later
-/// run still has to drain. A corrupt projection counts every pair as
-/// remaining (nothing is provably fresh).
-fn claims_zh_remaining(vault_root: &std::path::Path, pairs: &[(String, String)]) -> usize {
-    let file = ClaimsZhFile::load(vault_root).unwrap_or_default();
-    pairs
-        .iter()
-        .filter(|(key, en)| file.get_fresh(key, en).is_none())
-        .count()
 }
 
 pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
