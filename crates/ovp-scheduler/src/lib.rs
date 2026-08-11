@@ -234,9 +234,25 @@ pub fn is_due(cadence: Cadence, last_run: Option<NaiveDateTime>, now: NaiveDateT
     }
 }
 
-/// Resolve `{vault}` in a stored string against the live vault root.
+/// Resolve a vault-relative stored path against the live vault root.
+///
+/// Registry paths use `/` so they remain portable. Build the result through
+/// `PathBuf` instead of string replacement: Windows extended-length paths
+/// (`\\?\C:\...`) reject the mixed `\\?\C:\.../.ovp/...` form that a raw
+/// replacement would create.
 pub fn resolve_vault(s: &str, vault_root: &Path) -> String {
-    s.replace(VAULT_PLACEHOLDER, &vault_root.display().to_string())
+    let Some(rest) = s.strip_prefix(VAULT_PLACEHOLDER) else {
+        return s.replace(VAULT_PLACEHOLDER, &vault_root.display().to_string());
+    };
+    let mut resolved = vault_root.to_path_buf();
+    for component in rest
+        .trim_start_matches(['/', '\\'])
+        .split(['/', '\\'])
+        .filter(|component| !component.is_empty())
+    {
+        resolved.push(component);
+    }
+    resolved.display().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +622,36 @@ pub fn job_shell_command(
         cmd.push_str(" --date \"$(date +%F)\"");
     }
     cmd
+}
+
+/// The same job as a program + argv, with no shell in between — what Windows
+/// dispatch uses (`/bin/sh` does not exist there, and routing through cmd.exe
+/// would re-introduce quoting bugs that `sh_quote` exists to avoid).
+///
+/// The one capability this drops is env-file sourcing: there is no portable
+/// `. daily.env`. That is deliberate rather than missing — `.ovp/providers.toml`
+/// already supersedes `daily.env` on every platform (the child process reads it
+/// itself), so Windows simply never gets the legacy path. `run_with` surfaces
+/// this as a warning when a Windows registry still names an env file.
+///
+/// `today` is the caller's local `YYYY-MM-DD`; the shell form computes it with
+/// `$(date +%F)` at dispatch, and this is the same value.
+pub fn job_direct_command(
+    ovp2_path: &Path,
+    vault_root: &Path,
+    job: &JobConfig,
+    today: &str,
+) -> (PathBuf, Vec<String>) {
+    let mut args: Vec<String> = job
+        .argv
+        .iter()
+        .map(|a| resolve_vault(a, vault_root))
+        .collect();
+    if job.stamp_date {
+        args.push("--date".into());
+        args.push(today.to_string());
+    }
+    (ovp2_path.to_path_buf(), args)
 }
 
 pub trait JobRunner {
@@ -1016,6 +1062,21 @@ mod tests {
 
     // -- shell command builder ----------------------------------------------
 
+    #[test]
+    fn vault_paths_resolve_with_native_separators() {
+        let root = Path::new(r"C:\vault root\100% notes");
+        assert_eq!(
+            PathBuf::from(resolve_vault("{vault}/.ovp/work/crystal-synth", root)),
+            root.join(".ovp").join("work").join("crystal-synth")
+        );
+        assert_eq!(
+            PathBuf::from(resolve_vault(r"{vault}\.ovp\daily.env", root)),
+            root.join(".ovp").join("daily.env")
+        );
+        assert_eq!(resolve_vault("literal", root), "literal");
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn shell_command_resolves_vault_sources_env_and_stamps_date() {
         let j = JobConfig {

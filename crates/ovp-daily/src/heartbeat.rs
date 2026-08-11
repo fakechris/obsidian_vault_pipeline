@@ -219,29 +219,12 @@ pub fn write_last_run(vault_root: &Path, record: &LastRun) -> Result<(), String>
         .map_err(|e| format!("renaming {} → {}: {e}", tmp.display(), target.display()))
 }
 
-/// Is `pid` a live process? Probes with `kill -0` (no signal sent; exit 0 =
-/// alive). Conservative: if the probe itself can't run, assume ALIVE so a real
-/// run is never falsely reported dead. `pid == 0` (unset) is treated as not a
-/// real owner. Same primitive `RunLock` uses to reclaim stale locks.
+/// Is `pid` a live process? Conservative: alive unless the OS says the PID
+/// does not exist, so a real run is never falsely reported dead. `pid == 0`
+/// (unset) is treated as not a real owner. Same primitive `RunLock` uses to
+/// reclaim stale locks — see [`ovp_intake::probe_pid`].
 pub fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        std::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(true)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    ovp_intake::probe_pid(pid) != Some(false)
 }
 
 impl LastRun {

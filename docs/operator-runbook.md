@@ -148,9 +148,17 @@ What `install` does:
 - **macOS**: writes `~/Library/LaunchAgents/com.ovp2.daily.plist` (chmod 600)
   and `launchctl load`s it. **Linux**: writes
   `~/.config/systemd/user/ovp2-daily.service` + `.timer`
-  (`OnCalendar`, `Persistent=true`) and enables the timer. Windows is not
-  supported.
-- The job runs via `/bin/sh -c` and sources an **env file** first
+  (`OnCalendar`, `Persistent=true`) and enables the timer. **Windows**:
+  registers a Task Scheduler task `OVP2 Scheduler` (`schtasks /Create`, every
+  10 min, `/RL LIMITED`) running a generated
+  `%LOCALAPPDATA%\OVP2\ovp2-scheduler-tick.cmd`.
+- **Windows does not source the env file.** There is no `/bin/sh`, so each job
+  is spawned directly and credentials MUST live in `.ovp/providers.toml`.
+  macOS/Linux keep the `daily.env` path described below — `providers.toml` just
+  takes precedence over it when both exist. A Windows vault carrying only
+  `daily.env` gets a printed warning naming the file; read
+  `docs/windows-port.md` before assuming the provider is at fault.
+- On macOS/Linux the job runs via `/bin/sh -c` and sources an **env file** first
   (`--env-file`, default `<vault>/.ovp/daily.env`): if the file is missing,
   `install` creates a chmod-600 template with commented
   `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `OVP_LLM_MODEL` /

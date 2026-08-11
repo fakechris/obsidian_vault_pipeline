@@ -389,11 +389,16 @@ fn deploy_git(
 
 /// Run a git command in `dir`; error carries stderr on non-zero exit.
 fn run_git(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("spawn git: {e}"))?;
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args).current_dir(dir);
+    // `publish` is also driven from the desktop GUI (in-process ovp-server), so
+    // git must not pop a console window per invocation.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("spawn git: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {

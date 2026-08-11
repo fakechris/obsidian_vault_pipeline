@@ -307,7 +307,7 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     }
 
     // === Run 1: the full daily loop. ===
-    let stdout = run_ok(bin().args([
+    let (stdout, daily_stderr) = run_ok_full(bin().args([
         "daily",
         "--vault-root", vault.to_str().unwrap(),
         "--date", DATE,
@@ -338,7 +338,11 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     // resolution feeds into — no process-env mutation needed.
     let cache_root = TEST_CACHE.with(|c| c.borrow().clone()).expect("cache set");
     let shadow = ovp_index::sqlite::sqlite_path_in(&cache_root, &vault);
-    assert!(shadow.exists(), "missing sqlite shadow at {}", shadow.display());
+    assert!(
+        shadow.exists(),
+        "missing sqlite shadow at {}\ndaily stdout:\n{stdout}\ndaily stderr:\n{daily_stderr}",
+        shadow.display(),
+    );
     assert!(
         !vault.join(".ovp/index/read-model.sqlite").exists(),
         "shadow must NOT be written inside the synced vault"

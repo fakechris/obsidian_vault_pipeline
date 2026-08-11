@@ -950,22 +950,9 @@ fn now_secs() -> u64 {
 fn read_lock_pid(path: &Path) -> Option<u32> {
     let raw = std::fs::read_to_string(path).ok()?;
     let pid = raw.trim().parse::<u32>().ok().filter(|p| *p > 0)?;
-    // Only report if the process is still alive (unix kill -0).
-    #[cfg(unix)]
-    {
-        let alive = std::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !alive {
-            return None;
-        }
-    }
-    Some(pid)
+    // Only report an owner the OS confirms is still running: an unanswerable
+    // probe means we cannot vouch for the holder, so the lock is not reported.
+    (ovp_intake::probe_pid(pid) == Some(true)).then_some(pid)
 }
 
 /// Recover items left mid-flight across process death. Returns how many

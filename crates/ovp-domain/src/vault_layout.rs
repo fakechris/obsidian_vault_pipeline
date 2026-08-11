@@ -278,6 +278,38 @@ pub fn pack_case_id(pack_dir: &str) -> &str {
     pack_dir.rsplit(['/', '\\']).next().unwrap_or(pack_dir)
 }
 
+/// Render a filesystem path as a **vault-relative** string: strip `root` when
+/// `p` is under it, else keep the full path, and always spell the separator
+/// `/`.
+///
+/// This is the one place that decides what a vault-relative string looks like.
+/// Every method on `VaultLayout` above hands out `/`-joined literals, and these
+/// strings are persisted — `source_path`, `rel_path`, `moved_to`, `pack_file`,
+/// and the target of every rewritten Markdown link. A path built with the host
+/// separator would make a Windows-written vault unreadable by macOS/Linux (and
+/// by `lifecycle_moved_path` / `pack_case_id` right below), and the symptom is
+/// a lookup that returns nothing rather than an error.
+///
+/// The rewrite is `cfg(windows)`-only on purpose: `\` is a legal character in a
+/// Unix filename, so an unconditional replace would corrupt real paths on
+/// macOS/Linux. On Windows it cannot appear in a name at all, so it is lossless
+/// there.
+pub fn vault_rel(root: &std::path::Path, p: &std::path::Path) -> String {
+    let rel = p
+        .strip_prefix(root)
+        .map(|q| q.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| p.to_string_lossy().into_owned());
+    normalize_vault_rel(rel)
+}
+
+/// [`vault_rel`] for a path that is already relative (nothing to strip).
+pub fn normalize_vault_rel(rel: impl Into<String>) -> String {
+    let rel = rel.into();
+    #[cfg(windows)]
+    let rel = rel.replace('\\', "/");
+    rel
+}
+
 /// Lifecycle-move fallback: `rel_path` often records the INTAKE location
 /// (`50-Inbox/01-Raw/<month>/…`) while the daily lifecycle step has moved the
 /// processed source to `50-Inbox/03-Processed/<month>/…` keeping the trailing

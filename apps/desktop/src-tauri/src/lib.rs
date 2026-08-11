@@ -314,22 +314,48 @@ fn resolve_ovp2_bin() -> Option<PathBuf> {
         }
     }
     // Bundled sidecar: Tauri strips the target-triple suffix and places it next
-    // to the app executable.
+    // to the app executable. Windows keeps the `.exe` extension.
     if let Some(side) = std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| d.join("ovp2")))
+        .and_then(|e| e.parent().map(|d| d.join(OVP2_EXE)))
         .filter(|p| p.exists())
     {
         return Some(side);
     }
     // Dev fallback: the workspace release/debug build.
-    for rel in ["../../../target/release/ovp2", "../../../target/debug/ovp2"] {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    for profile in ["release", "debug"] {
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../target")
+            .join(profile)
+            .join(OVP2_EXE);
         if p.exists() {
             return Some(p);
         }
     }
     None
+}
+
+/// The sidecar's file name. Getting this wrong on Windows is silent: the
+/// scheduler just reports "no ovp2 binary found" and the portal keeps working,
+/// so nothing looks broken until a day of ticks has gone missing.
+#[cfg(windows)]
+const OVP2_EXE: &str = "ovp2.exe";
+#[cfg(not(windows))]
+const OVP2_EXE: &str = "ovp2";
+
+/// Spawn configuration shared by every scheduler child. On Windows a plain
+/// `Command` on a console subsystem binary pops a console window — that would
+/// be a black box flashing over the operator's screen every 10 minutes.
+fn scheduler_command(bin: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// Start the in-app scheduler: every `SCHEDULER_INTERVAL`, exec the sidecar's
@@ -351,7 +377,7 @@ fn start_scheduler(state: &AppState, vault: &Path) {
         // Seed the registry + state WITHOUT an OS unit — a fresh vault has no
         // schedule.json and `tick` errors on a missing registry, so the timer
         // would otherwise never run anything (codex P1). Idempotent.
-        let init = Command::new(&bin)
+        let init = scheduler_command(&bin)
             .arg("schedule")
             .arg("init")
             .arg("--vault-root")
@@ -373,7 +399,7 @@ fn start_scheduler(state: &AppState, vault: &Path) {
         }
         loop {
             std::thread::sleep(SCHEDULER_INTERVAL);
-            match Command::new(&bin)
+            match scheduler_command(&bin)
                 .arg("schedule")
                 .arg("tick")
                 .arg("--vault-root")

@@ -207,9 +207,7 @@ pub(crate) fn write_atomic(target: &Path, body: &str) -> Result<(), String> {
 /// Fsync a directory so a just-created or just-renamed entry survives power
 /// loss. Errors are real failures — the caller promised durability.
 pub(crate) fn sync_dir(dir: &Path) -> Result<(), String> {
-    std::fs::File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| format!("syncing directory {}: {e}", dir.display()))
+    ovp_intake::vaultops::sync_dir(dir)
 }
 
 /// Persist the model to `.ovp/index/index.json`. Overwrite is CORRECT here —

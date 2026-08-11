@@ -23,6 +23,25 @@ Only gotchas below. Anything derivable by reading the code is deliberately absen
 | `.ovp/schedule.json` | 无——下次 tick 自动读 | 否 |
 | `.ovp/providers.toml` | 无——每次调用重读 | 否 |
 
+Windows 上同一张表,换脚本:`scripts/build-desktop-sidecar.ps1 -InstallApp
+"$env:LOCALAPPDATA\OVP2"` 和 `scripts/deploy-portal.ps1 <vault>`。sidecar 叫
+`ovp2.exe`,和 `OVP2.exe` 并排放在安装目录里(不是 `Contents/MacOS`)。
+
+## Windows 只有 CI 能验
+
+没人有 Windows 机器。`cfg(windows)` 分支、NSIS 打包、MSVC 链接**在 mac 上一个都验不到**,
+所以 `.github/workflows/ci-windows.yml` 是这个项目唯一的 Windows 环境——红了就当本地
+编译失败处理,别当成"CI 抽风"。本地能做的最强预检是交叉编译:
+
+```bash
+rustup target add x86_64-pc-windows-gnu && brew install mingw-w64
+cargo check --workspace --exclude ovp2-desktop --all-targets --target x86_64-pc-windows-gnu
+```
+
+`cfg(windows)` 在 gnu 和 msvc 下一样成立,所以这能抓住绝大多数编译错;抓不住的是链接、
+Tauri 打包和一切运行期行为。已实现范围、**故意保留的限制**、以及还没在真机上验过的清单
+见 `docs/windows-port.md`——动 Windows 相关代码前先读那份,别重复推导。
+
 ## 为什么 `ovp-server` 不在 sidecar 那一行
 
 `apps/desktop/src-tauri/Cargo.toml` **直接依赖 `ovp-server`**,它被编译进 `ovp2-desktop`
