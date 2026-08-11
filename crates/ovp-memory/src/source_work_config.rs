@@ -40,6 +40,13 @@ pub struct SourceWorkConfig {
     /// Batch claim_zh when running `crystal-claims-zh` with --auto defaults.
     #[serde(default = "default_true")]
     pub auto_claim_zh: bool,
+    /// Cap on claim_zh translations per crystal-synth tail run (0 =
+    /// unlimited). Deliberately separate from `auto_max_per_run`: that budget
+    /// limits how many SOURCES daily auto-enqueues per run, while a claims
+    /// backlog must be able to drain in one run — a provider outage is
+    /// already contained by the batch's consecutive-failure breaker.
+    #[serde(default)]
+    pub auto_claim_zh_max_per_run: usize,
     /// Batch card/theme zh projections (stage D).
     #[serde(default = "default_true")]
     pub auto_memory_zh: bool,
@@ -53,6 +60,7 @@ impl Default for SourceWorkConfig {
             auto_notify: false,
             auto_max_per_run: default_auto_max(),
             auto_claim_zh: true,
+            auto_claim_zh_max_per_run: 0,
             auto_memory_zh: true,
         }
     }
@@ -102,6 +110,11 @@ auto_notify = false
 auto_max_per_run = 30
 # Prefer claim_zh / memory zh projections when running bilingual batch CLIs.
 auto_claim_zh = true
+# Cap claim_zh translations per crystal-synth tail run (0 = unlimited).
+# Separate from auto_max_per_run: an existing claims backlog drains without
+# being throttled by the daily enqueue budget; a provider outage is contained
+# by the batch's consecutive-failure breaker, not by this cap.
+auto_claim_zh_max_per_run = 0
 auto_memory_zh = true
 "#;
 
@@ -117,6 +130,7 @@ mod tests {
         assert!(cfg.auto_translate);
         assert!(!cfg.auto_notify);
         assert_eq!(cfg.auto_max_per_run, 30);
+        assert_eq!(cfg.auto_claim_zh_max_per_run, 0);
     }
 
     #[test]
@@ -126,13 +140,27 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "auto_summarize = false\nauto_translate = true\nauto_max_per_run = 5\n",
+            "auto_summarize = false\nauto_translate = true\nauto_max_per_run = 5\nauto_claim_zh_max_per_run = 10\n",
         )
         .unwrap();
         let cfg = SourceWorkConfig::load(tmp.path()).unwrap();
         assert!(!cfg.auto_summarize);
         assert!(cfg.auto_translate);
         assert_eq!(cfg.auto_max_per_run, 5);
+        assert_eq!(cfg.auto_claim_zh_max_per_run, 10);
+    }
+
+    /// A pre-field source-work.toml (no `auto_claim_zh_max_per_run`) loads
+    /// with the tail cap defaulting to 0 = unlimited.
+    #[test]
+    fn legacy_config_without_claim_zh_cap_defaults_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(CONFIG_REL);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "auto_max_per_run = 7\n").unwrap();
+        let cfg = SourceWorkConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.auto_max_per_run, 7);
+        assert_eq!(cfg.auto_claim_zh_max_per_run, 0);
     }
 
     #[test]

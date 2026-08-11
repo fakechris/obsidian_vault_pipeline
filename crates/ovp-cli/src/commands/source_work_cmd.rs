@@ -66,6 +66,10 @@ pub fn show_config(args: ShowConfigArgs) -> Result<(), CliError> {
     sayln!("  auto_notify: {}", cfg.auto_notify);
     sayln!("  auto_max_per_run: {}", cfg.auto_max_per_run);
     sayln!("  auto_claim_zh: {}", cfg.auto_claim_zh);
+    sayln!(
+        "  auto_claim_zh_max_per_run: {}",
+        cfg.auto_claim_zh_max_per_run
+    );
     sayln!("  auto_memory_zh: {}", cfg.auto_memory_zh);
     Ok(())
 }
@@ -231,11 +235,17 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
                 Ok(())
             }
         });
+    // Corrupt projections already failed loud above, so an Err here is an IO
+    // surprise — report it instead of guessing a backlog number.
+    let remaining = match ovp_memory::bilingual::remaining_untranslated(&args.vault_root, &pairs) {
+        Ok(r) => r.to_string(),
+        Err(e) => format!("unknown ({e})"),
+    };
     sayln!(
-        "claims-zh done: translated={} skipped={} errors={}",
+        "claims-zh done: translated={} skipped={} errors={} remaining={remaining}",
         done,
         skipped,
-        errors.len()
+        errors.len(),
     );
     Ok(())
 }

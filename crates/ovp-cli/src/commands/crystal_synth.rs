@@ -760,10 +760,17 @@ fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<(), 
 /// — NeverCallsClient is never built); `.ovp/source-work.toml` must parse and
 /// have `auto_claim_zh` (malformed config warns + skips); the live client
 /// must build. Every failure is a warn line — the parent run's exit code is
-/// decided by the EN phases alone. Incremental only: `get_fresh` content-hash
+/// decided by the EN phases alone — and the three failure gates (config /
+/// ledger / client build) also append an `outcome: "skipped"` run record so
+/// unattended failures stay auditable; deliberate states (flag off, replay,
+/// empty pairs) leave no record. Incremental only: `get_fresh` content-hash
 /// skip means an unchanged authority costs zero LLM calls. Writes ONLY the
-/// rebuildable projection (the ledger is read, never written); never touches
-/// the queue or the worker lock.
+/// rebuildable projection (the ledger is read, never written) plus an
+/// append-only run record to `.ovp/crystal/claims_zh_runs.jsonl`; never
+/// touches the queue or the worker lock. Keys that failed the last
+/// QUARANTINE_STREAK attempted runs are quarantined (skipped without a
+/// provider call) so a deterministically failing claim cannot bleed one paid
+/// call per run forever.
 fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
     if client_kind != ClientKind::Live {
         return;
@@ -771,17 +778,24 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
     let cfg = match ovp_memory::source_work_config::SourceWorkConfig::load(vault_root) {
         Ok(cfg) => cfg,
         Err(e) => {
-            sayln!("  claims_zh tail skipped (config: {e})");
+            let reason = format!("claims_zh tail skipped (config: {e})");
+            sayln!("  {reason}");
+            skip_claims_zh_run(vault_root, &reason);
             return;
         }
     };
+    // Deliberate operator states are NOT recorded: flag-off is an explicit
+    // config choice, and empty pairs is the steady state — neither is an
+    // anomaly worth a log line.
     if !cfg.auto_claim_zh {
         return;
     }
     let pairs = match crate::commands::source_work_cmd::active_claim_pairs(vault_root) {
         Ok(p) => p,
         Err(e) => {
-            sayln!("  claims_zh tail skipped (ledger: {e})");
+            let reason = format!("claims_zh tail skipped (ledger: {e})");
+            sayln!("  {reason}");
+            skip_claims_zh_run(vault_root, &reason);
             return;
         }
     };
@@ -793,27 +807,311 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
     let mut client = match build_client(ClientKind::Live, &cache, Some(&usage_ledger)) {
         Ok(c) => c,
         Err(e) => {
-            sayln!("  claims_zh tail skipped ({e})");
+            let reason = format!("claims_zh tail skipped ({e})");
+            sayln!("  {reason}");
+            skip_claims_zh_run(vault_root, &reason);
             return;
         }
     };
-    let model = ovp_memory::ask::AskArgs::default().model_name;
-    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
-    let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
+    // Capped by the claims-specific budget (0 = unlimited), NOT the daily
+    // enqueue budget `auto_max_per_run`: a backlog built up over many synth
+    // runs must drain in one run, and a provider outage is already contained
+    // by the batch's consecutive-failure breaker (candidate bilingual_tail-v2).
+    claims_zh_tail_run(
         vault_root,
         &pairs,
         client.as_mut(),
-        &model,
-        false,
-        cfg.auto_max_per_run,
+        cfg.auto_claim_zh_max_per_run,
     );
+}
+
+/// Append-only observability log for claims_zh tail runs — one JSON line per
+/// run, so a stuck backlog is reconstructable after the fact (the tail's
+/// stdout is otherwise lost in unattended runs).
+const CLAIMS_ZH_RUNS_REL: &str = ".ovp/crystal/claims_zh_runs.jsonl";
+
+/// Consecutive failed tail runs before a claim key is quarantined: the batch
+/// breaker only trips on CONSECUTIVE failures within one run, so a
+/// deterministically failing ("poison") claim interleaved with successes
+/// would otherwise cost one paid call per run forever (PR #439 P1).
+const QUARANTINE_STREAK: usize = 3;
+
+/// Defensive bounds for the run record's `errors` array — the jsonl is
+/// append-only, so a pathological run must not bloat it.
+const MAX_RECORD_ERRORS: usize = 50;
+const MAX_RECORD_ERROR_LEN: usize = 500;
+
+/// The translatable body of `claims_zh_tail`, split out so tests can drive it
+/// with a stub client (the live-client build needs the `anthropic` feature).
+fn claims_zh_tail_run(
+    vault_root: &std::path::Path,
+    pairs: &[(String, String)],
+    client: &mut dyn ModelClient,
+    max: usize,
+) {
+    let model = ovp_memory::ask::AskArgs::default().model_name;
+    // Quarantine first: keys that failed the last QUARANTINE_STREAK attempted
+    // runs are skipped without a provider call. A log read failure disables
+    // quarantine for this run (fail open) with a warn line.
+    let quarantined = match quarantined_claim_keys(vault_root, pairs) {
+        Ok(q) => q,
+        Err(e) => {
+            sayln!("    warn claims_zh quarantine disabled ({e})");
+            std::collections::BTreeSet::new()
+        }
+    };
+    if !quarantined.is_empty() {
+        sayln!(
+            "    warn claims_zh: quarantined {} key(s) after {QUARANTINE_STREAK} consecutive failed runs: {}",
+            quarantined.len(),
+            quarantined.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    let attempt: Vec<(String, String)> = pairs
+        .iter()
+        .filter(|(key, _)| !quarantined.contains(key))
+        .cloned()
+        .collect();
+    let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
+        vault_root, &attempt, client, &model, false, max,
+    );
+    let (remaining, remaining_error) =
+        match ovp_memory::bilingual::remaining_untranslated(vault_root, pairs) {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e)),
+        };
+    let remaining_display = remaining
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "unknown".into());
     sayln!(
-        "  claims_zh: translated={done} skipped={skipped} errors={}",
+        "  claims_zh: translated={done} skipped={skipped} errors={} remaining={remaining_display}",
         errors.len()
     );
     for e in &errors {
         sayln!("    warn claims_zh: {e}");
     }
+    // A pure no-op run (nothing translated, nothing failed, nothing
+    // quarantined) leaves no record — the log stays a signal, not a
+    // heartbeat. Observability only: a log failure warns like every other
+    // tail failure.
+    if (done > 0 || !errors.is_empty() || !quarantined.is_empty())
+        && let Err(e) = append_claims_zh_run(
+            vault_root,
+            &ClaimsZhRunRecord {
+                outcome: "completed",
+                model: Some(&model),
+                reason: None,
+                translated: done,
+                skipped,
+                errors: &errors,
+                quarantined: &quarantined,
+                remaining,
+                remaining_error: remaining_error.as_deref(),
+            },
+        )
+    {
+        sayln!("    warn claims_zh run log: {e}");
+    }
+}
+
+/// Record a SKIPPED tail run (config/ledger/client build failure) — these
+/// paths return before any translation work, so without a record the failure
+/// is invisible in unattended runs. Deliberate states (flag off, replay
+/// kind, empty pairs) are NOT recorded by design.
+fn skip_claims_zh_run(vault_root: &std::path::Path, reason: &str) {
+    let no_keys = std::collections::BTreeSet::new();
+    // Observability only: a log failure warns like every other tail failure.
+    if let Err(e) = append_claims_zh_run(
+        vault_root,
+        &ClaimsZhRunRecord {
+            outcome: "skipped",
+            model: None,
+            reason: Some(reason),
+            translated: 0,
+            skipped: 0,
+            errors: &[],
+            quarantined: &no_keys,
+            remaining: None,
+            remaining_error: None,
+        },
+    ) {
+        sayln!("    warn claims_zh run log: {e}");
+    }
+}
+
+/// Keys quarantined for this run: those present in `error_keys` of each of
+/// the last QUARANTINE_STREAK tail runs that made translation attempts.
+/// Records with no attempts (pure no-ops) and runs where the key was itself
+/// quarantined are neutral — they neither extend nor break a streak — while
+/// any other attempted run without the key in `error_keys` (a success, or
+/// the key simply being fresh) resets it. A single unparseable line (e.g. a
+/// half-written torn tail) is skipped — only a file that cannot be opened or
+/// read at all is an Err, and the caller disables quarantine (fail open).
+fn quarantined_claim_keys(
+    vault_root: &std::path::Path,
+    pairs: &[(String, String)],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let path = vault_root.join(CLAIMS_ZH_RUNS_REL);
+    if !path.is_file() {
+        return Ok(Default::default());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut records = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) {
+            records.push(rec);
+        }
+    }
+    let mut streaks: std::collections::HashMap<&str, usize> =
+        pairs.iter().map(|(k, _)| (k.as_str(), 0)).collect();
+    let mut broken: std::collections::HashSet<&str> = Default::default();
+    for rec in records.iter().rev() {
+        let error_keys = record_error_keys(rec);
+        let neutral: std::collections::HashSet<&str> = rec
+            .get("quarantined")
+            .and_then(|q| q.as_array())
+            .map(|a| a.iter().filter_map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+        let attempted = rec
+            .get("translated")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0)
+            > 0
+            || !error_keys.is_empty();
+        for (key, streak) in streaks.iter_mut() {
+            if broken.contains(key) || neutral.contains(key) || !attempted {
+                continue;
+            }
+            if error_keys.contains(*key) {
+                *streak += 1;
+            } else {
+                broken.insert(key);
+            }
+        }
+    }
+    Ok(streaks
+        .into_iter()
+        .filter(|(_, streak)| *streak >= QUARANTINE_STREAK)
+        .map(|(key, _)| key.to_string())
+        .collect())
+}
+
+/// Machine-consumable claim keys of a run record's failures: the explicit
+/// `error_keys` field when present, else the "key: message" prefixes of the
+/// free-text `errors` array (records written before the field existed).
+fn record_error_keys(rec: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    if let Some(keys) = rec.get("error_keys").and_then(|k| k.as_array()) {
+        return keys
+            .iter()
+            .filter_map(|k| k.as_str().map(str::to_string))
+            .collect();
+    }
+    rec.get("errors")
+        .and_then(|e| e.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str())
+                .filter_map(error_line_key)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Claim-key prefix of a "key: message" batch error line, if it has one.
+fn error_line_key(line: &str) -> Option<String> {
+    line.split_once(": ").map(|(key, _)| key.to_string())
+}
+
+/// One claims_zh tail run's persistable outcome (see `append_claims_zh_run`).
+/// `outcome` is "completed" (the batch ran) or "skipped" (early-return
+/// failure; `reason` carries the warn text). `remaining: None` records a
+/// JSON null — plus `remaining_error` when the projection was unreadable
+/// (see `remaining_untranslated`).
+struct ClaimsZhRunRecord<'a> {
+    outcome: &'a str,
+    model: Option<&'a str>,
+    reason: Option<&'a str>,
+    translated: usize,
+    skipped: usize,
+    errors: &'a [String],
+    quarantined: &'a std::collections::BTreeSet<String>,
+    remaining: Option<usize>,
+    remaining_error: Option<&'a str>,
+}
+
+/// Append one run record to `CLAIMS_ZH_RUNS_REL` (same append-only JSONL
+/// style as `.ovp/evolution-ledger.jsonl`). The whole line goes out in ONE
+/// `write_all` (minimizing torn-line odds against a concurrent reader) and
+/// `sync_data` forces it to disk — an unattended crash must not lose the
+/// very record written to explain the run.
+fn append_claims_zh_run(
+    vault_root: &std::path::Path,
+    run: &ClaimsZhRunRecord<'_>,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = vault_root.join(CLAIMS_ZH_RUNS_REL);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let error_keys: Vec<String> = run
+        .errors
+        .iter()
+        .filter_map(|e| error_line_key(e))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut record_errors: Vec<String> = run
+        .errors
+        .iter()
+        .take(MAX_RECORD_ERRORS)
+        .map(|e| e.chars().take(MAX_RECORD_ERROR_LEN).collect())
+        .collect();
+    if run.errors.len() > MAX_RECORD_ERRORS {
+        record_errors.push(format!(
+            "...truncated {} more",
+            run.errors.len() - MAX_RECORD_ERRORS
+        ));
+    }
+    let mut record = serde_json::json!({
+        "schema": "ovp.claims_zh_run/v1",
+        "ts": ts,
+        "outcome": run.outcome,
+        "translated": run.translated,
+        "skipped": run.skipped,
+        "errors": record_errors,
+        "error_keys": error_keys,
+        "quarantined": run.quarantined,
+        "remaining": run.remaining,
+    });
+    if let Some(m) = run.model {
+        record["model"] = serde_json::json!(m);
+    }
+    if let Some(r) = run.reason {
+        record["reason"] = serde_json::json!(r);
+    }
+    if let Some(e) = run.remaining_error {
+        record["remaining_error"] = serde_json::json!(e);
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let mut line = record.to_string();
+    line.push('\n');
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("appending {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| format!("syncing {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -1354,6 +1652,7 @@ mod tests {
     // ---- claims_zh bilingual tail gates (candidate bilingual_tail-v1) ----
 
     const CLAIMS_ZH: &str = ".ovp/crystal/claims_zh.json";
+    const CLAIMS_ZH_RUNS: &str = ".ovp/crystal/claims_zh_runs.jsonl";
 
     /// Eval_plan (1): a REPLAY-kind tail returns before any client/config
     /// work — NeverCallsClient is never built and no projection appears.
@@ -1362,6 +1661,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Replay);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
     }
 
     /// Eval_plan (4): `auto_claim_zh = false` skips the tail. The flag gate
@@ -1374,10 +1674,12 @@ mod tests {
         std::fs::write(&cfg, "auto_claim_zh = false\n").unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
     }
 
     /// Eval_plan (5): a malformed source-work.toml warns + skips — the tail
-    /// returns normally (failure isolation) and writes nothing.
+    /// returns normally (failure isolation) and writes no projection, but the
+    /// skip IS recorded so unattended failures stay auditable.
     #[test]
     fn claims_zh_tail_warns_and_skips_on_malformed_config() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1386,6 +1688,28 @@ mod tests {
         std::fs::write(&cfg, "auto_claim_zh = [not toml\n").unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["outcome"], "skipped");
+        assert!(
+            records[0]["reason"].as_str().unwrap().contains("config:"),
+            "reason carries the warn text: {records:?}"
+        );
+    }
+
+    /// The ledger gate records its skip too — a half-written/garbled ledger
+    /// fails `active_claim_pairs` before any client work.
+    #[test]
+    fn claims_zh_tail_records_skip_on_unreadable_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join(".ovp/crystal/ledger.jsonl");
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(&ledger, "not json\n").unwrap();
+        claims_zh_tail(tmp.path(), ClientKind::Live);
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["outcome"], "skipped");
+        assert!(records[0]["reason"].as_str().unwrap().contains("ledger:"));
     }
 
     /// The flag-on path with no ledger is a no-op: nothing to translate, and
@@ -1395,5 +1719,335 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
+    }
+
+    // ---- claims_zh tail body (candidate bilingual_tail-v2) ----
+
+    /// Always-succeeds stub so the tail body is testable without the
+    /// `anthropic` feature / a live provider.
+    struct StubClient {
+        calls: usize,
+    }
+
+    fn stub_reply() -> ovp_llm::ModelReply {
+        ovp_llm::ModelReply {
+            model: "stub".into(),
+            text: "中文翻译".into(),
+            stop_reason: ovp_llm::StopReason::EndTurn,
+            usage: ovp_llm::Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+            blocks: None,
+            raw_stop_reason: None,
+        }
+    }
+
+    impl ModelClient for StubClient {
+        fn call(
+            &mut self,
+            _request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            self.calls += 1;
+            Ok(stub_reply())
+        }
+    }
+
+    /// Always-fails stub — the simulated provider outage.
+    struct AlwaysFailsClient {
+        calls: usize,
+    }
+
+    impl ModelClient for AlwaysFailsClient {
+        fn call(
+            &mut self,
+            _request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            self.calls += 1;
+            Err(ovp_llm::CallError::Transport {
+                detail: "simulated outage".into(),
+            })
+        }
+    }
+
+    /// Fails only requests whose user content mentions `poison` — a
+    /// deterministically failing claim that never trips the in-run breaker
+    /// because successes interleave with its failures.
+    struct PoisonClient {
+        poison: &'static str,
+        attempts: usize,
+    }
+
+    impl ModelClient for PoisonClient {
+        fn call(
+            &mut self,
+            request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            self.attempts += 1;
+            let ovp_llm::ModelMessage::User { content } = &request.messages[0]
+            else {
+                panic!("bilingual requests are single user messages")
+            };
+            if content.contains(self.poison) {
+                Err(ovp_llm::CallError::Transport {
+                    detail: "deterministic poison failure".into(),
+                })
+            } else {
+                Ok(stub_reply())
+            }
+        }
+    }
+
+    fn claim_pairs(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("claim-{i:03}"), format!("English claim number {i}.")))
+            .collect()
+    }
+
+    fn run_records(tmp: &tempfile::TempDir) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(tmp.path().join(CLAIMS_ZH_RUNS))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// The claims cap is decoupled from the daily enqueue budget: with
+    /// `auto_max_per_run = 1` but `auto_claim_zh_max_per_run = 0` (unlimited)
+    /// the tail still translates the WHOLE missing backlog in one run, and
+    /// the run log records remaining = 0.
+    #[test]
+    fn claims_zh_tail_run_drains_full_backlog_when_cap_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The enqueue budget is irrelevant to the tail; only the claims cap
+        // gates translation volume. Parsed here to prove the wiring.
+        let cfg_dir = tmp.path().join(".ovp");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("source-work.toml"), "auto_max_per_run = 1\n").unwrap();
+        let cfg = ovp_memory::source_work_config::SourceWorkConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.auto_max_per_run, 1);
+        assert_eq!(cfg.auto_claim_zh_max_per_run, 0);
+
+        let pairs = claim_pairs(3);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, cfg.auto_claim_zh_max_per_run);
+        assert_eq!(client.calls, 3, "every missing claim is translated");
+        let file = ovp_memory::bilingual::ClaimsZhFile::load(tmp.path()).unwrap();
+        assert_eq!(file.entries.len(), 3);
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["schema"], "ovp.claims_zh_run/v1");
+        assert_eq!(records[0]["outcome"], "completed");
+        assert_eq!(records[0]["translated"], 3);
+        assert_eq!(records[0]["skipped"], 0);
+        assert_eq!(records[0]["errors"], serde_json::json!([]));
+        assert_eq!(records[0]["error_keys"], serde_json::json!([]));
+        assert_eq!(records[0]["quarantined"], serde_json::json!([]));
+        assert_eq!(records[0]["remaining"], 0);
+        assert!(records[0]["ts"].as_u64().unwrap() > 0);
+    }
+
+    /// A positive claims cap still bounds attempts, and the run log's
+    /// `remaining` reports the backlog left for the next run.
+    #[test]
+    fn claims_zh_tail_run_honors_positive_cap_and_logs_remaining() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(3);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 1);
+        assert_eq!(client.calls, 1);
+        assert_eq!(
+            ovp_memory::bilingual::remaining_untranslated(tmp.path(), &pairs).unwrap(),
+            2
+        );
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["translated"], 1);
+        assert_eq!(records[0]["remaining"], 2);
+
+        // A follow-up unlimited run drains the rest and APPENDS a record —
+        // the log is the audit trail of the backlog converging.
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.calls, 2, "fresh translations are skipped");
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1]["translated"], 2);
+        assert_eq!(records[1]["remaining"], 0);
+    }
+
+    /// A pure no-op run (everything fresh, nothing failed or quarantined)
+    /// appends NO record — the log stays a signal, not a heartbeat.
+    #[test]
+    fn claims_zh_tail_run_noop_appends_no_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(2);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(run_records(&tmp).len(), 1);
+
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.calls, 0, "all fresh — nothing attempted");
+        assert_eq!(run_records(&tmp).len(), 1, "no-op run leaves no record");
+    }
+
+    /// Unlimited cap + total outage: the in-run breaker aborts after 3
+    /// consecutive failures, and the record carries both the free-text errors
+    /// and the machine-consumable error_keys.
+    #[test]
+    fn claims_zh_tail_run_outage_breaks_and_logs_error_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(5);
+        let mut client = AlwaysFailsClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.calls, 3, "breaker aborts the batch");
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["translated"], 0);
+        assert_eq!(
+            records[0]["error_keys"],
+            serde_json::json!(["claim-000", "claim-001", "claim-002"])
+        );
+        let errors = records[0]["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 4, "3 item errors + the breaker line");
+        assert!(errors[3].as_str().unwrap().contains("aborting batch"));
+        assert_eq!(records[0]["remaining"], 5);
+    }
+
+    /// Quarantine end-to-end (PR #439 P1): a poison claim fails 3 runs in a
+    /// row while its neighbour succeeds (so the in-run breaker never trips);
+    /// the 4th run skips it WITHOUT a provider call and records the
+    /// quarantine. The quarantined claim still counts as remaining.
+    #[test]
+    fn claims_zh_tail_run_quarantines_poison_key_after_three_failed_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(2);
+        for (run, expected) in [(1, 2), (2, 1), (3, 1)] {
+            let mut client = PoisonClient {
+                poison: "number 0",
+                attempts: 0,
+            };
+            claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+            assert_eq!(
+                client.attempts, expected,
+                "run {run}: the healthy claim goes fresh after run 1"
+            );
+        }
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 3);
+        for (i, rec) in records.iter().enumerate() {
+            assert_eq!(rec["error_keys"], serde_json::json!(["claim-000"]));
+            assert_eq!(rec["translated"], if i == 0 { 1 } else { 0 });
+        }
+
+        let mut client = PoisonClient {
+            poison: "number 0",
+            attempts: 0,
+        };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.attempts, 0, "quarantined key is never called");
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[3]["outcome"], "completed");
+        assert_eq!(records[3]["quarantined"], serde_json::json!(["claim-000"]));
+        assert_eq!(records[3]["translated"], 0);
+        assert_eq!(records[3]["remaining"], 1, "still untranslated");
+    }
+
+    /// A `skipped` record (early-return gate failure) made no translation
+    /// attempts, so it is streak-NEUTRAL: the failed runs around it still
+    /// count as consecutive. A completed success record DOES reset.
+    #[test]
+    fn quarantine_streak_ignores_skipped_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(1);
+        let failed = serde_json::json!({
+            "schema": "ovp.claims_zh_run/v1", "outcome": "completed",
+            "translated": 0, "error_keys": ["claim-000"],
+        });
+        let skipped = serde_json::json!({
+            "schema": "ovp.claims_zh_run/v1", "outcome": "skipped",
+            "reason": "claims_zh tail skipped (config: x)",
+        });
+        write_run_lines(
+            &tmp,
+            &[failed.clone(), skipped, failed.clone(), failed.clone()],
+        );
+        let q = quarantined_claim_keys(tmp.path(), &pairs).unwrap();
+        assert!(q.contains("claim-000"), "3 failed runs around a skip");
+
+        let succeeded = serde_json::json!({
+            "schema": "ovp.claims_zh_run/v1", "outcome": "completed",
+            "translated": 1, "error_keys": [],
+        });
+        write_run_lines(&tmp, &[failed.clone(), failed.clone(), failed, succeeded]);
+        let q = quarantined_claim_keys(tmp.path(), &pairs).unwrap();
+        assert!(q.is_empty(), "a clean completed run resets the streak");
+    }
+
+    /// A torn/half-written line in the log is skipped, not fatal: streak math
+    /// runs on the intact records.
+    #[test]
+    fn quarantine_streak_tolerates_torn_log_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(1);
+        let failed = serde_json::json!({
+            "schema": "ovp.claims_zh_run/v1", "outcome": "completed",
+            "translated": 0, "error_keys": ["claim-000"],
+        });
+        let path = tmp.path().join(CLAIMS_ZH_RUNS);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut raw = String::new();
+        for _ in 0..3 {
+            raw.push_str(&failed.to_string());
+            raw.push('\n');
+        }
+        raw.push_str("{\"schema\": \"ovp.clai\n"); // torn tail
+        std::fs::write(&path, raw).unwrap();
+        let q = quarantined_claim_keys(tmp.path(), &pairs).unwrap();
+        assert!(q.contains("claim-000"));
+    }
+
+    fn write_run_lines(tmp: &tempfile::TempDir, lines: &[serde_json::Value]) {
+        let path = tmp.path().join(CLAIMS_ZH_RUNS);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut raw = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        raw.push('\n');
+        std::fs::write(&path, raw).unwrap();
+    }
+
+    /// A corrupt claims_zh.json: the batch fails loud via the projection
+    /// marker and remaining is unknowable — recorded as null +
+    /// remaining_error instead of a made-up number.
+    #[test]
+    fn claims_zh_tail_run_corrupt_projection_records_remaining_null() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zh = tmp.path().join(CLAIMS_ZH);
+        std::fs::create_dir_all(zh.parent().unwrap()).unwrap();
+        std::fs::write(&zh, "not json").unwrap();
+        let pairs = claim_pairs(2);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.calls, 0, "corrupt projection aborts before any call");
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert!(records[0]["remaining"].is_null());
+        assert!(records[0]["remaining_error"].is_string());
+        assert!(
+            records[0]["errors"].as_array().unwrap()[0]
+                .as_str()
+                .unwrap()
+                .contains("projection corrupt")
+        );
     }
 }

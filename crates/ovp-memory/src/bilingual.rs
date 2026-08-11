@@ -485,6 +485,25 @@ pub fn translate_claims_batch(
     (done, skipped, errors)
 }
 
+/// Active claims still missing a fresh zh projection — the backlog a later
+/// run (auto or manual) still has to drain. A MISSING projection file counts
+/// every pair as remaining (steady state before the first run); an existing
+/// but unreadable/corrupt file is an Err so callers can surface it instead of
+/// silently reporting a full backlog.
+pub fn remaining_untranslated(
+    vault_root: &Path,
+    pairs: &[(String, String)],
+) -> Result<usize, String> {
+    match ClaimsZhFile::load(vault_root) {
+        Ok(file) => Ok(pairs
+            .iter()
+            .filter(|(key, en)| file.get_fresh(key, en).is_none())
+            .count()),
+        Err(e) if vault_root.join(CLAIMS_ZH_REL).is_file() => Err(e),
+        Err(_) => Ok(pairs.len()),
+    }
+}
+
 /// Translate one memory card.
 pub fn translate_card(
     vault_root: &Path,
