@@ -70,3 +70,49 @@ pub fn run(args: IntakeArgs) -> Result<(), CliError> {
     );
     Ok(())
 }
+
+/// `intake-dedup-urls` — late URL dedup for pre-intake legacy copies (the
+/// intake ledger only reaches back to its go-live; see
+/// `park_legacy_url_duplicates`). Dry-run unless `apply`.
+pub fn run_dedup_urls(
+    vault_root: &std::path::Path,
+    apply: bool,
+    date: String,
+) -> Result<(), CliError> {
+    let _lock = if apply {
+        Some(ovp_intake::RunLock::acquire(vault_root).map_err(CliError::Io)?)
+    } else {
+        None
+    };
+    let cfg = IntakeConfig::new(
+        vault_root.to_path_buf(),
+        date.clone(),
+        format!("intake-dedup-{date}"),
+    );
+    let groups =
+        ovp_intake::park_legacy_url_duplicates(&cfg, !apply).map_err(CliError::Io)?;
+    if groups.is_empty() {
+        println!("intake-dedup-urls: no duplicate-URL groups in the processed tree");
+        return Ok(());
+    }
+    let mut parked_total = 0usize;
+    for g in &groups {
+        println!("{}", g.url);
+        println!("  keep {}", g.kept);
+        for rec in &g.parked {
+            parked_total += 1;
+            match &rec.to {
+                Some(to) => println!("  park {} → {to}", rec.from),
+                None => println!("  park {}", rec.from),
+            }
+        }
+    }
+    println!(
+        "intake-dedup-urls: {} group(s), {} copy(ies) parked{}",
+        groups.len(),
+        parked_total,
+        if apply { " — run `ovp2 index` (or wait for daily) to refresh projections" }
+        else { " — dry-run, nothing moved; pass --apply to execute" },
+    );
+    Ok(())
+}

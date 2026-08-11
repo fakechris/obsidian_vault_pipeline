@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyMemoryTitles,
+  buildMemoryTitleMap,
   citationsInOrder,
+  groundCitesOnSource,
+  parseChatFocus,
+  savedReplayPlan,
   citeLinkTarget,
   displayUserQuestion,
   normalizeCiteToken,
@@ -88,5 +93,95 @@ describe('displayUserQuestion', () => {
     expect(displayUserQuestion('What is agent memory?')).toBe(
       'What is agent memory?',
     );
+  });
+});
+
+describe('focused-session replay grounding', () => {
+  const SHA = '816380d615c63038a3aae393ecaa8a2c624045a5a03200111d46e0f860183519';
+
+  it('parseChatFocus reads the header markers', () => {
+    const md = `# Ask — ts\n<!-- ovp:focus_source=${SHA} -->\n<!-- ovp:focus_title=事关7709 -->\n\n**Q:** hi`;
+    expect(parseChatFocus(md)).toEqual({ sha: SHA, theme: null });
+    expect(parseChatFocus('# Ask\n<!-- ovp:focus_theme=Agent Memory -->\n')).toEqual({
+      sha: null,
+      theme: 'Agent Memory',
+    });
+    expect(parseChatFocus('# Ask\n\n**Q:** hi')).toEqual({ sha: null, theme: null });
+  });
+
+  it('groundCitesOnSource sends units/cards to the memory tab, keeps links', () => {
+    // Operator regression 2026-08-07: /ask/chat/src-… showed "No detail
+    // page" for every unit — the focus sha grounds them like the live dock.
+    const out = groundCitesOnSource(
+      [
+        { id: 'unit:u-004-723d01f2', kind: 'unit', link_target: null },
+        { id: `source:${SHA}`, kind: 'source', link_target: null },
+        { id: 'claim:ck-x', kind: 'claim', link_target: '/knowledge#ck-x' },
+      ],
+      SHA,
+    );
+    expect(out[0].link_target).toBe(`/library/${SHA}?tab=memory`);
+    expect(out[1].link_target).toBe(`/library/${SHA}`);
+    expect(out[2].link_target).toBe('/knowledge#ck-x');
+  });
+});
+
+describe('savedReplayPlan — replay source + error priority', () => {
+  const MD = '# Ask — ts\n<!-- ovp:focus_source=abc123 -->\n\n**Q:** hi\n\n**A:** there [unit:u-1]\n';
+
+  it('audit session wins when it has turns (focus still parsed)', () => {
+    const plan = savedReplayPlan(MD, 2);
+    expect(plan.kind).toBe('session');
+    expect(plan.focus.sha).toBe('abc123');
+  });
+
+  it('falls back to markdown turns when the session is empty', () => {
+    const plan = savedReplayPlan(MD, 0);
+    expect(plan.kind).toBe('markdown');
+    expect(plan.parsedTurns).toHaveLength(1);
+    expect(plan.parsedTurns[0].question).toBe('hi');
+  });
+
+  it('markdown loaded but turn-less is EMPTY; load failure is LOAD ERROR', () => {
+    expect(savedReplayPlan('# Ask — ts\n', 0).kind).toBe('empty');
+    // Both fetches failed: must NOT masquerade as an empty-but-fine chat.
+    expect(savedReplayPlan(null, 0).kind).toBe('loadError');
+    // …but a live audit session still replays even without markdown.
+    expect(savedReplayPlan(null, 3).kind).toBe('session');
+  });
+});
+
+describe('memory titles on replayed citation chips', () => {
+  const memory = {
+    cards: [{ id: 'c-1', title: 'The Leverage Card' }],
+    units: [
+      { unit_id: 'u-011-ecc4bc16', text: 'fallback text', quote: '基金与国际投行签TRS合同,付Swap Spread换每日2倍收益现金流', line: 14 },
+      { unit_id: 'u-empty', text: '  ', quote: '', line: null },
+    ],
+  };
+
+  it('buildMemoryTitleMap keys canonical ids, prefers quotes, skips empties', () => {
+    const m = buildMemoryTitleMap(memory);
+    expect(m.get('unit:u-011-ecc4bc16')).toContain('基金与国际投行签TRS合同');
+    expect(m.get('card:c-1')).toBe('The Leverage Card');
+    expect(m.has('unit:u-empty')).toBe(false);
+  });
+
+  it('applyMemoryTitles fills bare-id chips, never overwrites real titles', () => {
+    // Operator report 2026-08-07: chips read "u-011-ecc4bc16" — the raw id.
+    const m = buildMemoryTitleMap(memory);
+    const out = applyMemoryTitles(
+      [
+        { id: 'unit:u-011-ecc4bc16', title: 'unit:u-011-ecc4bc16' },
+        { id: 'unit:u-011-ecc4bc16', title: 'u-011-ecc4bc16' },
+        { id: 'card:c-1', title: 'Server-provided real title' },
+        { id: 'unit:u-unknown', title: 'unit:u-unknown' },
+      ],
+      m,
+    );
+    expect(out[0].title).toContain('TRS');
+    expect(out[1].title).toContain('TRS');
+    expect(out[2].title).toBe('Server-provided real title');
+    expect(out[3].title).toBe('unit:u-unknown');
   });
 });

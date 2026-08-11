@@ -11,18 +11,56 @@ use std::path::Path;
 use ovp_domain::crystal::DurableRecord;
 use ovp_domain::crystal::theme_pages::ThemePagesFile;
 use ovp_domain::units::Unit;
-use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, PackRow, Query, SourceRow};
+use ovp_index::{ClaimRow, ClaimStatus, EvidenceModel, IndexModel, Query, SourceRow};
 use serde_json::{Value, json};
 
-use crate::graph::{last_path_segment, theme_counts};
+use crate::graph::last_path_segment;
 
-/// `/api/themes` — display themes with their active-claim counts.
+/// `/api/themes` — display themes with their active-claim counts, keyed by
+/// the STABLE community id (not the mutable label). Two communities that
+/// happen to share a display label produce two entries — the id is the
+/// routing key the portal links by, so label collisions must not pool.
+/// `theme`/`label_zh` are presentation only. Records without a `theme_id`
+/// (pre-theme indexes / projection before themes.json) fall back to the
+/// `theme` string so the wall still renders.
 pub fn themes_body(records: &[DurableRecord]) -> Value {
-    let themes: Vec<Value> = theme_counts(records)
+    use std::collections::BTreeMap;
+    // Key by the stable community id when present; fall back to the label
+    // string when `theme_id` is None (pre-theme projection / corrupt
+    // themes.json passthrough) so distinct labels stay distinct entries
+    // instead of collapsing into one null-id bucket.
+    let mut by_key: BTreeMap<String, (Option<i64>, String, usize)> = BTreeMap::new();
+    for r in records {
+        let key = match r.theme_id {
+            Some(id) => format!("i{id}"),
+            None => format!("t:{}", r.theme),
+        };
+        let entry = by_key
+            .entry(key)
+            .or_insert_with(|| (r.theme_id, r.theme.clone(), 0));
+        entry.2 += 1;
+    }
+    let mut themes: Vec<(Option<i64>, String, usize)> =
+        by_key.into_iter().map(|(_, v)| v).collect();
+    // Highest count first; ties break by id (None sorts first as the least),
+    // then by label so the order is deterministic.
+    themes.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+    let out: Vec<Value> = themes
         .into_iter()
-        .map(|(theme, count)| json!({ "theme": theme, "count": count }))
+        .map(|(id, label, count)| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("theme".into(), Value::String(label));
+            obj.insert("count".into(), Value::Number(count.into()));
+            // `id` is the stable routing key; null only on pre-theme
+            // projections (the client routes those by label as a legacy fallback).
+            obj.insert(
+                "id".into(),
+                id.map(|i| Value::Number(i.into())).unwrap_or(Value::Null),
+            );
+            Value::Object(obj)
+        })
         .collect();
-    Value::Array(themes)
+    Value::Array(out)
 }
 
 /// `/api/theme-pages` — the grounded topic pages plus a claim lookup for
@@ -133,10 +171,9 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
         return None;
     }
     // Claims whose cited case_ids join to any mentioning source's pack.
-    let cases: std::collections::HashSet<String> = sources
+    let cases: std::collections::HashSet<&str> = sources
         .iter()
         .filter_map(|s| s.pack_dir.as_deref().and_then(last_path_segment))
-        .map(str::to_string)
         .collect();
     // Only durable/caveated claims — the endpoint contract + UI describe
     // active knowledge; a superseded/retracted claim rendered without a pill
@@ -145,17 +182,12 @@ pub fn entity_body(model: &IndexModel, id: &str) -> Option<Value> {
         .claims
         .iter()
         .filter(|c| matches!(c.status, ClaimStatus::Durable | ClaimStatus::Caveated))
-        .filter(|c| c.sources.iter().any(|s| cases.contains(s)))
+        .filter(|c| c.sources.iter().any(|s| cases.contains(s.as_str())))
         .collect();
-    claims.sort_by_key(|c| {
-        (
-            match c.status {
-                ClaimStatus::Durable => 0u8,
-                ClaimStatus::Caveated => 1,
-                _ => 2,
-            },
-            c.claim_id.clone(),
-        )
+    claims.sort_by(|a, b| {
+        claim_status_order(a)
+            .cmp(&claim_status_order(b))
+            .then_with(|| a.claim_id.cmp(&b.claim_id))
     });
     Some(json!({
         "id": id_lc,
@@ -220,18 +252,6 @@ pub fn claim_body_with_lineage(
         .iter()
         .find(|r| r.claim_key == id || r.claim_id == id)?;
 
-    let source_lookup: HashMap<String, &SourceRow> = model
-        .map(|m| m.sources.iter().map(|s| (s.sha256.clone(), s)).collect())
-        .unwrap_or_default();
-    let pack_lookup: HashMap<String, &PackRow> = model
-        .map(|m| {
-            m.packs
-                .iter()
-                .filter_map(|p| Some((last_path_segment(&p.pack_dir)?.to_string(), p)))
-                .collect()
-        })
-        .unwrap_or_default();
-
     let mut citations = Vec::new();
     for cit in &rec.citations {
         let unit_text = if include_unit_text {
@@ -245,18 +265,26 @@ pub fn claim_body_with_lineage(
             String::new()
         };
 
-        let (source_title, source_url, source_sha) =
-            if let Some(pack) = pack_lookup.get(cit.case_id.as_str()) {
-                let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
-                let src = source_lookup.get(&sha);
-                (
-                    src.and_then(|s| s.title.clone()).unwrap_or_else(|| pack.title.clone()),
-                    src.and_then(|s| s.url.clone()).unwrap_or_default(),
-                    sha,
-                )
-            } else {
-                (cit.case_id.clone(), String::new(), String::new())
-            };
+        let pack = model.and_then(|m| {
+            m.packs
+                .iter()
+                .find(|p| last_path_segment(&p.pack_dir) == Some(cit.case_id.as_str()))
+        });
+        let (source_title, source_url, source_sha) = if let Some(pack) = pack {
+            let sha = pack.source_sha256.as_deref().unwrap_or("").to_string();
+            let source = model.and_then(|m| m.sources.iter().find(|source| source.sha256 == sha));
+            (
+                source
+                    .and_then(|source| source.title.clone())
+                    .unwrap_or_else(|| pack.title.clone()),
+                source
+                    .and_then(|source| source.url.clone())
+                    .unwrap_or_default(),
+                sha,
+            )
+        } else {
+            (cit.case_id.clone(), String::new(), String::new())
+        };
 
         citations.push(json!({
             "unit_id": cit.unit_id,
@@ -276,7 +304,12 @@ pub fn claim_body_with_lineage(
         .and_then(|m| m.get(&rec.claim_key).or_else(|| m.get(&rec.claim_id)));
 
     let mut body = json!({
+        // Historical field name: the endpoint's public `claim_id` has always
+        // carried the CANONICAL claim_key (kept for client compat);
+        // `claim_key` states it explicitly so key-based consumers (the zh
+        // lookup rule shared with /api/model) need no folklore.
         "claim_id": rec.claim_key,
+        "claim_key": rec.claim_key,
         "claim": rec.claim,
         "theme": rec.theme,
         "strength": format!("{:?}", rec.strength).to_lowercase(),
@@ -360,15 +393,10 @@ pub fn source_body(
             .collect(),
         None => Vec::new(),
     };
-    citing.sort_by_key(|c| {
-        (
-            match c.status {
-                ClaimStatus::Durable => 0u8,
-                ClaimStatus::Caveated => 1,
-                _ => 2,
-            },
-            c.claim_id.clone(),
-        )
+    citing.sort_by(|a, b| {
+        claim_status_order(a)
+            .cmp(&claim_status_order(b))
+            .then_with(|| a.claim_id.cmp(&b.claim_id))
     });
 
     let doc = doc.unwrap_or(SourceDoc { markdown: None, truncated: false, error: None });
@@ -386,4 +414,12 @@ pub fn source_body(
             "error": doc.error,
         },
     }))
+}
+
+fn claim_status_order(claim: &ClaimRow) -> u8 {
+    match claim.status {
+        ClaimStatus::Durable => 0,
+        ClaimStatus::Caveated => 1,
+        _ => 2,
+    }
 }

@@ -11,7 +11,9 @@ import {
 const SHA = '6dc988d1d27614055ed13de8010eddbd44f107635061e25c7a6a5647f887a0a3';
 const model = {
   sources: [{ sha256: SHA, title: 'The Actual Article Title' }],
-  claims: [{ claim_key: 'ck-abc', claim: 'The claim text as indexed' }],
+  claims: [
+    { claim_id: 'agents-b001-3', claim_key: 'ck-abc', claim: 'The claim text as indexed' },
+  ],
 };
 
 describe('citationsFromAnswerText with an index lookup', () => {
@@ -28,6 +30,16 @@ describe('citationsFromAnswerText with an index lookup', () => {
   it('resolves claim keys to claim text', () => {
     const [c] = citationsFromAnswerText(
       'as shown [claim:ck-abc]',
+      makeCitationTitleLookup(model),
+    );
+    expect(c.title).toBe('The claim text as indexed');
+  });
+
+  it('resolves run-scoped claim_ids too — old transcripts cite them', () => {
+    // Operator regression 2026-08-07: a re-crystallize renumbered claim_ids
+    // and every pre-rerun chat lost its claim titles (lookup was key-only).
+    const [c] = citationsFromAnswerText(
+      'as shown [claim:agents-b001-3]',
       makeCitationTitleLookup(model),
     );
     expect(c.title).toBe('The claim text as indexed');
@@ -126,5 +138,16 @@ describe('tolerant + legacy citation resolution', () => {
     );
     expect(c.title).toBe('card:...:0');
     expect(c.link_target).toBeNull();
+  });
+});
+
+describe('modern unit/card ids never shadow real titles', () => {
+  it('lookup returns null for non-path unit ids (receipt title must win)', () => {
+    // 2026-08-07 regression: humanizeLegacyPath('u-006-b13dec99') returned
+    // the id itself, and lookup results outrank c.title in citationTitle —
+    // masking server-resolved quote titles on every replay surface.
+    const lookup = makeCitationTitleLookup({ sources: [], claims: [] });
+    expect(lookup('unit', 'u-006-b13dec99')).toBeNull();
+    expect(lookup('card', '40-Resources/Reader/good:0')).not.toBeUndefined();
   });
 });

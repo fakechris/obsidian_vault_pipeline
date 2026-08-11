@@ -32,6 +32,9 @@ export function installDesktopExternalLinks(): void {
   const invoke = tauri?.core?.invoke;
   if (!invoke) return; // plain browser — nothing to bridge
 
+  // Lets CSS clear native titlebar chrome (chat dock header, etc.).
+  document.documentElement.classList.add('tauri');
+
   const openExternal = (url: string) => {
     void invoke('open_external', { url }).catch(() => {
       /* best-effort; a failed open must not throw into the click handler */

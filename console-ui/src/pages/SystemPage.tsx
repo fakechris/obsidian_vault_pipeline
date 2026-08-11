@@ -606,6 +606,11 @@ function SettingsSection({ refreshKey = 0 }: { refreshKey?: number }) {
           <dd className="tiny">
             <AgeLabel builtAt={settings.built_at} />
           </dd>
+          {/* Stage-4 observation window: which store served this model —
+              expect a steady 'sqlite'; 'json' here without a recent tag
+              edit means the shadow is failing (see the repair banner). */}
+          <dt>{t('system.servingBackend')}</dt>
+          <dd className="mono tiny">{settings.serving_backend ?? '—'}</dd>
           <dt>{t('system.runId')}</dt>
           <dd className="mono tiny">
             {settings.run_id ?? t('system.noIndex')}

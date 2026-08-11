@@ -15,7 +15,7 @@ use std::path::Path;
 
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
-use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::read_source_from_path;
@@ -163,19 +163,63 @@ pub fn build_index_at_with_progress(
     })
 }
 
+/// Atomic whole-file write: unique tmp + fsync + rename + parent-dir fsync.
+/// The index and evidence projections are the two LARGEST files in the vault
+/// (tens of MB) — a crash mid-`fs::write` leaves a truncated JSON that the
+/// serving cache reads as a parse error and silently degrades to "no
+/// projection". Rename makes torn output impossible for concurrent readers;
+/// syncing the tmp file BEFORE the rename and the directory AFTER it keeps
+/// the same guarantee across power loss (data and rename must not reach disk
+/// out of order). The tmp name is unique per process + write (atomic counter,
+/// not the clock — two same-process writers inside one clock tick would
+/// otherwise share a name and truncate each other), so concurrent writers
+/// cannot rename each other's half-written file.
+pub(crate) fn write_atomic(target: &Path, body: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", target.display()))?;
+    ovp_intake::vaultops::create_dirs_synced(parent)?;
+    let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_os = target.to_path_buf().into_os_string();
+    tmp_os.push(format!(".tmp.{}-{seq}", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp_os);
+
+    let write_synced = |tmp: &Path| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()
+    };
+    if let Err(e) = write_synced(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("writing {}: {e}", tmp.display()));
+    }
+    std::fs::rename(&tmp, target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("renaming {} into place: {e}", target.display())
+    })?;
+    sync_dir(parent)
+}
+
+/// Fsync a directory so a just-created or just-renamed entry survives power
+/// loss. Errors are real failures — the caller promised durability.
+pub(crate) fn sync_dir(dir: &Path) -> Result<(), String> {
+    std::fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(|e| format!("syncing directory {}: {e}", dir.display()))
+}
+
 /// Persist the model to `.ovp/index/index.json`. Overwrite is CORRECT here —
 /// the index is derived, rebuildable state, not a ledger.
 pub fn write_index(vault_root: &Path, model: &IndexModel) -> Result<String, String> {
     let layout = VaultLayout::new();
     let target = vault_root.join(layout.index_file());
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
-    }
     let body =
         serde_json::to_string_pretty(model).map_err(|e| format!("serializing index: {e}"))?;
-    std::fs::write(&target, format!("{body}\n"))
-        .map_err(|e| format!("writing {}: {e}", target.display()))?;
+    write_atomic(&target, &format!("{body}\n"))?;
     Ok(rel_to(vault_root, &target))
 }
 
@@ -438,6 +482,16 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         } else if row.content_date.is_none() {
             row.content_date = first_iso_day_in(rel);
         }
+        // Roll-up: the generics every own/inferred tag implies (transitive),
+        // minus any already present. Separate field so operator tags stay pure.
+        let mut implied: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.extend(aliases.implied_generics(t));
+        }
+        for t in row.tags.iter().chain(row.tags_inferred.iter()) {
+            implied.remove(t);
+        }
+        row.tags_implied = implied.into_iter().collect();
         // Tier-0 URL entities from the SAME per-source read (no extra I/O):
         // the reverse index (entity → sources) is derived on demand from
         // these forward lists, so nothing else is persisted.
@@ -928,6 +982,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             claim_key: Some(rec.claim_key.clone()),
             claim: rec.claim.clone(),
             theme: (!rec.theme.is_empty()).then(|| rec.theme.clone()),
+            theme_id: None,
             status,
             sources: rec.source_cases.clone(),
             strength: enum_str(&rec.strength),
@@ -959,6 +1014,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 claim_key: None,
                 claim: entry.claim,
                 theme: (!entry.theme.is_empty()).then_some(entry.theme),
+                theme_id: None,
                 status: ClaimStatus::Caveated,
                 sources,
                 strength: enum_str(&entry.strength),
@@ -977,6 +1033,18 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     // every index build. Without themes.json the ledger theme passes through.
     if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
         for row in claims.iter_mut() {
+            // `majority_community` is the STABLE grouping identity (community
+            // id); `majority_label` resolves it to the presentation label.
+            // Store both so the portal can route by id while displaying the
+            // (mutable) label — a `crystal-themes` relabel changes the label
+            // but not the id, keeping existing theme URLs valid. Claims whose
+            // cited packs all map to noise/unmapped get the `UNCLASSIFIED_ID`
+            // sentinel so the Unclassified bucket has a routable id too.
+            row.theme_id = Some(
+                themes
+                    .majority_community(&row.sources)
+                    .unwrap_or(UNCLASSIFIED_ID),
+            );
             row.theme = Some(
                 themes
                     .majority_label(&row.sources)

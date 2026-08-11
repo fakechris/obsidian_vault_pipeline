@@ -224,6 +224,13 @@ export const en = {
   'tags.reverseHint': 'Merge the other direction (make the second tag the alias)',
   'tags.showWeak': 'Show weaker candidates',
   'tags.hideWeak': 'Hide weaker candidates',
+  'tags.implyInbox': 'Implication proposals',
+  'tags.implyHelp':
+    'A specific tag that almost always co-occurs with a broader one, but not the reverse — accept to roll the specific up under the generic (searching/faceting the generic then finds it).',
+  'tags.forward': 'rolls up',
+  'tags.reverseProb': 'reverse',
+  'tags.implyHint': 'Roll the specific tag up under the generic',
+  'library.byTagChildren': 'more specific',
   'tags.accept': 'Accept',
   'tags.reject': 'Reject',
   'tags.vocabulary': 'Vocabulary',
@@ -352,6 +359,7 @@ export const en = {
   'source.chatNewOnSource': 'New chat',
   'source.chatOpenInAsk': 'Open in Ask',
   'source.chatClose': 'Close',
+  'source.chatResize': 'Resize chat panel',
   'source.chatWorking': 'Working… ({n} steps)',
   'source.workDir': 'archive',
   'source.zhEmpty': 'No Chinese translation yet — use Translate above.',
@@ -376,6 +384,8 @@ export const en = {
   'source.neighborhoodCaption':
     'This source → its memory cards → citing claims → sibling sources. Click a node for a summary and an open link; hover to highlight its neighborhood.',
   'source.citingClaims': 'Citing claims',
+  'source.supportedThemes': 'Supports crystal knowledge',
+  'source.supportedThemesCount': '{n} claims',
   'source.citingEmpty': 'No crystal claims cite this source yet.',
   'source.citingEmptyHint': '→ Knowledge: how claims crystallize',
 
@@ -450,6 +460,9 @@ export const en = {
   'knowledge.untitledTheme': '(no theme)',
   'knowledge.claimCount': '{n} claims',
   'knowledge.ratioLine': 'durable {durable} · caveated {caveated}',
+  'knowledge.sourceCount': '{n} sources',
+  'knowledge.sourceCountTip':
+    'Distinct sources behind this theme — many claims from a single source deserve extra scrutiny.',
   'knowledge.graphCaption':
     'All claims, colored by community. Zoom in to reveal labels, hover to highlight a neighborhood, click for a summary. Toggle 3D to rotate.',
   'knowledge.unknownClaim':
@@ -480,10 +493,23 @@ export const en = {
   'theme.legacySource': 'Legacy source — no detail page in this vault.',
   'theme.strength': 'strength',
   'theme.empty': 'No active claims carry this theme.',
+  'theme.renamed': 'This theme was renamed or merged and no longer exists as "{name}".',
+  'theme.renamedHint': 'The claims may now live under one of these themes:',
   'theme.backToKnowledge': 'All themes',
   'theme.graph': 'Theme graph',
   'theme.graphCaption':
     'This theme’s claims and the sources they cite. Click a node for a summary and an open link; hover to highlight its neighborhood.',
+  'theme.chatOnThis': 'Chat on this knowledge',
+  'theme.chatPanelTitle': 'Chat on this knowledge',
+  'theme.chatGroundedIn': 'Grounded in',
+  'theme.chatMetaLine': '{claims} claims · {sources} sources auto-included',
+  'theme.chatNewOnTheme': 'New chat on this knowledge',
+  'theme.chatEmpty':
+    'Ask about this knowledge — the topic synthesis, its claims, and their sources are already in context.',
+  'theme.chatSeed1': 'Summarize what this knowledge says, and where the sources disagree.',
+  'theme.chatSeed2': 'Which claims here rest on the weakest evidence?',
+  'theme.chatSeed3': 'What changed most recently in this theme?',
+  'theme.chatPlaceholder': 'Ask about this knowledge…',
 
   // search page + ⌘K overlay
   'search.title': 'Search',
@@ -516,7 +542,13 @@ export const en = {
   'ask.historyFilterEmpty': 'No chats in this filter.',
   'ask.historyOnSource': 'Source',
   'ask.historyVault': 'Vault',
+  'ask.collapseHistory': 'Collapse history',
+  'ask.expandHistory': 'Expand history',
+  'ask.collapseRail': 'Collapse process & citations',
+  'ask.expandRail': 'Expand process & citations',
+  'ask.railCollapsedLabel': 'Process',
   'ask.savedChat': 'Saved chat',
+  'ask.continuing': 'continuing',
   'ask.closeChat': 'Back to conversation',
   'ask.newConversation': 'New conversation',
   'ask.chatLoadError': 'Could not load this chat — is the server running?',
@@ -584,6 +616,18 @@ export const en = {
   'ask.stopModelError': 'The model call failed mid-turn — the answer may be incomplete.',
   'ask.stopMaxRounds':
     'The agent reached its round limit and answered with what it had.',
+  'ask.fail.auth':
+    'API credentials are invalid or expired — check the key in .ovp/providers.toml.',
+  'ask.fail.rateLimited': 'Provider rate limit hit — wait a minute and retry.',
+  'ask.fail.contextExceeded':
+    'The conversation exceeded the model context window — start a new chat or narrow the question.',
+  'ask.fail.budgetExhausted':
+    'The model spent its whole output budget thinking — retry, or simplify the question.',
+  'ask.fail.overloaded': 'The provider is overloaded — retry shortly.',
+  'ask.fail.network': 'Network failure reaching the provider — check connectivity or proxy.',
+  'graph.legendMore': '+{n} more communities',
+  'graph.legendMoreOne': '+1 more community',
+  'graph.legendLess': 'Show fewer',
 
   // automation / schedule explainer (System)
   'auto.title': 'Automation',
@@ -625,8 +669,13 @@ export const en = {
   'auto.status.disabled': 'Disabled',
   'auto.status.idle': 'Idle',
   'auto.job.daily': 'Daily intake + reader',
+  'auto.job.themes': 'Weekly theme re-cluster',
   'auto.job.crystallize': 'Weekly crystallize',
   'auto.job.other': 'Job: {id}',
+  'auto.failHead': 'Last run failed ({n} in a row)',
+  'auto.failNoRetry': 'no automatic retry — waits for the next scheduled window',
+  'auto.failDisabled': 'the job is disabled — it will not run again until re-enabled',
+  'auto.failCounts': '{fails} of {runs} runs failed',
   'auto.job.noDesc': 'No description.',
   'auto.stage.pinboard': 'Pinboard capture',
   'auto.stage.pinboard.body':
@@ -743,6 +792,20 @@ export const en = {
   'system.vaultRoot': 'vault',
   'system.schema': 'index schema',
   'system.indexDate': 'index date',
+  'indexHealth.error':
+    'Knowledge index store failed to load — serving the JSON fallback. Data stays correct; search relevance may degrade.',
+  'indexHealth.rebuild': 'Rebuild index',
+  'indexHealth.rebuilding': 'Rebuilding the index store…',
+  'indexHealth.rebuildFailed': 'Rebuild failed: {err}',
+  'indexHealth.rebuildDone': 'Rebuild finished — data refreshes on the next poll.',
+  'system.servingBackend': 'serving backend',
+  'today.themesStale':
+    '{n} reader pack(s) are not clustered into themes yet — their claims sit in Unclassified. The weekly themes job (Sun 09:30) re-clusters when its runner includes the embedder; otherwise run `ovp2 crystal-themes` with an embed-capable build.',
+  'knowledge.sortDirLabel': 'sort direction',
+  'knowledge.sortCount': 'Count',
+  'knowledge.sortName': 'Name',
+  'knowledge.sortDir.asc': '↑',
+  'knowledge.sortDir.desc': '↓',
   'system.builtAt': 'built',
   'system.runId': 'run id',
   'system.counts': 'counts',

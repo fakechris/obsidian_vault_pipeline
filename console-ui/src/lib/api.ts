@@ -176,6 +176,13 @@ export interface ScheduleJob {
   argv: string[];
   last_run: string;
   last_status: string;
+  /** stderr tail of the last failed run (absent when the last run was ok). */
+  last_error?: string | null;
+  runs_total?: number;
+  failures_total?: number;
+  /** Failures since the last success — the "alive but failing every tick"
+   * signal is_due retries never surface on their own. */
+  consecutive_failures?: number;
   next_run: string | null;
   due: boolean;
   features: ScheduleJobFeatures;
@@ -218,6 +225,28 @@ export async function startRunNow(job: string): Promise<void> {
     const body = (await resp.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `run failed (${resp.status})`);
   }
+}
+
+/** Trigger the sqlite-repair projection rebuild (`ovp2 index` under the
+ * hood: JSON + shadow + whole-model parity). 409 = already running. */
+export async function startIndexRebuild(): Promise<void> {
+  const resp = await fetch('/api/index/rebuild', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!resp.ok && resp.status !== 202) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `rebuild failed (${resp.status})`);
+  }
+}
+
+export interface IndexRebuildStatus {
+  running: boolean;
+  last?: { ok?: boolean; exit?: number | null; error?: string; stderr_tail?: string } | null;
+}
+export function fetchIndexRebuildStatus(): Promise<IndexRebuildStatus> {
+  return fetchJson<IndexRebuildStatus>('/api/index/rebuild/status');
 }
 
 /** LLM provider config (a GUI over .ovp/providers.toml; secrets masked). */
@@ -546,6 +575,8 @@ export interface PostAskOptions {
   history?: AskHistoryTurn[];
   /** Pin the turn to one library source (chat-on-this). */
   focus_source?: string;
+  /** Theme-grounded chat: server injects topic page + active claims. */
+  focus_theme?: string;
 }
 
 /** POST /api/ask — cited answer over the grounded evidence index. The
@@ -564,6 +595,7 @@ export async function postAsk(
   if (opts.chat) body.chat = opts.chat;
   if (opts.history && opts.history.length > 0) body.history = opts.history;
   if (opts.focus_source) body.focus_source = opts.focus_source;
+  if (opts.focus_theme) body.focus_theme = opts.focus_theme;
   const res = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -629,7 +661,18 @@ export interface TagRow {
   tag: string;
   user: number;
   inferred: number;
+  implied?: number;
   origin?: 'user' | 'community' | 'llm' | null;
+}
+
+export interface ImplicationProposal {
+  specific: string;
+  specific_count: number;
+  generic: string;
+  generic_count: number;
+  forward: number;
+  reverse: number;
+  name_cosine?: number;
 }
 
 export interface TagProposal {
@@ -650,9 +693,12 @@ export interface TagsPayload {
   tags: TagRow[];
   banned: string[];
   proposals: TagProposal[];
+  implication_proposals?: ImplicationProposal[];
+  /** Accepted implication edges: specific → generics it rolls up to. */
+  implications?: Record<string, string[]>;
 }
 
-/** GET /api/tags — vocabulary counts + pending merge proposals. */
+/** GET /api/tags — vocabulary counts + pending merge/implication proposals. */
 export function fetchTags(): Promise<TagsPayload> {
   if (STATIC_MODE) {
     return Promise.resolve({ tags: [], banned: [], proposals: [] });
@@ -687,6 +733,15 @@ export async function postTagDecision(
   canonical: string,
 ): Promise<void> {
   await postJson('/api/tags/decision', { action, alias, canonical });
+}
+
+/** POST /api/tags/decision — accept/reject an implication `specific ⇒ generic`. */
+export async function postImplicationDecision(
+  action: 'accept_implication' | 'reject',
+  specific: string,
+  generic: string,
+): Promise<void> {
+  await postJson('/api/tags/decision', { action, specific, generic });
 }
 
 /** POST /api/source/:sha/tags — the one sanctioned frontmatter write

@@ -865,7 +865,8 @@ export function filterSources(
       (filter.status === null || s.status === filter.status) &&
       (filter.tag === null ||
         (s.tags ?? []).includes(filter.tag) ||
-        (s.tags_inferred ?? []).includes(filter.tag)),
+        (s.tags_inferred ?? []).includes(filter.tag) ||
+        (s.tags_implied ?? []).includes(filter.tag)),
   );
 }
 
@@ -954,17 +955,15 @@ export function loadLibraryNavSnapshot(): LibraryNavSnapshot | null {
   }
 }
 
-/** Tag → source count over the whole library (operator + inferred — the
- * facet filters on both), count desc then name. */
+/** Tag → source count over the whole library (operator + inferred + implied
+ * roll-up — the facet filters on all three), count desc then name. */
 export function countTags(sources: SourceRow[]): [string, number][] {
   const counts = new Map<string, number>();
+  const bump = (t: string) => counts.set(t, (counts.get(t) ?? 0) + 1);
   for (const s of sources) {
-    for (const t of s.tags ?? []) {
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    for (const t of s.tags_inferred ?? []) {
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
+    for (const t of s.tags ?? []) bump(t);
+    for (const t of s.tags_inferred ?? []) bump(t);
+    for (const t of s.tags_implied ?? []) bump(t);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
@@ -997,13 +996,35 @@ export function groupByMonth(sources: SourceRow[]): MonthGroup[] {
 
 /** One card of the Knowledge-home theme wall. */
 export interface ThemeGroup {
+  /** Stable community id — the routing key (`/knowledge/theme/:id`). Null
+   * only on pre-theme projections, where the wall falls back to `theme`
+   * (label) routing. */
+  id: number | null;
+  /** Display label (mutable under `crystal-themes` relabel). */
   theme: string;
+  /** Rebuildable Chinese label when the projection carries one. */
+  label_zh?: string;
   total: number;
   durable: number;
   caveated: number;
+  /** Distinct sources (case ids) across the theme's active claims — a theme
+   * with many claims but sources=1 rests on a single document. */
+  sources: number;
   /** First durable (else first caveated) claim text — the wall snippet. */
   topClaim?: string;
 }
+
+/** The crystal themes.json Unclassified sentinel — packs the clustering left
+ * unassigned. Routed as `/knowledge/theme/-1`. */
+export const UNCLASSIFIED_ID = -1;
+
+/** A parsed `/knowledge/theme/:theme` route key. The portal routes by stable
+ * community id; a non-numeric param is a LEGACY label URL (pre-id, or a
+ * bookmark from before the id-routing switch) and is resolved/redirected by
+ * the detail page via `/api/themes`. */
+export type ThemeRouteKey =
+  | { kind: 'id'; id: number }
+  | { kind: 'label'; label: string };
 
 /** The synthesizer's fallback bucket — sources that matched no keyword
  * bucket land under 'misc' (key) / 'Miscellaneous' (description). The
@@ -1015,22 +1036,36 @@ export function isMiscTheme(theme: string | null | undefined): boolean {
   return theme == null || theme === '' || theme === 'misc' || theme === 'Miscellaneous';
 }
 
-/** Route segment for the "no theme" bucket ('' theme key). A real theme is
- * never this literal, so it round-trips without colliding — and unthemed
- * claims/cards get a routable landing page instead of dead-ending on an empty
- * `/knowledge/theme/` segment (which falls through to the catch-all redirect). */
+/** Route segment for the "no theme" bucket ('' theme key) on LEGACY label
+ * routes. Id routes use the numeric `-1` (UNCLASSIFIED_ID) directly. */
 export const UNTHEMED_SEGMENT = '~none';
 
-/** Theme key → `/knowledge/theme/...` route, encoding the empty bucket as the
- * routable sentinel above. */
-export function themeRoute(theme: string | null | undefined): string {
-  const key = theme ?? '';
-  return `/knowledge/theme/${key === '' ? UNTHEMED_SEGMENT : encodeURIComponent(key)}`;
+/** Theme key → `/knowledge/theme/...` route. Prefers the stable community
+ * `id` (survives a relabel); falls back to the label for pre-theme
+ * projections (`id === null`), encoding the empty bucket as `~none`. */
+export function themeRoute(key: {
+  id: number | null;
+  theme: string;
+}): string {
+  if (key.id != null) return `/knowledge/theme/${key.id}`;
+  const label = key.theme ?? '';
+  return `/knowledge/theme/${label === '' ? UNTHEMED_SEGMENT : encodeURIComponent(label)}`;
 }
 
-/** Inverse of {@link themeRoute} for a decoded `:theme` route param. */
-export function themeFromRoute(param: string | null | undefined): string {
-  return param == null || param === UNTHEMED_SEGMENT ? '' : param;
+/** Inverse of {@link themeRoute} for a decoded `:theme` route param. Numeric
+ * (incl. `-1`) → id key; `~none` or a non-numeric string → legacy label key. */
+export function themeFromRoute(param: string | null | undefined): ThemeRouteKey {
+  if (param == null || param === UNTHEMED_SEGMENT) return { kind: 'label', label: '' };
+  if (/^-?\d+$/.test(param)) return { kind: 'id', id: Number(param) };
+  return { kind: 'label', label: param };
+}
+
+/** Does a claim belong to the route key? Id key → `theme_id` match (so a
+ * relabel that kept the community id still resolves); label key → legacy
+ * exact-string match against `theme`. */
+export function claimMatchesThemeKey(c: ClaimRow, key: ThemeRouteKey): boolean {
+  if (key.kind === 'id') return c.theme_id === key.id;
+  return (c.theme ?? '') === key.label;
 }
 
 /** Active claims only — the knowledge surface never lists superseded or
@@ -1041,27 +1076,48 @@ export function activeClaims(claims: ClaimRow[]): ClaimRow[] {
   );
 }
 
+/** Stable group key for a claim / a ledger theme entry: id when present,
+ * else the label. Two communities that share a display label but have
+ * distinct ids stay separate (the bug that routing-by-label created). */
+function themeGroupKey(id: number | null | undefined, label: string): string {
+  return id != null ? `i${id}` : `t${label}`;
+}
+
 /** Theme wall from /api/model claims + /api/themes: ledger themes keep the
- * ledger order (count desc); index-only themes append after. Claims without
- * a theme group under '' — the caller decides how to label it. */
+ * ledger order (count desc); index-only themes append after. Groups are
+ * keyed by the STABLE community id when present (so a relabel doesn't split
+ * a community into two cards); pre-theme entries fall back to the label. */
 export function themeWall(
   claims: ClaimRow[],
-  ledgerThemes: { theme: string; count: number }[],
+  ledgerThemes: {
+    id?: number | null;
+    theme: string;
+    count: number;
+    label_zh?: string;
+  }[],
+  // Optional case-id → canonical-identity map (see `caseCanonicalIds`):
+  // collapses re-captures of the same document so `sources` counts
+  // INDEPENDENT documents, not vault copies. Absent = raw case ids.
+  canonical?: Map<string, string>,
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
-  const ensure = (theme: string): ThemeGroup => {
-    let g = groups.get(theme);
+  const caseSets = new Map<string, Set<string>>();
+  const ensure = (id: number | null, theme: string, label_zh?: string): ThemeGroup => {
+    const key = themeGroupKey(id, theme);
+    let g = groups.get(key);
     if (!g) {
-      g = { theme, total: 0, durable: 0, caveated: 0 };
-      groups.set(theme, g);
+      g = { id: id ?? null, theme, label_zh, total: 0, durable: 0, caveated: 0, sources: 0 };
+      groups.set(key, g);
+      caseSets.set(key, new Set());
     }
     return g;
   };
   for (const t of ledgerThemes) {
-    ensure(t.theme);
+    ensure(t.id ?? null, t.theme, t.label_zh);
   }
   for (const c of activeClaims(claims)) {
-    const g = ensure(c.theme ?? '');
+    const g = ensure(c.theme_id ?? null, c.theme ?? '');
+    for (const s of c.sources) caseSets.get(themeGroupKey(g.id, g.theme))?.add(canonical?.get(s) ?? s);
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1073,25 +1129,142 @@ export function themeWall(
     }
   }
   for (const t of ledgerThemes) {
-    const g = groups.get(t.theme);
+    const g = groups.get(themeGroupKey(t.id ?? null, t.theme));
     // Ledger and index normally agree; when they drift mid-run, show the
     // larger count rather than hiding claims.
     if (g) g.total = Math.max(t.count, g.durable + g.caveated);
   }
   for (const g of groups.values()) {
     g.total = Math.max(g.total, g.durable + g.caveated);
+    g.sources = caseSets.get(themeGroupKey(g.id, g.theme))?.size ?? 0;
   }
   return [...groups.values()].sort(
     (a, b) => b.total - a.total || a.theme.localeCompare(b.theme),
   );
 }
 
+/** case id → canonical source identity for DISTINCT-source counting: the
+ * source URL when present (re-captures of the same article get different
+ * content shas but share the URL — 58 such pairs in the live vault when this
+ * shipped), else the content sha, else the case id itself. */
+export function caseCanonicalIds(model: {
+  sources: { sha256: string; url?: string | null }[];
+  packs: { pack_dir: string; source_sha256?: string | null }[];
+}): Map<string, string> {
+  const bySha = new Map(model.sources.map((s) => [s.sha256, s]));
+  const out = new Map<string, string>();
+  for (const p of model.packs) {
+    const caseId = p.pack_dir.split(/[/\\]/).filter(Boolean).pop();
+    if (!caseId) continue;
+    const src = p.source_sha256 ? bySha.get(p.source_sha256) : undefined;
+    out.set(caseId, src?.url?.trim() || p.source_sha256 || caseId);
+  }
+  return out;
+}
+
+/** Theme-card source badge: null hides it. `sources` counts only INDEXED
+ * claims, so 0 means "unknown" (ledger/index drift or a ledger-only theme) —
+ * omit rather than show a false zero. `single` flags a multi-claim theme
+ * resting on one document (deserves extra scrutiny). */
+export function themeSourceBadge(group: {
+  sources: number;
+  durable: number;
+  caveated: number;
+}): { n: number; single: boolean } | null {
+  if (group.sources <= 0) return null;
+  const active = group.durable + group.caveated;
+  return { n: group.sources, single: group.sources === 1 && active > 1 };
+}
+
+/** Failure strip for a schedule job on the System automation panel — null
+ * means no strip. Legacy state (pre-counter) reports 0 everywhere; the error
+ * status alone proves at least one failure, so the streak floors at 1 and
+ * lifetime counts show only when actually recorded (`runs_total > 0`). */
+export interface ScheduleFailureStrip {
+  streak: number;
+  /** 'noRetry' = enabled job waiting for its next window (is_due never
+   * retries); 'disabled' = will not run again until re-enabled. */
+  noteKey: 'noRetry' | 'disabled';
+  counts: { fails: number; runs: number } | null;
+}
+export function scheduleFailureStrip(job: {
+  last_status: string;
+  enabled: boolean;
+  consecutive_failures?: number;
+  failures_total?: number;
+  runs_total?: number;
+}): ScheduleFailureStrip | null {
+  if (job.last_status !== 'error') return null;
+  return {
+    streak: Math.max(1, job.consecutive_failures ?? 1),
+    noteKey: job.enabled ? 'noRetry' : 'disabled',
+    counts:
+      (job.runs_total ?? 0) > 0
+        ? { fails: job.failures_total ?? 0, runs: job.runs_total ?? 0 }
+        : null,
+  };
+}
+
+/** Targeted fix hint for an ask model_error, keyed by the server's
+ * failure_class slug. Unactionable classes (decode/protocol/internal/…)
+ * return null — the generic stop note already covers them. Keys live in the
+ * i18n catalogs as `ask.fail.*`. */
+export function failureHintKey(
+  cls: string | null | undefined,
+):
+  | 'ask.fail.auth'
+  | 'ask.fail.rateLimited'
+  | 'ask.fail.contextExceeded'
+  | 'ask.fail.budgetExhausted'
+  | 'ask.fail.overloaded'
+  | 'ask.fail.network'
+  | null {
+  switch (cls) {
+    case 'auth':
+      return 'ask.fail.auth';
+    case 'rate_limited':
+      return 'ask.fail.rateLimited';
+    case 'context_exceeded':
+      return 'ask.fail.contextExceeded';
+    case 'budget_exhausted':
+      return 'ask.fail.budgetExhausted';
+    case 'overloaded':
+      return 'ask.fail.overloaded';
+    case 'network':
+      return 'ask.fail.network';
+    default:
+      return null;
+  }
+}
+
+/** Distinct themes the source's citing claims land in — the source page's
+ * "supports this crystal knowledge" rail. Count = active citing claims in
+ * that theme; theme order follows count desc then name. Each entry carries
+ * the stable community `id` (when present) so the rail links by id. */
+export function sourceThemes(
+  citing: ClaimRow[],
+): { id: number | null; theme: string; count: number }[] {
+  const counts = new Map<string, { id: number | null; theme: string; count: number }>();
+  for (const c of activeClaims(citing)) {
+    const id = c.theme_id ?? null;
+    const theme = c.theme ?? '';
+    const key = themeGroupKey(id, theme);
+    const entry = counts.get(key);
+    if (entry) entry.count += 1;
+    else counts.set(key, { id, theme, count: 1 });
+  }
+  return [...counts.values()].sort(
+    (a, b) => b.count - a.count || a.theme.localeCompare(b.theme),
+  );
+}
+
 /** Theme claims for the detail page: durable first, then caveated;
- * stable claim_id order within each band. */
-export function themeClaims(claims: ClaimRow[], theme: string): ClaimRow[] {
+ * stable claim_id order within each band. Matches by stable id when the
+ * route is an id route (survives a relabel), else by legacy label. */
+export function themeClaims(claims: ClaimRow[], key: ThemeRouteKey): ClaimRow[] {
   const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
   return activeClaims(claims)
-    .filter((c) => (c.theme ?? '') === theme)
+    .filter((c) => claimMatchesThemeKey(c, key))
     .sort((a, b) => rank(a) - rank(b) || a.claim_id.localeCompare(b.claim_id));
 }
 
@@ -1223,4 +1396,223 @@ export function closureNodeIds(
     if (hasNode(id)) out.add(id);
   }
   return out;
+}
+
+/** Community anchors for the global knowledge graph (VZ, 2026-08-07).
+ *
+ * The force layout alone produced an ugly silhouette: a dense central
+ * hairball (short strong links + centroid pull) with unaffiliated nodes
+ * blasted to the far periphery by unopposed repulsion. Instead, every node
+ * gets a HOME in an organic packed-cloud silhouette (the hand-drawn tree
+ * reference the operator liked):
+ *
+ * - Communities are disks (radius ∝ sqrt(member count)) greedily packed on
+ *   an archimedean spiral — largest at the center, no empty donut middle.
+ * - Packing ORDER is affinity-greedy: after the largest, always the
+ *   unplaced community most connected to the placed ones, so heavy
+ *   cross-community chords stay short instead of spanning the layout.
+ * - Unclustered nodes (cluster <= 0) get evenly spaced, id-sorted seats on
+ *   a ring just outside the cloud — visible periphery, never strays.
+ *
+ * Deterministic and pure — vitest-covered; the graph component only seeds
+ * positions and applies the pull force toward these anchors. */
+export interface RadialAnchors {
+  radius: number;
+  byCluster: Map<number, { x: number; y: number }>;
+  byId: Map<string, { x: number; y: number }>;
+}
+
+export function radialAnchors(
+  clusterSizes: Map<number, number>,
+  unclusteredIds: string[],
+  affinity?: Map<number, Map<number, number>>,
+  nodeRadius = 7,
+): RadialAnchors {
+  const byCluster = new Map<number, { x: number; y: number }>();
+  const byId = new Map<string, { x: number; y: number }>();
+  const entries = [...clusterSizes.entries()].filter(([, n]) => n > 0);
+  // Blob footprint: disk radius grows with sqrt(member count) + padding.
+  const blobR = (n: number) => nodeRadius * Math.sqrt(n) * 1.45 + 10;
+
+  // AFFINITY-GREEDY placement order: largest first, then always the unplaced
+  // community most connected (by cross-edge weight) to anything already
+  // placed — the spiral packs consecutive picks adjacently, so the heavy
+  // inter-community chords stay SHORT instead of spanning the silhouette.
+  const remaining = new Map(entries);
+  const order: [number, number][] = [];
+  const first = entries.slice().sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+  if (first) {
+    order.push(first);
+    remaining.delete(first[0]);
+    while (remaining.size > 0) {
+      let best: [number, number] | null = null;
+      let bestScore = -1;
+      for (const [c, n] of remaining) {
+        let score = 0;
+        for (const [placed] of order) {
+          score += affinity?.get(c)?.get(placed) ?? 0;
+        }
+        // Ties (incl. no affinity data at all) fall back to size desc, id asc.
+        if (
+          best === null ||
+          score > bestScore ||
+          (score === bestScore && (n > best[1] || (n === best[1] && c < best[0])))
+        ) {
+          best = [c, n];
+          bestScore = score;
+        }
+      }
+      order.push(best!);
+      remaining.delete(best![0]);
+    }
+  }
+
+  // Greedy spiral packing: largest at the origin, each next community walks
+  // an archimedean spiral to the first spot clear of every placed disk —
+  // compact organic cloud, no empty donut middle.
+  const placed: { c: number; x: number; y: number; r: number }[] = [];
+  for (const [c, n] of order) {
+    const r = blobR(n);
+    if (placed.length === 0) {
+      placed.push({ c, x: 0, y: 0, r });
+      byCluster.set(c, { x: 0, y: 0 });
+      continue;
+    }
+    let theta = 0;
+    for (;;) {
+      theta += 0.22;
+      const rad = 6 * theta;
+      const x = rad * Math.cos(theta);
+      const y = rad * Math.sin(theta);
+      if (placed.every((p) => Math.hypot(x - p.x, y - p.y) >= r + p.r)) {
+        placed.push({ c, x, y, r });
+        byCluster.set(c, { x, y });
+        break;
+      }
+    }
+  }
+
+  const extent = placed.reduce((m, p) => Math.max(m, Math.hypot(p.x, p.y) + p.r), 0);
+  const radius = Math.max(60, extent);
+  // Unclustered nodes: deterministic seats on a ring just OUTSIDE the packed
+  // cloud — visible periphery, never repulsion-flung strays.
+  const outer = radius + 26;
+  const ids = [...unclusteredIds].sort();
+  for (let i = 0; i < ids.length; i++) {
+    const a = ((i + 0.5) / Math.max(1, ids.length)) * 2 * Math.PI;
+    byId.set(ids[i], { x: outer * Math.cos(a), y: outer * Math.sin(a) });
+  }
+  return { radius, byCluster, byId };
+}
+
+/** Centroid + bounding radius of a 3D fly-to target — the camera distance
+ * must come from the SPATIAL extent of the selected nodes (two far-apart
+ * clusters, or one wide cluster, must both fit the viewport), never from
+ * the cluster count. Pure — vitest-covered. */
+export function focusBounds(
+  pts: { x?: number; y?: number; z?: number }[],
+): { x: number; y: number; z: number; radius: number } | null {
+  if (pts.length === 0) return null;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const p of pts) {
+    cx += p.x ?? 0;
+    cy += p.y ?? 0;
+    cz += p.z ?? 0;
+  }
+  cx /= pts.length;
+  cy /= pts.length;
+  cz /= pts.length;
+  let radius = 0;
+  for (const p of pts) {
+    radius = Math.max(
+      radius,
+      Math.hypot((p.x ?? 0) - cx, (p.y ?? 0) - cy, (p.z ?? 0) - cz),
+    );
+  }
+  return { x: cx, y: cy, z: cz, radius };
+}
+
+/** One knowledge-graph legend row — possibly MERGING several graph clusters.
+ * Louvain clustering is finer-grained than the theme taxonomy, so distinct
+ * clusters often share a dominant-theme label ('Agent Harness Architecture'
+ * ×4 on the live vault); one row per label matches the reader's mental model,
+ * and a click frames ALL of that label's clusters. */
+export interface LegendRow {
+  /** Cluster ids sharing the label, largest first — ids[0] drives the dot. */
+  ids: number[];
+  label: string;
+  /** Summed member count across the merged clusters. */
+  size: number;
+}
+
+/** Merge same-label communities into legend rows, total size desc. Pure. */
+export function groupCommunities(
+  communities: { id: number; label: string; size: number }[],
+): LegendRow[] {
+  const byLabel = new Map<string, LegendRow>();
+  // Size-desc walk (stable id tie-break) ENFORCES the ids-largest-first
+  // contract instead of trusting the caller's order.
+  const ordered = [...communities].sort((a, b) => b.size - a.size || a.id - b.id);
+  for (const c of ordered) {
+    const row = byLabel.get(c.label);
+    if (row) {
+      row.ids.push(c.id);
+      row.size += c.size;
+    } else {
+      byLabel.set(c.label, { ids: [c.id], label: c.label, size: c.size });
+    }
+  }
+  return [...byLabel.values()].sort(
+    (a, b) => b.size - a.size || a.label.localeCompare(b.label),
+  );
+}
+
+/** Knowledge-graph legend rows: compact top-N strip by default, the full
+ * list when open. `hidden` drives the "+N more" toggle (0 hides it). Pure —
+ * the component only renders the returned slice. */
+export function legendCommunities<T>(
+  all: T[],
+  open: boolean,
+  collapsedCount = 8,
+): { visible: T[]; hidden: number } {
+  const visible = open ? all : all.slice(0, collapsedCount);
+  return { visible, hidden: all.length - visible.length };
+}
+
+/** Index-store health for the stage-4 repair banner. Pure so the node-env
+ * tests can pin the truth table: a REBUILD in flight outranks the error
+ * (the operator already acted), and only a recorded sqlite failure — not a
+ * mere 'json' serving_backend, which is legitimate right after a JSON-only
+ * rebuild — raises the banner. */
+export type IndexHealth = 'ok' | 'error' | 'rebuilding';
+
+export function indexHealth(
+  sqliteError: string | null | undefined,
+  rebuildRunning: boolean,
+): IndexHealth {
+  if (rebuildRunning) return 'rebuilding';
+  if (sqliteError) return 'error';
+  return 'ok';
+}
+
+/** Knowledge-wall sort control (operator request 2026-08-06): by claim
+ * count or theme name, either direction. Ties always break by name asc so
+ * the order is deterministic under every mode; the default ('count'/'desc')
+ * reproduces the wall's historical order exactly. */
+export type ThemeSortKey = 'count' | 'name';
+export type ThemeSortDir = 'asc' | 'desc';
+
+export function sortThemeWall(
+  groups: ThemeGroup[],
+  key: ThemeSortKey,
+  dir: ThemeSortDir,
+): ThemeGroup[] {
+  return [...groups].sort((a, b) => {
+    const primary =
+      key === 'count' ? a.total - b.total : a.theme.localeCompare(b.theme);
+    const signed = dir === 'asc' ? primary : -primary;
+    return signed || a.theme.localeCompare(b.theme);
+  });
 }

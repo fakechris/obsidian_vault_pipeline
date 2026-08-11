@@ -503,6 +503,14 @@ pub struct DurableRecord {
     pub claim_id: String,
     pub claim: String,
     pub theme: String,
+    /// Stable semantic-theme community id (`themes.json` `majority_community`),
+    /// overlaid by the projection layer (`load_active_records`) — NEVER set on
+    /// the ledger write path, so it stays absent from `ledger.jsonl` and old
+    /// events deserialize as None. `theme` is the presentation label (mutable
+    /// under relabel); `theme_id` is the stable grouping identity the portal
+    /// routes by, so a `--client live` rename doesn't orphan existing URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_id: Option<i64>,
     pub source_cases: Vec<String>,
     pub citations: Vec<DurableCitation>,
     pub provenance_score: f64,
@@ -578,6 +586,7 @@ pub fn build_durable_record(
         claim_id: claim.id.clone(),
         claim: claim.claim.clone(),
         theme: claim.theme.clone(),
+        theme_id: None,
         source_cases,
         citations,
         provenance_score: score.score,
@@ -1225,7 +1234,7 @@ mod tests {
 
     fn rec(key: &str, claim_id: &str) -> DurableRecord {
         DurableRecord {
-            claim_key: key.into(), claim_id: claim_id.into(), claim: "c".into(), theme: "t".into(),
+            claim_key: key.into(), claim_id: claim_id.into(), claim: "c".into(), theme: "t".into(), theme_id: None,
             source_cases: vec!["m18-01".into()], citations: vec![DurableCitation {
                 case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: Some(12) }],
             provenance_score: 0.9, provenance_class: ProvenanceClass::Durable,

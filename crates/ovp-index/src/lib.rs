@@ -22,6 +22,7 @@ pub mod evidence;
 pub mod model;
 pub mod query;
 pub mod score;
+pub mod sqlite;
 
 pub use build::{
     build_index, build_index_at, build_index_with_progress, failed_reader_attempt,

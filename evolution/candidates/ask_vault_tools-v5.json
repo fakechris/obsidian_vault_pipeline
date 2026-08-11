@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v5",
+  "base_version": "v4",
+  "target_version": "v5",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one retrieval upgrade: an INDEX-BACKED bm25 lane under the term search tools, with the v4 scan lane kept as the always-available fallback. Today search_evidence matches pack/card TITLES only (card bodies and unit text/quotes are structurally invisible to it) and search_claims has NO ranking at all (whole-query substring filter in ledger order). The stage-3c FTS surfaces (cards/units/claims, fts-v1 analyzer with CJK unigram+bigram postings) already exist in the machine-local shadow database, verified by build-time parity. v5: when the shadow is available and its analyzer stamp matches, search_evidence retrieves over cards_fts + units_fts (bm25 top-k, hits aggregated to packs) and RRF-fuses (k=60, same constant as retrieve.rs) with the existing title lane; search_claims ranks by claims_fts bm25 with the substring filter as fallback. When the shadow is missing, stale-stamped, or OVP_ASK_FTS=0, both tools take the exact v4 path. Every result names its lane (fts|scan) so transcripts stay diagnosable. Predicted: body-text recall becomes possible for evidence search; claim search gains relevance ordering; with the fts lane off, matching and ordering semantics are exactly v4 while the result carries the v5 additive shape (lane: scan).",
+  "predicted_delta": {
+    "coverage": "fixture replay (falsifiable now): queries matching ONLY card body or unit quote text — 0 hits under v4's title-only search_evidence — return the correct pack under v5 with the shadow present; with the shadow absent, v4 fixtures pass unmodified (fallback is the v4 code path). Live gate (phase-3 qrels of docs/design/storage-read-model.md): evidence-surface Recall@10 >= 1.2x the v4 title-only baseline on the mixed 中英 qrels set, else rollback.",
+    "operational_reliability": "zero new failure modes on missing/stale shadow (lane falls back, result says so); search_claims results ordered by bm25 relevance instead of ledger order — fewer rounds burned paging past irrelevant claims; OVP_ASK_FTS=0 restores v4 behavior without a rebuild."
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "fallback_is_v4": "with no shadow db, a stale generation, an analyzer-stamp mismatch, or OVP_ASK_FTS=0, both tools execute the v4 matching and ordering code path — results carry the additive v5 fields (lane: scan) but all prior v2/v3/v4 fixtures pass against the fallback lane",
+    "lane_honesty": "every search_evidence/search_claims result carries lane: fts|scan; a silent lane flip cannot masquerade as a recall change in transcripts",
+    "coverage_semantics_unchanged": "truncated, query_terms_truncated, matched_terms, and the executor's coverage accounting keep their v4 meanings in both lanes",
+    "result_shape_compatible": "hit fields are a superset of v4's (additive lane/rank fields only) — the agent prompt contract and portal consumers parse unchanged",
+    "read_only": "the fts lane opens the shadow read-only; ask can never write or rebuild the projection"
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures: body-only query (matches card content, not any title) → correct pack via fts lane, 0 hits via scan lane; unsegmented CJK body query recalls; claims query ranked by bm25 with the expected claim first; shadow-absent runs produce v4-identical results with lane: scan; analyzer-mismatch shadow falls back rather than erroring the tool; OVP_ASK_FTS=0 forces scan lane. All prior v2/v3/v4 fixtures pass unmodified. Live qrels remain the phase-3 quality gate.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set OVP_ASK_FTS=0 (instant, no rebuild) or revert the lane dispatch — the scan path preserves v4 matching/ordering semantics (result shape gains only additive fields); no persisted state, no prompt-namespace dependency.",
+  "ablation_required": false
+}

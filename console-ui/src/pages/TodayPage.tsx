@@ -184,10 +184,16 @@ function ClaimsThatDay({ view }: { view: DayView }) {
 function Attention({ model }: { model: IndexModel }) {
   const { t } = useI18n();
   const sources = attentionSources(model);
-  if (sources.length === 0) return null;
+  const staleThemes = model.themes_stale_packs ?? 0;
+  if (sources.length === 0 && staleThemes === 0) return null;
   return (
     <div className="section">
       <h2>{t('today.attentionTitle')}</h2>
+      {staleThemes > 0 && (
+        <div className="card attention-card sm">
+          <p style={{ margin: 0 }}>{t('today.themesStale', { n: staleThemes })}</p>
+        </div>
+      )}
       {sources.map((s) => (
         <AttentionCard source={s} key={s.sha256} />
       ))}

@@ -480,6 +480,7 @@ mod tests {
             claim_id: format!("id-{key}"),
             claim: claim.into(),
             theme: "t".into(),
+            theme_id: None,
             source_cases: cases.iter().map(|s| s.to_string()).collect(),
             citations: cases
                 .iter()

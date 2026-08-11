@@ -77,7 +77,9 @@ fn parse_hm(s: &str) -> Result<(u8, u8), String> {
 /// 00:00` (use that — it says what it means), and 0 would divide by zero.
 fn parse_every_hours(s: &str) -> Result<u8, String> {
     let bad = || {
-        format!("invalid interval '{s}': expected <N>h with N in 1..=23, e.g. 4h (24h = 'daily 00:00')")
+        format!(
+            "invalid interval '{s}': expected <N>h with N in 1..=23, e.g. 4h (24h = 'daily 00:00')"
+        )
     };
     let n = s.strip_suffix('h').ok_or_else(bad)?;
     if n.is_empty() || n.len() > 2 {
@@ -355,6 +357,19 @@ pub fn default_registry(
         "--work-dir".to_string(),
         format!("{VAULT_PLACEHOLDER}/.ovp/work/crystal-synth"),
     ];
+    // Semantic-theme re-clustering: BEFORE crystallize's Sunday slot so the
+    // weekly synthesis batches over fresh communities, and weekly at all so
+    // the themes projection can never quietly go a month stale again
+    // (2026-08-06 incident: 203 unclustered packs → 202 claims in
+    // Unclassified). A build without the `embed` feature skips gracefully
+    // (warn + exit 0), so lean sidecars never fail the tick.
+    let themes_argv = vec![
+        "crystal-themes".to_string(),
+        "--vault-root".to_string(),
+        VAULT_PLACEHOLDER.to_string(),
+        "--client".to_string(),
+        client.to_string(),
+    ];
     Registry {
         version: 1,
         env_file: Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env")),
@@ -366,6 +381,14 @@ pub fn default_registry(
                 enabled: true,
                 description: "Ingest captures + build reader packs".to_string(),
                 stamp_date: true,
+            },
+            JobConfig {
+                id: "themes".to_string(),
+                cadence: "weekly Sun 09:30".to_string(),
+                argv: themes_argv,
+                enabled: true,
+                description: "Re-cluster semantic themes (embeddings + labels)".to_string(),
+                stamp_date: false,
             },
             JobConfig {
                 id: "crystallize".to_string(),
@@ -390,6 +413,29 @@ pub struct JobRun {
     /// `ok`, `error`, or `seeded` (install placeholder so a fresh job runs at
     /// its next occurrence, not immediately).
     pub last_status: String,
+    /// Tail of the child's stderr from the last FAILED run, cleared on ok.
+    /// The 2026-08-03 crystallize failure was undiagnosable because the tick
+    /// discarded stderr — a failure must carry its own evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Trigger-level counters (never reset): a scheduler that is alive but
+    /// failing every trigger must be distinguishable from one that never
+    /// fires at all.
+    #[serde(default)]
+    pub runs_total: u64,
+    #[serde(default)]
+    pub failures_total: u64,
+    /// Consecutive failures since the last ok — the portal escalation signal.
+    #[serde(default)]
+    pub consecutive_failures: u32,
+}
+
+/// One job execution's outcome as seen by the runner.
+#[derive(Debug, Clone, Default)]
+pub struct JobResult {
+    pub ok: bool,
+    /// Bounded stderr tail when the job failed (None on ok/spawn-fail-known).
+    pub error_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -421,12 +467,37 @@ impl State {
     }
 
     /// Record a job's terminal outcome at `now` (formatted local wall-clock).
+    /// Counters carry over from the previous entry; `seeded` placeholders do
+    /// not count as runs.
     pub fn record(&mut self, id: &str, now: NaiveDateTime, status: &str) {
+        self.record_outcome(id, now, status, None);
+    }
+
+    pub fn record_outcome(
+        &mut self,
+        id: &str,
+        now: NaiveDateTime,
+        status: &str,
+        error_tail: Option<String>,
+    ) {
+        let prev = self.runs.get(id).cloned().unwrap_or_default();
+        let counted = status == "ok" || status == "error";
+        let failed = status == "error";
         self.runs.insert(
             id.to_string(),
             JobRun {
                 last_run: now.format("%Y-%m-%dT%H:%M:%S").to_string(),
                 last_status: status.to_string(),
+                last_error: if failed { error_tail } else { None },
+                runs_total: prev.runs_total + u64::from(counted),
+                failures_total: prev.failures_total + u64::from(failed),
+                consecutive_failures: if failed {
+                    prev.consecutive_failures + 1
+                } else if status == "ok" {
+                    0
+                } else {
+                    prev.consecutive_failures
+                },
             },
         );
     }
@@ -568,8 +639,9 @@ pub fn job_direct_command(
 }
 
 pub trait JobRunner {
-    /// Run one job; return whether it exited successfully.
-    fn run(&self, job: &JobConfig) -> bool;
+    /// Run one job; the result carries success and, on failure, a bounded
+    /// stderr tail so the state file records WHY.
+    fn run(&self, job: &JobConfig) -> JobResult;
 }
 
 /// The pure decision of which jobs a tick should run, given `now` and the
@@ -634,9 +706,14 @@ pub fn tick_with(
     };
     for id in &plan.due {
         let job = reg.get(id).expect("plan ids come from the registry");
-        let ok = runner.run(job);
-        new_state.record(id, now, if ok { "ok" } else { "error" });
-        report.ran.push((id.clone(), ok));
+        let result = runner.run(job);
+        new_state.record_outcome(
+            id,
+            now,
+            if result.ok { "ok" } else { "error" },
+            result.error_tail.clone(),
+        );
+        report.ran.push((id.clone(), result.ok));
     }
     (new_state, report)
 }
@@ -652,9 +729,15 @@ pub fn run_now_with(
     let job = reg
         .get(id)
         .ok_or_else(|| format!("no job '{id}' in the registry"))?;
-    let ok = runner.run(job);
+    let result = runner.run(job);
+    let ok = result.ok;
     let mut new_state = state.clone();
-    new_state.record(&job.id, now, if ok { "ok" } else { "error" });
+    new_state.record_outcome(
+        &job.id,
+        now,
+        if ok { "ok" } else { "error" },
+        result.error_tail,
+    );
     Ok((new_state, ok))
 }
 
@@ -721,9 +804,14 @@ mod tests {
             assert_eq!(Cadence::parse(s).unwrap().to_display(), s, "round-trip {s}");
         }
         for bad in [
-            "every 0h",   // would divide by zero
-            "every 24h",  // that is `daily 00:00` — say what you mean
-            "every 25h", "every 4", "every h", "every -4h", "every 4hh", "every 4h 00:00",
+            "every 0h",  // would divide by zero
+            "every 24h", // that is `daily 00:00` — say what you mean
+            "every 25h",
+            "every 4",
+            "every h",
+            "every -4h",
+            "every 4hh",
+            "every 4h 00:00",
         ] {
             assert!(Cadence::parse(bad).is_err(), "{bad} should be rejected");
         }
@@ -860,7 +948,7 @@ mod tests {
     // -- registry ------------------------------------------------------------
 
     #[test]
-    fn default_registry_has_daily_and_weekly_crystallize() {
+    fn default_registry_has_daily_weekly_crystallize_and_weekly_themes() {
         let reg = default_registry("live", (9, 0), true, Some(40));
         reg.validate().unwrap();
         let daily = reg.get("daily").unwrap();
@@ -884,6 +972,14 @@ mod tests {
             reg.env_file.as_deref(),
             Some(format!("{VAULT_PLACEHOLDER}/.ovp/daily.env").as_str())
         );
+        // The themes job runs BEFORE crystallize's slot and skips gracefully
+        // on embed-less builds — weekly by default so the projection can
+        // never quietly go a month stale again.
+        let themes = reg.get("themes").unwrap();
+        assert_eq!(themes.cadence, "weekly Sun 09:30");
+        assert!(themes.argv.contains(&"crystal-themes".to_string()));
+        assert!(themes.argv.contains(&VAULT_PLACEHOLDER.to_string()));
+        assert!(!themes.stamp_date);
     }
 
     #[test]
@@ -1027,41 +1123,86 @@ mod tests {
         fail: Vec<String>,
     }
     impl JobRunner for FakeRunner {
-        fn run(&self, job: &JobConfig) -> bool {
+        fn run(&self, job: &JobConfig) -> JobResult {
             self.ran.borrow_mut().push(job.id.clone());
-            !self.fail.contains(&job.id)
+            let ok = !self.fail.contains(&job.id);
+            JobResult {
+                ok,
+                error_tail: (!ok).then(|| format!("stderr tail for {}", job.id)),
+            }
         }
     }
 
-    fn two_job_registry() -> Registry {
+    #[test]
+    fn record_outcome_tracks_counters_and_error_evidence() {
+        let mut state = State::default();
+        let t = dt("2026-08-06T10:00:00");
+        // seeded placeholder: not a run.
+        state.record("daily", t, "seeded");
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (0, 0, 0)
+        );
+
+        state.record_outcome("daily", t, "error", Some("boom: refresh failed".into()));
+        state.record_outcome("daily", t, "error", Some("boom again".into()));
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (2, 2, 2)
+        );
+        assert_eq!(run.last_error.as_deref(), Some("boom again"));
+
+        // ok clears the error evidence and the consecutive streak, keeps totals.
+        state.record_outcome("daily", t, "ok", None);
+        let run = state.runs.get("daily").unwrap();
+        assert_eq!(
+            (run.runs_total, run.failures_total, run.consecutive_failures),
+            (3, 2, 0)
+        );
+        assert!(run.last_error.is_none());
+
+        // Old state files (no counter fields) deserialize with defaults.
+        let legacy: State = serde_json::from_str(
+            r#"{"runs":{"daily":{"last_run":"2026-08-03T19:41:37","last_status":"error"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.runs.get("daily").unwrap().runs_total, 0);
+    }
+
+    /// The full default registry (daily + weekly crystallize + weekly themes).
+    fn default_jobs_registry() -> Registry {
         default_registry("live", (9, 0), false, None)
     }
 
     #[test]
     fn plan_tick_partitions_due_disabled_and_not_due() {
-        let mut reg = two_job_registry();
+        let mut reg = default_jobs_registry();
         reg.get_mut("crystallize").unwrap().enabled = false;
-        let now = dt("2026-07-12T09:30:00"); // Sunday, daily due, crystallize off
+        let now = dt("2026-07-12T09:30:00"); // Sunday: daily + themes due, crystallize off
         let plan = plan_tick(&reg, &State::default(), now);
-        assert_eq!(plan.due, vec!["daily".to_string()]);
+        assert_eq!(plan.due, vec!["daily".to_string(), "themes".to_string()]);
         assert_eq!(plan.skipped_disabled, vec!["crystallize".to_string()]);
         assert!(plan.skipped_not_due.is_empty());
-        // Once daily has run, the next plan has nothing due.
+        // Once both have run, the next plan has nothing due.
         let mut state = State::default();
         state.record("daily", now, "ok");
+        state.record("themes", now, "ok");
         assert!(plan_tick(&reg, &state, now).due.is_empty());
     }
 
     #[test]
     fn tick_runs_due_jobs_and_records_state() {
-        let reg = two_job_registry();
-        let now = dt("2026-07-12T10:30:00"); // both due
+        let reg = default_jobs_registry();
+        let now = dt("2026-07-12T10:30:00"); // all three due (Sunday past 10:00)
         let runner = FakeRunner {
             fail: vec!["crystallize".into()],
             ..Default::default()
         };
         let (new_state, report) = tick_with(&reg, &State::default(), now, &runner);
-        assert_eq!(report.ran.len(), 2);
+        assert_eq!(report.ran.len(), 3);
+        assert_eq!(new_state.runs.get("themes").unwrap().last_status, "ok");
         assert_eq!(new_state.runs.get("daily").unwrap().last_status, "ok");
         assert_eq!(
             new_state.runs.get("crystallize").unwrap().last_status,
@@ -1071,7 +1212,7 @@ mod tests {
 
     #[test]
     fn run_now_ignores_cadence() {
-        let reg = two_job_registry();
+        let reg = default_jobs_registry();
         let now = dt("2026-07-12T08:00:00"); // crystallize NOT due
         let runner = FakeRunner::default();
         let (new_state, ok) =

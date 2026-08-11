@@ -203,7 +203,10 @@ impl Drop for AskSlot {
 struct Cached<T> {
     loaded: bool,
     stamp: Option<SystemTime>,
-    data: Option<T>,
+    /// `Arc`, not `T`: accessors hand out a refcount bump, NOT a deep clone.
+    /// The evidence model is ~tens of MB — cloning it per request was the
+    /// portal's single largest per-request cost (storage-read-model.md §1).
+    data: Option<Arc<T>>,
 }
 
 impl<T> Default for Cached<T> {
@@ -221,6 +224,26 @@ impl<T> Default for Cached<T> {
 fn mtime_of(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
+
+/// Crystal-ledger projections (active records + claim lineage), folded once
+/// per (ledger.jsonl, themes.json) mtime pair instead of per request. Before
+/// this cache, `/api/themes`, `/api/graph`, `/api/claim/*`, and subgraph
+/// search each re-read and re-folded the ENTIRE event ledger from disk on
+/// every request — `/api/claim` did it twice (records + lineage). Both
+/// projections derive from the same files, so one cache and one invalidation
+/// rule covers them; two stamps because the theme relabel reads themes.json.
+#[derive(Default)]
+struct CrystalCache {
+    loaded: bool,
+    ledger_stamp: Option<SystemTime>,
+    themes_stamp: Option<SystemTime>,
+    /// Empty until `loaded` — both are always rebuilt together on reload.
+    records: Arc<Vec<DurableRecord>>,
+    lineage: Arc<ClaimLineageIndex>,
+}
+
+type ClaimLineageIndex =
+    std::collections::BTreeMap<String, ovp_domain::crystal::lineage::ClaimLineage>;
 
 /// Count `.md` files under `dir` recursively, skipping dotfiles/dot-dirs.
 /// Mirrors `ovp_index::build`'s `walk` (the same rule that feeds the
@@ -271,6 +294,26 @@ struct AppState {
     /// Card/unit bodies for the /api/source/:sha memory layer — same
     /// mtime-keyed auto-reload as the model, keyed on `evidence.json`.
     evidence: RwLock<Cached<EvidenceModel>>,
+    /// Folded crystal-ledger projections — see [`CrystalCache`].
+    crystal: RwLock<CrystalCache>,
+    /// Which store the LAST model load actually served — surfaced on
+    /// /api/model as `serving_backend` so the stage-4 observation window
+    /// has a visible signal (desktop swallows stderr, so the fallback
+    /// warning alone is invisible in the GUI).
+    serving_backend: RwLock<&'static str>,
+    /// The last sqlite load FAILURE (None after a healthy load) — the
+    /// portal's repair banner reads this; once the JSON fallback is retired
+    /// this is the difference between "silently degraded" and "the operator
+    /// was told and offered the rebuild button".
+    sqlite_error: RwLock<Option<String>>,
+    /// The one in-flight portal-triggered projection rebuild (repair flow):
+    /// double-click protection + last-outcome surface, mirroring ManualRun.
+    index_rebuild: Arc<std::sync::Mutex<IndexRebuild>>,
+    /// Bilingual sidecars for `/api/source/:sha` — `cards_zh.json` alone is
+    /// over 10 MB on the live vault and was parsed from disk on EVERY source
+    /// request; same mtime-keyed reload as the model.
+    cards_zh: RwLock<Cached<ovp_memory::bilingual::CardsZhFile>>,
+    claims_zh: RwLock<Cached<ovp_memory::bilingual::ClaimsZhFile>>,
     /// The run-liveness heartbeat (`.ovp/last-run.json`), read LIVE (mtime
     /// auto-reload) — NOT the baked `index.json` snapshot. The heartbeat is a
     /// live sidecar: `daily` writes it before the index is rebuilt (and a crash
@@ -328,6 +371,15 @@ struct AppState {
     _source_work_worker_lock: Option<ovp_intake::RunLock>,
     /// True when this process runs the background source-work worker.
     source_work_worker_here: bool,
+}
+
+/// State of the portal-triggered projection rebuild (the sqlite repair
+/// flow: `ovp2 index` rebuilds JSON + shadow from the ledgers and packs).
+#[derive(Default)]
+struct IndexRebuild {
+    running: bool,
+    /// Last finished rebuild: `{ok, exit, finished, stderr_tail}`.
+    last: Option<serde_json::Value>,
 }
 
 /// State of the portal-triggered manual pipeline run.
@@ -458,17 +510,24 @@ impl AppState {
     /// fail-loud gate for corruption.
     fn current_last_run(&self) -> Option<LastRunModel> {
         let path = self.last_run_path();
+        // The heartbeat is a few hundred bytes — unwrapping the Arc with a
+        // clone keeps every caller's `ops.last_run: Option<LastRunModel>`
+        // assignment untouched.
         freshen(&self.last_run, &path, || {
             read_last_run_model(&self.vault_root).ok().flatten()
         })
+        .map(|arc| (*arc).clone())
     }
 
     /// The index model with its `ops.last_run` field OVERLAID by the live
     /// heartbeat sidecar — so `/api/model` (and the SPA banner reading it) never
     /// sees a stale baked "running". Returns None only when there is no index
     /// at all.
+    /// The ONE accessor that still deep-clones: it must mutate `ops.last_run`
+    /// with the live heartbeat overlay. Only `/api/model` pays this; the
+    /// phase-4 summary/pagination rework removes it entirely.
     fn model_with_live_last_run(&self) -> Option<IndexModel> {
-        let mut model = self.current_model()?;
+        let mut model = (*self.current_model()?).clone();
         model.ops.last_run = self.current_last_run();
         Some(model)
     }
@@ -478,45 +537,178 @@ impl AppState {
     /// the file actually changed (or was never loaded), so a separate
     /// `daily` process rebuilding the index is picked up on the next request
     /// — the portal is never stuck on the startup snapshot.
-    fn current_model(&self) -> Option<IndexModel> {
-        let path = self.index_path();
-        freshen(&self.model, &path, || read_index(&self.vault_root).ok())
+    fn current_model(&self) -> Option<Arc<IndexModel>> {
+        let stamp = self.projection_stamp();
+        freshen_with(&self.model, &stamp, || self.load_model_projection())
     }
 
-    /// The cached evidence sidecar, same mtime-keyed auto-reload as the model
-    /// (keyed on `evidence.json`). Legitimately absent on pre-M31 vaults; a
-    /// missing file caches `None` without re-reading every request, yet
-    /// reloads the instant one appears.
-    fn current_evidence(&self) -> Option<EvidenceModel> {
-        let path = self.evidence_path();
-        freshen(&self.evidence, &path, || {
-            read_evidence(&self.vault_root).ok()
-        })
+    /// The cached evidence sidecar, same stamp-keyed auto-reload as the
+    /// model. Legitimately absent on pre-M31 vaults; a missing file caches
+    /// `None` without re-reading every request, yet reloads the instant one
+    /// appears.
+    fn current_evidence(&self) -> Option<Arc<EvidenceModel>> {
+        let stamp = self.projection_stamp();
+        freshen_with(&self.evidence, &stamp, || self.load_evidence_projection())
+    }
+
+    /// Freshness stamp for the serving projections: the NEWEST of the sqlite
+    /// shadow and the JSON files — whichever store a rebuild touched last
+    /// invalidates the cache, in both backends and through fallback flips.
+    fn projection_stamp(&self) -> Option<SystemTime> {
+        let db = ovp_index::sqlite::sqlite_path(&self.vault_root)
+            .ok()
+            .and_then(|p| mtime_of(&p));
+        let json = mtime_of(&self.index_path()).max(mtime_of(&self.evidence_path()));
+        db.max(json)
+    }
+
+    /// True when the sqlite shadow is at least as new as the JSON files —
+    /// a JSON-only rebuild (portal tag curation calls `rebuild_index_now`,
+    /// which does not re-shadow) must serve the NEWER JSON, never a valid
+    /// but older shadow generation.
+    fn sqlite_is_newest(&self) -> bool {
+        let db = ovp_index::sqlite::sqlite_path(&self.vault_root)
+            .ok()
+            .and_then(|p| mtime_of(&p));
+        let json = mtime_of(&self.index_path()).max(mtime_of(&self.evidence_path()));
+        match (db, json) {
+            (Some(db), Some(json)) => db >= json,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// Stage-4 loader: the sqlite read-model is the serving store (operator
+    /// decision 2026-08-06 — direct switch) WHEN it is the newest
+    /// generation; the JSON projection serves otherwise and remains the
+    /// fallback until the observation window closes. `OVP_INDEX_BACKEND=json`
+    /// forces the old path.
+    fn load_model_projection(&self) -> Option<IndexModel> {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
+            match ovp_index::sqlite::read_index_sqlite(&self.vault_root) {
+                Ok(model) => {
+                    *self.serving_backend.write().unwrap() = "sqlite";
+                    *self.sqlite_error.write().unwrap() = None;
+                    return Some(model);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: sqlite read-model unavailable ({e}); serving the JSON fallback"
+                    );
+                    *self.sqlite_error.write().unwrap() = Some(e);
+                }
+            }
+        }
+        *self.serving_backend.write().unwrap() = "json";
+        read_index(&self.vault_root).ok()
+    }
+
+    fn load_evidence_projection(&self) -> Option<EvidenceModel> {
+        if index_backend_is_sqlite() && self.sqlite_is_newest() {
+            match ovp_index::sqlite::read_evidence_sqlite(&self.vault_root) {
+                // Ok(None) = the shadow generation was built without an
+                // evidence model — mirror the JSON absent case, no fallback.
+                Ok(evidence) => return evidence,
+                Err(e) => eprintln!(
+                    "warning: sqlite evidence unavailable ({e}); serving the JSON fallback"
+                ),
+            }
+        }
+        read_evidence(&self.vault_root).ok()
     }
 
     /// Force-reload both caches from disk regardless of mtime. `/api/refresh`
     /// keeps this for scripts; with mtime auto-reload it is now optional
     /// (every accessor already freshens on its own).
     fn refresh_model(&self) {
-        force_reload(
-            &self.model,
-            &self.index_path(),
-            read_index(&self.vault_root).ok(),
-        );
-        force_reload(
-            &self.evidence,
-            &self.evidence_path(),
-            read_evidence(&self.vault_root).ok(),
-        );
+        let stamp = self.projection_stamp();
+        force_reload_with(&self.model, stamp, self.load_model_projection());
+        force_reload_with(&self.evidence, stamp, self.load_evidence_projection());
         force_reload(
             &self.last_run,
             &self.last_run_path(),
             read_last_run_model(&self.vault_root).ok().flatten(),
         );
+        // The crystal + bilingual caches key on mtimes too — a same-mtime
+        // rewrite (the case /api/refresh exists for) must reset them as
+        // well, or graph/claim/source responses stay stale after a 200.
+        *self.crystal.write().unwrap() = CrystalCache::default();
+        force_reload(&self.cards_zh, &self.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL), {
+            ovp_memory::bilingual::CardsZhFile::load(&self.vault_root).ok()
+        });
+        force_reload(&self.claims_zh, &self.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL), {
+            ovp_memory::bilingual::ClaimsZhFile::load(&self.vault_root).ok()
+        });
     }
 
     fn console_dir(&self) -> PathBuf {
         self.vault_root.join(self.layout.console_dir())
+    }
+
+    /// Folded crystal projections, reloaded only when `ledger.jsonl` or
+    /// `themes.json` changed on disk. Same double-checked locking shape as
+    /// [`freshen`]; both projections rebuild together so a caller can never
+    /// pair records from one ledger generation with lineage from another.
+    fn crystal_projections(&self) -> (Arc<Vec<DurableRecord>>, Arc<ClaimLineageIndex>) {
+        let store = self.vault_root.join(self.layout.crystal_store_dir());
+        let ledger = store.join("ledger.jsonl");
+        let themes = store.join("themes.json");
+
+        let hit = |cache: &CrystalCache,
+                   ledger_stamp: &Option<SystemTime>,
+                   themes_stamp: &Option<SystemTime>| {
+            if cache.loaded
+                && cache.ledger_stamp == *ledger_stamp
+                && cache.themes_stamp == *themes_stamp
+            {
+                Some((cache.records.clone(), cache.lineage.clone()))
+            } else {
+                None
+            }
+        };
+
+        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        {
+            let guard = self.crystal.read().unwrap();
+            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+                return pair;
+            }
+        }
+        let mut guard = self.crystal.write().unwrap();
+        // Re-stat under the write lock — the files could have changed between
+        // the read guard's stat and acquiring the write lock.
+        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+            return pair;
+        }
+        let records = Arc::new(readers::load_active_records(&self.vault_root, &self.layout));
+        let lineage = Arc::new(readers::load_lineage_index(&self.vault_root, &self.layout));
+        *guard = CrystalCache {
+            loaded: true,
+            ledger_stamp,
+            themes_stamp,
+            records: records.clone(),
+            lineage: lineage.clone(),
+        };
+        (records, lineage)
+    }
+
+    /// Cached `cards_zh.json`, mtime-keyed. A missing file loads as the empty
+    /// default (bilingual sidecars are optional) without re-reading per
+    /// request, and reloads the moment a translate run writes one.
+    fn current_cards_zh(&self) -> Option<Arc<ovp_memory::bilingual::CardsZhFile>> {
+        let path = self.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL);
+        freshen(&self.cards_zh, &path, || {
+            ovp_memory::bilingual::CardsZhFile::load(&self.vault_root).ok()
+        })
+    }
+
+    /// Cached `claims_zh.json` — same shape as [`Self::current_cards_zh`].
+    fn current_claims_zh(&self) -> Option<Arc<ovp_memory::bilingual::ClaimsZhFile>> {
+        let path = self.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL);
+        freshen(&self.claims_zh, &path, || {
+            ovp_memory::bilingual::ClaimsZhFile::load(&self.vault_root).ok()
+        })
     }
 }
 
@@ -525,43 +717,60 @@ impl AppState {
 /// take the write guard and RE-CHECK the mtime under it (double-checked
 /// locking) so a burst of concurrent requests reloads once, not N times.
 /// `load` re-reads+parses the file and returns `None` if absent/invalid.
-fn freshen<T: Clone>(
+fn freshen<T>(
     cache: &RwLock<Cached<T>>,
     path: &Path,
     load: impl FnOnce() -> Option<T>,
-) -> Option<T> {
-    let disk = mtime_of(path);
+) -> Option<Arc<T>> {
+    let stamp = mtime_of(path);
+    freshen_with(cache, &stamp, load)
+}
+
+/// [`freshen`] against a PRE-COMPUTED stamp — for caches whose freshness
+/// spans more than one file (the serving projections watch both the sqlite
+/// shadow and the JSON fallback).
+fn freshen_with<T>(
+    cache: &RwLock<Cached<T>>,
+    stamp: &Option<SystemTime>,
+    load: impl FnOnce() -> Option<T>,
+) -> Option<Arc<T>> {
     {
         let guard = cache.read().unwrap();
-        if guard.loaded && guard.stamp == disk {
+        if guard.loaded && guard.stamp == *stamp {
             return guard.data.clone();
         }
     }
     let mut guard = cache.write().unwrap();
     // Re-check under the write lock: another thread may have just reloaded.
-    // Re-stat too — the file could have changed again between the read
-    // guard's stat and acquiring the write lock.
-    let disk = mtime_of(path);
-    if guard.loaded && guard.stamp == disk {
+    if guard.loaded && guard.stamp == *stamp {
         return guard.data.clone();
     }
-    let data = load();
+    let data = load().map(Arc::new);
     *guard = Cached {
         loaded: true,
-        stamp: disk,
+        stamp: *stamp,
         data: data.clone(),
     };
     data
 }
 
+/// `OVP_INDEX_BACKEND`: `sqlite` (the default — operator decision
+/// 2026-08-06, direct switch) or `json` to force the legacy path.
+fn index_backend_is_sqlite() -> bool {
+    !std::env::var("OVP_INDEX_BACKEND").is_ok_and(|v| v == "json")
+}
+
 /// Force-store a freshly-read value with the file's current mtime, bypassing
 /// the freshness check. Used by `/api/refresh`.
 fn force_reload<T>(cache: &RwLock<Cached<T>>, path: &Path, data: Option<T>) {
-    let stamp = mtime_of(path);
+    force_reload_with(cache, mtime_of(path), data);
+}
+
+fn force_reload_with<T>(cache: &RwLock<Cached<T>>, stamp: Option<SystemTime>, data: Option<T>) {
     *cache.write().unwrap() = Cached {
         loaded: true,
         stamp,
-        data,
+        data: data.map(Arc::new),
     };
 }
 
@@ -620,6 +829,12 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
         layout: VaultLayout::new(),
         model: RwLock::new(Cached::default()),
         evidence: RwLock::new(Cached::default()),
+        crystal: RwLock::new(CrystalCache::default()),
+        serving_backend: RwLock::new("unloaded"),
+        sqlite_error: RwLock::new(None),
+        index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
+        cards_zh: RwLock::new(Cached::default()),
+        claims_zh: RwLock::new(Cached::default()),
         last_run: RwLock::new(Cached::default()),
         viz_dir: config.viz_dir,
         ask_client: config.ask_client,
@@ -688,6 +903,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
 /// immediately, so every other request stays snappy while an ask is in
 /// flight.
 fn serve_loop(server: &Server, state: &Arc<AppState>) {
+    let pool_tx = spawn_request_pool(state);
     for mut request in server.incoming_requests() {
         let path = request.url().to_string();
         let method = request.method().clone();
@@ -722,6 +938,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
             if p == "/api/tags/decision"
                 || p == "/api/publish"
                 || p == "/api/schedule/run"
+                || p == "/api/index/rebuild"
                 || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
@@ -746,14 +963,74 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 continue;
             }
         }
-        let body = if method == Method::Post {
-            read_post_body(&mut request)
-        } else {
-            String::new()
-        };
-        let resp = dispatch(state, method, &path, &body);
-        let _ = request.respond(resp);
+        // Everything else — every GET and the remaining POSTs — goes to the
+        // bounded worker pool. Inline dispatch on the accept loop meant ONE
+        // slow handler (a cold model reload, a fulltext scan) stalled the
+        // whole portal; now it stalls one worker. try_send gives backpressure:
+        // a full queue answers 503 immediately instead of buffering without
+        // bound.
+        match pool_tx.try_send(request) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(request)) => {
+                let body = serde_json::json!({
+                    "error": "server busy — request queue full, retry shortly"
+                });
+                let _ = request.respond(json_response(503, &body.to_string()));
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(mut request)) => {
+                // Workers only exit when the sender drops — reaching here
+                // means the pool died; answer inline rather than hanging.
+                let path = request.url().to_string();
+                let method = request.method().clone();
+                let body = if method == Method::Post {
+                    read_post_body(&mut request)
+                } else {
+                    String::new()
+                };
+                let resp = dispatch(state, method, &path, &body);
+                let _ = request.respond(resp);
+            }
+        }
     }
+}
+
+/// Worker count for the general request pool — enough that a handful of slow
+/// reads cannot freeze the portal, small enough that per-thread stacks and
+/// cache contention stay negligible on a desktop machine.
+const GET_WORKER_THREADS: usize = 8;
+/// Accept-queue depth before try_send answers 503 — bounds memory when a
+/// client floods faster than workers drain.
+const GET_QUEUE_DEPTH: usize = 128;
+
+/// Spawn the bounded worker pool: N threads draining one sync channel. Each
+/// worker reads the body (slow bodies pin a worker, never the accept loop)
+/// and dispatches. The pool lives for the server's lifetime; the channel
+/// disconnects only if the accept loop exits first.
+fn spawn_request_pool(state: &Arc<AppState>) -> std::sync::mpsc::SyncSender<tiny_http::Request> {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<tiny_http::Request>(GET_QUEUE_DEPTH);
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    for _ in 0..GET_WORKER_THREADS {
+        let rx = Arc::clone(&rx);
+        let state = Arc::clone(state);
+        std::thread::spawn(move || {
+            loop {
+                let next = rx.lock().unwrap().recv();
+                let Ok(mut request) = next else {
+                    break;
+                };
+                let path = request.url().to_string();
+                let method = request.method().clone();
+                let body = if method == Method::Post {
+                    read_post_body(&mut request)
+                } else {
+                    String::new()
+                };
+                let resp = dispatch(&state, method, &path, &body);
+                let _ = request.respond(resp);
+            }
+        });
+    }
+    tx
 }
 
 /// Read a POST body up to one byte past [`MAX_POST_BODY_BYTES`] — the
@@ -793,6 +1070,8 @@ fn dispatch(
         (Method::Get, "/api/publish/status") => handle_publish_status(state),
         (Method::Post, "/api/publish") => handle_publish_start(state),
         (Method::Get, "/api/schedule/run/status") => handle_run_status(state),
+        (Method::Get, "/api/index/rebuild/status") => handle_index_rebuild_status(state),
+        (Method::Post, "/api/index/rebuild") => handle_index_rebuild_start(state),
         (Method::Get, "/api/schedule") => handle_schedule(state),
         (Method::Post, "/api/schedule/features") => handle_schedule_features(state, body),
         (Method::Get, p) if p.starts_with("/api/ask/progress") => {
@@ -889,8 +1168,9 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(m) => m,
         None => return json_response(503, r#"{"error":"index not available"}"#),
     };
-    let vocabulary = ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
-    let mut counts: std::collections::BTreeMap<&str, (usize, usize)> =
+    let vocabulary =
+        ovp_domain::tags::TagVocabulary::load(&state.vault_root).unwrap_or_default();
+    let mut counts: std::collections::BTreeMap<&str, (usize, usize, usize)> =
         std::collections::BTreeMap::new();
     // Seed from the vocabulary so zero-count community/llm entries still
     // appear (browser completeness + Source Detail autocomplete).
@@ -903,6 +1183,9 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
         for t in &s.tags_inferred {
             counts.entry(t.as_str()).or_default().1 += 1;
+        }
+        for t in &s.tags_implied {
+            counts.entry(t.as_str()).or_default().2 += 1;
         }
     }
     let origins: std::collections::BTreeMap<&str, &str> = vocabulary
@@ -920,11 +1203,12 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         .collect();
     let tags: Vec<serde_json::Value> = counts
         .iter()
-        .map(|(tag, (user, inferred))| {
+        .map(|(tag, (user, inferred, implied))| {
             serde_json::json!({
                 "tag": tag,
                 "user": user,
                 "inferred": inferred,
+                "implied": implied,
                 "origin": origins.get(tag),
             })
         })
@@ -955,11 +1239,44 @@ fn handle_tags_api(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             && !decisions.is_ignored(alias, canonical)
     })
     .collect();
+    // Implication proposals awaiting a decision: drop ones already implied
+    // (operator + UI table) or UI-rejected — same immediate-retire rule.
+    let impl_proposals: Vec<serde_json::Value> = std::fs::read_to_string(
+        state
+            .vault_root
+            .join(state.layout.tags_proposals_json_file()),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|v| v.get("implications").cloned())
+    .and_then(|v| v.as_array().cloned())
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|p| {
+        let specific = p.get("specific").and_then(|v| v.as_str()).unwrap_or("");
+        let generic = p.get("generic").and_then(|v| v.as_str()).unwrap_or("");
+        !specific.is_empty()
+            && !aliases.implied_generics(specific).contains(generic)
+            && !decisions.is_ignored(specific, generic)
+    })
+    .collect();
+    // The accepted implication edges (specific → generics) for the two-level
+    // facet rollup.
+    let implications = serde_json::to_value(
+        aliases
+            .implications()
+            .iter()
+            .map(|(s, generics)| (s.clone(), generics.iter().cloned().collect::<Vec<_>>()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    )
+    .unwrap_or_default();
     let banned: Vec<&str> = vocabulary.banned().collect();
     let body = serde_json::json!({
         "tags": tags,
         "banned": banned,
         "proposals": proposals,
+        "implication_proposals": impl_proposals,
+        "implications": implications,
     })
     .to_string();
     json_stamped(200, &body, Some(&model))
@@ -975,13 +1292,20 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
         Err(_) => return json_response(400, r#"{"error":"invalid JSON body"}"#),
     };
     let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    let alias = parsed.get("alias").and_then(|v| v.as_str()).unwrap_or("");
+    // Merge decisions carry alias/canonical; implication decisions carry
+    // specific/generic. `reject` accepts either pair.
+    let alias = parsed
+        .get("alias")
+        .or_else(|| parsed.get("specific"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let canonical = parsed
         .get("canonical")
+        .or_else(|| parsed.get("generic"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if alias.is_empty() || canonical.is_empty() {
-        return json_response(400, r#"{"error":"alias and canonical are required"}"#);
+        return json_response(400, r#"{"error":"both tags of the pair are required"}"#);
     }
     let _write = state
         .tags_write_lock
@@ -993,8 +1317,14 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
     };
     let result = match action {
         "accept" => decisions.accept(alias, canonical),
+        "accept_implication" => decisions.accept_implication(alias, canonical),
         "reject" => decisions.reject(alias, canonical),
-        _ => return json_response(400, r#"{"error":"action must be accept or reject"}"#),
+        _ => {
+            return json_response(
+                400,
+                r#"{"error":"action must be accept, accept_implication, or reject"}"#,
+            );
+        }
     };
     if let Err(e) = result {
         return json_response(400, &format!(r#"{{"error":{}}}"#, json_str(&e)));
@@ -1021,6 +1351,35 @@ fn handle_tag_decision(state: &AppState, body: &str) -> Response<std::io::Cursor
                     json_str(&format!(
                         "cannot merge #{alias} → #{canonical}: it conflicts with an existing \
                          rule in aliases.toml — edit that file directly"
+                    ))
+                ),
+            );
+        }
+    }
+    // Same class for implication accepts: absorb can silently discard the
+    // edge (self-loop after alias resolution, or the generic is dropped /
+    // boilerplate) — detect the no-op, roll the decision back, and 409
+    // instead of a false success that leaves the proposal card stuck
+    // (CodeRabbit on PR #347).
+    if action == "accept_implication" {
+        let ns = ovp_domain::tags::normalize_tag(alias).unwrap_or_default();
+        let ng = ovp_domain::tags::normalize_tag(canonical).unwrap_or_default();
+        let merged = ovp_domain::tags::TagAliases::load(&state.vault_root).unwrap_or_default();
+        let s = merged.resolve(&ns).to_string();
+        let g = merged.resolve(&ng).to_string();
+        let effective =
+            !ns.is_empty() && !ng.is_empty() && merged.implied_generics(&s).contains(&g);
+        if !effective {
+            let mut d = ovp_domain::tags::TagDecisions::load(&state.vault_root).unwrap_or_default();
+            d.remove_implication(alias, canonical);
+            let _ = d.save(&state.vault_root);
+            return json_response(
+                409,
+                &format!(
+                    r#"{{"error":{}}}"#,
+                    json_str(&format!(
+                        "implication #{alias} ⇒ #{canonical} cannot take effect (self-loop after \
+                         alias resolution, or the generic is dropped/boilerplate)"
                     ))
                 ),
             );
@@ -1220,9 +1579,9 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         // same freshness — the stamp pairs them.
         let model = state.current_model();
         let records = load_active_records(state);
-        let resp = graph::search_subgraph(&records, model.as_ref(), term.trim());
+        let resp = graph::search_subgraph(&records, model.as_deref(), term.trim());
         let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-        return json_stamped(200, &body, model.as_ref());
+        return json_stamped(200, &body, model.as_deref());
     }
 
     let model = match state.current_model() {
@@ -1307,7 +1666,7 @@ fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let records = load_active_records(state);
     let body = bodies::themes_body(&records).to_string();
-    json_stamped(200, &body, model.as_ref())
+    json_stamped(200, &body, model.as_deref())
 }
 
 /// `POST /api/publish` — kick off ONE background publish run using
@@ -1407,6 +1766,71 @@ fn handle_publish_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>>
 
 /// Jobs the portal may trigger — the registry's built-ins.
 const MANUAL_RUN_JOBS: &[&str] = &["daily", "crystallize"];
+
+fn handle_index_rebuild_status(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+    let body = serde_json::json!({"running": rebuild.running, "last": rebuild.last});
+    json_response(200, &body.to_string())
+}
+
+/// The sqlite REPAIR flow: rebuild every projection (JSON + shadow, with the
+/// whole-model parity gate) by running `ovp2 index` as a child — the same
+/// battle-tested path daily uses, never a second in-process implementation.
+/// The shadow's verify-then-promote contract means a failed rebuild leaves
+/// last-good untouched; success is picked up by the mtime stamps on the next
+/// request, no cache poke needed.
+fn handle_index_rebuild_start(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.running {
+            return json_response(
+                409,
+                r#"{"error":"an index rebuild is already in progress","code":"rebuild_running"}"#,
+            );
+        }
+        slot.running = true;
+    }
+    let bin = state
+        .ovp2_bin
+        .clone()
+        .or_else(|| std::env::current_exe().ok());
+    let Some(bin) = bin else {
+        let mut slot = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        return json_response(500, r#"{"error":"cannot resolve the ovp2 binary"}"#);
+    };
+    let vault_root = state.vault_root.clone();
+    let slot = Arc::clone(&state.index_rebuild);
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&bin)
+            .args(["index", "--vault-root", &vault_root.display().to_string()])
+            .output();
+        let last = match out {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let tail: String = stderr
+                    .lines()
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::json!({
+                    "ok": out.status.success(),
+                    "exit": out.status.code(),
+                    "stderr_tail": tail,
+                })
+            }
+            Err(e) => serde_json::json!({"ok": false, "error": format!("spawn: {e}")}),
+        };
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        slot.running = false;
+        slot.last = Some(last);
+    });
+    json_response(202, r#"{"started":true}"#)
+}
 
 fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let job = if body.trim().is_empty() {
@@ -1620,6 +2044,15 @@ fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                         "argv": job.argv,
                         "last_run": last_run,
                         "last_status": last_status,
+                        // Trigger-level observability (2026-08-06): a
+                        // scheduler that is alive but failing every trigger
+                        // must be visible, WITH its evidence — the 08-03
+                        // crystallize failure was undiagnosable because the
+                        // tick discarded stderr.
+                        "last_error": run.and_then(|r| r.last_error.clone()),
+                        "runs_total": run.map(|r| r.runs_total).unwrap_or(0),
+                        "failures_total": run.map(|r| r.failures_total).unwrap_or(0),
+                        "consecutive_failures": run.map(|r| r.consecutive_failures).unwrap_or(0),
                         "next_run": next_run,
                         "due": due,
                         "features": job_features_from_argv(&job.argv),
@@ -2057,7 +2490,7 @@ fn handle_theme_pages(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut body = bodies::theme_pages_body(pages.as_ref(), &records);
     // Splice rebuildable zh projections (claims_zh + theme_pages_zh).
     splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
-    json_stamped(200, &body.to_string(), model.as_ref())
+    json_stamped(200, &body.to_string(), model.as_deref())
 }
 
 /// Attach `claim_zh` / `sections_zh` when bilingual projections are fresh.
@@ -2169,6 +2602,42 @@ fn handle_terrain(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// How many packs the semantic-themes projection has never clustered —
+/// mirrors daily's `stale_theme_packs` (a missing/corrupt themes.json counts
+/// every pack as unthemed; that IS the signal to run crystal-themes).
+fn stale_theme_packs_count(vault_root: &Path, model: &IndexModel) -> usize {
+    if model.packs.is_empty() {
+        return 0;
+    }
+    let themes =
+        ovp_domain::crystal::themes::ThemesFile::load(&vault_root.join(".ovp/crystal/themes.json"))
+            .ok()
+            .flatten();
+    match &themes {
+        Some(t) => model
+            .packs
+            .iter()
+            .filter(|p| {
+                let case_id = ovp_domain::vault_layout::pack_case_id(&p.pack_dir);
+                !t.packs.contains_key(case_id)
+            })
+            .count(),
+        None => model.packs.len(),
+    }
+}
+
+/// The zh-translation lookup key for a claim JSON object: canonical
+/// `claim_key` when present, else `claim_id` — ONE rule for every endpoint,
+/// or /api/model and /api/claim disagree on whether a translation exists.
+fn claim_zh_lookup_key(obj: &serde_json::Map<String, serde_json::Value>) -> String {
+    obj.get("claim_key")
+        .and_then(|v| v.as_str())
+        .filter(|k| !k.is_empty())
+        .or_else(|| obj.get("claim_id").and_then(|v| v.as_str()))
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     // Overlay the LIVE heartbeat over the baked `ops.last_run` so the SPA banner
     // never reads a stale "running" snapshot baked into index.json.
@@ -2188,6 +2657,61 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // Agent-mode discovery: the SPA pre-generates a session id and polls
         // /api/ask/progress from turn 1 only when the agent path is live.
         obj.insert("ask_agent".into(), serde_json::json!(state.ask_agent));
+        // Stage-4 observability: which store the model actually came from
+        // (sqlite | json | unloaded). The desktop swallows stderr, so the
+        // fallback warning alone is invisible — this field is the visible
+        // signal the JSON-retirement observation window reads.
+        obj.insert(
+            "serving_backend".into(),
+            serde_json::json!(*state.serving_backend.read().unwrap()),
+        );
+        // Themes-staleness overlay: packs missing from the semantic-themes
+        // projection. The daily CLI has printed this hint since 95d9be14 —
+        // into a stderr the desktop swallows, which is how the projection
+        // once went a month stale unnoticed. The portal attention feed reads
+        // THIS field instead. None→0 packs is not staleness (fresh vault).
+        obj.insert(
+            "themes_stale_packs".into(),
+            serde_json::json!(stale_theme_packs_count(&state.vault_root, &model)),
+        );
+        // Repair surface: the last sqlite failure (null when healthy) and
+        // whether a portal-triggered rebuild is in flight — the SPA banner
+        // derives entirely from these plus serving_backend.
+        obj.insert(
+            "sqlite_error".into(),
+            serde_json::json!(*state.sqlite_error.read().unwrap()),
+        );
+        {
+            let rebuild = state.index_rebuild.lock().unwrap_or_else(|e| e.into_inner());
+            obj.insert(
+                "index_rebuild".into(),
+                serde_json::json!({"running": rebuild.running, "last": rebuild.last}),
+            );
+        }
+        // Splice claim_zh onto EVERY claim row (fresh-by-en_hash semantics).
+        // The theme-pages lookup only covers claims cited by real community
+        // pages, so Unclassified claims read "0/N 中文就绪" even when their
+        // translations exist on disk — row-level splice makes the zh surface
+        // independent of theme membership.
+        if let Some((claims_zh, rows)) = state
+            .current_claims_zh()
+            .zip(obj.get_mut("claims").and_then(|c| c.as_array_mut()))
+        {
+            for row in rows {
+                let Some(claim_obj) = row.as_object_mut() else {
+                    continue;
+                };
+                let en = claim_obj
+                    .get("claim")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let key = claim_zh_lookup_key(claim_obj);
+                if let Some(zh) = claims_zh.get_fresh(&key, &en) {
+                    claim_obj.insert("claim_zh".into(), serde_json::json!(zh));
+                }
+            }
+        }
         // Attention acknowledgements overlay: (sha,status) pairs the operator
         // dismissed. All attention surfaces (Today, System, the nav dot)
         // derive from this one model payload, so filtering stays consistent.
@@ -2219,8 +2743,8 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     json_stamped(200, &body, Some(&model))
 }
 
-fn load_active_records(state: &AppState) -> Vec<DurableRecord> {
-    readers::load_active_records(&state.vault_root, &state.layout)
+fn load_active_records(state: &AppState) -> Arc<Vec<DurableRecord>> {
+    state.crystal_projections().0
 }
 
 fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -2253,7 +2777,7 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                 let records = load_active_records(state);
                 // Evidence sidecar feeds the memory-layer card nodes (B5).
                 let evidence = state.current_evidence();
-                graph::source_neighborhood(&records, model.as_ref(), evidence.as_ref(), sha)
+                graph::source_neighborhood(&records, model.as_deref(), evidence.as_deref(), sha)
             }
             "global" => {
                 let limit = query
@@ -2274,14 +2798,14 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     persp,
                 };
                 let records = load_active_records(state);
-                graph::build_graph(&records, model.as_ref(), &params)
+                graph::build_graph(&records, model.as_deref(), &params)
             }
             "theme" => {
                 let Some(theme) = query.get("theme").filter(|t| !t.is_empty()) else {
                     return json_response(400, r#"{"error":"scope=theme requires theme=<theme>"}"#);
                 };
                 let records = load_active_records(state);
-                graph::theme_subgraph(&records, model.as_ref(), theme)
+                graph::theme_subgraph(&records, model.as_deref(), theme)
             }
             other => {
                 let body = serde_json::json!({
@@ -2293,7 +2817,7 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         return match result {
             Ok(resp) => {
                 let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-                json_stamped(200, &body, model.as_ref())
+                json_stamped(200, &body, model.as_deref())
             }
             Err(e) => {
                 let body = serde_json::json!({ "error": e.message });
@@ -2312,10 +2836,10 @@ fn handle_graph(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
 
     let records = load_active_records(state);
 
-    match graph::build_graph(&records, model.as_ref(), &params) {
+    match graph::build_graph(&records, model.as_deref(), &params) {
         Ok(resp) => {
             let body = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into());
-            json_stamped(200, &body, model.as_ref())
+            json_stamped(200, &body, model.as_deref())
         }
         Err(e) => {
             let body = serde_json::json!({ "error": e.message });
@@ -2365,12 +2889,11 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
     // (torn-read fix): the auto-freshen keeps them paired, and the stamp on the
     // response lets the client see the pairing.
     let model = state.current_model();
-    let records = load_active_records(state);
+    let (records, lineage) = state.crystal_projections();
     let reader_root = state.vault_root.join(state.layout.reader_root());
-    let lineage = ovp_api_projection::readers::load_lineage_index(&state.vault_root, &state.layout);
     match bodies::claim_body_with_lineage(
         &records,
-        model.as_ref(),
+        model.as_deref(),
         &reader_root,
         &id,
         true,
@@ -2379,25 +2902,22 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         Some(mut v) => {
             // Rebuildable bilingual projection — authority claim stays English.
             if let Some(obj) = v.as_object_mut() {
-                let key = obj
-                    .get("claim_id")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                // Same key rule as /api/model (claim_key, else claim_id) —
+                // the two endpoints must agree on whether a zh exists; and
+                // the mtime-cached file, not a per-request disk parse.
+                let key = claim_zh_lookup_key(obj);
                 let en = obj
                     .get("claim")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Ok(zh_file) =
-                    ovp_memory::bilingual::ClaimsZhFile::load(&state.vault_root)
-                {
+                if let Some(zh_file) = state.current_claims_zh() {
                     if let Some(zh) = zh_file.get_fresh(&key, &en) {
                         obj.insert("claim_zh".into(), serde_json::json!(zh));
                     }
                 }
             }
-            json_stamped(200, &v.to_string(), model.as_ref())
+            json_stamped(200, &v.to_string(), model.as_deref())
         }
         None => json_response(404, r#"{"error":"claim not found"}"#),
     }
@@ -2447,9 +2967,9 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
         });
 
     let evidence = state.current_evidence();
-    match bodies::source_body(&model, evidence.as_ref(), &sha, doc) {
+    match bodies::source_body(&model, evidence.as_deref(), &sha, doc) {
         Some(mut v) => {
-            splice_source_memory_zh(&state.vault_root, evidence.as_ref(), &sha, &mut v);
+            splice_source_memory_zh(state, evidence.as_deref(), &sha, &mut v);
             json_response(200, &v.to_string())
         }
         None => {
@@ -2461,12 +2981,12 @@ fn handle_source_api(state: &AppState, url: &str) -> Response<std::io::Cursor<Ve
 
 /// Attach card_zh fields when `.ovp/crystal/cards_zh.json` has a fresh entry.
 fn splice_source_memory_zh(
-    vault_root: &std::path::Path,
+    state: &AppState,
     evidence: Option<&ovp_index::EvidenceModel>,
     sha: &str,
     body: &mut serde_json::Value,
 ) {
-    let Ok(cards_zh) = ovp_memory::bilingual::CardsZhFile::load(vault_root) else {
+    let Some(cards_zh) = state.current_cards_zh() else {
         return;
     };
     let Some(ev) = evidence else {
@@ -2477,7 +2997,7 @@ fn splice_source_memory_zh(
         .and_then(|s| s.get("pack_dir"))
         .and_then(|p| p.as_str())
         .map(|s| s.to_string());
-    let claims_zh = ovp_memory::bilingual::ClaimsZhFile::load(vault_root).unwrap_or_default();
+    let claims_zh = state.current_claims_zh().unwrap_or_default();
 
     let mut enriched_cards = Vec::new();
     if !cards_zh.entries.is_empty() {
@@ -2621,7 +3141,7 @@ fn build_source_focus_pack(
 
     let mut cards_block = String::new();
     let mut card_n = 0usize;
-    if let Some(ev) = evidence.as_ref() {
+    if let Some(ev) = evidence.as_deref() {
         for c in ev
             .cards
             .iter()
@@ -2647,7 +3167,7 @@ fn build_source_focus_pack(
 
     let mut units_block = String::new();
     let mut unit_n = 0usize;
-    if let Some(ev) = evidence.as_ref() {
+    if let Some(ev) = evidence.as_deref() {
         for u in ev
             .units
             .iter()
@@ -2743,6 +3263,148 @@ url: {url}\n\n\
     let meta = ChatFocusMeta {
         source_sha: sha.to_string(),
         title: source.title.clone(),
+        theme: None,
+    };
+    Some((pack, meta))
+}
+
+/// Caps for the theme-grounded chat pack — the claims ARE the content here,
+/// so the claim budget is far larger than the source pack's.
+const FOCUS_THEME_CLAIM_MAX: usize = 40;
+const FOCUS_THEME_SOURCE_MAX: usize = 24;
+
+/// Build the auto-injected context pack for "chat on this crystal theme":
+/// the grounded topic-page synthesis (when one exists) + the theme's active
+/// claims + the distinct sources they cite. Mirrors `build_source_focus_pack`.
+/// Returns None for a theme with no active claims (nothing to ground on).
+fn build_theme_focus_pack(
+    state: &AppState,
+    model: &IndexModel,
+    theme: &str,
+) -> Option<(String, ChatFocusMeta)> {
+    let mut claims: Vec<&ovp_index::ClaimRow> = model
+        .claims
+        .iter()
+        .filter(|c| {
+            c.theme.as_deref() == Some(theme)
+                && matches!(
+                    c.status,
+                    ovp_index::ClaimStatus::Durable | ovp_index::ClaimStatus::Caveated
+                )
+        })
+        .collect();
+    if claims.is_empty() {
+        return None;
+    }
+    claims.sort_by_key(|c| {
+        (
+            match c.status {
+                ovp_index::ClaimStatus::Durable => 0u8,
+                _ => 1,
+            },
+            c.claim_id.clone(),
+        )
+    });
+    let claim_total = claims.len();
+
+    // case id → source row, for the distinct-source roster.
+    let by_sha: HashMap<&str, &ovp_index::SourceRow> =
+        model.sources.iter().map(|s| (s.sha256.as_str(), s)).collect();
+    let case_to_sha: HashMap<&str, &str> = model
+        .packs
+        .iter()
+        .filter_map(|p| {
+            let case = p
+                .pack_dir
+                .trim_end_matches(['/', '\\'])
+                .rsplit(['/', '\\'])
+                .next()?;
+            Some((case, p.source_sha256.as_deref()?))
+        })
+        .collect();
+
+    let mut claims_block = String::new();
+    let mut seen_sources: Vec<&str> = Vec::new();
+    for c in claims.iter().take(FOCUS_THEME_CLAIM_MAX) {
+        let key = c
+            .claim_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .unwrap_or(c.claim_id.as_str());
+        let status = match c.status {
+            ovp_index::ClaimStatus::Durable => "durable",
+            _ => "caveated",
+        };
+        claims_block.push_str(&format!("- [claim:{key}] ({status}) {}\n", c.claim.trim()));
+        for case in &c.sources {
+            if let Some(sha) = case_to_sha.get(case.as_str())
+                && !seen_sources.contains(sha)
+            {
+                seen_sources.push(sha);
+            }
+        }
+    }
+    let claim_note = if claim_total > FOCUS_THEME_CLAIM_MAX {
+        format!("…({} more claims omitted)\n", claim_total - FOCUS_THEME_CLAIM_MAX)
+    } else {
+        String::new()
+    };
+
+    let mut sources_block = String::new();
+    let source_n = seen_sources.len();
+    for sha in seen_sources.iter().take(FOCUS_THEME_SOURCE_MAX) {
+        let title = by_sha
+            .get(*sha)
+            .and_then(|s| s.title.as_deref())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or("(untitled)");
+        sources_block.push_str(&format!("- [source:{sha}] {title}\n"));
+    }
+    if sources_block.is_empty() {
+        sources_block.push_str("(no linked sources)\n");
+    }
+
+    // Grounded topic-page synthesis, when crystal-theme-pages has woven one.
+    let page_block = ovp_domain::crystal::theme_pages::ThemePagesFile::load(
+        &state
+            .vault_root
+            .join(".ovp")
+            .join("crystal")
+            .join("theme_pages.json"),
+    )
+    .ok()
+    .flatten()
+    .and_then(|f| f.pages.into_iter().find(|p| p.label == theme))
+    .map(|p| {
+        let mut out = String::new();
+        for sec in &p.sections {
+            out.push_str(&format!("### {}\n{}\n\n", sec.heading, sec.body));
+        }
+        out
+    })
+    .filter(|s| !s.trim().is_empty())
+    .unwrap_or_else(|| "(no synthesized topic page yet — reason from the claims)\n".into());
+
+    let pack = format!(
+        "[FOCUS CONTEXT — theme-grounded chat]\n\
+You are answering questions about ONE crystal knowledge theme. Prefer the \
+material below (topic-page synthesis, active claims, their sources). Cite \
+with [claim:…] or [source:…] when used. Vault-wide tools are allowed for \
+comparison, but the primary answer must stay grounded in this theme.\n\n\
+## Theme\n\
+{theme}\n\n\
+## Topic page\n\
+{page_block}\n\
+## Active claims ({claim_total})\n\
+{claims_block}{claim_note}\n\
+## Cited sources ({source_n})\n\
+{sources_block}"
+    );
+
+    let meta = ChatFocusMeta {
+        source_sha: String::new(),
+        title: Some(theme.to_string()),
+        theme: Some(theme.to_string()),
     };
     Some((pack, meta))
 }
@@ -3204,16 +3866,19 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let model = state.current_model();
     let body = serde_json::json!({
         "vault_root": state.vault_root.display().to_string(),
-        "schema_version": model.as_ref().map(|m| m.schema.clone()),
-        "index_date": model.as_ref().map(|m| m.date.clone()),
+        "schema_version": model.as_deref().map(|m| m.schema.clone()),
+        "index_date": model.as_deref().map(|m| m.date.clone()),
         // Provenance stamp (P1): the wall-clock build instant, its run id, and
         // the server-computed age. The System page shows "as of <built_at> ·
         // N min ago" so `index_date` (a day string) can no longer stand in for
         // freshness.
-        "built_at": model.as_ref().and_then(|m| m.built_at.clone()),
-        "run_id": model.as_ref().and_then(|m| m.run_id.clone()),
-        "age_seconds": model.as_ref().and_then(|m| age_seconds(m.built_at.as_deref())),
-        "counts": model.as_ref().map(|m| serde_json::json!({
+        "built_at": model.as_deref().and_then(|m| m.built_at.clone()),
+        "run_id": model.as_deref().and_then(|m| m.run_id.clone()),
+        // Stage-4 observation window: which store served the model. Reading
+        // it AFTER current_model() above means it reflects this very load.
+        "serving_backend": *state.serving_backend.read().unwrap(),
+        "age_seconds": model.as_deref().and_then(|m| age_seconds(m.built_at.as_deref())),
+        "counts": model.as_deref().map(|m| serde_json::json!({
             "sources": m.totals.sources,
             "packs": m.totals.packs,
             "claims": m.totals.claims_durable + m.totals.claims_caveated,
@@ -3223,8 +3888,8 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // inbox. `queued_at_build` is the projection's frozen end-of-run value,
         // kept for provenance ("live 159 · projection 175 as of <date>"); the
         // two legitimately differ mid-run. `queued_at_build` is null pre-index.
-        "queued_live": state.live_queued_count(model.as_ref()),
-        "queued_at_build": model.as_ref().map(|m| m.totals.queued),
+        "queued_live": state.live_queued_count(model.as_deref()),
+        "queued_at_build": model.as_deref().map(|m| m.totals.queued),
         // Factory present (anthropic feature) AND a non-empty key in env or
         // providers.toml — matches when POST /api/ask will accept work.
         "llm_configured": state.ask_client.is_some()
@@ -3243,7 +3908,7 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // was a bare package version; now version+git+built.
         "version": server_version(),
     });
-    json_stamped(200, &body.to_string(), model.as_ref())
+    json_stamped(200, &body.to_string(), model.as_deref())
 }
 
 /// The request headers `POST /api/ask` validates — the endpoint triggers
@@ -3379,11 +4044,28 @@ fn handle_ask(
         .map(str::trim)
         .filter(|s| !s.is_empty() && s.len() <= 128)
         .map(str::to_string);
-    let focus_built = focus_source.as_deref().and_then(|sha| {
-        state
-            .current_model()
-            .and_then(|model| build_source_focus_pack(state, &model, sha))
-    });
+    // Theme-grounded variant ("chat on this knowledge"): claims + topic page
+    // instead of one document. focus_source wins when both are sent.
+    let focus_theme = parsed
+        .get("focus_theme")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 256)
+        .map(str::to_string);
+    let focus_built = focus_source
+        .as_deref()
+        .and_then(|sha| {
+            state
+                .current_model()
+                .and_then(|model| build_source_focus_pack(state, &model, sha))
+        })
+        .or_else(|| {
+            focus_theme.as_deref().and_then(|theme| {
+                state
+                    .current_model()
+                    .and_then(|model| build_theme_focus_pack(state, &model, theme))
+            })
+        });
     let focus_meta = focus_built.as_ref().map(|(_, m)| m.clone());
     // Agent path: full pack + user question as one user message (tools still
     // available). Legacy path: pack goes in context_prefix so retrieval still
@@ -3523,7 +4205,7 @@ fn handle_ask(
         let result = run_ask(
             &factory,
             &model,
-            evidence.as_ref(),
+            evidence.as_deref(),
             &question,
             chat.as_deref(),
             &history,
@@ -3690,8 +4372,9 @@ fn handle_ask_agent(
                     &vault_root,
                     &VaultLayout::new(),
                 );
+                let evidence = ovp_index::read_evidence(&vault_root).ok();
                 let citations = match read_index(&vault_root).ok() {
-                    Some(m) => agent_citations(&done.answer, &m, &records),
+                    Some(m) => agent_citations(&done.answer, &m, &records, evidence.as_ref()),
                     None => agent_citations_unindexed(&done.answer, &records),
                 };
                 // Export REPAIR: a committed turn whose chat save failed
@@ -3732,6 +4415,10 @@ fn handle_ask_agent(
                     "chat": response_session,
                     "turn_id": done.turn_id,
                     "stopped_reason": done.stopped_reason,
+                    // Replay does not re-derive the class (execution artifact
+                    // — same rule as coverage): null, keeping the wire shape
+                    // identical to the live path.
+                    "failure_class": serde_json::Value::Null,
                     "idempotent_replay": true,
                     "usage": {
                         "input_tokens": done.input_tokens_total,
@@ -3881,8 +4568,9 @@ fn handle_ask_agent(
             // the model actually saw. No snapshot (unindexed vault) → source
             // citations resolve as unverified, honestly.
             let snapshot = tools.index_snapshot();
+            let evidence_for_receipts = ovp_index::read_evidence(&vault_root).ok();
             let citations = match snapshot.as_deref() {
-                Some(m) => agent_citations(&outcome.answer, m, &records),
+                Some(m) => agent_citations(&outcome.answer, m, &records, evidence_for_receipts.as_ref()),
                 None => agent_citations_unindexed(&outcome.answer, &records),
             };
             let coverage = tools.coverage();
@@ -3915,6 +4603,10 @@ fn handle_ask_agent(
                 "chat": response_session,
                 "turn_id": outcome.turn_id,
                 "stopped_reason": outcome.stopped_reason.as_str(),
+                // Set on model_error only: ovp_llm::failure_class slug so the
+                // portal can show a targeted fix hint (auth/rate_limited/…)
+                // instead of a bare "model error".
+                "failure_class": outcome.failure_class,
                 "usage": {
                     "input_tokens": outcome.input_tokens_total,
                     "output_tokens": outcome.output_tokens_total,
@@ -4038,6 +4730,17 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
             );
         }
     };
+    // Server-resolved citation receipts per turn — the SAME resolver as the
+    // live answer path. Replay surfaces must never reconstruct citations
+    // from answer text with weaker data (2026-08-07 operator report: every
+    // client-side reconstruction showed raw unit ids / dead links; this is
+    // the one-resolver consolidation).
+    let records = ovp_api_projection::readers::load_active_records(
+        &state.vault_root,
+        &VaultLayout::new(),
+    );
+    let model = state.current_model();
+    let evidence = state.current_evidence();
     let turns: Vec<serde_json::Value> = store
         .completed_turns()
         .into_iter()
@@ -4056,11 +4759,16 @@ fn handle_ask_session(state: &AppState, path: &str) -> Response<std::io::Cursor<
             // Transcript may hold the full focus pack (model input). Product
             // surfaces only the human question after `[USER QUESTION]`.
             let visible_q = user_visible_ask_question(&question);
+            let citations = match model.as_deref() {
+                Some(m) => agent_citations(&answer, m, &records, evidence.as_deref()),
+                None => agent_citations_unindexed(&answer, &records),
+            };
             serde_json::json!({
                 "turn_id": turn_id,
                 "question": visible_q,
                 "answer": answer,
                 "stopped_reason": stopped_reason,
+                "citations": citations,
                 "tool_trace": trail,
             })
         })
@@ -4310,14 +5018,18 @@ fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     let list: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(mtime, name, path)| {
-            let (focus_source, focus_title, preview) = std::fs::read_to_string(&path)
-                .ok()
-                .map(|md| parse_chat_surface_meta(&md))
-                .unwrap_or((None, None, None));
+            let (focus_source, focus_theme, focus_title, preview) =
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .map(|md| parse_chat_surface_meta(&md))
+                    .unwrap_or((None, None, None, None));
             let mut obj = serde_json::json!({ "name": name, "mtime": mtime });
             if let Some(map) = obj.as_object_mut() {
                 if let Some(sha) = focus_source {
                     map.insert("focus_source".into(), serde_json::json!(sha));
+                }
+                if let Some(theme) = focus_theme {
+                    map.insert("focus_theme".into(), serde_json::json!(theme));
                 }
                 if let Some(title) = focus_title {
                     map.insert("focus_title".into(), serde_json::json!(title));
@@ -4729,8 +5441,14 @@ mod tests {
     }
 
     fn temp_root(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ovp-server-test-{}-{name}", std::process::id()));
+        // Gitignored repo-local artifact root (never /tmp — repo rule).
+        // Canonicalized: handlers legitimately reject paths containing `..`
+        // (the publish out-dir guard), and static resolution compares
+        // absolute forms.
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/server-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        let base = base.canonicalize().expect("canonicalize test root");
+        let dir = base.join(format!("{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -4744,6 +5462,12 @@ mod tests {
             layout: VaultLayout::new(),
             model: RwLock::new(Cached::default()),
             evidence: RwLock::new(Cached::default()),
+            crystal: RwLock::new(CrystalCache::default()),
+            serving_backend: RwLock::new("unloaded"),
+            sqlite_error: RwLock::new(None),
+            index_rebuild: Arc::new(std::sync::Mutex::new(IndexRebuild::default())),
+            cards_zh: RwLock::new(Cached::default()),
+            claims_zh: RwLock::new(Cached::default()),
             last_run: RwLock::new(Cached::default()),
             viz_dir,
             ask_client: None,
@@ -5015,6 +5739,7 @@ mod tests {
                 last_reason: None,
                 tags: Vec::new(),
                 tags_inferred: Vec::new(),
+                tags_implied: Vec::new(),
                 entities: Vec::new(),
             }],
             packs: vec![PackRow {
@@ -5032,6 +5757,7 @@ mod tests {
                 claim_key: None,
                 claim: "Filesystem works as memory.".into(),
                 theme: Some("memory".into()),
+                theme_id: None,
                 status: ClaimStatus::Durable,
                 sources: vec!["good".into()],
                 strength: Some("supported".into()),
@@ -5073,6 +5799,82 @@ mod tests {
         };
         ovp_index::write_evidence(&vault, &evidence).unwrap();
         vault
+    }
+
+    #[test]
+    fn agent_citations_resolve_units_and_cards_via_evidence() {
+        // The one-resolver consolidation (2026-08-07): unit/card cites get
+        // titles + memory-tab links from the evidence sidecar — no focus
+        // context needed, fail-closed on unknown ids.
+        let vault = portal_vault(
+            "citations-evidence",
+            "50-Inbox/03-Processed/good.md",
+            "# Good\n\nbody\n",
+        );
+        let model = ovp_index::read_index(&vault).unwrap();
+        let evidence = ovp_index::read_evidence(&vault).unwrap();
+        let cits = agent_citations(
+            "[unit:u-001] [card:40-Resources/Reader/good:0] [unit:u-nope]",
+            &model,
+            &[],
+            Some(&evidence),
+        );
+        assert_eq!(cits[0]["kind"], "unit");
+        assert_eq!(cits[0]["title"], "the exact quote");
+        assert_eq!(cits[0]["link_target"], "/library/aaaa1111?tab=memory");
+        assert_eq!(cits[0]["verified"], true);
+        assert_eq!(cits[1]["kind"], "card");
+        assert_eq!(cits[1]["title"], "Card One");
+        assert_eq!(cits[1]["link_target"], "/library/aaaa1111?tab=memory");
+        assert_eq!(cits[1]["verified"], true);
+        // Unknown unit: honest non-receipt, no fabricated link.
+        assert_eq!(cits[2]["verified"], false);
+        assert_eq!(cits[2]["link_target"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn theme_focus_pack_grounds_on_claims_sources_and_topic_page() {
+        let vault = portal_vault(
+            "theme-focus",
+            "50-Inbox/03-Processed/good.md",
+            "# Good\n\nbody text\n",
+        );
+        std::fs::create_dir_all(vault.join(".ovp/crystal")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/crystal/theme_pages.json"),
+            serde_json::json!({
+                "schema": "ovp.theme_pages/v1",
+                "pages": [{
+                    "community_id": 1,
+                    "label": "memory",
+                    "label_zh": "",
+                    "claim_keys": ["c01"],
+                    "sections": [{
+                        "heading": "Overview",
+                        "body": "Filesystems act as memory [claim:c01]."
+                    }]
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let st = state(vault, None);
+        let model = st.current_model().expect("fixture model");
+
+        let (pack, meta) =
+            build_theme_focus_pack(&st, &model, "memory").expect("theme has claims");
+        // Claims block with status + stable key fallback (claim_id here).
+        assert!(pack.contains("[claim:c01] (durable)"), "{pack}");
+        // Distinct-source roster resolved case -> sha -> title.
+        assert!(pack.contains("[source:aaaa1111] Good Article"), "{pack}");
+        // Topic-page synthesis included verbatim.
+        assert!(pack.contains("Filesystems act as memory [claim:c01]."));
+        // Meta tags the transcript as theme-focused, never source-focused.
+        assert_eq!(meta.theme.as_deref(), Some("memory"));
+        assert!(meta.source_sha.is_empty());
+
+        // A theme with no active claims has nothing to ground on.
+        assert!(build_theme_focus_pack(&st, &model, "no-such-theme").is_none());
     }
 
     #[test]
@@ -5167,6 +5969,7 @@ mod tests {
             claim_id: format!("id-{key}"),
             claim: format!("claim text for {key}"),
             theme: theme.into(),
+            theme_id: None,
             source_cases: vec![case.into()],
             citations: vec![DurableCitation {
                 case_id: case.into(),
@@ -5577,7 +6380,10 @@ mod tests {
         let v = body_json(dispatch(&st, Method::Get, "/api/schedule", ""));
         assert_eq!(v["present"], true);
         let jobs = v["jobs"].as_array().unwrap();
-        assert_eq!(jobs.len(), 2);
+        // daily + weekly crystallize + weekly themes (2026-08-06).
+        assert_eq!(jobs.len(), 3);
+        let themes = jobs.iter().find(|j| j["id"] == "themes").unwrap();
+        assert_eq!(themes["cadence"], "weekly Sun 09:30");
         let daily = jobs.iter().find(|j| j["id"] == "daily").unwrap();
         assert_eq!(daily["cadence"], "daily 09:00");
         assert_eq!(daily["enabled"], true);
@@ -6038,6 +6844,7 @@ mod tests {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         }
     }
@@ -6083,7 +6890,7 @@ mod tests {
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault, None);
-        let live = st.live_queued_count(st.current_model().as_ref());
+        let live = st.live_queued_count(st.current_model().as_deref());
         assert_eq!(
             live, 2,
             "the 3 departed Processed rows must NOT be subtracted"
@@ -6133,7 +6940,7 @@ mod tests {
         ovp_index::write_index(&vault, &baked).unwrap();
 
         let st = state(vault.clone(), None);
-        let live = st.live_queued_count(st.current_model().as_ref());
+        let live = st.live_queued_count(st.current_model().as_deref());
         assert_eq!(
             live, 3,
             "6 files − (blocked + dup + processed-in-raw) = 3 queued"
@@ -6180,14 +6987,14 @@ mod tests {
         let st = state(vault.clone(), None);
 
         // At rest: 3 files − 1 blocked = 2 queued.
-        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 2);
+        assert_eq!(st.live_queued_count(st.current_model().as_deref()), 2);
 
         // A run processes one queued source: its file leaves 01-Raw. The
         // projection is NOT rebuilt (blocked row still known).
         std::fs::remove_file(raw.join("q0.md")).unwrap();
         st.live_queued.write().unwrap().computed_at = None;
         // 2 files (q1 + blocked) − 1 blocked = 1 queued. Not 2, not 0.
-        assert_eq!(st.live_queued_count(st.current_model().as_ref()), 1);
+        assert_eq!(st.live_queued_count(st.current_model().as_deref()), 1);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -6885,6 +7692,7 @@ mod tests {
             claim_id: id.into(),
             claim: "text".into(),
             theme: String::new(),
+            theme_id: None,
             source_cases: vec![],
             citations: vec![],
             provenance_score: 1.0,
@@ -6899,7 +7707,7 @@ mod tests {
         // A real (fixture-built) index: agent_citations only reads sources.
         let vault = portal_vault("agent-ambig", "50-Inbox/03-Processed/good.md", "body\n");
         let model = read_index(&vault).unwrap();
-        let cits = agent_citations("[claim:ck-a] [claim:ck-c]", &model, &records);
+        let cits = agent_citations("[claim:ck-a] [claim:ck-c]", &model, &records, None);
         let a = &cits[0];
         assert_eq!(a["verified"], true, "the key resolved uniquely");
         assert!(a["link_target"].is_null(), "shared claim_id anchor must be omitted");
@@ -6914,6 +7722,7 @@ mod tests {
              [claim: <ck-c> trailing words] [claim:xxxx]",
             &model,
             &records,
+            None,
         );
         assert_eq!(decorated[0]["verified"], true, "title-decorated sha resolves");
         assert_eq!(decorated[0]["link_target"], "/library/aaaa1111");
@@ -7215,6 +8024,170 @@ mod tests {
 
     // ---- mtime-based cache auto-reload (fix/serve-mtime-reload) ----
 
+    #[test]
+    fn claim_endpoint_zh_lookup_uses_the_same_key_rule_as_model() {
+        // write_ledger records carry DISTINCT claim_key ("a") and claim_id
+        // ("id-a") — the regression CodeRabbit asked for: both endpoints
+        // must key zh by claim_key first, or /api/model shows a translation
+        // /api/claim/{id} omits.
+        let vault = portal_vault("claim-zh-key", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        let key = v["claim_key"].as_str().expect("claim_key in body").to_string();
+        let en = v["claim"].as_str().expect("claim text").to_string();
+        // The fixture's UNDERLYING record has claim_id "id-a" ≠ claim_key
+        // "a"; the body's public `claim_id` field historically carries the
+        // KEY (see claim_body) — the explicit claim_key field states it.
+        assert_eq!(key, "a");
+        assert!(v.get("claim_zh").is_none(), "no zh yet");
+
+        let mut zh = ovp_memory::bilingual::ClaimsZhFile::default();
+        zh.entries.insert(
+            key,
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "键一致性翻译".into(),
+                en_hash: ovp_intake::vaultops::hex_sha256(en.trim().as_bytes())[..16].to_string(),
+                model: None,
+                translated_at: None,
+            },
+        );
+        zh.save(&vault).unwrap();
+
+        // Fresh state (the zh cache is mtime-keyed; a new file loads clean).
+        let st = state(vault.clone(), None);
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        assert_eq!(v["claim_zh"], serde_json::json!("键一致性翻译"));
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn model_splices_claim_zh_on_every_row_including_unclassified() {
+        let root = temp_root("claim-zh-splice");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let mut model = index_dated("2026-08-06");
+        model.claims = vec![
+            ovp_index::ClaimRow {
+                claim_id: "m1-01".into(),
+                claim_key: Some("ck-fresh".into()),
+                claim: "Agents need memory".into(),
+                theme: Some("Unclassified".into()),
+                theme_id: None,
+                status: ovp_index::ClaimStatus::Durable,
+                sources: vec![],
+                strength: None,
+                run_id: None,
+                run_date: None,
+                lane: None,
+            },
+            ovp_index::ClaimRow {
+                claim_id: "m1-02".into(),
+                claim_key: Some("ck-stale".into()),
+                claim: "This text was edited after translation".into(),
+                theme: Some("Unclassified".into()),
+                theme_id: None,
+                status: ovp_index::ClaimStatus::Caveated,
+                sources: vec![],
+                strength: None,
+                run_id: None,
+                run_date: None,
+                lane: None,
+            },
+        ];
+        ovp_index::write_index(&vault, &model).unwrap();
+
+        let mut zh = ovp_memory::bilingual::ClaimsZhFile::default();
+        let hash =
+            |en: &str| ovp_intake::vaultops::hex_sha256(en.trim().as_bytes())[..16].to_string();
+        zh.entries.insert(
+            "ck-fresh".into(),
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "智能体需要记忆".into(),
+                en_hash: hash("Agents need memory"),
+                model: None,
+                translated_at: None,
+            },
+        );
+        // Stale: en_hash no longer matches the live claim text — must NOT
+        // splice (fresh-by-en_hash is the honesty contract).
+        zh.entries.insert(
+            "ck-stale".into(),
+            ovp_memory::bilingual::ClaimZhEntry {
+                claim_zh: "过期翻译".into(),
+                en_hash: hash("some OLD text"),
+                model: None,
+                translated_at: None,
+            },
+        );
+        zh.save(&vault).unwrap();
+
+        let st = state(vault.clone(), None);
+        let body = body_json(handle_model(&st));
+        let claims = body["claims"].as_array().expect("claims");
+        // Unclassified membership is irrelevant: the splice is row-level,
+        // not routed through theme-page citation.
+        assert_eq!(claims[0]["claim_zh"], serde_json::json!("智能体需要记忆"));
+        assert!(claims[1].get("claim_zh").is_none(), "stale zh must not splice");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn serves_from_sqlite_shadow_even_without_json() {
+        // Stage 4: the sqlite shadow is the serving store. Keep the test
+        // cache out of the developer's real platform cache (OnceLock,
+        // first-call-wins; other tests resolve misses to the JSON fallback
+        // either way).
+        ovp_index::sqlite::override_cache_base(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/stage4-tests-server"),
+        );
+        let root = temp_root("sqlite-serving");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let model = index_dated("2026-03-03");
+        let evidence = evidence_dated("2026-03-03");
+        ovp_index::write_index(&vault, &model).unwrap();
+        ovp_index::write_evidence(&vault, &evidence).unwrap();
+        // Round-trip through the JSON readers so the shadow is built from
+        // the EXACT on-disk generation (write normalizes formatting).
+        let model = read_index(&vault).unwrap();
+        let evidence = ovp_index::read_evidence(&vault).unwrap();
+        ovp_index::sqlite::write_shadow(&vault, &model, Some(&evidence)).unwrap();
+
+        // Remove the JSON projections: only the shadow can serve now.
+        std::fs::remove_file(vault.join(".ovp/index/index.json")).unwrap();
+        std::fs::remove_file(vault.join(".ovp/index/evidence.json")).unwrap();
+
+        let st = state(vault.clone(), None);
+        assert_eq!(st.current_model().expect("model from sqlite").date, "2026-03-03");
+        assert_eq!(
+            st.current_evidence().expect("evidence from sqlite").date,
+            "2026-03-03"
+        );
+        assert_eq!(*st.serving_backend.read().unwrap(), "sqlite");
+
+        // A JSON-only rebuild (the tag-curation path re-writes index.json
+        // without re-shadowing) must flip serving to the NEWER JSON — a
+        // valid but OLDER shadow generation must not shadow it.
+        ovp_index::write_index(&vault, &index_dated("2026-04-04")).unwrap();
+        set_mtime(
+            &vault.join(".ovp/index/index.json"),
+            SystemTime::now() + Duration::from_secs(5),
+        );
+        assert_eq!(
+            st.current_model().expect("model from json").date,
+            "2026-04-04",
+            "newer JSON must win over an older valid shadow"
+        );
+        assert_eq!(*st.serving_backend.read().unwrap(), "json");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A minimal index whose `date` field labels the version, so tests can
     /// assert WHICH on-disk model an accessor returned.
     fn index_dated(date: &str) -> IndexModel {
@@ -7275,6 +8248,47 @@ mod tests {
         ovp_index::write_index(&vault, &index_dated("2026-02-02")).unwrap();
         set_mtime(&index, t0 + Duration::from_secs(60));
         assert_eq!(st.current_model().unwrap().date, "2026-02-02");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn crystal_projections_cache_by_ledger_mtime() {
+        let root = temp_root("crystal-mtime");
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let st = state(vault.clone(), None);
+
+        // Absent ledger caches empty — and the appearance of one reloads.
+        assert_eq!(st.crystal_projections().0.len(), 0);
+        write_ledger(&vault);
+        let ledger = vault
+            .join(VaultLayout::new().crystal_store_dir())
+            .join("ledger.jsonl");
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        set_mtime(&ledger, t0);
+        let (records, lineage) = st.crystal_projections();
+        assert_eq!(records.len(), 2);
+        assert!(!lineage.is_empty());
+
+        // Unchanged mtime → the SAME Arc back, no refold.
+        let again = st.crystal_projections();
+        assert!(Arc::ptr_eq(&records, &again.0));
+        assert!(Arc::ptr_eq(&lineage, &again.1));
+
+        // A crystal-synth run rewrites the ledger with a bumped mtime — the
+        // running server must refold.
+        std::fs::write(&ledger, "").unwrap();
+        set_mtime(&ledger, t0 + Duration::from_secs(60));
+        assert_eq!(st.crystal_projections().0.len(), 0);
+
+        // A SAME-mtime rewrite is invisible to the stamp — /api/refresh must
+        // force the refold (the case the endpoint exists for).
+        write_ledger(&vault);
+        set_mtime(&ledger, t0 + Duration::from_secs(60));
+        assert_eq!(st.crystal_projections().0.len(), 0, "stamp hides the rewrite");
+        st.refresh_model();
+        assert_eq!(st.crystal_projections().0.len(), 2, "refresh forces the refold");
 
         let _ = std::fs::remove_dir_all(&root);
     }

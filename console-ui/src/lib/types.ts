@@ -11,6 +11,10 @@ export interface GraphNode {
   hit?: boolean;
   label: string;
   theme?: string;
+  /** Stable semantic-theme community id (claims only) — the portal routes
+   * themes by this id so links survive a `crystal-themes` relabel. None on
+   * unit/source nodes and pre-theme projections. */
+  theme_id?: number | null;
   strength?: string;
   url?: string;
   degree: number;
@@ -127,8 +131,14 @@ export interface FindHit {
 }
 
 export interface ThemeCount {
+  /** Stable community id — the routing key the portal links by. Null on
+   * pre-theme projections (clients route those by `theme` label as a
+   * legacy fallback). */
+  id?: number | null;
   theme: string;
   count: number;
+  /** Rebuildable Chinese label when the live projection carries one. */
+  label_zh?: string;
 }
 
 export type SourceStatus =
@@ -174,6 +184,9 @@ export interface SourceRow {
   /** Machine-inferred backfill tags (tags-suggest kNN vote). Present only
    * while the source has no operator tags; rendered visibly weaker. */
   tags_inferred?: string[];
+  /** Generic tags rolled up from tags/tags_inferred via [implications]
+   * (`autogen` source ⇒ `agent`). Rendered as a weaker `>#` roll-up. */
+  tags_implied?: string[];
   /** Tier-0 URL entity ids this source mentions (`github:owner/repo`,
    * `arxiv:2504.19413`). Public content — present on the published model too. */
   entities?: string[];
@@ -202,6 +215,11 @@ export interface ClaimRow {
   /** Rebuildable Chinese projection when served by live API. */
   claim_zh?: string;
   theme?: string;
+  /** Stable semantic-theme community id — the portal routes themes by this
+   * id (not the mutable `theme` label), so a `crystal-themes` relabel doesn't
+   * orphan existing theme URLs. Absent on pre-theme indexes; `-1` is the
+   * Unclassified sentinel. */
+  theme_id?: number | null;
   status: ClaimStatus;
   sources: string[];
   strength?: string;
@@ -302,6 +320,10 @@ export interface AskResponse {
   tool_trace?: AskTraceEntry[];
   /** final | need_user | refusal | max_rounds | timeout | tool_error | model_error. */
   stopped_reason?: string;
+  /** On model_error only: ovp_llm failure_class slug (auth | rate_limited |
+   * context_exceeded | budget_exhausted | overloaded | network | …) — the UI
+   * maps the actionable ones to a targeted fix hint. */
+  failure_class?: string | null;
   turn_id?: string;
   usage?: { input_tokens: number; output_tokens: number };
 }
@@ -351,6 +373,9 @@ export interface AskSessionTurn {
   question: string;
   answer: string;
   stopped_reason: string;
+  /** Server-resolved citation receipts (same resolver as live answers).
+   * Absent only on pre-consolidation servers — clients then reconstruct. */
+  citations?: AskCitation[];
   tool_trace: AskTraceEntry[];
 }
 
@@ -369,6 +394,8 @@ export interface ChatEntry {
   mtime: number;
   /** Source sha when this session was started via Chat-on-this. */
   focus_source?: string | null;
+  /** Crystal theme when this session was started via Chat-on-this-knowledge. */
+  focus_theme?: string | null;
   focus_title?: string | null;
   /** First user question preview (truncated). */
   preview?: string | null;
@@ -406,6 +433,9 @@ export interface SettingsPayload {
    * the server-computed age. Null when no index is built yet. */
   built_at: string | null;
   run_id: string | null;
+  /** Stage-4 observation window: which store served the model —
+   * 'sqlite' or 'json' (the legacy fallback). */
+  serving_backend?: string;
   age_seconds: number | null;
   counts: SettingsCounts | null;
   /** LIVE queued backlog (01-Raw walk at serve time) — the authoritative-now
@@ -533,6 +563,22 @@ export interface IndexModel {
   /** Live-server overlay: the tool-loop agent serves /api/ask. The SPA
    * pre-generates a chat id and polls the progress feed from turn 1. */
   ask_agent?: boolean;
+  /** Live-server overlay (stage 4): which store the model was served from —
+   * 'sqlite' (the read-model shadow) or 'json' (the legacy fallback).
+   * Absent in static snapshots. */
+  serving_backend?: string;
+  /** Live-server overlay: the last sqlite load failure, null when healthy.
+   * Non-null drives the repair banner (rebuild button). */
+  sqlite_error?: string | null;
+  /** Live-server overlay: packs the semantic-themes projection has never
+   * clustered. Non-zero surfaces in the Today attention feed — the daily
+   * CLI printed this hint into a swallowed stderr for a month once. */
+  themes_stale_packs?: number;
+  /** Live-server overlay: the portal-triggered projection rebuild state. */
+  index_rebuild?: {
+    running: boolean;
+    last?: { ok?: boolean; exit?: number | null; error?: string; stderr_tail?: string } | null;
+  };
   schema: string;
   date: string;
   /** Wall-clock build instant (UTC RFC3339). Absent on pre-P1 indexes — the

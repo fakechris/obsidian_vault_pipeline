@@ -31,12 +31,15 @@ pub struct AskHistoryTurn {
     pub answer: String,
 }
 
-/// Optional source-grounded chat tag written into the saved transcript header
-/// so Ask history and Library can show "on this source" sessions.
+/// Optional focus tag written into the saved transcript header so Ask history
+/// and the focused surface (Library source page / Knowledge theme page) can
+/// show "on this" sessions. Exactly one of `source_sha` / `theme` is set.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChatFocusMeta {
     pub source_sha: String,
     pub title: Option<String>,
+    /// Crystal theme name for theme-grounded chats ("chat on this knowledge").
+    pub theme: Option<String>,
 }
 
 pub struct AskArgs {
@@ -566,14 +569,19 @@ fn save_or_append_chat(
 pub fn chat_file_header(ts: &str, focus: Option<&ChatFocusMeta>) -> String {
     let mut out = format!("# Ask — {ts}\n");
     if let Some(f) = focus {
+        // HTML comment cannot contain `--`; keep the list surface readable.
+        let safe = |s: &str| s.replace("--", "—");
         let sha = f.source_sha.trim();
+        let theme = f.theme.as_deref().map(str::trim).filter(|t| !t.is_empty());
         if !sha.is_empty() {
             out.push_str(&format!("<!-- ovp:focus_source={sha} -->\n"));
-            if let Some(title) = f.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-                // HTML comment cannot contain `--`; keep the list surface readable.
-                let safe = title.replace("--", "—");
-                out.push_str(&format!("<!-- ovp:focus_title={safe} -->\n"));
-            }
+        } else if let Some(theme) = theme {
+            out.push_str(&format!("<!-- ovp:focus_theme={} -->\n", safe(theme)));
+        }
+        if (!sha.is_empty() || theme.is_some())
+            && let Some(title) = f.title.as_deref().map(str::trim).filter(|t| !t.is_empty())
+        {
+            out.push_str(&format!("<!-- ovp:focus_title={} -->\n", safe(title)));
         }
     }
     out.push('\n');
@@ -582,9 +590,12 @@ pub fn chat_file_header(ts: &str, focus: Option<&ChatFocusMeta>) -> String {
 
 /// Parse focus metadata + first question preview from a saved chat markdown.
 /// Scans only the leading portion (cheap for /api/chats list).
-pub fn parse_chat_surface_meta(md: &str) -> (Option<String>, Option<String>, Option<String>) {
+pub fn parse_chat_surface_meta(
+    md: &str,
+) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
     let head = md.get(..md.len().min(8_192)).unwrap_or(md);
     let mut focus_source = None;
+    let mut focus_theme = None;
     let mut focus_title = None;
     for line in head.lines().take(40) {
         let line = line.trim();
@@ -595,6 +606,14 @@ pub fn parse_chat_surface_meta(md: &str) -> (Option<String>, Option<String>, Opt
             let v = rest.trim();
             if !v.is_empty() {
                 focus_source = Some(v.to_string());
+            }
+        } else if let Some(rest) = line
+            .strip_prefix("<!-- ovp:focus_theme=")
+            .and_then(|s| s.strip_suffix("-->"))
+        {
+            let v = rest.trim();
+            if !v.is_empty() {
+                focus_theme = Some(v.to_string());
             }
         } else if let Some(rest) = line
             .strip_prefix("<!-- ovp:focus_title=")
@@ -620,7 +639,7 @@ pub fn parse_chat_surface_meta(md: &str) -> (Option<String>, Option<String>, Opt
                 }
             })
     });
-    (focus_source, focus_title, preview)
+    (focus_source, focus_theme, focus_title, preview)
 }
 
 fn format_chat_turn(
@@ -1105,6 +1124,7 @@ mod tests {
                 claim_key: None,
                 claim: "Agent memory should be treated as persistent state.".into(),
                 theme: Some("memory".into()),
+                theme_id: None,
                 status: ClaimStatus::Durable,
                 sources: vec!["40-Resources/Reader/memory".into()],
                 strength: Some("supported".into()),
@@ -1370,15 +1390,36 @@ mod tests {
         let focus = ChatFocusMeta {
             source_sha: "abc123deadbeef".into(),
             title: Some("Memory as state — draft".into()),
+            theme: None,
         };
         let header = chat_file_header("1751812999", Some(&focus));
         assert!(header.contains("<!-- ovp:focus_source=abc123deadbeef -->"));
         assert!(header.contains("<!-- ovp:focus_title=Memory as state — draft -->"));
         let md = format!("{header}**Q:** What is the thesis?\n\n**A:** State over recall.\n");
-        let (sha, title, preview) = parse_chat_surface_meta(&md);
+        let (sha, theme, title, preview) = parse_chat_surface_meta(&md);
         assert_eq!(sha.as_deref(), Some("abc123deadbeef"));
+        assert_eq!(theme, None);
         assert_eq!(title.as_deref(), Some("Memory as state — draft"));
         assert_eq!(preview.as_deref(), Some("What is the thesis?"));
+    }
+
+    #[test]
+    fn theme_focus_header_round_trips() {
+        // Theme-grounded chats ("chat on this knowledge") tag the transcript
+        // with focus_theme; `--` is sanitized for the HTML comment.
+        let focus = ChatFocusMeta {
+            source_sha: String::new(),
+            title: Some("Agent Memory".into()),
+            theme: Some("Agent Memory -- deep".into()),
+        };
+        let header = chat_file_header("2026-08-07T00:00:00Z", Some(&focus));
+        assert!(header.contains("ovp:focus_theme=Agent Memory — deep"));
+        assert!(header.contains("ovp:focus_title=Agent Memory"));
+        let (sha, theme, title, preview) = parse_chat_surface_meta(&header);
+        assert_eq!(sha, None);
+        assert_eq!(theme.as_deref(), Some("Agent Memory — deep"));
+        assert_eq!(title.as_deref(), Some("Agent Memory"));
+        assert_eq!(preview, None);
     }
 
     #[test]
@@ -1390,6 +1431,7 @@ mod tests {
         let focus = ChatFocusMeta {
             source_sha: "sha-focus-1".into(),
             title: Some("Focused Source".into()),
+            theme: None,
         };
         save_agent_chat_turn_with_focus(
             &vault,
@@ -1412,8 +1454,9 @@ mod tests {
         assert_eq!(md.matches("ovp:focus_source=sha-focus-1").count(), 1);
         assert!(md.contains("**Q:** summarize this"));
         assert!(md.contains("**Q:** more?"));
-        let (sha, title, preview) = parse_chat_surface_meta(&md);
+        let (sha, theme, title, preview) = parse_chat_surface_meta(&md);
         assert_eq!(sha.as_deref(), Some("sha-focus-1"));
+        assert_eq!(theme, None);
         assert_eq!(title.as_deref(), Some("Focused Source"));
         assert_eq!(preview.as_deref(), Some("summarize this"));
         let _ = std::fs::remove_dir_all(&vault);

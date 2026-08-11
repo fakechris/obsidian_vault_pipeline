@@ -145,6 +145,7 @@ mod tests {
                 claim_key: None,
                 claim: "代理记忆与上下文系统：文件系统即记忆，语义检索不足以独立支撑长期记忆。".into(),
                 theme: Some("记忆与上下文".into()),
+                theme_id: None,
                 status: ClaimStatus::Durable,
                 sources: vec!["case-a".into()],
                 strength: Some("supported".into()),

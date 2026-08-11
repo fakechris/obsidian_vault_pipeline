@@ -17,6 +17,7 @@ import { STATIC_MODE } from '../lib/api';
 import { isDesktopApp, openInSystemBrowser } from '../lib/desktopExternalLinks';
 import ErrorBoundary from './ErrorBoundary';
 import RunBanner from './RunBanner';
+import IndexHealthBanner from './IndexHealthBanner';
 import SearchOmnibox from './SearchOmnibox';
 
 // The published site is knowledge-only: Knowledge (home), Library, Search. The
@@ -191,6 +192,7 @@ export default function Shell() {
       {/* Run heartbeat + health dot are live-ops chrome — hidden on the
           published static site (no server, no run state). */}
       {!STATIC_MODE && <RunBanner />}
+      {!STATIC_MODE && <IndexHealthBanner />}
       <div className="page">
         <div className="shell">
           <div className="shell-head">

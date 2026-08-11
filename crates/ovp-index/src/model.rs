@@ -113,6 +113,12 @@ pub struct SourceRow {
     /// surfaces render them visibly weaker (`~#tag`, dashed chips).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags_inferred: Vec<String>,
+    /// Generic tags this source rolls up to via `[implications]` (`autogen`
+    /// source ⇒ `agent`). Derived from `tags`/`tags_inferred` at build, kept
+    /// separate so operator tags stay pure; searching/faceting a generic
+    /// matches these, surfaces render them as a weaker roll-up (`>#tag`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_implied: Vec<String>,
     /// Tier-0 URL entity ids this source mentions (`github:owner/repo`,
     /// `arxiv:2504.19413`, …), extracted deterministically from the note's
     /// URL + body. Forward list for the SourceDetail chips + `find --entity`;
@@ -143,6 +149,7 @@ impl SourceRow {
             last_reason: None,
             tags: Vec::new(),
             tags_inferred: Vec::new(),
+            tags_implied: Vec::new(),
             entities: Vec::new(),
         }
     }
@@ -259,6 +266,15 @@ pub struct ClaimRow {
     pub claim: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Stable semantic-theme community id (`themes.json` `majority_community`),
+    /// additive: pre-existing indexes deserialize as None. The portal routes
+    /// themes by this id (not the mutable `theme` label), so a `crystal-themes`
+    /// relabel doesn't orphan existing URLs. `None` means a PRE-THEME
+    /// projection (no `themes.json` at build time); when the projection
+    /// exists, unmapped/noise claims get `Some(UNCLASSIFIED_ID)` — the
+    /// unclassified bucket, not `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_id: Option<i64>,
     pub status: ClaimStatus,
     /// Case ids (pack dirs / source cases) the claim cites.
     #[serde(default)]

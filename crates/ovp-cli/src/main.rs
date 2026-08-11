@@ -260,6 +260,17 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// OPS — late URL dedup for pre-intake legacy sources: processed copies
+    /// sharing a URL are parked under the duplicates dir (oldest copy kept),
+    /// with normal Duplicate ledger records. Packs and crystal citations stay
+    /// resolvable. Dry-run by default; pass --apply to move files.
+    IntakeDedupUrls {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Actually move files and append ledger records (default: plan only).
+        #[arg(long)]
+        apply: bool,
+    },
     /// PRODUCT — materialize Pinboard bookmarks as notes in
     /// `50-Inbox/02-Pinboard/` (URL-deduped against `.ovp/pinboard-sync.jsonl`
     /// and the intake ledger). Offline via `--fixture <export.json>`; live API
@@ -324,6 +335,11 @@ enum Cmd {
         vault_root: PathBuf,
         #[arg(long)]
         date: Option<String>,
+        /// Verify the CURRENT sqlite shadow against the CURRENT JSON
+        /// projections without rebuilding anything (stage-3 soak check).
+        /// Any divergence exits non-zero naming the first mismatch.
+        #[arg(long)]
+        verify_sqlite: bool,
     },
     /// PRODUCT — query the read model: list/search/filter sources, reader
     /// packs, crystal claims, runs, and deep evidence cards/units.
@@ -1606,6 +1622,9 @@ fn main() -> ExitCode {
                 dry_run,
             })
         }
+        Cmd::IntakeDedupUrls { vault_root, apply } => {
+            commands::intake::run_dedup_urls(&vault_root, apply, today_iso())
+        }
         Cmd::PinboardSync {
             vault_root,
             fixture,
@@ -1637,9 +1656,17 @@ fn main() -> ExitCode {
                 backfill_days,
             })
         }
-        Cmd::Index { vault_root, date } => {
-            let date = date.unwrap_or_else(today_iso);
-            commands::index_cmd::run_index(commands::index_cmd::IndexArgs { vault_root, date })
+        Cmd::Index {
+            vault_root,
+            date,
+            verify_sqlite,
+        } => {
+            if verify_sqlite {
+                commands::index_cmd::run_verify_sqlite(&vault_root)
+            } else {
+                let date = date.unwrap_or_else(today_iso);
+                commands::index_cmd::run_index(commands::index_cmd::IndexArgs { vault_root, date })
+            }
         }
         Cmd::Find {
             vault_root,

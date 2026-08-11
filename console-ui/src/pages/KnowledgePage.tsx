@@ -19,7 +19,18 @@ const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import { fetchThemes } from '../lib/api';
-import { isMiscTheme, themeRoute, themeWall, type ThemeGroup } from '../lib/derive';
+import {
+  caseCanonicalIds,
+  isMiscTheme,
+  sortThemeWall,
+  themeRoute,
+  themeSourceBadge,
+  themeWall,
+  UNCLASSIFIED_ID,
+  type ThemeGroup,
+  type ThemeSortDir,
+  type ThemeSortKey,
+} from '../lib/derive';
 import type { IndexModel, ThemeCount } from '../lib/types';
 import { useModel } from '../model';
 
@@ -30,11 +41,12 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
   const { t } = useI18n();
   const active = group.durable + group.caveated;
   const pct = active > 0 ? Math.round((group.durable / active) * 100) : 0;
+  const sourceBadge = themeSourceBadge(group);
   // The 'misc' fallback bucket displays honestly as "Unclassified" — the
-  // link target keeps the literal theme key (display layer only).
-  const misc = isMiscTheme(group.theme);
+  // link target keeps the stable id (or the label on pre-theme projections).
+  const misc = isMiscTheme(group.theme) || group.id === UNCLASSIFIED_ID;
   return (
-    <Link className="theme-card" to={themeRoute(group.theme)}>
+    <Link className="theme-card" to={themeRoute(group)}>
       <div className="theme-card-head">
         <span className="theme-card-name">
           {misc
@@ -62,6 +74,17 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
           durable: group.durable,
           caveated: group.caveated,
         })}
+        {sourceBadge && (
+          <>
+            {' · '}
+            <span
+              className={sourceBadge.single ? 'theme-card-single-source' : undefined}
+              title={t('knowledge.sourceCountTip')}
+            >
+              {t('knowledge.sourceCount', { n: sourceBadge.n })}
+            </span>
+          </>
+        )}
       </div>
       {misc && (
         <p className="theme-card-ratio tiny muted">
@@ -121,7 +144,26 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     };
   }, []);
 
-  const wall = themeWall(model.claims, themes);
+  // Sort control (URL-parameterized like the view toggle; default = the
+  // historical count-desc wall).
+  const sortKey: ThemeSortKey = params.get('sort') === 'name' ? 'name' : 'count';
+  const sortDir: ThemeSortDir =
+    params.get('dir') === 'asc' ? 'asc' : params.get('dir') === 'desc' ? 'desc' : sortKey === 'name' ? 'asc' : 'desc';
+  const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
+    setParams(
+      (p) => {
+        p.set('sort', key);
+        p.set('dir', dir);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+  const wall = sortThemeWall(
+    themeWall(model.claims, themes, caseCanonicalIds(model)),
+    sortKey,
+    sortDir,
+  );
 
   return (
     <>
@@ -149,6 +191,34 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
           {t('knowledge.viewTerrain')}
         </button>
         </div>
+
+        {/* Sort control (list view only): key toggle + direction, same
+            seg-toggle vocabulary as the perspective switch. */}
+        {view === 'list' && (
+          <div className="seg-toggle persp-toggle" role="group">
+            <button
+              type="button"
+              className={sortKey === 'count' ? 'active' : ''}
+              onClick={() => setSort('count', sortKey === 'count' ? sortDir : 'desc')}
+            >
+              {t('knowledge.sortCount')}
+            </button>
+            <button
+              type="button"
+              className={sortKey === 'name' ? 'active' : ''}
+              onClick={() => setSort('name', sortKey === 'name' ? sortDir : 'asc')}
+            >
+              {t('knowledge.sortName')}
+            </button>
+            <button
+              type="button"
+              aria-label={t('knowledge.sortDirLabel')}
+              onClick={() => setSort(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}
+            >
+              {sortDir === 'asc' ? t('knowledge.sortDir.asc') : t('knowledge.sortDir.desc')}
+            </button>
+          </div>
+        )}
 
         {/* Perspective switch — a SIBLING of .tab-row (not nested), so the
             .tab-row button rules don't clobber the .seg-toggle contrast. Shares
@@ -182,7 +252,10 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
           )}
           <div className="theme-wall">
             {wall.map((g) => (
-              <ThemeCard key={g.theme || '(untitled)'} group={g} />
+              <ThemeCard
+                key={g.id != null ? `id:${g.id}` : g.theme || '(untitled)'}
+                group={g}
+              />
             ))}
           </div>
         </>
@@ -231,7 +304,7 @@ export default function KnowledgePage() {
       model.claims.find((c) => c.claim_key === anchor);
     if (claim) {
       return (
-        <Navigate to={`${themeRoute(claim.theme)}#${claim.claim_id}`} replace />
+        <Navigate to={`${themeRoute({ id: claim.theme_id ?? null, theme: claim.theme ?? '' })}#${claim.claim_id}`} replace />
       );
     }
   }

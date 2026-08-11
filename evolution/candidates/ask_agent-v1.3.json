@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_agent-v1.3",
+  "base_version": "v1.2",
+  "target_version": "v1.3",
+  "surface": "runtime",
+  "component": "runtime.ask_agent",
+  "hypothesis": "RUNTIME surface, additive observability: classify model-call failures at the ovp-llm boundary (`ovp_llm::failure_class(&CallError) -> &'static str`, stable wire vocabulary auth | rate_limited | context_exceeded | budget_exhausted | overloaded | network | decode | protocol | cache_miss | provider_error | internal) and carry the slug through the agent so surfaces can show a TARGETED fix hint instead of a bare 'model call failed'. Three additive carriers: (1) TranscriptEvent::ModelFailed gains `class` (serde default — old transcripts read back with class=\"\"), (2) AgentOutcome gains `failure_class: Option<&'static str>` (Some only on stopped_reason=model_error; None on idempotent replays — the class lives in the audit transcript, replay does not re-derive it), (3) POST /api/ask response body gains `failure_class` and the portal maps the six actionable slugs to bilingual hints (auth → check providers.toml key; rate_limited/overloaded → retry later; context_exceeded → new chat or narrow the question; budget_exhausted → retry/simplify; network → check connectivity/proxy) while unactionable slugs fall back to the existing generic stop note. Classification is code, not judge: the ground truth (HTTP status + Anthropic error code + CallError variant) is decidable, so per the decidability rule this is a match arm, not a prompt. Motivated by the 2026-08-03 crystallize incident class (a swallowed raw error) and the Cabinet research verdict that adapter-level error classification is the highest-value borrow.",
+  "predicted_delta": {
+    "operational_reliability": "MEASURABLE: model_error diagnosability from the portal alone goes 0/1 (v1.2: bare 'model call failed', class recoverable only by reading raw provider text in the transcript) to 1/1 (v1.3: /api/ask carries failure_class and the stop note names the fix) on a forced failure of each actionable class. Deterministic pass condition: for every CallError fixture in failure_class_covers_the_wire_vocabulary, the classified slug is non-empty and stable, and for the six actionable slugs the portal renders a hint (a slug without i18n keys is a compile error via the MsgKey union). Baseline v1.2 = 0 of 6 actionable classes distinguishable in the response body; target v1.3 = 6 of 6."
+  },
+  "guardrails": {
+    "additive_only": "no existing field changes meaning; ModelFailed.class deserializes old transcripts via serde default; AgentOutcome remains PartialEq; /api/ask emits failure_class: null except on model_error",
+    "replay_honesty": "idempotent replays report failure_class=None rather than re-deriving — replay never fabricates execution artifacts (same rule as coverage=null on replay)",
+    "classification_is_total": "failure_class is a total function over CallError — every variant maps to a slug, unknown provider codes land in provider_error, never a panic or empty string from the live path",
+    "hint_scope": "the portal maps ONLY the six actionable slugs to hints; decode/protocol/internal keep the generic stop note (no fabricated advice for caller bugs)"
+  },
+  "eval_plan": {
+    "tests": [
+      "ovp-llm client::retry_tests::failure_class_covers_the_wire_vocabulary — the full slug vocabulary against numeric HTTP codes, the no_api_key sentinel, structured provider types, and every non-Provider variant",
+      "ovp-memory agent::tests::model_failure_ends_turn_honestly — extended: outcome.failure_class=Some(\"network\") and the ModelFailed audit event carries class=\"network\"",
+      "console-ui typecheck + vitest (failureHintKey wiring compiles against the MsgKey union — a slug without i18n keys is a build error)"
+    ],
+    "live_check": "next real ask failure in the portal shows the targeted hint line under the stop note; the session transcript's model_failed event carries the class"
+  },
+  "rollback": "revert the commit; transcript compatibility is two-way (older builds ignore the unknown `class` field on read, newer builds read old lines as class=\"\" via serde default)",
+  "ablation_required": false
+}

@@ -6,7 +6,7 @@
 //! state (`shared_projection_api`). [`VaultTools`] adds lazy caches, argument
 //! validation, and runtime-computed coverage for the agent projection.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,7 +52,9 @@ const MAX_PASSAGE_BYTES: usize = 2 * 1024;
 const MAX_CLAIM_CHARS: usize = 500;
 const CURSOR_PREFIX: &str = "c1:";
 const FULLTEXT_CURSOR_PREFIX: &str = "f1:";
-const MAX_SEARCH_TERMS: usize = 8;
+/// CJK bigram expansion inflates term counts (a 9-char Chinese run is already
+/// 8 bigrams), so the cap leaves room for a bilingual query's Latin terms too.
+const MAX_SEARCH_TERMS: usize = 16;
 const MAX_MATCHED_CARDS_PER_HIT: usize = 8;
 const MAX_MATCHED_CARD_TITLE_CHARS: usize = 200;
 /// Aggregate serialized-size budget for multi-hit results. Individually-capped
@@ -279,7 +281,37 @@ impl VaultTools {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("evidence index unavailable: {e}"))
                 })?;
-                Ok(search_evidence(&model, &query, limit))
+                // Index-backed lane (v5): ONE snapshot reader for both
+                // surfaces; the fts query is built from the SAME capped term
+                // list the scan lane reports as query_terms_used, so a
+                // result can never be driven by a term the payload says was
+                // omitted. Fetch generously past the display limit so pack
+                // aggregation and RRF have candidates. None (no shadow /
+                // stale generation / kill switch) = v4 path.
+                let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    let cards = reader
+                        .fts_search(
+                            ovp_index::sqlite::FtsSurface::Cards,
+                            &capped_query,
+                            FTS_EVIDENCE_FETCH,
+                        )
+                        .ok()?;
+                    let units = reader
+                        .fts_search(
+                            ovp_index::sqlite::FtsSurface::Units,
+                            &capped_query,
+                            FTS_EVIDENCE_FETCH,
+                        )
+                        .ok()?;
+                    Some(EvidenceFtsLane {
+                        saturated: cards.len() == FTS_EVIDENCE_FETCH
+                            || units.len() == FTS_EVIDENCE_FETCH,
+                        cards,
+                        units,
+                    })
+                });
+                Ok(search_evidence_fused(&model, &query, limit, fts))
             }
             ParsedCall::SearchFulltext {
                 query,
@@ -348,12 +380,42 @@ impl VaultTools {
                 let records = self.cached_records().map_err(|e| {
                     DispatchError::Unavailable(format!("claim ledger unavailable: {e}"))
                 })?;
-                Ok(search_claims(
+                // bm25 rank from the claims FTS surface as canonical rank
+                // keys (claim_key when present, else claim_id+status) with
+                // status eligibility applied IN the query before the top-k;
+                // deduped preserving order; the fts query uses the SAME
+                // capped term list the scan lane reports. None = v4 filter.
+                let statuses: Vec<&str> = match status.as_deref() {
+                    Some(one) => vec![one],
+                    None => vec!["durable", "caveated"],
+                };
+                let fts_rank = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    reader
+                        .fts_claims_rank(&capped_query, MAX_SEARCH_LIMIT * 2, &statuses)
+                        .ok()
+                        .map(|ranked| {
+                            let mut seen = BTreeSet::new();
+                            ranked
+                                .into_iter()
+                                .map(|hit| {
+                                    claim_rank_key(
+                                        hit.claim_key.as_deref(),
+                                        &hit.claim_id,
+                                        &hit.status,
+                                    )
+                                })
+                                .filter(|key| seen.insert(key.clone()))
+                                .collect::<Vec<_>>()
+                        })
+                });
+                Ok(search_claims_ranked(
                     &model,
                     &records,
                     &query,
                     limit,
                     status.as_deref(),
+                    fts_rank.as_deref(),
                 ))
             }
             ParsedCall::GetClaim {
@@ -521,7 +583,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_evidence",
-            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Does not search card bodies, units text, or source bodies.",
+            "Search the reader-pack evidence layer by pack title and card titles — the best FIRST stop for 'I remember an article about…' recall questions, because card titles condense what each article actually said. Space-separated terms are OR-matched as case-insensitive verbatim substrings (unspaced Chinese runs auto-expand into character bigrams, so unsegmented Chinese queries work); hits rank by LANGUAGE-GROUP coverage (terms group by script; a hit's score is its best group's matched fraction, so fully matching the English terms outranks partially matching the Chinese ones; total matched terms then recency break ties) and report matched_terms. Prefer 1–3 distinctive terms, using the language the article is written in (an English article will not match Chinese terms); beyond 16 distinct terms only the first 16 are used. When the local search index is available (result lane: fts), card bodies and unit text/quotes are searched too and relevance fuses with the title ranking — index-lane hits carry matched_via (cards/units — the SURFACE that matched; cards covers title and content without field-level provenance) and matched_cards_fts, and their matched_terms may be empty (the match lives in text this tool does not echo). Without the index (lane: scan), matching is titles-only. Never searches raw source bodies (use search_fulltext).",
             json!({
                 "type": "object",
                 "properties": {
@@ -534,7 +596,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_fulltext",
-            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings; hits rank by LANGUAGE-GROUP coverage (terms group by script; score = best group's matched fraction; total matched then recency break ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 8 distinct terms only the first 8 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
+            "Search source bodies with bounded newest-first streaming scans. Space-separated terms are OR-matched as case-insensitive verbatim substrings (unspaced Chinese runs auto-expand into character bigrams, so unsegmented Chinese queries work); hits rank by LANGUAGE-GROUP coverage (terms group by script; score = best group's matched fraction; total matched then recency break ties) and report matched_terms — so include several distinctive terms you expect to co-occur in the target article, in the language it is written in (an English article will not match Chinese terms); beyond 16 distinct terms only the first 16 are used. Pass next_cursor to continue scanning where the previous call stopped (use its value as cursor). Does not search source metadata, crystallized claims, or the reader-pack evidence layer.",
             json!({
                 "type": "object",
                 "properties": {
@@ -586,7 +648,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
         ),
         tool_def(
             "search_claims",
-            "Search the crystallized-claims layer only: active durable and caveated claim text and display themes. Does not search source metadata, reader-pack cards or units, or source bodies.",
+            "Search the crystallized-claims layer only: active durable and caveated claim text and display themes. When the local search index is available (result lane: fts) hits are RELEVANCE-ranked (bm25, unspaced Chinese works); otherwise (lane: scan) whole-query substring filtering in ledger order. Does not search source metadata, reader-pack cards or units, or source bodies.",
             json!({
                 "type": "object",
                 "properties": {
@@ -701,21 +763,105 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
     json!({"hits": hits, "truncated": truncated})
 }
 
-fn tokenize_search_terms(query: &str) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut terms = Vec::new();
-    // Unicode-aware split: CJK IME input separates terms with U+3000
-    // ideographic spaces, which split_ascii_whitespace would glue into one
-    // unmatchable token (parity with search_source_chunks).
-    for term in query.split_whitespace().map(str::to_lowercase) {
-        if !term.is_empty() && seen.insert(term.clone()) {
-            terms.push(term);
-            if terms.len() == MAX_SEARCH_TERMS {
-                break;
+fn push_search_term(
+    term: &str,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
+    if term.is_empty() || seen.contains(term) {
+        return;
+    }
+    if terms.len() == MAX_SEARCH_TERMS {
+        // A DISTINCT term is being dropped — that is real truncation the
+        // caller must be able to surface (duplicates are not).
+        *capped = true;
+        return;
+    }
+    seen.insert(term.to_string());
+    terms.push(term.to_string());
+}
+
+fn flush_cjk_run(
+    run: &mut Vec<char>,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
+    match run.len() {
+        0 => {}
+        1 => push_search_term(&run[0].to_string(), terms, seen, capped),
+        _ => {
+            for pair in run.windows(2) {
+                push_search_term(&pair.iter().collect::<String>(), terms, seen, capped);
             }
         }
     }
-    terms
+    run.clear();
+}
+
+fn flush_other_run(
+    buf: &mut String,
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    capped: &mut bool,
+) {
+    // Boundary punctuation from CJK separators (、。《》 glued to an adjacent
+    // Latin word, e.g. `手写、transformer` → `、transformer`) would both fail
+    // to match the bare word AND misclassify the term as CJK in
+    // language_grouped_score. Trim non-ASCII punctuation at the EDGES only —
+    // internal punctuation stays, and ASCII punctuation is never trimmed, so
+    // URLs, paths, `foo-bar`, and `c++` tokenize exactly as before.
+    let trimmed = buf.trim_matches(|c: char| !c.is_ascii() && !c.is_alphanumeric());
+    // Punctuation-only fragments (stray 《》 around a CJK run) would match
+    // half the corpus as substrings; segments must carry at least one
+    // alphanumeric to count as a term.
+    if trimmed.chars().any(char::is_alphanumeric) {
+        push_search_term(trimmed, terms, seen, capped);
+    }
+    buf.clear();
+}
+
+/// Tokenize plus an honest cap flag: `true` means at least one DISTINCT term
+/// past `MAX_SEARCH_TERMS` was dropped. Consumers surface it — a corpus hit
+/// that only an omitted term would have matched otherwise reads as a clean
+/// miss (`0 hits, truncated: false`), which coverage honesty forbids.
+fn tokenize_search_terms_capped(query: &str) -> (Vec<String>, bool) {
+    let mut seen = BTreeSet::new();
+    let mut terms = Vec::new();
+    let mut capped = false;
+    // Unicode-aware split: CJK IME input separates terms with U+3000
+    // ideographic spaces, which split_ascii_whitespace would glue into one
+    // unmatchable token (parity with search_source_chunks).
+    //
+    // CJK-ideograph runs then expand into overlapping character bigrams: an
+    // unsegmented Chinese query kept as one verbatim substring essentially
+    // never hits, and the failure is silent (`0 hits, truncated: false`).
+    // Bigrams mirror the index-side granularity of
+    // `ovp_index::score::tokenize_for_search`, so substring matching (CJK is
+    // contiguous in UTF-8) recovers recall without a segmenter. Non-CJK
+    // segments stay whole — URLs, paths, and `foo-bar` identifiers keep
+    // their punctuation, exactly as before.
+    for token in query.split_whitespace() {
+        let mut cjk_run: Vec<char> = Vec::new();
+        let mut other = String::new();
+        for ch in token.to_lowercase().chars() {
+            if ovp_index::score::is_cjk(ch) {
+                flush_other_run(&mut other, &mut terms, &mut seen, &mut capped);
+                cjk_run.push(ch);
+            } else {
+                flush_cjk_run(&mut cjk_run, &mut terms, &mut seen, &mut capped);
+                other.push(ch);
+            }
+        }
+        flush_cjk_run(&mut cjk_run, &mut terms, &mut seen, &mut capped);
+        flush_other_run(&mut other, &mut terms, &mut seen, &mut capped);
+    }
+    (terms, capped)
+}
+
+fn tokenize_search_terms(query: &str) -> Vec<String> {
+    tokenize_search_terms_capped(query).0
 }
 
 fn update_fnv1a64(hash: &mut u64, bytes: &[u8]) {
@@ -858,8 +1004,177 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
     (best, matched.len())
 }
 
+/// Gate for the index-backed bm25 lane (candidate `ask_vault_tools-v5`):
+/// the lane serves ONLY when the kill switch is off AND the shadow's
+/// generation stamps equal the model actually loaded — the promotion
+/// contract keeps last-good on failed rebuilds, so a same-analyzer shadow
+/// can legitimately lag the JSON generation, and serving it would rank
+/// current queries against a previous corpus. Any failure → the exact v4
+/// scan path. Read-only; ask can never write or rebuild the projection.
+fn shadow_reader_for(
+    vault_root: &Path,
+    model: &IndexModel,
+) -> Option<ovp_index::sqlite::ShadowReader> {
+    if std::env::var("OVP_ASK_FTS").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    // ONE reader = one snapshot: the open fd survives a concurrent
+    // promotion, so the generation check and every surface query in this
+    // tool call see the same file — checking on one connection and
+    // searching on another could straddle a rename.
+    let reader = ovp_index::sqlite::ShadowReader::open(vault_root).ok()?;
+    let (built_at, run_id) = reader.generation().ok()?;
+    let current = built_at == model.built_at.clone().unwrap_or_default()
+        && run_id == model.run_id.clone().unwrap_or_default();
+    current.then_some(reader)
+}
+
+/// The rank identity for one claim row: canonical `claim_key` when the row
+/// has one (the claim-key contract), else the `(claim_id, status)` legacy
+/// fallback — claim_id alone can repeat even within a status.
+fn claim_rank_key(claim_key: Option<&str>, claim_id: &str, status: &str) -> String {
+    match claim_key.filter(|key| !key.is_empty()) {
+        Some(key) => format!("k:{key}"),
+        None => format!("i:{claim_id}:{status}"),
+    }
+}
+
+/// How many FTS rows the evidence lane fetches per surface BEFORE pack
+/// aggregation — generous, so a few hot packs cannot eat the cap and hide
+/// other matching packs behind an honest-looking result.
+const FTS_EVIDENCE_FETCH: usize = MAX_SEARCH_LIMIT * 4;
+
+/// The evidence lane's raw inputs plus a SATURATION flag: when either
+/// surface returned exactly the fetch cap, deeper matches may exist beyond
+/// it — the fused result must read truncated, never complete.
+struct EvidenceFtsLane {
+    cards: Vec<ovp_index::sqlite::FtsHit>,
+    units: Vec<ovp_index::sqlite::FtsHit>,
+    saturated: bool,
+}
+
+/// `card:{pack_dir}:{idx}` → (pack_dir, idx). The trailing segment is the
+/// numeric card index, so splitting on the LAST colon is unambiguous even
+/// though pack_dir is a path.
+fn parse_card_id(id: &str) -> Option<(&str, usize)> {
+    let rest = id.strip_prefix("card:")?;
+    let (pack_dir, idx) = rest.rsplit_once(':')?;
+    Some((pack_dir, idx.parse().ok()?))
+}
+
+/// `unit:{pack_dir}:{unit_id}` → pack_dir.
+fn parse_unit_pack(id: &str) -> Option<&str> {
+    let rest = id.strip_prefix("unit:")?;
+    Some(rest.rsplit_once(':')?.0)
+}
+
+/// Aggregate card/unit FTS hits to PACKS, ordered by each pack's best bm25
+/// rank across both surfaces (lower is better). Returns each pack's matched
+/// card indices (unit hits count toward the pack's rank but carry no card
+/// index).
+fn evidence_fts_packs(
+    cards: &[ovp_index::sqlite::FtsHit],
+    units: &[ovp_index::sqlite::FtsHit],
+) -> Vec<(String, PackFtsDetail)> {
+    #[derive(Default)]
+    struct Agg {
+        best: f64,
+        card_idxs: Vec<usize>,
+        from_units: bool,
+        first_seen: usize,
+    }
+    let mut packs: HashMap<String, Agg> = HashMap::new();
+    let mut order = 0usize;
+    let mut note = |pack: &str, rank: f64, card_idx: Option<usize>, order: &mut usize| {
+        let entry = packs.entry(pack.to_string()).or_insert_with(|| {
+            *order += 1;
+            Agg {
+                best: rank,
+                card_idxs: Vec::new(),
+                from_units: false,
+                first_seen: *order,
+            }
+        });
+        entry.best = entry.best.min(rank);
+        match card_idx {
+            Some(idx) => {
+                if !entry.card_idxs.contains(&idx) {
+                    entry.card_idxs.push(idx);
+                }
+            }
+            None => entry.from_units = true,
+        }
+    };
+    for hit in cards {
+        if let Some((pack, idx)) = parse_card_id(&hit.id) {
+            note(pack, hit.rank, Some(idx), &mut order);
+        }
+    }
+    for hit in units {
+        if let Some(pack) = parse_unit_pack(&hit.id) {
+            note(pack, hit.rank, None, &mut order);
+        }
+    }
+    let mut out: Vec<(String, Agg)> = packs.into_iter().collect();
+    out.sort_by(|a, b| {
+        a.1.best
+            .partial_cmp(&b.1.best)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.first_seen.cmp(&b.1.first_seen))
+    });
+    out.into_iter()
+        .map(|(pack, agg)| {
+            (
+                pack,
+                PackFtsDetail {
+                    card_idxs: agg.card_idxs,
+                    from_units: agg.from_units,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Which surfaces matched within one pack's fts hits — drives the honest
+/// matched_via label and the body-card detail.
+#[derive(Default, Clone)]
+struct PackFtsDetail {
+    card_idxs: Vec<usize>,
+    from_units: bool,
+}
+
+impl PackFtsDetail {
+    /// SURFACE-level provenance: cards_fts indexes title+content and cannot
+    /// say which field matched, so the label names the surface (cards /
+    /// units / cards+units), never claims body-level support.
+    fn matched_via(&self) -> &'static str {
+        match (!self.card_idxs.is_empty(), self.from_units) {
+            (true, true) => "cards+units",
+            (false, true) => "units",
+            _ => "cards",
+        }
+    }
+}
+
+/// RRF constant — the same k the pre-retrieval path uses (`retrieve.rs`), so
+/// a future third lane fuses on identical terms.
+const RRF_K: f64 = 60.0;
+
 pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
-    let terms = tokenize_search_terms(query);
+    search_evidence_fused(model, query, limit, None)
+}
+
+/// [`search_evidence`] with an optional index-backed lane: the v4 title scan
+/// always runs (it is the fallback AND one fusion input); when FTS card/unit
+/// hits are supplied, packs from both lanes fuse by RRF so a body-only match
+/// — structurally invisible to the title scan — can finally surface.
+fn search_evidence_fused(
+    model: &IndexModel,
+    query: &str,
+    limit: usize,
+    fts: Option<EvidenceFtsLane>,
+) -> Value {
+    let (terms, terms_capped) = tokenize_search_terms_capped(query);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut matches = Vec::new();
     let mut any_matched_cards_truncated = false;
@@ -930,14 +1245,165 @@ pub fn search_evidence(model: &IndexModel, query: &str, limit: usize) -> Value {
             .cmp(&left.0)
             .then_with(|| left.1.cmp(&right.1))
     });
-    let mut truncated = matches.len() > limit || any_matched_cards_truncated;
-    let mut hits = matches
-        .into_iter()
-        .take(limit)
-        .map(|(_, _, hit)| hit)
-        .collect::<Vec<_>>();
+
+    let lane = if fts.is_some() { "fts" } else { "scan" };
+    let mut fts_saturated = false;
+    let mut fts_detail_truncated = false;
+    let ordered: Vec<Value> = if let Some(EvidenceFtsLane { cards, units, saturated }) = fts {
+        fts_saturated = saturated;
+        let fts_packs = evidence_fts_packs(&cards, &units);
+        let fts_detail_by_pack: HashMap<String, PackFtsDetail> = fts_packs.iter().cloned().collect();
+        let fts_pos: HashMap<&str, usize> = fts_packs
+            .iter()
+            .enumerate()
+            .map(|(pos, (pack, _))| (pack.as_str(), pos))
+            .collect();
+        let title_pos: HashMap<&str, usize> = matches
+            .iter()
+            .enumerate()
+            .map(|(pos, (_, i, _))| (model.packs[*i].pack_dir.as_str(), pos))
+            .collect();
+        // RRF over the two ranked lists — same k as the pre-retrieval path.
+        let mut rrf: HashMap<String, f64> = HashMap::new();
+        for (pack, pos) in title_pos.iter().chain(fts_pos.iter()) {
+            *rrf.entry(pack.to_string()).or_default() += 1.0 / (RRF_K + *pos as f64 + 1.0);
+        }
+        let mut pack_order: Vec<String> = rrf.keys().cloned().collect();
+        pack_order.sort_by(|a, b| {
+            rrf[b]
+                .partial_cmp(&rrf[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ta = title_pos.get(a.as_str()).copied().unwrap_or(usize::MAX);
+                    let tb = title_pos.get(b.as_str()).copied().unwrap_or(usize::MAX);
+                    ta.cmp(&tb)
+                })
+                .then_with(|| {
+                    let fa = fts_pos.get(a.as_str()).copied().unwrap_or(usize::MAX);
+                    let fb = fts_pos.get(b.as_str()).copied().unwrap_or(usize::MAX);
+                    fa.cmp(&fb)
+                })
+                .then_with(|| a.cmp(b))
+        });
+
+        let mut title_by_pack: HashMap<String, Value> = matches
+            .into_iter()
+            .map(|(_, i, hit)| (model.packs[i].pack_dir.clone(), hit))
+            .collect();
+        let pack_by_dir: HashMap<&str, &ovp_index::PackRow> = model
+            .packs
+            .iter()
+            .map(|p| (p.pack_dir.as_str(), p))
+            .collect();
+
+        let mut ordered = Vec::new();
+        for pack_dir in pack_order {
+            let mut hit = match title_by_pack.remove(&pack_dir) {
+                Some(hit) => hit,
+                None => {
+                    // FTS-only pack: the match lives in card BODIES or unit
+                    // text — structurally invisible to the title scan. A
+                    // pack the live model no longer knows (shadow one
+                    // generation behind) is skipped, never fabricated.
+                    let Some(pack) = pack_by_dir.get(pack_dir.as_str()) else {
+                        continue;
+                    };
+                    let pack_title_lower = pack.title.to_lowercase();
+                    let card_titles_lower: Vec<String> = pack
+                        .card_titles
+                        .iter()
+                        .map(|t| t.to_lowercase())
+                        .collect();
+                    // Best-effort echo over the text this tool DOES hold
+                    // (title + card titles); a genuine body/unit-only match
+                    // legitimately leaves this empty — matched_via says why.
+                    let matched_terms: Vec<String> = terms
+                        .iter()
+                        .filter(|term| {
+                            pack_title_lower.contains(term.as_str())
+                                || card_titles_lower.iter().any(|t| t.contains(term.as_str()))
+                        })
+                        .cloned()
+                        .collect();
+                    let mut hit = Map::new();
+                    hit.insert("pack_title".into(), json!(pack.title));
+                    hit.insert("matched_cards".into(), json!([] as [&str; 0]));
+                    hit.insert("matched_terms".into(), json!(matched_terms));
+                    if let Some(source_id) = pack.source_sha256.as_deref() {
+                        hit.insert("source_id".into(), json!(source_id));
+                        hit.insert("open_ref".into(), json!(format!("/library/{source_id}")));
+                    }
+                    hit.insert("total_cards".into(), json!(pack.card_titles.len()));
+                    Value::Object(hit)
+                }
+            };
+            // Index-lane detail applies to EVERY pack it ranked — including
+            // packs the title lane also hit, where hiding a unit
+            // contribution would contradict the tool contract. Card titles
+            // come from the fts card hits (cards_fts matches title OR
+            // content — the field name says fts, not body). Detail caps
+            // propagate to truncation.
+            if let Some(detail) = fts_detail_by_pack.get(&pack_dir) {
+                let mut detail_truncated = false;
+                let fts_titles: Vec<String> = pack_by_dir
+                    .get(pack_dir.as_str())
+                    .map(|pack| {
+                        detail_truncated |= detail.card_idxs.len() > MAX_MATCHED_CARDS_PER_HIT;
+                        detail
+                            .card_idxs
+                            .iter()
+                            .filter_map(|idx| pack.card_titles.get(*idx))
+                            .take(MAX_MATCHED_CARDS_PER_HIT)
+                            .map(|title| {
+                                let (title, capped) =
+                                    cap_chars(title, MAX_MATCHED_CARD_TITLE_CHARS);
+                                detail_truncated |= capped;
+                                title
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(obj) = hit.as_object_mut() {
+                    obj.insert("matched_via".into(), json!(detail.matched_via()));
+                    if !fts_titles.is_empty() {
+                        obj.insert("matched_cards_fts".into(), json!(fts_titles));
+                    }
+                    if detail_truncated {
+                        obj.insert("matched_cards_fts_truncated".into(), json!(true));
+                    }
+                }
+                fts_detail_truncated |= detail_truncated;
+            }
+            ordered.push(hit);
+        }
+        ordered
+    } else {
+        matches.into_iter().map(|(_, _, hit)| hit).collect()
+    };
+
+    let mut truncated = ordered.len() > limit
+        || any_matched_cards_truncated
+        || terms_capped
+        || fts_saturated
+        || fts_detail_truncated;
+    let mut hits: Vec<Value> = ordered.into_iter().take(limit).collect();
     truncated |= cap_aggregate(&mut hits);
-    json!({"hits": hits, "truncated": truncated})
+    let mut out = json!({"hits": hits, "truncated": truncated, "lane": lane});
+    annotate_capped_terms(&mut out, terms_capped, &terms);
+    out
+}
+
+/// Mark a result whose QUERY lost distinct terms to `MAX_SEARCH_TERMS`: a
+/// document matching only an omitted term reads as a clean miss otherwise,
+/// and `matched_terms` cannot expose the omission when there are no hits.
+fn annotate_capped_terms(out: &mut Value, capped: bool, terms: &[String]) {
+    if !capped {
+        return;
+    }
+    if let Some(map) = out.as_object_mut() {
+        map.insert("query_terms_truncated".into(), json!(true));
+        map.insert("query_terms_used".into(), json!(terms));
+    }
 }
 
 #[derive(Debug)]
@@ -1042,7 +1508,19 @@ fn search_fulltext_at_with_budget(
     remaining: Duration,
     corpus_budget: usize,
 ) -> Value {
-    let terms = tokenize_search_terms(query);
+    let (terms, terms_capped) = tokenize_search_terms_capped(query);
+    // The agent path rejects zero-term queries at parse; the portal path
+    // reaches here directly — an empty matcher must not burn a corpus scan
+    // it can never match.
+    if terms.is_empty() {
+        return json!({
+            "hits": [],
+            "scanned_sources": 0,
+            "total_sources": fulltext_candidate_count(model),
+            "truncated": false,
+            "note": "query contains no searchable terms (punctuation only) — nothing was scanned",
+        });
+    }
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut candidates = model
         .sources
@@ -1151,12 +1629,19 @@ fn search_fulltext_at_with_budget(
         .map(|(_, _, hit)| hit)
         .collect();
     let aggregate_capped = cap_aggregate(&mut hits);
-    let truncated = stopped_before_end || incomplete_file || hit_limit_drop || aggregate_capped;
+    // terms_capped counts as truncation: the dropped terms were never
+    // searched anywhere in the corpus, so coverage must read partial.
+    let truncated =
+        stopped_before_end || incomplete_file || hit_limit_drop || aggregate_capped || terms_capped;
     let mut out = Map::new();
     out.insert("hits".into(), json!(hits));
     out.insert("scanned_sources".into(), json!(scanned_sources));
     out.insert("total_sources".into(), json!(total_sources));
     out.insert("truncated".into(), json!(truncated));
+    if terms_capped {
+        out.insert("query_terms_truncated".into(), json!(true));
+        out.insert("query_terms_used".into(), json!(&terms));
+    }
     if stopped_before_end {
         out.insert(
             "next_cursor".into(),
@@ -1682,11 +2167,10 @@ pub fn search_source_chunks(
     query: &str,
     limit: usize,
 ) -> Result<Value, VaultToolError> {
-    let terms: BTreeSet<String> = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .filter(|term| !term.is_empty())
-        .collect();
+    // Same tokenizer as the search tools (CJK bigram expansion included) so
+    // a query that found a source can drill into it with identical terms.
+    let (term_list, terms_capped) = tokenize_search_terms_capped(query);
+    let terms: BTreeSet<String> = term_list.iter().cloned().collect();
     if terms.is_empty() {
         return Err(VaultToolError::InvalidArgs(
             "`query` must not be empty".into(),
@@ -1708,7 +2192,7 @@ pub fn search_source_chunks(
     // newlines (single-byte, never mid-char); the passage cap may land
     // mid-char, so the flush trims to the valid prefix.
     let mut reader = std::io::BufReader::new(file);
-    let mut matches: Vec<(usize, usize, String)> = Vec::new();
+    let mut matches: Vec<((usize, usize), usize, String)> = Vec::new();
     let mut passage_capped = false;
     let mut scan_capped = false;
     let mut scanned: usize = 0;
@@ -1719,7 +2203,7 @@ pub fn search_source_chunks(
     let flush = |paragraph: &mut Vec<u8>,
                  over_cap: &mut bool,
                  index: &mut usize,
-                 matches: &mut Vec<(usize, usize, String)>,
+                 matches: &mut Vec<((usize, usize), usize, String)>,
                  passage_capped: &mut bool| {
         let text = match std::str::from_utf8(paragraph) {
             Ok(s) => s,
@@ -1733,8 +2217,17 @@ pub fn search_source_chunks(
             // honest miss with complete coverage.
             *passage_capped |= *over_cap;
             let lower = text.to_lowercase();
-            let score: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
-            if score > 0 {
+            // Distinct-term coverage ranks BEFORE raw frequency: with bigram
+            // expansion a passage repeating one common bigram must not
+            // outrank a passage matching every term of the query.
+            let matched: usize = terms
+                .iter()
+                .filter(|term| lower.contains(term.as_str()))
+                .count();
+            let occurrences: usize =
+                terms.iter().map(|term| lower.matches(term.as_str()).count()).sum();
+            let score = (matched, occurrences);
+            if matched > 0 {
                 let trimmed = text.trim_end();
                 // A paragraph capped DURING accumulation already fits the
                 // byte budget — still mark it visibly (the same … marker a
@@ -1836,20 +2329,26 @@ pub fn search_source_chunks(
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let limit = limit.clamp(1, MAX_CHUNK_LIMIT);
-    let mut truncated = passage_capped || matches.len() > limit;
+    // A term-capped query never searched the dropped terms — that is partial
+    // coverage, not a complete pass (the executor's coverage accounting
+    // reads `truncated`).
+    let mut truncated = passage_capped || matches.len() > limit || terms_capped;
     let mut chunks = matches
         .into_iter()
         .take(limit)
-        .map(|(score, index, passage)| {
+        .map(|((matched, occurrences), index, passage)| {
             json!({
                 "index": index,
                 "passage": passage,
-                "score": score
+                "matched_terms": matched,
+                "score": occurrences
             })
         })
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut chunks);
-    Ok(json!({"chunks": chunks, "truncated": truncated}))
+    let mut out = json!({"chunks": chunks, "truncated": truncated});
+    annotate_capped_terms(&mut out, terms_capped, &term_list);
+    Ok(out)
 }
 
 /// Search ACTIVE durable ledger records plus caveated index rows. The ledger is
@@ -1862,8 +2361,54 @@ pub fn search_claims(
     limit: usize,
     status: Option<&str>,
 ) -> Value {
+    search_claims_ranked(model, records, query, limit, status, None)
+}
+
+/// [`search_claims`] with an optional bm25 rank from the claims FTS surface
+/// (candidate `ask_vault_tools-v5`). With a rank: candidates matching the
+/// index-backed lane order FIRST by relevance, and substring-only matches
+/// (e.g. a claim newer than the shadow generation) append after in ledger
+/// order — union, never a recall regression. Without: the exact v4 filter.
+fn search_claims_ranked(
+    model: &IndexModel,
+    records: &[DurableRecord],
+    query: &str,
+    limit: usize,
+    status: Option<&str>,
+    fts_rank: Option<&[String]>,
+) -> Value {
+    let lane = if fts_rank.is_some() { "fts" } else { "scan" };
+    let fts_pos: Option<HashMap<&str, usize>> = fts_rank.map(|ranked| {
+        ranked
+            .iter()
+            .enumerate()
+            .map(|(pos, key)| (key.as_str(), pos))
+            .collect()
+    });
+    // A candidate is in when the substring filter matches (v4) OR the fts
+    // lane ranked THIS row's canonical rank key (see claim_rank_key — id
+    // alone conflates rows). Sort key = fts position; substring-only extras
+    // after (usize::MAX keeps their relative order via stable sort).
+    let claim_matches = |claim: &str,
+                         theme: &str,
+                         claim_key: Option<&str>,
+                         claim_id: &str,
+                         row_status: &str,
+                         q: &str|
+     -> Option<usize> {
+        let by_text = claim.to_lowercase().contains(q) || theme.to_lowercase().contains(q);
+        match &fts_pos {
+            Some(pos) => match pos.get(claim_rank_key(claim_key, claim_id, row_status).as_str()) {
+                Some(p) => Some(*p),
+                None if by_text => Some(usize::MAX),
+                None => None,
+            },
+            None if by_text => Some(usize::MAX),
+            None => None,
+        }
+    };
     let query = query.to_lowercase();
-    let mut hits = Vec::new();
+    let mut hits: Vec<(usize, Value)> = Vec::new();
     let mut any_capped = false;
 
     if status.is_none() || status == Some("durable") {
@@ -1872,11 +2417,16 @@ pub fn search_claims(
             let theme = row
                 .and_then(|row| row.theme.as_deref())
                 .unwrap_or(record.theme.as_str());
-            if !record.claim.to_lowercase().contains(&query)
-                && !theme.to_lowercase().contains(&query)
-            {
+            let Some(pos) = claim_matches(
+                &record.claim,
+                theme,
+                Some(&record.claim_key),
+                &record.claim_id,
+                "durable",
+                &query,
+            ) else {
                 continue;
-            }
+            };
             let (claim, capped) = cap_chars(&record.claim, MAX_CLAIM_CHARS);
             any_capped |= capped;
             let mut hit = Map::new();
@@ -1901,7 +2451,7 @@ pub fn search_claims(
                 json!({"score": record.provenance_score, "class": record.provenance_class}),
             );
             hit.insert("status".into(), json!("durable"));
-            hits.push(Value::Object(hit));
+            hits.push((pos, Value::Object(hit)));
         }
     }
 
@@ -1912,10 +2462,16 @@ pub fn search_claims(
             .filter(|row| row.status == ClaimStatus::Caveated)
         {
             let theme = row.theme.as_deref().unwrap_or("");
-            if !row.claim.to_lowercase().contains(&query) && !theme.to_lowercase().contains(&query)
-            {
+            let Some(pos) = claim_matches(
+                &row.claim,
+                theme,
+                row.claim_key.as_deref(),
+                &row.claim_id,
+                "caveated",
+                &query,
+            ) else {
                 continue;
-            }
+            };
             let (claim, capped) = cap_chars(&row.claim, MAX_CLAIM_CHARS);
             any_capped |= capped;
             let mut hit = Map::new();
@@ -1935,15 +2491,18 @@ pub fn search_claims(
                 json!(resolved_source_ids(model, &row.sources)),
             );
             hit.insert("status".into(), json!("caveated"));
-            hits.push(Value::Object(hit));
+            hits.push((pos, Value::Object(hit)));
         }
     }
 
+    // Stable sort: fts-ranked candidates lead by relevance; substring-only
+    // extras (usize::MAX) keep their v4 relative order after them.
+    hits.sort_by_key(|(pos, _)| *pos);
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let mut truncated = any_capped || hits.len() > limit;
-    hits.truncate(limit);
+    let mut hits: Vec<Value> = hits.into_iter().take(limit).map(|(_, hit)| hit).collect();
     truncated |= cap_aggregate(&mut hits);
-    json!({"hits": hits, "truncated": truncated})
+    json!({"hits": hits, "truncated": truncated, "lane": lane})
 }
 
 /// Resolve an ACTIVE durable claim. Canonical `claim_key` lookup is direct;
@@ -2566,7 +3125,18 @@ fn required_search_query(object: &Map<String, Value>) -> Result<String, String> 
     // distinct terms rather than rejecting: an invalid-args bounce costs a
     // whole agent round (and feeds the breaker) for a fault the tool can
     // resolve losslessly enough — matched_terms shows what actually ran.
-    required_string(object, "query")
+    let query = required_string(object, "query")?;
+    // Zero terms is different: nothing CAN run, and an empty-matcher pass
+    // would read as an honest complete miss (search_source_chunks already
+    // rejects this state — the term tools must match).
+    if tokenize_search_terms(&query).is_empty() {
+        return Err(
+            "`query` contains no searchable terms (punctuation only) — include at least \
+             one word, CJK character, or identifier"
+                .into(),
+        );
+    }
+    Ok(query)
 }
 
 fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<String>, String> {
@@ -2688,6 +3258,7 @@ mod tests {
                         claim_key: None,
                         claim: "Agent memory still needs corroboration".into(),
                         theme: Some("Agent memory".into()),
+                        theme_id: None,
                         status: ClaimStatus::Caveated,
                         sources: vec!["case-b".into()],
                         strength: Some("overreach".into()),
@@ -2747,6 +3318,7 @@ mod tests {
             last_reason: None,
             tags: vec!["agent-memory".into()],
             tags_inferred: vec!["retrieval".into()],
+            tags_implied: vec![],
             entities: vec![],
         }
     }
@@ -2757,6 +3329,7 @@ mod tests {
             claim_key: Some(key.into()),
             claim: claim.into(),
             theme: Some("Agent memory".into()),
+            theme_id: None,
             status: ClaimStatus::Durable,
             sources: vec!["case-a".into()],
             strength: Some("supported".into()),
@@ -2823,6 +3396,7 @@ mod tests {
             claim_id: id.into(),
             claim: format!("Agent memory claim for {key}"),
             theme: "Agent memory".into(),
+            theme_id: None,
             source_cases: vec![case_id.into()],
             citations: vec![DurableCitation {
                 case_id: case_id.into(),
@@ -2940,7 +3514,14 @@ mod tests {
         assert!(evidence.contains("matched_terms"));
         assert!(evidence.contains("1–3 distinctive terms"));
         assert!(evidence.contains("English article will not match Chinese terms"));
-        assert!(evidence.contains("Does not search card bodies, units text, or source bodies"));
+        // v5: the index-backed lane makes bodies/units searchable — the
+        // description must state BOTH lanes and never claim titles-only
+        // unconditionally.
+        assert!(evidence.contains("lane: fts"));
+        assert!(evidence.contains("card bodies and unit text/quotes"));
+        assert!(evidence.contains("the SURFACE that matched"));
+        assert!(evidence.contains("lane: scan"));
+        assert!(evidence.contains("Never searches raw source bodies"));
         let fulltext = description("search_fulltext");
         assert!(fulltext.contains("newest-first"));
         assert!(fulltext.contains("OR-matched"));
@@ -3095,6 +3676,191 @@ mod tests {
             json!({"query": "transformer"}),
         ));
         assert_eq!(metadata["hits"], json!([]));
+    }
+
+    fn simple_pack(pack_dir: &str, title: &str, card_titles: Vec<String>) -> PackRow {
+        PackRow {
+            pack_dir: pack_dir.into(),
+            title: title.into(),
+            date: None,
+            units: 1,
+            cards: card_titles.len(),
+            json_repaired: false,
+            card_titles,
+            source_sha256: None,
+        }
+    }
+
+    #[test]
+    fn evidence_fts_lane_surfaces_body_only_matches_and_fuses() {
+        let model = fixture_model(
+            vec![],
+            vec![
+                simple_pack(
+                    "40-Resources/Reader/alpha",
+                    "Alpha pack",
+                    vec!["Title needle card".into()],
+                ),
+                simple_pack(
+                    "40-Resources/Reader/beta",
+                    "Beta pack",
+                    vec!["Unrelated title".into()],
+                ),
+            ],
+            vec![],
+        );
+
+        // v4 scan lane: title-only recall, honestly labelled.
+        let scan = search_evidence(&model, "needle", 10);
+        assert_eq!(scan["lane"], json!("scan"));
+        assert_eq!(scan["hits"].as_array().expect("hits").len(), 1);
+
+        // fts lane: beta matched via card BODY (invisible to the title scan)
+        // — surfaces with honest markers, fused with the title-lane hit.
+        let cards = vec![ovp_index::sqlite::FtsHit {
+            id: "card:40-Resources/Reader/beta:0".into(),
+            rowid: 7,
+            rank: -2.0,
+        }];
+        let fused = search_evidence_fused(
+            &model,
+            "needle",
+            10,
+            Some(EvidenceFtsLane { cards, units: vec![], saturated: false }),
+        );
+        assert_eq!(fused["lane"], json!("fts"));
+        let hits = fused["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 2);
+        let beta = hits.iter().find(|h| h["pack_title"] == "Beta pack").expect("beta");
+        assert_eq!(beta["matched_via"], json!("cards"));
+        assert_eq!(beta["matched_cards_fts"], json!(["Unrelated title"]));
+        let alpha = hits.iter().find(|h| h["pack_title"] == "Alpha pack").expect("alpha");
+        assert_eq!(alpha["matched_terms"], json!(["needle"]));
+
+        // A pack the live model no longer knows (stale shadow) is skipped,
+        // never fabricated.
+        let ghost = vec![ovp_index::sqlite::FtsHit {
+            id: "card:40-Resources/Reader/ghost:0".into(),
+            rowid: 9,
+            rank: -3.0,
+        }];
+        let fused = search_evidence_fused(
+            &model,
+            "needle",
+            10,
+            Some(EvidenceFtsLane { cards: ghost, units: vec![], saturated: false }),
+        );
+        let hits = fused["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "ghost pack must be dropped");
+        assert_eq!(hits[0]["pack_title"], "Alpha pack");
+    }
+
+    #[test]
+    fn claims_fts_rank_orders_by_relevance_with_substring_extras() {
+        let claim = |id: &str, text: &str| ClaimRow {
+            claim_id: id.into(),
+            claim_key: None,
+            claim: text.into(),
+            theme: None,
+            theme_id: None,
+            status: ClaimStatus::Caveated,
+            sources: vec![],
+            strength: None,
+            run_id: None,
+            run_date: None,
+            lane: None,
+        };
+        let model = fixture_model(
+            vec![],
+            vec![],
+            vec![claim("c-1", "alpha memory claim"), claim("c-2", "beta memory claim")],
+        );
+
+        // v4 scan lane: ledger/model order.
+        let scan = search_claims(&model, &[], "memory", 10, None);
+        assert_eq!(scan["lane"], json!("scan"));
+        let ids: Vec<_> = scan["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|h| h["claim_id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("c-1"), json!("c-2")]);
+
+        // fts rank leads by relevance; the substring-only extra (c-1, not in
+        // the shadow's rank) appends after — union, never a recall loss.
+        let rank = vec![claim_rank_key(None, "c-2", "caveated")];
+        let ranked = search_claims_ranked(&model, &[], "memory", 10, None, Some(&rank));
+        assert_eq!(ranked["lane"], json!("fts"));
+        let ids: Vec<_> = ranked["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|h| h["claim_id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("c-2"), json!("c-1")]);
+    }
+
+    #[test]
+    fn executor_fts_lane_end_to_end_over_a_real_shadow() {
+        // Real shadow in a gitignored cache; the OnceLock override keeps the
+        // developer's platform cache untouched (first-call-wins is benign —
+        // every ovp-memory test resolves misses to the scan lane either way).
+        ovp_index::sqlite::override_cache_base(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/stage3-tests-memory"),
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model = fixture_model(
+            vec![],
+            vec![simple_pack(
+                "40-Resources/Reader/alpha",
+                "Alpha pack",
+                vec!["Quiet title".into()],
+            )],
+            vec![],
+        );
+        let evidence = ovp_index::EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: "2026-08-06".into(),
+            cards: vec![ovp_index::evidence::CardEvidenceRow {
+                id: "card:40-Resources/Reader/alpha:0".into(),
+                pack_dir: "40-Resources/Reader/alpha".into(),
+                source_sha256: None,
+                source_title: "Alpha pack".into(),
+                title: "Quiet title".into(),
+                content: "深度检索 bodyneedle only lives in the card body".into(),
+                unit_type: None,
+                cited_unit_ids: vec![],
+            }],
+            units: vec![],
+            warnings: vec![],
+        };
+        ovp_index::write_index(temp.path(), &model).expect("index");
+        ovp_index::write_evidence(temp.path(), &evidence).expect("evidence");
+        ovp_index::sqlite::write_shadow(temp.path(), &model, Some(&evidence)).expect("shadow");
+
+        let mut tools = VaultTools::new(temp.path());
+        // Body-only term, unsegmented CJK included — zero recall on v4.
+        let out = ok_json(call(&mut tools, "search_evidence", json!({"query": "深度检索"})));
+        assert_eq!(out["lane"], json!("fts"));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["pack_title"], "Alpha pack");
+        assert_eq!(hits[0]["matched_via"], json!("cards"));
+
+        // Generation guard: when the JSON projections move on but the shadow
+        // kept last-good (failed rebuild), the lane must fall back — serving
+        // a stale corpus's rankings for the current model is worse than the
+        // scan.
+        let mut newer = model.clone();
+        newer.built_at = Some("2026-08-06T09:00:00Z".into());
+        ovp_index::write_index(temp.path(), &newer).expect("newer index");
+        // A fresh executor (new turn, new snapshot) loads the NEWER model;
+        // the shadow still stamps the old generation and must not serve.
+        let mut fresh = VaultTools::new(temp.path());
+        let out = ok_json(call(&mut fresh, "search_evidence", json!({"query": "深度检索"})));
+        assert_eq!(out["lane"], json!("scan"), "stale shadow must not serve");
+        assert_eq!(out["hits"].as_array().expect("hits").len(), 0);
     }
 
     #[test]
@@ -3862,24 +4628,74 @@ mod tests {
                 call(&mut invalid_tools, name, json!({"query": ""})),
                 ToolOutcome::InvalidArgs(_)
             ));
+            // Punctuation-only queries tokenize to ZERO terms — an empty
+            // matcher would read as an honest complete miss (and the portal
+            // path would burn a corpus scan on it), so they bounce like the
+            // empty query, matching search_source_chunks.
+            for junk in ["《》", "!!!", "、。"] {
+                assert!(matches!(
+                    call(&mut invalid_tools, name, json!({"query": junk})),
+                    ToolOutcome::InvalidArgs(_)
+                ));
+            }
         }
         assert_eq!(invalid_tools.coverage(), Coverage::default());
-        // Over-long term lists soft-truncate to the first 8 distinct terms —
-        // an invalid-args bounce would burn an agent round (and feed the
-        // breaker) for a fault the tool resolves losslessly enough. The ninth
-        // term does not match anything, and the run still succeeds.
+        // Over-long term lists soft-truncate to the first MAX_SEARCH_TERMS
+        // distinct terms — an invalid-args bounce would burn an agent round
+        // (and feed the breaker) for a fault the tool resolves losslessly
+        // enough. The run still succeeds, and the DROPPED 17th term is
+        // surfaced: without the flag a document matching only the omitted
+        // term reads as a clean miss (`0 hits, truncated: false`).
         let mut soft_tools = VaultTools::new(temp.path());
+        let filler = (1..=16).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
         let soft = ok_json(soft_tools.execute(
             "search_fulltext",
-            &json!({"query": "one two three four five six seven eight NEEDLE"}),
+            &json!({"query": format!("{filler} NEEDLE")}),
             Duration::from_secs(10),
         ));
         assert_eq!(soft["hits"].as_array().expect("hits").len(), 0);
+        // Dropped terms were never searched → the pass is PARTIAL, not a
+        // clean complete miss (coverage accounting reads `truncated`).
+        assert_eq!(soft["truncated"], json!(true));
+        assert_eq!(soft["query_terms_truncated"], json!(true));
+        assert_eq!(
+            soft["query_terms_used"].as_array().expect("terms").len(),
+            16
+        );
+        // An unspaced 18-ideograph run alone exceeds the cap (17 bigrams).
+        let cjk_run: String = "一二三四五六七八九十百千万亿兆京垓秭".chars().collect();
+        let (cjk_terms, cjk_capped) = tokenize_search_terms_capped(&cjk_run);
+        assert_eq!(cjk_terms.len(), 16);
+        assert!(cjk_capped);
+        // Duplicates are NOT truncation: 16 distinct terms repeated stay flagless.
+        let (_, dup_capped) = tokenize_search_terms_capped(&format!("{filler} {filler}"));
+        assert!(!dup_capped);
 
         // CJK IME queries separate terms with U+3000 ideographic spaces -
         // the tokenizer must split on Unicode whitespace, not ASCII only.
         let ideographic = tokenize_search_terms("\u{624b}\u{5199}\u{3000}transformer\u{3000}\u{7b14}\u{8bb0}");
         assert_eq!(ideographic, vec!["\u{624b}\u{5199}", "transformer", "\u{7b14}\u{8bb0}"]);
+
+        // An UNSEGMENTED bilingual query expands: CJK runs become overlapping
+        // bigrams (mirroring index-side tokenize_for_search granularity),
+        // embedded Latin stays whole. Before bigram expansion this whole
+        // token was one unmatchable substring — silent zero recall.
+        let unsegmented = tokenize_search_terms("手写transformer求职笔记");
+        assert_eq!(
+            unsegmented,
+            vec!["手写", "transformer", "求职", "职笔", "笔记"]
+        );
+        // CJK punctuation fragments carry no alphanumerics and are dropped;
+        // Latin identifiers keep their internal punctuation.
+        assert_eq!(tokenize_search_terms("《转型》 foo-bar"), vec!["转型", "foo-bar"]);
+        // CJK separators glued to a Latin word trim off the EDGES (otherwise
+        // `、transformer` never matches a plain-English source and the term
+        // misclassifies as CJK in language grouping); internal and ASCII
+        // punctuation survive (URLs, c++).
+        assert_eq!(
+            tokenize_search_terms("手写、transformer。 c++ https://a.b/c"),
+            vec!["手写", "transformer", "c++", "https://a.b/c"]
+        );
 
         let mut dedupe_tools = VaultTools::new(temp.path());
         let deduped = ok_json(call(

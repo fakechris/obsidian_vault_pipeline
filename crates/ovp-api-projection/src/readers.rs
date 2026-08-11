@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use ovp_domain::VaultLayout;
-use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_THEME};
+use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::lineage::{lineage_index, ClaimLineage};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_intake::read_jsonl;
@@ -60,6 +60,11 @@ pub fn load_active_records_strict(
     match ThemesFile::load(&store.join("themes.json")) {
         Ok(Some(themes)) => {
             for r in records.iter_mut() {
+                // Route-by-id: keep the stable community id alongside the
+                // mutable display label (see ovp-index::build_claims). Claims
+                // with no mapped pack get the Unclassified sentinel so the
+                // bucket stays routable.
+                r.theme_id = Some(themes.majority_community(&r.source_cases).unwrap_or(UNCLASSIFIED_ID));
                 r.theme = themes
                     .majority_label(&r.source_cases)
                     .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string());

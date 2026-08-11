@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgeGraph from '../components/KnowledgeGraph';
-import SourceChatPanel from '../components/SourceChatPanel';
+import FocusChatPanel from '../components/FocusChatPanel';
 import { ClaimPill, EmptyState, StatusPill } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
@@ -22,14 +22,19 @@ import {
 import { useSourceWorkQueueOptional } from '../lib/sourceWorkQueue';
 import {
   collectionOf,
+  isMiscTheme,
   libraryBrowseOrder,
   libraryFilterActive,
   libraryFilterFromSearch,
   librarySourcePath,
   loadLibraryNavSnapshot,
   sourceDisplayTitle,
+  sourceThemes,
+  themeRoute,
+  UNCLASSIFIED_ID,
   type LibraryFilter,
 } from '../lib/derive';
+import { buildMemoryTitleMap } from '../lib/chatTranscript';
 import { isReactImeComposing } from '../lib/ime';
 import { MarkdownView, sourceImageCandidates } from '../lib/markdown';
 import { companionLinks, isPrimarilyEnglish } from '../lib/sourceLinks';
@@ -185,6 +190,16 @@ function SourceTags({
           )}
         </span>
       ))}
+      {(source.tags_implied ?? []).map((tg) => (
+        <Link
+          key={`>${tg}`}
+          className="tag-chip implied"
+          to={`/library?tag=${encodeURIComponent(tg)}`}
+          title="rolled up via implications"
+        >
+          &gt;#{tg}
+        </Link>
+      ))}
       {!STATIC_MODE && (
         <>
           <input
@@ -209,6 +224,34 @@ function SourceTags({
       )}
       {error && <span className="fail-note">{error}</span>}
     </dd>
+  );
+}
+
+/** Which crystal knowledge this source supports: the distinct themes its
+ * citing claims land in, linking into /knowledge/theme/:theme. Hidden when
+ * no active claim cites the source (the claims card already shows empty). */
+function SupportedThemes({ citing }: { citing: ClaimRow[] }) {
+  const { t } = useI18n();
+  const themes = sourceThemes(citing);
+  if (themes.length === 0) return null;
+  return (
+    <div className="card">
+      <h3 style={{ marginBottom: '0.6rem' }}>{t('source.supportedThemes')}</h3>
+      <ul className="citing-list">
+        {themes.map(({ id, theme, count }) => (
+          <li key={(id != null ? `i${id}` : `t${theme}`) || '(unclassified)'}>
+            <Link to={themeRoute({ id: id ?? null, theme })}>
+              {isMiscTheme(theme) || id === UNCLASSIFIED_ID
+                ? t('theme.unclassified')
+                : theme || t('knowledge.untitledTheme')}
+            </Link>{' '}
+            <span className="tiny muted mono">
+              {t('source.supportedThemesCount', { n: count })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -764,7 +807,10 @@ export default function SourceDetailPage() {
           </>
         )}
         {(!STATIC_MODE ||
-          (source.tags ?? []).length + (source.tags_inferred ?? []).length > 0) && (
+          (source.tags ?? []).length +
+            (source.tags_inferred ?? []).length +
+            (source.tags_implied ?? []).length >
+            0) && (
           <>
             <dt>{t('tags.title')}</dt>
             <SourceTags
@@ -1061,6 +1107,7 @@ export default function SourceDetailPage() {
               <div className="graph-caption">{t('source.neighborhoodCaption')}</div>
             </div>
           )}
+          <SupportedThemes citing={citing} />
           <div className="card">
             <h3 style={{ marginBottom: '0.6rem' }}>{t('source.citingClaims')}</h3>
             <CitingClaims claims={citing} />
@@ -1069,12 +1116,15 @@ export default function SourceDetailPage() {
       </div>
 
       {!STATIC_MODE && (
-        <SourceChatPanel
-          sha={source.sha256}
+        <FocusChatPanel
+          focus={{ kind: 'source', sha: source.sha256 }}
           title={title}
-          cardCount={memory.cards.length}
-          unitCount={memory.units.length}
-          claimCount={citing.length}
+          citeTitles={buildMemoryTitleMap(memory)}
+          metaLine={t('source.chatMetaLine', {
+            cards: memory.cards.length,
+            units: memory.units.length,
+            claims: citing.length,
+          })}
           open={chatOpen}
           resumeChat={resumeChat}
           onClose={() => setChatOpen(false)}

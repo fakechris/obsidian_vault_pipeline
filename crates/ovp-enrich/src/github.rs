@@ -274,10 +274,8 @@ pub fn parse_github_repo_url(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches('/');
     let path = if let Some(rest) = url.strip_prefix("https://github.com/") {
         rest
-    } else if let Some(rest) = url.strip_prefix("http://github.com/") {
-        rest
     } else {
-        return None;
+        url.strip_prefix("http://github.com/")?
     };
 
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();

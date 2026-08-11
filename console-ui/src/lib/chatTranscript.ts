@@ -43,6 +43,119 @@ export function normalizeCiteToken(token: string): string {
 /** Best-effort portal link for a citation key when replaying a saved chat
  * (no live evidence sidecar). Claims deep-link by key; cards/units have no
  * stable sha without the index. */
+/** Ground unit/card/source cites onto a focused source's library page when
+ * the generic index lookup has no link (modern unit ids have no standalone
+ * page — their home is the source's memory tab). Shared by the focus chat
+ * dock and Ask-page replay of focused sessions. */
+export function groundCitesOnSource<
+  T extends { id: string; kind?: string; link_target?: string | null },
+>(cites: T[], sha: string): T[] {
+  return cites.map((c) => {
+    if (c.link_target) return c;
+    const kind = c.kind || (c.id.includes(':') ? c.id.slice(0, c.id.indexOf(':')) : '');
+    if (kind === 'source') {
+      const token = c.id.slice(c.id.indexOf(':') + 1).split(/\s+/)[0] ?? '';
+      if (!token || token === sha || token.startsWith(sha.slice(0, 12))) {
+        return { ...c, link_target: `/library/${encodeURIComponent(sha)}` };
+      }
+    }
+    if (kind === 'unit' || kind === 'card') {
+      return {
+        ...c,
+        link_target: `/library/${encodeURIComponent(sha)}?tab=memory`,
+      };
+    }
+    return c;
+  });
+}
+
+/** Human-readable titles for a focused source's memory layer, keyed by
+ * canonical cite id (`unit:<id>` / `card:<id>`). Units title with their
+ * verbatim quote (else text) snippet — the evidence sidecar isn't loaded in
+ * the SPA, but a focused session's `/api/source/:sha` payload carries it. */
+export function buildMemoryTitleMap(memory: {
+  cards: { id?: string; title: string }[];
+  units: { unit_id: string; text: string; quote: string; line: number | null }[];
+}): Map<string, string> {
+  const clip = (s: string, n = 90) => {
+    const t = s.trim().replace(/\s+/g, ' ');
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const out = new Map<string, string>();
+  for (const u of memory.units) {
+    const body = u.quote.trim() || u.text.trim();
+    if (!body) continue;
+    out.set(`unit:${u.unit_id}`, clip(body));
+  }
+  for (const c of memory.cards) {
+    if (c.id && c.title.trim()) out.set(`card:${c.id}`, clip(c.title, 90));
+  }
+  return out;
+}
+
+/** Fill readable titles into citation chips whose title degraded to the raw
+ * id (replay builds citations from answer text alone — server receipts have
+ * titles, reconstructed ones don't). Never overwrites a real title. */
+export function applyMemoryTitles<
+  T extends { id: string; title?: string | null },
+>(cites: T[], titles: Map<string, string>): T[] {
+  return cites.map((c) => {
+    const bare = !c.title || c.title === c.id || c.id.endsWith(`:${c.title}`);
+    const better = titles.get(c.id);
+    return bare && better ? { ...c, title: better } : c;
+  });
+}
+
+/** Replay-source decision for a saved chat (`/ask/chat/:id`) — pure, so the
+ * error-priority matrix is testable without rendering:
+ * - audit session has turns → replay those (richest: trails + stop reasons);
+ * - else markdown parses → replay the markdown turns;
+ * - else markdown LOADED but has no turns → honest "empty" state;
+ * - else (markdown load failed too) → load error, never "empty"
+ *   (CodeRabbit: a swallowed fetch failure must not masquerade as an
+ *   empty-but-fine chat).
+ * `md === null` means the markdown fetch failed. Focus markers ride along —
+ * the caller grounds citations with them. */
+export interface SavedReplayPlan {
+  focus: { sha: string | null; theme: string | null };
+  kind: 'session' | 'markdown' | 'empty' | 'loadError';
+  parsedTurns: { question: string; answer: string }[];
+}
+
+export function savedReplayPlan(
+  md: string | null,
+  sessionTurnCount: number,
+): SavedReplayPlan {
+  const focus = parseChatFocus(md ?? '');
+  if (sessionTurnCount > 0) {
+    return { focus, kind: 'session', parsedTurns: [] };
+  }
+  if (md === null) {
+    return { focus, kind: 'loadError', parsedTurns: [] };
+  }
+  const parsedTurns = parseChatTranscript(md);
+  if (parsedTurns.length === 0) {
+    return { focus, kind: 'empty', parsedTurns: [] };
+  }
+  return { focus, kind: 'markdown', parsedTurns };
+}
+
+/** Focus markers from a saved chat's header (`ovp:focus_source` /
+ * `ovp:focus_theme`) — the replay surface needs them to ground citations
+ * exactly like the live dock did. */
+export function parseChatFocus(md: string): { sha: string | null; theme: string | null } {
+  let sha: string | null = null;
+  let theme: string | null = null;
+  for (const line of md.split('\n', 40)) {
+    const l = line.trim();
+    const src = l.match(/^<!-- ovp:focus_source=(.+?) -->$/);
+    if (src) sha = src[1].trim() || null;
+    const th = l.match(/^<!-- ovp:focus_theme=(.+?) -->$/);
+    if (th) theme = th[1].trim() || null;
+  }
+  return { sha, theme };
+}
+
 export function citeLinkTarget(id: string): string | null {
   if (id.startsWith('claim:')) {
     const key = id.slice('claim:'.length);
