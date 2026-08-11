@@ -762,8 +762,9 @@ fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<(), 
 /// must build. Every failure is a warn line — the parent run's exit code is
 /// decided by the EN phases alone. Incremental only: `get_fresh` content-hash
 /// skip means an unchanged authority costs zero LLM calls. Writes ONLY the
-/// rebuildable projection (the ledger is read, never written); never touches
-/// the queue or the worker lock.
+/// rebuildable projection (the ledger is read, never written) plus an
+/// append-only run record to `.ovp/crystal/claims_zh_runs.jsonl`; never
+/// touches the queue or the worker lock.
 fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
     if client_kind != ClientKind::Live {
         return;
@@ -797,23 +798,93 @@ fn claims_zh_tail(vault_root: &std::path::Path, client_kind: ClientKind) {
             return;
         }
     };
-    let model = ovp_memory::ask::AskArgs::default().model_name;
-    // Capped at the vault's per-run auto budget — see cards_zh_tail (codex P1).
-    let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
+    // Capped by the claims-specific budget (0 = unlimited), NOT the daily
+    // enqueue budget `auto_max_per_run`: a backlog built up over many synth
+    // runs must drain in one run, and a provider outage is already contained
+    // by the batch's consecutive-failure breaker (candidate bilingual_tail-v2).
+    claims_zh_tail_run(
         vault_root,
         &pairs,
         client.as_mut(),
-        &model,
-        false,
-        cfg.auto_max_per_run,
+        cfg.auto_claim_zh_max_per_run,
     );
+}
+
+/// Append-only observability log for claims_zh tail runs — one JSON line per
+/// run, so a stuck backlog is reconstructable after the fact (the tail's
+/// stdout is otherwise lost in unattended runs).
+const CLAIMS_ZH_RUNS_REL: &str = ".ovp/crystal/claims_zh_runs.jsonl";
+
+/// The translatable body of `claims_zh_tail`, split out so tests can drive it
+/// with a stub client (the live-client build needs the `anthropic` feature).
+fn claims_zh_tail_run(
+    vault_root: &std::path::Path,
+    pairs: &[(String, String)],
+    client: &mut dyn ModelClient,
+    max: usize,
+) {
+    let model = ovp_memory::ask::AskArgs::default().model_name;
+    let (done, skipped, errors) =
+        ovp_memory::bilingual::translate_claims_batch(vault_root, pairs, client, &model, false, max);
+    let remaining = claims_zh_remaining(vault_root, pairs);
     sayln!(
-        "  claims_zh: translated={done} skipped={skipped} errors={}",
+        "  claims_zh: translated={done} skipped={skipped} errors={} remaining={remaining}",
         errors.len()
     );
     for e in &errors {
         sayln!("    warn claims_zh: {e}");
     }
+    // Observability only: a log failure warns like every other tail failure.
+    if let Err(e) = append_claims_zh_run(vault_root, &model, done, skipped, &errors, remaining) {
+        sayln!("    warn claims_zh run log: {e}");
+    }
+}
+
+/// Active claims still missing a fresh zh projection after the batch — the
+/// backlog the next run (auto or manual) still has to drain. A corrupt
+/// projection counts every pair as remaining (nothing is provably fresh).
+fn claims_zh_remaining(vault_root: &std::path::Path, pairs: &[(String, String)]) -> usize {
+    let file = ovp_memory::bilingual::ClaimsZhFile::load(vault_root).unwrap_or_default();
+    pairs
+        .iter()
+        .filter(|(key, en)| file.get_fresh(key, en).is_none())
+        .count()
+}
+
+/// Append one run record to `CLAIMS_ZH_RUNS_REL` (same append-only JSONL
+/// style as `.ovp/evolution-ledger.jsonl`).
+fn append_claims_zh_run(
+    vault_root: &std::path::Path,
+    model: &str,
+    translated: usize,
+    skipped: usize,
+    errors: &[String],
+    remaining: usize,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = vault_root.join(CLAIMS_ZH_RUNS_REL);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let record = serde_json::json!({
+        "schema": "ovp.claims_zh_run/v1",
+        "ts": ts,
+        "model": model,
+        "translated": translated,
+        "skipped": skipped,
+        "errors": errors,
+        "remaining": remaining,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("opening {}: {e}", path.display()))?;
+    writeln!(file, "{record}").map_err(|e| format!("appending {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -1354,6 +1425,7 @@ mod tests {
     // ---- claims_zh bilingual tail gates (candidate bilingual_tail-v1) ----
 
     const CLAIMS_ZH: &str = ".ovp/crystal/claims_zh.json";
+    const CLAIMS_ZH_RUNS: &str = ".ovp/crystal/claims_zh_runs.jsonl";
 
     /// Eval_plan (1): a REPLAY-kind tail returns before any client/config
     /// work — NeverCallsClient is never built and no projection appears.
@@ -1362,6 +1434,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Replay);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
     }
 
     /// Eval_plan (4): `auto_claim_zh = false` skips the tail. The flag gate
@@ -1374,6 +1447,7 @@ mod tests {
         std::fs::write(&cfg, "auto_claim_zh = false\n").unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
     }
 
     /// Eval_plan (5): a malformed source-work.toml warns + skips — the tail
@@ -1386,6 +1460,7 @@ mod tests {
         std::fs::write(&cfg, "auto_claim_zh = [not toml\n").unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
     }
 
     /// The flag-on path with no ledger is a no-op: nothing to translate, and
@@ -1395,5 +1470,108 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         claims_zh_tail(tmp.path(), ClientKind::Live);
         assert!(!tmp.path().join(CLAIMS_ZH).exists());
+        assert!(!tmp.path().join(CLAIMS_ZH_RUNS).exists());
+    }
+
+    // ---- claims_zh tail body (candidate bilingual_tail-v2) ----
+
+    /// Always-succeeds stub so the tail body is testable without the
+    /// `anthropic` feature / a live provider.
+    struct StubClient {
+        calls: usize,
+    }
+
+    impl ModelClient for StubClient {
+        fn call(
+            &mut self,
+            _request: &ovp_llm::ModelRequest,
+        ) -> Result<ovp_llm::ModelReply, ovp_llm::CallError> {
+            self.calls += 1;
+            Ok(ovp_llm::ModelReply {
+                model: "stub".into(),
+                text: "中文翻译".into(),
+                stop_reason: ovp_llm::StopReason::EndTurn,
+                usage: ovp_llm::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                blocks: None,
+                raw_stop_reason: None,
+            })
+        }
+    }
+
+    fn claim_pairs(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("claim-{i:03}"), format!("English claim number {i}.")))
+            .collect()
+    }
+
+    fn run_records(tmp: &tempfile::TempDir) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(tmp.path().join(CLAIMS_ZH_RUNS))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// The claims cap is decoupled from the daily enqueue budget: with
+    /// `auto_max_per_run = 1` but `auto_claim_zh_max_per_run = 0` (unlimited)
+    /// the tail still translates the WHOLE missing backlog in one run, and
+    /// the run log records remaining = 0.
+    #[test]
+    fn claims_zh_tail_run_drains_full_backlog_when_cap_unlimited() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The enqueue budget is irrelevant to the tail; only the claims cap
+        // gates translation volume. Parsed here to prove the wiring.
+        let cfg_dir = tmp.path().join(".ovp");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("source-work.toml"), "auto_max_per_run = 1\n").unwrap();
+        let cfg = ovp_memory::source_work_config::SourceWorkConfig::load(tmp.path()).unwrap();
+        assert_eq!(cfg.auto_max_per_run, 1);
+        assert_eq!(cfg.auto_claim_zh_max_per_run, 0);
+
+        let pairs = claim_pairs(3);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, cfg.auto_claim_zh_max_per_run);
+        assert_eq!(client.calls, 3, "every missing claim is translated");
+        let file = ovp_memory::bilingual::ClaimsZhFile::load(tmp.path()).unwrap();
+        assert_eq!(file.entries.len(), 3);
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["schema"], "ovp.claims_zh_run/v1");
+        assert_eq!(records[0]["translated"], 3);
+        assert_eq!(records[0]["skipped"], 0);
+        assert_eq!(records[0]["errors"], serde_json::json!([]));
+        assert_eq!(records[0]["remaining"], 0);
+        assert!(records[0]["ts"].as_u64().unwrap() > 0);
+    }
+
+    /// A positive claims cap still bounds attempts, and the run log's
+    /// `remaining` reports the backlog left for the next run.
+    #[test]
+    fn claims_zh_tail_run_honors_positive_cap_and_logs_remaining() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pairs = claim_pairs(3);
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 1);
+        assert_eq!(client.calls, 1);
+        assert_eq!(claims_zh_remaining(tmp.path(), &pairs), 2);
+
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["translated"], 1);
+        assert_eq!(records[0]["remaining"], 2);
+
+        // A follow-up unlimited run drains the rest and APPENDS a record —
+        // the log is the audit trail of the backlog converging.
+        let mut client = StubClient { calls: 0 };
+        claims_zh_tail_run(tmp.path(), &pairs, &mut client, 0);
+        assert_eq!(client.calls, 2, "fresh translations are skipped");
+        let records = run_records(&tmp);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1]["translated"], 2);
+        assert_eq!(records[1]["remaining"], 0);
     }
 }

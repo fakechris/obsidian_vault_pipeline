@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- claims_zh tail: a claims backlog left by crystal-synth now drains in one
+  run instead of being throttled to the daily enqueue budget
+  (`auto_max_per_run`, default 30). The tail budget is a separate config key
+  `auto_claim_zh_max_per_run` (default 0 = unlimited); provider outages stay
+  contained by the batch's consecutive-failure breaker.
+
 ### Added
+- claims_zh observability: every tail run appends a record
+  (`translated`/`skipped`/`errors`/`remaining`) to
+  `.ovp/crystal/claims_zh_runs.jsonl`, and both the tail summary and
+  `ovp2 source-work claims-zh` now print the remaining untranslated backlog.
 - `ovp2 schedule <install|uninstall|status>` — productized OS scheduler for
   the daily loop (launchd user agent on macOS, systemd user timer on Linux).
   `install` writes the unit file(s) + a chmod-600 env-file template
