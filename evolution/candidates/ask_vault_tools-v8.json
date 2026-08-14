@@ -1,0 +1,29 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v8",
+  "base_version": "v7",
+  "target_version": "v8",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one fusion repair in search_evidence: conditional strong-title protection. Diagnosed (PR #447 evidence-trace + ablation, 6 degraded questions): RRF k=60 buries single-lane hits — a pack ranked 1-4 in the title lane but absent from both fts lanes scores 1/61, while dozens of mediocre packs present in both lanes score 2/(60+r+1) and overtake it, dropping strong title matches to fused rank 21-107 (separate-lane fusion measured WORSE: 70-149). v8: title-lane hits whose language-group coverage is COMPLETE (score permille == 1000 — every term of the best language group matched, a principled predicate, not a tuned threshold) are pinned: at most 3, in title-lane order, placed ahead of the RRF order; pinned hits carry an additive pinned:true field. Queries with no full-coverage title hit fuse exactly as v7 — body-only recall (fts-only golds, no title match at all) is structurally untouched. OVP_ASK_TITLE_PIN=0 restores exact v7 fusion. ANTI-OVERFIT DISCIPLINE (operator directive 2026-08-14): both parameters (cap=3, coverage==complete) are fixed a priori and MUST NOT be tuned against the eval set; acceptance is one pre-registered run; q-010/q-023 (weak title lane, a retrieval-quality problem not a fusion problem) are explicitly NOT targets and their scores carry no weight in the decision.",
+  "predicted_delta": {
+    "coverage": "the four strong-title collapses (s-005 title#1->fused38, s-001 title#3->46, q-005 title#4->21, q-020 title#4->16) return to the fused top-5; body-only fixtures unchanged; tuning-34 search_evidence per-question R@5/R@10/R@20: zero losses.",
+    "operational_reliability": "no new failure modes: pinning is a pure reordering of an already-computed result set; kill switch restores v7; pinned:true keeps transcripts explainable."
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "fallback_is_v7": "OVP_ASK_TITLE_PIN=0, or any query without a full-coverage title hit, fuses byte-identically to v7",
+    "pin_is_minority": "at most 3 pinned slots — the fused top-10 stays majority-RRF, so the fts lane's body-only wins cannot be crowded out",
+    "predicate_is_principled": "the pin condition is complete best-group term coverage — a semantic property of the match, never a numeric threshold tuned against eval data",
+    "no_eval_iteration": "acceptance = ONE pre-registered tuning-34 run + ONE final frozen-holdout run; a failure sends the candidate back to design review, never into parameter adjustment against the same data",
+    "result_shape_compatible": "additive pinned:true field only",
+    "read_only": "no writes, no projection changes"
+  },
+  "eval_plan": {
+    "replay_set": "adversarial fixtures constructed from the MECHANISM (not from eval questions): (1) full-coverage title #1 absent from fts lanes + two both-lane mediocre packs -> pinned first with pinned:true; (2) five full-coverage hits -> only first three pin; (3) body-only query with zero title matches -> byte-identical v7 fusion; (4) kill switch off -> v7 fusion; all prior fixtures pass unmodified. Pre-registered acceptance: tuning-34 search_evidence per-question R@5/10/20 zero losses AND the four strong-title collapses in fused top-5; then ONE frozen-holdout run recorded in the ledger regardless of outcome.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set OVP_ASK_TITLE_PIN=0 (instant, no rebuild) or revert the pin block — a pure reordering ahead of the existing RRF order, no persisted state.",
+  "ablation_required": false
+}
