@@ -1069,6 +1069,10 @@ enum Cmd {
         /// Write the JSON report here (stdout when absent).
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Query policy: verbatim question, or deterministic term extraction
+        /// (the fast-planner experiment arm).
+        #[arg(long, default_value = "verbatim")]
+        query_mode: String,
     },
     /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
     /// evergreen notes. Scores the query, ranks, and prints a bounded context.
@@ -2441,14 +2445,25 @@ fn main() -> ExitCode {
             ks,
             gold_only,
             out,
+            query_mode,
         } => {
-            use commands::retrieval_eval::RetrievalEvalArgs;
-            commands::retrieval_eval::run(RetrievalEvalArgs {
-                vault_root,
-                qrels,
-                ks,
-                gold_only,
-                out,
+            use commands::retrieval_eval::{QueryMode, RetrievalEvalArgs};
+            let mode = match query_mode.as_str() {
+                "verbatim" => Ok(QueryMode::Verbatim),
+                "terms" => Ok(QueryMode::Terms),
+                other => Err(CliError::Io(format!(
+                    "unknown --query-mode {other} (verbatim|terms)"
+                ))),
+            };
+            mode.and_then(|query_mode| {
+                commands::retrieval_eval::run(RetrievalEvalArgs {
+                    vault_root,
+                    qrels,
+                    ks,
+                    gold_only,
+                    out,
+                    query_mode,
+                })
             })
         }
         Cmd::Rag {
