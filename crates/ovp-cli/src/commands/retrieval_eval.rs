@@ -18,7 +18,7 @@ use std::time::Duration;
 use ovp_memory::agent::{ToolExecutor, ToolOutcome};
 use ovp_memory::vault_tools::VaultTools;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::CliError;
 
@@ -303,7 +303,7 @@ fn extract_terms(question: &str) -> String {
     // never touches latin words (滤掉 "durable" 里不会出现中文噪声,反之亦然).
     let mut latin = String::new();
     let mut cjk = String::new();
-    let mut flush_latin = |buf: &mut String, push: &mut dyn FnMut(&str)| {
+    let flush_latin = |buf: &mut String, push: &mut dyn FnMut(&str)| {
         for word in buf.split_whitespace() {
             let w = word.to_lowercase();
             let w = w.trim_matches(|c: char| !c.is_alphanumeric());
@@ -313,7 +313,7 @@ fn extract_terms(question: &str) -> String {
         }
         buf.clear();
     };
-    let mut flush_cjk = |buf: &mut String, push: &mut dyn FnMut(&str)| {
+    let flush_cjk = |buf: &mut String, push: &mut dyn FnMut(&str)| {
         let mut s = buf.clone();
         for noise in ZH_NOISE {
             s = s.replace(noise, " ");

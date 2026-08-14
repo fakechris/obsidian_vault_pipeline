@@ -1,7 +1,7 @@
 //! Read-only vault tools for the ask-agent runtime (accepted candidate
-//! `ask_vault_tools-v5`; the sources fts lane ships under the PENDING
-//! candidate `ask_vault_tools-v6` — registry stays at v5 until its live
-//! qrels gate passes and the decision is ledgered).
+//! `ask_vault_tools-v6`, ledgered 2026-08-14; the fts-query scaffolding
+//! strip ships under the PENDING candidate `ask_vault_tools-v7` — registry
+//! stays at v6 until its gold-44 gate passes and the decision is ledgered).
 //!
 //! The public functions in this module are the shared projection API: they
 //! depend only on explicit vault/index/ledger inputs and never on executor
@@ -287,7 +287,12 @@ impl VaultTools {
                 // read as a clean complete miss. None (no shadow / stale
                 // generation / kill switch) = v5 scan path.
                 let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
-                    let (terms, terms_capped) = tokenize_search_terms_capped(&query);
+                    // v7: scaffolding stripped BEFORE tokenization — the fts
+                    // lane searches a subset of the raw query's terms, so a
+                    // result can never be driven by a term the payload says
+                    // was omitted. Scan lane below still sees the raw query.
+                    let (terms, terms_capped) =
+                        tokenize_search_terms_capped(&fts_query_source(&query));
                     let capped_query = terms.join(" ");
                     reader
                         .fts_search(
@@ -319,14 +324,16 @@ impl VaultTools {
                     DispatchError::Unavailable(format!("evidence index unavailable: {e}"))
                 })?;
                 // Index-backed lane (v5): ONE snapshot reader for both
-                // surfaces; the fts query is built from the SAME capped term
-                // list the scan lane reports as query_terms_used, so a
-                // result can never be driven by a term the payload says was
-                // omitted. Fetch generously past the display limit so pack
-                // aggregation and RRF have candidates. None (no shadow /
-                // stale generation / kill switch) = v4 path.
+                // surfaces; since v7 the fts query is built from a SUBSET of
+                // the capped term list the scan lane reports (request
+                // scaffolding stripped), so a result can never be driven by
+                // a term the payload says was omitted. Fetch generously past
+                // the display limit so pack aggregation and RRF have
+                // candidates. None (no shadow / stale generation / kill
+                // switch) = v4 path.
                 let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
-                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    let capped_query =
+                        tokenize_search_terms(&fts_query_source(&query)).join(" ");
                     let cards = reader
                         .fts_search(
                             ovp_index::sqlite::FtsSurface::Cards,
@@ -427,7 +434,9 @@ impl VaultTools {
                     None => vec!["durable", "caveated"],
                 };
                 let fts_rank = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
-                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    // v7 strip: see the SearchSources arm — subset honesty.
+                    let capped_query =
+                        tokenize_search_terms(&fts_query_source(&query)).join(" ");
                     reader
                         .fts_claims_rank(&capped_query, MAX_SEARCH_LIMIT * 2, &statuses)
                         .ok()
@@ -1092,6 +1101,129 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
         best = best.max((hit * 1000 / group.len()) as u32);
     }
     (best, matched.len())
+}
+
+/// zh request phrases stripped from fts queries AS SUBSTRINGS (candidate
+/// `ask_vault_tools-v7`). Longest first: 帮我找一篇 must strip before 帮我.
+/// ONLY multi-char phrases that are essentially never part of a content
+/// word may live here — a substring hit inside a content word destroys it
+/// (德里→德 was the reviewed failure). Ambiguous words go in
+/// [`QUERY_STRIP_ZH_STANDALONE`]; single-char function words are handled
+/// by the ≥2-char fragment rule and must NEVER be listed.
+pub const QUERY_STRIP_ZH: &[&str] = &[
+    "帮我找一篇", "帮我找", "帮我", "请问", "找一篇", "找一下", "看一下", "查一下",
+    "那篇", "这篇", "一篇", "有哪些", "是哪些", "是什么", "有什么", "给两条", "给出",
+    "给我", "带引用", "我记得", "我看过", "有没有", "总结一下", "介绍一下", "分享了",
+    "写着", "关于", "里面",
+];
+
+/// zh words dropped ONLY when they stand alone as a complete fragment
+/// after substring stripping and punctuation splitting. 笔记软件 keeps its
+/// 笔记; a bare trailing 结论/引用/文章 is scaffolding.
+pub const QUERY_STRIP_ZH_STANDALONE: &[&str] = &[
+    "文章", "笔记", "内容", "结论", "引用", "总结", "介绍", "讲了", "说了",
+    "哪些", "什么", "看过", "记得", "我的", "标题", "那个", "这个",
+];
+
+/// Single-char function words trimmed from fragment EDGES only, with an
+/// undo: if the trim leaves fewer than 2 chars the ORIGINAL fragment is
+/// kept — that one rule makes 饱和/德里/目的 immune while 的取舍→取舍 and
+/// 来源和→来源 still clean up. Leading trims only 的 (word-initial 的 is
+/// rare); 和平/里程 style words are protected by not trimming those chars
+/// at the leading edge at all.
+const ZH_EDGE_LEAD: &[char] = &['的'];
+const ZH_EDGE_TRAIL: &[char] = &['的', '了', '和', '与', '吗', '呢', '里', '在', '个', '还'];
+
+/// Latin stopwords dropped from fts queries — request verbs and function
+/// words only; identifiers, names, and technical terms always survive.
+pub const QUERY_STRIP_LATIN: &[&str] = &[
+    "vault", "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is", "are",
+    "was", "what", "which", "that", "this", "with", "about", "please", "find", "give",
+    "show", "me", "my", "our", "how", "do", "does", "did", "you", "your", "there", "any",
+];
+
+/// Strip request scaffolding from a question before fts tokenization
+/// (candidate `ask_vault_tools-v7`). A natural-language question tokenizes
+/// into CJK bigrams of its scaffolding ("帮我","给两","引用"…) which flood
+/// the bm25 match and bury content terms — measured on the R0 gold-44
+/// qrels as union source R@20 0.29 → 0.33 with scaffolding stripped.
+/// Pure segmentation: latin words pass a stopword list, CJK runs have
+/// noise substrings blanked (longest first); a query that strips to
+/// nothing falls back to the original — never an empty fts query. SCAN
+/// lanes never see this: they keep matching the raw query (guardrail
+/// `scan_lane_untouched`).
+pub fn strip_request_scaffolding(query: &str) -> String {
+    let mut out = String::new();
+    let mut latin = String::new();
+    let mut cjk = String::new();
+    let flush_latin = |buf: &mut String, out: &mut String| {
+        for word in buf.split_whitespace() {
+            let lower = word.to_lowercase();
+            let w = lower.trim_matches(|c: char| !c.is_alphanumeric());
+            if !w.is_empty() && !QUERY_STRIP_LATIN.contains(&w) {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                // Original casing: the tokenizer downstream owns
+                // normalization; the strip only decides survival.
+                out.push_str(word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c.is_ascii()));
+            }
+        }
+        buf.clear();
+    };
+    let flush_cjk = |buf: &mut String, out: &mut String| {
+        let mut s = buf.clone();
+        for noise in QUERY_STRIP_ZH {
+            s = s.replace(noise, " ");
+        }
+        // Split on punctuation too (:《》,…), not just the whitespace the
+        // replacements introduced — a fragment must be pure content before
+        // the edge-trim and standalone checks can judge it whole.
+        for frag in s.split(|c: char| !c.is_alphanumeric()) {
+            let trimmed = frag
+                .trim_start_matches(|c| ZH_EDGE_LEAD.contains(&c))
+                .trim_end_matches(|c| ZH_EDGE_TRAIL.contains(&c));
+            let frag = if trimmed.chars().count() >= 2 { trimmed } else { frag };
+            if frag.chars().count() >= 2 && !QUERY_STRIP_ZH_STANDALONE.contains(&frag) {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(frag);
+            }
+        }
+        buf.clear();
+    };
+    for ch in query.chars() {
+        if (ch as u32) >= 0x2E80 {
+            flush_latin(&mut latin, &mut out);
+            cjk.push(ch);
+        } else if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            // Any non-CJK alphanumeric — café and naïve are single latin
+            // terms to the fts analyzer and must survive intact (reviewed:
+            // ascii-only here silently dropped the diacritic letters).
+            flush_cjk(&mut cjk, &mut out);
+            latin.push(ch);
+        } else {
+            flush_latin(&mut latin, &mut out);
+            flush_cjk(&mut cjk, &mut out);
+        }
+    }
+    flush_latin(&mut latin, &mut out);
+    flush_cjk(&mut cjk, &mut out);
+    if out.trim().is_empty() {
+        query.to_string()
+    } else {
+        out
+    }
+}
+
+/// The v7 strip behind its kill switch: `OVP_ASK_QUERY_STRIP=0` yields the
+/// raw query — byte-identical v6 fts term construction.
+fn fts_query_source(query: &str) -> String {
+    if std::env::var("OVP_ASK_QUERY_STRIP").is_ok_and(|v| v == "0") {
+        return query.to_string();
+    }
+    strip_request_scaffolding(query)
 }
 
 /// Gate for the index-backed bm25 lane (candidate `ask_vault_tools-v5`):
@@ -3475,6 +3607,49 @@ mod tests {
         assert_eq!(out["hits"][0]["match_reason"], "title");
     }
 
+    /// Scaffolding strips away, content survives (zh, latin, mixed); an
+    /// all-scaffolding query falls back to the original — never empty.
+    #[test]
+    fn strip_request_scaffolding_keeps_content_terms() {
+        assert_eq!(
+            strip_request_scaffolding("帮我找一篇文章:诀窍是手写 Transformer,还分享了她的笔记"),
+            "诀窍是手写 Transformer 她的笔记"
+        );
+        assert_eq!(
+            strip_request_scaffolding("vault 里关于 context engineering 的 durable 结论,给两条带引用"),
+            "context engineering durable"
+        );
+        // Identifiers and technical latin terms always survive.
+        assert_eq!(
+            strip_request_scaffolding("what is the tokenspeed EAGLE drafter"),
+            "tokenspeed EAGLE drafter"
+        );
+        assert_eq!(strip_request_scaffolding("帮我找一篇文章"), "帮我找一篇文章");
+    }
+
+    /// The reviewed content-loss cases: a function word INSIDE a content
+    /// word must never strip (德里/和平), an ambiguous word only drops when
+    /// it stands alone (笔记软件 keeps its 笔记), and non-ASCII latin
+    /// letters survive as one term (café).
+    #[test]
+    fn strip_request_scaffolding_never_destroys_content_words() {
+        assert_eq!(strip_request_scaffolding("德里旅游有哪些"), "德里旅游");
+        assert_eq!(strip_request_scaffolding("和平协议有哪些"), "和平协议");
+        assert_eq!(strip_request_scaffolding("笔记软件推荐有哪些"), "笔记软件推荐");
+        assert_eq!(strip_request_scaffolding("find café retrieval"), "café retrieval");
+    }
+
+    /// Edge-trim cleans connective single-chars glued to content (的取舍,
+    /// 来源和) while the <2-char undo protects words that ARE the function
+    /// char plus one (饱和, 目的, 德里).
+    #[test]
+    fn strip_edge_trim_undoes_when_it_would_destroy_the_word() {
+        assert_eq!(strip_request_scaffolding("RAG 的取舍 vault 证据"), "RAG 取舍 证据");
+        assert_eq!(strip_request_scaffolding("的来源和 durable"), "来源 durable");
+        assert_eq!(strip_request_scaffolding("饱和 溶液"), "饱和 溶液");
+        assert_eq!(strip_request_scaffolding("目的 分析"), "目的 分析");
+    }
+
     /// fts rank leads by bm25 relevance; the substring-only extra (absent
     /// from the shadow's rank) appends after — union, never a recall loss.
     /// A ghost id the live model no longer knows is dropped BEFORE the
@@ -4060,6 +4235,19 @@ mod tests {
         assert_eq!(hits.len(), 1, "fts-only source hit must surface: {out}");
         assert_eq!(hits[0]["source_id"], "dddd4444");
         assert_eq!(hits[0]["match_reason"], "index");
+
+        // v7: the SAME lookup phrased as a natural-language request — the
+        // scaffolding ("帮我找一篇文章","笔记") strips before tokenization,
+        // so the surviving content terms still reach the title via fts.
+        let out = ok_json(call(
+            &mut tools,
+            "search_sources",
+            json!({"query": "帮我找一篇文章:手写 求职笔记"}),
+        ));
+        assert_eq!(out["lane"], json!("fts"));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "scaffolded query must still recall: {out}");
+        assert_eq!(hits[0]["source_id"], "dddd4444");
 
         // Generation guard: when the JSON projections move on but the shadow
         // kept last-good (failed rebuild), the lane must fall back — serving

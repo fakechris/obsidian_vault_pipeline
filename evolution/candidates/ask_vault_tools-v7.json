@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v7",
+  "base_version": "v6",
+  "target_version": "v7",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one retrieval upgrade: deterministic request-scaffolding stripping in the fts lane query construction of the three term-search tools (search_sources / search_evidence / search_claims). Measured on the R0 gold-44 qrels: a natural-language question ('帮我找一篇…','…有哪些,给两条带引用') tokenizes into CJK bigrams of its request scaffolding, which flood the bm25 AND/OR match and bury content terms — verbatim-question union source R@20 is 0.29 while the same questions with scaffolding stripped score 0.33 (per-tool: evidence 0.19→0.28, sources 0.28→0.35), 4 wins / 31 ties / 0 losses. v7: before tokenization for the fts query, a fixed zh noise-phrase list (longest-first per CJK run) and a latin stopword list are removed; a query that strips to nothing falls back to the original (never an empty fts query). SCAN lanes are untouched — they keep matching the raw query, so the v4/v5/v6 fallback semantics and all existing fixtures are unchanged. OVP_ASK_QUERY_STRIP=0 restores exact v6 behavior. Honesty invariant preserved: the fts lane searches a SUBSET of the reported terms, so a result can never be driven by a term the payload says was omitted; the scan lane's matched_terms/query_terms_used semantics are untouched.",
+  "predicted_delta": {
+    "coverage": "gold-44 verbatim-mode replay (the production path measurement): union source R@20 moves from 0.29 toward the terms-mode 0.33, with the largest gains on claim_evidence (0.00→~0.18) and compare (0.00→~0.10) buckets; NO bucket may regress (exact/meta/source_scoped/recent hold). Fixture replay: a scaffolded CJK query over a title only reachable via content terms returns the source through the fts lane; an all-scaffolding query behaves exactly as v6.",
+    "operational_reliability": "zero new failure modes: stripping is a pure function ahead of the existing tokenizer; OVP_ASK_QUERY_STRIP=0 or any strip bug degrades to v6 term construction; no persisted state, no schema change, no new payload fields."
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "fallback_is_v6": "OVP_ASK_QUERY_STRIP=0, or a query that strips to nothing, yields byte-identical v6 fts queries; scan lanes never see the stripped query at all",
+    "scan_lane_untouched": "run_query substring matching, tag sweep, matched_terms, and coverage accounting are byte-identical to v6 — the strip applies ONLY where the fts query string is built",
+    "honesty_subset": "the fts lane searches a subset of the tokenizer's reported terms; query_terms_truncated semantics unchanged (the cap applies to the stripped term list, which is never larger)",
+    "no_content_loss": "the noise lists contain only request scaffolding and function words, maintained as named constants with unit tests; content terms (nouns, names, identifiers, all latin non-stopwords) always survive",
+    "read_only": "no writes, no projection changes"
+  },
+  "eval_plan": {
+    "replay_set": "unit: strip cases (zh scaffolding, latin stopwords, mixed, all-scaffolding fallback, kill-switch off = identity); fts-lane e2e over a real shadow: scaffolded query recalls the source that its content terms match, kill switch restores v6 behavior; all prior v4/v5/v6 fixtures pass unmodified. Acceptance gate: gold-44 verbatim-mode before/after on the real vault — union source R@20 strictly improves, zero bucket regressions, per-question losses = 0.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set OVP_ASK_QUERY_STRIP=0 (instant, no rebuild) or revert the strip call sites — three one-line call insertions plus one pure function; no persisted state.",
+  "ablation_required": false
+}
