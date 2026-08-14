@@ -1050,6 +1050,18 @@ enum Cmd {
         symptom: Vec<String>,
     },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
+    /// DIAGNOSTIC — dump the evidence-fusion lane snapshot for one query
+    /// (title lane + cards/units fts lanes SEPARATELY with raw bm25, pack
+    /// metadata, saturation). Read-only; step-3a fusion-diagnosis tooling.
+    EvidenceTrace {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        query: String,
+        /// Per-surface fts fetch depth.
+        #[arg(long, default_value_t = 200)]
+        fetch: usize,
+    },
     /// PRODUCT — R0 retrieval baseline (docs/design/retrieval-eval.md): run
     /// each qrel question against the ask vault-tool surface (real dispatch,
     /// fts lane included when the shadow serves) and report bucketed
@@ -2439,6 +2451,11 @@ fn main() -> ExitCode {
             };
             commands::evolve::run(EvolveArgs { sub, registry_path })
         }
+        Cmd::EvidenceTrace {
+            vault_root,
+            query,
+            fetch,
+        } => commands::retrieval_eval::trace(vault_root, query, fetch),
         Cmd::RetrievalEval {
             vault_root,
             qrels,

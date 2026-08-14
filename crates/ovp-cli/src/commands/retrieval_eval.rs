@@ -98,6 +98,19 @@ struct QuestionReport {
 
 const TOOL_BUDGET: Duration = Duration::from_secs(60);
 
+/// `evidence-trace` — dump the evidence-fusion lane snapshot for one query
+/// (step-3a diagnosis tooling; read-only, prints JSON to stdout).
+pub fn trace(vault_root: PathBuf, query: String, fetch: usize) -> Result<(), CliError> {
+    let snapshot = ovp_memory::vault_tools::evidence_lane_snapshot(&vault_root, &query, fetch)
+        .map_err(CliError::Io)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| CliError::Io(format!("serializing trace: {e}")))?
+    );
+    Ok(())
+}
+
 pub fn run(args: RetrievalEvalArgs) -> Result<(), CliError> {
     let ks = if args.ks.is_empty() {
         vec![10, 20]
