@@ -152,7 +152,11 @@ fn load_qrels(path: &PathBuf) -> Result<Vec<Qrel>, CliError> {
                 .map_err(|e| CliError::Io(format!("reading {}: {e}", path.display())))?
                 .path();
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("q-") && name.ends_with(".json") {
+            // Any .json EXCEPT known sidecar files: a prefix whitelist here
+            // silently dropped the silver set (s-*.json) from a 44-question
+            // run that then reported itself complete at 14. The schema check
+            // below is the real guard against unrelated files.
+            if name.ends_with(".json") && !name.starts_with("SUMMARY") {
                 files.push(p);
             }
         }
