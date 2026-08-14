@@ -1,3 +1,4 @@
+pub mod agent_eval;
 pub mod apply_plan;
 pub mod ask;
 pub mod auto_run;

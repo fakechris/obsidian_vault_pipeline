@@ -1050,6 +1050,24 @@ enum Cmd {
         symptom: Vec<String>,
     },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
+    /// E2E — drive the REAL ask-agent loop over qrel questions (live LLM)
+    /// and measure answer-level quality: citation validity, gold-source
+    /// citation, abstain honesty, rounds/tokens/wall. Requires --features
+    /// anthropic and a configured provider.
+    AgentEval {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long)]
+        qrels: PathBuf,
+        /// Only run these qrel ids (repeatable).
+        #[arg(long = "id")]
+        ids: Vec<String>,
+        #[arg(long)]
+        out: PathBuf,
+        /// Cost guard: max questions actually run.
+        #[arg(long, default_value_t = 10)]
+        max_questions: usize,
+    },
     /// EXPERIMENT — dense-lane probe (Step 4): embed source titles + card
     /// contents with the local multilingual model, rank sources by cosine
     /// per query, dump top-30. Eval-only; requires --features embed.
@@ -2462,6 +2480,22 @@ fn main() -> ExitCode {
                 }
             };
             commands::evolve::run(EvolveArgs { sub, registry_path })
+        }
+        Cmd::AgentEval {
+            vault_root,
+            qrels,
+            ids,
+            out,
+            max_questions,
+        } => {
+            use commands::agent_eval::AgentEvalArgs;
+            commands::agent_eval::run(AgentEvalArgs {
+                vault_root,
+                qrels,
+                ids,
+                out,
+                max_questions,
+            })
         }
         Cmd::EmbedProbe {
             vault_root,
