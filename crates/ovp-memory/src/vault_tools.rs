@@ -1,5 +1,5 @@
 //! Read-only vault tools for the ask-agent runtime (candidate
-//! `ask_vault_tools-v2`).
+//! `ask_vault_tools-v5`).
 //!
 //! The public functions in this module are the shared projection API: they
 //! depend only on explicit vault/index/ledger inputs and never on executor
@@ -275,7 +275,36 @@ impl VaultTools {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("source index unavailable: {e}"))
                 })?;
-                Ok(search_sources(&model, &query, limit))
+                // bm25 rank from the sources FTS surface (sha256 keys,
+                // deduped preserving order); the fts query uses the SAME
+                // capped term list the scan lane matches on. The scan lane's
+                // whole-query substring match cannot see multi-term queries
+                // ("手写 transformer") that fts token-matches across fields.
+                // None (no shadow / stale generation / kill switch) = v4 scan.
+                let fts_rank = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let capped_query = tokenize_search_terms(&query).join(" ");
+                    reader
+                        .fts_search(
+                            ovp_index::sqlite::FtsSurface::Sources,
+                            &capped_query,
+                            FTS_SOURCES_FETCH,
+                        )
+                        .ok()
+                        .map(|ranked| {
+                            let mut seen = BTreeSet::new();
+                            ranked
+                                .into_iter()
+                                .map(|hit| hit.id)
+                                .filter(|id| seen.insert(id.clone()))
+                                .collect::<Vec<_>>()
+                        })
+                });
+                Ok(search_sources_ranked(
+                    &model,
+                    &query,
+                    limit,
+                    fts_rank.as_deref(),
+                ))
             }
             ParsedCall::SearchEvidence { query, limit } => {
                 let model = self.cached_index().map_err(|e| {
@@ -728,6 +757,19 @@ pub fn load_active_records(vault_root: &Path) -> Result<Vec<DurableRecord>, Stri
 /// tag-only matches are added because the v1 tool contract includes tag text
 /// in its search surface while `Query.term` intentionally searches fields.
 pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
+    search_sources_ranked(model, query, limit, None)
+}
+
+/// [`search_sources`] with an optional bm25 rank from the sources FTS
+/// surface: fts-ranked ids lead by relevance; scan-only extras (whole-query
+/// substring matches fts tokenization cannot see) keep their v4 relative
+/// order after them — union, never a recall loss. Mirrors the claims lane.
+fn search_sources_ranked(
+    model: &IndexModel,
+    query: &str,
+    limit: usize,
+    fts_rank: Option<&[String]>,
+) -> Value {
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let query_lower = query.to_lowercase();
     let hits = run_query(
@@ -752,6 +794,27 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
         }
     }
 
+    let lane = if fts_rank.is_some() { "fts" } else { "scan" };
+    if let Some(rank) = fts_rank {
+        // The generation guard makes ghosts (fts id absent from the live
+        // model) near-impossible, but a ghost must not eat a result slot
+        // below the limit — membership-filter before fusing.
+        let known: BTreeSet<&str> = model.sources.iter().map(|s| s.sha256.as_str()).collect();
+        let mut fused: Vec<String> = Vec::new();
+        let mut in_fused = BTreeSet::new();
+        for id in rank {
+            if known.contains(id.as_str()) && in_fused.insert(id.clone()) {
+                fused.push(id.clone());
+            }
+        }
+        for id in ids {
+            if in_fused.insert(id.clone()) {
+                fused.push(id);
+            }
+        }
+        ids = fused;
+    }
+
     let mut truncated = ids.len() > limit;
     let mut hits = ids
         .into_iter()
@@ -760,7 +823,7 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
         .map(|source| source_search_hit(source, &query_lower))
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut hits);
-    json!({"hits": hits, "truncated": truncated})
+    json!({"hits": hits, "truncated": truncated, "lane": lane})
 }
 
 fn push_search_term(
@@ -1043,6 +1106,10 @@ fn claim_rank_key(claim_key: Option<&str>, claim_id: &str, status: &str) -> Stri
 /// aggregation — generous, so a few hot packs cannot eat the cap and hide
 /// other matching packs behind an honest-looking result.
 const FTS_EVIDENCE_FETCH: usize = MAX_SEARCH_LIMIT * 4;
+
+/// Sources FTS fetch — no pack aggregation on this surface, so 2× the display
+/// cap suffices (parity with the claims lane's fetch).
+const FTS_SOURCES_FETCH: usize = MAX_SEARCH_LIMIT * 2;
 
 /// The evidence lane's raw inputs plus a SATURATION flag: when either
 /// surface returned exactly the fetch cap, deeper matches may exist beyond
@@ -2688,8 +2755,18 @@ fn source_search_hit(source: &SourceRow, query_lower: &str) -> Value {
         .is_some_and(|value| value.to_lowercase().contains(query_lower))
     {
         "rel_path"
-    } else {
+    } else if source
+        .tags
+        .iter()
+        .chain(source.tags_inferred.iter())
+        .any(|tag| tag.to_lowercase().contains(query_lower))
+    {
         "tag"
+    } else {
+        // Reachable only via the fts lane: a token/bigram match (bm25 over
+        // title+author+url+tags+entities) with no whole-query substring in
+        // any field the scan checks. Naming a field here would be a lie.
+        "index"
     };
     let mut out = Map::new();
     out.insert("source_id".into(), json!(source.sha256));
@@ -3371,6 +3448,47 @@ mod tests {
         assert_eq!(out["hits"][0]["match_reason"], "title");
     }
 
+    /// fts rank leads by bm25 relevance; the substring-only extra (absent
+    /// from the shadow's rank) appends after — union, never a recall loss.
+    /// A ghost id the live model no longer knows is dropped BEFORE the
+    /// limit, so it can never eat a result slot.
+    #[test]
+    fn sources_fts_rank_leads_with_substring_extras() {
+        let first = source("aaaa1111", "Retrieval notes, part one", None, None);
+        let second = source("bbbb2222", "Deep retrieval survey", None, None);
+        let model = fixture_model(vec![first, second], vec![], vec![]);
+
+        // v4 scan lane: model order, honestly labelled.
+        let scan = search_sources(&model, "retrieval", 10);
+        assert_eq!(scan["lane"], json!("scan"));
+        let ids: Vec<_> = scan["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|h| h["source_id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("aaaa1111"), json!("bbbb2222")]);
+
+        let rank = vec!["ghost9999".to_string(), "bbbb2222".to_string()];
+        let out = search_sources_ranked(&model, "retrieval", 10, Some(&rank));
+        assert_eq!(out["lane"], json!("fts"));
+        let ids: Vec<_> = out["hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|h| h["source_id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("bbbb2222"), json!("aaaa1111")]);
+
+        // limit=1 with the ghost first in rank: the ghost must not consume
+        // the only slot, and the dropped scan extra must read truncated.
+        let out = search_sources_ranked(&model, "retrieval", 1, Some(&rank));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["source_id"], "bbbb2222");
+        assert_eq!(out["truncated"], json!(true));
+    }
+
     fn fixture_model(
         sources: Vec<SourceRow>,
         packs: Vec<PackRow>,
@@ -3811,7 +3929,12 @@ mod tests {
         );
         let temp = tempfile::tempdir().expect("tempdir");
         let model = fixture_model(
-            vec![],
+            vec![source(
+                "dddd4444",
+                "手写 Transformer 求职笔记",
+                None,
+                None,
+            )],
             vec![simple_pack(
                 "40-Resources/Reader/alpha",
                 "Alpha pack",
@@ -3848,6 +3971,21 @@ mod tests {
         assert_eq!(hits[0]["pack_title"], "Alpha pack");
         assert_eq!(hits[0]["matched_via"], json!("cards"));
 
+        // Sources surface: a multi-term query ("手写 求职") is structurally
+        // invisible to the scan lane's whole-query substring match — only
+        // the fts token lane can reach this title. The reason must not name
+        // a field the scan never matched.
+        let out = ok_json(call(
+            &mut tools,
+            "search_sources",
+            json!({"query": "手写 求职"}),
+        ));
+        assert_eq!(out["lane"], json!("fts"));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "fts-only source hit must surface: {out}");
+        assert_eq!(hits[0]["source_id"], "dddd4444");
+        assert_eq!(hits[0]["match_reason"], "index");
+
         // Generation guard: when the JSON projections move on but the shadow
         // kept last-good (failed rebuild), the lane must fall back — serving
         // a stale corpus's rankings for the current model is worse than the
@@ -3859,6 +3997,13 @@ mod tests {
         // the shadow still stamps the old generation and must not serve.
         let mut fresh = VaultTools::new(temp.path());
         let out = ok_json(call(&mut fresh, "search_evidence", json!({"query": "深度检索"})));
+        assert_eq!(out["lane"], json!("scan"), "stale shadow must not serve");
+        assert_eq!(out["hits"].as_array().expect("hits").len(), 0);
+        let out = ok_json(call(
+            &mut fresh,
+            "search_sources",
+            json!({"query": "手写 求职"}),
+        ));
         assert_eq!(out["lane"], json!("scan"), "stale shadow must not serve");
         assert_eq!(out["hits"].as_array().expect("hits").len(), 0);
     }
