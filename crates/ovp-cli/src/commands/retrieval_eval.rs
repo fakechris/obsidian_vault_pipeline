@@ -211,6 +211,23 @@ fn run_tool(
     }
 }
 
+/// Interleave ranked lists round-robin with dedup: rank-0 of every list,
+/// then rank-1 of every list, and so on.
+fn round_robin_union(lists: &[Vec<String>]) -> Vec<String> {
+    let mut out = Vec::new();
+    let max_len = lists.iter().map(Vec::len).max().unwrap_or(0);
+    for i in 0..max_len {
+        for list in lists {
+            if let Some(id) = list.get(i) {
+                if !out.contains(id) {
+                    out.push(id.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 fn recall_at(golds: &[String], ranked: &[String], k: usize) -> f64 {
     if golds.is_empty() {
         return 0.0;
@@ -241,7 +258,7 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
     let mut source_recall: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut claim_recall = BTreeMap::new();
     let mut tool_errors = Vec::new();
-    let mut union_sources: Vec<String> = Vec::new();
+    let mut per_tool_sources: Vec<Vec<String>> = Vec::new();
     let mut hits_returned = 0usize;
 
     for tool in ["search_sources", "search_evidence", "search_claims"] {
@@ -253,11 +270,7 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
         if let Some(err) = err {
             tool_errors.push(err);
         }
-        for sid in &sources {
-            if !union_sources.contains(sid) {
-                union_sources.push(sid.clone());
-            }
-        }
+        per_tool_sources.push(sources.clone());
         if !gold_sources.is_empty() {
             let per_k: BTreeMap<String, f64> = ks
                 .iter()
@@ -273,6 +286,10 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
         }
     }
     if !gold_sources.is_empty() {
+        // Round-robin interleave, NOT concatenation: one noisy tool must not
+        // fill the union's top-k and make the union score BELOW its best
+        // member (rank i from every tool precedes rank i+1 from any).
+        let union_sources = round_robin_union(&per_tool_sources);
         let per_k: BTreeMap<String, f64> = ks
             .iter()
             .map(|k| {
@@ -430,6 +447,19 @@ mod tests {
         assert_eq!(recall_at(&golds, &ranked, 1), 0.0);
         assert_eq!(recall_at(&golds, &ranked, 2), 0.5);
         assert_eq!(recall_at(&golds, &ranked, 3), 1.0);
+    }
+
+    /// A noisy first tool must not bury a later tool's rank-0 hit: the
+    /// union interleaves by rank, so the union@k can never read below a
+    /// member tool's @1 hit at k >= member count.
+    #[test]
+    fn union_interleaves_round_robin_with_dedup() {
+        let noisy: Vec<String> = (0..5).map(|i| format!("noise{i}")).collect();
+        let good = vec!["gold".to_string(), "noise0".to_string()];
+        let union = round_robin_union(&[noisy, good]);
+        assert_eq!(union[0], "noise0");
+        assert_eq!(union[1], "gold", "rank-0 of the second tool comes second");
+        assert_eq!(union.iter().filter(|x| *x == "noise0").count(), 1);
     }
 
     #[test]
