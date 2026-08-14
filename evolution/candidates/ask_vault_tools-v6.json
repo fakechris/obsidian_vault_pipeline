@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v6",
+  "base_version": "v5",
+  "target_version": "v6",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one retrieval upgrade completing the v5 arc: the sources_fts surface (built and parity-verified since stage 3c, ZERO production callers until now) becomes an index-backed bm25 lane under search_sources, with the v5 scan lane kept as the always-available fallback. Today search_sources matches the WHOLE query as one lowercase substring over title/url/rel_path/author (run_query) plus a tag-substring sweep — a multi-term query ('手写 transformer', '<author> retrieval') whose terms hit different fields or are non-contiguous in one field is structurally invisible, and CJK multi-term queries fail silently. v6: when the shadow is available and generation-current, search_sources retrieves over sources_fts (bm25 top-k over title+author+url+tags+entities, CJK unigram+bigram analyzer) and fuses: fts rank leads by relevance, scan-only substring extras append after in their v5 relative order (union, never a recall loss — same fusion shape as the v5 claims lane). Fts-only hits report match_reason: index (naming a scan field would be a lie). The fts query uses tokenize_search_terms_capped; a dropped distinct term surfaces as query_terms_truncated and folds into truncated, and a fetch-cap-saturated rank also reads truncated. When the shadow is missing, stale, or OVP_ASK_FTS=0, the tool takes the exact v5 path. Predicted: multi-term and cross-field source lookup becomes possible; with the fts lane off, matching and ordering semantics are exactly v5 while the result carries the additive lane field.",
+  "predicted_delta": {
+    "coverage": "fixture replay (falsifiable now): a multi-term CJK query whose terms are non-contiguous in the title — 0 hits under v5's whole-query substring scan — returns the correct source under v6 with the shadow present; with the shadow absent, v5 fixtures pass unmodified (fallback is the v5 code path). Live gate (retrieval-eval qrels, docs/design/retrieval-eval.md): source-surface Recall@10 on the exact and meta buckets must not regress vs the v5 scan baseline, and the paraphrase/mixed-language buckets' source recall should improve; measured when the R0 gold set lands, else rollback via kill switch.",
+    "operational_reliability": "zero new failure modes on missing/stale shadow (lane falls back, result says so); OVP_ASK_FTS=0 restores v5 behavior without a rebuild; a capped or saturated fts query can no longer masquerade as a complete miss."
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "fallback_is_v5": "with no shadow db, a stale generation, an analyzer-stamp mismatch, or OVP_ASK_FTS=0, search_sources executes the v5 matching and ordering code path — results carry the additive v6 fields (lane: scan) but all prior fixtures pass against the fallback lane",
+    "lane_honesty": "every search_sources result carries lane: fts|scan; fts-only hits carry match_reason: index instead of falsely naming a scan field",
+    "coverage_semantics_unchanged": "truncated, query_terms_truncated, and the executor's coverage accounting keep their v5 meanings; the fts lane ADDS truncation causes (term cap, fetch saturation) and must never remove one",
+    "result_shape_compatible": "hit fields are a superset of v5's (additive lane field and the index match_reason value only) — the agent prompt contract and portal consumers parse unchanged",
+    "read_only": "the fts lane opens the shadow read-only; ask can never write or rebuild the projection"
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures: multi-term CJK query non-contiguous in the title → correct source via fts lane, 0 hits via scan lane; fts rank leads with scan-only extras appended; a ghost id absent from the live model is dropped before the limit and cannot eat a result slot; term-capped query annotates query_terms_truncated and reads truncated; fetch-saturated rank reads truncated; shadow-absent and stale-generation runs produce v5-identical results with lane: scan; OVP_ASK_FTS=0 forces scan lane. All prior fixtures pass unmodified. Live qrels (retrieval-eval R0 gold set) are the quality gate before this candidate is recorded accepted.",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set OVP_ASK_FTS=0 (instant, no rebuild, shared with the v5 lanes) or revert the lane dispatch — the scan path preserves v5 matching/ordering semantics (result shape gains only additive fields); no persisted state, no prompt-namespace dependency.",
+  "ablation_required": false
+}
