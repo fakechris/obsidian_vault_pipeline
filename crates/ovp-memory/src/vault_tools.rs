@@ -1338,6 +1338,17 @@ fn fts_query_source(query: &str) -> String {
     strip_request_scaffolding(query)
 }
 
+/// v8 pin cap — fixed a priori (anti-overfit directive): at most 3 pinned
+/// slots keeps the fused top-10 majority-RRF, so body-only fts wins cannot
+/// be crowded out. NEVER tune this against the eval set.
+const MAX_TITLE_PINS: usize = 3;
+
+/// The v8 pin behind its kill switch: `OVP_ASK_TITLE_PIN=0` restores the
+/// exact v7 fusion order.
+fn title_pins_enabled() -> bool {
+    !std::env::var("OVP_ASK_TITLE_PIN").is_ok_and(|v| v == "0")
+}
+
 /// Gate for the index-backed bm25 lane (candidate `ask_vault_tools-v5`):
 /// the lane serves ONLY when the kill switch is off AND the shadow's
 /// generation stamps equal the model actually loaded — the promotion
@@ -1624,6 +1635,33 @@ fn search_evidence_fused(
                 .then_with(|| a.cmp(b))
         });
 
+        // v8 (candidate `ask_vault_tools-v8`): conditional strong-title
+        // protection. RRF punishes a single-lane hit (1/61) below mediocre
+        // both-lane packs (2/(60+r+1)) — measured burying a title #1 to
+        // fused rank 38. A title hit whose best language group matched
+        // COMPLETELY (permille == 1000 — a semantic predicate, never a
+        // tuned threshold) pins ahead of the RRF order, at most
+        // MAX_TITLE_PINS in title-lane order. Queries with no
+        // full-coverage title hit fuse exactly as v7.
+        let mut pinned: Vec<String> = Vec::new();
+        if title_pins_enabled() {
+            for ((permille, _), index, _) in &matches {
+                if *permille == 1000 && pinned.len() < MAX_TITLE_PINS {
+                    let dir = model.packs[*index].pack_dir.clone();
+                    if !pinned.contains(&dir) {
+                        pinned.push(dir);
+                    }
+                }
+            }
+        }
+        if !pinned.is_empty() {
+            let rest: Vec<String> = pack_order
+                .into_iter()
+                .filter(|pack| !pinned.contains(pack))
+                .collect();
+            pack_order = pinned.iter().cloned().chain(rest).collect();
+        }
+
         let mut title_by_pack: HashMap<String, Value> = matches
             .into_iter()
             .map(|(_, i, hit)| (model.packs[i].pack_dir.clone(), hit))
@@ -1711,6 +1749,12 @@ fn search_evidence_fused(
                     }
                 }
                 fts_detail_truncated |= detail_truncated;
+            }
+            // Transcript honesty: a pinned hit says WHY it leads the order.
+            if pinned.contains(&pack_dir) {
+                if let Some(obj) = hit.as_object_mut() {
+                    obj.insert("pinned".into(), json!(true));
+                }
             }
             ordered.push(hit);
         }
@@ -4279,6 +4323,87 @@ mod tests {
             .map(|h| h["claim_id"].clone())
             .collect();
         assert_eq!(ids, vec![json!("c-2"), json!("c-1")]);
+    }
+
+    /// The diagnosed pathology, reconstructed from the MECHANISM: a
+    /// full-coverage title #1 absent from the fts lanes loses to mediocre
+    /// both-lane packs under plain RRF (1/61 < 1/62 + 1/61); the v8 pin
+    /// puts it first and says so. Partial-coverage hits never pin.
+    #[test]
+    fn full_coverage_title_hit_pins_ahead_of_both_lane_flood() {
+        let model = fixture_model(
+            vec![],
+            vec![
+                simple_pack(
+                    "40-Resources/Reader/gold",
+                    "Needle thread guide",
+                    vec!["Complete coverage card".into()],
+                ),
+                simple_pack(
+                    "40-Resources/Reader/a",
+                    "Needle article A",
+                    vec!["Card a".into()],
+                ),
+                simple_pack(
+                    "40-Resources/Reader/b",
+                    "Needle article B",
+                    vec!["Card b".into()],
+                ),
+            ],
+            vec![],
+        );
+        let fts = EvidenceFtsLane {
+            cards: vec![
+                ovp_index::sqlite::FtsHit {
+                    id: "card:40-Resources/Reader/a:0".into(),
+                    rowid: 1,
+                    rank: -3.0,
+                },
+                ovp_index::sqlite::FtsHit {
+                    id: "card:40-Resources/Reader/b:0".into(),
+                    rowid: 2,
+                    rank: -2.0,
+                },
+            ],
+            units: vec![],
+            saturated: false,
+        };
+        // v7 math: gold (title #1, single-lane) = 1/61 loses to a (title
+        // #2 + fts #1) = 1/62 + 1/61 — the flood buries the best match.
+        let out = search_evidence_fused(&model, "needle thread", 10, Some(fts));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits[0]["pack_title"], "Needle thread guide");
+        assert_eq!(hits[0]["pinned"], json!(true));
+        // Partial-coverage packs (needle only, permille 500) never pin.
+        assert!(hits[1].get("pinned").is_none());
+        assert!(hits[2].get("pinned").is_none());
+    }
+
+    /// The pin cap is a fixed minority: five full-coverage hits, only the
+    /// first three pin — the fused top-10 stays majority-RRF.
+    #[test]
+    fn title_pins_cap_at_three() {
+        let packs = (0..5)
+            .map(|i| {
+                simple_pack(
+                    &format!("40-Resources/Reader/p{i}"),
+                    &format!("Needle pack {i}"),
+                    vec![format!("Card {i}")],
+                )
+            })
+            .collect();
+        let model = fixture_model(vec![], packs, vec![]);
+        let fts = EvidenceFtsLane {
+            cards: vec![],
+            units: vec![],
+            saturated: false,
+        };
+        let out = search_evidence_fused(&model, "needle", 10, Some(fts));
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 5);
+        for (i, hit) in hits.iter().enumerate() {
+            assert_eq!(hit.get("pinned").is_some(), i < 3, "hit {i}: {hit}");
+        }
     }
 
     #[test]
