@@ -260,13 +260,23 @@ pub fn run(args: RetrievalEvalArgs) -> Result<(), CliError> {
         )));
     }
 
+    // Generation stamp: runs straddling a daily tick are NOT strictly
+    // comparable — the report must say which index it measured (learned
+    // the hard way when an identity check was polluted by a tick).
+    let generation = ovp_index::read_index(&args.vault_root)
+        .map(|m| json!({"built_at": m.built_at, "run_id": m.run_id}))
+        .unwrap_or(Value::Null);
+
     let mut tools = VaultTools::new(&args.vault_root);
     let mut rows = Vec::new();
     for q in &qrels {
         rows.push(score_question(&mut tools, q, &ks, limit, args.query_mode));
     }
 
-    let report = assemble_report(&qrels, rows, &ks, args.query_mode);
+    let mut report = assemble_report(&qrels, rows, &ks, args.query_mode);
+    if let Some(map) = report.as_object_mut() {
+        map.insert("generation".into(), generation);
+    }
     let text = serde_json::to_string_pretty(&report)
         .map_err(|e| CliError::Io(format!("serializing report: {e}")))?;
     match &args.out {

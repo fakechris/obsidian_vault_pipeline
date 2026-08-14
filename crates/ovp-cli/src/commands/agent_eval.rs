@@ -105,7 +105,10 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
     for (i, q) in qrels.iter().enumerate() {
         eprintln!("[{}/{}] {} …", i + 1, qrels.len(), q.id);
         let session = format!("agenteval-{}-{}", q.id, epoch_ms);
-        let mut store = SessionStore::open(&args.vault_root, &session)
+        // SessionStore takes the SESSIONS DIR, not the vault root — passing
+        // the root scattered transcripts into the vault top level once.
+        let sessions_dir = args.vault_root.join(".ovp/ask-sessions");
+        let mut store = SessionStore::open(&sessions_dir, &session)
             .map_err(|e| CliError::Io(format!("session store: {e}")))?;
         let mut client = factory().map_err(CliError::Io)?;
         let cfg = AgentConfig {
@@ -142,6 +145,12 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
                     .collect();
                 let mut valid = 0usize;
                 let mut gold_hit = false;
+                // Source-attributed citation set for PRECISION: gold-hit is
+                // boolean recall; precision says how much of the citation
+                // volume actually points at gold (the 85-citation spam
+                // problem the boolean cannot see).
+                let mut attributed: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
                 for c in &cited {
                     if let Some(sid) = c.strip_prefix("source:") {
                         let full = known_sources
@@ -150,6 +159,7 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
                             .copied();
                         if let Some(full) = full {
                             valid += 1;
+                            attributed.insert(full.to_string());
                             if gold.iter().any(|g| *g == full) {
                                 gold_hit = true;
                             }
@@ -157,6 +167,7 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
                     } else if let Some(key) = c.strip_prefix("claim:") {
                         if let Some(sources) = claim_sources.get(key) {
                             valid += 1;
+                            attributed.extend(sources.iter().cloned());
                             if sources.iter().any(|s| gold.contains(s.as_str())) {
                                 gold_hit = true;
                             }
@@ -167,6 +178,14 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
                         valid += 1;
                     }
                 }
+                let citation_precision = if attributed.is_empty() {
+                    Value::Null
+                } else {
+                    json!(
+                        attributed.iter().filter(|s| gold.contains(s.as_str())).count() as f64
+                            / attributed.len() as f64
+                    )
+                };
                 let abstained = cited.is_empty();
                 json!({
                     "id": q.id,
@@ -181,6 +200,8 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
                     "wall_ms": wall_ms,
                     "citations": cited,
                     "citations_valid": valid,
+                    "attributed_sources": attributed.len(),
+                    "citation_precision": citation_precision,
                     "gold_source_cited": gold_hit,
                     "abstained": abstained,
                     "abstain_correct": q.no_answer == abstained,
@@ -212,6 +233,7 @@ pub fn run(args: AgentEvalArgs) -> Result<(), CliError> {
             "valid_total": ran.iter().filter_map(|r| r["citations_valid"].as_u64()).sum::<u64>(),
         },
         "abstain_correct_rate": rate(&ran.iter().collect::<Vec<_>>(), |r| r["abstain_correct"] == json!(true)),
+        "mean_citation_precision": mean(&ran, "citation_precision"),
         "mean_rounds": mean(&ran, "rounds"),
         "mean_output_tokens": mean(&ran, "output_tokens"),
         "mean_wall_ms": mean(&ran, "wall_ms"),
