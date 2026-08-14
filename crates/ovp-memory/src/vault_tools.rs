@@ -1,5 +1,7 @@
-//! Read-only vault tools for the ask-agent runtime (candidate
-//! `ask_vault_tools-v6`).
+//! Read-only vault tools for the ask-agent runtime (accepted candidate
+//! `ask_vault_tools-v5`; the sources fts lane ships under the PENDING
+//! candidate `ask_vault_tools-v6` — registry stays at v5 until its live
+//! qrels gate passes and the decision is ledgered).
 //!
 //! The public functions in this module are the shared projection API: they
 //! depend only on explicit vault/index/ledger inputs and never on executor
@@ -605,7 +607,7 @@ pub fn tool_definitions() -> Vec<ToolDef> {
     vec![
         tool_def(
             "search_sources",
-            "Search source metadata by title, URL, path, or tags ONLY. Does not search article bodies; use search_fulltext. Does not search the reader-pack evidence layer; use search_evidence.",
+            "Search source METADATA only — title, author, URL, path, tags, and entities. Does not search article bodies; use search_fulltext. Does not search the reader-pack evidence layer; use search_evidence. When the local search index is available (result lane: fts), terms are tokenized (unspaced Chinese runs auto-expand into character bigrams) and relevance-matched across all metadata fields, so multi-term and cross-field queries work; hits matched only by the index carry match_reason: index. Without the index (lane: scan), the WHOLE query must appear as one substring in a single field (title/URL/path/author) or tag.",
             json!({
                 "type": "object",
                 "properties": {
@@ -3687,9 +3689,18 @@ mod tests {
                 .as_str()
         };
         let sources = description("search_sources");
-        assert!(sources.contains("title, URL, path, or tags ONLY"));
+        assert!(sources.contains("METADATA only"));
+        assert!(sources.contains("author"));
+        assert!(sources.contains("entities"));
         assert!(sources.contains("search_fulltext"));
         assert!(sources.contains("search_evidence"));
+        // v6 candidate: the index-backed lane makes multi-term/cross-field
+        // metadata queries work — the description must state BOTH lanes and
+        // the scan lane's whole-query substring constraint.
+        assert!(sources.contains("lane: fts"));
+        assert!(sources.contains("match_reason: index"));
+        assert!(sources.contains("lane: scan"));
+        assert!(sources.contains("WHOLE query"));
         let evidence = description("search_evidence");
         assert!(evidence.contains("pack title and card titles"));
         assert!(evidence.contains("OR-matched"));
