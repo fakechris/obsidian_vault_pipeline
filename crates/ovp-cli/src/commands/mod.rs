@@ -33,6 +33,7 @@ pub mod pinboard_sync;
 pub mod project;
 pub mod query;
 pub mod rag;
+pub mod retrieval_eval;
 pub mod read_source;
 pub mod review_run;
 pub mod mcp;

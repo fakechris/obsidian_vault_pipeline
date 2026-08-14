@@ -1050,6 +1050,26 @@ enum Cmd {
         symptom: Vec<String>,
     },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
+    /// PRODUCT — R0 retrieval baseline (docs/design/retrieval-eval.md): run
+    /// each qrel question against the ask vault-tool surface (real dispatch,
+    /// fts lane included when the shadow serves) and report bucketed
+    /// candidate recall. Read-only; the report is a run artifact.
+    RetrievalEval {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// A qrel JSON file or a directory of `q-*.json` files.
+        #[arg(long)]
+        qrels: PathBuf,
+        /// Recall cutoffs (repeatable). Default: 10, 20.
+        #[arg(long = "k")]
+        ks: Vec<usize>,
+        /// Only score records with confidence == "gold".
+        #[arg(long)]
+        gold_only: bool,
+        /// Write the JSON report here (stdout when absent).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Read-only RAG retrieval (L6) over the canonical store + knowledge index +
     /// evergreen notes. Scores the query, ranks, and prints a bounded context.
     /// Read-only — never assembles, runs, applies, or writes.
@@ -2414,6 +2434,22 @@ fn main() -> ExitCode {
                 }
             };
             commands::evolve::run(EvolveArgs { sub, registry_path })
+        }
+        Cmd::RetrievalEval {
+            vault_root,
+            qrels,
+            ks,
+            gold_only,
+            out,
+        } => {
+            use commands::retrieval_eval::RetrievalEvalArgs;
+            commands::retrieval_eval::run(RetrievalEvalArgs {
+                vault_root,
+                qrels,
+                ks,
+                gold_only,
+                out,
+            })
         }
         Cmd::Rag {
             vault_root,
