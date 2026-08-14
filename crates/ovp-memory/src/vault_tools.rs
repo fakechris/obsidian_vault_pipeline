@@ -3337,8 +3337,9 @@ fn strength_name(strength: StrengthClass) -> String {
 /// Resolve case_ids to source shas via the packs join (pack_dir basename ==
 /// case_id). Misses are dropped — a citation path must never carry an id the
 /// index cannot open (A3a gate: caveated hits previously had NO followable
-/// source path at all).
-fn resolved_source_ids(model: &IndexModel, case_ids: &[String]) -> Vec<String> {
+/// source path at all). Pub: agent-eval attributes cited claims to gold
+/// sources through the same join.
+pub fn resolved_source_ids(model: &IndexModel, case_ids: &[String]) -> Vec<String> {
     case_ids
         .iter()
         .filter_map(|case_id| {
