@@ -1,5 +1,5 @@
 //! Read-only vault tools for the ask-agent runtime (candidate
-//! `ask_vault_tools-v5`).
+//! `ask_vault_tools-v6`).
 //!
 //! The public functions in this module are the shared projection API: they
 //! depend only on explicit vault/index/ledger inputs and never on executor
@@ -275,14 +275,18 @@ impl VaultTools {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("source index unavailable: {e}"))
                 })?;
-                // bm25 rank from the sources FTS surface (sha256 keys,
-                // deduped preserving order); the fts query uses the SAME
-                // capped term list the scan lane matches on. The scan lane's
-                // whole-query substring match cannot see multi-term queries
-                // ("手写 transformer") that fts token-matches across fields.
-                // None (no shadow / stale generation / kill switch) = v4 scan.
-                let fts_rank = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
-                    let capped_query = tokenize_search_terms(&query).join(" ");
+                // bm25 rank from the sources FTS surface (candidate
+                // `ask_vault_tools-v6`): sha256 keys, deduped preserving
+                // order. The scan lane's whole-query substring match cannot
+                // see multi-term queries ("手写 transformer") that fts
+                // token-matches across fields. The capped tokenizer's drop
+                // flag travels with the lane — a distinct term the fts query
+                // never searched must surface as query_terms_truncated, not
+                // read as a clean complete miss. None (no shadow / stale
+                // generation / kill switch) = v5 scan path.
+                let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
+                    let (terms, terms_capped) = tokenize_search_terms_capped(&query);
+                    let capped_query = terms.join(" ");
                     reader
                         .fts_search(
                             ovp_index::sqlite::FtsSurface::Sources,
@@ -291,20 +295,22 @@ impl VaultTools {
                         )
                         .ok()
                         .map(|ranked| {
+                            let saturated = ranked.len() == FTS_SOURCES_FETCH;
                             let mut seen = BTreeSet::new();
-                            ranked
+                            let rank: Vec<String> = ranked
                                 .into_iter()
                                 .map(|hit| hit.id)
                                 .filter(|id| seen.insert(id.clone()))
-                                .collect::<Vec<_>>()
+                                .collect();
+                            SourcesFtsLane {
+                                rank,
+                                saturated,
+                                terms,
+                                terms_capped,
+                            }
                         })
                 });
-                Ok(search_sources_ranked(
-                    &model,
-                    &query,
-                    limit,
-                    fts_rank.as_deref(),
-                ))
+                Ok(search_sources_ranked(&model, &query, limit, fts))
             }
             ParsedCall::SearchEvidence { query, limit } => {
                 let model = self.cached_index().map_err(|e| {
@@ -760,15 +766,26 @@ pub fn search_sources(model: &IndexModel, query: &str, limit: usize) -> Value {
     search_sources_ranked(model, query, limit, None)
 }
 
+/// The sources lane's bm25 rank plus its honesty flags: `saturated` when
+/// the fetch cap came back exactly full (deeper matches may exist), and the
+/// capped term list the fts query ACTUALLY searched — a dropped distinct
+/// term must surface in the result, never read as a clean miss.
+struct SourcesFtsLane {
+    rank: Vec<String>,
+    saturated: bool,
+    terms: Vec<String>,
+    terms_capped: bool,
+}
+
 /// [`search_sources`] with an optional bm25 rank from the sources FTS
 /// surface: fts-ranked ids lead by relevance; scan-only extras (whole-query
-/// substring matches fts tokenization cannot see) keep their v4 relative
+/// substring matches fts tokenization cannot see) keep their v5 relative
 /// order after them — union, never a recall loss. Mirrors the claims lane.
 fn search_sources_ranked(
     model: &IndexModel,
     query: &str,
     limit: usize,
-    fts_rank: Option<&[String]>,
+    fts: Option<SourcesFtsLane>,
 ) -> Value {
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let query_lower = query.to_lowercase();
@@ -794,17 +811,23 @@ fn search_sources_ranked(
         }
     }
 
-    let lane = if fts_rank.is_some() { "fts" } else { "scan" };
-    if let Some(rank) = fts_rank {
+    let lane = if fts.is_some() { "fts" } else { "scan" };
+    let mut fts_saturated = false;
+    let mut terms_capped = false;
+    let mut capped_terms: Vec<String> = Vec::new();
+    if let Some(fts) = fts {
+        fts_saturated = fts.saturated;
+        terms_capped = fts.terms_capped;
+        capped_terms = fts.terms;
         // The generation guard makes ghosts (fts id absent from the live
         // model) near-impossible, but a ghost must not eat a result slot
         // below the limit — membership-filter before fusing.
         let known: BTreeSet<&str> = model.sources.iter().map(|s| s.sha256.as_str()).collect();
         let mut fused: Vec<String> = Vec::new();
         let mut in_fused = BTreeSet::new();
-        for id in rank {
+        for id in fts.rank {
             if known.contains(id.as_str()) && in_fused.insert(id.clone()) {
-                fused.push(id.clone());
+                fused.push(id);
             }
         }
         for id in ids {
@@ -815,7 +838,7 @@ fn search_sources_ranked(
         ids = fused;
     }
 
-    let mut truncated = ids.len() > limit;
+    let mut truncated = ids.len() > limit || fts_saturated || terms_capped;
     let mut hits = ids
         .into_iter()
         .take(limit)
@@ -823,7 +846,9 @@ fn search_sources_ranked(
         .map(|source| source_search_hit(source, &query_lower))
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut hits);
-    json!({"hits": hits, "truncated": truncated, "lane": lane})
+    let mut out = json!({"hits": hits, "truncated": truncated, "lane": lane});
+    annotate_capped_terms(&mut out, terms_capped, &capped_terms);
+    out
 }
 
 fn push_search_term(
@@ -3469,9 +3494,16 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![json!("aaaa1111"), json!("bbbb2222")]);
 
-        let rank = vec!["ghost9999".to_string(), "bbbb2222".to_string()];
-        let out = search_sources_ranked(&model, "retrieval", 10, Some(&rank));
+        let lane = || SourcesFtsLane {
+            rank: vec!["ghost9999".to_string(), "bbbb2222".to_string()],
+            saturated: false,
+            terms: vec!["retrieval".to_string()],
+            terms_capped: false,
+        };
+        let out = search_sources_ranked(&model, "retrieval", 10, Some(lane()));
         assert_eq!(out["lane"], json!("fts"));
+        assert_eq!(out["truncated"], json!(false));
+        assert_eq!(out.get("query_terms_truncated"), None);
         let ids: Vec<_> = out["hits"]
             .as_array()
             .expect("hits")
@@ -3482,11 +3514,43 @@ mod tests {
 
         // limit=1 with the ghost first in rank: the ghost must not consume
         // the only slot, and the dropped scan extra must read truncated.
-        let out = search_sources_ranked(&model, "retrieval", 1, Some(&rank));
+        let out = search_sources_ranked(&model, "retrieval", 1, Some(lane()));
         let hits = out["hits"].as_array().expect("hits");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["source_id"], "bbbb2222");
         assert_eq!(out["truncated"], json!(true));
+    }
+
+    /// The fts lane's honesty flags fold into the result: a term the capped
+    /// tokenizer dropped surfaces as query_terms_truncated (a source
+    /// matching only that term must not read as a clean complete miss), and
+    /// a fetch-cap-saturated rank reads truncated because deeper matches
+    /// may exist past the cap.
+    #[test]
+    fn sources_fts_cap_and_saturation_read_truncated() {
+        let row = source("aaaa1111", "Retrieval notes", None, None);
+        let model = fixture_model(vec![row], vec![], vec![]);
+
+        let capped = SourcesFtsLane {
+            rank: vec!["aaaa1111".to_string()],
+            saturated: false,
+            terms: vec!["retrieval".to_string()],
+            terms_capped: true,
+        };
+        let out = search_sources_ranked(&model, "retrieval", 10, Some(capped));
+        assert_eq!(out["truncated"], json!(true));
+        assert_eq!(out["query_terms_truncated"], json!(true));
+        assert_eq!(out["query_terms_used"], json!(["retrieval"]));
+
+        let saturated = SourcesFtsLane {
+            rank: vec!["aaaa1111".to_string()],
+            saturated: true,
+            terms: vec!["retrieval".to_string()],
+            terms_capped: false,
+        };
+        let out = search_sources_ranked(&model, "retrieval", 10, Some(saturated));
+        assert_eq!(out["truncated"], json!(true));
+        assert_eq!(out.get("query_terms_truncated"), None);
     }
 
     fn fixture_model(
