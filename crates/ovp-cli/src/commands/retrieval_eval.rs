@@ -32,6 +32,17 @@ pub struct RetrievalEvalArgs {
     pub gold_only: bool,
     /// Write the JSON report here (stdout when absent).
     pub out: Option<PathBuf>,
+    /// How the question becomes a tool query. `verbatim` = the question as
+    /// typed (the baseline policy); `terms` = deterministic distinctive-term
+    /// extraction (request-noise stripped) — the fast-planner EXPERIMENT arm,
+    /// eval-only, not production behavior.
+    pub query_mode: QueryMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryMode {
+    Verbatim,
+    Terms,
 }
 
 /// One qrel record — accepts both the promoted (`qrel/v1`) and draft
@@ -66,6 +77,9 @@ struct Relevant {
 #[derive(Debug, Serialize)]
 struct QuestionReport {
     id: String,
+    /// The query actually sent to the tools (differs from the question in
+    /// `terms` mode — keep it visible so a bad extraction is debuggable).
+    effective_query: String,
     class: String,
     language: String,
     confidence: String,
@@ -107,10 +121,10 @@ pub fn run(args: RetrievalEvalArgs) -> Result<(), CliError> {
     let mut tools = VaultTools::new(&args.vault_root);
     let mut rows = Vec::new();
     for q in &qrels {
-        rows.push(score_question(&mut tools, q, &ks, limit));
+        rows.push(score_question(&mut tools, q, &ks, limit, args.query_mode));
     }
 
-    let report = assemble_report(&qrels, rows, &ks);
+    let report = assemble_report(&qrels, rows, &ks, args.query_mode);
     let text = serde_json::to_string_pretty(&report)
         .map_err(|e| CliError::Io(format!("serializing report: {e}")))?;
     match &args.out {
@@ -211,6 +225,127 @@ fn run_tool(
     }
 }
 
+/// Deterministic distinctive-term extraction — the `terms` experiment arm.
+/// A question as typed carries request scaffolding ("帮我找一篇…的文章",
+/// "give me two … with citations") whose CJK bigrams flood BM25 and bury
+/// the content terms (measured: verbatim R@20 ≈ 0 where a clean query
+/// scores 0.4). Strategy: latin words pass a stopword list; CJK runs have
+/// request-phrase substrings blanked (longest first), then surviving
+/// fragments of >= 2 chars count as terms. Cap 8 — matching MAX_SEARCH_TERMS
+/// headroom, and an honest planner should be selective anyway.
+fn extract_terms(question: &str) -> String {
+    const LATIN_STOP: &[&str] = &[
+        "vault", "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "is", "are", "was",
+        "what", "which", "that", "this", "with", "about", "please", "find", "give", "show", "me",
+        "my", "our", "how", "do", "does", "did", "you", "your", "there", "any",
+    ];
+    // Longest first: 有哪些 must strip before 哪些, 帮我找一篇 before 帮我.
+    const ZH_NOISE: &[&str] = &[
+        "帮我找一篇",
+        "帮我找",
+        "帮我",
+        "请问",
+        "找一篇",
+        "一篇",
+        "那篇",
+        "这篇",
+        "文章",
+        "有哪些",
+        "是哪些",
+        "哪些",
+        "是什么",
+        "什么",
+        "给两条",
+        "给出",
+        "给我",
+        "带引用",
+        "引用",
+        "结论",
+        "关于",
+        "里面",
+        "我记得",
+        "我看过",
+        "有没有",
+        "看过",
+        "记得",
+        "总结一下",
+        "总结",
+        "介绍一下",
+        "介绍",
+        "讲了",
+        "说了",
+        "内容",
+        "笔记",
+        "分享了",
+        "还",
+        "了",
+        "的",
+        "里",
+        "吗",
+        "呢",
+        "和",
+        "与",
+        "在",
+        "个",
+    ];
+    let mut terms: Vec<String> = Vec::new();
+    let mut push = |t: &str| {
+        let t = t.trim();
+        if !t.is_empty() && terms.len() < 8 && !terms.iter().any(|x| x == t) {
+            terms.push(t.to_string());
+        }
+    };
+    // Split the question into latin/CJK segments first so noise stripping
+    // never touches latin words (滤掉 "durable" 里不会出现中文噪声,反之亦然).
+    let mut latin = String::new();
+    let mut cjk = String::new();
+    let mut flush_latin = |buf: &mut String, push: &mut dyn FnMut(&str)| {
+        for word in buf.split_whitespace() {
+            let w = word.to_lowercase();
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            if w.len() >= 2 && !LATIN_STOP.contains(&w) {
+                push(w);
+            }
+        }
+        buf.clear();
+    };
+    let mut flush_cjk = |buf: &mut String, push: &mut dyn FnMut(&str)| {
+        let mut s = buf.clone();
+        for noise in ZH_NOISE {
+            s = s.replace(noise, " ");
+        }
+        for frag in s.split_whitespace() {
+            if frag.chars().count() >= 2 {
+                push(frag);
+            }
+        }
+        buf.clear();
+    };
+    for ch in question.chars() {
+        let is_cjk = (ch as u32) >= 0x2E80;
+        if is_cjk {
+            flush_latin(&mut latin, &mut push);
+            cjk.push(ch);
+        } else if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            flush_cjk(&mut cjk, &mut push);
+            latin.push(ch);
+        } else {
+            // Separator: flush both sides so punctuation splits runs.
+            flush_latin(&mut latin, &mut push);
+            flush_cjk(&mut cjk, &mut push);
+            latin.push(' ');
+        }
+    }
+    flush_latin(&mut latin, &mut push);
+    flush_cjk(&mut cjk, &mut push);
+    if terms.is_empty() {
+        // A question that is ALL scaffolding degrades to verbatim rather
+        // than an empty query (which every tool rejects).
+        return question.to_string();
+    }
+    terms.join(" ")
+}
+
 /// Interleave ranked lists round-robin with dedup: rank-0 of every list,
 /// then rank-1 of every list, and so on.
 fn round_robin_union(lists: &[Vec<String>]) -> Vec<String> {
@@ -240,7 +375,17 @@ fn recall_at(golds: &[String], ranked: &[String], k: usize) -> f64 {
     hit as f64 / golds.len() as f64
 }
 
-fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) -> QuestionReport {
+fn score_question(
+    tools: &mut VaultTools,
+    q: &Qrel,
+    ks: &[usize],
+    limit: usize,
+    mode: QueryMode,
+) -> QuestionReport {
+    let effective_query = match mode {
+        QueryMode::Verbatim => q.question.clone(),
+        QueryMode::Terms => extract_terms(&q.question),
+    };
     let gold_sources: Vec<String> = q
         .relevant
         .iter()
@@ -262,7 +407,7 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
     let mut hits_returned = 0usize;
 
     for tool in ["search_sources", "search_evidence", "search_claims"] {
-        let (sources, claims, lane, err) = run_tool(tools, tool, &q.question, limit);
+        let (sources, claims, lane, err) = run_tool(tools, tool, &effective_query, limit);
         hits_returned += sources.len().max(claims.len());
         if let Some(lane) = lane {
             lanes.insert(tool.to_string(), lane);
@@ -304,6 +449,7 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
 
     QuestionReport {
         id: q.id.clone(),
+        effective_query,
         class: q.class.clone().unwrap_or_else(|| "unclassified".into()),
         language: q.language.clone().unwrap_or_else(|| "unknown".into()),
         confidence: q.confidence.clone().unwrap_or_else(|| "unknown".into()),
@@ -318,7 +464,12 @@ fn score_question(tools: &mut VaultTools, q: &Qrel, ks: &[usize], limit: usize) 
     }
 }
 
-fn assemble_report(qrels: &[Qrel], rows: Vec<QuestionReport>, ks: &[usize]) -> Value {
+fn assemble_report(
+    qrels: &[Qrel],
+    rows: Vec<QuestionReport>,
+    ks: &[usize],
+    mode: QueryMode,
+) -> Value {
     // Buckets: mean union source-recall per class and per language, scored
     // ONLY over records that carry source gold — a bucket with none reports
     // n=0 rather than a fabricated 0.0 average.
@@ -375,6 +526,10 @@ fn assemble_report(qrels: &[Qrel], rows: Vec<QuestionReport>, ks: &[usize]) -> V
 
     json!({
         "schema": "ovp.retrieval_eval.report/v1",
+        "query_mode": match mode {
+            QueryMode::Verbatim => "verbatim",
+            QueryMode::Terms => "terms",
+        },
         "ks": ks,
         "questions": rows.len(),
         "confidence_counts": confidence_counts,
@@ -449,6 +604,24 @@ mod tests {
         assert_eq!(recall_at(&golds, &ranked, 3), 1.0);
     }
 
+    /// Request scaffolding strips away; content terms survive with their
+    /// scripts separated; an all-scaffolding question degrades to verbatim.
+    #[test]
+    fn extract_terms_strips_request_noise() {
+        assert_eq!(
+            extract_terms(
+                "帮我找一篇文章:一个女生毕业求职,诀窍是手写 Transformer,还分享了她的笔记"
+            ),
+            "女生毕业求职 诀窍是手写 transformer"
+        );
+        assert_eq!(
+            extract_terms("vault 里关于 context engineering 的 durable 结论,给两条带引用"),
+            "context engineering durable"
+        );
+        // All scaffolding → verbatim fallback, never an empty query.
+        assert_eq!(extract_terms("帮我找一篇文章"), "帮我找一篇文章");
+    }
+
     /// A noisy first tool must not bury a later tool's rank-0 hit: the
     /// union interleaves by rank, so the union@k can never read below a
     /// member tool's @1 hit at k >= member count.
@@ -509,7 +682,7 @@ mod tests {
         let ks = vec![10];
         let rows: Vec<QuestionReport> = qrels
             .iter()
-            .map(|q| score_question(&mut tools, q, &ks, 10))
+            .map(|q| score_question(&mut tools, q, &ks, 10, QueryMode::Verbatim))
             .collect();
 
         let hit = &rows[0];
@@ -522,7 +695,8 @@ mod tests {
         assert!(neg.no_answer);
         assert_eq!(neg.hits_returned, 0);
 
-        let report = assemble_report(&qrels, rows, &ks);
+        let report = assemble_report(&qrels, rows, &ks, QueryMode::Verbatim);
+        assert_eq!(report["query_mode"], "verbatim");
         assert_eq!(report["questions"], 2);
         assert_eq!(report["negatives_with_hits"], 0);
         assert_eq!(
