@@ -167,7 +167,7 @@
     {
       "id": "runtime.ask_vault_tools",
       "surface": "runtime",
-      "current_version": "v5",
+      "current_version": "v6",
       "file": "crates/ovp-memory/src/vault_tools.rs",
       "quality_buckets": [
         "coverage",
