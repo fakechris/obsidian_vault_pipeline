@@ -273,7 +273,12 @@ impl VaultTools {
         remaining: Duration,
     ) -> Result<Value, DispatchError> {
         match call {
-            ParsedCall::SearchSources { query, limit } => {
+            ParsedCall::SearchSources {
+                query,
+                limit,
+                date_from,
+                date_to,
+            } => {
                 let model = self.cached_index().map_err(|e| {
                     DispatchError::Unavailable(format!("source index unavailable: {e}"))
                 })?;
@@ -286,6 +291,17 @@ impl VaultTools {
                 // never searched must surface as query_terms_truncated, not
                 // read as a clean complete miss. None (no shadow / stale
                 // generation / kill switch) = v5 scan path.
+                // v9: a date window filters AFTER ranking, so the fetch cap
+                // must not truncate BEFORE it — out-of-window high-bm25
+                // sources would silently eat the slots of in-window gold
+                // (measured: an in-window hit beyond rank 100 vanished).
+                // With a window the fetch covers the corpus; without one the
+                // v8 cap stands.
+                let fetch = if date_from.is_some() || date_to.is_some() {
+                    model.sources.len().max(FTS_SOURCES_FETCH)
+                } else {
+                    FTS_SOURCES_FETCH
+                };
                 let fts = shadow_reader_for(&self.vault_root, &model).and_then(|reader| {
                     // v7: scaffolding stripped BEFORE tokenization — the fts
                     // lane searches a subset of the raw query's terms, so a
@@ -295,14 +311,10 @@ impl VaultTools {
                         tokenize_search_terms_capped(&fts_query_source(&query));
                     let capped_query = terms.join(" ");
                     reader
-                        .fts_search(
-                            ovp_index::sqlite::FtsSurface::Sources,
-                            &capped_query,
-                            FTS_SOURCES_FETCH,
-                        )
+                        .fts_search(ovp_index::sqlite::FtsSurface::Sources, &capped_query, fetch)
                         .ok()
                         .map(|ranked| {
-                            let saturated = ranked.len() == FTS_SOURCES_FETCH;
+                            let saturated = ranked.len() == fetch;
                             let mut seen = BTreeSet::new();
                             let rank: Vec<String> = ranked
                                 .into_iter()
@@ -317,7 +329,14 @@ impl VaultTools {
                             }
                         })
                 });
-                Ok(search_sources_ranked(&model, &query, limit, fts))
+                Ok(search_sources_ranked_windowed(
+                    &model,
+                    &query,
+                    limit,
+                    fts,
+                    date_from.as_deref(),
+                    date_to.as_deref(),
+                ))
             }
             ParsedCall::SearchEvidence { query, limit } => {
                 let model = self.cached_index().map_err(|e| {
@@ -616,12 +635,14 @@ pub fn tool_definitions() -> Vec<ToolDef> {
     vec![
         tool_def(
             "search_sources",
-            "Search source METADATA only — title, author, URL, path, tags, and entities. Does not search article bodies; use search_fulltext. Does not search the reader-pack evidence layer; use search_evidence. When the local search index is available (result lane: fts), terms are tokenized (unspaced Chinese runs auto-expand into character bigrams) and relevance-matched across all metadata fields, so multi-term and cross-field queries work; hits matched only by the index carry match_reason: index. Without the index (lane: scan), the WHOLE query must appear as one substring in a single field (title/URL/path/author) or tag.",
+            "Search source METADATA only — title, author, URL, path, tags, and entities. Does not search article bodies; use search_fulltext. Does not search the reader-pack evidence layer; use search_evidence. When the local search index is available (result lane: fts), terms are tokenized (unspaced Chinese runs auto-expand into character bigrams) and relevance-matched across all metadata fields, so multi-term and cross-field queries work; hits matched only by the index carry match_reason: index. Without the index (lane: scan), the WHOLE query must appear as one substring in a single field (title/URL/path/author) or tag. For date-anchored questions ('看的那篇', 'early August', 'last month') pass date_from/date_to as inclusive ISO prefixes (YYYY, YYYY-MM, or YYYY-MM-DD) — both lanes then return only sources dated inside the window, and the applied window is echoed in the result; undated sources never match a window.",
             json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "minLength": 1},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT},
+                    "date_from": {"type": "string", "pattern": "^\\d{4}(-\\d{2}){0,2}$"},
+                    "date_to": {"type": "string", "pattern": "^\\d{4}(-\\d{2}){0,2}$"}
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -798,8 +819,34 @@ fn search_sources_ranked(
     limit: usize,
     fts: Option<SourcesFtsLane>,
 ) -> Value {
+    search_sources_ranked_windowed(model, query, limit, fts, None, None)
+}
+
+/// [`search_sources_ranked`] with an optional inclusive ISO-prefix date
+/// window (candidate `ask_vault_tools-v9`): BOTH lanes filter before
+/// fusion — the fts rank must not leak an out-of-window source the scan
+/// lane would exclude. No window = the exact v8 path.
+fn search_sources_ranked_windowed(
+    model: &IndexModel,
+    query: &str,
+    limit: usize,
+    fts: Option<SourcesFtsLane>,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+) -> Value {
     let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
     let query_lower = query.to_lowercase();
+    let windowed = date_from.is_some() || date_to.is_some();
+    let in_window = |id: &str| -> bool {
+        if !windowed {
+            return true;
+        }
+        model
+            .sources
+            .iter()
+            .find(|source| source.sha256 == id)
+            .is_some_and(|source| date_in_window(source.date.as_deref(), date_from, date_to))
+    };
     let hits = run_query(
         model,
         &Query {
@@ -821,12 +868,18 @@ fn search_sources_ranked(
             ids.push(source.sha256.clone());
         }
     }
+    if windowed {
+        ids.retain(|id| in_window(id));
+    }
 
     let lane = if fts.is_some() { "fts" } else { "scan" };
     let mut fts_saturated = false;
     let mut terms_capped = false;
     let mut capped_terms: Vec<String> = Vec::new();
-    if let Some(fts) = fts {
+    if let Some(mut fts) = fts {
+        if windowed {
+            fts.rank.retain(|id| in_window(id));
+        }
         fts_saturated = fts.saturated;
         terms_capped = fts.terms_capped;
         capped_terms = fts.terms;
@@ -858,6 +911,16 @@ fn search_sources_ranked(
         .collect::<Vec<_>>();
     truncated |= cap_aggregate(&mut hits);
     let mut out = json!({"hits": hits, "truncated": truncated, "lane": lane});
+    // Window echo (additive): the payload states which filter actually
+    // applied, so a narrow result cannot read as a full-corpus search.
+    if let Some(map) = out.as_object_mut() {
+        if let Some(from) = date_from {
+            map.insert("date_from".into(), json!(from));
+        }
+        if let Some(to) = date_to {
+            map.insert("date_to".into(), json!(to));
+        }
+    }
     annotate_capped_terms(&mut out, terms_capped, &capped_terms);
     out
 }
@@ -3347,6 +3410,8 @@ enum ParsedCall {
     SearchSources {
         query: String,
         limit: usize,
+        date_from: Option<String>,
+        date_to: Option<String>,
     },
     SearchEvidence {
         query: String,
@@ -3392,10 +3457,12 @@ impl ParsedCall {
             .ok_or_else(|| format!("`{name}` input must be a JSON object"))?;
         match name {
             "search_sources" => {
-                validate_keys(object, &["query", "limit"])?;
+                validate_keys(object, &["query", "limit", "date_from", "date_to"])?;
                 Ok(Self::SearchSources {
                     query: required_string(object, "query")?,
                     limit: optional_limit(object, "limit", DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT)?,
+                    date_from: optional_iso_prefix(object, "date_from")?,
+                    date_to: optional_iso_prefix(object, "date_to")?,
                 })
             }
             "search_evidence" => {
@@ -3537,6 +3604,58 @@ fn optional_fulltext_cursor(object: &Map<String, Value>) -> Result<Option<String
     };
     fulltext_cursor_parts(&cursor)?;
     Ok(Some(cursor))
+}
+
+/// Validate an optional ISO date PREFIX (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) —
+/// candidate `ask_vault_tools-v9`. An invalid string is an InvalidArgs
+/// error, never a silent no-filter (decidable semantics guardrail).
+fn optional_iso_prefix(object: &Map<String, Value>, key: &str) -> Result<Option<String>, String> {
+    let Some(raw) = optional_string(object, key)? else {
+        return Ok(None);
+    };
+    let ok = match raw.len() {
+        4 => raw.chars().all(|c| c.is_ascii_digit()),
+        7 | 10 => raw.chars().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                c == '-'
+            } else {
+                c.is_ascii_digit()
+            }
+        }),
+        _ => false,
+    };
+    if ok {
+        Ok(Some(raw))
+    } else {
+        Err(format!(
+            "`{key}` must be an ISO date prefix (YYYY, YYYY-MM, or YYYY-MM-DD), got `{raw}`"
+        ))
+    }
+}
+
+/// Inclusive ISO-prefix window check: `from` compares lexicographically
+/// (a shorter prefix sorts before any date inside it); `to` includes any
+/// date that is <= it OR extends it (`2026-08-05` is inside to=`2026-08`).
+/// Undated sources are OUTSIDE every window — a date-anchored question
+/// wants dated material.
+fn date_in_window(date: Option<&str>, from: Option<&str>, to: Option<&str>) -> bool {
+    if from.is_none() && to.is_none() {
+        return true;
+    }
+    let Some(date) = date else {
+        return false;
+    };
+    if let Some(from) = from {
+        if date < from {
+            return false;
+        }
+    }
+    if let Some(to) = to {
+        if date > to && !date.starts_with(to) {
+            return false;
+        }
+    }
+    true
 }
 
 fn optional_string(object: &Map<String, Value>, key: &str) -> Result<Option<String>, String> {
@@ -3781,6 +3900,76 @@ mod tests {
             "tokenspeed EAGLE drafter"
         );
         assert_eq!(strip_request_scaffolding("帮我找一篇文章"), "帮我找一篇文章");
+    }
+
+    /// Inclusive ISO-prefix window semantics (v9): prefix ends include
+    /// their extensions, undated sources are outside every window, and the
+    /// fts lane cannot leak an out-of-window source past the scan filter.
+    #[test]
+    fn date_window_filters_both_lanes_inclusively() {
+        assert!(date_in_window(Some("2026-08-05"), Some("2026-08"), Some("2026-08")));
+        assert!(date_in_window(Some("2026-08-05"), Some("2026-08-01"), Some("2026-08-10")));
+        assert!(!date_in_window(Some("2026-07-31"), Some("2026-08"), None));
+        assert!(!date_in_window(Some("2026-08-11"), None, Some("2026-08-10")));
+        assert!(!date_in_window(None, Some("2026-08"), None));
+        assert!(date_in_window(None, None, None));
+
+        let inside = source("aaaa1111", "Retrieval notes early august", None, Some("2026-08-03"));
+        let outside = source("bbbb2222", "Retrieval notes july", None, Some("2026-07-10"));
+        let model = fixture_model(vec![inside, outside], vec![], vec![]);
+        // Scan lane: only the in-window source survives.
+        let out = search_sources_ranked_windowed(
+            &model,
+            "retrieval",
+            10,
+            None,
+            Some("2026-08-01"),
+            Some("2026-08-10"),
+        );
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["source_id"], "aaaa1111");
+        assert_eq!(out["date_from"], "2026-08-01");
+        assert_eq!(out["date_to"], "2026-08-10");
+        // Fts lane: an out-of-window id in the rank is dropped, never fused.
+        let lane = SourcesFtsLane {
+            rank: vec!["bbbb2222".to_string(), "aaaa1111".to_string()],
+            saturated: false,
+            terms: vec!["retrieval".to_string()],
+            terms_capped: false,
+        };
+        let out = search_sources_ranked_windowed(
+            &model,
+            "retrieval",
+            10,
+            Some(lane),
+            Some("2026-08"),
+            None,
+        );
+        let hits = out["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "fts must not leak out-of-window: {out}");
+        assert_eq!(hits[0]["source_id"], "aaaa1111");
+        // No window = the exact v8 path (both sources match).
+        let out = search_sources_ranked_windowed(&model, "retrieval", 10, None, None, None);
+        assert_eq!(out["hits"].as_array().expect("hits").len(), 2);
+        assert_eq!(out.get("date_from"), None);
+    }
+
+    /// An invalid date string is an InvalidArgs error — never a silent
+    /// no-filter that reads as a full-corpus search.
+    #[test]
+    fn invalid_date_prefix_is_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut tools = VaultTools::new(temp.path());
+        let outcome = tools.execute(
+            "search_sources",
+            &json!({"query": "x", "date_from": "早八月"}),
+            Duration::from_secs(5),
+        );
+        match outcome {
+            ToolOutcome::InvalidArgs(msg) => assert!(msg.contains("ISO date prefix"), "{msg}"),
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
     }
 
     /// The reviewed content-loss cases: a function word INSIDE a content
@@ -4032,6 +4221,12 @@ mod tests {
         assert!(sources.contains("match_reason: index"));
         assert!(sources.contains("lane: scan"));
         assert!(sources.contains("WHOLE query"));
+        // v9: the date window is part of the model-facing contract — the
+        // description must name the params, the prefix form, and the
+        // undated-sources rule.
+        assert!(sources.contains("date_from/date_to"));
+        assert!(sources.contains("ISO prefixes"));
+        assert!(sources.contains("undated sources never match"));
         let evidence = description("search_evidence");
         assert!(evidence.contains("pack title and card titles"));
         assert!(evidence.contains("OR-matched"));
