@@ -64,6 +64,20 @@ struct Qrel {
     no_answer: bool,
     #[serde(default)]
     confidence: Option<String>,
+    /// Adjudicated tool filters (v9): a date window the question's wording
+    /// implies. The harness passes them to search_sources — measuring the
+    /// TOOL under a correct window; extracting the window from prose is the
+    /// agent's job and is measured separately.
+    #[serde(default)]
+    filters: QrelFilters,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct QrelFilters {
+    #[serde(default)]
+    date_from: Option<String>,
+    #[serde(default)]
+    date_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,10 +215,8 @@ fn load_qrels(path: &PathBuf) -> Result<Vec<Qrel>, CliError> {
 fn run_tool(
     tools: &mut VaultTools,
     name: &str,
-    query: &str,
-    limit: usize,
+    input: Value,
 ) -> (Vec<String>, Vec<String>, Option<String>, Option<String>) {
-    let input = json!({"query": query, "limit": limit});
     match tools.execute(name, &input, TOOL_BUDGET) {
         ToolOutcome::Ok(raw) => {
             let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
@@ -424,7 +436,20 @@ fn score_question(
     let mut hits_returned = 0usize;
 
     for tool in ["search_sources", "search_evidence", "search_claims"] {
-        let (sources, claims, lane, err) = run_tool(tools, tool, &effective_query, limit);
+        let mut input = json!({"query": effective_query, "limit": limit});
+        if tool == "search_sources" {
+            // v9: adjudicated date windows travel to the tool that supports
+            // them — measuring the tool under a correct window.
+            if let Some(map) = input.as_object_mut() {
+                if let Some(from) = &q.filters.date_from {
+                    map.insert("date_from".into(), json!(from));
+                }
+                if let Some(to) = &q.filters.date_to {
+                    map.insert("date_to".into(), json!(to));
+                }
+            }
+        }
+        let (sources, claims, lane, err) = run_tool(tools, tool, input);
         hits_returned += sources.len().max(claims.len());
         if let Some(lane) = lane {
             lanes.insert(tool.to_string(), lane);

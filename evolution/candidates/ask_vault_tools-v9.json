@@ -1,0 +1,28 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "ask_vault_tools-v9",
+  "base_version": "v8",
+  "target_version": "v9",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "RUNTIME surface, one deterministic capability: optional date_from/date_to (ISO YYYY-MM-DD prefix, inclusive) on search_sources, applied to BOTH lanes (scan candidates filtered before matching, fts rank ids filtered before fusion). Measured need (recent-bucket recon 2026-08-14): all four recent-class gold sources sit 100+ sources back from today — date-anchored questions ('8 月初看的…','7 月底读的…') cannot be reached by recency-N (list_recent_sources) OR by relevance ranking; they need query × date-range intersection. This is decidable semantics (repo decidability rule: decidable ground truth → code, not ranking heuristics). No date params = byte-identical v8 behavior. The agent-side skill of EXTRACTING the window from the question is out of scope — this candidate makes the tool capable when the window is right; the tool description documents the params so the model can use them.",
+  "predicted_delta": {
+    "coverage": "pre-registered, ONE run: tuning-set recent-class questions with adjudicated date windows in their qrels reach their gold via search_sources (union source R@20 for the recent bucket improves from the 0.25 baseline); every question WITHOUT date filters scores byte-identically to v8 (the diff of the two report JSONs is empty outside the recent bucket). DESIGN REVISION (recorded 2026-08-14, first acceptance run failed): the initial implementation filtered AFTER the fixed fetch cap, so out-of-window high-bm25 sources silently ate the slots of in-window gold (a measured in-window hit beyond rank 100 vanished) — with a window the fts fetch now covers the corpus, so the cap cannot truncate ahead of the filter. Known limit, NOT patched here: s-024-class cross-language paraphrase (zh question, en title, zero term overlap) stays unreachable by ANY lexical window — routed to the dense-lane experiment.",
+    "operational_reliability": "an invalid date string is an InvalidArgs error, never a silent no-filter; from > to returns an empty result with truncated:false (honest empty, not an error); no new failure modes on the default path."
+  },
+  "guardrails": {
+    "accepted_without_quote": 0,
+    "no_filter_is_v8": "absent params take the exact v8 code path — scan, fts, fusion, and payload unchanged",
+    "both_lanes_filtered": "the fts lane must not leak an out-of-window source that the scan lane would have excluded — filters apply before fusion on both",
+    "decidable_semantics": "inclusive ISO prefix comparison on the source date field; no fuzzy parsing, no relative-date interpretation in the tool (that is the agent's job)",
+    "result_shape_compatible": "additive echo of the applied window only",
+    "read_only": "no writes, no projection changes"
+  },
+  "eval_plan": {
+    "replay_set": "unit fixtures: window includes/excludes by prefix (year-only, month, day); fts hit outside the window dropped before fusion; invalid date = InvalidArgs; absent params byte-identical to v8 output on the same model; tool-description honesty test names the params. Pre-registered acceptance: ONE tuning-set run with date windows added to the recent-class qrels (window adjudication = data work recorded in the qrel notes) — recent bucket improves, all other buckets byte-identical; ONE frozen-holdout run recorded regardless of outcome (holdout has 1 recent question with its own window).",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert the parameter plumbing — no persisted state, no env needed: absent params ARE the v8 path, so rollback equals models simply not sending the params.",
+  "ablation_required": false
+}
