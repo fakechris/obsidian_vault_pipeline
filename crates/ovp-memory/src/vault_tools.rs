@@ -1103,17 +1103,36 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
     (best, matched.len())
 }
 
-/// zh request-scaffolding phrases stripped from fts queries (candidate
-/// `ask_vault_tools-v7`). Longest first: 有哪些 must strip before 哪些,
-/// 帮我找一篇 before 帮我. ONLY request scaffolding and function words —
-/// content terms must always survive (guardrail `no_content_loss`).
+/// zh request phrases stripped from fts queries AS SUBSTRINGS (candidate
+/// `ask_vault_tools-v7`). Longest first: 帮我找一篇 must strip before 帮我.
+/// ONLY multi-char phrases that are essentially never part of a content
+/// word may live here — a substring hit inside a content word destroys it
+/// (德里→德 was the reviewed failure). Ambiguous words go in
+/// [`QUERY_STRIP_ZH_STANDALONE`]; single-char function words are handled
+/// by the ≥2-char fragment rule and must NEVER be listed.
 pub const QUERY_STRIP_ZH: &[&str] = &[
-    "帮我找一篇", "帮我找", "帮我", "请问", "找一篇", "一篇", "那篇", "这篇", "文章",
-    "有哪些", "是哪些", "哪些", "是什么", "什么", "给两条", "给出", "给我", "带引用",
-    "引用", "结论", "关于", "里面", "我记得", "我看过", "有没有", "看过", "记得",
-    "总结一下", "总结", "介绍一下", "介绍", "讲了", "说了", "内容", "笔记", "分享了",
-    "还", "了", "的", "里", "吗", "呢", "和", "与", "在", "个",
+    "帮我找一篇", "帮我找", "帮我", "请问", "找一篇", "找一下", "看一下", "查一下",
+    "那篇", "这篇", "一篇", "有哪些", "是哪些", "是什么", "有什么", "给两条", "给出",
+    "给我", "带引用", "我记得", "我看过", "有没有", "总结一下", "介绍一下", "分享了",
+    "写着", "关于", "里面",
 ];
+
+/// zh words dropped ONLY when they stand alone as a complete fragment
+/// after substring stripping and punctuation splitting. 笔记软件 keeps its
+/// 笔记; a bare trailing 结论/引用/文章 is scaffolding.
+pub const QUERY_STRIP_ZH_STANDALONE: &[&str] = &[
+    "文章", "笔记", "内容", "结论", "引用", "总结", "介绍", "讲了", "说了",
+    "哪些", "什么", "看过", "记得", "我的", "标题", "那个", "这个",
+];
+
+/// Single-char function words trimmed from fragment EDGES only, with an
+/// undo: if the trim leaves fewer than 2 chars the ORIGINAL fragment is
+/// kept — that one rule makes 饱和/德里/目的 immune while 的取舍→取舍 and
+/// 来源和→来源 still clean up. Leading trims only 的 (word-initial 的 is
+/// rare); 和平/里程 style words are protected by not trimming those chars
+/// at the leading edge at all.
+const ZH_EDGE_LEAD: &[char] = &['的'];
+const ZH_EDGE_TRAIL: &[char] = &['的', '了', '和', '与', '吗', '呢', '里', '在', '个', '还'];
 
 /// Latin stopwords dropped from fts queries — request verbs and function
 /// words only; identifiers, names, and technical terms always survive.
@@ -1157,11 +1176,15 @@ pub fn strip_request_scaffolding(query: &str) -> String {
         for noise in QUERY_STRIP_ZH {
             s = s.replace(noise, " ");
         }
-        for frag in s.split_whitespace() {
-            // CJK punctuation (:《》…) rides along in the run — trim it at
-            // the edges so a surviving fragment is pure content.
-            let frag = frag.trim_matches(|c: char| !c.is_alphanumeric());
-            if frag.chars().count() >= 2 {
+        // Split on punctuation too (:《》,…), not just the whitespace the
+        // replacements introduced — a fragment must be pure content before
+        // the edge-trim and standalone checks can judge it whole.
+        for frag in s.split(|c: char| !c.is_alphanumeric()) {
+            let trimmed = frag
+                .trim_start_matches(|c| ZH_EDGE_LEAD.contains(&c))
+                .trim_end_matches(|c| ZH_EDGE_TRAIL.contains(&c));
+            let frag = if trimmed.chars().count() >= 2 { trimmed } else { frag };
+            if frag.chars().count() >= 2 && !QUERY_STRIP_ZH_STANDALONE.contains(&frag) {
                 if !out.is_empty() {
                     out.push(' ');
                 }
@@ -1174,7 +1197,10 @@ pub fn strip_request_scaffolding(query: &str) -> String {
         if (ch as u32) >= 0x2E80 {
             flush_latin(&mut latin, &mut out);
             cjk.push(ch);
-        } else if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+        } else if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            // Any non-CJK alphanumeric — café and naïve are single latin
+            // terms to the fts analyzer and must survive intact (reviewed:
+            // ascii-only here silently dropped the diacritic letters).
             flush_cjk(&mut cjk, &mut out);
             latin.push(ch);
         } else {
@@ -3587,7 +3613,7 @@ mod tests {
     fn strip_request_scaffolding_keeps_content_terms() {
         assert_eq!(
             strip_request_scaffolding("帮我找一篇文章:诀窍是手写 Transformer,还分享了她的笔记"),
-            "诀窍是手写 Transformer"
+            "诀窍是手写 Transformer 她的笔记"
         );
         assert_eq!(
             strip_request_scaffolding("vault 里关于 context engineering 的 durable 结论,给两条带引用"),
@@ -3599,6 +3625,29 @@ mod tests {
             "tokenspeed EAGLE drafter"
         );
         assert_eq!(strip_request_scaffolding("帮我找一篇文章"), "帮我找一篇文章");
+    }
+
+    /// The reviewed content-loss cases: a function word INSIDE a content
+    /// word must never strip (德里/和平), an ambiguous word only drops when
+    /// it stands alone (笔记软件 keeps its 笔记), and non-ASCII latin
+    /// letters survive as one term (café).
+    #[test]
+    fn strip_request_scaffolding_never_destroys_content_words() {
+        assert_eq!(strip_request_scaffolding("德里旅游有哪些"), "德里旅游");
+        assert_eq!(strip_request_scaffolding("和平协议有哪些"), "和平协议");
+        assert_eq!(strip_request_scaffolding("笔记软件推荐有哪些"), "笔记软件推荐");
+        assert_eq!(strip_request_scaffolding("find café retrieval"), "café retrieval");
+    }
+
+    /// Edge-trim cleans connective single-chars glued to content (的取舍,
+    /// 来源和) while the <2-char undo protects words that ARE the function
+    /// char plus one (饱和, 目的, 德里).
+    #[test]
+    fn strip_edge_trim_undoes_when_it_would_destroy_the_word() {
+        assert_eq!(strip_request_scaffolding("RAG 的取舍 vault 证据"), "RAG 取舍 证据");
+        assert_eq!(strip_request_scaffolding("的来源和 durable"), "来源 durable");
+        assert_eq!(strip_request_scaffolding("饱和 溶液"), "饱和 溶液");
+        assert_eq!(strip_request_scaffolding("目的 分析"), "目的 分析");
     }
 
     /// fts rank leads by bm25 relevance; the substring-only extra (absent
