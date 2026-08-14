@@ -1103,6 +1103,118 @@ fn language_grouped_score(terms: &[String], matched: &[String]) -> (u32, usize) 
     (best, matched.len())
 }
 
+/// Read-only diagnostic snapshot of the evidence-fusion lanes for ONE
+/// query (step 3a of the fusion diagnosis — tooling, not production
+/// behavior). Emits the title lane and the cards/units fts lanes
+/// SEPARATELY with raw bm25 — production merges them by cross-table
+/// `min(bm25)` (the suspected defect: two fts tables' scores are not
+/// comparable) — plus pack metadata and saturation flags, so ablation
+/// fusions can be computed offline without touching the shipped path.
+pub fn evidence_lane_snapshot(
+    vault_root: &Path,
+    query: &str,
+    fetch: usize,
+) -> Result<Value, String> {
+    let model = read_index(vault_root).map_err(|e| format!("index: {e}"))?;
+    let (terms, _) = tokenize_search_terms_capped(query);
+    // Title lane: the same matching and ordering as the production scan
+    // (duplicated here on purpose — the diagnostic must observe, never
+    // share mutable plumbing with, the surface under investigation).
+    let mut title = Vec::new();
+    for (index, pack) in model.packs.iter().enumerate() {
+        let pack_title_lower = pack.title.to_lowercase();
+        let card_titles_lower: Vec<String> =
+            pack.card_titles.iter().map(|t| t.to_lowercase()).collect();
+        let matched: Vec<String> = terms
+            .iter()
+            .filter(|term| {
+                pack_title_lower.contains(term.as_str())
+                    || card_titles_lower.iter().any(|t| t.contains(term.as_str()))
+            })
+            .cloned()
+            .collect();
+        if matched.is_empty() {
+            continue;
+        }
+        let score = language_grouped_score(&terms, &matched);
+        title.push((score, index, matched));
+    }
+    title.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut packs_meta = Map::new();
+    let mut note_pack = |packs_meta: &mut Map<String, Value>, pack_dir: &str| {
+        if !packs_meta.contains_key(pack_dir) {
+            if let Some(p) = model.packs.iter().find(|p| p.pack_dir == pack_dir) {
+                packs_meta.insert(
+                    pack_dir.into(),
+                    json!({
+                        "title": p.title,
+                        "source_id": p.source_sha256,
+                        "cards_n": p.card_titles.len(),
+                        "units_n": p.units,
+                    }),
+                );
+            }
+        }
+    };
+    let title_rows: Vec<Value> = title
+        .iter()
+        .map(|((permille, matched_n), index, matched)| {
+            let pack = &model.packs[*index];
+            note_pack(&mut packs_meta, &pack.pack_dir);
+            json!({
+                "pack_dir": pack.pack_dir,
+                "score_permille": permille,
+                "matched_n": matched_n,
+                "matched_terms": matched,
+            })
+        })
+        .collect();
+
+    let effective = fts_query_source(query);
+    let fts_query = tokenize_search_terms(&effective).join(" ");
+    let mut cards_rows = Vec::new();
+    let mut units_rows = Vec::new();
+    let mut cards_saturated = false;
+    let mut units_saturated = false;
+    let mut shadow_served = false;
+    if let Some(reader) = shadow_reader_for(vault_root, &model) {
+        shadow_served = true;
+        if let Ok(hits) = reader.fts_search(ovp_index::sqlite::FtsSurface::Cards, &fts_query, fetch)
+        {
+            cards_saturated = hits.len() == fetch;
+            for hit in hits {
+                if let Some((pack, idx)) = parse_card_id(&hit.id) {
+                    note_pack(&mut packs_meta, pack);
+                    cards_rows
+                        .push(json!({"pack_dir": pack, "card_idx": idx, "bm25": hit.rank}));
+                }
+            }
+        }
+        if let Ok(hits) = reader.fts_search(ovp_index::sqlite::FtsSurface::Units, &fts_query, fetch)
+        {
+            units_saturated = hits.len() == fetch;
+            for hit in hits {
+                if let Some(pack) = parse_unit_pack(&hit.id) {
+                    note_pack(&mut packs_meta, pack);
+                    units_rows.push(json!({"pack_dir": pack, "bm25": hit.rank}));
+                }
+            }
+        }
+    }
+    Ok(json!({
+        "schema": "ovp.retrieval_eval.evidence_trace/v1",
+        "query": query,
+        "effective_fts_query": fts_query,
+        "shadow_served": shadow_served,
+        "title_lane": title_rows,
+        "cards_hits": cards_rows,
+        "units_hits": units_rows,
+        "cards_saturated": cards_saturated,
+        "units_saturated": units_saturated,
+        "packs": Value::Object(packs_meta),
+    }))
+}
+
 /// zh request phrases stripped from fts queries AS SUBSTRINGS (candidate
 /// `ask_vault_tools-v7`). Longest first: 帮我找一篇 must strip before 帮我.
 /// ONLY multi-char phrases that are essentially never part of a content
@@ -4167,6 +4279,55 @@ mod tests {
             .map(|h| h["claim_id"].clone())
             .collect();
         assert_eq!(ids, vec![json!("c-2"), json!("c-1")]);
+    }
+
+    #[test]
+    fn evidence_lane_snapshot_reports_lanes_separately() {
+        ovp_index::sqlite::override_cache_base(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.run/stage3-tests-memory"),
+        );
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model = fixture_model(
+            vec![],
+            vec![simple_pack(
+                "40-Resources/Reader/alpha",
+                "Trace pack about retrieval",
+                vec!["Quiet title".into()],
+            )],
+            vec![],
+        );
+        let evidence = ovp_index::EvidenceModel {
+            schema: "ovp.index.evidence/v1".into(),
+            date: "2026-08-14".into(),
+            cards: vec![ovp_index::evidence::CardEvidenceRow {
+                id: "card:40-Resources/Reader/alpha:0".into(),
+                pack_dir: "40-Resources/Reader/alpha".into(),
+                source_sha256: None,
+                source_title: "Trace pack about retrieval".into(),
+                title: "Quiet title".into(),
+                content: "retrieval diagnostics live in the card body".into(),
+                unit_type: None,
+                cited_unit_ids: vec![],
+            }],
+            units: vec![],
+            warnings: vec![],
+        };
+        ovp_index::write_index(temp.path(), &model).expect("index");
+        ovp_index::write_evidence(temp.path(), &evidence).expect("evidence");
+        ovp_index::sqlite::write_shadow(temp.path(), &model, Some(&evidence)).expect("shadow");
+
+        let snap = evidence_lane_snapshot(temp.path(), "retrieval", 50).expect("snapshot");
+        assert_eq!(snap["shadow_served"], json!(true));
+        // Title lane and the cards lane report SEPARATELY — the whole point
+        // of the diagnostic is observing them before the production merge.
+        assert_eq!(snap["title_lane"][0]["pack_dir"], "40-Resources/Reader/alpha");
+        assert_eq!(snap["cards_hits"][0]["pack_dir"], "40-Resources/Reader/alpha");
+        assert!(snap["cards_hits"][0]["bm25"].is_f64());
+        assert_eq!(snap["units_hits"].as_array().expect("units").len(), 0);
+        assert_eq!(
+            snap["packs"]["40-Resources/Reader/alpha"]["cards_n"],
+            json!(1)
+        );
     }
 
     #[test]
