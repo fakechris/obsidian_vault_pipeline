@@ -1050,6 +1050,18 @@ enum Cmd {
         symptom: Vec<String>,
     },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
+    /// EXPERIMENT — dense-lane probe (Step 4): embed source titles + card
+    /// contents with the local multilingual model, rank sources by cosine
+    /// per query, dump top-30. Eval-only; requires --features embed.
+    EmbedProbe {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// JSON array of {id, question}.
+        #[arg(long)]
+        queries: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// DIAGNOSTIC — dump the evidence-fusion lane snapshot for one query
     /// (title lane + cards/units fts lanes SEPARATELY with raw bm25, pack
     /// metadata, saturation). Read-only; step-3a fusion-diagnosis tooling.
@@ -2451,6 +2463,11 @@ fn main() -> ExitCode {
             };
             commands::evolve::run(EvolveArgs { sub, registry_path })
         }
+        Cmd::EmbedProbe {
+            vault_root,
+            queries,
+            out,
+        } => commands::retrieval_eval::embed_probe(vault_root, queries, out),
         Cmd::EvidenceTrace {
             vault_root,
             query,

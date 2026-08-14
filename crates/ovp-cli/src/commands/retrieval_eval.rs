@@ -112,6 +112,121 @@ struct QuestionReport {
 
 const TOOL_BUDGET: Duration = Duration::from_secs(60);
 
+/// `embed-probe` — the Step-4 dense-lane EXPERIMENT (eval-only, no
+/// production behavior): embed source titles + card contents with the
+/// local multilingual model (cache-shared with theme clustering), rank
+/// sources by max cosine for each query, dump top-30 per query. The
+/// measured 9-question zh↔en gap (7 paraphrase + 2 recent) is the
+/// evidence base this experiment exists to test.
+#[cfg(feature = "embed")]
+pub fn embed_probe(vault_root: PathBuf, queries: PathBuf, out: PathBuf) -> Result<(), CliError> {
+    use ovp_embed::{EMBED_DIM, EMBED_MODEL_ID, cache, document_text};
+
+    #[derive(Deserialize)]
+    struct ProbeQuery {
+        id: String,
+        question: String,
+    }
+    let qs: Vec<ProbeQuery> = serde_json::from_str(
+        &std::fs::read_to_string(&queries)
+            .map_err(|e| CliError::Io(format!("reading {}: {e}", queries.display())))?,
+    )
+    .map_err(|e| CliError::Io(format!("parsing {}: {e}", queries.display())))?;
+
+    let model = ovp_index::read_index(&vault_root).map_err(|e| CliError::Io(format!("index: {e}")))?;
+    let evidence =
+        ovp_index::read_evidence(&vault_root).map_err(|e| CliError::Io(format!("evidence: {e}")))?;
+    let cache_dir = vault_root.join(".ovp/cache/embeddings");
+
+    // (source_id, doc text, via) — titles for every source, plus each card's
+    // title+content head aggregated back to its source (codex review:
+    // titles-only would false-negative body-described paraphrases).
+    let mut docs: Vec<(String, String, &'static str)> = Vec::new();
+    for s in &model.sources {
+        if let Some(title) = &s.title {
+            docs.push((s.sha256.clone(), title.clone(), "title"));
+        }
+    }
+    for c in &evidence.cards {
+        if let Some(sid) = &c.source_sha256 {
+            docs.push((sid.clone(), document_text(&c.title, &c.content, 400), "card"));
+        }
+    }
+
+    let mut embedder = ovp_embed::embedder::Embedder::new(true)
+        .map_err(|e| CliError::Io(format!("embedder: {e}")))?;
+    let mut vectors: Vec<Option<Vec<f32>>> = vec![None; docs.len()];
+    let mut miss_idx = Vec::new();
+    for (i, (_, text, _)) in docs.iter().enumerate() {
+        let sha = cache::text_sha256(text);
+        match cache::load(&cache_dir, &sha, EMBED_MODEL_ID, EMBED_DIM) {
+            Some(v) => vectors[i] = Some(v),
+            None => miss_idx.push(i),
+        }
+    }
+    eprintln!("docs={} cache_hits={} misses={}", docs.len(), docs.len() - miss_idx.len(), miss_idx.len());
+    for chunk in miss_idx.chunks(256) {
+        let texts: Vec<String> = chunk.iter().map(|i| docs[*i].1.clone()).collect();
+        let embedded = embedder.embed(&texts).map_err(CliError::Io)?;
+        for (j, i) in chunk.iter().enumerate() {
+            let sha = cache::text_sha256(&docs[*i].1);
+            cache::store(&cache_dir, &sha, EMBED_MODEL_ID, &embedded[j])
+                .map_err(CliError::Io)?;
+            vectors[*i] = Some(embedded[j].clone());
+        }
+        eprintln!("embedded {}/{}", miss_idx.iter().position(|x| x == chunk.last().unwrap()).unwrap() + 1, miss_idx.len());
+    }
+
+    let mut report = Vec::new();
+    for q in &qs {
+        let qv = embedder
+            .embed(&[q.question.clone()])
+            .map_err(CliError::Io)?
+            .remove(0);
+        // L2-normalized vectors: dot = cosine. Source score = best doc.
+        let mut best: std::collections::HashMap<&str, (f32, &'static str)> =
+            std::collections::HashMap::new();
+        for (i, (sid, _, via)) in docs.iter().enumerate() {
+            let Some(v) = &vectors[i] else { continue };
+            let dot: f32 = v.iter().zip(&qv).map(|(a, b)| a * b).sum();
+            let entry = best.entry(sid.as_str()).or_insert((f32::MIN, via));
+            if dot > entry.0 {
+                *entry = (dot, via);
+            }
+        }
+        let mut ranked: Vec<(&str, f32, &'static str)> =
+            best.into_iter().map(|(sid, (s, via))| (sid, s, via)).collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        report.push(json!({
+            "id": q.id,
+            "question": q.question,
+            "top": ranked.iter().take(30).map(|(sid, score, via)| {
+                json!({"source_id": sid, "score": score, "via": via})
+            }).collect::<Vec<_>>(),
+        }));
+    }
+    std::fs::write(
+        &out,
+        serde_json::to_string_pretty(&json!({
+            "schema": "ovp.retrieval_eval.embed_probe/v1",
+            "model": EMBED_MODEL_ID,
+            "docs": docs.len(),
+            "queries": report,
+        }))
+        .map_err(|e| CliError::Io(format!("serializing: {e}")))?,
+    )
+    .map_err(|e| CliError::Io(format!("writing {}: {e}", out.display())))?;
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
+#[cfg(not(feature = "embed"))]
+pub fn embed_probe(_: PathBuf, _: PathBuf, _: PathBuf) -> Result<(), CliError> {
+    Err(CliError::Io(
+        "embed-probe requires a build with --features embed".into(),
+    ))
+}
+
 /// `evidence-trace` — dump the evidence-fusion lane snapshot for one query
 /// (step-3a diagnosis tooling; read-only, prints JSON to stdout).
 pub fn trace(vault_root: PathBuf, query: String, fetch: usize) -> Result<(), CliError> {
