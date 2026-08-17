@@ -23,6 +23,7 @@ import {
   caseCanonicalIds,
   isMiscTheme,
   sortThemeWall,
+  sourceDaysByCase,
   themeRoute,
   themeSourceBadge,
   themeWall,
@@ -91,6 +92,15 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
           {t('theme.unclassifiedNote')}
         </p>
       )}
+      {group.firstSeen != null && group.lastSeen != null && (
+        <p
+          className="theme-card-times tiny muted"
+          title={t('knowledge.themeTimesTip')}
+        >
+          <span>{t('knowledge.themeCreated', { day: group.firstSeen })}</span>
+          <span>{t('knowledge.themeUpdated', { day: group.lastSeen })}</span>
+        </p>
+      )}
       {group.topClaim && <p className="theme-card-snippet">{group.topClaim}</p>}
     </Link>
   );
@@ -145,8 +155,13 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
   }, []);
 
   // Sort control (URL-parameterized like the view toggle; default = the
-  // historical count-desc wall).
-  const sortKey: ThemeSortKey = params.get('sort') === 'name' ? 'name' : 'count';
+  // historical count-desc wall). Time keys default to desc too — the "what's
+  // new" view — flipped by the direction button.
+  const sortRaw = params.get('sort');
+  const sortKey: ThemeSortKey =
+    sortRaw === 'name' || sortRaw === 'updated' || sortRaw === 'created'
+      ? sortRaw
+      : 'count';
   const sortDir: ThemeSortDir =
     params.get('dir') === 'asc' ? 'asc' : params.get('dir') === 'desc' ? 'desc' : sortKey === 'name' ? 'asc' : 'desc';
   const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
@@ -160,7 +175,12 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     );
   };
   const wall = sortThemeWall(
-    themeWall(model.claims, themes, caseCanonicalIds(model)),
+    themeWall(
+      model.claims,
+      themes,
+      caseCanonicalIds(model),
+      sourceDaysByCase(model),
+    ),
     sortKey,
     sortDir,
   );
@@ -209,6 +229,20 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
               onClick={() => setSort('name', sortKey === 'name' ? sortDir : 'asc')}
             >
               {t('knowledge.sortName')}
+            </button>
+            <button
+              type="button"
+              className={sortKey === 'updated' ? 'active' : ''}
+              onClick={() => setSort('updated', sortKey === 'updated' ? sortDir : 'desc')}
+            >
+              {t('knowledge.sortUpdated')}
+            </button>
+            <button
+              type="button"
+              className={sortKey === 'created' ? 'active' : ''}
+              onClick={() => setSort('created', sortKey === 'created' ? sortDir : 'desc')}
+            >
+              {t('knowledge.sortCreated')}
             </button>
             <button
               type="button"

@@ -1012,6 +1012,11 @@ export interface ThemeGroup {
   sources: number;
   /** First durable (else first caveated) claim text — the wall snippet. */
   topClaim?: string;
+  /** B-axis day of the theme's earliest / latest claim (`claimDay`), from
+   * the claims this projection indexes. Absent when no claim has a date —
+   * the wall then shows no time line rather than a false one. */
+  firstSeen?: string | null;
+  lastSeen?: string | null;
 }
 
 /** The crystal themes.json Unclassified sentinel — packs the clustering left
@@ -1099,6 +1104,9 @@ export function themeWall(
   // collapses re-captures of the same document so `sources` counts
   // INDEPENDENT documents, not vault copies. Absent = raw case ids.
   canonical?: Map<string, string>,
+  // Optional case-id → B-axis day map (see `sourceDaysByCase`): the wall's
+  // created/updated times. Absent = no time line on the cards.
+  sourceDays?: Map<string, string> | null,
 ): ThemeGroup[] {
   const groups = new Map<string, ThemeGroup>();
   const caseSets = new Map<string, Set<string>>();
@@ -1118,6 +1126,11 @@ export function themeWall(
   for (const c of activeClaims(claims)) {
     const g = ensure(c.theme_id ?? null, c.theme ?? '');
     for (const s of c.sources) caseSets.get(themeGroupKey(g.id, g.theme))?.add(canonical?.get(s) ?? s);
+    const day = claimDay(c, sourceDays ?? null);
+    if (day) {
+      if (g.firstSeen == null || day < g.firstSeen) g.firstSeen = day;
+      if (g.lastSeen == null || day > g.lastSeen) g.lastSeen = day;
+    }
     if (c.status === 'durable') {
       // The first durable claim is the wall snippet, even when a caveated
       // one was seen first.
@@ -1282,6 +1295,67 @@ export function sourcesByCase(model: IndexModel): Map<string, SourceRow> {
     if (src) out.set(caseId, src);
   }
   return out;
+}
+
+/** The source's day on the B timeline (pipeline): last processed day, else
+ * intake day, else the legacy date. ISO 'YYYY-MM-DD' — compares
+ * lexicographically = chronologically. */
+export function sourceDay(src: SourceRow): string | null {
+  return src.processed_on ?? src.captured_on ?? src.date ?? null;
+}
+
+/** case id → B-axis day (`sourceDay` of the resolved source), for claims
+ * whose own run_id carries no date. Claims' sources are pack case ids —
+ * same resolution `sourcesByCase` uses. */
+export function sourceDaysByCase(model: IndexModel): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [caseId, src] of sourcesByCase(model)) {
+    const day = sourceDay(src);
+    if (day) out.set(caseId, day);
+  }
+  return out;
+}
+
+/** The claim's day on the B timeline: the run that (re)wrote it to the
+ * crystal ledger when `run_id` embeds one, else the NEWEST cited source's
+ * pipeline day (evidence cannot post-date the claim; legacy undated runs
+ * leave this the only honest signal). Null = no date anywhere. */
+export function claimDay(
+  claim: ClaimRow,
+  sourceDays: Map<string, string> | null,
+): string | null {
+  if (claim.run_date) return claim.run_date;
+  if (!sourceDays) return null;
+  let best: string | null = null;
+  for (const caseId of claim.sources) {
+    const day = sourceDays.get(caseId);
+    if (day && (best === null || day > best)) best = day;
+  }
+  return best;
+}
+
+/** UNIQUE per-row React keys for a claim list. `claim_id` can collide
+ * across runs (the topic overview's ambiguous-id note) while `claim_key`
+ * cannot — but legacy review rows lack claim_key, so `claim_key ?? claim_id`
+ * still collides. Duplicate React keys BREAK reconciliation: when the list
+ * is re-sorted the DOM order stays frozen in a stale arrangement while the
+ * projected array reorders underneath (2026-08-17 "sort/filter has no
+ * visible effect" on the theme detail page — filter worked, sorting looked
+ * dead). Keys follow the list ORDER once: occurrence-suffixed (`id`, `id#2`
+ * …), so each row object keeps a STABLE key across filter/sort (those keep
+ * the same row objects, just reordered). */
+export function uniqueClaimKeys(
+  claims: ClaimRow[],
+): WeakMap<ClaimRow, string> {
+  const counts = new Map<string, number>();
+  const keys = new WeakMap<ClaimRow, string>();
+  for (const c of claims) {
+    const base = c.claim_key ?? c.claim_id;
+    const n = counts.get(base) ?? 0;
+    counts.set(base, n + 1);
+    keys.set(c, n === 0 ? base : `${base}#${n}`);
+  }
+  return keys;
 }
 
 export type PageBodyToken =
@@ -1597,12 +1671,27 @@ export function indexHealth(
   return 'ok';
 }
 
-/** Knowledge-wall sort control (operator request 2026-08-06): by claim
- * count or theme name, either direction. Ties always break by name asc so
+/** Knowledge-wall sort control: by claim count, theme name, or the theme's
+ * created/updated day, either direction. Ties always break by name asc so
  * the order is deterministic under every mode; the default ('count'/'desc')
- * reproduces the wall's historical order exactly. */
-export type ThemeSortKey = 'count' | 'name';
+ * reproduces the wall's historical order exactly. Undated themes sort last
+ * under BOTH directions. */
+export type ThemeSortKey = 'count' | 'name' | 'updated' | 'created';
 export type ThemeSortDir = 'asc' | 'desc';
+
+/** B-day comparator: unknown (null) sorts last regardless of direction;
+ * `dir` applies only between known days. */
+function cmpDayTime(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  dir: ThemeSortDir,
+): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  const raw = a < b ? -1 : a > b ? 1 : 0;
+  return dir === 'asc' ? raw : -raw;
+}
 
 export function sortThemeWall(
   groups: ThemeGroup[],
@@ -1610,9 +1699,62 @@ export function sortThemeWall(
   dir: ThemeSortDir,
 ): ThemeGroup[] {
   return [...groups].sort((a, b) => {
-    const primary =
-      key === 'count' ? a.total - b.total : a.theme.localeCompare(b.theme);
-    const signed = dir === 'asc' ? primary : -primary;
+    // Time keys apply `dir` inside the comparator (nulls stay last); the
+    // count/name keys apply it here.
+    let primary: number;
+    switch (key) {
+      case 'count':
+        primary = a.total - b.total;
+        break;
+      case 'name':
+        primary = a.theme.localeCompare(b.theme);
+        break;
+      case 'updated':
+        primary = cmpDayTime(a.lastSeen, b.lastSeen, dir);
+        break;
+      case 'created':
+        primary = cmpDayTime(a.firstSeen, b.firstSeen, dir);
+        break;
+    }
+    const signed =
+      key === 'count' || key === 'name' ? (dir === 'asc' ? primary : -primary) : primary;
     return signed || a.theme.localeCompare(b.theme);
   });
+}
+
+/** Theme-detail claim filter: by status. 'all' = both bands (the page's
+ * historical behavior). */
+export type ClaimStatusFilter = 'all' | 'durable' | 'caveated';
+
+export function filterClaimsByStatus(
+  claims: ClaimRow[],
+  filter: ClaimStatusFilter,
+): ClaimRow[] {
+  if (filter === 'all') return claims;
+  return claims.filter((c) => c.status === filter);
+}
+
+/** Theme-detail claim sort: 'default' reproduces `themeClaims` order
+ * (durable before caveated, claim_id within each band); 'day' orders by the
+ * claim's B-axis day, undated claims last under either direction. Ties
+ * break by claim_id so the order is deterministic. */
+export type ThemeClaimSortKey = 'default' | 'day';
+
+export function sortThemeClaims(
+  claims: ClaimRow[],
+  key: ThemeClaimSortKey,
+  dir: ThemeSortDir,
+  sourceDays: Map<string, string> | null,
+): ClaimRow[] {
+  const sorted = [...claims];
+  if (key === 'day') {
+    sorted.sort((a, b) => {
+      const cmp = cmpDayTime(claimDay(a, sourceDays), claimDay(b, sourceDays), dir);
+      return cmp || a.claim_id.localeCompare(b.claim_id);
+    });
+  } else {
+    const rank = (c: ClaimRow) => (c.status === 'durable' ? 0 : 1);
+    sorted.sort((a, b) => rank(a) - rank(b) || a.claim_id.localeCompare(b.claim_id));
+  }
+  return sorted;
 }
