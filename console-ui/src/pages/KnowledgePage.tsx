@@ -22,12 +22,17 @@ import { fetchThemes } from '../lib/api';
 import {
   caseCanonicalIds,
   isMiscTheme,
+  isTimeSortKey,
+  readKnowledgeSortPref,
+  resolveKnowledgeWallSort,
   sortThemeWall,
   sourceDaysByCase,
   themeRoute,
   themeSourceBadge,
   themeWall,
+  writeKnowledgeSortPref,
   UNCLASSIFIED_ID,
+  type KnowledgeSortPref,
   type ThemeGroup,
   type ThemeSortDir,
   type ThemeSortKey,
@@ -154,16 +159,22 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     };
   }, []);
 
-  // Sort control (URL-parameterized like the view toggle; default = the
-  // historical count-desc wall). Time keys default to desc too — the "what's
-  // new" view — flipped by the direction button.
-  const sortRaw = params.get('sort');
-  const sortKey: ThemeSortKey =
-    sortRaw === 'name' || sortRaw === 'updated' || sortRaw === 'created'
-      ? sortRaw
-      : 'count';
-  const sortDir: ThemeSortDir =
-    params.get('dir') === 'asc' ? 'asc' : params.get('dir') === 'desc' ? 'desc' : sortKey === 'name' ? 'asc' : 'desc';
+  // Sort preference — persisted in localStorage (survives navigation and
+  // restarts, unlike URL params which a Link navigation drops) AND shared
+  // with the theme detail pages: the time direction lives in `pref.timeDir`,
+  // so a "sort by date, newest first" choice here carries to every theme
+  // page. An explicit URL sort (shared link) still wins per-visit.
+  const [pref, setPref] = useState<KnowledgeSortPref>(() =>
+    readKnowledgeSortPref(window.localStorage),
+  );
+  const applyPref = (patch: Partial<KnowledgeSortPref>) => {
+    setPref((prev) => {
+      const next = { ...prev, ...patch };
+      writeKnowledgeSortPref(next, window.localStorage);
+      return next;
+    });
+  };
+  const { key: sortKey, dir: sortDir } = resolveKnowledgeWallSort(params, pref);
   const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
     setParams(
       (p) => {
@@ -172,6 +183,12 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         return p;
       },
       { replace: true },
+    );
+    // Time keys rotate the SHARED time direction; count/name keep their own.
+    applyPref(
+      isTimeSortKey(key)
+        ? { wallKey: key, timeDir: dir }
+        : { wallKey: key, wallDir: dir },
     );
   };
   const wall = sortThemeWall(
