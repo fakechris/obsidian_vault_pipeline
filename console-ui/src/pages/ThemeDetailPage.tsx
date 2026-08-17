@@ -327,8 +327,11 @@ function ThemeBody({
   // Claim filter/sort — the SAME persisted pref family as the knowledge
   // wall. The Day sort's direction is the shared time direction, so a date
   // sort picked here agrees with the wall automatically (and vice versa);
-  // filter/sort choices also persist across visits. Explicit URL params
-  // (shared links) still win per-visit. Chat dock shares searchParams.
+  // filter/sort choices also persist across visits. URL params are consumed
+  // ON ARRIVAL (shared links land into prefs and are stripped; back
+  // navigation carrying old params can't override the current preference).
+  // Day-to-day clicks never write claim-view params — only localStorage.
+  // Chat dock shares searchParams (which may carry ?chat=).
   const [pref, setPref] = useState<KnowledgeSortPref>(() =>
     readKnowledgeSortPref(window.localStorage),
   );
@@ -339,37 +342,48 @@ function ThemeBody({
       return next;
     });
   };
-  const { filter: claimFilter, sort: claimSort, dir: claimDir } =
+  const { filter: claimFilter, sort: claimSort, dir: claimDir, clear } =
     resolveThemeClaimsSort(searchParams, pref);
+  // Consumed ONCE per landing (see the wall): merge explicit URL params into
+  // prefs and strip them, so back navigation can't override the current
+  // preference. The ref guard keeps the replace() from re-entering.
+  const consumedParamsRef = useRef<string>('');
+  useEffect(() => {
+    if (clear.length === 0) return;
+    const signature = clear.join(',');
+    if (consumedParamsRef.current === signature) return;
+    consumedParamsRef.current = signature;
+    const prefPatch: Partial<KnowledgeSortPref> = {};
+    if (clear.includes('filter')) prefPatch.detailFilter = claimFilter;
+    // Only a URL sort=day is an explicit claim-list choice; default is not
+    // stored (see resolveThemeClaimsSort).
+    if (clear.includes('sort') && claimSort === 'day') prefPatch.detailSort = 'day';
+    if (clear.includes('dir')) prefPatch.timeDir = claimDir;
+    applyPref(prefPatch);
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        for (const k of clear) p.delete(k);
+        return p;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clear.join(','), claimFilter, claimSort, claimDir]);
   const setClaimView = (patch: {
     filter?: ClaimStatusFilter;
     sort?: ThemeClaimSortKey;
     dir?: ThemeSortDir;
   }) => {
-    setSearchParams(
-      (prev) => {
-        const p = new URLSearchParams(prev);
-        if (patch.filter !== undefined) {
-          if (patch.filter === 'all') p.delete('filter');
-          else p.set('filter', patch.filter);
-        }
-        if (patch.sort !== undefined) {
-          if (patch.sort === 'default') p.delete('sort');
-          else p.set('sort', patch.sort);
-        }
-        if (patch.dir !== undefined) {
-          if (patch.dir === 'desc') p.delete('dir');
-          else p.set('dir', patch.dir);
-        }
-        return p;
-      },
-      { replace: true },
-    );
     // Filter/sort choices are the page's prefs; the direction button spins
-    // the SHARED time direction (meaningful when sorting by day).
+    // the SHARED time direction (meaningful when sorting by day). 'default'
+    // is NOT stored — it means "follow the wall" — so it clears detailSort
+    // instead of freezing it (see resolveThemeClaimsSort).
     const prefPatch: Partial<KnowledgeSortPref> = {};
     if (patch.filter !== undefined) prefPatch.detailFilter = patch.filter;
-    if (patch.sort !== undefined) prefPatch.detailSort = patch.sort;
+    if (patch.sort !== undefined) {
+      prefPatch.detailSort = patch.sort === 'default' ? null : patch.sort;
+    }
     if (patch.dir !== undefined) prefPatch.timeDir = patch.dir;
     applyPref(prefPatch);
   };

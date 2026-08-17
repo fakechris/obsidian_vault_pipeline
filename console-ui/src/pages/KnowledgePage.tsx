@@ -11,7 +11,7 @@
  * so the hash resolves through the model and forwards to
  * /knowledge/theme/:t#<claim_id> where the card scrolls into view. */
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 // Terrain pulls in three.js (~500KB) — load it only when the Terrain tab is
 // selected so it stays out of the initial portal bundle.
@@ -163,7 +163,11 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
   // restarts, unlike URL params which a Link navigation drops) AND shared
   // with the theme detail pages: the time direction lives in `pref.timeDir`,
   // so a "sort by date, newest first" choice here carries to every theme
-  // page. An explicit URL sort (shared link) still wins per-visit.
+  // page. URL params are consumed ON ARRIVAL: a shared link (or a back
+  // navigation carrying an old `?sort=&dir=`) lands into the prefs and is
+  // stripped from the URL, so the persisted choice — not a stale history
+  // entry — drives every subsequent visit. Day-to-day clicks never write
+  // sort params; they update localStorage instead.
   const [pref, setPref] = useState<KnowledgeSortPref>(() =>
     readKnowledgeSortPref(window.localStorage),
   );
@@ -174,16 +178,33 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
       return next;
     });
   };
-  const { key: sortKey, dir: sortDir } = resolveKnowledgeWallSort(params, pref);
-  const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
+  // Merge explicit URL params into prefs (arrival-only) and clear them —
+  // ONCE per landing. Clearing makes back navigation behave: a stale
+  // `?sort=&dir=` from before the last click stops overriding the newer
+  // localStorage preference. The ref guard keeps the replace() from
+  // re-entering the effect on the same params.
+  const { key: sortKey, dir: sortDir, clear } = resolveKnowledgeWallSort(params, pref);
+  const consumedRef = useRef<string>('');
+  useEffect(() => {
+    if (clear.length === 0) return;
+    const signature = clear.join(',');
+    if (consumedRef.current === signature) return;
+    consumedRef.current = signature;
+    applyPref(
+      isTimeSortKey(sortKey)
+        ? { wallKey: sortKey, timeDir: sortDir }
+        : { wallKey: sortKey, wallDir: sortDir },
+    );
     setParams(
       (p) => {
-        p.set('sort', key);
-        p.set('dir', dir);
+        for (const k of clear) p.delete(k);
         return p;
       },
       { replace: true },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clear.join(','), sortKey, sortDir]);
+  const setSort = (key: ThemeSortKey, dir: ThemeSortDir) => {
     // Time keys rotate the SHARED time direction; count/name keep their own.
     applyPref(
       isTimeSortKey(key)
