@@ -1762,7 +1762,7 @@ export function sortThemeClaims(
 // ----------------------------------------------------- persisted sort prefs
 
 /** localStorage key for the knowledge-family sort prefs. */
-export const KNOWLEDGE_SORT_PREF_KEY = 'ovp.knowledgeSortPref.v1';
+export const KNOWLEDGE_SORT_PREF_STORAGE = 'ovp.knowledgeSortPref.v1';
 
 /** Persisted sort state shared by the knowledge pages (operator request
  * 2026-08-17: "the sort rules should be the same for this whole family of
@@ -1779,7 +1779,9 @@ export interface KnowledgeSortPref {
   /** Shared date-sort direction (wall updated/created + detail day). */
   timeDir: ThemeSortDir;
   detailFilter: ClaimStatusFilter;
-  detailSort: ThemeClaimSortKey | null;
+  /** Explicit claim-list sort — only 'day' (see resolveThemeClaimsSort:
+   * 'default' means "follow the wall" and is stored as null). */
+  detailSort: 'day' | null;
 }
 
 export const DEFAULT_KNOWLEDGE_SORT_PREF: KnowledgeSortPref = {
@@ -1801,8 +1803,7 @@ const isThemeSortKey = (v: unknown): v is ThemeSortKey =>
 const isDir = (v: unknown): v is ThemeSortDir => v === 'asc' || v === 'desc';
 const isClaimFilter = (v: unknown): v is ClaimStatusFilter =>
   v === 'all' || v === 'durable' || v === 'caveated';
-const isClaimSortKey = (v: unknown): v is ThemeClaimSortKey =>
-  v === 'default' || v === 'day';
+const isClaimSortKey = (v: unknown): v is 'day' => v === 'day';
 
 /** Parse the persisted prefs, tolerating absence and corruption (a stale or
  * hand-edited value falls back field-by-field to the default). `storage`
@@ -1813,7 +1814,7 @@ export function readKnowledgeSortPref(
   if (!storage) return DEFAULT_KNOWLEDGE_SORT_PREF;
   let raw: unknown = null;
   try {
-    raw = JSON.parse(storage.getItem(KNOWLEDGE_SORT_PREF_KEY) ?? '');
+    raw = JSON.parse(storage.getItem(KNOWLEDGE_SORT_PREF_STORAGE) ?? '');
   } catch {
     return DEFAULT_KNOWLEDGE_SORT_PREF;
   }
@@ -1840,19 +1841,22 @@ export function writeKnowledgeSortPref(
 ): void {
   if (!storage) return;
   try {
-    storage.setItem(KNOWLEDGE_SORT_PREF_KEY, JSON.stringify(pref));
+    storage.setItem(KNOWLEDGE_SORT_PREF_STORAGE, JSON.stringify(pref));
   } catch {
     /* ignore */
   }
 }
 
-/** Resolve the wall's sort from a URLQuery + persisted prefs. An EXPLICIT
- * URL value (shared link) wins; otherwise the persisted pref. Time keys pull
- * their direction from the shared `timeDir`, count/name from `wallDir`. */
+/** Resolve the wall's sort from a URLQuery + persisted prefs, merging any
+ * explicit URL value INTO the prefs (shared links land once and become the
+ * persisted rule) and reporting which params to clear (arrival-only — see
+ * `resolveThemeClaimsSort` for the back-navigation reasoning). Invalid
+ * values are neither used nor cleared. Pref direction per key type: time
+ * keys → `timeDir`, others → `wallDir`. */
 export function resolveKnowledgeWallSort(
   params: URLSearchParams,
   pref: KnowledgeSortPref,
-): { key: ThemeSortKey; dir: ThemeSortDir } {
+): { key: ThemeSortKey; dir: ThemeSortDir; clear: ('sort' | 'dir')[] } {
   const urlKey = params.get('sort');
   const key = isThemeSortKey(urlKey) ? urlKey : pref.wallKey;
   const urlDir = params.get('dir');
@@ -1861,26 +1865,44 @@ export function resolveKnowledgeWallSort(
     : isTimeSortKey(key)
       ? pref.timeDir
       : pref.wallDir;
-  return { key, dir };
+  const clear: ('sort' | 'dir')[] = [];
+  if (isThemeSortKey(urlKey)) clear.push('sort');
+  if (isDir(urlDir)) clear.push('dir');
+  return { key, dir, clear };
 }
 
 /** Resolve the theme page's claim list (filter + sort + direction) from a
- * URLQuery + persisted prefs. Explicit URL values win; then explicit detail
- * prefs; then the cross-page rule — when the wall sorts by time and the
- * operator has never picked a claim-list sort, the list sorts by day too,
- * in the shared `timeDir`. */
+ * URLQuery + persisted prefs, merging valid explicit URL values INTO prefs
+ * and reporting them for clearing (arrival-only). Explicit values win for
+ * the FIRST paint and then persist — so a shared link lands exactly as
+ * shared, and a back navigation carrying an old `?sort=…&dir=…` is absorbed
+ * rather than overriding the operator's newer localStorage choice (the
+ * "sorting is not remembered" bug). Invalid values are neither used nor
+ * cleared. Then detail prefs; then the cross-page rule — when the wall sorts
+ * by time and the operator has never picked a claim-list sort, the list
+ * sorts by day too, in the shared `timeDir`. */
 export function resolveThemeClaimsSort(
   params: URLSearchParams,
   pref: KnowledgeSortPref,
-): { filter: ClaimStatusFilter; sort: ThemeClaimSortKey; dir: ThemeSortDir } {
+): {
+  filter: ClaimStatusFilter;
+  sort: ThemeClaimSortKey;
+  dir: ThemeSortDir;
+  clear: ('sort' | 'dir' | 'filter')[];
+} {
   const urlFilter = params.get('filter');
   const filter = isClaimFilter(urlFilter) ? urlFilter : pref.detailFilter;
+  // 'default' is NOT a stored preference: it means "follow the wall" —
+  // storing it would freeze the list into the hardcoded order even when the
+  // wall (and the shared time axis) later switches to a time sort, which the
+  // operator experiences as "my sort got lost". Only 'day' is an explicit
+  // claim-list choice.
   const urlSort = params.get('sort');
   let sort: ThemeClaimSortKey;
-  if (urlSort === 'day' || urlSort === 'default') {
-    sort = urlSort;
-  } else if (pref.detailSort != null) {
-    sort = pref.detailSort;
+  if (urlSort === 'day') {
+    sort = 'day';
+  } else if (pref.detailSort === 'day') {
+    sort = 'day';
   } else if (isTimeSortKey(pref.wallKey)) {
     // The wall is on a time sort and the operator has not chosen a
     // claim-list sort here — carry the time sort (and its direction).
@@ -1890,5 +1912,9 @@ export function resolveThemeClaimsSort(
   }
   const urlDir = params.get('dir');
   const dir = isDir(urlDir) ? urlDir : sort === 'day' ? pref.timeDir : 'desc';
-  return { filter, sort, dir };
+  const clear: ('sort' | 'dir' | 'filter')[] = [];
+  if (isClaimFilter(urlFilter)) clear.push('filter');
+  if (urlSort === 'day') clear.push('sort'); // 'default' is not a stored pref
+  if (isDir(urlDir)) clear.push('dir');
+  return { filter, sort, dir, clear };
 }
