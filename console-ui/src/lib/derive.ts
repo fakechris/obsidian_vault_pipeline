@@ -1758,3 +1758,137 @@ export function sortThemeClaims(
   }
   return sorted;
 }
+
+// ----------------------------------------------------- persisted sort prefs
+
+/** localStorage key for the knowledge-family sort prefs. */
+export const KNOWLEDGE_SORT_PREF_KEY = 'ovp.knowledgeSortPref.v1';
+
+/** Persisted sort state shared by the knowledge pages (operator request
+ * 2026-08-17: "the sort rules should be the same for this whole family of
+ * pages, and stay between visits"). The TIME direction (`timeDir`) is the
+ * shared axis: the wall's Updated/Created keys and the theme page's Day sort
+ * all honor it, so picking "newest first" on either page carries to the
+ * other. `detailSort` stays null until the operator explicitly picks a
+ * claim-list sort on a theme page — null means "follow the wall: when the
+ * wall sorts by time, the claims list does too". */
+export interface KnowledgeSortPref {
+  wallKey: ThemeSortKey;
+  /** Direction for the non-time wall keys (count/name). */
+  wallDir: ThemeSortDir;
+  /** Shared date-sort direction (wall updated/created + detail day). */
+  timeDir: ThemeSortDir;
+  detailFilter: ClaimStatusFilter;
+  detailSort: ThemeClaimSortKey | null;
+}
+
+export const DEFAULT_KNOWLEDGE_SORT_PREF: KnowledgeSortPref = {
+  wallKey: 'count',
+  wallDir: 'desc',
+  timeDir: 'desc',
+  detailFilter: 'all',
+  detailSort: null,
+};
+
+/** True for the wall's time sort keys — those share `timeDir` with the
+ * theme page's Day sort. */
+export function isTimeSortKey(key: ThemeSortKey): boolean {
+  return key === 'updated' || key === 'created';
+}
+
+const isThemeSortKey = (v: unknown): v is ThemeSortKey =>
+  v === 'count' || v === 'name' || v === 'updated' || v === 'created';
+const isDir = (v: unknown): v is ThemeSortDir => v === 'asc' || v === 'desc';
+const isClaimFilter = (v: unknown): v is ClaimStatusFilter =>
+  v === 'all' || v === 'durable' || v === 'caveated';
+const isClaimSortKey = (v: unknown): v is ThemeClaimSortKey =>
+  v === 'default' || v === 'day';
+
+/** Parse the persisted prefs, tolerating absence and corruption (a stale or
+ * hand-edited value falls back field-by-field to the default). `storage`
+ * null (non-browser env) yields the default. */
+export function readKnowledgeSortPref(
+  storage: { getItem(key: string): string | null } | null,
+): KnowledgeSortPref {
+  if (!storage) return DEFAULT_KNOWLEDGE_SORT_PREF;
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(storage.getItem(KNOWLEDGE_SORT_PREF_KEY) ?? '');
+  } catch {
+    return DEFAULT_KNOWLEDGE_SORT_PREF;
+  }
+  if (typeof raw !== 'object' || raw == null) return DEFAULT_KNOWLEDGE_SORT_PREF;
+  const src = raw as Record<string, unknown>;
+  return {
+    wallKey: isThemeSortKey(src.wallKey) ? src.wallKey : DEFAULT_KNOWLEDGE_SORT_PREF.wallKey,
+    wallDir: isDir(src.wallDir) ? src.wallDir : DEFAULT_KNOWLEDGE_SORT_PREF.wallDir,
+    timeDir: isDir(src.timeDir) ? src.timeDir : DEFAULT_KNOWLEDGE_SORT_PREF.timeDir,
+    detailFilter: isClaimFilter(src.detailFilter)
+      ? src.detailFilter
+      : DEFAULT_KNOWLEDGE_SORT_PREF.detailFilter,
+    detailSort: isClaimSortKey(src.detailSort)
+      ? src.detailSort
+      : DEFAULT_KNOWLEDGE_SORT_PREF.detailSort,
+  };
+}
+
+/** Persist the prefs. Best-effort — a quota/privacy-mode throw must not
+ * crash the click that caused it. */
+export function writeKnowledgeSortPref(
+  pref: KnowledgeSortPref,
+  storage: { setItem(key: string, value: string): void } | null,
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(KNOWLEDGE_SORT_PREF_KEY, JSON.stringify(pref));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Resolve the wall's sort from a URLQuery + persisted prefs. An EXPLICIT
+ * URL value (shared link) wins; otherwise the persisted pref. Time keys pull
+ * their direction from the shared `timeDir`, count/name from `wallDir`. */
+export function resolveKnowledgeWallSort(
+  params: URLSearchParams,
+  pref: KnowledgeSortPref,
+): { key: ThemeSortKey; dir: ThemeSortDir } {
+  const urlKey = params.get('sort');
+  const key = isThemeSortKey(urlKey) ? urlKey : pref.wallKey;
+  const urlDir = params.get('dir');
+  const dir = isDir(urlDir)
+    ? urlDir
+    : isTimeSortKey(key)
+      ? pref.timeDir
+      : pref.wallDir;
+  return { key, dir };
+}
+
+/** Resolve the theme page's claim list (filter + sort + direction) from a
+ * URLQuery + persisted prefs. Explicit URL values win; then explicit detail
+ * prefs; then the cross-page rule — when the wall sorts by time and the
+ * operator has never picked a claim-list sort, the list sorts by day too,
+ * in the shared `timeDir`. */
+export function resolveThemeClaimsSort(
+  params: URLSearchParams,
+  pref: KnowledgeSortPref,
+): { filter: ClaimStatusFilter; sort: ThemeClaimSortKey; dir: ThemeSortDir } {
+  const urlFilter = params.get('filter');
+  const filter = isClaimFilter(urlFilter) ? urlFilter : pref.detailFilter;
+  const urlSort = params.get('sort');
+  let sort: ThemeClaimSortKey;
+  if (urlSort === 'day' || urlSort === 'default') {
+    sort = urlSort;
+  } else if (pref.detailSort != null) {
+    sort = pref.detailSort;
+  } else if (isTimeSortKey(pref.wallKey)) {
+    // The wall is on a time sort and the operator has not chosen a
+    // claim-list sort here — carry the time sort (and its direction).
+    sort = 'day';
+  } else {
+    sort = 'default';
+  }
+  const urlDir = params.get('dir');
+  const dir = isDir(urlDir) ? urlDir : sort === 'day' ? pref.timeDir : 'desc';
+  return { filter, sort, dir };
+}

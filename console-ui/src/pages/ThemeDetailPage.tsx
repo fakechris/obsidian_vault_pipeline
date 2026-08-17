@@ -22,6 +22,8 @@ import {
   filterClaimsByStatus,
   isMiscTheme,
   parsePageBody,
+  readKnowledgeSortPref,
+  resolveThemeClaimsSort,
   sortThemeClaims,
   sourceDaysByCase,
   sourcesByCase,
@@ -29,7 +31,9 @@ import {
   themeFromRoute,
   themeRoute,
   uniqueClaimKeys,
+  writeKnowledgeSortPref,
   type ClaimStatusFilter,
+  type KnowledgeSortPref,
   type ThemeClaimSortKey,
   type ThemeRouteKey,
   type ThemeSortDir,
@@ -320,16 +324,23 @@ function ThemeBody({
     return distinct.size;
   }, [model, claims]);
 
-  // Claim filter/sort (URL-parameterized like the wall: ?filter=durable&
-  // sort=day&dir=asc). 'all'/'default'/'desc' are the defaults and are not
-  // written into the URL. Chat dock uses the same searchParams object.
-  const filterRaw = searchParams.get('filter');
-  const claimFilter: ClaimStatusFilter =
-    filterRaw === 'durable' || filterRaw === 'caveated' ? filterRaw : 'all';
-  const sortRaw = searchParams.get('sort');
-  const claimSort: ThemeClaimSortKey = sortRaw === 'day' ? 'day' : 'default';
-  const dirRaw = searchParams.get('dir');
-  const claimDir: ThemeSortDir = dirRaw === 'asc' || dirRaw === 'desc' ? dirRaw : 'desc';
+  // Claim filter/sort — the SAME persisted pref family as the knowledge
+  // wall. The Day sort's direction is the shared time direction, so a date
+  // sort picked here agrees with the wall automatically (and vice versa);
+  // filter/sort choices also persist across visits. Explicit URL params
+  // (shared links) still win per-visit. Chat dock shares searchParams.
+  const [pref, setPref] = useState<KnowledgeSortPref>(() =>
+    readKnowledgeSortPref(window.localStorage),
+  );
+  const applyPref = (patch: Partial<KnowledgeSortPref>) => {
+    setPref((prev) => {
+      const next = { ...prev, ...patch };
+      writeKnowledgeSortPref(next, window.localStorage);
+      return next;
+    });
+  };
+  const { filter: claimFilter, sort: claimSort, dir: claimDir } =
+    resolveThemeClaimsSort(searchParams, pref);
   const setClaimView = (patch: {
     filter?: ClaimStatusFilter;
     sort?: ThemeClaimSortKey;
@@ -354,6 +365,13 @@ function ThemeBody({
       },
       { replace: true },
     );
+    // Filter/sort choices are the page's prefs; the direction button spins
+    // the SHARED time direction (meaningful when sorting by day).
+    const prefPatch: Partial<KnowledgeSortPref> = {};
+    if (patch.filter !== undefined) prefPatch.detailFilter = patch.filter;
+    if (patch.sort !== undefined) prefPatch.detailSort = patch.sort;
+    if (patch.dir !== undefined) prefPatch.timeDir = patch.dir;
+    applyPref(prefPatch);
   };
   const shownClaims = useMemo(
     () =>
