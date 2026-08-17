@@ -18,13 +18,21 @@ import { fetchThemePages, fetchThemes } from '../lib/api';
 import {
   UNCLASSIFIED_ID,
   caseCanonicalIds,
+  claimDay,
+  filterClaimsByStatus,
   isMiscTheme,
   parsePageBody,
+  sortThemeClaims,
+  sourceDaysByCase,
   sourcesByCase,
   themeClaims,
   themeFromRoute,
   themeRoute,
+  uniqueClaimKeys,
+  type ClaimStatusFilter,
+  type ThemeClaimSortKey,
   type ThemeRouteKey,
+  type ThemeSortDir,
 } from '../lib/derive';
 import type {
   ClaimRow,
@@ -191,12 +199,16 @@ function ClaimCard({
   byCase,
   highlighted,
   claimZh,
+  day,
 }: {
   claim: ClaimRow;
   byCase: Map<string, SourceRow>;
   highlighted: boolean;
   /** Optional zh from theme-pages / claims_zh projection (by claim_key). */
   claimZh?: string | null;
+  /** Optional B-axis day (claim run / newest cited source) — shown so the
+   * list's time order is readable at a glance. Undated claims render bare. */
+  day?: string | null;
 }) {
   const { t, lang } = useI18n();
   // Content language follows UI lang (top-bar EN/中): zh prefers claim_zh
@@ -206,7 +218,7 @@ function ClaimCard({
   const text = lang === 'zh' && hasZh ? zh : claim.claim;
   return (
     <div
-      className={`card claim-card${highlighted ? ' claim-hit' : ''}`}
+      className={`card claim-card${highlighted ? ' claim-hit' : ''}${day ? ' claim-dated' : ''}`}
       id={claim.claim_id}
     >
       <div className="claim-top">
@@ -221,6 +233,11 @@ function ClaimCard({
         {lang === 'zh' && !hasZh && (
           <span className="tiny muted" title={t('theme.claimZhMissingTip')}>
             {t('theme.claimEnOnly')}
+          </span>
+        )}
+        {day && (
+          <span className="claim-day mono tiny" title={t('theme.claimDayTip')}>
+            {day}
           </span>
         )}
         {/* Scroll via onClick rather than a native `#id` href: under the
@@ -267,6 +284,15 @@ function ThemeBody({
   const location = useLocation();
   const claims = useMemo(() => themeClaims(model.claims, routeKey), [model, routeKey]);
   const byCase = useMemo(() => sourcesByCase(model), [model]);
+  // B-axis days for undated claims: newest cited source's pipeline day
+  // (see `claimDay`). Built once per model.
+  const sourceDays = useMemo(() => sourceDaysByCase(model), [model]);
+  // UNIQUE per-row React keys — claim_id collides across runs and legacy
+  // review rows lack claim_key (see `uniqueClaimKeys`): duplicate keys would
+  // freeze the DOM order when the list is re-sorted. Computed once against
+  // the stable `claims` order; filter/sort keep the same row objects, so
+  // each row's key is stable across every view change.
+  const uniqueClaimKey = useMemo(() => uniqueClaimKeys(claims), [claims]);
   // Chat-on-this-knowledge dock (same URL contract as the source page:
   // ?chat=1 opens empty; ?chat=<stem> resumes that session in-context).
   const [searchParams, setSearchParams] = useSearchParams();
@@ -293,6 +319,52 @@ function ThemeBody({
     }
     return distinct.size;
   }, [model, claims]);
+
+  // Claim filter/sort (URL-parameterized like the wall: ?filter=durable&
+  // sort=day&dir=asc). 'all'/'default'/'desc' are the defaults and are not
+  // written into the URL. Chat dock uses the same searchParams object.
+  const filterRaw = searchParams.get('filter');
+  const claimFilter: ClaimStatusFilter =
+    filterRaw === 'durable' || filterRaw === 'caveated' ? filterRaw : 'all';
+  const sortRaw = searchParams.get('sort');
+  const claimSort: ThemeClaimSortKey = sortRaw === 'day' ? 'day' : 'default';
+  const dirRaw = searchParams.get('dir');
+  const claimDir: ThemeSortDir = dirRaw === 'asc' || dirRaw === 'desc' ? dirRaw : 'desc';
+  const setClaimView = (patch: {
+    filter?: ClaimStatusFilter;
+    sort?: ThemeClaimSortKey;
+    dir?: ThemeSortDir;
+  }) => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (patch.filter !== undefined) {
+          if (patch.filter === 'all') p.delete('filter');
+          else p.set('filter', patch.filter);
+        }
+        if (patch.sort !== undefined) {
+          if (patch.sort === 'default') p.delete('sort');
+          else p.set('sort', patch.sort);
+        }
+        if (patch.dir !== undefined) {
+          if (patch.dir === 'desc') p.delete('dir');
+          else p.set('dir', patch.dir);
+        }
+        return p;
+      },
+      { replace: true },
+    );
+  };
+  const shownClaims = useMemo(
+    () =>
+      sortThemeClaims(
+        filterClaimsByStatus(claims, claimFilter),
+        claimSort,
+        claimDir,
+        sourceDays,
+      ),
+    [claims, claimFilter, claimSort, claimDir, sourceDays],
+  );
   // theme-pages payload carries claim_zh keyed by claim_key when
   // .ovp/crystal/claims_zh.json exists — reuse for cards (index model may not
   // splice claim_zh on every claim row yet).
@@ -430,15 +502,88 @@ function ThemeBody({
                 {t('theme.zhPartialOverview')}
               </p>
             )}
-            {claims.map((c) => (
+            {/* Filter + sort live directly above the cards they drive — same
+                seg-toggle vocabulary as the perspective/sort switches. */}
+            <div className="claim-tools">
+              <div
+                className="seg-toggle"
+                role="group"
+                aria-label={t('theme.filterLabel')}
+              >
+                <button
+                  type="button"
+                  className={claimFilter === 'all' ? 'active' : ''}
+                  onClick={() => setClaimView({ filter: 'all' })}
+                >
+                  {t('theme.filterAll')}
+                </button>
+                <button
+                  type="button"
+                  className={claimFilter === 'durable' ? 'active' : ''}
+                  onClick={() => setClaimView({ filter: 'durable' })}
+                >
+                  {t('theme.filterDurable')}
+                </button>
+                <button
+                  type="button"
+                  className={claimFilter === 'caveated' ? 'active' : ''}
+                  onClick={() => setClaimView({ filter: 'caveated' })}
+                >
+                  {t('theme.filterCaveated')}
+                </button>
+              </div>
+              <div
+                className="seg-toggle"
+                role="group"
+                aria-label={t('theme.sortLabel')}
+              >
+                <button
+                  type="button"
+                  className={claimSort === 'default' ? 'active' : ''}
+                  onClick={() => setClaimView({ sort: 'default' })}
+                >
+                  {t('theme.sortDefault')}
+                </button>
+                <button
+                  type="button"
+                  className={claimSort === 'day' ? 'active' : ''}
+                  onClick={() => setClaimView({ sort: 'day' })}
+                >
+                  {t('theme.sortDay')}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t('knowledge.sortDirLabel')}
+                  onClick={() =>
+                    setClaimView({ dir: claimDir === 'asc' ? 'desc' : 'asc' })
+                  }
+                >
+                  {claimDir === 'asc'
+                    ? t('knowledge.sortDir.asc')
+                    : t('knowledge.sortDir.desc')}
+                </button>
+              </div>
+            </div>
+            {shownClaims.length === 0 && (
+              <p className="sm muted theme-filter-empty">
+                {t('theme.filterEmpty', {
+                  filter:
+                    claimFilter === 'durable'
+                      ? t('theme.filterDurable')
+                      : t('theme.filterCaveated'),
+                })}
+              </p>
+            )}
+            {shownClaims.map((c) => (
               <ClaimCard
-                key={c.claim_id}
+                key={uniqueClaimKey.get(c) ?? c.claim_id}
                 claim={c}
                 byCase={byCase}
                 highlighted={anchor === c.claim_id}
                 claimZh={
                   (c.claim_key && zhByKey.get(c.claim_key)) || c.claim_zh || null
                 }
+                day={claimDay(c, sourceDays)}
               />
             ))}
           </>

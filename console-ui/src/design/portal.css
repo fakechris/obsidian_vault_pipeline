@@ -2219,6 +2219,16 @@ html[data-tauri-drag-region] .source-chat-panel {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* created/updated days on a wall card — the B-axis time line. */
+.theme-card-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.7rem;
+  margin: 0.5rem 0 0;
+}
+.theme-card-times span {
+  overflow-wrap: anywhere;
+}
 
 /* ---------- theme detail: claim cards + anchor highlight (B3) ---------- */
 /* Topic overview + claims share the left column; theme graph sits in a
@@ -2231,6 +2241,32 @@ html[data-tauri-drag-region] .source-chat-panel {
 }
 .theme-claims-meta {
   margin-bottom: 0.9rem;
+}
+/* claim filter/sort bar — sits above the claim cards. */
+.claim-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0 0 1rem;
+}
+.theme-filter-empty {
+  margin: 0 0 1rem;
+}
+/* per-claim B-axis day chip in the card header — with a day present the
+   chip takes the auto margin (right-aligned next to the anchor); undated
+   cards keep the anchor's own auto margin (historical right alignment).
+   Two auto margins would split the free space, hence the class switch. */
+.claim-day {
+  margin-left: auto;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-pill);
+  padding: 0.05rem 0.5rem;
+  letter-spacing: 0.03em;
+}
+.claim-card.claim-dated .claim-anchor {
+  margin-left: 0;
 }
 .theme-rail {
   position: sticky;
