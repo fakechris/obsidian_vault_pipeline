@@ -136,10 +136,11 @@ pub fn parse_version(text: &str) -> (Option<String>, Option<bool>) {
         // No recognisable stamp means no opinion at all — including on dirty.
         return (None, None);
     }
-    (
-        Some(candidate.to_string()),
-        Some(inner.contains("dirty")),
-    )
+    // `unknown` names the commit as unknowable; the tree's cleanliness is
+    // equally unknowable, and reporting `false` there would be a clean state
+    // this cannot actually vouch for.
+    let dirty = (candidate != "unknown").then(|| inner.contains("dirty"));
+    (Some(candidate.to_string()), dirty)
 }
 
 /// Run `<path> --version` with a real deadline.
@@ -202,11 +203,28 @@ fn probe_portal(name: &str, dir: &Path) -> ArtifactReport {
 }
 
 /// First `assets/<name>.js` referenced by the HTML.
+///
+/// Walks the asset references and takes the first that IS a `.js`, rather
+/// than anchoring on the first `assets/` and hunting for the next `.js`
+/// anywhere after it. With a stylesheet emitted first that older form
+/// returned `assets/x.css"><script src="/assets/y.js` — markup and all —
+/// and a garbage entry reports a portal mismatch that is not real. Vite
+/// happens to emit the script first today; that is not a guarantee.
 pub fn entry_asset(html: &str) -> Option<String> {
-    let start = html.find("assets/")?;
-    let rest = &html[start..];
-    let end = rest.find(".js")? + 3;
-    Some(rest[..end].to_string())
+    let mut rest = html;
+    while let Some(start) = rest.find("assets/") {
+        rest = &rest[start..];
+        // A reference ends at the first character that cannot be in a path.
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || "./_-".contains(c)))
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        if candidate.ends_with(".js") {
+            return Some(candidate.to_string());
+        }
+        rest = &rest[end.max(1)..];
+    }
+    None
 }
 
 pub fn collect(vault_root: &Path, app: Option<PathBuf>) -> Vec<ArtifactReport> {
@@ -258,7 +276,13 @@ pub fn collect(vault_root: &Path, app: Option<PathBuf>) -> Vec<ArtifactReport> {
 
 pub fn run(args: ArtifactsArgs) -> Result<(), CliError> {
     let reports = collect(&args.vault_root, args.app);
-    let dirty = GIT_DIRTY == "1";
+    // Tri-state, for the same reason: a build with no git metadata stamps
+    // `unknown`, and calling that clean is a claim this cannot support.
+    let dirty: Option<bool> = match GIT_DIRTY {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    };
 
     if args.json {
         let body = serde_json::json!({
@@ -275,7 +299,11 @@ pub fn run(args: ArtifactsArgs) -> Result<(), CliError> {
 
     println!(
         "this binary: {GIT_SHA}{}",
-        if dirty { " (dirty)" } else { "" }
+        match dirty {
+            Some(true) => " (dirty)",
+            Some(false) => "",
+            None => " (dirty state unknown)",
+        }
     );
     for r in &reports {
         let detail = match (&r.sha, &r.entry) {
@@ -320,7 +348,7 @@ pub fn run(args: ArtifactsArgs) -> Result<(), CliError> {
             println!("  nothing you see. Run `scripts/deploy-portal.sh <vault>`.");
         }
     }
-    if dirty {
+    if dirty == Some(true) {
         println!();
         println!("  NOTE: this binary was built from a dirty tree — its sha is a lower");
         println!("  bound on what is in it, not an identity.");
@@ -336,6 +364,35 @@ mod tests {
     fn entry_asset_pulls_the_first_js_reference() {
         let html = r#"<html><script type="module" src="/assets/index-Bjqc7rfs.js"></script>"#;
         assert_eq!(entry_asset(html).as_deref(), Some("assets/index-Bjqc7rfs.js"));
+    }
+
+    #[test]
+    fn entry_asset_skips_a_stylesheet_emitted_before_the_script() {
+        // The older form anchored on the first `assets/` and then hunted for
+        // the next `.js` ANYWHERE after it, returning markup and all — and a
+        // garbage entry reports a portal mismatch that is not real.
+        let html = concat!(
+            r#"<link rel="stylesheet" href="/assets/index-AAAA.css">"#,
+            r#"<script type="module" src="/assets/index-BBBB.js"></script>"#,
+        );
+        assert_eq!(entry_asset(html).as_deref(), Some("assets/index-BBBB.js"));
+    }
+
+    #[test]
+    fn entry_asset_takes_the_first_script_when_several_follow() {
+        let html = r#"<script src="/assets/a.js"></script><script src="/assets/b.js">"#;
+        assert_eq!(entry_asset(html).as_deref(), Some("assets/a.js"));
+    }
+
+    #[test]
+    fn an_unknown_stamp_reports_an_unknown_dirty_state_not_a_clean_one() {
+        // A build with no git metadata cannot vouch for the tree's
+        // cleanliness either; `false` there is a claim it cannot support.
+        assert_eq!(parse_version("ovp2 2.0.1 (unknown)"), (Some("unknown".into()), None));
+        assert_eq!(
+            parse_version("ovp2 2.0.1 (abc123, dirty)"),
+            (Some("abc123".into()), Some(true))
+        );
     }
 
     #[test]
