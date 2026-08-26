@@ -52,7 +52,21 @@ pub struct Finding {
     pub check: String,
     pub severity: Severity,
     pub message: String,
+    /// The concrete next action, when there is one.
+    ///
+    /// A check that says what is wrong but not what to do about it makes the
+    /// operator go looking — and the command that knows the answer is the one
+    /// staying quiet about it. Only on findings a person can actually act on:
+    /// a hint on a PASS is noise, and an invented hint is worse than none.
+    pub hint: Option<String>,
     pub fixed: bool,
+}
+
+impl Finding {
+    fn attach_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
 }
 
 pub fn run(args: DoctorArgs) -> Result<(), CliError> {
@@ -80,6 +94,7 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
                     "check": f.check,
                     "severity": format!("{}", f.severity),
                     "message": f.message,
+                    "hint": f.hint,
                     "fixed": f.fixed,
                 })
             })
@@ -89,6 +104,11 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
         for f in &findings {
             let fix_tag = if f.fixed { " [FIXED]" } else { "" };
             println!("  [{}] {}: {}{}", f.severity, f.check, f.message, fix_tag);
+            // Indented under its finding, and only when the operator still has
+            // something to do — a hint next to a [FIXED] line is just noise.
+            if let Some(hint) = f.hint.as_deref().filter(|_| !f.fixed) {
+                println!("         -> {hint}");
+            }
         }
     }
 
@@ -116,15 +136,21 @@ fn check_ledger_fs_consistency(vault_root: &Path, layout: &VaultLayout, findings
                     check: "ledger-readable".into(),
                     severity: Severity::Fail,
                     message: format!("cannot read ledger: {e}"),
+                    hint: None,
                     fixed: false,
-                });
+                }.attach_hint(
+            "check permissions on the daily ledger — doctor cannot verify run history or index freshness without it",
+        ));
             } else {
                 findings.push(Finding {
                     check: "ledger-exists".into(),
                     severity: Severity::Warn,
                     message: "no daily ledger found (no runs yet?)".into(),
+                    hint: None,
                     fixed: false,
-                });
+                }.attach_hint(
+            "expected on a fresh vault; otherwise run `ovp2 daily --vault-root <vault>` once to create it",
+        ));
             }
             return;
         }
@@ -149,6 +175,7 @@ fn check_ledger_fs_consistency(vault_root: &Path, layout: &VaultLayout, findings
             check: "ledger-fs-consistency".into(),
             severity: Severity::Warn,
             message: format!("{missing_count} succeeded ledger entries without corresponding pack directories"),
+            hint: None,
             fixed: false,
         });
     } else {
@@ -156,6 +183,7 @@ fn check_ledger_fs_consistency(vault_root: &Path, layout: &VaultLayout, findings
             check: "ledger-fs-consistency".into(),
             severity: Severity::Pass,
             message: "all succeeded ledger entries have corresponding pack dirs".into(),
+            hint: None,
             fixed: false,
         });
     }
@@ -168,6 +196,7 @@ fn check_orphan_packs(vault_root: &Path, layout: &VaultLayout, findings: &mut Ve
             check: "orphan-packs".into(),
             severity: Severity::Pass,
             message: "no reader directory yet".into(),
+            hint: None,
             fixed: false,
         });
         return;
@@ -199,13 +228,17 @@ fn check_orphan_packs(vault_root: &Path, layout: &VaultLayout, findings: &mut Ve
             check: "orphan-packs".into(),
             severity: Severity::Warn,
             message: format!("{orphan_count} reader pack(s) not linked to any ledger entry"),
+            hint: None,
             fixed: false,
-        });
+        }.attach_hint(
+            "usually a run that died between writing the pack and recording it — `ovp2 index` re-derives the read model, and `--fix` quarantines the orphans",
+        ));
     } else {
         findings.push(Finding {
             check: "orphan-packs".into(),
             severity: Severity::Pass,
             message: "all reader packs linked to ledger entries".into(),
+            hint: None,
             fixed: false,
         });
     }
@@ -225,6 +258,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                         check: "stale-index".into(),
                         severity: Severity::Warn,
                         message: "index.json missing — rebuilt".into(),
+                        hint: None,
                         fixed: true,
                     });
                 }
@@ -233,6 +267,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                         check: "stale-index".into(),
                         severity: Severity::Fail,
                         message: format!("index.json missing, rebuild failed: {e}"),
+                        hint: None,
                         fixed: false,
                     });
                 }
@@ -242,6 +277,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                 check: "stale-index".into(),
                 severity: Severity::Fail,
                 message: "index.json missing (run `doctor --fix` or `index`)".into(),
+                hint: None,
                 fixed: false,
             });
         }
@@ -253,6 +289,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
             check: "stale-index".into(),
             severity: Severity::Pass,
             message: "no ledger to compare index freshness against".into(),
+            hint: None,
             fixed: false,
         });
         return;
@@ -276,6 +313,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                             check: "stale-index".into(),
                             severity: Severity::Warn,
                             message: "index.json older than ledger — rebuilt".into(),
+                            hint: None,
                             fixed: true,
                         });
                     }
@@ -284,6 +322,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                             check: "stale-index".into(),
                             severity: Severity::Fail,
                             message: format!("index stale, rebuild failed: {e}"),
+                            hint: None,
                             fixed: false,
                         });
                     }
@@ -293,6 +332,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                     check: "stale-index".into(),
                     severity: Severity::Warn,
                     message: "index.json is older than the daily ledger (run `index` or `daily`)".into(),
+                    hint: None,
                     fixed: false,
                 });
             }
@@ -302,6 +342,7 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                 check: "stale-index".into(),
                 severity: Severity::Pass,
                 message: "index.json is up-to-date".into(),
+                hint: None,
                 fixed: false,
             });
         }
@@ -337,8 +378,11 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
                     Severity::Warn
                 },
                 message: format!("could not recheck durable claims: {e}"),
+                hint: None,
                 fixed: false,
-            });
+            }.attach_hint(
+                    "the ledger or the reader packs could not be read — fix the error above first; until then this vault has NO staleness signal at all",
+                ));
             return;
         }
     };
@@ -347,6 +391,7 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
             check: "crystal-staleness".into(),
             severity: Severity::Pass,
             message: "no durable claims to recheck".into(),
+            hint: None,
             fixed: false,
         });
         return;
@@ -369,6 +414,7 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
                 "all {} durable claims still ground ({age_note})",
                 report.n_claims
             ),
+            hint: None,
             fixed: false,
         });
         return;
@@ -389,8 +435,11 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
             report.n_claims,
             defects.join(" ")
         ),
+        hint: None,
         fixed: false,
-    });
+    }.attach_hint(
+            "run `ovp2 crystal-recheck --vault-root <vault> --out <report>` for the per-claim detail; re-verification is a gated write, never automatic",
+        ));
 }
 
 fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
@@ -402,6 +451,7 @@ fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
             check: "crystal-integrity".into(),
             severity: Severity::Pass,
             message: "no crystal store yet".into(),
+            hint: None,
             fixed: false,
         });
         return;
@@ -412,8 +462,11 @@ fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
             check: "crystal-integrity".into(),
             severity: Severity::Warn,
             message: "crystal directory exists but ledger.jsonl is missing".into(),
+            hint: None,
             fixed: false,
-        });
+        }.attach_hint(
+            "the store is half-written — restore `.ovp/crystal/` from a backup, or re-run `ovp2 crystal-synth` to rebuild it",
+        ));
         return;
     }
 
@@ -424,8 +477,11 @@ fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
                 check: "crystal-integrity".into(),
                 severity: Severity::Fail,
                 message: format!("cannot read crystal ledger: {e}"),
+                hint: None,
                 fixed: false,
-            });
+            }.attach_hint(
+            "check permissions on `.ovp/crystal/ledger.jsonl`; the console and `find` read only that path",
+        ));
             return;
         }
     };
@@ -448,13 +504,17 @@ fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
             check: "crystal-integrity".into(),
             severity: Severity::Fail,
             message: format!("crystal ledger has {invalid} unparseable lines ({valid} valid)"),
+            hint: None,
             fixed: false,
-        });
+        }.attach_hint(
+            "the ledger is append-only, so a bad line is almost always a truncated write — inspect the tail and drop the partial record",
+        ));
     } else {
         findings.push(Finding {
             check: "crystal-integrity".into(),
             severity: Severity::Pass,
             message: format!("crystal ledger intact ({valid} records)"),
+            hint: None,
             fixed: false,
         });
     }
@@ -493,6 +553,7 @@ fn check_run_recency(
                     ".ovp/last-run.json is present but unreadable/corrupt ({e}) — the last run's \
                      status is unknowable; repair or remove it, then rerun `ovp2 daily`"
                 ),
+                hint: None,
                 fixed: false,
             });
             return;
@@ -511,6 +572,7 @@ fn check_run_recency(
                         rec.run_id,
                         rec.error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default()
                     ),
+                    hint: None,
                     fixed: false,
                 });
                 return;
@@ -524,6 +586,7 @@ fn check_run_recency(
                          check the schedule log and rerun `ovp2 daily`",
                         rec.run_id
                     ),
+                    hint: None,
                     fixed: false,
                 });
                 return;
@@ -550,6 +613,7 @@ fn check_run_recency(
                 check: "run-recency".into(),
                 severity: Severity::Warn,
                 message: "no run recorded yet (no heartbeat, no reports)".into(),
+                hint: None,
                 fixed: false,
             });
         }
@@ -564,6 +628,7 @@ fn check_run_recency(
                         "last run was ~{hours}h ago (> {threshold_hours}h) — the unattended loop may be \
                          stalled; check `ovp2 schedule status` and the schedule log"
                     ),
+                    hint: None,
                     fixed: false,
                 });
             } else {
@@ -572,6 +637,7 @@ fn check_run_recency(
                     check: "run-recency".into(),
                     severity: Severity::Pass,
                     message: format!("last run ~{hours}h ago (< {threshold_hours}h)"),
+                    hint: None,
                     fixed: false,
                 });
             }
@@ -594,6 +660,7 @@ fn check_run_recency(
                     "queue is growing: {live_queued} queued now vs {queued_after} after the last run \
                      — capture is outpacing reading; raise --max-sources or run more often"
                 ),
+                hint: None,
                 fixed: false,
             });
         }
@@ -709,6 +776,7 @@ fn check_disk_usage(vault_root: &Path, layout: &VaultLayout, findings: &mut Vec<
             check: format!("disk-{name}"),
             severity,
             message: format!("{size_mb:.1} MB"),
+            hint: None,
             fixed: false,
         });
     }
@@ -756,6 +824,7 @@ fn check_legacy_artifacts(vault_root: &Path, findings: &mut Vec<Finding>) {
                  safe to archive/delete once you've verified the ovp2 rebuild — \
                  see https://github.com/fakechris/obsidian_vault_pipeline/blob/main/docs/ovp-to-ovp2.md (§5, Migrating an existing OVP vault; docs/ovp-to-ovp2.md in a source checkout)"
             ),
+            hint: None,
             fixed: false,
         });
     }
@@ -765,6 +834,7 @@ fn check_legacy_artifacts(vault_root: &Path, findings: &mut Vec<Finding>) {
             check: "legacy-artifacts".into(),
             severity: Severity::Pass,
             message: "no Python-era OVP artifacts found".into(),
+            hint: None,
             fixed: false,
         });
     }
@@ -871,6 +941,7 @@ fn check_inbox_orphans(vault_root: &Path, layout: &VaultLayout, findings: &mut V
             check,
             severity: Severity::Pass,
             message: "no stranded inbox files".into(),
+            hint: None,
             fixed: false,
         });
         return;
@@ -894,6 +965,7 @@ fn check_inbox_orphans(vault_root: &Path, layout: &VaultLayout, findings: &mut V
              ovp2 never auto-moves them.",
             locations.join(", ")
         ),
+        hint: None,
         fixed: false,
     });
 }
@@ -959,6 +1031,85 @@ fn is_leap(y: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build the vault states that actually TRIGGER the actionable branches.
+    ///
+    /// An empty tempdir exercises almost none of them: the first version of
+    /// this test passed with a hint deliberately removed, because the branch
+    /// that hint belonged to never ran. A coverage test that cannot reach the
+    /// code it claims to cover is worse than no test — it reports safety.
+    fn vaults_with_actionable_findings() -> Vec<(&'static str, tempfile::TempDir)> {
+        let mut out = Vec::new();
+
+        // crystal dir present, ledger missing -> half-written store
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join(".ovp/crystal")).unwrap();
+        out.push(("crystal-no-ledger", d));
+
+        // ledger present but with a line that will not parse
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join(".ovp/crystal")).unwrap();
+        std::fs::write(
+            d.path().join(".ovp/crystal/ledger.jsonl"),
+            "{\"op\":\"write\"}\nnot json at all\n",
+        )
+        .unwrap();
+        out.push(("crystal-bad-line", d));
+
+        out
+    }
+
+    /// Every finding a person is expected to act on should say what to do.
+    /// Not a blanket rule — a message that already names the command needs no
+    /// second copy of it — but silence by DEFAULT is what sends an operator
+    /// searching while the command that knows the answer says nothing.
+    #[test]
+    fn actionable_findings_carry_a_hint_or_name_the_command_themselves() {
+        let mut checked_actionable = 0;
+        for (label, vault) in vaults_with_actionable_findings() {
+            let mut findings = Vec::new();
+            check_crystal_integrity(vault.path(), &mut findings);
+            check_crystal_staleness(vault.path(), &mut findings);
+            for f in &findings {
+                if !matches!(f.severity, Severity::Warn | Severity::Fail) {
+                    continue;
+                }
+                checked_actionable += 1;
+                let names_a_command =
+                    f.message.contains("`ovp2 ") || f.message.contains("run `");
+                assert!(
+                    f.hint.is_some() || names_a_command,
+                    "{label}: [{}] {}: actionable but offers no next step",
+                    f.check,
+                    f.message
+                );
+            }
+        }
+        // The guard the first version lacked: if the fixtures stop reaching any
+        // actionable branch, this test must fail rather than pass vacuously.
+        assert!(
+            checked_actionable >= 2,
+            "fixtures reached only {checked_actionable} actionable finding(s) — \
+             the assertion above is not being exercised"
+        );
+    }
+
+    #[test]
+    fn a_passing_finding_carries_no_hint() {
+        // A hint on a PASS is noise: there is nothing to do.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(vault.path().join(".ovp/crystal")).unwrap();
+        std::fs::write(vault.path().join(".ovp/crystal/ledger.jsonl"), "").unwrap();
+        let mut findings = Vec::new();
+        check_crystal_integrity(vault.path(), &mut findings);
+        assert!(!findings.is_empty());
+        for f in &findings {
+            if f.severity == Severity::Pass {
+                assert!(f.hint.is_none(), "{}: PASS should not carry a hint", f.check);
+            }
+        }
+    }
+
 
     fn touch(root: &Path, rel: &str) {
         let p = root.join(rel);
