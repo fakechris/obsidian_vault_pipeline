@@ -1,0 +1,33 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-010",
+ "question": "关于 LLM 评测(evals)的最佳实践,把不同来源的观点综合一下,带引用。",
+ "source_session": "a3d-eval-agent-q8-cross-source",
+ "language": "mixed",
+ "class": "compare",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "1d7cd07f9f255a3d61c6c937c660fda032d1cdea006ea96a75f5797f49393ea1",
+   "grade": 3,
+   "why": "benchflow-ai/awesome-evals，evals 资源策展，正面承载评测资源综述。"
+  },
+  {
+   "surface": "source",
+   "id": "65b9f77e3d6c1fd723abd16fee7eaf29f0e3d57c617517f8f6850ebb81e87c11",
+   "grade": 2,
+   "why": "Perplexity Qwen3.5 factuality 后训练评测，evals 具体案例证据。"
+  },
+  {
+   "surface": "source",
+   "id": "0adfa4027791014d5f067356de4087d07f8c9960661ccfb99fe2d2a7931bc57d",
+   "grade": 2,
+   "why": "evo autoresearch loop 自动发现指标并跑 benchmark，evals/best practice 候选。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "digest 有多来源标题和深入读取轨迹，但最终答案在扩展检索阶段结束，没有任何最终引用；候选均为 grade 1。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "compare 题：3 个 source 直接谈 evals；Perplexity/evo-hq 为具体 eval 案例 grade 2；删 multi-agent research（不在 evals 主题上）。(1 个编造 id 已剔除)"
+}

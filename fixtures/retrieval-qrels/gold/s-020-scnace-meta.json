@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-020",
+ "question": "5 月 scnace 写的那篇讲智能体任务编排的文章是哪条？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "meta",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "a5bb08edab1e5306285e535ac73b35e7ea0308979a1dbb4d186f62a11946e796",
+   "grade": 3,
+   "why": "source 元数据 author=scnace、date=2026-05-20、标题《tape x bee : 我对智能体任务的编排方式》全部命中，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=a5bb08edab1e5306285e535ac73b35e7ea0308979a1dbb4d186f62a11946e796 的 author/date/title 元数据生成 meta 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "meta 题：'5 月 scnace 写的那篇讲智能体任务编排的文章是哪条' 用 author + month + 主题定位，自然、可判别。"
+}

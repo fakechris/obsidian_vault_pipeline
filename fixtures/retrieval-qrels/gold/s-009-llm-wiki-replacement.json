@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-009",
+ "question": "有没有文章讲把原来那套大模型知识库换掉，做成真正能用的版本？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "f919df1d2831f5e2cdc52f80df8d802ccc9ccba8b2e62e14fd30b25fde3edbbb",
+   "grade": 3,
+   "why": "标题《I Replaced Karpathy's LLM Wiki with Something That Actually Works》唯一对应 '把 LLM wiki 换掉换成真可用版本'，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=f919df1d2831f5e2cdc52f80df8d802ccc9ccba8b2e62e14fd30b25fde3edbbb（标题《I Replaced Karpathy's LLM Wiki with Something That Actually Works》）做 paraphrase。 | label review 2026-08-14 (droid): label_correct_hard_question - 三方 miss 为真实能力缺口非标注错误",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'把原来那套大模型知识库换掉，做成真正能用的版本' 把 'I Replaced Karpathy's LLM Wiki with Something That Actually Works' 改写为中文自然提问，未复用 Karpathy/replaced/wiki 等原词；可判别。"
+}

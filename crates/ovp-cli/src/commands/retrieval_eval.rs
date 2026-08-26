@@ -710,6 +710,97 @@ fn assemble_report(
 mod tests {
     use super::*;
 
+    /// `fixtures/retrieval-qrels/<set>` — the committed ground truth.
+    fn qrels_dir(set: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/retrieval-qrels")
+            .join(set)
+    }
+
+    /// The committed qrels must survive schema drift: this loads them through
+    /// the SAME `load_qrels` the command uses, so a field change that would
+    /// break a real run breaks here first.
+    #[test]
+    fn committed_qrels_load_and_are_well_formed() {
+        const CLASSES: [&str; 8] = [
+            "exact",
+            "paraphrase",
+            "claim_evidence",
+            "compare",
+            "recent",
+            "source_scoped",
+            "meta",
+            "negative",
+        ];
+        const SURFACES: [&str; 5] = ["source", "claim", "card", "unit", "chunk"];
+
+        for (set, expected) in [("gold", 34usize), ("holdout", 10usize)] {
+            let qrels = load_qrels(&qrels_dir(set)).expect(set);
+            // An exact count, not `> 0`: a prefix whitelist once silently
+            // dropped the `s-*` half of this set and the run still reported
+            // itself complete, so "some files loaded" is not evidence.
+            assert_eq!(qrels.len(), expected, "{set} question count");
+            for q in &qrels {
+                assert_eq!(
+                    q.confidence.as_deref(),
+                    Some("gold"),
+                    "{}: only adjudicated records belong here",
+                    q.id
+                );
+                let class = q.class.as_deref().unwrap_or_default();
+                assert!(CLASSES.contains(&class), "{}: unknown class {class}", q.id);
+                assert_eq!(
+                    q.relevant.is_empty(),
+                    q.no_answer,
+                    "{}: a negative has no relevant set, and vice versa",
+                    q.id
+                );
+                for r in &q.relevant {
+                    assert!(
+                        SURFACES.contains(&r.surface.as_str()),
+                        "{}: unknown surface {}",
+                        q.id,
+                        r.surface
+                    );
+                    assert!(
+                        matches!(r.grade, Some(1..=3)),
+                        "{}: grade must be 1..=3, got {:?}",
+                        q.id,
+                        r.grade
+                    );
+                }
+            }
+        }
+    }
+
+    /// The holdout is only worth anything while it stays unseen. Leaking one
+    /// question into the optimization set turns it into a second training set
+    /// that reports flattering numbers, and nothing else would catch it — the
+    /// rule is otherwise just a sentence in a README.
+    #[test]
+    fn qrels_gold_and_holdout_stay_disjoint() {
+        let gold = load_qrels(&qrels_dir("gold")).expect("gold");
+        let holdout = load_qrels(&qrels_dir("holdout")).expect("holdout");
+
+        let gold_ids: std::collections::BTreeSet<&str> =
+            gold.iter().map(|q| q.id.as_str()).collect();
+        for q in &holdout {
+            assert!(!gold_ids.contains(q.id.as_str()), "id {} in both sets", q.id);
+        }
+        // Also compare the questions themselves: renumbering a duplicate would
+        // sail past an id check while leaking the same judgement.
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let gold_qs: std::collections::BTreeSet<String> =
+            gold.iter().map(|q| norm(&q.question)).collect();
+        for q in &holdout {
+            assert!(
+                !gold_qs.contains(&norm(&q.question)),
+                "{}: question also appears in gold",
+                q.id
+            );
+        }
+    }
+
     fn source_row(sha: &str, title: &str) -> ovp_index::SourceRow {
         ovp_index::SourceRow {
             sha256: sha.into(),

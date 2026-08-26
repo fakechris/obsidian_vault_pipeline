@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-017",
+ "question": "agent 权限治理为什么要默认拒绝？策略门、能力沙箱和继承规则该怎么设计？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "claim",
+   "id": "ck-8a33edb839c8442f",
+   "grade": 3,
+   "why": "claim 原文给出 fail-closed policy gates + 能力沙箱 + kill switch + 继承只收紧不放松，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 claim_key=ck-8a33edb839c8442f（主题 Managed AI agent runtime & execution）把结论反向改写成问题。该 claim 的 source_ids 未在 silver-input.sources 中提供可对应的 sha256，故按允许 ID 约束不另引。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "claim_evidence 题：'agent 权限治理为什么要默认拒绝？策略门、能力沙箱和继承规则该怎么设计' 把 fail-closed governance claim 反向改写；问题只点了三个具体设计要素（policy gates / capability sandboxes / 继承），与 claim 三段结构对齐，可判别。"
+}

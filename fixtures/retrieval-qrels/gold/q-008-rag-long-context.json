@@ -1,0 +1,39 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-008",
+ "question": "关于 RAG 和 long context 的取舍,vault 里有什么证据?",
+ "source_session": "a3d-eval-agent-q6-grounded-qa",
+ "language": "mixed",
+ "class": "compare",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "8ae56ab1ef50ec5188b3c67375752e860b2d4a21d1313480ba56f85771eb179b",
+   "grade": 3,
+   "why": "1M Context ≠ Lossless Long Memory，正面论述 long context 与 long memory 的工程取舍。"
+  },
+  {
+   "surface": "source",
+   "id": "eda8b14272d8ccc982ff087a94f3b8e514cbb213c96537f1c8aede09a9e73590",
+   "grade": 3,
+   "why": "Why long-term memory for LLMs remains unsolved，直接讨论 LLM 长期记忆的局限。"
+  },
+  {
+   "surface": "source",
+   "id": "105068eabae55d2dc2a60f8a5265f4ab613b8618e9f6508982b9964d7d1595aa",
+   "grade": 3,
+   "why": "Coding Agents are Effective Long-Context Processors，正面支撑 long context 处理证据。"
+  },
+  {
+   "surface": "source",
+   "id": "01b4867abcf3b294369fd429d278fdace5d79b829cb0b5488e4b49b4b74f3cfe",
+   "grade": 1,
+   "why": "agent memory SOTA 系统，作为 RAG/LC 对照的弱相关候选保留。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "digest 有多篇带标题的候选并做了 source_chunks 检索，但最终答案未完成且没有引用；候选相关性未经答案验证。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "compare 题：3 个 source 标题直接谈 long context / long memory 取舍；删 Building a Good Vertical Agent（弱相关），memory 那条降 grade 1。"
+}

@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-011",
+ "question": "I'm looking for the practical guide to turning a language model into a useful autonomous worker.",
+ "source_session": "silver-generated",
+ "language": "en",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "67000a6afabe9cbcc3494513111832b3c48e9bbd9602782d2f929bc7f757d336",
+   "grade": 3,
+   "why": "标题《Building Effective AI Agents》是实践型 '把模型变成有用 autonomous worker' 的主要指南，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=67000a6afabe9cbcc3494513111832b3c48e9bbd9602782d2f929bc7f757d336（标题《Building Effective AI Agents》）做 paraphrase。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'practical guide to turning a language model into a useful autonomous worker' 是 Building Effective AI Agents 的口语化换词（没用 Building / Effective / Agents 中任何一个原词），可判别。"
+}

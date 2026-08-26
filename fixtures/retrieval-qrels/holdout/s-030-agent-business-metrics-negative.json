@@ -1,0 +1,14 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-030",
+ "question": "我想找 agent 产品在生产环境的留存率、付费转化率和月度收入数据，vault 里有吗？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "negative",
+ "relevant": [],
+ "no_answer": true,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据输入中的 agent 产品与 readiness 邻近主题构造负例；silver-input 未出现留存率、付费转化率、月度收入等实测经营数据或对应 claim/source，故 relevant 为空。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "negative 题：'agent 产品在生产环境的留存率、付费转化率和月度收入数据' 对照 silver-input 无 agent 产品经营指标 / MRR / 付费转化数据（vault 只谈 agent 技术与产品理念），确认 no_answer=true。问题自然、范围明确。"
+}

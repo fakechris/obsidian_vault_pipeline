@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-006",
+ "question": "找一下标题里写着 “The Log is the Agent” 的那篇 paper。",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "72f86b3edee1946ff42b48a115a9fec6f912e58bf5b381d1af481df6db0930e4",
+   "grade": 3,
+   "why": "唯一带《The Log is the Agent》字样的 vault 文章，是 paper 本身，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=72f86b3edee1946ff42b48a115a9fec6f912e58bf5b381d1af481df6db0930e4（标题含《The Log is the Agent》）做 exact 标题短语提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'标题里写着 The Log is the Agent 的那篇 paper' 中英混排引标题短语作为定位线索，自然、可判别、exact 桶预期。"
+}

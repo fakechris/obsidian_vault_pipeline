@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-002",
+ "question": "Can you find the vault note whose title is just “Langfuse”?",
+ "source_session": "silver-generated",
+ "language": "en",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "17c1b85cd7268ec1859a1d6bf8d6cf6a1ddae7ee7c7837fdca6864dad1b09925",
+   "grade": 3,
+   "why": "唯一标题《Langfuse》本身就是答案，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=17c1b85cd7268ec1859a1d6bf8d6cf6a1ddae7ee7c7837fdca6864dad1b09925（标题《Langfuse》）做 exact 标题提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'vault note whose title is just Langfuse' 措辞轻微书面但属 exact 桶的源标题直接引用，在英文用户用 prompt 定位唯一标题时很常见；可判别、不泄漏。"
+}

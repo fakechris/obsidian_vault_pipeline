@@ -1,0 +1,14 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-028",
+ "question": "vault 里有没有关于 NVIDIA CUDA kernel 调优和显存占用对比的实测？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "negative",
+ "relevant": [],
+ "no_answer": true,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据输入中的 AI agent/LLM 邻近主题构造负例；silver-input 未出现 CUDA kernel、显存实测或对应 claim/source，故 relevant 为空。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "negative 题：'vault 里有没有 NVIDIA CUDA kernel 调优和显存占用对比的实测' 对照 silver-input 全部 claims/sources 无任何 CUDA / kernel / 显存 / GPU 性能主题内容，确认 no_answer=true。问题自然、范围足够窄以判断无答案。"
+}

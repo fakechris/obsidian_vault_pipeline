@@ -1,0 +1,14 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-017",
+ "question": "你看看能不能帮我找到一篇我之前的文章，或者是一条 Twitter，讲的是一个女生毕业的时候投了几十份简历，最后被 OpenAI 或者anthropic类似的公司录取了。她还分享了一个诀窍，就是要能够手写 Transformer，而且写得很细致，还分享了她的笔记。",
+ "source_session": "agent-1784902644119-63232-0",
+ "language": "mixed",
+ "class": "negative",
+ "relevant": [],
+ "no_answer": true,
+ "confidence": "gold",
+ "annotator_notes": "final_answer 明确说 vault 中都没有命中；seen_source_ids 虽有若干 ID，但标题为空，无法依据 digest 判断任何一个是主题相关候选。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "transformer-job-story variant B 负例：digest 明确 final_answer 说 vault 无命中；no_answer=true。保留作为不可解负例测试。"
+}

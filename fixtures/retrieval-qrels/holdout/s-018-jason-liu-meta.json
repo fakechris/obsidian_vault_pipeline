@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-018",
+ "question": "Jason Liu 在 5 月写的那篇 Codex-maxxing，能帮我翻出来吗？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "meta",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "63ed0f127d5f1f1e2007e8881b24b08d7818184f327322f1b4720e7e52d541e9",
+   "grade": 3,
+   "why": "source 元数据 author=Jason Liu、date=2026-05-25、标题《Codex-maxxing - Jason Liu》全部命中，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=63ed0f127d5f1f1e2007e8881b24b08d7818184f327322f1b4720e7e52d541e9 的 author/date/title 元数据生成 meta 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "meta 题：'Jason Liu 在 5 月写的那篇 Codex-maxxing' 用 author + month + 标题定位，自然、可判别。"
+}

@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-027",
+ "question": "《MemTensor/memmy-agent: 🍙 A personal AI agent & local memory hub for all AI agents like Claude Code, Codex, OpenClaw and Hermes Agent. Gives every AI one shared, fully controlled memory and persistent context — all AI remember the same you.》那篇里，shared memory 具体想解决什么问题？",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "source_scoped",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7",
+   "grade": 3,
+   "why": "问题用完整标题定位唯一 source，副标题说明该项目正是多个 AI 共享一套记忆的设计，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7（完整标题见问题）生成 source_scoped 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "source_scoped 题：标题全文较长且含 emoji，引用稍显笨重，但 source_scoped 桶本就用标题作唯一标识，问题随后问的是文章内 'shared memory' 设计意图，可判别；不视作翻译腔（无中翻英/英翻中的不对接）。vault 中仅此一篇 memmy-agent，无混淆候选。"
+}

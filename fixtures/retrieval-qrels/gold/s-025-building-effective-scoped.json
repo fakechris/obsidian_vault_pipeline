@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-025",
+ "question": "《Building Effective AI Agents》那篇里，关于怎样把智能体做得真正可用，主要讲了什么？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "source_scoped",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "67000a6afabe9cbcc3494513111832b3c48e9bbd9602782d2f929bc7f757d336",
+   "grade": 3,
+   "why": "问题用标题《Building Effective AI Agents》直接定位源，文章本身承载答案，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=67000a6afabe9cbcc3494513111832b3c48e9bbd9602782d2f929bc7f757d336（标题《Building Effective AI Agents》）生成 source_scoped 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "source_scoped 题：用完整标题《Building Effective AI Agents》指明唯一 source，询问内容，可判别、不泄漏（title 是定位手段）。"
+}

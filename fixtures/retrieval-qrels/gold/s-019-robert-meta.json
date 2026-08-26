@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-019",
+ "question": "Robert 在 May 2026 写的、讲 agent 运行记录压缩的那篇是什么？",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "meta",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "da31750624b47bb64547f4e91636fdea73dcf23a764ec8e8964bb87edc147ffe",
+   "grade": 3,
+   "why": "source 元数据 author=Robert、date=2026-05-20、标题为 Laminar trace 压缩文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=da31750624b47bb64547f4e91636fdea73dcf23a764ec8e8964bb87edc147ffe 的 author/date/title 元数据生成 meta 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "meta 题：'Robert 在 May 2026 写的讲 agent 运行记录压缩的那篇' 用 author + month + 主题定位，自然、可判别。"
+}

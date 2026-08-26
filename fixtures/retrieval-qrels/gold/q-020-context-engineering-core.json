@@ -1,0 +1,153 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-020",
+ "question": "context engineering 一句话核心结论?",
+ "source_session": "final-sanity-mcp2",
+ "language": "mixed",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "01461090526e4112accab4ba83e827c4ab302ee614188dc39dd90b33d56884e8",
+   "grade": 3,
+   "why": "Anthropic Effective context engineering，CE 权威一手论述。"
+  },
+  {
+   "surface": "source",
+   "id": "2978e8abceba8e266b1a6c79397ad5c6e16061e04fa666a8b96412bcca121054",
+   "grade": 3,
+   "why": "Context engineering: the key to great agents，CE 主张核心来源。"
+  },
+  {
+   "surface": "source",
+   "id": "800bd16e703926ccf6913397c0bcddab7b9d66be650f143d158129bbcbd72abf",
+   "grade": 3,
+   "why": "LangChain Context engineering in Deep Agents，CE 工程化文档。"
+  },
+  {
+   "surface": "source",
+   "id": "65f5c5e24f91d9508ca77f8fb28b8f589d2731be6d38243e448f378a5b4c8d16",
+   "grade": 3,
+   "why": "Martin Fowler 站 Context Engineering for Coding Agents，CE 深度综述。"
+  },
+  {
+   "surface": "source",
+   "id": "024fa72c02389abf120f7feef6ce86f0c2769c7af2f3fc4e7bcfc1fe23b9524a",
+   "grade": 2,
+   "why": "Tw93 你不知道的 Agent 包含 agent 架构与上下文处理实践。"
+  },
+  {
+   "surface": "source",
+   "id": "103fd8059638b8807b49a039e1af27e8b4537b6f0fb6c6f55156ebe6913a9721",
+   "grade": 2,
+   "why": "Skill Issue: Harness Engineering，harness 管理直接等于上下文工程。"
+  },
+  {
+   "surface": "source",
+   "id": "2421eb2c19992efb15637edc8a69283748dfbbafd6805a706d3118e2481faae0",
+   "grade": 2,
+   "why": "Best Practices For CLAUDE.md/AGENTS.md，CLAUDE.md 是 CE 落地实践。"
+  },
+  {
+   "surface": "source",
+   "id": "77a22cddd1aca710a36cd4ba0803da4ba3580dbb796a87b5222f30b8eea757ae",
+   "grade": 2,
+   "why": "The Anatomy of an AI Agent Harness，harness 结构即上下文管理结构。"
+  },
+  {
+   "surface": "source",
+   "id": "7fec4927eb4de7a7c264067924d63fe16abbd7e3b67847b60b452164b4ba9023",
+   "grade": 2,
+   "why": "Build Agents that never forget，memory 即上下文工程组成。"
+  },
+  {
+   "surface": "source",
+   "id": "5208365372c07aa5388d68d20aafc5452b3ec108b664b186b9e419e3efa1064e",
+   "grade": 2,
+   "why": "mksglu/context-mode 直接做 context window 优化，CE 一手工具。"
+  },
+  {
+   "surface": "source",
+   "id": "da9a91fe4fd1e0bb1a21704872c123dda002be06e97730c83dedcb3aef5bd4cc",
+   "grade": 2,
+   "why": "Anthropic Code execution with MCP，code execution 减少 context 传递。"
+  },
+  {
+   "surface": "source",
+   "id": "1d171ea92a54164b896dcbb092361bd6dc24fbb844804c9997da4667aee2c2c2",
+   "grade": 2,
+   "why": "MCP vs CLI was the wrong debate，懒加载是 CE 的核心模式之一。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-2c51d4069315ce9f",
+   "grade": 3,
+   "why": "claim 原文把 CE 定义为应对 context rot/dumb zone 的 discipline，是 CE 核心结论。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-1873cef951b6410e",
+   "grade": 3,
+   "why": "claim 原文直接给出 context 增长→LLM 性能退化、token efficiency 是核心约束的判断。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-2c29534256276bdc",
+   "grade": 3,
+   "why": "claim 原文直接断言 context 是有限共享预算，过载损害 agent。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-f58488e4c093d437",
+   "grade": 3,
+   "why": "claim 原文把 CE 归纳为「curating what an LLM sees」，是 CE 一句话核心。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-1dc5a1d4fa22290d",
+   "grade": 3,
+   "why": "claim 原文给出 tool output 占满 40% context 的定量结论。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-61568a8a92511420",
+   "grade": 3,
+   "why": "claim 原文给出 code execution/context-mode 98.7%、94-99% token 节省的硬数据。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-a257b43724a09948",
+   "grade": 3,
+   "why": "claim 原文把 MCP/CLI 之争归因于工具描述全量塞 context，是 CE 关键模式判断。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-1722c52f3d0ee13d",
+   "grade": 3,
+   "why": "claim 原文说明 code execution 把中间结果留在执行环境，是 CE 减少 context 传递的实践总结。"
+  },
+  {
+   "surface": "source",
+   "id": "837e49a102adee0bf40415af3f9f30c92c7b035ef786261e6820cdd660bc414d",
+   "grade": 2,
+   "why": "supplemental adjudication 2026-08-14 (label completeness): 标题本身就是一句可摘录的 CE 核心结论：「上下文不是仓库，是工作台」，直接回答「一句话核心结论」类问题。"
+  },
+  {
+   "surface": "source",
+   "id": "67ff28702a18a0de5687dba15c22dab600259a15b3d7573273eebccb3b2346f2",
+   "grade": 1,
+   "why": "supplemental adjudication 2026-08-14 (label completeness): 标题主题是多 Agent 架构的工程批评（matched「engineering」来自「工程」子串），不承载 CE 一句话结论；邻接主题保留作候选。"
+  },
+  {
+   "surface": "source",
+   "id": "e6d6a20710528ae5e99461185755e321ddd1f7375454e8c376872305f446d4e4",
+   "grade": 1,
+   "why": "supplemental adjudication 2026-08-14 (label completeness): 标题是李宏毅讲 AI Agent 运作原理的科普讲座（OpenClaw 解剖），范围广于 CE；可能顺带提上下文但不是 CE 一句话结论承载，邻接主题保留作候选。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "第二轮重标（digest 修复后）：补入 digest 中出现的 claim_key 与 search_claims 结果来源；final_answer 为空且没有引用，claims/source 仅依据 digest 可见证据标注，confidence 保持 needs_review。 | supplemental labels added 2026-08-14 (droid, v8 forensics)",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "context engineering 一句话核心结论：草稿塞 15 source + 9 claim，按 ground-truth 删 IDA Pro MCP（无关 CE）和 input-normalization claim，剩 12 source + 8 claim 全部 promote。"
+}

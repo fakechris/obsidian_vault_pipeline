@@ -1,0 +1,87 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-001",
+ "question": "我的 vault 里关于 agent memory 的 durable 结论有哪些?给出引用。",
+ "source_session": "a3b-smoke-1",
+ "language": "mixed",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "01b4867abcf3b294369fd429d278fdace5d79b829cb0b5488e4b49b4b74f3cfe",
+   "grade": 3,
+   "why": "标题 We broke the frontier in agent memory，正面承载 memory 系统结论，是引用源之一。"
+  },
+  {
+   "surface": "source",
+   "id": "2c7baaa763519920162d55af20afebd4c62b85b1dd65c780458d513acb631289",
+   "grade": 3,
+   "why": "Karpathy Second Brain 在 agent 规模下失效，正面承载 memory 局限结论。"
+  },
+  {
+   "surface": "source",
+   "id": "342165ed1b51d3a471a2633d197539242d351da21770517f60e66698ec0377f3",
+   "grade": 3,
+   "why": "同一 Karpathy Second Brain 文章的另一发布面（不同 author），同结论的双源引用。"
+  },
+  {
+   "surface": "source",
+   "id": "43154e2f57beb2e9aa8f2431bb612298c0c9f3ba767893f25465808d5621835a",
+   "grade": 2,
+   "why": "Emotion Is the Missing Memory Layer，正面讨论 memory 层，承载部分 memory 结论。"
+  },
+  {
+   "surface": "source",
+   "id": "53a20bf3436bec2f99891632a898e5738c20d8e85b3db115f1aa9235f33512fd",
+   "grade": 2,
+   "why": "Honcho + Hermes-LCM 改进 Hermes Agent 记忆，正面承载 memory 系统实践。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-9841d0974d8ef1c9",
+   "grade": 3,
+   "why": "claim 原文直接给出 machine-facing agent memory 与 human-facing note-taking 的根本差异，是 agent memory 的核心结论。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-c50fb1b08438f85c",
+   "grade": 3,
+   "why": "claim 原文直接说明 memory/context 管理依赖 vector stores、knowledge bases、skills 等多种机制，是 memory 系统的核心结论。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-22676f418a7cf239",
+   "grade": 3,
+   "why": "claim 原文直接给出 agent memory 多时间尺度（working + external）与当前系统缺乏选择性遗忘的判断，是 memory 本体结论。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-b5ef1405ace93349",
+   "grade": 3,
+   "why": "claim 原文直接定义 agent memory 架构与 human note-taking 系统的本质差异，正面回答 memory 设计。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-ac5a863e10faada2",
+   "grade": 3,
+   "why": "claim 原文直接列出 memory failure 的三种表现（amnesia、personalization loss、hallucination）。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-4b73e227d6cbd6f9",
+   "grade": 3,
+   "why": "claim 原文直接断言 memory systems 是 agent 持续改进的基础设施。"
+  },
+  {
+   "surface": "claim",
+   "id": "ck-20c363815ecfba31",
+   "grade": 3,
+   "why": "claim 原文直接给出 agent memory 按 declarative/procedural/episodic 分层的实践。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "第二轮重标（digest 修复后）：补入 digest 中出现的 claim_key 与 search_claims 结果来源；final_answer 没有实际列出结论或引用，因此 claims/source 均按证据可见性标注，未提升 confidence。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "vault 里有充足 agent memory durable claims；按 ground-truth 实际标题修剪 15 个 source，仅保留真 memory 主题；删 3 个 context/skills claim。"
+}

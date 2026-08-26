@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-014",
+ "question": "为什么 eval 要分优化集和 holdout 集，专门防止 agent 钻评测空子？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "claim",
+   "id": "ck-c968145c1fc49510",
+   "grade": 3,
+   "why": "claim 原文直接给出 holdout set 拆分为优化/holdout 来防御 reward hacking 与过拟合，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 claim_key=ck-c968145c1fc49510（主题 Agent Harness Engineering）把结论反向改写成问题。该 claim 的 source_ids 未在 silver-input.sources 中提供可对应的 sha256，故按允许 ID 约束不另引。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "claim_evidence 题：'eval 为什么要分优化集和 holdout 集，专门防止 agent 钻评测空子' 把 holdout pattern claim 反向改写；'holdout' 是该 claim 的核心术语，用作问题关键词符合 claim_evidence 桶预期，可判别。"
+}

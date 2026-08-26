@@ -1,0 +1,25 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-022",
+ "question": "最近（8 月初）看过的、让不同 AI 共用一套记忆的文章是哪篇？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "recent",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7",
+   "grade": 3,
+   "why": "source date=2026-08-04，副标题明确讨论让 Claude Code / Codex / OpenClaw / Hermes Agent 共用一套记忆，是 8 月初唯一匹配候选，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7 的 date=2026-08-04 与标题主题生成 recent 问题。 | date window 2026-08-01..2026-08-10 adjudicated blind from wording (\"8 月初\") 2026-08-14",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "recent 题：'最近（8 月初）看过的、让不同 AI 共用一套记忆的文章' 用时间窗 + 主题定位，silver-input 中 8 月初日期的 source 仅这一篇共享记忆主题，无混淆候选。",
+ "filters": {
+  "date_from": "2026-08-01",
+  "date_to": "2026-08-10"
+ }
+}

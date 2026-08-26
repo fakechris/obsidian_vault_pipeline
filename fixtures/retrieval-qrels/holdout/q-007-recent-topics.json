@@ -1,0 +1,43 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-007",
+ "question": "我最近读了哪些主题的东西?挑三篇值得重读的。",
+ "source_session": "a3d-eval-agent-q5-explore-recent",
+ "language": "mixed",
+ "class": "recent",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "96901268f6e8fed73b8edc9c05bbf115db856c94f4477eb14a830e802de55a49",
+   "grade": 1,
+   "why": "Anthropic 大规模 Claude Code 迁移，list_recent_sources 候选。"
+  },
+  {
+   "surface": "source",
+   "id": "747237d54ac314200edd0320489d799f663a217b837ebb5d9b82b9632b480567",
+   "grade": 1,
+   "why": "CMGS 1M concurrent sandboxes，list_recent_sources 候选。"
+  },
+  {
+   "surface": "source",
+   "id": "873b49a7b5c6024697cea56cb9f8e759db8458a2103d2aca60269910242a1be1",
+   "grade": 1,
+   "why": "中美 AI 模型前沿比较，list_recent_sources 候选。"
+  },
+  {
+   "surface": "source",
+   "id": "8e2da9a4e95e0452d01d88fb6fd434ad8de3c3f400d6469abe539172424ce69f",
+   "grade": 1,
+   "why": "Cerebras 知识库实践，list_recent_sources 候选。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "list_recent_sources 返回了候选，但 final_answer 在完成三篇推荐前结束，且没有最终引用；候选均为 grade 1。 | date window 2026-07-15..2026-08-14 adjudicated blind from wording (\"最近\"无锚,30 天惯例窗口) 2026-08-14",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "recent 题：list_recent_sources 返回 4 个候选都是 vault 近期源，全部 keep 作 grade 1（候选集合）。",
+ "filters": {
+  "date_from": "2026-07-15",
+  "date_to": "2026-08-14"
+ }
+}

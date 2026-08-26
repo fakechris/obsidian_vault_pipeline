@@ -1,0 +1,25 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-024",
+ "question": "7 月底最近看的、讲让多个智能体同时做事但人还能掌控的文章是哪篇？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "recent",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "edccb9e67b2ac0d4fcd7110d97d439501f864cd1e533906d199fc7871e0843be",
+   "grade": 3,
+   "why": "source date=2026-07-28，标题《Air: Multitask with agents, stay in control》直接匹配 multitask + stay-in-control 主题，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=edccb9e67b2ac0d4fcd7110d97d439501f864cd1e533906d199fc7871e0843be 的 date=2026-07-28 与标题主题生成 recent 问题。 | date window 2026-07-20..2026-07-31 adjudicated blind from wording (\"7 月底\") 2026-08-14",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "recent 题：'7 月底最近看的、讲让多个智能体同时做事但人还能掌控的文章' 时间窗 + multitask + human-in-control 主题，silver-input 中 7 月底日期相符唯一。",
+ "filters": {
+  "date_from": "2026-07-20",
+  "date_to": "2026-07-31"
+ }
+}
