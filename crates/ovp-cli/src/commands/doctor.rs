@@ -439,22 +439,27 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
-    findings.push(Finding {
-        check: "crystal-staleness".into(),
-        severity: Severity::Warn,
-        message: format!(
-            "{} of {} durable claims no longer ground ({}) — {age_note}. \
-             Run `ovp2 crystal-recheck --vault-root <vault> --out <report>`; \
-             re-verification is a gated write, never automatic",
-            report.n_stale,
-            report.n_claims,
-            defects.join(" ")
+    // The message states the FACT; the hint carries the ACTION. #461 put the
+    // command in the message because there was nowhere else for it — leaving
+    // it there now prints the same instruction twice.
+    findings.push(
+        Finding {
+            check: "crystal-staleness".into(),
+            severity: Severity::Warn,
+            message: format!(
+                "{} of {} durable claims no longer ground ({}) — {age_note}",
+                report.n_stale,
+                report.n_claims,
+                defects.join(" ")
+            ),
+            hint: None,
+            fixed: false,
+        }
+        .attach_hint(
+            "run `ovp2 crystal-recheck --vault-root <vault> --out <report>` for the \
+             per-claim detail; re-verification is a gated write, never automatic",
         ),
-        hint: None,
-        fixed: false,
-    }.attach_hint(
-            "run `ovp2 crystal-recheck --vault-root <vault> --out <report>` for the per-claim detail; re-verification is a gated write, never automatic",
-        ));
+    );
 }
 
 fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
@@ -1104,11 +1109,45 @@ mod tests {
         )
         .unwrap();
 
+        // A durable claim citing a case that is NOT among the reader packs —
+        // the one state that produces the stale-claims WARN. Without it the
+        // finding this whole check exists for goes untested: fault injection
+        // showed both the hint rule and the no-duplicate-command rule passing
+        // vacuously for it.
+        let stale = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(stale.path().join(".ovp/crystal")).unwrap();
+        let pack = stale
+            .path()
+            .join("40-Resources/Reader/2026-01-01_Present-aaaaaaaa");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("units.accepted.json"),
+            r#"[{"id":"u-000-aaaaaaaa","kind":"assertion","text":"t",
+                 "evidence":{"ref_id":"p001.s001","quote":"q","location":null},
+                 "attribution":"author","modality":"asserted","arguments":[],
+                 "status":"accepted","issues":[]}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            stale.path().join(".ovp/crystal/ledger.jsonl"),
+            concat!(
+                r#"{"op":"write","record":{"claim_key":"ck-1","claim_id":"ck-1","claim":"c","#,
+                r#""theme":"t","source_cases":["2026-01-01_Gone-bbbbbbbb"],"#,
+                r#""citations":[{"case_id":"2026-01-01_Gone-bbbbbbbb","unit_id":"u-000-bbbbbbbb","#,
+                r#""quote":"q","resolved_line":1}],"provenance_score":1.0,"#,
+                r#""provenance_class":"durable","strength":"supported","strength_rationale":"r","#,
+                r#""final_class":"durable","run_id":"r1","status":"active"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
         vec![
             ("bare", bare),
             ("crystal-no-ledger", no_ledger),
             ("crystal-bad-line", bad_line),
             ("ledger-dangling-pack", dangling),
+            ("crystal-stale-claim", stale),
         ]
     }
 
@@ -1144,12 +1183,30 @@ mod tests {
         // Guards the first version lacked: if the fixtures stop reaching the
         // branches, or the exemption arm is never taken, this test must fail
         // rather than pass vacuously.
-        assert!(actionable >= 8, "only {actionable} actionable finding(s) reached");
+        assert!(actionable >= 10, "only {actionable} actionable finding(s) reached");
         assert!(
             exempted >= 1,
             "no finding took the message-names-a-command exemption — that arm of \
              the assertion is untested and could be silently wrong"
         );
+    }
+
+
+    /// The message says WHAT is wrong; the hint says what to DO. A finding
+    /// carrying the same command in both prints the instruction twice.
+    #[test]
+    fn a_finding_does_not_repeat_its_command_in_both_message_and_hint() {
+        for (label, vault) in actionable_fixtures() {
+            for f in all_checks(vault.path()) {
+                let Some(hint) = f.hint.as_deref() else { continue };
+                assert!(
+                    !names_a_command(&f),
+                    "{label}: [{}] names a command in BOTH message and hint:\n  msg:  {}\n  hint: {hint}",
+                    f.check,
+                    f.message
+                );
+            }
+        }
     }
 
     #[test]
