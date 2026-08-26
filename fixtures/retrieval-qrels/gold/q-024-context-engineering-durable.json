@@ -1,0 +1,33 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-024",
+ "question": "vault 里关于 context engineering 的来源和 durable 结论有哪些?",
+ "source_session": "web-a3c-smoke1",
+ "language": "mixed",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "01461090526e4112accab4ba83e827c4ab302ee614188dc39dd90b33d56884e8",
+   "grade": 3,
+   "why": "Anthropic Effective context engineering，CE 一手权威综述。"
+  },
+  {
+   "surface": "source",
+   "id": "3db88bc656b322f6ea505b77bfd59e95f63f931f436197a2728c8c44697bc29f",
+   "grade": 3,
+   "why": "Advanced Context Engineering for Coding Agents，CE 深度综述。"
+  },
+  {
+   "surface": "source",
+   "id": "f1ae727f8b08e34af4441733da8ba468fe51559bb515937cd82d76e007e55a6e",
+   "grade": 3,
+   "why": "Aman AI Journal • Context Engineering primer，CE 系统化 primer。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "会话以 model_error 结束；工具确实返回候选，但标题不完整且最终答案没有引用，故只保留 grade 1。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "claim_evidence 题：3 个 source 全是 CE 系统综述，按 ground-truth 标题全部 promote grade 3；草稿未给 claim，只能列 source。"
+}

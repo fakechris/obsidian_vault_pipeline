@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-012",
+ "question": "有没有一篇教我做笔记首页的文章，能把今天真正重要的东西集中显示出来？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "f48476156888967b2ff380a27d6c7b745995394ff73708c3849bb3180459e7d1",
+   "grade": 3,
+   "why": "标题《How to Build an Obsidian Dashboard That Shows You Everything That Matters Today》是 Obsidian 主题唯一文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=f48476156888967b2ff380a27d6c7b745995394ff73708c3849bb3180459e7d1（标题《How to Build an Obsidian Dashboard That Shows You Everything That Matters Today》）做 paraphrase。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'教我做笔记首页的文章，把今天真正重要的东西集中显示出来' 用 '笔记首页' 译 Obsidian Dashboard、'今天真正重要的东西集中显示' 译 Today/Everything That Matters Today 的语义但用不同中文表达；可判别，Obsidian dashboard 在 vault 内只有这一篇。"
+}

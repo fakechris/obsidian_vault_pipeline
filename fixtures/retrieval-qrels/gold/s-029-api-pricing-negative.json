@@ -1,0 +1,14 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-029",
+ "question": "有没有一篇专门比较 OpenAI、Anthropic 和 Google API 价格，并给出最新套餐表？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "negative",
+ "relevant": [],
+ "no_answer": true,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据输入中的 provider/API key 与 AI agent 邻近主题构造负例；silver-input 未出现三家 API 价格、套餐表或对应 claim/source，故 relevant 为空。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "negative 题：'OpenAI、Anthropic、Google API 价格 + 最新套餐表' 对照 silver-input 无任一三家 API 价格比较或套餐表内容（vault 仅在 claim 中涉及 provider API keys pluggable，并未做价格比较），确认 no_answer=true。问题自然、范围明确。"
+}

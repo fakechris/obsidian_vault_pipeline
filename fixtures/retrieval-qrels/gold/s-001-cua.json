@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-001",
+ "question": "我之前看过一篇标题里直接写 CUA 的 agent 基础设施文章，能帮我找出来吗？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "3d693fb99a6752e4d99d18fb5a4d590d2482f4d851ecda4fe37521d43bc7fadb",
+   "grade": 3,
+   "why": "标题《CUA - Computer-Use Agent Infrastructure》本身是问题的承载对象，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=3d693fb99a6752e4d99d18fb5a4d590d2482f4d851ecda4fe37521d43bc7fadb（标题《CUA - Computer-Use Agent Infrastructure》）做 exact 项目名提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'标题里直接写 CUA 的 agent 基础设施' 直指唯一标题《CUA - Computer-Use Agent Infrastructure》，自然中文提问，可判别；没有复用标题其他词组但作为 exact 桶正是预期行为。"
+}

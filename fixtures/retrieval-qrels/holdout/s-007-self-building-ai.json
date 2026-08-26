@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-007",
+ "question": "我想找一篇讲某个智能程序能不断改造自己、越跑越会搭建自身的文章。",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "055d42f737cc5038f073b92780de1634ab2d87436250e9b4f904cb9a0a080b23",
+   "grade": 3,
+   "why": "标题《The self-improving AI system that keeps building itself》正是 'single program keeps self-modifying' 主题的承载对象，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=055d42f737cc5038f073b92780de1634ab2d87436250e9b4f904cb9a0a080b23（标题《The self-improving AI system that keeps building itself》）做 paraphrase。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'智能程序能不断改造自己、越跑越会搭建自身' 复述 self-improving-keeps-building-itself 主题，没有复用 'self-improving' 或 'building itself' 原词；问题用单数 '智能程序' 与多智能体自我进化（CORAL）作了区分，可判别。"
+}

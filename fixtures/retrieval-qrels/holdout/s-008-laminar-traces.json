@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-008",
+ "question": "有没有一篇讲把 agent 跑过的记录压到原来二十分之一左右的？",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "da31750624b47bb64547f4e91636fdea73dcf23a764ec8e8964bb87edc147ffe",
+   "grade": 3,
+   "why": "标题《How Laminar compresses agent traces by 20x》是该主题唯一文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=da31750624b47bb64547f4e91636fdea73dcf23a764ec8e8964bb87edc147ffe（标题《How Laminar compresses agent traces by 20x》）做 paraphrase。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'把 agent 跑过的记录压到原来二十分之一左右' 把 20x 改写成 '1/20 of original' 倒述、用 '跑过的记录' 替代 'agent traces'，自然换词、未复用原标题；可判别。"
+}

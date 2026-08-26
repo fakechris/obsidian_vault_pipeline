@@ -1,0 +1,57 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-005",
+ "question": "找一下讲 context engineering 的文章,哪篇讲得最系统?",
+ "source_session": "a3d-eval-agent-q3-find-source",
+ "language": "mixed",
+ "class": "compare",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "01461090526e4112accab4ba83e827c4ab302ee614188dc39dd90b33d56884e8",
+   "grade": 3,
+   "why": "Anthropic Effective context engineering，是 CE 主题最权威的一手论述，最系统候选。"
+  },
+  {
+   "surface": "source",
+   "id": "f1ae727f8b08e34af4441733da8ba468fe51559bb515937cd82d76e007e55a6e",
+   "grade": 3,
+   "why": "Aman primer 上下文工程综述，篇幅长且系统，正面承载 CE 系统化论述。"
+  },
+  {
+   "surface": "source",
+   "id": "3db88bc656b322f6ea505b77bfd59e95f63f931f436197a2728c8c44697bc29f",
+   "grade": 3,
+   "why": "Advanced Context Engineering for Coding Agents，coding agent 维度的 CE 深度论述。"
+  },
+  {
+   "surface": "source",
+   "id": "afafd391882bd5299788ee81c3124282bef9d1b5ab96720645400e5e8bf33e19",
+   "grade": 2,
+   "why": "Nyk 短文 Context Engineering Is The Only Engineering，单点主张较系统论述短。"
+  },
+  {
+   "surface": "source",
+   "id": "2978e8abceba8e266b1a6c79397ad5c6e16061e04fa666a8b96412bcca121054",
+   "grade": 2,
+   "why": "Neil Rahilly Context engineering: the key to great agents，CE 主张型短文。"
+  },
+  {
+   "surface": "source",
+   "id": "67ff28702a18a0de5687dba15c22dab600259a15b3d7573273eebccb3b2346f2",
+   "grade": 1,
+   "why": "supplemental adjudication 2026-08-14 (label completeness): 标题谈的是「虚拟公司」式多 Agent 架构的工程批评，属 AI agent 工程邻接主题；不承载 context engineering 的方法/理念论述（matched 'engineering'"
+  },
+  {
+   "surface": "source",
+   "id": "837e49a102adee0bf40415af3f9f30c92c7b035ef786261e6820cdd660bc414d",
+   "grade": 2,
+   "why": "supplemental adjudication 2026-08-14 (label completeness): 标题直接给出上下文定位的核心比喻——「不是仓库，是工作台」，属 context engineering 的本体/方法论主张，是 CE 系统论述的候选材料。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "工具轨迹显示做了多来源比较，但 seen_source_ids 的标题为空且 final_answer 尚未给出选择或引用；只能保留低等级候选。 | supplemental labels added 2026-08-14 (droid, v8 forensics)",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "5 个 source 全是 context engineering 主题，按 ground-truth 实际标题全部 promote；该问哪个最系统是 compare 题，5 个都是候选。"
+}

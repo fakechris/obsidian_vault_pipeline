@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-022",
+ "question": "详细讲讲这个金融产品，金融现象的本质",
+ "source_session": "src-ms8oe2fl-wvaspa",
+ "language": "zh",
+ "class": "source_scoped",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "816380d615c63038a3aae393ecaa8a2c624045a5a03200111d46e0f860183519",
+   "grade": 3,
+   "why": "事关7709 文章本身详尽讨论 7709.HK 单股杠杆 ETF 反身性与 KOSPI 7·13 风暴，是问题的承载对象。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "这是 source-grounded chat，焦点 source 在 digest 的上下文中完整给出；但 cited_sources/cited_claims 为空，无法判断回答实际引用了哪些段落。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "source_scoped 题：focus context 唯一给出，事关7709 文章本身是答案；promote 到 grade 3。"
+}

@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-015",
+ "question": "What exactly does “loop engineering” mean—how does the loop take over the human prompter?",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "claim_evidence",
+ "relevant": [
+  {
+   "surface": "claim",
+   "id": "ck-e5a3183b0890cc4e",
+   "grade": 3,
+   "why": "claim 原文直接定义 loop engineering 为替代 human prompter 的迭代驱动循环，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 claim_key=ck-e5a3183b0890cc4e（主题 Loop Engineering）把结论反向改写成英文问题。该 claim 的 source_ids 未在 silver-input.sources 中提供可对应的 sha256，故按允许 ID 约束不另引。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "claim_evidence 题：'What exactly does loop engineering mean—how does the loop take over the human prompter' 反向询问 'loop engineering 替代 human prompter' claim；用术语是 claim_evidence 桶预期行为，可判别。"
+}

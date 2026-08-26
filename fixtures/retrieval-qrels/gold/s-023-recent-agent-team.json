@@ -1,0 +1,25 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-023",
+ "question": "最近读的关于 Multi-Agent 团队协作最佳实践是哪篇？",
+ "source_session": "silver-generated",
+ "language": "mixed",
+ "class": "recent",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "f51d6296d879060d0356aa81e768a38edb0304dd5e9f53c4ddb16ce544ba8c01",
+   "grade": 3,
+   "why": "source date=2026-08-08，标题《最佳实践：从Multi-Agent到Agent Team》唯一匹配 Multi-Agent 团队协作最佳实践最近阅读意图，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=f51d6296d879060d0356aa81e768a38edb0304dd5e9f53c4ddb16ce544ba8c01 的 date=2026-08-08 与标题主题生成 recent 问题。 | date window 2026-07-15..2026-08-14 adjudicated blind from wording (\"最近\"无锚,30 天惯例窗口) 2026-08-14",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "recent 题：'最近读的关于 Multi-Agent 团队协作最佳实践是哪篇' 时间近 + 主题，单一候选。",
+ "filters": {
+  "date_from": "2026-07-15",
+  "date_to": "2026-08-14"
+ }
+}

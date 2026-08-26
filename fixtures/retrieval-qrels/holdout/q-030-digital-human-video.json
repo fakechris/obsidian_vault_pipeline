@@ -1,0 +1,39 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-030",
+ "question": "在知识库里找一下，就是跟这个数字人做视频生成相关的内容，串一串，就有什么比较好的实践吗？就是做数字人、数字分身，或者是做视频编辑。",
+ "source_session": "web-ms5oakt4-vvpf41",
+ "language": "mixed",
+ "class": "compare",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "6dc988d1d27614055ed13de8010eddbd44f107635061e25c7a6a5647f887a0a3",
+   "grade": 3,
+   "why": "Codex+Hyperframes+HeyGen+声音克隆自媒体变现，正面承载数字人/视频编辑组合实践。"
+  },
+  {
+   "surface": "source",
+   "id": "979d7ea1381359b259a4d78a0b13a032f24272c77980b9539c3ec5d2cce4f9c1",
+   "grade": 3,
+   "why": "rachel-digital-human-production，数字人制作实践项目本身。"
+  },
+  {
+   "surface": "source",
+   "id": "3e3d2ca0bf8696a4fce3c1173f90123393bdc95ec553755dd316a3c8a25cf3f3",
+   "grade": 3,
+   "why": "Kmeng AI Animata 本地化 AI 视频创作工具，正面承载视频创作工具实践。"
+  },
+  {
+   "surface": "source",
+   "id": "e806e9e5f4721f65509ef33f045c36e61ed15cab8293572048191352262ecdbe",
+   "grade": 2,
+   "why": "Seedance2-Storyboard-Generator，视频分镜生成工具，承载视频编辑相邻实践。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "工具结果和标题覆盖数字人、数字分身、视频生成与编辑多个方向，但 final_answer 在补充确认前结束且没有引用。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "compare 题：4 个 source 全是数字人/视频生成主题，按 ground-truth 全部 promote；Seedance2 与其他三个相比偏工具化故 grade 2。"
+}

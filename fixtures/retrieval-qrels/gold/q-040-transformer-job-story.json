@@ -1,0 +1,27 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-040",
+ "question": "你看看能不能帮我找到一篇我之前的文章，或者是一条 Twitter，讲的是一个女生毕业的时候投了几十份简历，最后被 OpenAI 或者anthropic类似的公司录取了。她还分享了一个诀窍，就是要能够手写 Transformer，而且写得很细致，还分享了她的笔记。",
+ "source_session": "web-v2i6-regression",
+ "language": "mixed",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "51c47a5b14cbada25319c3f4813d2371a5c52383514046cfd49befb986f74c5c",
+   "grade": 3,
+   "why": "alisawuffles Notes on the Industry Job Search，dozens of interviews + transformer muscle memory + 公开笔记全部命中，是目标故事。"
+  },
+  {
+   "surface": "source",
+   "id": "95f4610732e6e6555151bae7d1d7ea0b7fee2c829637a3e9b251254d53870591",
+   "grade": 2,
+   "why": "silviasapora ML Job Interviews: The Ultimate Guide，Transformer from scratch 笔记候选，主题相邻但不是目标故事。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "final_answer 已找到与多个线索吻合的行业求职笔记，但仍需确认作者、Twitter/文章形态及手写笔记细节；无最终引用。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "transformer-job-story variant B 正例：alisawuffles Notes on the Industry Job Search 的几十次面试/Transformer 练习/笔记线索全部命中；promote 到 grade 3。ML Job Interviews 仍 grade 2。"
+}

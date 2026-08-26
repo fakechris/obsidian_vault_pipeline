@@ -1,0 +1,45 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-023",
+ "question": "像我们obsidian vault pipeline这种项目，怎么做meomory效果最好，有没有最佳实践，或者最适合的memory产品",
+ "source_session": "thm-msiqhp82-ke4pbi",
+ "language": "mixed",
+ "class": "compare",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "01b4867abcf3b294369fd429d278fdace5d79b829cb0b5488e4b49b4b74f3cfe",
+   "grade": 3,
+   "why": "We broke the frontier in agent memory（supermemory 博客），SOTA memory 系统实现，正面承载 memory 产品/最佳实践。"
+  },
+  {
+   "surface": "source",
+   "id": "9a1a6d8cd7e66e7a461e7582db61fa486adb2f4b0b8a42ef949dae8ad011f23a",
+   "grade": 3,
+   "why": "Dhravya Shah 同一内容的 X/Twitter 版本，承载 memory SOTA 主张。"
+  },
+  {
+   "surface": "source",
+   "id": "6e2160664be15c24db3c39daf51b7ec3f65a9324d4a20a589006f1aa5c6a2ee2",
+   "grade": 3,
+   "why": "98.2% on LongMemEval，可长期记忆 agent 评测与实现，正面承载 memory 最佳实践。"
+  },
+  {
+   "surface": "source",
+   "id": "98043fd561a59f3620d512a98d1c81beccd4047fcebacdd52d87b4cd20298789",
+   "grade": 3,
+   "why": "Agent Memory Is Blind to Time，mem0 temporal reasoning 层，承载 memory 时间维度实践。"
+  },
+  {
+   "surface": "source",
+   "id": "63ee63befc1394f8aec0cd9102d80ee750ceeb18b1900fea9bef64e0acf9675d",
+   "grade": 2,
+   "why": "How Memory Works in HyperAgents?，mem0 双层记忆架构，承载 memory 架构候选。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "theme-grounded 上下文提供了 active claims 和 56 个 cited sources，候选可据此标注；但最终 cited_sources/cited_claims 为空，因此全部保留 grade 1。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "compare 题：5 个 source 全是 agent memory 系统实践（包括 LongMemEval、SOTA、temporal memory、HyperAgents），全部 promote。"
+}

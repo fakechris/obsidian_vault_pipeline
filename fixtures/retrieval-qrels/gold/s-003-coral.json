@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-003",
+ "question": "哪篇文章标题里有 CORAL，讲的是多智能体自我进化基础设施？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "fb4f0932187ec09096113c5b536588450af92b9d0d6c1de51958a8fac3ff9cf3",
+   "grade": 3,
+   "why": "唯一带 CORAL 与 Multi-Agent Self-Evolution 的标题文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=fb4f0932187ec09096113c5b536588450af92b9d0d6c1de51958a8fac3ff9cf3（标题《CORAL - Multi-Agent Self-Evolution Infrastructure》）做 exact 项目名提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'标题里有 CORAL，讲的是多智能体自我进化基础设施' 把独特项目名 CORAL 与主题并置，自然中文、可判别、exact 桶预期。"
+}

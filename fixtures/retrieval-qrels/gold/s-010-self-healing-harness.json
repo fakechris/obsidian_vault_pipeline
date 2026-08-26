@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-010",
+ "question": "我记得有篇文章说光有记忆和外围框架还不够，还得让这套东西能自己发现问题并修好，帮我找下？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "paraphrase",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "c12b52bfc7abfa61c839c168e62fef4c4bc7c4cb3a6217fa5dcaff10e60b6aa6",
+   "grade": 3,
+   "why": "标题《Open Memory and Open Harness Is Not Enough: You Need Self-Optimizing (Self-Healing) Harness》是唯一把 memory + harness 列为不够并主张 self-healing 的文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=c12b52bfc7abfa61c839c168e62fef4c4bc7c4cb3a6217fa5dcaff10e60b6aa6（标题《Open Memory and Open Harness Is Not Enough: ...》）做 paraphrase。 | label review 2026-08-14 (droid): label_correct_hard_question - 三方 miss 为真实能力缺口非标注错误",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "paraphrase 题：'光有记忆和外围框架还不够，得能自己发现问题并修好' 用 '记忆' 译 Memory、'外围框架' 译 Harness、'自己发现问题并修好' 译 Self-Healing，未复述 Self-Healing Harness 原词；与 vault 中其他 harness 文章（Anatomy of an Agent Harness / Harness Is the Backend）不相交，可判别。"
+}

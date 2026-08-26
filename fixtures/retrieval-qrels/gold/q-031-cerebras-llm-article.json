@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-031",
+ "question": "有一篇 Cerebus 的，好像是关于 LLM 的文章，帮我找一下。",
+ "source_session": "web-msfnaa35-6okobq",
+ "language": "mixed",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "8e2da9a4e95e0452d01d88fb6fd434ad8de3c3f400d6469abe539172424ce69f",
+   "grade": 2,
+   "why": "Cerebras How we built our knowledge base，Cerebus 拼写应为 Cerebras，是最贴合 Cerebras/LLM 主题的官方候选。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "Cerebus 拼写未直接命中，final_answer 推断用户可能指 Cerebras 并找到官方知识库候选；仍未完成正本确认。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：Cerebus 应是 Cerebras 拼写变体，Cerebras 官方知识库文章是匹配候选；promote 到 grade 2（拼写不一致但实质答案）。"
+}

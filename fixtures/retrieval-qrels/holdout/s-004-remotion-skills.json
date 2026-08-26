@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-004",
+ "question": "我想找那篇标题含 Remotion Skills、还提到视频制作提示词的文章。",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "d7a6d329efc1ce798803124f5160c34ae083abb70f0f482a74edf66aa2437be4",
+   "grade": 3,
+   "why": "标题《Remotion Skills 制作视频完整过程和提示词》是唯一同时含 Remotion Skills 与提示词的 vault 文章，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=d7a6d329efc1ce798803124f5160c34ae083abb70f0f482a74edf66aa2437be4（标题《Remotion Skills 制作视频完整过程和提示词》）做 exact 项目名提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'标题含 Remotion Skills、还提到视频制作提示词' 用独特项目名 + 主题双轴定位，自然、可判别。"
+}

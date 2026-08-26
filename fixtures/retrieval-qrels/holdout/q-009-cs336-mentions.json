@@ -1,0 +1,27 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "q-009",
+ "question": "Stanford CS336 是什么?我的哪些文章提到了它?",
+ "source_session": "a3d-eval-agent-q7-entity",
+ "language": "mixed",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "f503789f77b73c2215ab8b1a76cd6ca43cb97b3af814fc297634bd83a5c64191",
+   "grade": 3,
+   "why": "Stanford CS336 | Language Modeling from Scratch，是 CS336 课程主页本身，直接回答第一问。"
+  },
+  {
+   "surface": "source",
+   "id": "51c47a5b14cbada25319c3f4813d2371a5c52383514046cfd49befb986f74c5c",
+   "grade": 1,
+   "why": "alisawuffles 求职笔记可能提到 CS336，但 final_answer 没确认该具体来源，仅作候选保留。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "CS336 的直接来源可确认，但 final_answer 只说找到三篇、没有列出引用，其他提及它的来源无法从 digest 明确映射。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：CS336 主页本身 grade 3；alisawuffles 是否提及 CS336 不确定但问题第二部分问提到它的文章，保留 grade 1。"
+}

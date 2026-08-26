@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-021",
+ "question": "Ashwin Gopinath 在 6 月写的、把“记忆”和“目的”放在一起讲的文章是哪篇？",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "meta",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "8f26fc0a15409ea3c9cb377664431899bda0c7efa76dd6f3b71141a717e5fc45",
+   "grade": 3,
+   "why": "source 元数据 author=Ashwin Gopinath、date=2026-06-03、标题《Memory Is Purpose》全部命中，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=8f26fc0a15409ea3c9cb377664431899bda0c7efa76dd6f3b71141a717e5fc45 的 author/date/title 元数据生成 meta 问题。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "meta 题：'Ashwin Gopinath 在 6 月写的、把记忆和目的放在一起讲的文章' 用 author + month + 标题同义（中文化 Memory/Purpose）定位，自然、可判别。"
+}

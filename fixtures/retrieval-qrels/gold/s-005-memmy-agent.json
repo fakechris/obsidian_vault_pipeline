@@ -1,0 +1,21 @@
+{
+ "schema": "ovp.retrieval_eval.qrel/v1",
+ "id": "s-005",
+ "question": "找一下标题里有 memmy-agent 的那条，应该是给多个 AI 共用本地记忆的项目。",
+ "source_session": "silver-generated",
+ "language": "zh",
+ "class": "exact",
+ "relevant": [
+  {
+   "surface": "source",
+   "id": "97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7",
+   "grade": 3,
+   "why": "标题以《MemTensor/memmy-agent》开头，副标题明确讨论共享/本地记忆，是问题唯一目标，grade 3。"
+  }
+ ],
+ "no_answer": false,
+ "confidence": "gold",
+ "annotator_notes": "生成方式：据 source sha256=97b645a800ea95505bfd100a05e0d390d2896c8a173a79846f06dcf3b709b0f7（标题以《MemTensor/memmy-agent》开头）做 exact 项目名提问。",
+ "adjudicated_by": "droid",
+ "adjudication_reason": "exact 题：'标题里有 memmy-agent 的那条，给多个 AI 共用本地记忆的项目' 项目名 + 主题双轴，自然、可判别。"
+}
