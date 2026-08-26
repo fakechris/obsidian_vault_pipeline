@@ -22,6 +22,8 @@ import {
   shouldClearRetry,
   type BannerLevel,
   type RetryPending,
+  failingJobs,
+  type FailingJob,
 } from '../lib/derive';
 import { STATIC_MODE, fetchSchedule, startRunNow, type ScheduleJob } from '../lib/api';
 import { useModel } from '../model';
@@ -55,6 +57,9 @@ export default function RunBanner() {
   const [retryPending, setRetryPending] = useState<RetryPending | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [dailyJob, setDailyJob] = useState<ScheduleJob | null>(null);
+  // The banner already fetched every job and threw all but `daily` away, so a
+  // crystallize failing for days was visible ONLY on the hidden System page.
+  const [failing, setFailing] = useState<FailingJob[]>([]);
 
   const banner = lastRunBanner(model, now);
   // Retry stays pending until the heartbeat actually moves the banner off
@@ -91,9 +96,12 @@ export default function RunBanner() {
       .then((s) => {
         if (cancelled) return;
         setDailyJob(s.jobs.find((j) => j.id === 'daily') ?? null);
+        setFailing(failingJobs(s.jobs));
       })
       .catch(() => {
-        if (!cancelled) setDailyJob(null);
+        if (cancelled) return;
+        setDailyJob(null);
+        setFailing([]);
       });
     return () => {
       cancelled = true;
@@ -194,6 +202,26 @@ export default function RunBanner() {
 
   return (
     <div className={`run-banner-wrap ${level}`}>
+      {failing.length > 0 && (
+        <div className="run-banner-failing">
+          {failing.map((j) => (
+            <button
+              key={j.id}
+              type="button"
+              className="run-banner-failing-item"
+              onClick={() => navigate('/system')}
+              title={j.reason ?? undefined}
+            >
+              {t('banner.jobFailing', {
+                id: j.id,
+                streak: j.streak,
+                when: formatRunWhen(j.lastRun) || '—',
+              })}
+              {j.reason ? ` — ${j.reason}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="run-banner-bar">
         <button
           type="button"

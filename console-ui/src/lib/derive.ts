@@ -1918,3 +1918,96 @@ export function resolveThemeClaimsSort(
   if (isDir(urlDir)) clear.push('dir');
   return { filter, sort, dir, clear };
 }
+
+// ---------------------------------------------------------------------------
+// Silently failing scheduler jobs
+// ---------------------------------------------------------------------------
+
+/** A scheduled job that is failing, condensed for the always-visible banner. */
+export interface FailingJob {
+  id: string;
+  /** Failures since the last success. 1 for a first failure. */
+  streak: number;
+  /** Local `YYYY-MM-DDTHH:MM:SS` of the last attempt. */
+  lastRun: string;
+  /** The most diagnostic line of the recorded stderr tail — see
+   *  [`firstErrorLine`]; deliberately not simply the first. */
+  reason: string | null;
+}
+
+/** Longest reason the banner will render, ELLIPSIS INCLUDED. */
+const REASON_MAX = 160;
+
+/** Lines that read as a diagnosis rather than progress chatter. */
+const ERROR_LINE = /^(error|fatal|panic|thread '.*' panicked)\b|(^|\s)(error|failed|panic)[:!]/i;
+
+/**
+ * The most diagnostic line of a stderr tail, bounded for a one-line banner.
+ *
+ * NOT simply the first line. The tail is the last 12 lines of stderr, and on a
+ * real crystallize failure its head was progress chatter
+ * ("embedding 1 pack(s) with Xenova/…") while the actual cause
+ * ("error: gate: strength verdicts incomplete") was the final line. Prefer a
+ * line that reads as an error; otherwise take the LAST non-blank one, since
+ * the newest thing a dying run said beats the oldest.
+ */
+export function firstErrorLine(tail: string | null | undefined): string | null {
+  if (!tail) return null;
+  const lines = tail
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return null;
+  // Last match, not first: a run can log a recovered error before the fatal one.
+  const line =
+    [...lines].reverse().find((l) => ERROR_LINE.test(l)) ?? lines[lines.length - 1];
+  // -1 for the ellipsis: the cap counts what is RENDERED, so slicing to the
+  // cap and then appending would overshoot it.
+  return line.length > REASON_MAX
+    ? `${line.slice(0, REASON_MAX - 1)}…`
+    : line;
+}
+
+/**
+ * Scheduled jobs whose last run FAILED, worst streak first.
+ *
+ * The banner is on every page and already fetches the whole schedule, but it
+ * only ever looked at `daily`. So a `crystallize` that has been failing for
+ * days is visible ONLY to someone who opens the hidden System page and selects
+ * that job — which is the silent-failure shape this is meant to remove.
+ *
+ * `daily` is excluded on purpose: the banner reports it from the heartbeat,
+ * with live progress and a richer status than the schedule row carries.
+ * Listing it here too would double-report the same run.
+ */
+export function failingJobs(
+  jobs: readonly ScheduleJobLike[] | null | undefined,
+  opts: { exclude?: readonly string[] } = {},
+): FailingJob[] {
+  const exclude = new Set(opts.exclude ?? ['daily']);
+  return (jobs ?? [])
+    .filter(
+      (j) =>
+        j.enabled !== false &&
+        j.last_status === 'error' &&
+        !exclude.has(j.id),
+    )
+    .map((j) => ({
+      id: j.id,
+      streak: Math.max(1, j.consecutive_failures ?? 1),
+      lastRun: j.last_run ?? '',
+      reason: firstErrorLine(j.last_error),
+    }))
+    .sort((a, b) => b.streak - a.streak || a.id.localeCompare(b.id));
+}
+
+/** The subset of `ScheduleJob` this module needs — keeps derive.ts free of
+ *  the API module's import graph. */
+export interface ScheduleJobLike {
+  id: string;
+  enabled?: boolean;
+  last_status?: string;
+  last_run?: string;
+  last_error?: string | null;
+  consecutive_failures?: number;
+}

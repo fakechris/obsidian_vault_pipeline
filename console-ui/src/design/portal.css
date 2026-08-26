@@ -211,6 +211,37 @@ body {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
+/* Scheduler jobs that are failing, above the daily banner. The daily run gets
+   the banner proper; these are the ones that were previously visible only on
+   the hidden System page. Amber, not red: the daily loop is still healthy —
+   the point is to stop a job failing for days from being silent, not to make
+   the whole portal look broken. */
+.run-banner-failing {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.run-banner-failing-item {
+  width: 100%;
+  text-align: start;
+  border: 0;
+  cursor: pointer;
+  padding: 0.3rem 0.75rem;
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--warn-fg, #7a4a00);
+  background: var(--warn-bg, #fdf3e0);
+  border-bottom: 1px solid var(--warn-border, #f0dcb8);
+  /* One line: a stderr first-line can be long and this sits above the fold on
+     every page. The full text is on the title attribute. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-banner-failing-item:hover {
+  filter: brightness(0.97);
+}
 .run-banner-bar {
   display: flex;
   align-items: stretch;
