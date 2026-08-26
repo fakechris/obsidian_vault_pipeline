@@ -217,7 +217,13 @@ fn port_is_free(port: u16) -> bool {
 /// vault has already claimed and ports that will not bind, so two vaults whose
 /// hashes collide still land on different origins.
 fn allocate_port(ports: &BTreeMap<String, u16>, vault: &str) -> (u16, bool) {
-    let claimed = ports.get(vault).copied().filter(|p| *p >= 1024);
+    // A claim outside the window cannot have been written by this code, so it
+    // is corrupt (hand-edited config, or a port that predates the window).
+    // Treat it as no claim and repair, rather than honouring it or clamping
+    // the probe to the window edge — clamping silently moves the search away
+    // from the vault's own candidate.
+    let window = PORT_WINDOW_LO..(PORT_WINDOW_LO + PORT_WINDOW_LEN);
+    let claimed = ports.get(vault).copied().filter(|p| window.contains(p));
     if let Some(port) = claimed.filter(|p| port_is_free(*p)) {
         return (port, true);
     }
@@ -232,7 +238,6 @@ fn allocate_port(ports: &BTreeMap<String, u16>, vault: &str) -> (u16, bool) {
         .map(|(_, v)| *v)
         .collect();
     let start = claimed.unwrap_or_else(|| stable_port_candidate(vault));
-    let start = start.clamp(PORT_WINDOW_LO, PORT_WINDOW_LO + PORT_WINDOW_LEN - 1);
     for step in 0..PORT_WINDOW_LEN {
         let offset = (start - PORT_WINDOW_LO + step) % PORT_WINDOW_LEN;
         let port = PORT_WINDOW_LO + offset;
@@ -1076,52 +1081,59 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_canonical_port_yields_a_stand_in_that_must_not_be_claimed() {
+    fn a_busy_canonical_port_yields_an_in_window_stand_in_and_recovers() {
         let v = "/Users/op/vault-a";
-        let held = TcpListener::bind("127.0.0.1:0").unwrap();
-        let busy = held.local_addr().unwrap().port();
         let mut ports = BTreeMap::new();
-        ports.insert(v.to_string(), busy);
-        let (port, canonical) = allocate_port(&ports, v);
-        assert_ne!(port, busy);
+        let (canonical_port, ok) = allocate_port(&ports, v);
+        assert!(ok);
+        ports.insert(v.to_string(), canonical_port);
+        // Occupy the vault's OWN canonical port — the claim has to be inside
+        // the window for this to model a real conflict rather than a corrupt
+        // entry (which takes the repair path instead).
+        let held = TcpListener::bind(("127.0.0.1", canonical_port)).expect("just probed free");
+
+        let (port, is_canonical) = allocate_port(&ports, v);
+        assert_ne!(port, canonical_port);
         assert!(
-            !canonical,
+            !is_canonical,
             "a stand-in must be flagged so the caller never overwrites the claim"
         );
-        // Conflict clears -> back to the canonical origin, settings intact.
-        drop(held);
-        assert_eq!(allocate_port(&ports, v), (busy, true));
-    }
-
-    #[test]
-    fn a_stand_in_stays_inside_the_vault_owned_window() {
-        // The stand-in must NOT be an ephemeral port: the OS hands those to
-        // other vaults' launches later, which re-opens the cross-vault
-        // localStorage bleed on the fallback path.
-        let v = "/Users/op/vault-a";
-        let held = TcpListener::bind("127.0.0.1:0").unwrap();
-        let busy = held.local_addr().unwrap().port();
-        let mut ports = BTreeMap::new();
-        ports.insert(v.to_string(), busy);
-        let (port, canonical) = allocate_port(&ports, v);
-        assert!(!canonical);
         assert!(
             (PORT_WINDOW_LO..PORT_WINDOW_LO + PORT_WINDOW_LEN).contains(&port),
-            "stand-in {port} escaped the window"
+            "stand-in {port} escaped the window; the OS would hand it to another vault"
         );
+
+        // Conflict clears -> back to the canonical origin, settings intact.
+        drop(held);
+        assert_eq!(allocate_port(&ports, v), (canonical_port, true));
     }
 
     #[test]
-    fn a_stand_in_avoids_ports_other_vaults_claimed() {
+    fn allocation_skips_a_port_another_vault_already_claimed() {
+        // `a` is unclaimed, so probing starts at ITS hashed candidate — which
+        // `b` already owns. That is the only setup that actually exercises the
+        // `others.contains` branch: give `a` an out-of-window claim instead and
+        // the probe starts somewhere else entirely and passes for free.
         let (a, b) = ("/Users/op/vault-69", "/Users/op/vault-450");
+        let contested = stable_port_candidate(a);
+        assert_eq!(contested, stable_port_candidate(b), "fixture must collide");
         let mut ports = BTreeMap::new();
-        // A's canonical is busy; B holds the very next port in the window.
-        let held = TcpListener::bind("127.0.0.1:0").unwrap();
-        ports.insert(a.to_string(), held.local_addr().unwrap().port());
-        let neighbour = stable_port_candidate(a);
-        ports.insert(b.to_string(), neighbour);
-        let (port, _) = allocate_port(&ports, a);
-        assert_ne!(port, neighbour, "must not stand in on B's claimed origin");
+        ports.insert(b.to_string(), contested);
+        let (port, canonical) = allocate_port(&ports, a);
+        assert_ne!(port, contested, "must not allocate B's origin to A");
+        assert!(canonical);
+    }
+
+    #[test]
+    fn an_out_of_window_claim_is_repaired() {
+        let v = "/Users/op/vault-a";
+        let mut ports = BTreeMap::new();
+        // Nothing this code writes lands here; honouring it would pin the
+        // vault to a port the OS reassigns freely.
+        ports.insert(v.to_string(), 51234u16);
+        let (port, canonical) = allocate_port(&ports, v);
+        assert_eq!(port, stable_port_candidate(v), "probe starts at the candidate");
+        assert!(canonical, "a corrupt claim must be repaired");
     }
 
     #[test]
