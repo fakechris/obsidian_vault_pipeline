@@ -2005,7 +2005,15 @@ fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         }
     };
     match ovp_scheduler::load_registry(&state.vault_root) {
-        Ok(Some(reg)) => {
+        Ok(Some(loaded)) => {
+            // Quarantined jobs ride along so the portal can show them red
+            // instead of leaving an operator wondering where a job went.
+            let rejected: Vec<serde_json::Value> = loaded
+                .rejected
+                .iter()
+                .map(|r| serde_json::json!({ "id": r.id, "reason": r.reason }))
+                .collect();
+            let reg = loaded.registry;
             let jobs: Vec<serde_json::Value> = reg
                 .jobs
                 .iter()
@@ -2065,6 +2073,7 @@ fn handle_schedule(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                     "present": true,
                     "registry_rel": ovp_scheduler::REGISTRY_REL,
                     "jobs": jobs,
+                    "rejected": rejected,
                 })
                 .to_string(),
             )
@@ -2143,7 +2152,8 @@ fn handle_schedule_features(state: &AppState, body: &str) -> Response<std::io::C
     };
 
     let mut reg = match ovp_scheduler::load_registry(&state.vault_root) {
-        Ok(Some(r)) => r,
+        // as_written: this path saves, and must not drop quarantined jobs.
+        Ok(Some(r)) => r.as_written,
         Ok(None) => {
             return json_response(
                 404,

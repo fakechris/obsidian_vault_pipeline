@@ -11,6 +11,7 @@ use ovp_scheduler::{JobConfig, JobRunner, plan_tick, run_now_with};
 // Re-export the engine items the sibling `schedule` module (installer) and the
 // CLI dispatch reference, so call sites keep using `commands::scheduler::…`.
 pub use ovp_scheduler::{
+    LoadedRegistry, RejectedJob,
     Cadence, Registry, State, VAULT_PLACEHOLDER, default_registry, is_due, registry_path,
     resolve_vault,
 };
@@ -22,7 +23,7 @@ use crate::CliError;
 
 // -- persistence, error-mapped into CliError --------------------------------
 
-pub fn load_registry(vault_root: &Path) -> Result<Option<Registry>, CliError> {
+pub fn load_registry(vault_root: &Path) -> Result<Option<LoadedRegistry>, CliError> {
     ovp_scheduler::load_registry(vault_root).map_err(CliError::Io)
 }
 pub fn save_registry(vault_root: &Path, reg: &Registry) -> Result<(), CliError> {
@@ -227,6 +228,24 @@ fn missing_registry_err(vault_root: &Path) -> CliError {
     ))
 }
 
+/// Print quarantined jobs. Loud on stdout AND stderr: the desktop scheduler
+/// only forwards a child's stderr to `eprintln`, which Finder swallows, so a
+/// stderr-only warning is invisible to exactly the operator who needs it.
+fn report_rejected(rejected: &[RejectedJob]) {
+    if rejected.is_empty() {
+        return;
+    }
+    println!(
+        "scheduler: {} job(s) QUARANTINED — they will not run until fixed:",
+        rejected.len()
+    );
+    for r in rejected {
+        println!("  - {}: {}", r.id, r.reason);
+        eprintln!("scheduler: job '{}' quarantined: {}", r.id, r.reason);
+    }
+    println!("  (the remaining jobs still run; edit .ovp/schedule.json to fix)");
+}
+
 /// Give every registry job a state entry it lacks, so a job with no recorded
 /// run first fires at its NEXT occurrence, not immediately on the first tick (an
 /// unseeded job has no last-run, so `is_due` treats every past occurrence as
@@ -237,7 +256,7 @@ fn missing_registry_err(vault_root: &Path) -> CliError {
 /// over a malformed state file fails loud rather than installing a timer whose
 /// every tick would then error (codex P2).
 pub fn seed_missing_state(vault_root: &Path) -> Result<(), CliError> {
-    let Some(reg) = load_registry(vault_root)? else {
+    let Some(reg) = load_registry(vault_root)?.map(|l| l.registry) else {
         return Ok(());
     };
     let mut state = load_state(vault_root)?; // validates an existing file
@@ -259,7 +278,10 @@ pub fn seed_missing_state(vault_root: &Path) -> Result<(), CliError> {
 /// hint and returns `None` instead of erroring when nothing is installed.
 fn require_registry(vault_root: &Path) -> Result<Option<Registry>, CliError> {
     match load_registry(vault_root)? {
-        Some(reg) => Ok(Some(reg)),
+        Some(loaded) => {
+            report_rejected(&loaded.rejected);
+            Ok(Some(loaded.registry))
+        }
         None => {
             println!(
                 "scheduler: no registry at {} — run `ovp2 schedule install --vault-root {}`",
@@ -319,12 +341,18 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     // can't slip an edit between the read and the launch. Held across the whole
     // dispatch so a concurrent tick/run-now can't double-spawn a job.
     let _lock = acquire_dispatch_lock(vault_root)?;
-    let Some(reg) = load_registry(vault_root)? else {
+    let Some(loaded) = load_registry(vault_root)? else {
         return Err(CliError::Io(format!(
             "scheduler tick: no registry at {} — run `ovp2 schedule install`",
             registry_path(vault_root).display()
         )));
     };
+    // A broken job must not take the healthy ones down with it: report it and
+    // dispatch the rest. This is the failure CLAUDE.md calls the most expensive
+    // one in the repo — a cadence the installed binary does not understand used
+    // to stop EVERY job, and from the GUI it looked like nothing happening.
+    report_rejected(&loaded.rejected);
+    let reg = loaded.registry;
     let mut state = load_state(vault_root)?;
     let runner = shell_runner(vault_root, &reg)?;
     let now = local_now();
@@ -384,7 +412,9 @@ pub fn run_run_now(
     // A mutating command must FAIL on a missing registry, not exit 0, so a
     // script/desktop client can't record false success.
     let _lock = acquire_dispatch_lock(vault_root)?;
-    let reg = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
+    let loaded = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
+    report_rejected(&loaded.rejected);
+    let reg = loaded.registry;
     let state = load_state(vault_root)?;
     // Recency skip UNDER the dispatch lock: if a tick (or another trigger)
     // dispatched this job moments ago, a forced re-run is a duplicate, not
@@ -420,7 +450,11 @@ pub fn run_set_enabled(vault_root: &Path, id: &str, enabled: bool) -> Result<(),
     // can't act on a stale snapshot and two enable/disable calls can't lose an
     // update. Missing registry is an error for this mutator.
     let _lock = acquire_dispatch_lock(vault_root)?;
-    let mut reg = load_registry(vault_root)?.ok_or_else(|| missing_registry_err(vault_root))?;
+    // as_written, NOT registry: saving the filtered view would delete a
+    // quarantined job as a side effect of an unrelated edit.
+    let mut reg = load_registry(vault_root)?
+        .ok_or_else(|| missing_registry_err(vault_root))?
+        .as_written;
     let job = reg
         .get_mut(id)
         .ok_or_else(|| CliError::Io(format!("no job '{id}' in the registry")))?;

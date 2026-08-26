@@ -932,7 +932,8 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
         // deleting it; a deleted built-in is restored disabled? No — it is
         // restored as the default ships it; disable it again if unwanted.
         let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
-            .expect("registry_path exists but load returned None");
+            .expect("registry_path exists but load returned None")
+        .as_written;
         let mut inserted = false;
         for (pos, fresh_job) in fresh.jobs.iter().enumerate() {
             if reg.get(&fresh_job.id).is_none() {
@@ -948,7 +949,8 @@ fn ensure_registry(cfg: &ScheduleConfig, reconcile: bool) -> Result<RegistryOutc
         return Ok(RegistryOutcome::Unchanged);
     }
     let mut reg = super::scheduler::load_registry(&cfg.vault_root)?
-        .expect("registry_path exists but load returned None");
+        .expect("registry_path exists but load returned None")
+        .as_written;
     let before = reg.clone();
     reg.env_file = fresh.env_file.clone();
     // Overwrite each built-in job's config from the flags, but preserve the
@@ -1486,8 +1488,9 @@ fn status_with(
         // when omitted — so status never reports a file the ticks don't source
         // (codex P2). Only fall back to the install-time metadata when the
         // registry itself can't be read.
-        Ok(Some(reg)) => {
-            let raw = reg
+        Ok(Some(loaded)) => {
+            let raw = loaded
+                .registry
                 .env_file
                 .clone()
                 .unwrap_or_else(|| format!("{}/.ovp/daily.env", super::scheduler::VAULT_PLACEHOLDER));
@@ -1505,7 +1508,7 @@ fn status_with(
     match registry {
         Ok(Some(reg)) => match super::scheduler::load_state(&meta.vault_root) {
             Ok(state) => {
-                super::scheduler::print_jobs(&reg, &state, super::scheduler::local_now(), "  ")
+                super::scheduler::print_jobs(&reg.registry, &state, super::scheduler::local_now(), "  ")
             }
             // A malformed state file blocks `tick`, so surface it rather than
             // silently showing every job as never-run/due-now (codex P2).
@@ -1645,7 +1648,8 @@ mod tests {
         assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Seeded);
 
         // Operator edits the daily job the way the portal/CLI allows.
-        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         let daily = reg.get_mut("daily").unwrap();
         daily.cadence = "every 4h".into();
         daily.argv.push("--max-sources".into());
@@ -1657,13 +1661,15 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Unchanged);
         }
-        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         assert_eq!(after, edited, "init must leave an edited registry alone");
 
         // install still reconciles — it carries the operator's flags, so
         // re-running it IS how you change the built-in job.
         assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
-        let reconciled = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let reconciled = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         assert_eq!(reconciled.get("daily").unwrap().cadence, "daily 09:00");
     }
 
@@ -1677,14 +1683,16 @@ mod tests {
 
         // Model an upgrade: a registry from before the `themes` built-in,
         // carrying operator edits that must survive the migration.
-        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         reg.jobs.retain(|j| j.id != "themes");
         let daily = reg.get_mut("daily").unwrap();
         daily.cadence = "every 4h".into();
         super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
 
         assert_eq!(ensure_registry(&c, false).unwrap(), RegistryOutcome::Migrated);
-        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         // Inserted at its default position: BEFORE crystallize (registry
         // order is catch-up execution order — themes must re-cluster first).
         let ids: Vec<&str> = after.jobs.iter().map(|j| j.id.as_str()).collect();
@@ -1696,11 +1704,13 @@ mod tests {
 
         // Reinstall (reconcile) restores a missing built-in at its default
         // position too — never appended after crystallize.
-        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let mut reg = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         reg.jobs.retain(|j| j.id != "themes");
         super::super::scheduler::save_registry(dir.path(), &reg).unwrap();
         assert_eq!(ensure_registry(&c, true).unwrap(), RegistryOutcome::Reconciled);
-        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap();
+        let after = super::super::scheduler::load_registry(dir.path()).unwrap().unwrap()
+            .as_written;
         let ids: Vec<&str> = after.jobs.iter().map(|j| j.id.as_str()).collect();
         assert_eq!(ids, vec!["daily", "themes", "crystallize"]);
     }
@@ -2353,7 +2363,8 @@ mod tests {
         let reg_path = super::super::scheduler::registry_path(vault.path());
         let mut reg = super::super::scheduler::load_registry(vault.path())
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .as_written;
         reg.get_mut("crystallize").unwrap().enabled = false;
         // Operator also moved crystallize to a different weekly slot.
         reg.get_mut("crystallize").unwrap().cadence = "weekly Wed 03:00".into();
@@ -2371,7 +2382,8 @@ mod tests {
         );
         let reg2 = super::super::scheduler::load_registry(vault.path())
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .as_written;
         // The daily cadence now reflects the new --time flag...
         assert_eq!(reg2.get("daily").unwrap().cadence, "daily 21:00");
         // ...but operator-owned fields survive: crystallize's enable state AND
@@ -2396,7 +2408,8 @@ mod tests {
         // Operator disables a job.
         let mut reg = super::super::scheduler::load_registry(vault.path())
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .as_written;
         reg.get_mut("crystallize").unwrap().enabled = false;
         super::super::scheduler::save_registry(vault.path(), &reg).unwrap();
 
@@ -2407,7 +2420,8 @@ mod tests {
         assert_eq!(report.registry, RegistryOutcome::Reconciled);
         let reg2 = super::super::scheduler::load_registry(vault.path())
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .as_written;
         // env file reconciled...
         assert_eq!(
             reg2.env_file.as_deref(),

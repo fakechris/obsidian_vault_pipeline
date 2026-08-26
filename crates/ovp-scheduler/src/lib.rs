@@ -314,17 +314,78 @@ impl Registry {
 
     /// Validate every cadence up front so a hand-edited typo fails loud at load
     /// rather than silently skipping a job at tick time.
+    ///
+    /// Whole-registry verdict, kept for callers that genuinely need "is every
+    /// job usable". Loading uses [`Registry::partition`] instead — see there
+    /// for why an all-or-nothing answer is the wrong shape at load time.
     pub fn validate(&self) -> Result<(), String> {
-        let mut seen = std::collections::BTreeSet::new();
-        for job in &self.jobs {
-            if !seen.insert(job.id.as_str()) {
-                return Err(format!("duplicate job id '{}'", job.id));
-            }
-            job.parsed_cadence()
-                .map_err(|e| format!("job '{}': {e}", job.id))?;
+        let (_, rejected) = self.clone().partition();
+        match rejected.first() {
+            Some(r) => Err(format!("job '{}': {}", r.id, r.reason)),
+            None => Ok(()),
         }
-        Ok(())
     }
+
+    /// Split into the jobs that can run and the ones that cannot.
+    ///
+    /// A single unparseable cadence used to fail the whole load, which meant
+    /// `schedule list` and `tick` exited non-zero and **every** job stopped —
+    /// not just the broken one. Worse, the desktop app writes a tick's stderr
+    /// to `eprintln` only, so from the GUI that looked like nothing happening
+    /// at all. The usual way in is a `schedule.json` edited to a cadence syntax
+    /// the installed binary does not know yet, which is a routine ordering
+    /// mistake, not corruption.
+    ///
+    /// So quarantine per job: the healthy ones keep running and the broken ones
+    /// are reported by id and reason. A duplicate id keeps the FIRST occurrence
+    /// — that is what `get()` already resolves to, so quarantining the later
+    /// one matches the behaviour the rest of the code already has.
+    pub fn partition(mut self) -> (Registry, Vec<RejectedJob>) {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut kept = Vec::new();
+        let mut rejected = Vec::new();
+        for job in std::mem::take(&mut self.jobs) {
+            if !seen.insert(job.id.clone()) {
+                rejected.push(RejectedJob {
+                    id: job.id,
+                    reason: "duplicate job id (the first one is used)".to_string(),
+                });
+                continue;
+            }
+            match job.parsed_cadence() {
+                Ok(_) => kept.push(job),
+                Err(e) => rejected.push(RejectedJob { id: job.id, reason: e }),
+            }
+        }
+        // `..self` rather than restating fields: a field added later must be
+        // carried through automatically, not silently reset to its default.
+        (Registry { jobs: kept, ..self }, rejected)
+    }
+}
+
+/// A job the registry could not use, and why. Reported, never silently dropped:
+/// a job missing from `schedule list` with no explanation is indistinguishable
+/// from one that was never configured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedJob {
+    pub id: String,
+    pub reason: String,
+}
+
+/// A loaded registry plus whatever could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedRegistry {
+    /// Only the jobs that can actually run. Dispatch reads THIS.
+    pub registry: Registry,
+    pub rejected: Vec<RejectedJob>,
+    /// The registry exactly as it sits on disk, quarantined jobs included.
+    ///
+    /// Edit-and-save paths (`schedule disable`, `set-cadence`, install
+    /// migration) must go through this, never through `registry`: saving the
+    /// filtered view would DELETE the operator's broken job definition as a
+    /// side effect of an unrelated edit. Quarantine hides a job from the
+    /// dispatcher; it must never erase it from the file.
+    pub as_written: Registry,
 }
 
 /// The built-in default registry seeded on install: a daily reader run and a
@@ -532,7 +593,13 @@ pub fn state_path(vault_root: &Path) -> PathBuf {
     vault_root.join(STATE_REL)
 }
 
-pub fn load_registry(vault_root: &Path) -> Result<Option<Registry>, String> {
+/// Load the registry, quarantining individual unusable jobs.
+///
+/// Still `Err` when the FILE is the problem (missing read permission,
+/// unparseable JSON) — that is genuinely all-or-nothing and there is no
+/// partial registry to salvage. A bad cadence inside an otherwise valid file
+/// is not: it takes down one job, and everything else must keep running.
+pub fn load_registry(vault_root: &Path) -> Result<Option<LoadedRegistry>, String> {
     let path = registry_path(vault_root);
     if !path.exists() {
         return Ok(None);
@@ -541,8 +608,13 @@ pub fn load_registry(vault_root: &Path) -> Result<Option<Registry>, String> {
         std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let reg: Registry =
         serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
-    reg.validate()?;
-    Ok(Some(reg))
+    let as_written = reg.clone();
+    let (registry, rejected) = reg.partition();
+    Ok(Some(LoadedRegistry {
+        registry,
+        rejected,
+        as_written,
+    }))
 }
 
 pub fn save_registry(vault_root: &Path, reg: &Registry) -> Result<(), String> {
@@ -671,6 +743,10 @@ pub struct TickPlan {
     pub skipped_not_due: Vec<String>,
     /// Job ids skipped because disabled.
     pub skipped_disabled: Vec<String>,
+    /// Job ids skipped because their cadence does not parse — broken, not
+    /// waiting. Kept apart from `skipped_not_due` so a job that will NEVER run
+    /// cannot read as one that simply is not due yet.
+    pub skipped_invalid: Vec<String>,
 }
 
 pub fn plan_tick(reg: &Registry, state: &State, now: NaiveDateTime) -> TickPlan {
@@ -680,10 +756,12 @@ pub fn plan_tick(reg: &Registry, state: &State, now: NaiveDateTime) -> TickPlan 
             plan.skipped_disabled.push(job.id.clone());
             continue;
         }
-        // A cadence that fails to parse was rejected at load; stay defensive and
-        // skip rather than panic in the dispatcher.
+        // A cadence that fails to parse is quarantined at load, but stay
+        // defensive here for a registry built in memory. Its own bucket, NOT
+        // `skipped_not_due`: "not due" reads as "fine, just not time yet",
+        // while the truth is the job is broken and will never run.
         let Ok(cadence) = job.parsed_cadence() else {
-            plan.skipped_not_due.push(job.id.clone());
+            plan.skipped_invalid.push(job.id.clone());
             continue;
         };
         if is_due(cadence, state.last_run_of(&job.id), now) {
@@ -1050,7 +1128,7 @@ mod tests {
         assert!(load_registry(v).unwrap().is_none());
         let reg = default_registry("live", (9, 0), false, None);
         save_registry(v, &reg).unwrap();
-        assert_eq!(load_registry(v).unwrap().unwrap(), reg);
+        assert_eq!(load_registry(v).unwrap().unwrap().as_written, reg);
         let mut state = State::default();
         state.record("daily", dt("2026-07-12T09:05:00"), "ok");
         save_state(v, &state).unwrap();
@@ -1252,6 +1330,114 @@ mod tests {
         assert_eq!(*runner.ran.borrow(), vec!["crystallize".to_string()]);
         assert!(new_state.runs.contains_key("crystallize"));
         assert!(run_now_with(&reg, &State::default(), "nope", now, &runner).is_err());
+    }
+
+    /// Write a registry file whose second job has a cadence this binary cannot
+    /// parse — the exact shape of the failure CLAUDE.md documents (schedule.json
+    /// edited to a syntax newer than the installed binary).
+    fn registry_with_one_bad_cadence(v: &Path) {
+        std::fs::create_dir_all(v.join(".ovp")).unwrap();
+        let raw = r#"{
+          "version": 1,
+          "jobs": [
+            {"id":"daily","cadence":"daily 09:00","argv":["daily"],"enabled":true,"description":"d"},
+            {"id":"future","cadence":"every 3rd tuesday","argv":["x"],"enabled":true,"description":"f"},
+            {"id":"themes","cadence":"weekly Sun 08:00","argv":["themes"],"enabled":true,"description":"t"}
+          ]
+        }"#;
+        std::fs::write(v.join(REGISTRY_REL), raw).unwrap();
+    }
+
+    #[test]
+    fn one_unparseable_cadence_does_not_stop_the_other_jobs() {
+        // The whole point. This used to make load_registry return Err, which
+        // made `schedule list` and `tick` exit non-zero — every job stopped,
+        // not just the broken one, and from the GUI it looked like nothing
+        // happening at all.
+        let dir = tempfile::tempdir().unwrap();
+        registry_with_one_bad_cadence(dir.path());
+
+        let loaded = load_registry(dir.path()).unwrap().unwrap();
+        let ids: Vec<&str> = loaded.registry.jobs.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, vec!["daily", "themes"], "healthy jobs survive");
+        assert_eq!(loaded.rejected.len(), 1);
+        assert_eq!(loaded.rejected[0].id, "future");
+        assert!(
+            loaded.rejected[0].reason.contains("invalid cadence"),
+            "the reason must name the problem: {}",
+            loaded.rejected[0].reason
+        );
+    }
+
+    #[test]
+    fn a_quarantined_job_is_kept_in_the_file_not_deleted() {
+        // Quarantine hides a job from the dispatcher. If an unrelated edit
+        // (`schedule disable`) then saved the FILTERED view, the operator's
+        // broken definition would be erased instead of fixed — a worse
+        // outcome than the bug this whole change exists to fix.
+        let dir = tempfile::tempdir().unwrap();
+        registry_with_one_bad_cadence(dir.path());
+
+        let loaded = load_registry(dir.path()).unwrap().unwrap();
+        let mut edited = loaded.as_written;
+        assert_eq!(edited.jobs.len(), 3, "as_written keeps the broken job");
+        edited.get_mut("daily").unwrap().enabled = false;
+        save_registry(dir.path(), &edited).unwrap();
+
+        let after = load_registry(dir.path()).unwrap().unwrap();
+        assert_eq!(after.as_written.jobs.len(), 3, "still three on disk");
+        assert_eq!(after.rejected.len(), 1, "still quarantined, still present");
+    }
+
+    #[test]
+    fn a_broken_job_is_reported_as_invalid_not_as_not_due() {
+        // "not due" reads as "fine, just not time yet". A job that will NEVER
+        // run must not hide in that bucket.
+        let mut reg = default_jobs_registry();
+        reg.jobs.push(JobConfig {
+            id: "broken".into(),
+            cadence: "every 3rd tuesday".into(),
+            argv: vec!["x".into()],
+            enabled: true,
+            description: "b".into(),
+            ..reg.jobs[0].clone()
+        });
+        let plan = plan_tick(&reg, &State::default(), dt("2026-07-12T09:30:00"));
+        assert_eq!(plan.skipped_invalid, vec!["broken".to_string()]);
+        assert!(!plan.skipped_not_due.contains(&"broken".to_string()));
+    }
+
+    #[test]
+    fn a_duplicate_id_quarantines_the_later_copy_and_keeps_the_first() {
+        // `get()` already resolves to the first occurrence, so quarantining the
+        // later one matches the behaviour the rest of the code already has.
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path();
+        std::fs::create_dir_all(v.join(".ovp")).unwrap();
+        std::fs::write(
+            v.join(REGISTRY_REL),
+            r#"{"version":1,"jobs":[
+              {"id":"daily","cadence":"daily 09:00","argv":["first"],"enabled":true,"description":"a"},
+              {"id":"daily","cadence":"daily 10:00","argv":["second"],"enabled":true,"description":"b"}
+            ]}"#,
+        )
+        .unwrap();
+        let loaded = load_registry(v).unwrap().unwrap();
+        assert_eq!(loaded.registry.jobs.len(), 1);
+        assert_eq!(loaded.registry.jobs[0].argv, vec!["first".to_string()]);
+        assert_eq!(loaded.rejected.len(), 1);
+        assert!(loaded.rejected[0].reason.contains("duplicate"));
+    }
+
+    #[test]
+    fn a_file_level_problem_is_still_fatal() {
+        // Per-job quarantine must not swallow a genuinely unusable FILE —
+        // there is no partial registry to salvage from unparseable JSON.
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path();
+        std::fs::create_dir_all(v.join(".ovp")).unwrap();
+        std::fs::write(v.join(REGISTRY_REL), "{not json").unwrap();
+        assert!(load_registry(v).is_err());
     }
 
     #[test]
