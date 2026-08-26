@@ -621,6 +621,9 @@ export const zh: Record<keyof typeof en, string> = {
   'auto.missing':
     '还没有定时注册表（{path}）。打开桌面 App 会写入默认任务（每日 + 每周结晶），或运行 `ovp2 schedule init`。',
   'auto.empty': '定时注册表为空——没有配置任务。',
+  'auto.quarantined': '已隔离——修好前不会运行',
+  'auto.quarantinedHelp': '这些任务仍在 {path} 里。调度器跳过了它们,其余任务照常运行。',
+  'auto.allQuarantined': '所有已配置的任务都被隔离了——当前没有任何任务会运行。',
   'auto.configHint': '配置真相源：vault 的 {path}。历史流量：',
   'auto.flowLink': '管线 Flow →',
   'auto.cadence': '何时',

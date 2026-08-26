@@ -655,6 +655,9 @@ export const en = {
   'auto.missing':
     'No schedule registry yet ({path}). Opening the desktop app seeds defaults (daily + weekly crystallize), or run `ovp2 schedule init`.',
   'auto.empty': 'Schedule registry is empty — no jobs configured.',
+  'auto.quarantined': 'Quarantined — will not run until fixed',
+  'auto.quarantinedHelp': 'These jobs are still in {path}. The scheduler skipped them and ran everything else.',
+  'auto.allQuarantined': 'Every configured job is quarantined — nothing is scheduled to run.',
   'auto.configHint': 'Source of truth: vault {path}. Historical volume:',
   'auto.flowLink': 'Pipeline flow →',
   'auto.cadence': 'When',

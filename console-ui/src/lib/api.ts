@@ -187,10 +187,18 @@ export interface ScheduleJob {
   due: boolean;
   features: ScheduleJobFeatures;
 }
+/** A job the scheduler refused to load, and why. Quarantined, not deleted:
+ *  it is still in `schedule.json` and will run again once the reason is fixed. */
+export interface RejectedScheduleJob {
+  id: string;
+  reason: string;
+}
 export interface SchedulePayload {
   present: boolean;
   registry_rel: string;
   jobs: ScheduleJob[];
+  /** Absent on servers older than the per-job quarantine change. */
+  rejected?: RejectedScheduleJob[];
 }
 export function fetchSchedule(): Promise<SchedulePayload> {
   return fetchJson<SchedulePayload>('/api/schedule');
