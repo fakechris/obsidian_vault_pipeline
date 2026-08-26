@@ -1072,7 +1072,10 @@ mod tests {
     #[test]
     fn a_claimed_port_is_reused_and_is_stable_across_launches() {
         let mut ports = BTreeMap::new();
-        let v = "/Users/op/vault-a";
+        // A DISTINCT path per test: these bind real ports, and a shared vault
+        // path means a shared candidate, which races under cargo's parallel
+        // test threads.
+        let v = "/Users/op/vault-reuse";
         let (first, ok) = allocate_port(&ports, v);
         assert!(ok);
         ports.insert(v.to_string(), first);
@@ -1082,7 +1085,7 @@ mod tests {
 
     #[test]
     fn a_busy_canonical_port_yields_an_in_window_stand_in_and_recovers() {
-        let v = "/Users/op/vault-a";
+        let v = "/Users/op/vault-standin";
         let mut ports = BTreeMap::new();
         let (canonical_port, ok) = allocate_port(&ports, v);
         assert!(ok);
@@ -1126,7 +1129,7 @@ mod tests {
 
     #[test]
     fn an_out_of_window_claim_is_repaired() {
-        let v = "/Users/op/vault-a";
+        let v = "/Users/op/vault-outofwindow";
         let mut ports = BTreeMap::new();
         // Nothing this code writes lands here; honouring it would pin the
         // vault to a port the OS reassigns freely.
@@ -1142,7 +1145,7 @@ mod tests {
         // corrupt. Treat it as "no claim": allocate a real port and mark it
         // canonical so the bad entry gets overwritten rather than retried
         // forever.
-        let v = "/Users/op/vault-a";
+        let v = "/Users/op/vault-privileged";
         let mut ports = BTreeMap::new();
         ports.insert(v.to_string(), 80u16);
         let (port, canonical) = allocate_port(&ports, v);
