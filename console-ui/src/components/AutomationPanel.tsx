@@ -6,7 +6,7 @@
  * web / github node state comes from argv features. Click a node for detail.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Archive,
   BookOpen,
@@ -451,6 +451,7 @@ function JobStrip({
 }
 
 export default function AutomationPanel() {
+  const [searchParams] = useSearchParams();
   const { t } = useI18n();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -495,6 +496,19 @@ export default function AutomationPanel() {
       cancelled = true;
     };
   }, []);
+
+  // Honour `?job=<id>`: the banner links here to show a SPECIFIC failing job,
+  // and landing on `daily` instead makes that click a dead end. Its own effect
+  // keyed on the param, not part of the mount fetch — otherwise clicking a
+  // second failing job while already on this page would change the URL and
+  // move nothing. Router-aware rather than `window.location.search`: the
+  // published static build uses HashRouter, where the query is inside the hash.
+  useEffect(() => {
+    const wanted = searchParams.get('job');
+    if (!wanted || !data) return;
+    const match = data.jobs.find((j) => j.id === wanted);
+    if (match) selectJob(match);
+  }, [searchParams, data]);
 
   const activeJob =
     data?.jobs.find((j) => j.id === activeJobId) ?? data?.jobs[0] ?? null;

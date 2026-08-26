@@ -23,10 +23,18 @@ describe('firstErrorLine', () => {
     );
   });
 
-  it('prefers the LAST error line — a run may log a recovered error first', () => {
+  it('takes the last line, so a recovered error earlier in the run does not win', () => {
     expect(firstErrorLine('error: transient, retrying\nworking\nerror: fatal, giving up')).toBe(
       'error: fatal, giving up',
     );
+  });
+
+  it('keeps a cause that carries no error keyword', () => {
+    // Keyword matching returned "Error: job failed" here and threw the actual
+    // cause away — neither of the lines below would match an error vocabulary.
+    expect(
+      firstErrorLine('Error: job failed\nCaused by:\nPermission denied (os error 13)'),
+    ).toBe('Permission denied (os error 13)');
   });
 
   it('falls back to the newest line when nothing reads as an error', () => {

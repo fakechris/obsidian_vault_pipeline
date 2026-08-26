@@ -1930,26 +1930,26 @@ export interface FailingJob {
   streak: number;
   /** Local `YYYY-MM-DDTHH:MM:SS` of the last attempt. */
   lastRun: string;
-  /** The most diagnostic line of the recorded stderr tail — see
-   *  [`firstErrorLine`]; deliberately not simply the first. */
+  /** The run's final word — see [`firstErrorLine`]. */
   reason: string | null;
 }
 
 /** Longest reason the banner will render, ELLIPSIS INCLUDED. */
 const REASON_MAX = 160;
 
-/** Lines that read as a diagnosis rather than progress chatter. */
-const ERROR_LINE = /^(error|fatal|panic|thread '.*' panicked)\b|(^|\s)(error|failed|panic)[:!]/i;
-
 /**
- * The most diagnostic line of a stderr tail, bounded for a one-line banner.
+ * The run's final word: the LAST non-blank line of its stderr tail.
  *
- * NOT simply the first line. The tail is the last 12 lines of stderr, and on a
- * real crystallize failure its head was progress chatter
- * ("embedding 1 pack(s) with Xenova/…") while the actual cause
- * ("error: gate: strength verdicts incomplete") was the final line. Prefer a
- * line that reads as an error; otherwise take the LAST non-blank one, since
- * the newest thing a dying run said beats the oldest.
+ * Not the first. The tail is the last 12 lines of stderr and on a real
+ * crystallize failure it OPENED with progress chatter ("embedding 1 pack(s)
+ * with Xenova/…") while the cause ("error: gate: strength verdicts
+ * incomplete") was the final line.
+ *
+ * An earlier version pattern-matched for error-looking lines, which was worse
+ * in both directions: it missed causes that carry no keyword
+ * (`Caused by:` / `Permission denied (os error 13)`) and it matched summaries
+ * that do (`summary: failed: 0`). Taking the last line handles all of those,
+ * and needs no vocabulary to keep up to date.
  */
 export function firstErrorLine(tail: string | null | undefined): string | null {
   if (!tail) return null;
@@ -1957,29 +1957,13 @@ export function firstErrorLine(tail: string | null | undefined): string | null {
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
-  if (lines.length === 0) return null;
-  // Last match, not first: a run can log a recovered error before the fatal one.
-  const line =
-    [...lines].reverse().find((l) => ERROR_LINE.test(l)) ?? lines[lines.length - 1];
+  const line = lines[lines.length - 1];
+  if (!line) return null;
   // -1 for the ellipsis: the cap counts what is RENDERED, so slicing to the
   // cap and then appending would overshoot it.
-  return line.length > REASON_MAX
-    ? `${line.slice(0, REASON_MAX - 1)}…`
-    : line;
+  return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1)}…` : line;
 }
 
-/**
- * Scheduled jobs whose last run FAILED, worst streak first.
- *
- * The banner is on every page and already fetches the whole schedule, but it
- * only ever looked at `daily`. So a `crystallize` that has been failing for
- * days is visible ONLY to someone who opens the hidden System page and selects
- * that job — which is the silent-failure shape this is meant to remove.
- *
- * `daily` is excluded on purpose: the banner reports it from the heartbeat,
- * with live progress and a richer status than the schedule row carries.
- * Listing it here too would double-report the same run.
- */
 export function failingJobs(
   jobs: readonly ScheduleJobLike[] | null | undefined,
   opts: { exclude?: readonly string[] } = {},

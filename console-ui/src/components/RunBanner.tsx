@@ -29,6 +29,10 @@ import { STATIC_MODE, fetchSchedule, startRunNow, type ScheduleJob } from '../li
 import { useModel } from '../model';
 import RunActivity from './RunActivity';
 
+/** How often to re-read the schedule. Independent of the daily banner: a
+ *  non-daily job's state changes on its own cadence. */
+const SCHEDULE_POLL_MS = 60_000;
+
 /** Re-render tick so the age string advances. A minute is granular enough for
  * a wall-clock banner; the interval is cleared on unmount. */
 export function useNowTick(intervalMs = 60_000): number {
@@ -92,19 +96,27 @@ export default function RunBanner() {
   useEffect(() => {
     if (STATIC_MODE) return;
     let cancelled = false;
-    fetchSchedule()
-      .then((s) => {
-        if (cancelled) return;
-        setDailyJob(s.jobs.find((j) => j.id === 'daily') ?? null);
-        setFailing(failingJobs(s.jobs));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDailyJob(null);
-        setFailing([]);
-      });
+    const load = () =>
+      fetchSchedule()
+        .then((s) => {
+          if (cancelled) return;
+          setDailyJob(s.jobs.find((j) => j.id === 'daily') ?? null);
+          setFailing(failingJobs(s.jobs));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setDailyJob(null);
+          setFailing([]);
+        });
+    load();
+    // Poll on its own clock. Keying this to the DAILY banner meant a
+    // non-daily job could fail — or recover — while `bannerLevel` and
+    // `runId` both sat still, leaving a new failure invisible or a fixed one
+    // falsely flagged until a reload.
+    const timer = window.setInterval(load, SCHEDULE_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [bannerLevel, banner.runId]);
 
@@ -203,13 +215,13 @@ export default function RunBanner() {
   return (
     <div className={`run-banner-wrap ${level}`}>
       {failing.length > 0 && (
-        <div className="run-banner-failing">
+        <div className="run-banner-failing" role="status" aria-live="polite">
           {failing.map((j) => (
             <button
               key={j.id}
               type="button"
               className="run-banner-failing-item"
-              onClick={() => navigate('/system')}
+              onClick={() => navigate(`/system?job=${encodeURIComponent(j.id)}`)}
               title={j.reason ?? undefined}
             >
               {t('banner.jobFailing', {

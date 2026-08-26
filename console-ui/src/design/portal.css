@@ -230,9 +230,11 @@ body {
   font: inherit;
   font-size: 0.8rem;
   line-height: 1.35;
-  color: var(--warn-fg, #7a4a00);
-  background: var(--warn-bg, #fdf3e0);
-  border-bottom: 1px solid var(--warn-border, #f0dcb8);
+  /* The real tokens. `--warn-fg` does not exist — an invented name falls back
+     to the literal, which in dark mode lands around 2:1 against the surface. */
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
   /* One line: a stderr first-line can be long and this sits above the fold on
      every page. The full text is on the title attribute. */
   overflow: hidden;
