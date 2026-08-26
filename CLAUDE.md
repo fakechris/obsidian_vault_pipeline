@@ -24,8 +24,11 @@ Only gotchas below. Anything derivable by reading the code is deliberately absen
 | `.ovp/providers.toml` | 无——每次调用重读 | 否 |
 
 Windows 上同一张表,换脚本:`scripts/build-desktop-sidecar.ps1 -InstallApp
-"$env:LOCALAPPDATA\OVP2"` 和 `scripts/deploy-portal.ps1 <vault>`。sidecar 叫
-`ovp2.exe`,和 `OVP2.exe` 并排放在安装目录里(不是 `Contents/MacOS`)。
+"$env:LOCALAPPDATA\OVP2 Desktop"` 和 `scripts/deploy-portal.ps1 <vault>`。
+sidecar 叫 `ovp2.exe`,和**壳 `ovp2-desktop.exe`** 并排放在安装目录里(不是
+`Contents/MacOS`)。**壳不叫 `OVP2.exe`**:tauri.conf.json 没设 `mainBinaryName`,
+壳保留 Cargo bin 名;而且 Windows 文件名大小写不敏感,`OVP2.exe` 和 `ovp2.exe`
+根本无法共存于同一目录。权威是 `scripts/build-desktop-sidecar.ps1` 里的检查。
 
 ## Windows 只有 CI 能验
 

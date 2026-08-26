@@ -21,6 +21,7 @@
 //! library builds or the non-Windows targets changes.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    stamp_provenance();
 
     // The TARGET, not the host — this file also runs when cross-compiling.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -35,4 +36,77 @@ fn main() {
         // gnu targets link through the gcc driver, so ld needs -Wl.
         println!("cargo:rustc-link-arg-bins=-Wl,--stack,{STACK_BYTES}");
     }
+}
+
+/// Stamp the binary with the commit it was built from.
+///
+/// This repo ships FOUR independently-built copies of the same code — the app
+/// sidecar, the desktop shell, the vault's portal copy, and a dev
+/// `target/release` build — and CLAUDE.md names "changed A but only rebuilt B"
+/// as the most expensive time sink here: the symptom is "my change did
+/// nothing" while the code, the tests and the build are all green. A binary
+/// that cannot say which commit it came from makes that undiagnosable.
+///
+/// Absent or unusable git is NOT an error: a release tarball has no `.git`,
+/// and the build must still work. It stamps `unknown` and the reader reports
+/// that honestly rather than guessing.
+fn stamp_provenance() {
+    let sha = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    // Dirty means the artifact contains code that is in NO commit, so its sha
+    // is a lower bound on what is in it, not an identity.
+    let dirty = match git(&["status", "--porcelain", "--untracked-files=no"]) {
+        Some(s) if !s.is_empty() => "1",
+        Some(_) => "0",
+        None => "unknown",
+    };
+    println!("cargo:rustc-env=OVP2_GIT_SHA={sha}");
+    println!("cargo:rustc-env=OVP2_GIT_DIRTY={dirty}");
+    // A ready-made suffix, because clap's `version` is a `concat!` of literals
+    // and cannot branch.
+    println!(
+        "cargo:rustc-env=OVP2_GIT_DIRTY_SUFFIX={}",
+        if dirty == "1" { ", dirty" } else { "" }
+    );
+
+    // Rebuild when HEAD moves. Without this a `cargo build` after a commit
+    // reuses the cached crate and stamps the PREVIOUS sha — a provenance that
+    // lies is worse than none.
+    //
+    // Watch the RESOLVED ref, via the COMMON dir. In a linked worktree
+    // (this repo keeps several under `.claude/worktrees/`) `--git-dir` is the
+    // worktree's private admin directory: its `HEAD` is a symref that does not
+    // change when you commit on that branch, and the branch ref itself lives
+    // in the common directory. Watching only the private dir means a
+    // same-branch commit leaves every timestamp untouched and the stale stamp
+    // survives.
+    let Some(git_dir) = git(&["rev-parse", "--git-dir"]) else {
+        return;
+    };
+    println!(
+        "cargo:rerun-if-changed={}",
+        std::path::Path::new(&git_dir).join("HEAD").display()
+    );
+    let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .or_else(|| git(&["rev-parse", "--git-common-dir"]))
+        .unwrap_or(git_dir);
+    let common = std::path::PathBuf::from(common);
+    if let Some(reference) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
+        // Loose ref. A PACKED ref has no file, so also watch packed-refs.
+        println!(
+            "cargo:rerun-if-changed={}",
+            common.join(&reference).display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            common.join("packed-refs").display()
+        );
+    }
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
