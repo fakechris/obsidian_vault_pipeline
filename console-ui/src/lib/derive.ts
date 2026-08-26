@@ -1918,3 +1918,80 @@ export function resolveThemeClaimsSort(
   if (isDir(urlDir)) clear.push('dir');
   return { filter, sort, dir, clear };
 }
+
+// ---------------------------------------------------------------------------
+// Silently failing scheduler jobs
+// ---------------------------------------------------------------------------
+
+/** A scheduled job that is failing, condensed for the always-visible banner. */
+export interface FailingJob {
+  id: string;
+  /** Failures since the last success. 1 for a first failure. */
+  streak: number;
+  /** Local `YYYY-MM-DDTHH:MM:SS` of the last attempt. */
+  lastRun: string;
+  /** The run's final word — see [`firstErrorLine`]. */
+  reason: string | null;
+}
+
+/** Longest reason the banner will render, ELLIPSIS INCLUDED. */
+const REASON_MAX = 160;
+
+/**
+ * The run's final word: the LAST non-blank line of its stderr tail.
+ *
+ * Not the first. The tail is the last 12 lines of stderr and on a real
+ * crystallize failure it OPENED with progress chatter ("embedding 1 pack(s)
+ * with Xenova/…") while the cause ("error: gate: strength verdicts
+ * incomplete") was the final line.
+ *
+ * An earlier version pattern-matched for error-looking lines, which was worse
+ * in both directions: it missed causes that carry no keyword
+ * (`Caused by:` / `Permission denied (os error 13)`) and it matched summaries
+ * that do (`summary: failed: 0`). Taking the last line handles all of those,
+ * and needs no vocabulary to keep up to date.
+ */
+export function firstErrorLine(tail: string | null | undefined): string | null {
+  if (!tail) return null;
+  const lines = tail
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const line = lines[lines.length - 1];
+  if (!line) return null;
+  // -1 for the ellipsis: the cap counts what is RENDERED, so slicing to the
+  // cap and then appending would overshoot it.
+  return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1)}…` : line;
+}
+
+export function failingJobs(
+  jobs: readonly ScheduleJobLike[] | null | undefined,
+  opts: { exclude?: readonly string[] } = {},
+): FailingJob[] {
+  const exclude = new Set(opts.exclude ?? ['daily']);
+  return (jobs ?? [])
+    .filter(
+      (j) =>
+        j.enabled !== false &&
+        j.last_status === 'error' &&
+        !exclude.has(j.id),
+    )
+    .map((j) => ({
+      id: j.id,
+      streak: Math.max(1, j.consecutive_failures ?? 1),
+      lastRun: j.last_run ?? '',
+      reason: firstErrorLine(j.last_error),
+    }))
+    .sort((a, b) => b.streak - a.streak || a.id.localeCompare(b.id));
+}
+
+/** The subset of `ScheduleJob` this module needs — keeps derive.ts free of
+ *  the API module's import graph. */
+export interface ScheduleJobLike {
+  id: string;
+  enabled?: boolean;
+  last_status?: string;
+  last_run?: string;
+  last_error?: string | null;
+  consecutive_failures?: number;
+}

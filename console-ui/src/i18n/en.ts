@@ -38,6 +38,7 @@ export const en = {
 
   // run-liveness banner (fixed top strip, every page)
   'banner.none': 'No runs yet',
+  'banner.jobFailing': '{id} is failing — {streak} attempt(s), last {when}. Open System',
   'banner.completed': 'Last run: completed {when} ({ago})',
   'banner.completedCounts': 'Last run: completed {when} ({ago}) · {read} read · {queued} queued',
   'banner.running': 'Run in progress · started {when} ({ago})',

@@ -38,6 +38,7 @@ export const zh: Record<keyof typeof en, string> = {
 
   // run-liveness banner (fixed top strip, every page)
   'banner.none': '尚无运行记录',
+  'banner.jobFailing': '{id} 正在失败——已尝试 {streak} 次,最后一次 {when}。打开系统页',
   'banner.completed': '最近运行：已完成 {when}（{ago}）',
   'banner.completedCounts': '最近运行：已完成 {when}（{ago}）· 阅读 {read} · 队列 {queued}',
   'banner.running': '运行进行中 · 开始 {when}（{ago}）',
