@@ -49,6 +49,11 @@ pub mod themes;
 /// over active durable claims. Append-only; never rewrites evidence.
 pub mod lineage;
 
+/// Staleness recheck over already-durable claims: re-run the citation linter
+/// against the CURRENT grounding index, plus evidence age. Read-only, never a
+/// repair — a stale claim is not a wrong claim.
+pub mod recheck;
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 

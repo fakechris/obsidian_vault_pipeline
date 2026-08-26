@@ -558,6 +558,27 @@ enum Cmd {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// PRODUCT — staleness recheck over ALREADY-durable claims: re-run the
+    /// citation linter against the CURRENT reader packs and report which
+    /// durable claims no longer ground, plus how old their evidence is.
+    /// READ-ONLY — never rewrites a claim. A stale claim is not a wrong claim;
+    /// it is one whose evidence can no longer be assumed without looking.
+    CrystalRecheck {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Reader packs to re-lint against. Default: `<vault>/40-Resources/Reader`.
+        #[arg(long)]
+        packs_dir: Option<PathBuf>,
+        /// Durable ledger. Default: `<vault>/.ovp/crystal/ledger.jsonl`.
+        #[arg(long)]
+        ledger: Option<PathBuf>,
+        /// Write the JSON report here (the summary always prints).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Cap the per-claim listing in the printed summary.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -1999,6 +2020,22 @@ fn main() -> ExitCode {
                 commands::scheduler::run_set_enabled(&vault_root, &id, false)
             }
         },
+        Cmd::CrystalRecheck {
+            vault_root,
+            packs_dir,
+            ledger,
+            out,
+            limit,
+        } => {
+            use commands::crystal_recheck::CrystalRecheckArgs;
+            commands::crystal_recheck::run(CrystalRecheckArgs {
+                vault_root,
+                packs_dir,
+                ledger,
+                out,
+                limit,
+            })
+        }
         Cmd::CrystalLint {
             candidate,
             packs_dir,
