@@ -1506,18 +1506,24 @@ fn status_with(
     let reg_path = super::scheduler::registry_path(&meta.vault_root);
     println!("  registry:  {}", reg_path.display());
     match registry {
-        Ok(Some(reg)) => match super::scheduler::load_state(&meta.vault_root) {
-            Ok(state) => {
-                // status is the diagnostic command — a quarantined job going
-                // unmentioned HERE is exactly the silence this change exists
-                // to remove.
-                super::scheduler::report_rejected(&reg.rejected);
-                super::scheduler::print_jobs(&reg.registry, &state, super::scheduler::local_now(), "  ")
+        Ok(Some(reg)) => {
+            // BEFORE the state read, not inside its Ok arm: a malformed
+            // schedule-state.json takes the Err branch, and quarantined jobs
+            // would go unmentioned exactly when BOTH files need repair —
+            // which is when the operator most needs to see them.
+            super::scheduler::report_rejected(&reg.rejected);
+            match super::scheduler::load_state(&meta.vault_root) {
+                Ok(state) => super::scheduler::print_jobs(
+                    &reg.registry,
+                    &state,
+                    super::scheduler::local_now(),
+                    "  ",
+                ),
+                // A malformed state file blocks `tick`, so surface it rather
+                // than silently showing every job as never-run/due-now.
+                Err(e) => println!("             WARN: cannot read schedule state: {e}"),
             }
-            // A malformed state file blocks `tick`, so surface it rather than
-            // silently showing every job as never-run/due-now (codex P2).
-            Err(e) => println!("             WARN: cannot read schedule state: {e}"),
-        },
+        }
         Ok(None) => println!("             MISSING — re-run `ovp2 schedule install`"),
         Err(e) => println!("             WARN: cannot read registry: {e}"),
     }

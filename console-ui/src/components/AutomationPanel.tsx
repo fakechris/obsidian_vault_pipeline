@@ -547,8 +547,10 @@ export default function AutomationPanel() {
             {t('auto.quarantined')}
           </p>
           <ul className="sm" style={{ margin: '0.4rem 0 0', paddingInlineStart: '1.1rem' }}>
-            {data.rejected!.map((r) => (
-              <li key={r.id}>
+            {/* id is NOT unique here: a registry with three jobs sharing an
+                id quarantines two of them, both reported under that same id. */}
+            {data.rejected!.map((r, i) => (
+              <li key={`${r.id}-${i}`}>
                 <code>{r.id}</code> — {r.reason}
               </li>
             ))}
