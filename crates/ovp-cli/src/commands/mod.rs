@@ -5,6 +5,7 @@ pub mod auto_run;
 pub mod client;
 pub mod compare_run;
 pub mod copy_probe;
+pub mod artifacts;
 pub mod crystal_lint;
 pub mod crystal_recheck;
 pub mod crystal_review;

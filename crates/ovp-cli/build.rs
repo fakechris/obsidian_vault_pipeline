@@ -21,6 +21,7 @@
 //! library builds or the non-Windows targets changes.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    stamp_provenance();
 
     // The TARGET, not the host — this file also runs when cross-compiling.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -35,4 +36,50 @@ fn main() {
         // gnu targets link through the gcc driver, so ld needs -Wl.
         println!("cargo:rustc-link-arg-bins=-Wl,--stack,{STACK_BYTES}");
     }
+}
+
+/// Stamp the binary with the commit it was built from.
+///
+/// This repo ships FOUR independently-built copies of the same code — the app
+/// sidecar, the desktop shell, the vault's portal copy, and a dev
+/// `target/release` build — and CLAUDE.md names "changed A but only rebuilt B"
+/// as the most expensive time sink here: the symptom is "my change did
+/// nothing" while the code, the tests and the build are all green. A binary
+/// that cannot say which commit it came from makes that undiagnosable.
+///
+/// Absent or unusable git is NOT an error: a release tarball has no `.git`,
+/// and the build must still work. It stamps `unknown` and the reader reports
+/// that honestly rather than guessing.
+fn stamp_provenance() {
+    let sha = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    // Dirty means the artifact contains code that is in NO commit, so its sha
+    // is a lower bound on what is in it, not an identity.
+    let dirty = match git(&["status", "--porcelain", "--untracked-files=no"]) {
+        Some(s) if !s.is_empty() => "1",
+        Some(_) => "0",
+        None => "unknown",
+    };
+    println!("cargo:rustc-env=OVP2_GIT_SHA={sha}");
+    println!("cargo:rustc-env=OVP2_GIT_DIRTY={dirty}");
+
+    // Rebuild when HEAD moves. Without these a `cargo build` after a commit
+    // reuses the cached crate and stamps the PREVIOUS sha — a provenance that
+    // lies is worse than none.
+    if let Some(dir) = git(&["rev-parse", "--git-dir"]) {
+        let dir = std::path::PathBuf::from(dir);
+        for p in ["HEAD", "refs"] {
+            let path = dir.join(p);
+            if path.exists() {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }

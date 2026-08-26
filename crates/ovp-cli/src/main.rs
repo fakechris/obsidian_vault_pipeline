@@ -29,7 +29,17 @@ impl std::fmt::Display for CliError {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "ovp2", version, about = "OVP Next — clean-core Rust pipeline")]
+// `--version` carries the build's commit, because that is what tells four
+// independently-built copies of this binary apart. `artifacts` parses it.
+#[command(
+    name = "ovp2",
+    version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (", env!("OVP2_GIT_SHA"),
+        ")"
+    ),
+    about = "OVP Next — clean-core Rust pipeline"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -557,6 +567,20 @@ enum Cmd {
     Schedule {
         #[command(subcommand)]
         action: ScheduleAction,
+    },
+    /// PRODUCT — which build is each installed copy actually running?
+    /// This repo ships four independently-built copies (app sidecar, desktop
+    /// shell, the vault's portal copy, a dev build) and CLAUDE.md names
+    /// "changed A but only rebuilt B" the most expensive failure here. Reports
+    /// what each copy says it was built from. Read-only; rebuilds nothing.
+    Artifacts {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// Installed app directory. Default: /Applications/OVP2.app (macOS).
+        #[arg(long)]
+        app: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
     },
     /// PRODUCT — staleness recheck over ALREADY-durable claims: re-run the
     /// citation linter against the CURRENT reader packs and report which
@@ -2020,6 +2044,18 @@ fn main() -> ExitCode {
                 commands::scheduler::run_set_enabled(&vault_root, &id, false)
             }
         },
+        Cmd::Artifacts {
+            vault_root,
+            app,
+            json,
+        } => {
+            use commands::artifacts::ArtifactsArgs;
+            commands::artifacts::run(ArtifactsArgs {
+                vault_root,
+                app,
+                json,
+            })
+        }
         Cmd::CrystalRecheck {
             vault_root,
             packs_dir,
