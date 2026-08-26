@@ -2,7 +2,11 @@
   "mcpServers": {
     "ovp": {
       "command": "${OVP2_BIN:-/Applications/OVP2.app/Contents/MacOS/ovp2}",
-      "args": ["mcp", "--vault-root", "${OVP_VAULT_ROOT:-/Users/chris/Documents/ovp-vault}"],
+      "args": [
+        "mcp",
+        "--vault-root",
+        "${OVP_VAULT_ROOT}"
+      ],
       "env": {
         "OVP_LLM_NO_PROXY": "${OVP_LLM_NO_PROXY:-1}"
       }
