@@ -65,6 +65,7 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
     check_orphan_packs(&args.vault_root, &layout, &mut findings);
     check_stale_index(&args.vault_root, &mut findings, args.fix);
     check_crystal_integrity(&args.vault_root, &mut findings);
+    check_crystal_staleness(&args.vault_root, &mut findings);
     let threshold_hours = args.since_hours.unwrap_or(DEFAULT_RECENCY_HOURS);
     check_run_recency(&args.vault_root, &layout, now_unix_secs(), threshold_hours, &mut findings);
     check_disk_usage(&args.vault_root, &layout, &mut findings);
@@ -305,6 +306,91 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
             });
         }
     }
+}
+
+/// Do the durable claims still ground against TODAY's reader packs?
+///
+/// `crystal-integrity` only proves the ledger parses. A claim can parse
+/// perfectly while the unit it cites has moved, and because the ledger is
+/// append-only and the pre-write linter never runs again, nothing would ever
+/// say so. Routine visibility is the whole point — a staleness signal you have
+/// to remember to ask for is one you find out about from a wrong answer.
+///
+/// WARN, never FAIL: a stale claim is not a wrong claim, and a routine pack
+/// rebuild would otherwise read as corruption and start failing CI.
+fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
+    use crate::commands::crystal_recheck::recheck_vault;
+
+    // A vault with no crystal store yet is the normal fresh state and must not
+    // nag. Anything else — unreadable packs, a malformed ledger — means the
+    // check did not run, and reporting THAT as Info would quietly retire the
+    // very signal this exists to provide.
+    let store_absent = !vault_root.join(".ovp/crystal/ledger.jsonl").exists();
+    let report = match recheck_vault(vault_root, None, None) {
+        Ok(r) => r,
+        Err(e) => {
+            findings.push(Finding {
+                check: "crystal-staleness".into(),
+                severity: if store_absent {
+                    Severity::Info
+                } else {
+                    Severity::Warn
+                },
+                message: format!("could not recheck durable claims: {e}"),
+                fixed: false,
+            });
+            return;
+        }
+    };
+    if report.n_claims == 0 {
+        findings.push(Finding {
+            check: "crystal-staleness".into(),
+            severity: Severity::Pass,
+            message: "no durable claims to recheck".into(),
+            fixed: false,
+        });
+        return;
+    }
+    let aged = report
+        .age_buckets
+        .get("181-365d")
+        .copied()
+        .unwrap_or(0)
+        + report.age_buckets.get("365d+").copied().unwrap_or(0);
+    let age_note = format!(
+        "{}/{} lean on evidence older than 180d",
+        aged, report.n_claims
+    );
+    if report.n_stale == 0 {
+        findings.push(Finding {
+            check: "crystal-staleness".into(),
+            severity: Severity::Pass,
+            message: format!(
+                "all {} durable claims still ground ({age_note})",
+                report.n_claims
+            ),
+            fixed: false,
+        });
+        return;
+    }
+    let defects: Vec<String> = report
+        .by_defect
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    findings.push(Finding {
+        check: "crystal-staleness".into(),
+        severity: Severity::Warn,
+        message: format!(
+            "{} of {} durable claims no longer ground ({}) — {age_note}. \
+             Run `ovp2 crystal-recheck --vault-root <vault> --out <report>`; \
+             re-verification is a gated write, never automatic",
+            report.n_stale,
+            report.n_claims,
+            defects.join(" ")
+        ),
+        fixed: false,
+    });
 }
 
 fn check_crystal_integrity(vault_root: &Path, findings: &mut Vec<Finding>) {
