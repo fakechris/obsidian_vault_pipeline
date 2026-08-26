@@ -779,6 +779,10 @@ pub struct TickReport {
     pub ran: Vec<(String, bool)>,
     pub skipped_not_due: Vec<String>,
     pub skipped_disabled: Vec<String>,
+    /// Jobs whose cadence does not parse. Carried through rather than dropped
+    /// at this boundary: an embedder that only sees `ran` + the two benign skip
+    /// buckets cannot tell a broken job from an idle one.
+    pub skipped_invalid: Vec<String>,
 }
 
 /// In-memory tick (no persistence): run every due job via `runner` and return
@@ -796,6 +800,7 @@ pub fn tick_with(
     let mut report = TickReport {
         skipped_not_due: plan.skipped_not_due,
         skipped_disabled: plan.skipped_disabled,
+        skipped_invalid: plan.skipped_invalid,
         ..Default::default()
     };
     for id in &plan.due {

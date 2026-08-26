@@ -231,7 +231,7 @@ fn missing_registry_err(vault_root: &Path) -> CliError {
 /// Print quarantined jobs. Loud on stdout AND stderr: the desktop scheduler
 /// only forwards a child's stderr to `eprintln`, which Finder swallows, so a
 /// stderr-only warning is invisible to exactly the operator who needs it.
-fn report_rejected(rejected: &[RejectedJob]) {
+pub fn report_rejected(rejected: &[RejectedJob]) {
     if rejected.is_empty() {
         return;
     }

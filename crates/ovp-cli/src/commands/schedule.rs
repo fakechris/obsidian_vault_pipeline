@@ -1508,6 +1508,10 @@ fn status_with(
     match registry {
         Ok(Some(reg)) => match super::scheduler::load_state(&meta.vault_root) {
             Ok(state) => {
+                // status is the diagnostic command — a quarantined job going
+                // unmentioned HERE is exactly the silence this change exists
+                // to remove.
+                super::scheduler::report_rejected(&reg.rejected);
                 super::scheduler::print_jobs(&reg.registry, &state, super::scheduler::local_now(), "  ")
             }
             // A malformed state file blocks `tick`, so surface it rather than

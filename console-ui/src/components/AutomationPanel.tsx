@@ -531,7 +531,30 @@ export default function AutomationPanel() {
       {data && data.present && data.jobs.length === 0 && (
         <div className="card">
           <p className="sm" style={{ margin: 0 }}>
-            {t('auto.empty')}
+            {/* An all-quarantined registry is NOT an empty one. Saying "no jobs
+                configured" there sends the operator looking for a config that
+                exists and is broken. */}
+            {(data.rejected?.length ?? 0) > 0
+              ? t('auto.allQuarantined')
+              : t('auto.empty')}
+          </p>
+        </div>
+      )}
+
+      {data && (data.rejected?.length ?? 0) > 0 && (
+        <div className="card">
+          <p className="sm warn" style={{ margin: 0, fontWeight: 600 }}>
+            {t('auto.quarantined')}
+          </p>
+          <ul className="sm" style={{ margin: '0.4rem 0 0', paddingInlineStart: '1.1rem' }}>
+            {data.rejected!.map((r) => (
+              <li key={r.id}>
+                <code>{r.id}</code> — {r.reason}
+              </li>
+            ))}
+          </ul>
+          <p className="sm muted" style={{ marginBottom: 0 }}>
+            {t('auto.quarantinedHelp', { path: data.registry_rel })}
           </p>
         </div>
       )}
