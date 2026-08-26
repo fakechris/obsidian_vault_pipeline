@@ -321,14 +321,21 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
 fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
     use crate::commands::crystal_recheck::recheck_vault;
 
+    // A vault with no crystal store yet is the normal fresh state and must not
+    // nag. Anything else — unreadable packs, a malformed ledger — means the
+    // check did not run, and reporting THAT as Info would quietly retire the
+    // very signal this exists to provide.
+    let store_absent = !vault_root.join(".ovp/crystal/ledger.jsonl").exists();
     let report = match recheck_vault(vault_root, None, None) {
         Ok(r) => r,
         Err(e) => {
             findings.push(Finding {
                 check: "crystal-staleness".into(),
-                // Info, not Warn: no crystal store yet is the normal state of
-                // a fresh vault, and this check must not nag it.
-                severity: Severity::Info,
+                severity: if store_absent {
+                    Severity::Info
+                } else {
+                    Severity::Warn
+                },
                 message: format!("could not recheck durable claims: {e}"),
                 fixed: false,
             });

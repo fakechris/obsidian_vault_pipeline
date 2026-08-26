@@ -16,7 +16,9 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::recheck::{RecheckReport, recheck};
-use ovp_domain::crystal::{Citation, CrystalCandidate, CrystalClaim};
+use ovp_domain::crystal::{
+    Citation, CrystalCandidate, CrystalClaim, CrystalStatus, FinalClass, StoreEvent, fold_ledger,
+};
 
 use crate::CliError;
 use crate::commands::crystal_write::build_grounding_index;
@@ -33,90 +35,55 @@ pub struct CrystalRecheckArgs {
     pub limit: usize,
 }
 
-/// Rebuild a lintable candidate from the durable ledger.
+/// Rebuild a lintable candidate from what the vault CURRENTLY asserts.
 ///
-/// Only `op: write` records with `final_class: durable` are in scope — the
-/// point is to recheck what the vault currently asserts, not the history of
-/// how it got there. A later record for the same `claim_key` supersedes an
-/// earlier one.
+/// Goes through the domain's typed `StoreEvent` + [`fold_ledger`] rather than
+/// reading `op` strings here. The ledger has three ops, not one: `Supersede`
+/// also flips its predecessor to `Superseded`, and `Retract` marks a record
+/// retracted. Re-implementing "latest write wins" in the CLI reproduces none
+/// of that, so it would recheck retracted claims as if they were live and miss
+/// the replacements — and today's vault happens to contain only `write`
+/// records, so the mistake would have looked correct until the first
+/// supersede landed.
+///
+/// Typed deserialization is also the point for citations: a hand-rolled
+/// `filter_map` drops a malformed citation silently, and a claim that loses
+/// all of them then reports as intact — staleness is measured from citation
+/// defects, and a claim with no citations has none.
 fn durable_from_ledger(path: &PathBuf) -> Result<CrystalCandidate, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", path.display())))?;
-    // BTreeMap: last write per claim_key wins, deterministic order out.
-    let mut by_key: std::collections::BTreeMap<String, CrystalClaim> =
-        std::collections::BTreeMap::new();
-    let mut skipped = 0usize;
+    let mut events: Vec<StoreEvent> = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let v: serde_json::Value = serde_json::from_str(line)
+        let ev: StoreEvent = serde_json::from_str(line)
             .map_err(|e| CliError::Io(format!("{}:{}: {e}", path.display(), i + 1)))?;
-        if v.get("op").and_then(|o| o.as_str()) != Some("write") {
-            continue;
-        }
-        let Some(rec) = v.get("record") else {
-            skipped += 1;
-            continue;
-        };
-        if rec.get("final_class").and_then(|c| c.as_str()) != Some("durable") {
-            continue;
-        }
-        let key = rec
-            .get("claim_key")
-            .or_else(|| rec.get("claim_id"))
-            .and_then(|k| k.as_str())
-            .unwrap_or_default()
-            .to_string();
-        if key.is_empty() {
-            skipped += 1;
-            continue;
-        }
-        let citations: Vec<Citation> = rec
-            .get("citations")
-            .and_then(|c| c.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|c| {
-                        Some(Citation {
-                            case_id: c.get("case_id")?.as_str()?.to_string(),
-                            unit_id: c.get("unit_id")?.as_str()?.to_string(),
-                            quote: c.get("quote")?.as_str()?.to_string(),
-                            claimed_line: None,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        by_key.insert(
-            key.clone(),
-            CrystalClaim {
-                id: key,
-                claim: rec
-                    .get("claim")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                theme: rec
-                    .get("theme")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                citations,
-                caveat: None,
-            },
-        );
+        events.push(ev);
     }
-    if skipped > 0 {
-        // Loud, not silent: a record we could not key is a durable claim that
-        // this recheck did NOT cover, and a report that hides its own gaps is
-        // worse than no report.
-        eprintln!("crystal-recheck: {skipped} durable record(s) had no usable claim key — NOT rechecked");
-    }
-    Ok(CrystalCandidate {
-        items: by_key.into_values().collect(),
-    })
+    let items = fold_ledger(&events)
+        .into_iter()
+        .filter(|r| r.status == CrystalStatus::Active && r.final_class == FinalClass::Durable)
+        .map(|r| CrystalClaim {
+            id: r.claim_key,
+            claim: r.claim,
+            theme: r.theme,
+            citations: r
+                .citations
+                .into_iter()
+                .map(|c| Citation {
+                    case_id: c.case_id,
+                    unit_id: c.unit_id,
+                    quote: c.quote,
+                    claimed_line: None,
+                })
+                .collect(),
+            caveat: None,
+        })
+        .collect();
+    Ok(CrystalCandidate { items })
 }
 
 fn print_summary(report: &RecheckReport, limit: usize) {
@@ -233,41 +200,84 @@ mod tests {
         d
     }
 
+    /// A full durable record — the typed `StoreEvent` shape the ledger really
+    /// carries, not the trimmed JSON a hand-rolled parser would have accepted.
+    fn rec(key: &str, claim: &str, class: &str, unit: &str) -> String {
+        format!(
+            r#"{{"claim_key":"{key}","claim_id":"{key}","claim":"{claim}","theme":"t",
+                 "source_cases":["2026-01-01_X-a"],
+                 "citations":[{{"case_id":"2026-01-01_X-a","unit_id":"{unit}","quote":"q","resolved_line":1}}],
+                 "provenance_score":1.0,"provenance_class":"durable","strength":"supported",
+                 "strength_rationale":"r","final_class":"{class}","run_id":"r1","status":"active"}}"#
+        )
+        .replace('\n', "")
+    }
+
     #[test]
-    fn only_durable_write_records_are_rechecked() {
+    fn only_active_durable_records_are_rechecked() {
         let d = tmp("scope");
         let p = write_ledger(
             &d,
             &[
-                r#"{"op":"write","record":{"claim_key":"ck-1","final_class":"durable","claim":"a","citations":[{"case_id":"2026-01-01_X-a","unit_id":"u-1","quote":"q"}]}}"#,
-                r#"{"op":"write","record":{"claim_key":"ck-2","final_class":"caveated","claim":"b","citations":[]}}"#,
-                r#"{"op":"revoke","record":{"claim_key":"ck-3","final_class":"durable","claim":"c","citations":[]}}"#,
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-2", "b", "caveated", "u-2")),
                 "",
             ],
         );
         let c = durable_from_ledger(&p).unwrap();
         let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(ids, vec!["ck-1"], "caveated and non-write ops stay out");
+        assert_eq!(ids, vec!["ck-1"], "caveated stays out");
         std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
-    fn a_later_write_supersedes_an_earlier_one_for_the_same_key() {
-        // The ledger is append-only, so the same claim_key appears more than
-        // once. Rechecking the stale historical copy would report defects that
-        // the current vault does not actually assert.
+    fn a_retracted_claim_is_not_rechecked() {
+        // Retract is a real ledger op. Rechecking a retracted claim reports
+        // defects the vault does not assert — and "latest write wins" cannot
+        // see it, which is why this goes through the domain's fold.
+        let d = tmp("retract");
+        let p = write_ledger(
+            &d,
+            &[
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+                &format!(r#"{{"op":"retract","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+            ],
+        );
+        let c = durable_from_ledger(&p).unwrap();
+        assert!(c.items.is_empty(), "retracted claims are not live assertions");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_supersede_swaps_in_the_replacement_and_drops_the_predecessor() {
         let d = tmp("supersede");
         let p = write_ledger(
             &d,
             &[
-                r#"{"op":"write","record":{"claim_key":"ck-1","final_class":"durable","claim":"old","citations":[{"case_id":"2026-01-01_X-a","unit_id":"u-old","quote":"q"}]}}"#,
-                r#"{"op":"write","record":{"claim_key":"ck-1","final_class":"durable","claim":"new","citations":[{"case_id":"2026-01-01_X-a","unit_id":"u-new","quote":"q"}]}}"#,
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-old", "old", "durable", "u-old")),
+                &format!(
+                    r#"{{"op":"supersede","record":{},"supersedes":"ck-old"}}"#,
+                    rec("ck-new", "new", "durable", "u-new")
+                ),
             ],
         );
         let c = durable_from_ledger(&p).unwrap();
-        assert_eq!(c.items.len(), 1);
-        assert_eq!(c.items[0].claim, "new");
+        let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["ck-new"], "the superseded predecessor drops out");
         assert_eq!(c.items[0].citations[0].unit_id, "u-new");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_malformed_citation_fails_loudly_instead_of_vanishing() {
+        // Dropping it would leave a claim with zero citations, and staleness is
+        // measured from citation DEFECTS — a claim with none reports intact.
+        let d = tmp("badcit");
+        let p = write_ledger(
+            &d,
+            &[r#"{"op":"write","record":{"claim_key":"ck-1","claim_id":"ck-1","claim":"a","theme":"t","source_cases":[],"citations":[{"case_id":"c","unit_id":123,"quote":"q"}],"provenance_score":1.0,"provenance_class":"durable","strength":"supported","strength_rationale":"r","final_class":"durable","run_id":"r1","status":"active"}}"#],
+        );
+        assert!(durable_from_ledger(&p).is_err());
         std::fs::remove_dir_all(&d).ok();
     }
 

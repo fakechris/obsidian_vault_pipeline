@@ -116,8 +116,10 @@ pub fn evidence_age_days(case_id: &str, today: (i32, u32, u32)) -> Option<i64> {
     None
 }
 
-/// `YYYY-MM-DD` with real bounds. Deliberately strict: this is the only thing
-/// standing between a typo'd id and a fabricated age.
+/// `YYYY-MM-DD` with real calendar bounds. Deliberately strict: this is the
+/// only thing standing between a typo'd id and a fabricated age, and
+/// `days_from_civil` will happily convert `2026-02-31` into a real number that
+/// nothing downstream can tell apart from a true date.
 fn parse_civil(s: &str) -> Option<(i32, u32, u32)> {
     let bytes = s.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
@@ -126,10 +128,20 @@ fn parse_civil(s: &str) -> Option<(i32, u32, u32)> {
     let y: i32 = s.get(0..4)?.parse().ok()?;
     let m: u32 = s.get(5..7)?.parse().ok()?;
     let d: u32 = s.get(8..10)?.parse().ok()?;
-    if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+    if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || d < 1 || d > days_in_month(y, m) {
         return None;
     }
     Some((y, m, d))
+}
+
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Howard Hinnant's `days_from_civil`. Chrono is not a dependency of this
@@ -325,6 +337,23 @@ mod tests {
     fn a_long_digit_run_does_not_masquerade_as_a_date() {
         // `2026-08-25` embedded in a longer number is not a capture date.
         assert_eq!(evidence_age_days("12026-08-250_x", TODAY), None);
+    }
+
+    #[test]
+    fn an_impossible_calendar_date_is_undated() {
+        // `days_from_civil` converts these into perfectly real-looking numbers,
+        // so a day-range check alone would fabricate an age nothing downstream
+        // could tell apart from a true one.
+        for id in [
+            "2026-02-31_Bad",
+            "2025-02-29_NotALeapYear",
+            "2026-04-31_Bad",
+            "2026-06-31_Bad",
+        ] {
+            assert_eq!(evidence_age_days(id, TODAY), None, "{id}");
+        }
+        // Real leap day still parses.
+        assert!(evidence_age_days("2024-02-29_Good", TODAY).is_some());
     }
 
     #[test]
