@@ -234,6 +234,42 @@ pub fn is_due(cadence: Cadence, last_run: Option<NaiveDateTime>, now: NaiveDateT
     }
 }
 
+/// How long to wait before retrying a FAILED job, indexed by how many times it
+/// has failed in a row. Past the last entry the job stops retrying and waits
+/// for its next scheduled occurrence.
+///
+/// `is_due` records a failed attempt the same way as a successful one, so
+/// before this a single 09:05 failure left `daily` silently dead until 09:00
+/// the next morning — a network blip cost a full day of ingest. These delays
+/// give a transient failure a few chances to clear within the hour.
+///
+/// Three attempts, not more: something still failing four hours later is not
+/// transient, and hammering it neither fixes it nor tells the operator
+/// anything the failure streak has not already said.
+const RETRY_BACKOFF_MINS: [i64; 3] = [15, 60, 240];
+
+/// Is this job owed a post-failure retry right now?
+///
+/// Deliberately separate from [`is_due`]: a retry is not a scheduled run, and
+/// conflating them would report a job stuck in a failure loop as if it were
+/// simply keeping its schedule.
+pub fn retry_due(run: Option<&JobRun>, now: NaiveDateTime) -> bool {
+    let Some(run) = run else { return false };
+    if run.last_status != "error" {
+        return false;
+    }
+    let attempts = run.consecutive_failures as usize;
+    // 0 means the counter predates this field (an older state file); treat it
+    // as "no retry budget known" rather than inventing one.
+    if attempts == 0 || attempts > RETRY_BACKOFF_MINS.len() {
+        return false;
+    }
+    let Ok(last) = NaiveDateTime::parse_from_str(&run.last_run, "%Y-%m-%dT%H:%M:%S") else {
+        return false;
+    };
+    now >= last + Duration::minutes(RETRY_BACKOFF_MINS[attempts - 1])
+}
+
 /// Resolve a vault-relative stored path against the live vault root.
 ///
 /// Registry paths use `/` so they remain portable. Build the result through
@@ -747,6 +783,10 @@ pub struct TickPlan {
     /// waiting. Kept apart from `skipped_not_due` so a job that will NEVER run
     /// cannot read as one that simply is not due yet.
     pub skipped_invalid: Vec<String>,
+    /// Job ids being re-attempted after a failure. NOT folded into `due`: a
+    /// job clawing its way out of a failure loop is a different state from one
+    /// keeping its schedule, and the operator should be able to see which.
+    pub retrying: Vec<String>,
 }
 
 pub fn plan_tick(reg: &Registry, state: &State, now: NaiveDateTime) -> TickPlan {
@@ -766,6 +806,8 @@ pub fn plan_tick(reg: &Registry, state: &State, now: NaiveDateTime) -> TickPlan 
         };
         if is_due(cadence, state.last_run_of(&job.id), now) {
             plan.due.push(job.id.clone());
+        } else if retry_due(state.runs.get(&job.id), now) {
+            plan.retrying.push(job.id.clone());
         } else {
             plan.skipped_not_due.push(job.id.clone());
         }
@@ -783,6 +825,8 @@ pub struct TickReport {
     /// at this boundary: an embedder that only sees `ran` + the two benign skip
     /// buckets cannot tell a broken job from an idle one.
     pub skipped_invalid: Vec<String>,
+    /// Jobs that ran as a post-failure retry rather than on schedule.
+    pub retried: Vec<String>,
 }
 
 /// In-memory tick (no persistence): run every due job via `runner` and return
@@ -801,6 +845,7 @@ pub fn tick_with(
         skipped_not_due: plan.skipped_not_due,
         skipped_disabled: plan.skipped_disabled,
         skipped_invalid: plan.skipped_invalid,
+        retried: plan.retrying.clone(),
         ..Default::default()
     };
     for id in &plan.due {
@@ -1443,6 +1488,78 @@ mod tests {
         std::fs::create_dir_all(v.join(".ovp")).unwrap();
         std::fs::write(v.join(REGISTRY_REL), "{not json").unwrap();
         assert!(load_registry(v).is_err());
+    }
+
+    fn failed_run(last_run: &str, streak: u32) -> JobRun {
+        JobRun {
+            last_run: last_run.into(),
+            last_status: "error".into(),
+            last_error: Some("boom".into()),
+            runs_total: streak as u64,
+            failures_total: streak as u64,
+            consecutive_failures: streak,
+        }
+    }
+
+    #[test]
+    fn a_failed_job_retries_after_a_backoff_instead_of_waiting_a_whole_day() {
+        // The failure this exists for: daily fires 09:00, dies 09:05, and
+        // before this the job was silently dead until 09:00 tomorrow.
+        let run = failed_run("2026-07-12T09:05:00", 1);
+        assert!(!retry_due(Some(&run), dt("2026-07-12T09:15:00")), "too soon");
+        assert!(retry_due(Some(&run), dt("2026-07-12T09:20:00")), "15m elapsed");
+    }
+
+    #[test]
+    fn the_backoff_lengthens_with_the_failure_streak() {
+        let at = |streak, when| retry_due(Some(&failed_run("2026-07-12T09:00:00", streak)), dt(when));
+        assert!(at(1, "2026-07-12T09:15:00"));
+        assert!(!at(2, "2026-07-12T09:15:00"), "second failure waits an hour");
+        assert!(at(2, "2026-07-12T10:00:00"));
+        assert!(!at(3, "2026-07-12T10:00:00"), "third waits four hours");
+        assert!(at(3, "2026-07-12T13:00:00"));
+    }
+
+    #[test]
+    fn retrying_stops_after_the_budget_and_waits_for_the_next_occurrence() {
+        // Still failing four hours later is not transient. Hammering neither
+        // fixes it nor says anything the failure streak has not.
+        let run = failed_run("2026-07-12T09:00:00", 4);
+        assert!(!retry_due(Some(&run), dt("2026-07-13T09:00:00")));
+    }
+
+    #[test]
+    fn a_successful_or_seeded_run_is_never_retried() {
+        for status in ["ok", "seeded"] {
+            let run = JobRun {
+                last_status: status.into(),
+                ..failed_run("2026-07-12T09:00:00", 1)
+            };
+            assert!(!retry_due(Some(&run), dt("2026-07-12T23:00:00")), "{status}");
+        }
+        assert!(!retry_due(None, dt("2026-07-12T23:00:00")), "never run");
+    }
+
+    #[test]
+    fn an_old_state_file_without_the_counter_is_not_retried() {
+        // consecutive_failures defaults to 0 on a pre-counter state file.
+        // Inventing a retry budget from that would re-run jobs on upgrade.
+        let run = failed_run("2026-07-12T09:00:00", 0);
+        assert!(!retry_due(Some(&run), dt("2026-07-12T23:00:00")));
+    }
+
+    #[test]
+    fn a_retry_is_planned_separately_from_a_scheduled_run() {
+        // Folding it into `due` would report a job clawing out of a failure
+        // loop as if it were simply keeping its schedule.
+        let reg = default_jobs_registry();
+        let mut state = State::default();
+        state.runs.insert("daily".into(), failed_run("2026-07-12T09:05:00", 1));
+        // 09:30 Sunday: daily already "ran" (and failed) past its occurrence.
+        let plan = plan_tick(&reg, &state, dt("2026-07-12T09:30:00"));
+        assert!(!plan.due.contains(&"daily".to_string()), "not a scheduled run");
+        assert_eq!(plan.retrying, vec!["daily".to_string()]);
+        assert!(!plan.skipped_not_due.contains(&"daily".to_string()));
     }
 
     #[test]
