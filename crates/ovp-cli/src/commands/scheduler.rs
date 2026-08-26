@@ -358,7 +358,7 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
     let now = local_now();
     let plan = plan_tick(&reg, &state, now);
     let stamp = now.format("%Y-%m-%dT%H:%M:%S");
-    if plan.due.is_empty() {
+    if plan.due.is_empty() && plan.retrying.is_empty() {
         println!(
             "scheduler tick {stamp}: nothing due ({} job(s))",
             reg.jobs.len()
@@ -366,16 +366,37 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
         return Ok(());
     }
     let mut failed = Vec::new();
-    for id in &plan.due {
+    // Scheduled work first, then retries: a job owed its normal slot should not
+    // wait behind another job's recovery attempt.
+    let to_run: Vec<(&String, bool)> = plan
+        .due
+        .iter()
+        .map(|id| (id, false))
+        .chain(plan.retrying.iter().map(|id| (id, true)))
+        .collect();
+    for (id, is_retry) in to_run {
         let job = reg.get(id).expect("plan ids come from the registry");
         let result = runner.run(job);
         let ok = result.ok;
-        state.record_outcome(id, now, if ok { "ok" } else { "error" }, result.error_tail);
+        // A fresh clock AFTER the job: `now` is the tick's start and is the
+        // cadence watermark, but a long job that fails near the end would
+        // otherwise carry a failure timestamp from before it even started,
+        // and the retry backoff would already be spent.
+        state.record_outcome_at(
+            id,
+            now,
+            local_now(),
+            if ok { "ok" } else { "error" },
+            result.error_tail,
+        );
         // Persist after EACH job so an interrupted tick never reruns a completed
         // (possibly expensive/non-idempotent) job on the next tick.
         save_state(vault_root, &state)?;
+        // Name the retry. "ran daily -> ok" hides that the job spent the last
+        // hour failing, which is the part worth noticing.
+        let how = if is_retry { "retried" } else { "ran" };
         println!(
-            "scheduler tick {stamp}: ran '{id}' -> {}",
+            "scheduler tick {stamp}: {how} '{id}' -> {}",
             if ok { "ok" } else { "ERROR" }
         );
         if !ok {
