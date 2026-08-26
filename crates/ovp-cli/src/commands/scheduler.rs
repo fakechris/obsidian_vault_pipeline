@@ -378,7 +378,17 @@ pub fn run_tick(vault_root: &Path) -> Result<(), CliError> {
         let job = reg.get(id).expect("plan ids come from the registry");
         let result = runner.run(job);
         let ok = result.ok;
-        state.record_outcome(id, now, if ok { "ok" } else { "error" }, result.error_tail);
+        // A fresh clock AFTER the job: `now` is the tick's start and is the
+        // cadence watermark, but a long job that fails near the end would
+        // otherwise carry a failure timestamp from before it even started,
+        // and the retry backoff would already be spent.
+        state.record_outcome_at(
+            id,
+            now,
+            local_now(),
+            if ok { "ok" } else { "error" },
+            result.error_tail,
+        );
         // Persist after EACH job so an interrupted tick never reruns a completed
         // (possibly expensive/non-idempotent) job on the next tick.
         save_state(vault_root, &state)?;

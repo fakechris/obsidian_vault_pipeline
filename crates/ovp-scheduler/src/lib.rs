@@ -264,10 +264,13 @@ pub fn retry_due(run: Option<&JobRun>, now: NaiveDateTime) -> bool {
     if attempts == 0 || attempts > RETRY_BACKOFF_MINS.len() {
         return false;
     }
-    let Ok(last) = NaiveDateTime::parse_from_str(&run.last_run, "%Y-%m-%dT%H:%M:%S") else {
+    // The FAILURE instant, not the cadence watermark. Falls back to
+    // `last_run` only for a state file written before the field existed.
+    let stamp = run.last_failure_at.as_deref().unwrap_or(&run.last_run);
+    let Ok(failed_at) = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%dT%H:%M:%S") else {
         return false;
     };
-    now >= last + Duration::minutes(RETRY_BACKOFF_MINS[attempts - 1])
+    now >= failed_at + Duration::minutes(RETRY_BACKOFF_MINS[attempts - 1])
 }
 
 /// Resolve a vault-relative stored path against the live vault root.
@@ -541,6 +544,16 @@ pub struct JobRun {
     /// Consecutive failures since the last ok — the portal escalation signal.
     #[serde(default)]
     pub consecutive_failures: u32,
+    /// When the last FAILED attempt actually FINISHED.
+    ///
+    /// Separate from `last_run`, which is the cadence watermark and is stamped
+    /// with the TICK's start time. A 30-minute job that starts at 09:05 and
+    /// dies at 09:35 has `last_run = 09:05`, so a backoff measured from it
+    /// would already be spent the moment the job failed. `last_run` cannot
+    /// simply become the completion time either: a job spanning an occurrence
+    /// would then mark that occurrence as served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<String>,
 }
 
 /// One job execution's outcome as seen by the runner.
@@ -593,6 +606,19 @@ impl State {
         status: &str,
         error_tail: Option<String>,
     ) {
+        self.record_outcome_at(id, now, now, status, error_tail);
+    }
+
+    /// `now` is the cadence watermark (tick start); `finished_at` is when this
+    /// attempt actually ended and is what the retry backoff measures from.
+    pub fn record_outcome_at(
+        &mut self,
+        id: &str,
+        now: NaiveDateTime,
+        finished_at: NaiveDateTime,
+        status: &str,
+        error_tail: Option<String>,
+    ) {
         let prev = self.runs.get(id).cloned().unwrap_or_default();
         let counted = status == "ok" || status == "error";
         let failed = status == "error";
@@ -610,6 +636,13 @@ impl State {
                     0
                 } else {
                     prev.consecutive_failures
+                },
+                last_failure_at: if failed {
+                    Some(finished_at.format("%Y-%m-%dT%H:%M:%S").to_string())
+                } else if status == "ok" {
+                    None
+                } else {
+                    prev.last_failure_at.clone()
                 },
             },
         );
@@ -848,7 +881,10 @@ pub fn tick_with(
         retried: plan.retrying.clone(),
         ..Default::default()
     };
-    for id in &plan.due {
+    // Scheduled work first, then retries — and retries are actually RUN here.
+    // Reporting `retried` while only iterating `due` would hand an embedder a
+    // report claiming a recovery attempt that never happened.
+    for id in plan.due.iter().chain(plan.retrying.iter()) {
         let job = reg.get(id).expect("plan ids come from the registry");
         let result = runner.run(job);
         new_state.record_outcome(
@@ -1498,6 +1534,9 @@ mod tests {
             runs_total: streak as u64,
             failures_total: streak as u64,
             consecutive_failures: streak,
+            // Same instant as last_run here: these fixtures model a fast job,
+            // where the two coincide.
+            last_failure_at: Some(last_run.into()),
         }
     }
 
@@ -1560,6 +1599,79 @@ mod tests {
         assert!(!plan.due.contains(&"daily".to_string()), "not a scheduled run");
         assert_eq!(plan.retrying, vec!["daily".to_string()]);
         assert!(!plan.skipped_not_due.contains(&"daily".to_string()));
+    }
+
+    #[test]
+    fn the_backoff_measures_from_the_failure_not_the_tick_start() {
+        // A 30-minute job: the tick starts 09:05, the job dies 09:35.
+        // `last_run` is the cadence watermark (09:05); measuring the backoff
+        // from it would make the 15-minute delay already spent at the moment
+        // of failure.
+        let mut state = State::default();
+        state.record_outcome_at(
+            "slow",
+            dt("2026-07-12T09:05:00"),
+            dt("2026-07-12T09:35:00"),
+            "error",
+            Some("boom".into()),
+        );
+        let run = state.runs.get("slow").unwrap();
+        assert_eq!(run.last_run, "2026-07-12T09:05:00", "watermark is tick start");
+        assert_eq!(run.last_failure_at.as_deref(), Some("2026-07-12T09:35:00"));
+        assert!(!retry_due(Some(run), dt("2026-07-12T09:40:00")), "only 5m since failure");
+        assert!(retry_due(Some(run), dt("2026-07-12T09:50:00")), "15m since failure");
+    }
+
+    #[test]
+    fn a_success_clears_the_failure_timestamp() {
+        let mut state = State::default();
+        state.record_outcome_at(
+            "j",
+            dt("2026-07-12T09:00:00"),
+            dt("2026-07-12T09:10:00"),
+            "error",
+            None,
+        );
+        assert!(state.runs["j"].last_failure_at.is_some());
+        state.record_outcome("j", dt("2026-07-13T09:00:00"), "ok", None);
+        assert!(state.runs["j"].last_failure_at.is_none(), "stale failure must not linger");
+        assert_eq!(state.runs["j"].consecutive_failures, 0);
+    }
+
+    #[test]
+    fn tick_with_actually_runs_the_retry_it_reports() {
+        // Naming a job in `retried` while only dispatching `due` hands an
+        // embedder a report of a recovery attempt that never happened.
+        let reg = default_jobs_registry();
+        let mut state = State::default();
+        state.record_outcome_at(
+            "daily",
+            dt("2026-07-12T09:05:00"),
+            dt("2026-07-12T09:05:00"),
+            "error",
+            None,
+        );
+        let runner = FakeRunner::default();
+        let (new_state, report) = tick_with(&reg, &state, dt("2026-07-12T09:30:00"), &runner);
+        assert_eq!(report.retried, vec!["daily".to_string()]);
+        assert!(
+            runner.ran.borrow().contains(&"daily".to_string()),
+            "the runner must actually have been called"
+        );
+        assert!(report.ran.iter().any(|(id, _)| id == "daily"));
+        // The retry succeeded, so the job is healed and the streak resets —
+        // which is the entire point of retrying at all.
+        assert_eq!(new_state.runs["daily"].last_status, "ok");
+        assert_eq!(new_state.runs["daily"].consecutive_failures, 0);
+
+        // And when the retry ALSO fails, the streak advances to the next,
+        // longer backoff rather than looping at 15 minutes.
+        let runner = FakeRunner {
+            fail: vec!["daily".to_string()],
+            ..Default::default()
+        };
+        let (after, _) = tick_with(&reg, &state, dt("2026-07-12T09:30:00"), &runner);
+        assert_eq!(after.runs["daily"].consecutive_failures, 2);
     }
 
     #[test]
