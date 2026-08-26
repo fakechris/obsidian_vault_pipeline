@@ -6,6 +6,7 @@
 //!   sidecar's `schedule tick` — REPLACING launchd/systemd entirely;
 //! - persists the chosen vault, with a first-run folder picker.
 
+use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +33,12 @@ struct AppConfig {
     /// also the head of this list after a successful open.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     known_vaults: Vec<String>,
+    /// Canonical portal port per vault path — the vault's stable webview
+    /// origin. App-scoped rather than per-vault because the property being
+    /// protected is CROSS-vault: only a registry that sees every claim can
+    /// keep two vaults off the same port. BTreeMap for deterministic output.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    ports: BTreeMap<String, u16>,
 }
 
 /// Recent-list cap — enough for real multi-vault use, small enough for a menu.
@@ -86,7 +93,13 @@ fn read_config_file(app: &AppHandle) -> AppConfig {
     let Some(path) = config_file(app) else {
         return AppConfig::default();
     };
-    std::fs::read_to_string(&path)
+    read_config_at(&path)
+}
+
+/// Path-addressed read — a corrupt or missing file is an empty config, never
+/// a hard failure (the app must still boot into onboarding).
+fn read_config_at(path: &Path) -> AppConfig {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
@@ -94,11 +107,27 @@ fn read_config_file(app: &AppHandle) -> AppConfig {
 
 fn save_config(app: &AppHandle, cfg: &AppConfig) -> Result<(), String> {
     let path = config_file(app).ok_or("cannot resolve the app config dir")?;
+    write_config_at(&path, cfg)
+}
+
+/// Path-addressed write, sibling-temp + rename so it is atomic. A crash or a
+/// full disk mid-write must not leave truncated JSON: this file now carries
+/// the per-vault port map, and a corrupt read means every vault silently
+/// changes origin (and loses its portal settings) on the next launch.
+fn write_config_at(path: &Path, cfg: &AppConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
+    // Per-process temp name: two instances sharing one `config.json.tmp` would
+    // overwrite each other's half-written content and rename the wrong bytes
+    // into place. Rename itself is atomic, so the loser just loses its update.
+    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename into {}: {e}", path.display())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +159,93 @@ fn free_port() -> Result<u16, String> {
     let l = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind loopback: {e}"))?;
     let port = l.local_addr().map_err(|e| e.to_string())?.port();
     Ok(port)
+}
+
+// ---------------------------------------------------------------------------
+// Sticky portal port.
+//
+// The webview's origin is `http://127.0.0.1:<port>`, and Chromium/WKWebView
+// partition localStorage + IndexedDB BY ORIGIN. A fresh `free_port()` per
+// launch therefore hands the portal a brand-new, empty storage bucket every
+// time the app restarts — silently wiping theme, language, panel width and
+// the persisted knowledge sort prefs. Nothing errors; the settings are just
+// gone. So the port has to be stable across launches, per vault.
+//
+// Per vault, not per app: each vault is served on its own origin, so switching
+// vaults must not let vault A's portal state leak into vault B's.
+// ---------------------------------------------------------------------------
+
+/// Low end of the candidate window, and its width.
+///
+/// Deliberately below every common ephemeral range, because a remembered port
+/// drawn from one is the port most likely to be gone by the next launch: macOS
+/// `bind :0` draws from 49152..65535, and Linux's default
+/// `net.ipv4.ip_local_port_range` is 32768..60999 — so the window has to stop
+/// at 32768, not 40000, to clear both.
+const PORT_WINDOW_LO: u16 = 20000;
+const PORT_WINDOW_LEN: u16 = 12768; // 20000..32768
+
+/// Deterministic candidate derived from the vault path (FNV-1a, so it is
+/// stable across Rust versions and reinstalls — unlike `DefaultHasher`).
+///
+/// This is a STARTING POINT, not an identity: 12768 slots cannot give distinct
+/// vaults distinct ports, and a collision would put two vaults on one origin
+/// and hand vault B vault A's portal settings. `allocate_port` probes away from
+/// a collision; the config's port map is what actually enforces uniqueness.
+fn stable_port_candidate(vault: &str) -> u16 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in vault.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    PORT_WINDOW_LO + u16::try_from(hash % u64::from(PORT_WINDOW_LEN)).unwrap_or(0)
+}
+
+/// True iff we can bind `port` on loopback right now. Same TOCTOU caveat as
+/// `free_port`; a lost race just falls through to the caller's retry.
+fn port_is_free(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// The port `vault` should serve on, and whether it is that vault's canonical
+/// origin (`true`) or a transient stand-in because the canonical one was busy
+/// (`false`). Only a canonical result may be written back to the config —
+/// overwriting the canonical port with a stand-in would strand the settings
+/// stored under the original origin even after the conflict clears.
+///
+/// Allocation walks forward from the hashed candidate, skipping ports another
+/// vault has already claimed and ports that will not bind, so two vaults whose
+/// hashes collide still land on different origins.
+fn allocate_port(ports: &BTreeMap<String, u16>, vault: &str) -> (u16, bool) {
+    let claimed = ports.get(vault).copied().filter(|p| *p >= 1024);
+    if let Some(port) = claimed.filter(|p| port_is_free(*p)) {
+        return (port, true);
+    }
+    // Either no claim yet, or the canonical port is busy right now. Probe the
+    // window either way — a stand-in MUST come from the same vault-owned
+    // space, never `free_port()`. An ephemeral stand-in is a port the OS will
+    // later hand to some other vault's launch, which is the cross-vault
+    // localStorage bleed this whole registry exists to prevent.
+    let others: std::collections::BTreeSet<u16> = ports
+        .iter()
+        .filter(|(k, _)| k.as_str() != vault)
+        .map(|(_, v)| *v)
+        .collect();
+    let start = claimed.unwrap_or_else(|| stable_port_candidate(vault));
+    let start = start.clamp(PORT_WINDOW_LO, PORT_WINDOW_LO + PORT_WINDOW_LEN - 1);
+    for step in 0..PORT_WINDOW_LEN {
+        let offset = (start - PORT_WINDOW_LO + step) % PORT_WINDOW_LEN;
+        let port = PORT_WINDOW_LO + offset;
+        if !others.contains(&port) && port_is_free(port) {
+            // Only the vault's FIRST allocation is canonical. When a claim
+            // already exists, anything other than that exact port is a
+            // stand-in and must not overwrite it.
+            return (port, claimed.is_none_or(|c| c == port));
+        }
+    }
+    // Whole window unavailable — serve rather than refuse to launch, but never
+    // record it.
+    (free_port().unwrap_or(0), false)
 }
 
 fn wait_until_up(port: u16) -> Result<(), String> {
@@ -207,7 +323,11 @@ fn resolve_viz_dir(app: &AppHandle) -> PathBuf {
 /// calls `set_var` — safe under Tauri's multi-threaded runtime. Scheduler
 /// children still exec the bundled `ovp2` sidecar, which loads providers.toml
 /// into their own env at process start.
-fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
+fn start_server(
+    vault: PathBuf,
+    viz_dir: PathBuf,
+    cfg_path: Option<PathBuf>,
+) -> Result<String, String> {
     // Retry a few times: free_port has a tiny TOCTOU window (another process
     // could grab the port between the probe and run_server binding it), so a
     // lost race just picks a new port rather than failing the launch.
@@ -237,16 +357,26 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
         vault.display(),
         viz_dir.display()
     ));
+    let vault_key = vault.display().to_string();
     for attempt in 0..3 {
-        let port = match free_port() {
-            Ok(p) => p,
-            Err(e) => {
-                last_err = e;
-                diag(&format!("free_port failed: {last_err}"));
-                continue;
+        // First attempt takes this vault's canonical port so the webview
+        // origin — and therefore the portal's localStorage — survives a
+        // restart. Later attempts mean that port lost a race; take any free
+        // one rather than failing the launch over a settings nicety.
+        let (port, canonical) = if attempt == 0 {
+            match cfg_path.as_deref() {
+                Some(p) => allocate_port(&read_config_at(p).ports, &vault_key),
+                None => (free_port().unwrap_or(0), false),
             }
+        } else {
+            (free_port().unwrap_or(0), false)
         };
-        diag(&format!("attempt {attempt} port {port}"));
+        if port == 0 {
+            last_err = "could not obtain a loopback port".to_string();
+            diag(&format!("port allocation failed: {last_err}"));
+            continue;
+        }
+        diag(&format!("attempt {attempt} port {port} canonical={canonical}"));
         let ask_client = ovp_server::providers_ask_client_factory(vault.clone());
         let config = ovp_server::ServeConfig {
             vault_root: vault.clone(),
@@ -264,14 +394,55 @@ fn start_server(vault: PathBuf, viz_dir: PathBuf) -> Result<String, String> {
             // the agent path serves Ask unless OVP_ASK_AGENT=0.
             ask_agent: std::env::var("OVP_ASK_AGENT").map(|v| v != "0").unwrap_or(true),
         };
+        // `wait_until_http` only proves SOMEBODY answers 200 on that port. If a
+        // second instance won the bind race, the loser would read the winner's
+        // response as its own success and then record a claim for a port it
+        // never owned. Have the server report its own bind failure instead.
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
             if let Err(e) = ovp_server::run_server(config) {
-                eprintln!("ovp2-desktop: portal server exited: {e}");
+                let _ = tx.send(e.to_string());
             }
         });
+        // A lost bind fails immediately; a healthy server never sends.
+        if let Ok(e) = rx.recv_timeout(Duration::from_millis(300)) {
+            last_err = format!("portal server could not bind {port}: {e}");
+            diag(&last_err);
+            continue;
+        }
         match wait_until_http(port) {
             Ok(()) => {
+                if let Ok(e) = rx.try_recv() {
+                    last_err = format!("portal server exited on {port}: {e}");
+                    diag(&last_err);
+                    continue;
+                }
                 let url = format!("http://127.0.0.1:{port}/");
+                // Claim only a canonical port that actually served. A stand-in
+                // must never overwrite the claim: the settings live under the
+                // canonical origin, and once a transient conflict clears we
+                // want to go back to it, not strand them.
+                let claim = if canonical { cfg_path.as_deref() } else { None };
+                if let Some(p) = claim {
+                    let mut cfg = read_config_at(p);
+                    // Re-read and re-check: another vault may have claimed this
+                    // port since allocation. Losing the claim costs stickiness
+                    // once; taking it would alias two vaults onto one origin.
+                    let stolen = cfg
+                        .ports
+                        .iter()
+                        .any(|(k, v)| k != &vault_key && *v == port);
+                    if stolen {
+                        diag(&format!("port {port} claimed by another vault; not recording"));
+                    } else if cfg.ports.get(&vault_key) != Some(&port) {
+                        cfg.ports.insert(vault_key.clone(), port);
+                        // Surfacing this matters: an unrecorded canonical port
+                        // is one another vault may later be handed.
+                        if let Err(e) = write_config_at(p, &cfg) {
+                            diag(&format!("could not record port {port}: {e}"));
+                        }
+                    }
+                }
                 diag(&format!("portal up at {url}"));
                 return Ok(url);
             }
@@ -294,7 +465,7 @@ fn ensure_server(app: &AppHandle, state: &AppState, vault: &Path) -> Result<Stri
             return Ok(url.clone());
         }
     }
-    let url = start_server(vault.to_path_buf(), resolve_viz_dir(app))?;
+    let url = start_server(vault.to_path_buf(), resolve_viz_dir(app), config_file(app))?;
     let mut guard = state.server_url.lock().unwrap();
     if let Some(existing) = guard.as_ref() {
         return Ok(existing.clone());
@@ -445,6 +616,10 @@ async fn boot(app: AppHandle, state: State<'_, AppState>) -> Result<BootState, S
                     &AppConfig {
                         vault: cfg_file.vault.clone(),
                         known_vaults: remember_vault(&cfg_file.known_vaults, &vault),
+                        // `..cfg_file` rather than a fresh struct: rebuilding
+                        // field-by-field silently drops everything else in the
+                        // file — `ports` here, whatever comes next later.
+                        ..cfg_file
                     },
                 );
                 refresh_vault_menu(&app);
@@ -482,6 +657,7 @@ async fn set_vault_and_start(
         &AppConfig {
             vault: Some(vault.clone()),
             known_vaults: remember_vault(&prev.known_vaults, &vault),
+            ..prev
         },
     )?;
     refresh_vault_menu(&app);
@@ -603,6 +779,7 @@ fn switch_to_vault(app: &AppHandle, vault: &str) {
     let cfg = AppConfig {
         vault: Some(vault.to_string()),
         known_vaults: remember_vault(&prev.known_vaults, vault),
+        ..prev
     };
     if let Err(e) = save_config(app, &cfg) {
         eprintln!("ovp2-desktop: could not save vault config: {e}");
@@ -807,6 +984,7 @@ mod tests {
         let cfg = AppConfig {
             vault: Some("/Users/op/ovp-vault".into()),
             known_vaults: vec!["/Users/op/ovp-vault".into(), "/Users/op/other".into()],
+            ..AppConfig::default()
         };
         let s = serde_json::to_string(&cfg).unwrap();
         let back: AppConfig = serde_json::from_str(&s).unwrap();
@@ -851,5 +1029,140 @@ mod tests {
     fn free_port_is_bindable() {
         let p = free_port().unwrap();
         assert!(p > 0);
+    }
+
+    #[test]
+    fn stable_port_candidate_is_deterministic_and_below_every_ephemeral_range() {
+        let a = "/Users/op/Documents/ovp-vault";
+        assert_eq!(stable_port_candidate(a), stable_port_candidate(a));
+        // Must clear BOTH macOS (49152..) and Linux (32768..) ephemeral
+        // ranges: a candidate the OS also hands to other processes is the one
+        // least likely to still be free at the next launch.
+        for v in ["/a", "/b/c", a, ""] {
+            let p = stable_port_candidate(v);
+            assert!((PORT_WINDOW_LO..32768).contains(&p), "{v} -> {p}");
+        }
+    }
+
+    #[test]
+    fn hash_collisions_do_not_share_an_origin() {
+        // These two paths hash to the SAME candidate (12768 slots cannot be
+        // injective over arbitrary paths). Allocation must still give them
+        // different ports, or vault B reads vault A's portal localStorage.
+        let (a, b) = ("/Users/op/vault-69", "/Users/op/vault-450");
+        assert_eq!(
+            stable_port_candidate(a),
+            stable_port_candidate(b),
+            "fixture is only meaningful if these collide"
+        );
+        let mut ports = BTreeMap::new();
+        let (pa, ok_a) = allocate_port(&ports, a);
+        assert!(ok_a);
+        ports.insert(a.to_string(), pa);
+        let (pb, ok_b) = allocate_port(&ports, b);
+        assert!(ok_b);
+        assert_ne!(pa, pb, "collision must be probed away from");
+    }
+
+    #[test]
+    fn a_claimed_port_is_reused_and_is_stable_across_launches() {
+        let mut ports = BTreeMap::new();
+        let v = "/Users/op/vault-a";
+        let (first, ok) = allocate_port(&ports, v);
+        assert!(ok);
+        ports.insert(v.to_string(), first);
+        // Second launch: same vault, same origin. The whole point.
+        assert_eq!(allocate_port(&ports, v), (first, true));
+    }
+
+    #[test]
+    fn a_busy_canonical_port_yields_a_stand_in_that_must_not_be_claimed() {
+        let v = "/Users/op/vault-a";
+        let held = TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy = held.local_addr().unwrap().port();
+        let mut ports = BTreeMap::new();
+        ports.insert(v.to_string(), busy);
+        let (port, canonical) = allocate_port(&ports, v);
+        assert_ne!(port, busy);
+        assert!(
+            !canonical,
+            "a stand-in must be flagged so the caller never overwrites the claim"
+        );
+        // Conflict clears -> back to the canonical origin, settings intact.
+        drop(held);
+        assert_eq!(allocate_port(&ports, v), (busy, true));
+    }
+
+    #[test]
+    fn a_stand_in_stays_inside_the_vault_owned_window() {
+        // The stand-in must NOT be an ephemeral port: the OS hands those to
+        // other vaults' launches later, which re-opens the cross-vault
+        // localStorage bleed on the fallback path.
+        let v = "/Users/op/vault-a";
+        let held = TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy = held.local_addr().unwrap().port();
+        let mut ports = BTreeMap::new();
+        ports.insert(v.to_string(), busy);
+        let (port, canonical) = allocate_port(&ports, v);
+        assert!(!canonical);
+        assert!(
+            (PORT_WINDOW_LO..PORT_WINDOW_LO + PORT_WINDOW_LEN).contains(&port),
+            "stand-in {port} escaped the window"
+        );
+    }
+
+    #[test]
+    fn a_stand_in_avoids_ports_other_vaults_claimed() {
+        let (a, b) = ("/Users/op/vault-69", "/Users/op/vault-450");
+        let mut ports = BTreeMap::new();
+        // A's canonical is busy; B holds the very next port in the window.
+        let held = TcpListener::bind("127.0.0.1:0").unwrap();
+        ports.insert(a.to_string(), held.local_addr().unwrap().port());
+        let neighbour = stable_port_candidate(a);
+        ports.insert(b.to_string(), neighbour);
+        let (port, _) = allocate_port(&ports, a);
+        assert_ne!(port, neighbour, "must not stand in on B's claimed origin");
+    }
+
+    #[test]
+    fn a_privileged_claimed_port_is_repaired_not_reused() {
+        // 80 is not something this code could have written, so the entry is
+        // corrupt. Treat it as "no claim": allocate a real port and mark it
+        // canonical so the bad entry gets overwritten rather than retried
+        // forever.
+        let v = "/Users/op/vault-a";
+        let mut ports = BTreeMap::new();
+        ports.insert(v.to_string(), 80u16);
+        let (port, canonical) = allocate_port(&ports, v);
+        assert_ne!(port, 80);
+        assert!((PORT_WINDOW_LO..PORT_WINDOW_LO + PORT_WINDOW_LEN).contains(&port));
+        assert!(canonical, "a corrupt claim must be repaired");
+    }
+
+    #[test]
+    fn config_write_is_atomic_and_round_trips_the_port_map() {
+        let dir = std::env::temp_dir().join(format!("ovp2-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let mut cfg = AppConfig::default();
+        cfg.ports.insert("/Users/op/vault-a".into(), 20001);
+        write_config_at(&path, &cfg).unwrap();
+        assert_eq!(read_config_at(&path).ports.get("/Users/op/vault-a"), Some(&20001));
+        // No temp file left behind, and a corrupt file reads as empty rather
+        // than panicking the boot path.
+        assert!(!path
+            .with_extension(format!("json.tmp.{}", std::process::id()))
+            .exists());
+        std::fs::write(&path, "not json").unwrap();
+        assert!(read_config_at(&path).ports.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn older_config_without_ports_still_loads() {
+        let cfg: AppConfig =
+            serde_json::from_str(r#"{"vault":"/v","known_vaults":["/v"]}"#).unwrap();
+        assert!(cfg.ports.is_empty());
+        assert_eq!(cfg.vault.as_deref(), Some("/v"));
     }
 }
