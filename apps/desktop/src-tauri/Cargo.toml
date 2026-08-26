@@ -35,3 +35,8 @@ serde_json = { workspace = true }
 # (.ovp/providers.toml), without set_var on the multi-threaded Tauri host.
 ovp-server = { path = "../../../crates/ovp-server", features = ["anthropic"] }
 ovp-domain = { path = "../../../crates/ovp-domain" }
+
+[dev-dependencies]
+# Tests write real files; tempfile cleans up on PANIC too, which a manual
+# temp_dir() + remove_dir_all() at the end of the test does not.
+tempfile = { workspace = true }

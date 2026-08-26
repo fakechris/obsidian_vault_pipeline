@@ -1153,8 +1153,12 @@ mod tests {
 
     #[test]
     fn config_write_is_atomic_and_round_trips_the_port_map() {
-        let dir = std::env::temp_dir().join(format!("ovp2-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // tempfile, not `temp_dir()` + manual cleanup: the repo forbids run
+        // artifacts in /tmp, and a hand-rolled cleanup at the end of the test
+        // never runs when an assertion panics — leaving the directory behind
+        // exactly on the failures worth investigating.
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
         let path = dir.join("config.json");
         let mut cfg = AppConfig::default();
         cfg.ports.insert("/Users/op/vault-a".into(), 20001);
@@ -1167,7 +1171,6 @@ mod tests {
             .exists());
         std::fs::write(&path, "not json").unwrap();
         assert!(read_config_at(&path).ports.is_empty());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
