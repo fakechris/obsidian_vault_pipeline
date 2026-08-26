@@ -61,18 +61,45 @@ fn stamp_provenance() {
     };
     println!("cargo:rustc-env=OVP2_GIT_SHA={sha}");
     println!("cargo:rustc-env=OVP2_GIT_DIRTY={dirty}");
+    // A ready-made suffix, because clap's `version` is a `concat!` of literals
+    // and cannot branch.
+    println!(
+        "cargo:rustc-env=OVP2_GIT_DIRTY_SUFFIX={}",
+        if dirty == "1" { ", dirty" } else { "" }
+    );
 
-    // Rebuild when HEAD moves. Without these a `cargo build` after a commit
+    // Rebuild when HEAD moves. Without this a `cargo build` after a commit
     // reuses the cached crate and stamps the PREVIOUS sha — a provenance that
     // lies is worse than none.
-    if let Some(dir) = git(&["rev-parse", "--git-dir"]) {
-        let dir = std::path::PathBuf::from(dir);
-        for p in ["HEAD", "refs"] {
-            let path = dir.join(p);
-            if path.exists() {
-                println!("cargo:rerun-if-changed={}", path.display());
-            }
-        }
+    //
+    // Watch the RESOLVED ref, via the COMMON dir. In a linked worktree
+    // (this repo keeps several under `.claude/worktrees/`) `--git-dir` is the
+    // worktree's private admin directory: its `HEAD` is a symref that does not
+    // change when you commit on that branch, and the branch ref itself lives
+    // in the common directory. Watching only the private dir means a
+    // same-branch commit leaves every timestamp untouched and the stale stamp
+    // survives.
+    let Some(git_dir) = git(&["rev-parse", "--git-dir"]) else {
+        return;
+    };
+    println!(
+        "cargo:rerun-if-changed={}",
+        std::path::Path::new(&git_dir).join("HEAD").display()
+    );
+    let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .or_else(|| git(&["rev-parse", "--git-common-dir"]))
+        .unwrap_or(git_dir);
+    let common = std::path::PathBuf::from(common);
+    if let Some(reference) = git(&["symbolic-ref", "--quiet", "HEAD"]) {
+        // Loose ref. A PACKED ref has no file, so also watch packed-refs.
+        println!(
+            "cargo:rerun-if-changed={}",
+            common.join(&reference).display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            common.join("packed-refs").display()
+        );
     }
 }
 

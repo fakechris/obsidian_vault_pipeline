@@ -58,7 +58,9 @@ fn default_app_dir() -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("OVP2"))
+        // "OVP2 Desktop" — what the installer creates and what
+        // build-desktop-sidecar.ps1 documents, not the bare "OVP2" in CLAUDE.md.
+        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("OVP2 Desktop"))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -121,13 +123,23 @@ pub fn parse_version(text: &str) -> (Option<String>, Option<bool>) {
         return (None, None);
     };
     let inner = &inner[..close];
-    let sha = inner
-        .split(',')
-        .next()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    (sha, Some(inner.contains("dirty")))
+    let candidate = inner.split(',').next().map(str::trim).unwrap_or_default();
+    // Validate the GRAMMAR, do not just take the first parenthesised text.
+    // `ovp2 2.0.1 (release build)` previously yielded the sha "release build",
+    // which is precisely the wrong-sha-reports-all-clear failure this contract
+    // exists to prevent.
+    let looks_like_stamp = candidate == "unknown"
+        || (!candidate.is_empty()
+            && candidate.len() <= 40
+            && candidate.chars().all(|c| c.is_ascii_hexdigit()));
+    if !looks_like_stamp {
+        // No recognisable stamp means no opinion at all — including on dirty.
+        return (None, None);
+    }
+    (
+        Some(candidate.to_string()),
+        Some(inner.contains("dirty")),
+    )
 }
 
 /// Run `<path> --version` with a real deadline.
@@ -144,23 +156,24 @@ fn version_output(path: &Path) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-            Err(_) => return None,
-        }
-    }
-    let out = child.wait_with_output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
+    // Read on a thread and bound the WHOLE operation. Polling `try_wait` and
+    // then calling `wait_with_output` bounds only the child's exit: a
+    // surviving grandchild that inherited the stdout pipe keeps it open, and
+    // the read after the loop blocks forever with the deadline already spent.
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = String::new();
+        let _ = stdout.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let text = rx.recv_timeout(PROBE_TIMEOUT).ok();
+    // Kill regardless: on the timeout path the child is still running, and on
+    // the success path it has exited and this is a no-op that also reaps it.
+    let _ = child.kill();
+    let _ = child.wait();
+    text
 }
 
 /// The entry asset an `index.html` references — the same signal
@@ -207,10 +220,16 @@ pub fn collect(vault_root: &Path, app: Option<PathBuf>) -> Vec<ArtifactReport> {
             app_dir.join("Contents/MacOS/ovp2-desktop"),
             app_dir.join("Contents/Resources/console-ui/dist"),
         );
+        // `ovp2-desktop.exe`, NOT `OVP2.exe`: tauri.conf.json sets no
+        // `mainBinaryName`, so the shell keeps its Cargo bin name — and
+        // Windows filenames are case-insensitive, so an `OVP2.exe` shell could
+        // not coexist with the `ovp2.exe` sidecar in one directory. Checking
+        // for `OVP2.exe` would have matched the SIDECAR and reported a shell
+        // that is not there. See scripts/build-desktop-sidecar.ps1.
         #[cfg(not(target_os = "macos"))]
         let (sidecar, shell, bundled_portal) = (
             app_dir.join("ovp2.exe"),
-            app_dir.join("OVP2.exe"),
+            app_dir.join("ovp2-desktop.exe"),
             app_dir.join("console-ui/dist"),
         );
         out.push(probe_binary("app sidecar", &sidecar));
@@ -226,10 +245,14 @@ pub fn collect(vault_root: &Path, app: Option<PathBuf>) -> Vec<ArtifactReport> {
         "portal (vault copy — WINS)",
         &vault_root.join(".ovp/console/app"),
     ));
-    out.push(probe_binary(
-        "dev build",
-        &PathBuf::from("target/release/ovp2"),
-    ));
+    // Anchored at the tree this binary was COMPILED from, not the caller's
+    // cwd. A relative path missed the real dev build whenever `artifacts` ran
+    // from anywhere else — and could have probed an unrelated
+    // `target/release/ovp2` that happened to sit under it.
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/release")
+        .join(if cfg!(windows) { "ovp2.exe" } else { "ovp2" });
+    out.push(probe_binary("dev build", &dev));
     out
 }
 
@@ -368,9 +391,21 @@ mod tests {
         // A binary predating the stamp, and a hypothetical format change. A
         // WRONG sha would compare equal to nothing and report all-clear on a
         // stale copy — strictly worse than admitting ignorance.
-        for text in ["ovp2 2.0.1\n", "ovp2 2.0.1 (\n", "", "ovp2 2.0.1 ()"] {
+        for text in [
+            "ovp2 2.0.1\n",
+            "ovp2 2.0.1 (\n",
+            "",
+            "ovp2 2.0.1 ()",
+            // The one that mattered: any parenthesised text used to become a
+            // "sha", and a wrong sha compares equal to nothing — reporting
+            // all-clear on a stale copy.
+            "ovp2 2.0.1 (release build)",
+            "ovp2 2.0.1 (built by someone)",
+        ] {
             assert_eq!(parse_version(text).0, None, "{text:?}");
         }
+        // `unknown` is a real stamp: a build with no git says so.
+        assert_eq!(parse_version("ovp2 2.0.1 (unknown)").0.as_deref(), Some("unknown"));
     }
 
     #[test]

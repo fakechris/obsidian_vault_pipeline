@@ -33,9 +33,12 @@ impl std::fmt::Display for CliError {
 // independently-built copies of this binary apart. `artifacts` parses it.
 #[command(
     name = "ovp2",
+    // The dirty flag rides along: without it every OTHER artifact reads as
+    // clean, because the reader can only see what --version prints.
     version = concat!(
         env!("CARGO_PKG_VERSION"),
         " (", env!("OVP2_GIT_SHA"),
+        env!("OVP2_GIT_DIRTY_SUFFIX"),
         ")"
     ),
     about = "OVP Next — clean-core Rust pipeline"
