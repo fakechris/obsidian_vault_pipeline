@@ -177,7 +177,9 @@ fn check_ledger_fs_consistency(vault_root: &Path, layout: &VaultLayout, findings
             message: format!("{missing_count} succeeded ledger entries without corresponding pack directories"),
             hint: None,
             fixed: false,
-        });
+        }.attach_hint(
+            "the ledger points at packs that are not on disk — a moved vault, a partial restore, or a manual delete; `ovp2 index` re-derives the read model from what IS there",
+        ));
     } else {
         findings.push(Finding {
             check: "ledger-fs-consistency".into(),
@@ -269,7 +271,9 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                         message: format!("index.json missing, rebuild failed: {e}"),
                         hint: None,
                         fixed: false,
-                    });
+                    }.attach_hint(
+            "the rebuild itself failed — read the error above; `find`, the portal and the console all read this projection, so they stay stale until it succeeds",
+        ));
                 }
             }
         } else {
@@ -324,7 +328,9 @@ fn check_stale_index(vault_root: &Path, findings: &mut Vec<Finding>, fix: bool) 
                             message: format!("index stale, rebuild failed: {e}"),
                             hint: None,
                             fixed: false,
-                        });
+                        }.attach_hint(
+            "the rebuild itself failed — read the error above; `find`, the portal and the console all read this projection, so they stay stale until it succeeds",
+        ));
                     }
                 }
             } else {
@@ -370,7 +376,7 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
     let report = match recheck_vault(vault_root, None, None) {
         Ok(r) => r,
         Err(e) => {
-            findings.push(Finding {
+            let finding = Finding {
                 check: "crystal-staleness".into(),
                 severity: if store_absent {
                     Severity::Info
@@ -380,9 +386,18 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
                 message: format!("could not recheck durable claims: {e}"),
                 hint: None,
                 fixed: false,
-            }.attach_hint(
-                    "the ledger or the reader packs could not be read — fix the error above first; until then this vault has NO staleness signal at all",
-                ));
+            };
+            // The hint follows the SEVERITY. A fresh vault with no crystal
+            // store takes the Info path and is not broken — handing it "fix
+            // the error above" invents a problem for someone who has none.
+            findings.push(if store_absent {
+                finding
+            } else {
+                finding.attach_hint(
+                    "the ledger or the reader packs could not be read — until that is \
+                     fixed this vault has NO staleness signal at all",
+                )
+            });
             return;
         }
     };
@@ -574,7 +589,9 @@ fn check_run_recency(
                     ),
                     hint: None,
                     fixed: false,
-                });
+                }.attach_hint(
+            "read the failure in `.ovp/logs/` or the run ledger; the scheduler now retries on a backoff, but a persistent failure needs the cause fixed",
+        ));
                 return;
             }
             ovp_daily::LastRunStatus::Aborted => {
@@ -615,7 +632,9 @@ fn check_run_recency(
                 message: "no run recorded yet (no heartbeat, no reports)".into(),
                 hint: None,
                 fixed: false,
-            });
+            }.attach_hint(
+            "expected before the first run; otherwise check `ovp2 schedule status` — a quarantined or disabled job never fires",
+        ));
         }
         Some(ts) => {
             let age = now_secs - ts;
@@ -1032,76 +1051,132 @@ fn is_leap(y: i32) -> bool {
 mod tests {
     use super::*;
 
-    /// Build the vault states that actually TRIGGER the actionable branches.
+    /// Run EVERY check, the way `run()` does.
     ///
-    /// An empty tempdir exercises almost none of them: the first version of
-    /// this test passed with a hint deliberately removed, because the branch
-    /// that hint belonged to never ran. A coverage test that cannot reach the
-    /// code it claims to cover is worse than no test — it reports safety.
-    fn vaults_with_actionable_findings() -> Vec<(&'static str, tempfile::TempDir)> {
-        let mut out = Vec::new();
+    /// The first version of this test called only the two crystal checks, so
+    /// removing a hint from any other check left it green — it reported a
+    /// coverage guarantee it did not have.
+    fn all_checks(vault: &Path) -> Vec<Finding> {
+        let layout = VaultLayout::new();
+        let mut findings = Vec::new();
+        check_ledger_fs_consistency(vault, &layout, &mut findings);
+        check_orphan_packs(vault, &layout, &mut findings);
+        check_stale_index(vault, &mut findings, false);
+        check_crystal_integrity(vault, &mut findings);
+        check_crystal_staleness(vault, &mut findings);
+        check_run_recency(vault, &layout, now_unix_secs(), DEFAULT_RECENCY_HOURS, &mut findings);
+        check_disk_usage(vault, &layout, &mut findings);
+        check_legacy_artifacts(vault, &mut findings);
+        check_inbox_orphans(vault, &layout, &mut findings);
+        findings
+    }
 
-        // crystal dir present, ledger missing -> half-written store
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(d.path().join(".ovp/crystal")).unwrap();
-        out.push(("crystal-no-ledger", d));
+    /// Vault states that actually TRIGGER actionable branches. An empty dir
+    /// reaches almost none of them.
+    fn actionable_fixtures() -> Vec<(&'static str, tempfile::TempDir)> {
+        let bare = tempfile::tempdir().unwrap();
 
-        // ledger present but with a line that will not parse
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(d.path().join(".ovp/crystal")).unwrap();
+        let no_ledger = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(no_ledger.path().join(".ovp/crystal")).unwrap();
+
+        let bad_line = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(bad_line.path().join(".ovp/crystal")).unwrap();
         std::fs::write(
-            d.path().join(".ovp/crystal/ledger.jsonl"),
+            bad_line.path().join(".ovp/crystal/ledger.jsonl"),
             "{\"op\":\"write\"}\nnot json at all\n",
         )
         .unwrap();
-        out.push(("crystal-bad-line", d));
 
-        out
+        // A ledger whose succeeded entry points at a pack that is not on
+        // disk. Without this the whole ledger-* family goes untested: a
+        // MISSING ledger reads as an empty one, so `check_ledger_fs_consistency`
+        // takes its Pass path and removing its hints changed nothing.
+        let dangling = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dangling.path().join(".ovp")).unwrap();
+        std::fs::write(
+            dangling.path().join(".ovp/daily-runs.jsonl"),
+            concat!(
+                r#"{"schema":"ovp.daily/v1","run_id":"daily-2026-01-01","date":"2026-01-01","#,
+                r#""source_path":"50-Inbox/01-Raw/x.md","source_sha256":"deadbeef","#,
+                r#""status":"succeeded","pack_dir":"40-Resources/Reader/gone","units":1,"cards":1}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        vec![
+            ("bare", bare),
+            ("crystal-no-ledger", no_ledger),
+            ("crystal-bad-line", bad_line),
+            ("ledger-dangling-pack", dangling),
+        ]
+    }
+
+    fn names_a_command(f: &Finding) -> bool {
+        f.message.contains("`ovp2 ") || f.message.contains("run `")
     }
 
     /// Every finding a person is expected to act on should say what to do.
     /// Not a blanket rule — a message that already names the command needs no
-    /// second copy of it — but silence by DEFAULT is what sends an operator
+    /// second copy — but silence by DEFAULT is what sends an operator
     /// searching while the command that knows the answer says nothing.
     #[test]
     fn actionable_findings_carry_a_hint_or_name_the_command_themselves() {
-        let mut checked_actionable = 0;
-        for (label, vault) in vaults_with_actionable_findings() {
-            let mut findings = Vec::new();
-            check_crystal_integrity(vault.path(), &mut findings);
-            check_crystal_staleness(vault.path(), &mut findings);
-            for f in &findings {
-                if !matches!(f.severity, Severity::Warn | Severity::Fail) {
+        let mut actionable = 0;
+        let mut exempted = 0;
+        for (label, vault) in actionable_fixtures() {
+            for f in all_checks(vault.path()) {
+                if !matches!(f.severity, Severity::Warn | Severity::Fail) || f.fixed {
                     continue;
                 }
-                checked_actionable += 1;
-                let names_a_command =
-                    f.message.contains("`ovp2 ") || f.message.contains("run `");
+                actionable += 1;
+                if f.hint.is_none() {
+                    exempted += 1;
+                }
                 assert!(
-                    f.hint.is_some() || names_a_command,
+                    f.hint.is_some() || names_a_command(&f),
                     "{label}: [{}] {}: actionable but offers no next step",
                     f.check,
                     f.message
                 );
             }
         }
-        // The guard the first version lacked: if the fixtures stop reaching any
-        // actionable branch, this test must fail rather than pass vacuously.
+        // Guards the first version lacked: if the fixtures stop reaching the
+        // branches, or the exemption arm is never taken, this test must fail
+        // rather than pass vacuously.
+        assert!(actionable >= 8, "only {actionable} actionable finding(s) reached");
         assert!(
-            checked_actionable >= 2,
-            "fixtures reached only {checked_actionable} actionable finding(s) — \
-             the assertion above is not being exercised"
+            exempted >= 1,
+            "no finding took the message-names-a-command exemption — that arm of \
+             the assertion is untested and could be silently wrong"
         );
     }
 
     #[test]
+    fn a_fresh_vault_is_not_handed_a_hint_for_a_problem_it_does_not_have() {
+        // The Info path (no crystal store yet) is the normal fresh state.
+        // Attaching the Warn path's hint there invents a problem.
+        let vault = tempfile::tempdir().unwrap();
+        let mut findings = Vec::new();
+        check_crystal_staleness(vault.path(), &mut findings);
+        for f in &findings {
+            if matches!(f.severity, Severity::Info | Severity::Pass) {
+                assert!(
+                    f.hint.is_none(),
+                    "[{}] {}: non-actionable finding carries a hint",
+                    f.severity,
+                    f.message
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_passing_finding_carries_no_hint() {
-        // A hint on a PASS is noise: there is nothing to do.
         let vault = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(vault.path().join(".ovp/crystal")).unwrap();
         std::fs::write(vault.path().join(".ovp/crystal/ledger.jsonl"), "").unwrap();
-        let mut findings = Vec::new();
-        check_crystal_integrity(vault.path(), &mut findings);
+        let findings = all_checks(vault.path());
         assert!(!findings.is_empty());
         for f in &findings {
             if f.severity == Severity::Pass {
@@ -1109,6 +1184,7 @@ mod tests {
             }
         }
     }
+
 
 
     fn touch(root: &Path, rel: &str) {
