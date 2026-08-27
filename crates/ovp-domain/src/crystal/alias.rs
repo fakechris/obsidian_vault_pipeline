@@ -41,6 +41,17 @@ pub fn alias_for(index: usize) -> String {
     format!("c{}", index + 1)
 }
 
+/// Does this string occupy the handle namespace (`c` + digits)?
+///
+/// The namespace is reserved: a string of this shape is resolved by the table
+/// or not at all, never by the real-id passthrough.
+fn is_handle_shaped(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix('c') else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
 impl Aliases {
     /// Build from real ids in the ORDER they are presented to the model.
     pub fn new<I, S>(real_ids: I) -> Self
@@ -75,6 +86,13 @@ impl Aliases {
         let given = given.trim();
         if let Some(real) = self.to_real.get(given) {
             return Some(real.as_str());
+        }
+        // Anything SHAPED like a handle is judged only by the table. Without
+        // this, a real id that happens to be `c9` would let an unoffered
+        // handle `c9` through the passthrough below and be treated as that
+        // item — the unoffered-identifier bug, wearing the new syntax.
+        if is_handle_shaped(given) {
+            return None;
         }
         self.to_real
             .values()
@@ -132,6 +150,18 @@ mod tests {
         assert_eq!(a.resolve("c9"), None);
         assert_eq!(a.resolve("l3-something-else-1"), None);
         assert_eq!(a.resolve(""), None);
+    }
+
+    #[test]
+    fn a_handle_shaped_string_is_judged_only_by_the_table() {
+        // If a real id happens to BE `c9`, the passthrough would otherwise
+        // accept an unoffered handle `c9` and silently bind it to that item.
+        let a = Aliases::new(["real-1", "c9"]);
+        assert_eq!(a.resolve("c2"), Some("c9"), "c2 is the table entry for it");
+        assert_eq!(a.resolve("c9"), None, "the handle namespace is reserved");
+        assert_eq!(a.resolve("c99"), None);
+        // A non-handle-shaped real id still passes through.
+        assert_eq!(a.resolve("real-1"), Some("real-1"));
     }
 
     #[test]

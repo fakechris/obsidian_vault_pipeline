@@ -35,12 +35,14 @@ defect. Only `supported` + `evidence_sufficient: true` can become durable.
 ## Output shape
 
 Output **only** JSON — no prose, no markdown fence. Return exactly one verdict
-per claim, keyed by the claim's `claim_id`:
+per claim, keyed by the SHORT `claim_id` handle exactly as given above
+(`c1`, `c2`, …). Copy the handle verbatim; do not invent, renumber, or expand
+it into anything longer.
 
 ```json
 [
-  { "claim_id": "agents-1", "strength": "supported", "evidence_sufficient": true, "rationale": "both quotes state this directly" },
-  { "claim_id": "memory-2", "strength": "overreach", "evidence_sufficient": false, "rationale": "claim generalizes beyond the single hedged quote" }
+  { "claim_id": "c1", "strength": "supported", "evidence_sufficient": true, "rationale": "both quotes state this directly" },
+  { "claim_id": "c2", "strength": "overreach", "evidence_sufficient": false, "rationale": "claim generalizes beyond the single hedged quote" }
 ]
 ```
 
