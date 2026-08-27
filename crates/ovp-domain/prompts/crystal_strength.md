@@ -1,4 +1,4 @@
-# Crystal claim-strength prompt — crystal_strength/v1
+# Crystal claim-strength prompt — crystal_strength/v2
 
 You are a strict **claim-strength judge** for a durable knowledge Crystal. The
 citation grounding was already verified mechanically (every cited quote is a

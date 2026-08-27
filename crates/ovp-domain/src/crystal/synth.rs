@@ -27,7 +27,10 @@ const STRENGTH_TEMPLATE: &str = include_str!("../../prompts/crystal_strength.md"
 /// Cassette namespace + version marker for the synthesis stage.
 pub const CRYSTAL_SYNTH_PROMPT_ID: &str = "crystal_synth/v1";
 /// Cassette namespace + version marker for the claim-strength stage.
-pub const CRYSTAL_STRENGTH_PROMPT_ID: &str = "crystal_strength/v1";
+// v2: the model is handed SHORT positional handles (`c1`, `c2`, …) instead of
+// the 85-character claim ids it kept mis-transcribing. New namespace because
+// the request text changed — v1 cassettes must not replay against it.
+pub const CRYSTAL_STRENGTH_PROMPT_ID: &str = "crystal_strength/v2";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 /// Synthesis reads many units and writes several claims — generous headroom.
 const SYNTH_MAX_TOKENS: u32 = 8192;
@@ -597,8 +600,11 @@ pub fn strength_request(candidate: &CrystalCandidate, catalog: &UnitsCatalog) ->
         .split_once(marker)
         .unwrap_or((STRENGTH_TEMPLATE, ""));
     let mut user = format!("{marker}\n\n");
-    for item in &candidate.items {
-        user.push_str(&format!("### claim_id: {}\n", item.id));
+    for (i, item) in candidate.items.iter().enumerate() {
+        // A short positional handle, NOT `item.id`. See crystal::alias: the
+        // real ids run to 85 characters with an 84-character shared prefix,
+        // and the model returned verdicts for the wrong ones.
+        user.push_str(&format!("### claim_id: {}\n", crate::crystal::alias::alias_for(i)));
         user.push_str(&format!("claim: {}\n", item.claim));
         if let Some(cav) = &item.caveat {
             user.push_str(&format!("caveat: {cav}\n"));
@@ -628,6 +634,25 @@ pub fn strength_request(candidate: &CrystalCandidate, catalog: &UnitsCatalog) ->
         temperature: None,
         tools: None,
         cache_namespace: Some(CRYSTAL_STRENGTH_PROMPT_ID.to_string()),
+    }
+}
+
+
+/// Map a strength reply's short handles back to real claim ids.
+///
+/// Call this on every parsed verdict set before `strength_coverage`. An entry
+/// the table cannot resolve is left VERBATIM so the coverage error still names
+/// what the model actually said — resolving an unknown handle to "some claim"
+/// would reintroduce the wrong-identifier bug under a shorter name.
+pub fn resolve_strength_aliases(
+    candidate: &CrystalCandidate,
+    verdicts: &mut [crate::crystal::ClaimStrengthVerdict],
+) {
+    let table = crate::crystal::alias::Aliases::new(candidate.items.iter().map(|i| i.id.as_str()));
+    for v in verdicts.iter_mut() {
+        if let Some(real) = table.resolve(&v.claim_id) {
+            v.claim_id = real.to_string();
+        }
     }
 }
 

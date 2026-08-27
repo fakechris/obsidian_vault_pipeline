@@ -1,4 +1,4 @@
-# Cluster selection prompt — cluster_select/v1
+# Cluster selection prompt — cluster_select/v2
 
 You are scouting for **one cross-source synthesis cluster** inside a knowledge
 corpus. Below is a **seed** source (currently not covered by any durable
