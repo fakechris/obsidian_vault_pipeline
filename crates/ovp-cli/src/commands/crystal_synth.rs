@@ -145,7 +145,7 @@ pub(crate) fn call_and_parse<T>(
     request: &ovp_llm::ModelRequest,
     stage: &str,
     parse: impl Fn(&str) -> Result<T, String>,
-) -> Result<(T, Option<RepairLog>), CliError> {
+) -> Result<(T, Option<RepairLog>, String), CliError> {
     let reply = client
         .call(request)
         .map_err(|e| CliError::Io(format!("crystal-synth: {stage} call failed: {e}")))?;
@@ -156,7 +156,9 @@ pub(crate) fn call_and_parse<T>(
                 Err(d) => {
                     // Valid JSON the stage parser rejects (e.g. no `claims`
                     // array) pins a rerun just like unparseable JSON — forget
-                    // it too so the retry re-asks the model.
+                    // it too so the retry re-asks the model. Keep the exchange
+                    // first: invalidate deletes the only copy of it.
+                    super::quarantine::record(stage, request, &reply.text, &d);
                     client.invalidate(request);
                     return Err(CliError::Io(format!("crystal-synth: {stage} parse: {d}")));
                 }
@@ -165,7 +167,10 @@ pub(crate) fn call_and_parse<T>(
                 stage: stage.to_string(),
                 method: "parser-local: unescaped-backslash".to_string(),
             });
-            Ok((parsed, log))
+            // The RAW text rides along: a caller that rejects this reply on
+            // content must be able to record what the model actually said,
+            // not a reconstruction of it.
+            Ok((parsed, log, reply.text))
         }
         Err(defect) => {
             // One bounded model repair, re-parsed through the SAME parser.
@@ -180,11 +185,28 @@ pub(crate) fn call_and_parse<T>(
                         stage: stage.to_string(),
                         method: format!("model-repair (input defect: {defect})"),
                     }),
+                    repaired.clone().unwrap_or_default(),
                 )),
-                _ => {
+                other => {
+                    // The REPAIR reply too when there was one: a repair that
+                    // parsed but failed the stage parser is its own defect.
+                    if let (Some(text), Some(Err(d))) = (repaired.as_deref(), other) {
+                        super::quarantine::record(
+                            &format!("{stage}-repair"),
+                            &json_repair_request(&reply.text),
+                            text,
+                            &d,
+                        );
+                    }
                     // Forget the unrecoverable exchange under a recording
                     // cache: a rerun must re-ask the model, not replay the
                     // same unparseable reply forever. No-op for replay/fakes.
+                    super::quarantine::record(
+                        stage,
+                        request,
+                        &reply.text,
+                        &format!("unrecoverable JSON: {defect}"),
+                    );
                     client.invalidate(request);
                     client.invalidate(&json_repair_request(&reply.text));
                     Err(CliError::Io(format!(
@@ -252,6 +274,10 @@ pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
 }
 
 pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
+    // Rejected replies land beside the run's other artifacts. NOT under the
+    // cassette root: nothing may read these back as a valid exchange.
+    super::quarantine::set_dir(args.work_dir.join("rejected"));
+
     // Validate --refresh prerequisites BEFORE any model calls or store writes,
     // so an invalid flag combination can never partially mutate the ledger.
     if args.refresh && (args.vault_root.is_none() || args.date.is_none()) {
@@ -458,7 +484,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                     batch.cases.len()
                 );
                 let req = crystal_synth_batch_request(&catalog, batch, args.max_units_per_case);
-                let (claims, log): (Vec<CrystalClaim>, Option<RepairLog>) =
+                let (claims, log, _raw): (Vec<CrystalClaim>, Option<RepairLog>, String) =
                     call_and_parse(base.as_mut(), &req, "synth", |t| {
                         parse_synth_claims(t, &batch.claim_prefix())
                     })?;
@@ -514,7 +540,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                     &catalog,
                 );
                 let stage = format!("strength-b{:03}", idx + 1);
-                let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+                let (mut chunk_verdicts, log, _raw): (Vec<ClaimStrengthVerdict>, Option<RepairLog>, String) =
                     call_and_parse(base.as_mut(), &req, &stage, parse_strength_verdicts)?;
                 // The model answered about `c1`, `c2`, … — put the real claim
                 // ids back before anything downstream matches on them.
