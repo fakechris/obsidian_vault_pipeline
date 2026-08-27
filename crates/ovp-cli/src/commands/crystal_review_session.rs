@@ -575,7 +575,7 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         );
         let sub = CrystalCandidate { items: chunk.to_vec() };
         let req = strength_request(&sub, &catalog);
-        let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+        let (mut chunk_verdicts, log, _raw): (Vec<ClaimStrengthVerdict>, Option<RepairLog>, String) =
             call_and_parse(client.as_mut(), &req, "strength", parse_strength_verdicts)?;
         // The model answered about `c1`, `c2`, … — resolve before coverage.
         // Missing this here would abort every review-session re-gate on a

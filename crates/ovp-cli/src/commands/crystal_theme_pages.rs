@@ -134,7 +134,7 @@ pub(crate) fn build_pages(
         // round-4 P1). Same failure path as a gate failure.
         let req = theme_page_request(&community.synth_theme(), &claims);
         let draft = match call_and_parse(client, &req, "theme-page", parse_theme_page) {
-            Ok((draft, _repair)) => draft,
+            Ok((draft, _repair, _raw)) => draft,
             Err(e) => {
                 outcome
                     .failures
@@ -159,8 +159,14 @@ pub(crate) fn build_pages(
                 theme_page_repair_request(&community.synth_theme(), &claims, &draft, &listed);
             let repaired =
                 match call_and_parse(client, &repair_req, "theme-page-repair", parse_theme_page) {
-                    Ok((repaired, _log)) => repaired,
+                    Ok((repaired, _log, _raw)) => repaired,
                     Err(e) => {
+                        super::quarantine::record(
+                            "theme-page-repair",
+                            &repair_req,
+                            "",
+                            &format!("{e:?}"),
+                        );
                         client.invalidate(&req);
                         outcome
                             .failures
@@ -294,6 +300,9 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
     let layout = VaultLayout::new();
     let store = args.vault_root.join(layout.crystal_store_dir());
     let pages_path = store.join("theme_pages.json");
+    // Without this every quarantine call in this command is a silent no-op —
+    // the sink is process-scoped and only crystal-synth was setting it.
+    super::quarantine::set_dir(store.join("rejected"));
 
     let themes = match ThemesFile::load(&store.join("themes.json")) {
         Ok(Some(themes)) => themes,

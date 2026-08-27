@@ -359,7 +359,7 @@ fn flush_strength_wave(
         calls += 1;
         stats.strength_calls += 1;
         let stage = format!("strength-w{wave:03}-{calls:03}");
-        let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, _) =
+        let (mut chunk_verdicts, log, _raw): (Vec<ClaimStrengthVerdict>, _, String) =
             call_and_parse(client, &req, &stage, parse_strength_verdicts)?;
         if let Some(l) = log {
             repairs.push(l);
@@ -566,7 +566,7 @@ pub(crate) fn run_sweep(
         // incomplete — swallowing it per-seed would let a replay produce
         // different metrics than the live run, so that one stays fatal.
         // (String match: ModelClient errors are unstructured today.)
-        let (selection, log) =
+        let (selection, log, raw_reply) =
             match call_and_parse(client, &req, "cluster-select", parse_cluster_selection) {
                 Ok(v) => v,
                 Err(e) if e.to_string().contains("cache miss") => return Err(e),
@@ -616,12 +616,14 @@ pub(crate) fn run_sweep(
                 // offered — and the invalidate below left nothing to inspect.
                 // The reply alone would not have explained it either: the
                 // offered set is in the REQUEST.
-                super::quarantine::record(
-                    "cluster-select",
-                    &req,
-                    &format!("{{\"selected_case_ids\": {case_ids:?}}}"),
-                    &e,
-                );
+                // The RAW reply, not a reconstruction. The first version of
+                // this re-serialised the already-trimmed, already-ALIAS-
+                // RESOLVED `case_ids`, so the log showed long real ids the
+                // model may never have written — the resolver had put them
+                // there — and dropped the rationale entirely. A diagnostic
+                // that reports its own output as the model's is worse than
+                // none: it invents a defect.
+                super::quarantine::record("cluster-select", &req, &raw_reply, &e);
                 // Under a recording cache, forget the bad exchange so a rerun
                 // re-asks the model instead of replaying the violation forever.
                 client.invalidate(&req);
@@ -669,7 +671,7 @@ pub(crate) fn run_sweep(
             cfg.max_units_per_case,
         );
         stats.synth_calls += 1;
-        let (claims, log): (Vec<CrystalClaim>, _) =
+        let (claims, log, _raw): (Vec<CrystalClaim>, _, String) =
             call_and_parse(client, &synth_req, "synth", |t| {
                 parse_synth_claims(t, &cluster.key)
             })?;

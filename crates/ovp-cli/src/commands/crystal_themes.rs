@@ -467,7 +467,7 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
             Some(client) => {
                 let titles = centroid_titles(&docs, &vectors, ms);
                 let req = theme_label_request(&kw, &titles);
-                let (parsed, _log) =
+                let (parsed, _log, _raw) =
                     call_and_parse(client.as_mut(), &req, "theme-label", parse_theme_label)?;
                 parsed
             }

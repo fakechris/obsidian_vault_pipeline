@@ -392,7 +392,7 @@ pub fn run(args: TagsBootstrapArgs) -> Result<usize, CliError> {
             let reply = match call_and_parse(client.as_mut(), &req, "tag-classify", |t| {
                 parse_tag_classify(t, batch_len)
             }) {
-                Ok((reply, _repair)) => reply,
+                Ok((reply, _repair, _raw)) => reply,
                 Err(e) => {
                     sayln!("  classify: batch failed ({e}) — keeping the floor for its sources");
                     continue;

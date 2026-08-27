@@ -23,21 +23,24 @@
 //! diagnostic.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use ovp_llm::{ModelMessage, ModelRequest, request_key};
 
-static DIR: OnceLock<PathBuf> = OnceLock::new();
+static DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
-/// Point this process's rejected-reply log at `dir`. First call wins; later
-/// calls are ignored, so a nested stage cannot redirect the log mid-run.
+/// Point this process's rejected-reply log at `dir`.
+///
+/// LAST call wins. The A/B harness runs `run_stats` once per arm in one
+/// process, and a first-wins lock would file arm B's rejections under arm A's
+/// directory — a log that misattributes is worse than a missing one.
 pub(crate) fn set_dir(dir: PathBuf) {
-    let _ = DIR.set(dir);
+    *DIR.write().unwrap_or_else(|e| e.into_inner()) = Some(dir);
 }
 
 /// Where rejected replies are being written, if anywhere.
-pub(crate) fn dir() -> Option<&'static Path> {
-    DIR.get().map(PathBuf::as_path)
+pub(crate) fn dir() -> Option<PathBuf> {
+    DIR.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// The user-facing text of a request — what the model was actually asked.
@@ -61,7 +64,7 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
     let Some(dir) = dir() else {
         return;
     };
-    if std::fs::create_dir_all(dir).is_err() {
+    if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
     let key = request_key(request);
@@ -78,11 +81,22 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
         "defect": defect,
         // Both halves. The reply alone cannot explain an "identifier that was
         // never offered" — you need to see what WAS offered.
+        // The system prompt is part of what the model received; omitting it
+        // hides half the instructions when the defect is "it ignored them".
+        "system": request.system,
         "request": request_text(request),
         "reply": reply_text,
     });
     if let Ok(s) = serde_json::to_string_pretty(&body) {
-        let _ = std::fs::write(&path, format!("{s}\n"));
+        if std::fs::write(&path, format!("{s}\n")).is_ok() {
+            // 0600: these carry raw vault content and raw model output, and a
+            // work dir is not guaranteed to be gitignored or unsynced.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
     }
 }
 
@@ -104,8 +118,8 @@ mod tests {
         }
     }
 
-    /// `set_dir` is process-wide and first-wins, so these exercise `write_to`
-    /// directly rather than fighting over the global.
+    /// `set_dir` is process-wide, so these exercise the same body through a
+    /// local path rather than racing other tests for the global.
     fn write_to(dir: &Path, stage: &str, request: &ModelRequest, reply: &str, defect: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let key = request_key(request);
