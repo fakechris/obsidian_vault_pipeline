@@ -611,6 +611,17 @@ pub(crate) fn run_sweep(
             Ok(ids) => ids,
             Err(e) => {
                 stats.failed += 1;
+                // Keep the exchange BEFORE forgetting it. This is the branch
+                // that fired on 2026-08-27 — a selected id that was never
+                // offered — and the invalidate below left nothing to inspect.
+                // The reply alone would not have explained it either: the
+                // offered set is in the REQUEST.
+                super::quarantine::record(
+                    "cluster-select",
+                    &req,
+                    &format!("{{\"selected_case_ids\": {case_ids:?}}}"),
+                    &e,
+                );
                 // Under a recording cache, forget the bad exchange so a rerun
                 // re-asks the model instead of replaying the violation forever.
                 client.invalidate(&req);
