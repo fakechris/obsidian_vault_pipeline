@@ -359,11 +359,20 @@ fn flush_strength_wave(
         calls += 1;
         stats.strength_calls += 1;
         let stage = format!("strength-w{wave:03}-{calls:03}");
-        let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, _) =
+        let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, _) =
             call_and_parse(client, &req, &stage, parse_strength_verdicts)?;
         if let Some(l) = log {
             repairs.push(l);
         }
+        // The model answered about `c1`, `c2`, … — put the real claim ids back
+        // before `strength_coverage` matches on them. This is the wave that
+        // failed on 2026-08-23.
+        ovp_domain::crystal::synth::resolve_strength_aliases(
+            &CrystalCandidate {
+                items: chunk.to_vec(),
+            },
+            &mut chunk_verdicts,
+        );
         wave_verdicts.extend(chunk_verdicts);
     }
     let ids: Vec<String> = wave_claims.iter().map(|c| c.id.clone()).collect();
@@ -587,6 +596,15 @@ pub(crate) fn run_sweep(
                 rationale,
             } => (case_ids, rationale),
         };
+
+        // The model picked from `c1`, `c2`, … — resolve to real case ids
+        // BEFORE validating. Anything the table cannot resolve is kept
+        // verbatim so the error below still names what it actually returned.
+        let case_ids = ovp_domain::crystal::select::selection_aliases(
+            &digests[seed],
+            &neighbor_digests,
+        )
+        .resolve_all(case_ids.iter().map(String::as_str));
 
         // ---- Mechanical validation: fail THIS seed loudly, keep sweeping. ----
         let selected = match validate_selection(&offered, &case_ids, cfg.max_cases_per_cluster) {

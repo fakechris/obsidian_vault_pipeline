@@ -1,4 +1,4 @@
-# Cluster selection prompt — cluster_select/v1
+# Cluster selection prompt — cluster_select/v2
 
 You are scouting for **one cross-source synthesis cluster** inside a knowledge
 corpus. Below is a **seed** source (currently not covered by any durable
@@ -14,8 +14,9 @@ refusal is strictly better than a forced grab-bag.
 
 ## Rules
 
-1. Select between `min_cases` and `max_cases` distinct `case_id`s, copied
-   **verbatim** from the digests below. Never invent or edit an id.
+1. Select between `min_cases` and `max_cases` distinct `case_id`s. Each is a
+   SHORT handle (`c1`, `c2`, …). Copy it **verbatim** from the digests below —
+   never invent, renumber, or expand one into a title or path.
 2. Prefer clusters that **include the seed** — it is the coverage target. You
    may exclude the seed only when its neighbors form a genuinely stronger
    cluster that the seed does not belong to.
@@ -37,7 +38,7 @@ Either a selection:
 
 ```json
 {
-  "selected_case_ids": ["<case_id>", "<case_id>", "<case_id>"],
+  "selected_case_ids": ["c1", "c4", "c7"],
   "rationale": "one sentence: the cross-source question this cluster can answer"
 }
 ```

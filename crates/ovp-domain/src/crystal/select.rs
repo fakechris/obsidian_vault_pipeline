@@ -14,11 +14,16 @@
 use std::collections::BTreeSet;
 
 use ovp_llm::{ModelMessage, ModelRequest};
+
+use crate::crystal::alias::{Aliases, alias_for};
 use serde::{Deserialize, Serialize};
 
 const SELECT_TEMPLATE: &str = include_str!("../../prompts/cluster_select.md");
 /// Cassette namespace + version marker for the cluster-selection stage.
-pub const CLUSTER_SELECT_PROMPT_ID: &str = "cluster_select/v1";
+// v2: the digests carry SHORT positional `case_id`s (`c1`, `c2`, …) instead of
+// the long `<hash8>-<date>_<title>` form the model kept returning wrong. New
+// namespace because the request text changed — v1 cassettes must not replay.
+pub const CLUSTER_SELECT_PROMPT_ID: &str = "cluster_select/v2";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 /// Selection replies are tiny (a handful of ids + one sentence).
 const SELECT_MAX_TOKENS: u32 = 1024;
@@ -37,6 +42,26 @@ pub struct CaseDigest {
     pub case_id: String,
     pub title: String,
     pub card_titles: Vec<String>,
+}
+
+impl CaseDigest {
+    /// The same digest under a short handle. Only the id the model has to copy
+    /// changes; the title and card titles it reasons over are untouched.
+    pub fn with_alias(&self, alias: String) -> CaseDigest {
+        CaseDigest {
+            case_id: alias,
+            title: self.title.clone(),
+            card_titles: self.card_titles.clone(),
+        }
+    }
+}
+
+/// The alias table a `cluster_select` reply must be resolved against: the seed
+/// is `c1`, then the neighbors in order.
+pub fn selection_aliases(seed: &CaseDigest, neighbors: &[CaseDigest]) -> Aliases {
+    Aliases::new(
+        std::iter::once(seed.case_id.as_str()).chain(neighbors.iter().map(|n| n.case_id.as_str())),
+    )
 }
 
 /// Drop a trailing `_tag_` token (the reader card-kind italics:
@@ -106,11 +131,21 @@ pub fn cluster_select_request(
     let (system, _) = SELECT_TEMPLATE
         .split_once(marker)
         .unwrap_or((SELECT_TEMPLATE, ""));
+    // The model sees SHORT handles, never the real ids. The offered ids run to
+    // ~60 characters of hash + date + title; a fresh live sweep had the model
+    // return one that had never been offered, which `validate_selection`
+    // correctly refused — killing that seed. See crystal::alias.
+    let aliased_seed = seed.with_alias(alias_for(0));
+    let aliased_neighbors: Vec<CaseDigest> = neighbors
+        .iter()
+        .enumerate()
+        .map(|(i, n)| n.with_alias(alias_for(i + 1)))
+        .collect();
     let input = SelectInput {
         min_cases: MIN_CLUSTER_CASES,
         max_cases,
-        seed,
-        neighbors,
+        seed: &aliased_seed,
+        neighbors: &aliased_neighbors,
     };
     let user = format!(
         "{marker}\n\n{}\n",
@@ -257,15 +292,50 @@ mod tests {
         let seed = digest("seed-1");
         let neighbors = vec![digest("n-1"), digest("n-2")];
         let req = cluster_select_request(&seed, &neighbors, 16);
-        assert_eq!(req.cache_namespace.as_deref(), Some("cluster_select/v1"));
-        assert!(req.system.as_deref().unwrap().contains("cluster_select/v1"));
+        assert_eq!(req.cache_namespace.as_deref(), Some("cluster_select/v2"));
+        assert!(req.system.as_deref().unwrap().contains("cluster_select/v2"));
         let ModelMessage::User { content } = &req.messages[0] else {
             panic!()
         };
-        assert!(content.contains("seed-1"));
-        assert!(content.contains("n-2"));
+        // Assert on the case_id FIELDS, not on the raw text: the titles
+        // legitimately contain the id here (`Title seed-1`) and the model is
+        // supposed to read those. What must not reach it is the long id as
+        // the thing it has to copy back.
+        let json: serde_json::Value =
+            serde_json::from_str(content.split_once("\n\n").unwrap().1.trim()).unwrap();
+        assert_eq!(json["seed"]["case_id"], "c1");
+        assert_eq!(json["neighbors"][0]["case_id"], "c2");
+        assert_eq!(json["neighbors"][1]["case_id"], "c3");
+        // Titles and card titles are untouched — only the id is aliased.
+        assert_eq!(json["seed"]["title"], "Title seed-1");
+        assert_eq!(json["neighbors"][1]["card_titles"][0], "Card of n-2");
         assert!(content.contains("\"max_cases\": 16"));
         assert!(content.contains("\"min_cases\": 3"));
+    }
+
+    #[test]
+    fn a_selection_of_handles_resolves_back_to_the_real_case_ids() {
+        let seed = digest("seed-1");
+        let neighbors = vec![digest("n-1"), digest("n-2")];
+        let table = selection_aliases(&seed, &neighbors);
+        assert_eq!(
+            table.resolve_all(["c1", "c3"].into_iter()),
+            vec!["seed-1".to_string(), "n-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_handle_that_was_never_offered_still_fails_validation() {
+        // The bug being fixed was an id outside the offered set. Shortening
+        // the handle must not make an out-of-range one resolve to something.
+        let seed = digest("seed-1");
+        let neighbors = vec![digest("n-1")];
+        let table = selection_aliases(&seed, &neighbors);
+        let resolved = table.resolve_all(["c1", "c9"].into_iter());
+        assert_eq!(resolved[1], "c9", "kept verbatim so the error names it");
+        let offered: BTreeSet<String> =
+            ["seed-1".to_string(), "n-1".to_string()].into_iter().collect();
+        assert!(validate_selection(&offered, &resolved, 16).is_err());
     }
 
     #[test]

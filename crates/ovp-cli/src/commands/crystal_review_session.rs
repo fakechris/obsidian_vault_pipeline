@@ -575,8 +575,12 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         );
         let sub = CrystalCandidate { items: chunk.to_vec() };
         let req = strength_request(&sub, &catalog);
-        let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+        let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
             call_and_parse(client.as_mut(), &req, "strength", parse_strength_verdicts)?;
+        // The model answered about `c1`, `c2`, … — resolve before coverage.
+        // Missing this here would abort every review-session re-gate on a
+        // perfectly conforming reply.
+        ovp_domain::crystal::synth::resolve_strength_aliases(&sub, &mut chunk_verdicts);
         verdicts.extend(chunk_verdicts);
         if let Some(l) = log {
             repairs.push(l);

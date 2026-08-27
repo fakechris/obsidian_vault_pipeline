@@ -514,8 +514,16 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
                     &catalog,
                 );
                 let stage = format!("strength-b{:03}", idx + 1);
-                let (chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
+                let (mut chunk_verdicts, log): (Vec<ClaimStrengthVerdict>, Option<RepairLog>) =
                     call_and_parse(base.as_mut(), &req, &stage, parse_strength_verdicts)?;
+                // The model answered about `c1`, `c2`, … — put the real claim
+                // ids back before anything downstream matches on them.
+                ovp_domain::crystal::synth::resolve_strength_aliases(
+                    &CrystalCandidate {
+                        items: chunk.to_vec(),
+                    },
+                    &mut chunk_verdicts,
+                );
                 if let Some(l) = log {
                     repairs.push(l);
                 }
