@@ -15,9 +15,8 @@ refusal is strictly better than a forced grab-bag.
 ## Rules
 
 1. Select between `min_cases` and `max_cases` distinct `case_id`s. Each is a
-   SHORT handle (`c1`, `c2`, …); copy it verbatim from the corpus above — do
-   not invent one, and do not expand it into a title or path. Copied
-   **verbatim** from the digests below. Never invent or edit an id.
+   SHORT handle (`c1`, `c2`, …). Copy it **verbatim** from the digests below —
+   never invent, renumber, or expand one into a title or path.
 2. Prefer clusters that **include the seed** — it is the coverage target. You
    may exclude the seed only when its neighbors form a genuinely stronger
    cluster that the seed does not belong to.
