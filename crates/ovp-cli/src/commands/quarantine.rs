@@ -72,7 +72,17 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
         .collect();
-    let path = dir.join(format!("{safe_stage}-{}.json", &key[..key.len().min(12)]));
+    // Collision-safe: a second rejection of the SAME stage+request is a
+    // second data point, not a correction of the first. Overwriting cost us
+    // a real reply once already.
+    let stem = format!("{safe_stage}-{}", &key[..key.len().min(12)]);
+    let mut path = dir.join(format!("{stem}.json"));
+    for n in 1..1000 {
+        if !path.exists() {
+            break;
+        }
+        path = dir.join(format!("{stem}-{n}.json"));
+    }
     let body = serde_json::json!({
         "schema": "ovp.crystal.rejected_reply/v1",
         "stage": stage,
@@ -158,6 +168,33 @@ mod tests {
             let r = req("x/v1", "u");
             record("stage", &r, "reply", "defect"); // must not panic
         }
+    }
+
+    #[test]
+    fn a_second_rejection_does_not_overwrite_the_first() {
+        // This is not hypothetical. A caller recorded a repair failure with an
+        // empty reply after `call_and_parse` had already recorded the same
+        // stage+request WITH the real reply — and the empty one won, deleting
+        // the evidence inside the change that exists to keep it.
+        let d = tempfile::tempdir().unwrap();
+        let r = req("x/v1", "u");
+        let key = request_key(&r);
+        let stem = format!("s-{}", &key[..12]);
+        std::fs::write(d.path().join(format!("{stem}.json")), "{\"reply\":\"the real one\"}")
+            .unwrap();
+        // Second record must pick a fresh name.
+        let mut path = d.path().join(format!("{stem}.json"));
+        for n in 1..1000 {
+            if !path.exists() {
+                break;
+            }
+            path = d.path().join(format!("{stem}-{n}.json"));
+        }
+        std::fs::write(&path, "{}").unwrap();
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 2);
+        let first =
+            std::fs::read_to_string(d.path().join(format!("{stem}.json"))).unwrap();
+        assert!(first.contains("the real one"), "the first record survived");
     }
 
     #[test]

@@ -134,7 +134,7 @@ pub(crate) fn build_pages(
         // round-4 P1). Same failure path as a gate failure.
         let req = theme_page_request(&community.synth_theme(), &claims);
         let draft = match call_and_parse(client, &req, "theme-page", parse_theme_page) {
-            Ok((draft, _repair, _raw)) => draft,
+            Ok((draft, _repair, raw)) => (draft, raw),
             Err(e) => {
                 outcome
                     .failures
@@ -145,6 +145,7 @@ pub(crate) fn build_pages(
         // The model cites positional handles (c1, c2, …); the code owns the
         // handle → claim_key substitution. Unresolved handles survive into
         // the verifier and fail loud as UnknownClaim.
+        let (draft, draft_raw) = draft;
         let mut sections = draft.clone();
         resolve_handles(&mut sections, &claim_keys);
 
@@ -159,14 +160,13 @@ pub(crate) fn build_pages(
                 theme_page_repair_request(&community.synth_theme(), &claims, &draft, &listed);
             let repaired =
                 match call_and_parse(client, &repair_req, "theme-page-repair", parse_theme_page) {
-                    Ok((repaired, _log, _raw)) => repaired,
+                    Ok((repaired, _log, raw)) => (repaired, raw),
                     Err(e) => {
-                        super::quarantine::record(
-                            "theme-page-repair",
-                            &repair_req,
-                            "",
-                            &format!("{e:?}"),
-                        );
+                        // No record here: `call_and_parse` already wrote this
+                        // failure WITH the real reply, and a second write
+                        // under the same stage+key would overwrite it with an
+                        // empty one — deleting evidence inside the change
+                        // that exists to keep it.
                         client.invalidate(&req);
                         outcome
                             .failures
@@ -174,12 +174,20 @@ pub(crate) fn build_pages(
                         continue;
                     }
                 };
+            let (repaired, repair_raw) = repaired;
             let mut repaired_resolved = repaired;
             resolve_handles(&mut repaired_resolved, &claim_keys);
             defects = verify_page(&repaired_resolved, &known);
             if defects.is_empty() {
                 sections = repaired_resolved;
             } else {
+                // A page the verifier rejects is a content defect: keep both
+                // replies before forgetting them. `call_and_parse` never saw
+                // these — it parsed them fine; the gate is what refused.
+                let listed: Vec<String> = defects.iter().map(|d| d.to_string()).collect();
+                let defect = format!("verify_page: {}", listed.join("; "));
+                super::quarantine::record("theme-page", &req, &draft_raw, &defect);
+                super::quarantine::record("theme-page-repair", &repair_req, &repair_raw, &defect);
                 // Forget both exchanges so a rerun re-asks instead of
                 // replaying the same ungrounded page (no-op on replay).
                 client.invalidate(&req);

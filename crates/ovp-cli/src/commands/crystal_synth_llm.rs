@@ -348,6 +348,7 @@ fn flush_strength_wave(
     // Chunked verdicts — 1:1 coverage per wave or the run fails loud, the
     // same invariant batch mode enforces globally.
     let mut wave_verdicts: Vec<ClaimStrengthVerdict> = Vec::new();
+    let mut exchanges: Vec<(ovp_llm::ModelRequest, String)> = Vec::new();
     let mut calls = 0usize;
     for chunk in wave_claims.chunks(MAX_STRENGTH_CLAIMS_PER_CALL) {
         let req = strength_request(
@@ -359,7 +360,7 @@ fn flush_strength_wave(
         calls += 1;
         stats.strength_calls += 1;
         let stage = format!("strength-w{wave:03}-{calls:03}");
-        let (mut chunk_verdicts, log, _raw): (Vec<ClaimStrengthVerdict>, _, String) =
+        let (mut chunk_verdicts, log, raw): (Vec<ClaimStrengthVerdict>, _, String) =
             call_and_parse(client, &req, &stage, parse_strength_verdicts)?;
         if let Some(l) = log {
             repairs.push(l);
@@ -373,11 +374,27 @@ fn flush_strength_wave(
             },
             &mut chunk_verdicts,
         );
+        // Hold the exchange until coverage is judged below. A coverage failure
+        // is a CONTENT defect like any other: without this the bad reply is
+        // never recorded AND its cassette is never invalidated, so under a
+        // recording cache a rerun replays the same invalid response forever.
+        exchanges.push((req, raw));
         wave_verdicts.extend(chunk_verdicts);
     }
     let ids: Vec<String> = wave_claims.iter().map(|c| c.id.clone()).collect();
     let coverage = strength_coverage(&ids, &wave_verdicts);
     if !coverage.complete() {
+        // Keep every chunk of the wave: the defect is a property of the SET
+        // (a verdict missing here may have been answered in another chunk),
+        // so a single chunk in isolation would not explain it.
+        let defect = format!(
+            "strength coverage incomplete — missing={:?} duplicate={:?} unknown={:?}",
+            coverage.missing, coverage.duplicate, coverage.unknown
+        );
+        for (req, raw) in &exchanges {
+            super::quarantine::record("strength", req, raw, &defect);
+            client.invalidate(req);
+        }
         return Err(CliError::Gate(format!(
             "crystal-synth: strength verdicts incomplete for wave {wave} — \
              missing={:?} duplicate={:?} unknown={:?}",
