@@ -105,18 +105,53 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
         "request": request_text(request),
         "reply": reply_text,
     });
-    if let Ok(s) = serde_json::to_string_pretty(&body) {
-        if std::fs::write(&path, format!("{s}\n")).is_ok() {
-            prune(&dir);
-            // 0600: these carry raw vault content and raw model output, and a
-            // work dir is not guaranteed to be gitignored or unsynced.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-        }
+    let Ok(s) = serde_json::to_string_pretty(&body) else {
+        return;
+    };
+    // Created 0600, not created-then-chmod'd. These carry raw vault content
+    // and raw model output, and a work dir is not guaranteed gitignored or
+    // unsynced — a create-then-fix sequence leaves a window in which the
+    // content is on disk at the umask default.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
+    let wrote = opts
+        .open(&path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(format!("{s}\n").as_bytes())
+        })
+        .is_ok();
+    // Only after the protected file is closed.
+    if wrote {
+        prune(&dir);
+    }
+}
+
+/// Is this a filename `record` produced? `<stage>-<12 hex>[-<n>].json`, where
+/// stage is the ASCII-allowlisted form.
+fn is_record_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let mut parts: Vec<&str> = stem.split('-').collect();
+    // Optional collision suffix.
+    if parts.len() > 2 && parts.last().is_some_and(|p| p.chars().all(|c| c.is_ascii_digit())) {
+        parts.pop();
+    }
+    let Some(key) = parts.pop() else {
+        return false;
+    };
+    !parts.is_empty()
+        && key.len() == 12
+        && key.chars().all(|c| c.is_ascii_hexdigit())
+        && parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// Which records to drop, oldest first, keeping the newest `keep`.
@@ -142,7 +177,15 @@ fn prune(dir: &Path) {
     };
     let files: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        // Only files THIS module could have written. Extension alone would let
+        // pruning delete unrelated `.json` in a directory it does not own, and
+        // `set_dir` has no exclusivity contract to lean on.
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_record_name)
+        })
         .filter_map(|e| {
             let m = e.metadata().ok()?.modified().ok()?;
             Some((m, e.path()))
@@ -267,11 +310,37 @@ mod tests {
     fn the_cap_is_actually_enforced_on_disk() {
         let d = tempfile::tempdir().unwrap();
         for i in 0..(KEEP + 5) {
-            std::fs::write(d.path().join(format!("s-{i:04}.json")), "{}").unwrap();
+            std::fs::write(d.path().join(format!("s-{i:012x}.json")), "{}").unwrap();
         }
         prune(d.path());
         let n = std::fs::read_dir(d.path()).unwrap().count();
         assert!(n <= KEEP, "{n} files left, cap is {KEEP}");
+    }
+
+    #[test]
+    fn pruning_never_touches_a_file_this_module_did_not_write() {
+        // `set_dir` has no exclusivity contract, and one caller points it at a
+        // directory inside the crystal store. Deleting a neighbour's file to
+        // enforce our own cap would be the worst kind of cleanup.
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..(KEEP + 5) {
+            std::fs::write(d.path().join(format!("s-{i:012x}.json")), "{}").unwrap();
+        }
+        std::fs::write(d.path().join("themes.json"), "{}").unwrap();
+        std::fs::write(d.path().join("notes.md"), "x").unwrap();
+        prune(d.path());
+        assert!(d.path().join("themes.json").exists(), "foreign json survived");
+        assert!(d.path().join("notes.md").exists());
+    }
+
+    #[test]
+    fn record_names_are_recognised_and_foreign_ones_are_not() {
+        assert!(is_record_name("cluster-select-9fe29df8cdd1.json"));
+        assert!(is_record_name("strength-9fe29df8cdd1-2.json"));
+        assert!(!is_record_name("themes.json"));
+        assert!(!is_record_name("theme_pages.json"));
+        assert!(!is_record_name("ledger.jsonl"));
+        assert!(!is_record_name("short-abc.json"));
     }
 
     #[test]
