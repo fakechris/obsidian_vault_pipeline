@@ -29,6 +29,14 @@ use ovp_llm::{ModelMessage, ModelRequest, request_key};
 
 static DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
+/// How many rejected exchanges to keep, newest first.
+///
+/// A bound against unbounded growth, NOT a retention policy: these are for
+/// diagnosing a failure you are looking at now, and their value drops off
+/// fast. A failing run writes a handful, so this holds many runs of history
+/// while stopping a pathological loop from filling the disk with vault text.
+const KEEP: usize = 200;
+
 /// Point this process's rejected-reply log at `dir`.
 ///
 /// LAST call wins. The A/B harness runs `run_stats` once per arm in one
@@ -99,6 +107,7 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
     });
     if let Ok(s) = serde_json::to_string_pretty(&body) {
         if std::fs::write(&path, format!("{s}\n")).is_ok() {
+            prune(&dir);
             // 0600: these carry raw vault content and raw model output, and a
             // work dir is not guaranteed to be gitignored or unsynced.
             #[cfg(unix)]
@@ -107,6 +116,40 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
                 let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             }
         }
+    }
+}
+
+/// Which records to drop, oldest first, keeping the newest `keep`.
+///
+/// Pure so the test does not depend on filesystem timestamp resolution —
+/// a cleanup test that races the clock is a flake waiting to happen.
+/// Ordered by mtime rather than by name: the name carries a request hash,
+/// which says nothing about age.
+fn victims(mut files: Vec<(std::time::SystemTime, PathBuf)>, keep: usize) -> Vec<PathBuf> {
+    if files.len() <= keep {
+        return Vec::new();
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let drop_n = files.len() - keep;
+    files.into_iter().take(drop_n).map(|(_, p)| p).collect()
+}
+
+/// Drop the oldest records beyond [`KEEP`]. Best-effort: a log that cannot
+/// tidy itself is still a useful log.
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let m = e.metadata().ok()?.modified().ok()?;
+            Some((m, e.path()))
+        })
+        .collect();
+    for path in victims(files, KEEP) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -195,6 +238,40 @@ mod tests {
         let first =
             std::fs::read_to_string(d.path().join(format!("{stem}.json"))).unwrap();
         assert!(first.contains("the real one"), "the first record survived");
+    }
+
+    fn at(secs: u64, name: &str) -> (std::time::SystemTime, PathBuf) {
+        (
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            PathBuf::from(name),
+        )
+    }
+
+    #[test]
+    fn pruning_drops_the_oldest_and_keeps_the_newest() {
+        // Deliberately out of name order: age comes from mtime, and the name
+        // is a request hash that says nothing about it.
+        let files = vec![at(30, "c.json"), at(10, "a.json"), at(20, "b.json")];
+        assert_eq!(victims(files, 2), vec![PathBuf::from("a.json")]);
+    }
+
+    #[test]
+    fn pruning_leaves_a_small_directory_alone() {
+        // The common case is a handful of files; churning them would be noise.
+        let files = vec![at(10, "a.json"), at(20, "b.json")];
+        assert!(victims(files.clone(), KEEP).is_empty());
+        assert!(victims(files, 2).is_empty(), "exactly at the cap keeps everything");
+    }
+
+    #[test]
+    fn the_cap_is_actually_enforced_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..(KEEP + 5) {
+            std::fs::write(d.path().join(format!("s-{i:04}.json")), "{}").unwrap();
+        }
+        prune(d.path());
+        let n = std::fs::read_dir(d.path()).unwrap().count();
+        assert!(n <= KEEP, "{n} files left, cap is {KEEP}");
     }
 
     #[test]
