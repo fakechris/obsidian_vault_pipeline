@@ -29,6 +29,14 @@ use ovp_llm::{ModelMessage, ModelRequest, request_key};
 
 static DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
+/// How many rejected exchanges to keep, newest first.
+///
+/// A bound against unbounded growth, NOT a retention policy: these are for
+/// diagnosing a failure you are looking at now, and their value drops off
+/// fast. A failing run writes a handful, so this holds many runs of history
+/// while stopping a pathological loop from filling the disk with vault text.
+const KEEP: usize = 200;
+
 /// Point this process's rejected-reply log at `dir`.
 ///
 /// LAST call wins. The A/B harness runs `run_stats` once per arm in one
@@ -97,16 +105,94 @@ pub(crate) fn record(stage: &str, request: &ModelRequest, reply_text: &str, defe
         "request": request_text(request),
         "reply": reply_text,
     });
-    if let Ok(s) = serde_json::to_string_pretty(&body) {
-        if std::fs::write(&path, format!("{s}\n")).is_ok() {
-            // 0600: these carry raw vault content and raw model output, and a
-            // work dir is not guaranteed to be gitignored or unsynced.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-        }
+    let Ok(s) = serde_json::to_string_pretty(&body) else {
+        return;
+    };
+    // Created 0600, not created-then-chmod'd. These carry raw vault content
+    // and raw model output, and a work dir is not guaranteed gitignored or
+    // unsynced — a create-then-fix sequence leaves a window in which the
+    // content is on disk at the umask default.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let wrote = opts
+        .open(&path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(format!("{s}\n").as_bytes())
+        })
+        .is_ok();
+    // Only after the protected file is closed.
+    if wrote {
+        prune(&dir);
+    }
+}
+
+/// Is this a filename `record` produced? `<stage>-<12 hex>[-<n>].json`, where
+/// stage is the ASCII-allowlisted form.
+fn is_record_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let mut parts: Vec<&str> = stem.split('-').collect();
+    // Optional collision suffix.
+    if parts.len() > 2 && parts.last().is_some_and(|p| p.chars().all(|c| c.is_ascii_digit())) {
+        parts.pop();
+    }
+    let Some(key) = parts.pop() else {
+        return false;
+    };
+    !parts.is_empty()
+        && key.len() == 12
+        && key.chars().all(|c| c.is_ascii_hexdigit())
+        && parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Which records to drop, oldest first, keeping the newest `keep`.
+///
+/// Pure so the test does not depend on filesystem timestamp resolution —
+/// a cleanup test that races the clock is a flake waiting to happen.
+/// Ordered by mtime rather than by name: the name carries a request hash,
+/// which says nothing about age.
+fn victims(mut files: Vec<(std::time::SystemTime, PathBuf)>, keep: usize) -> Vec<PathBuf> {
+    if files.len() <= keep {
+        return Vec::new();
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let drop_n = files.len() - keep;
+    files.into_iter().take(drop_n).map(|(_, p)| p).collect()
+}
+
+/// Drop the oldest records beyond [`KEEP`]. Best-effort: a log that cannot
+/// tidy itself is still a useful log.
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        // Only files THIS module could have written. Extension alone would let
+        // pruning delete unrelated `.json` in a directory it does not own, and
+        // `set_dir` has no exclusivity contract to lean on.
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_record_name)
+        })
+        .filter_map(|e| {
+            let m = e.metadata().ok()?.modified().ok()?;
+            Some((m, e.path()))
+        })
+        .collect();
+    for path in victims(files, KEEP) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -195,6 +281,66 @@ mod tests {
         let first =
             std::fs::read_to_string(d.path().join(format!("{stem}.json"))).unwrap();
         assert!(first.contains("the real one"), "the first record survived");
+    }
+
+    fn at(secs: u64, name: &str) -> (std::time::SystemTime, PathBuf) {
+        (
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            PathBuf::from(name),
+        )
+    }
+
+    #[test]
+    fn pruning_drops_the_oldest_and_keeps_the_newest() {
+        // Deliberately out of name order: age comes from mtime, and the name
+        // is a request hash that says nothing about it.
+        let files = vec![at(30, "c.json"), at(10, "a.json"), at(20, "b.json")];
+        assert_eq!(victims(files, 2), vec![PathBuf::from("a.json")]);
+    }
+
+    #[test]
+    fn pruning_leaves_a_small_directory_alone() {
+        // The common case is a handful of files; churning them would be noise.
+        let files = vec![at(10, "a.json"), at(20, "b.json")];
+        assert!(victims(files.clone(), KEEP).is_empty());
+        assert!(victims(files, 2).is_empty(), "exactly at the cap keeps everything");
+    }
+
+    #[test]
+    fn the_cap_is_actually_enforced_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..(KEEP + 5) {
+            std::fs::write(d.path().join(format!("s-{i:012x}.json")), "{}").unwrap();
+        }
+        prune(d.path());
+        let n = std::fs::read_dir(d.path()).unwrap().count();
+        assert!(n <= KEEP, "{n} files left, cap is {KEEP}");
+    }
+
+    #[test]
+    fn pruning_never_touches_a_file_this_module_did_not_write() {
+        // `set_dir` has no exclusivity contract, and one caller points it at a
+        // directory inside the crystal store. Deleting a neighbour's file to
+        // enforce our own cap would be the worst kind of cleanup.
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..(KEEP + 5) {
+            std::fs::write(d.path().join(format!("s-{i:012x}.json")), "{}").unwrap();
+        }
+        std::fs::write(d.path().join("themes.json"), "{}").unwrap();
+        std::fs::write(d.path().join("notes.md"), "x").unwrap();
+        prune(d.path());
+        assert!(d.path().join("themes.json").exists(), "foreign json survived");
+        assert!(d.path().join("notes.md").exists());
+    }
+
+    #[test]
+    fn record_names_are_recognised_and_foreign_ones_are_not() {
+        assert!(is_record_name("cluster-select-9fe29df8cdd1.json"));
+        assert!(is_record_name("strength-9fe29df8cdd1-2.json"));
+        assert!(!is_record_name("themes.json"));
+        assert!(!is_record_name("theme_pages.json"));
+        assert!(!is_record_name("ledger.jsonl"));
+        assert!(!is_record_name("short-abc.json"));
     }
 
     #[test]
