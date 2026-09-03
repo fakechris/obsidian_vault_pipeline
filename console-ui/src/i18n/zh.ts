@@ -614,7 +614,7 @@ export const zh: Record<keyof typeof en, string> = {
   'auto.jobsAria': '定时任务',
   'auto.toggle.pinboard': 'Pinboard live 同步',
   'auto.toggle.pinboardHint':
-    '在 Pinboard 节点上开关。需在 .ovp/daily.env 配置 PINBOARD_TOKEN。',
+    '在 Pinboard 节点上开关。需在 .ovp/providers.toml 配置 PINBOARD_TOKEN。',
   'auto.clock':
     '时钟：桌面 App 在打开期间约每 10 分钟检查一次到点任务。关掉 App 后自动跑会暂停（除非你还用 `ovp2 schedule install` 装了系统定时）。',
   'auto.loading': '加载定时配置…',

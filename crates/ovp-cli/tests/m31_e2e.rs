@@ -632,3 +632,36 @@ fn daily_periodic_refresh_rebuilds_projection_mid_run() {
     // …but the end-of-run projection is still built.
     assert!(vault0.join(".ovp/index/index.json").exists(), "final index still written at N=0");
 }
+
+#[test]
+fn daily_pinboard_skip_records_warning_in_report() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join("cache");
+    set_test_cache(&cache_dir);
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join("50-Inbox/01-Raw")).unwrap();
+
+    let mut cmd = bin();
+    cmd.env_remove("PINBOARD_TOKEN");
+    cmd.args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-pinboard-skip",
+        "--pinboard-live",
+        "--cache-dir", cache_dir.to_str().unwrap(),
+    ]);
+    let stdout = run_ok(&mut cmd);
+    assert!(stdout.contains("pinboard: skipped (PINBOARD_TOKEN is not set"));
+
+    let report_path = vault.join(".ovp/reports/daily-pinboard-skip.json");
+    assert!(report_path.exists(), "report exists: {}", report_path.display());
+    let raw = std::fs::read_to_string(&report_path).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let warnings = val.get("warnings").and_then(|w| w.as_array()).expect("warnings array in report");
+    assert!(!warnings.is_empty(), "expected warnings in report, got: {val}");
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap_or("").contains("pinboard: PINBOARD_TOKEN is not set")),
+        "expected pinboard skip in warnings: {warnings:?}"
+    );
+}

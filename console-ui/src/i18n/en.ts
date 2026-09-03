@@ -648,7 +648,7 @@ export const en = {
   'auto.jobsAria': 'Scheduled jobs',
   'auto.toggle.pinboard': 'Pinboard live sync',
   'auto.toggle.pinboardHint':
-    'Toggle on the Pinboard node (or here). Needs PINBOARD_TOKEN in .ovp/daily.env.',
+    'Toggle on the Pinboard node (or here). Needs PINBOARD_TOKEN in .ovp/providers.toml.',
   'auto.clock':
     'Clock: the desktop app ticks every ~10 minutes while it is open. Closing the app pauses automatic runs (unless you also installed an OS schedule with `ovp2 schedule install`).',
   'auto.loading': 'Loading schedule…',
