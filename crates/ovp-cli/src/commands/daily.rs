@@ -176,7 +176,7 @@ fn run_inner(
         && args.pinboard_fixture.is_none()
         && std::env::var("PINBOARD_TOKEN").ok().filter(|t| !t.trim().is_empty()).is_none()
     {
-        Some("PINBOARD_TOKEN is not set (add it to .ovp/daily.env to enable live capture)".to_string())
+        Some("PINBOARD_TOKEN is not set (add it to .ovp/providers.toml to enable live capture)".to_string())
     } else {
         None
     };
@@ -204,6 +204,7 @@ fn run_inner(
         && let Some(reason) = pinboard_skip
     {
         sayln!("  pinboard: skipped ({reason})");
+        report.warnings.push(format!("pinboard: {reason}"));
     } else if args.pinboard_fixture.is_some() || args.pinboard_live {
         let mut fetch = build_pinboard_fetch(&args)?;
         let opts = ovp_intake::PinboardSyncOptions {
