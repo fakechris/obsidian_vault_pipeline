@@ -3926,6 +3926,9 @@ fn handle_settings(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
 struct AskHeaders {
     content_type: Option<String>,
     origin: Option<String>,
+    /// Raw `Host` header (`hostname:port` or `[ipv6]:port`) for true
+    /// same-origin checks when serving on a Tailscale / LAN IP.
+    host: Option<String>,
 }
 
 impl AskHeaders {
@@ -3940,7 +3943,71 @@ impl AskHeaders {
         Self {
             content_type: get("content-type"),
             origin: get("origin"),
+            host: get("host"),
         }
+    }
+}
+
+/// Split `host[:port]` or `[ipv6][:port]` into `(host, optional port)`.
+fn split_host_port(authority: &str) -> Option<(String, Option<u16>)> {
+    let authority = authority.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (addr, after) = rest.split_once(']')?;
+        if addr.is_empty() {
+            return None;
+        }
+        let port = if after.is_empty() {
+            None
+        } else {
+            let p = after.strip_prefix(':')?;
+            if p.is_empty() {
+                return None;
+            }
+            Some(p.parse().ok()?)
+        };
+        Some((addr.to_string(), port))
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p))
+                if !h.is_empty() && !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                Some((h.to_string(), Some(p.parse().ok()?)))
+            }
+            _ => Some((authority.to_string(), None)),
+        }
+    }
+}
+
+/// True when `Origin`'s host+port matches the request `Host` header
+/// (case-insensitive host). Origin port defaults to 80/443 from the scheme
+/// when omitted; a Host without an explicit port only matches those defaults.
+fn origin_matches_host(origin: &str, host_header: &str) -> bool {
+    let is_https = origin.starts_with("https://");
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let Some((o_host, o_port_opt)) = split_host_port(authority) else {
+        return false;
+    };
+    let o_port = o_port_opt.unwrap_or(if is_https { 443 } else { 80 });
+
+    let Some((h_host, h_port_opt)) = split_host_port(host_header) else {
+        return false;
+    };
+    if !o_host.eq_ignore_ascii_case(&h_host) {
+        return false;
+    }
+    match h_port_opt {
+        Some(h_port) => h_port == o_port,
+        // Browsers omit Host port for 80/443; reject non-default Origin ports.
+        None => o_port == 80 || o_port == 443,
     }
 }
 
@@ -3948,7 +4015,8 @@ impl AskHeaders {
 /// loopback host. Any PORT is accepted — the vite dev server proxies /api
 /// from its own port, so pinning the serve port would break `npm run dev`.
 /// The trust boundary is "pages served from this machine"; `null` and
-/// foreign hosts are rejected.
+/// foreign hosts are rejected. Tailscale / LAN Origins are accepted via
+/// [`origin_matches_host`] instead.
 fn is_loopback_origin(origin: &str) -> bool {
     let rest = origin
         .strip_prefix("http://")
@@ -3983,15 +4051,16 @@ fn admit_ask_slot(state: &AppState) -> Result<AskSlot, Response<std::io::Cursor<
 /// handler already sits on a detached thread (see `serve_loop`), so a slow
 /// provider can never stall other requests.
 ///
-/// Cross-site hardening (a webpage anywhere can POST at localhost): the
+/// Cross-site hardening (a webpage anywhere can POST at this host): the
 /// body must be declared `application/json` — a CORS-"simple" text/plain
 /// POST is refused with 415, and a real JSON POST from a foreign origin
 /// needs a CORS preflight this server never grants. Belt-and-braces, any
-/// attached `Origin` must additionally be loopback (403 otherwise).
-/// The mutation-route guard: JSON content type + same-machine origin. A
-/// browser will happily SEND a cross-site `text/plain` simple POST to
-/// loopback even though it can't read the response — every state-changing
-/// route (ask, tag decisions, source tag writes) must pass this first.
+/// attached `Origin` must be loopback OR match the request `Host`
+/// (true same-origin — covers Tailscale / LAN IPs) — 403 otherwise.
+/// The mutation-route guard: JSON content type + same-origin. A browser
+/// will happily SEND a cross-site `text/plain` simple POST even though it
+/// can't read the response — every state-changing route (ask, tag
+/// decisions, source tag writes) must pass this first.
 fn guard_json_same_origin(headers: &AskHeaders) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
     let is_json = headers
         .content_type
@@ -4005,13 +4074,18 @@ fn guard_json_same_origin(headers: &AskHeaders) -> Option<Response<std::io::Curs
             r#"{"error":"content-type must be application/json"}"#,
         ));
     }
-    if let Some(origin) = headers.origin.as_deref()
-        && !is_loopback_origin(origin)
-    {
-        return Some(json_response(
-            403,
-            r#"{"error":"cross-origin write rejected"}"#,
-        ));
+    if let Some(origin) = headers.origin.as_deref() {
+        let same_origin = is_loopback_origin(origin)
+            || headers
+                .host
+                .as_deref()
+                .is_some_and(|h| origin_matches_host(origin, h));
+        if !same_origin {
+            return Some(json_response(
+                403,
+                r#"{"error":"cross-origin write rejected"}"#,
+            ));
+        }
     }
     None
 }
@@ -5551,6 +5625,7 @@ mod tests {
         AskHeaders {
             content_type: Some("application/json".into()),
             origin: None,
+            host: None,
         }
     }
 
@@ -7487,6 +7562,7 @@ mod tests {
             let headers = AskHeaders {
                 content_type: ct.map(str::to_string),
                 origin: None,
+                host: None,
             };
             let resp = ask_with(&st, &headers, body);
             assert_eq!(resp.status_code(), 415, "content-type {ct:?}");
@@ -7496,6 +7572,7 @@ mod tests {
         let headers = AskHeaders {
             content_type: Some("application/json; charset=utf-8".into()),
             origin: None,
+            host: None,
         };
         assert_eq!(ask_with(&st, &headers, body).status_code(), 200);
 
@@ -7511,6 +7588,7 @@ mod tests {
         let with_origin = |origin: &str| AskHeaders {
             content_type: Some("application/json".into()),
             origin: Some(origin.into()),
+            host: None,
         };
 
         // Foreign / opaque origins are refused before ANY other work.
@@ -7970,7 +8048,90 @@ mod tests {
         assert!(!is_loopback_origin("null"));
         assert!(!is_loopback_origin("file://"));
         assert!(!is_loopback_origin(""));
+        // Tailscale / LAN are not loopback — they need Host matching.
+        assert!(!is_loopback_origin("http://100.114.30.43:3141"));
     }
+
+    #[test]
+    fn origin_matches_host_tailscale_and_rejects_evil() {
+        // INV-6: portal opened at Tailscale IP must pass when Origin host
+        // matches Host (including port).
+        assert!(origin_matches_host(
+            "http://100.114.30.43:3141",
+            "100.114.30.43:3141"
+        ));
+        assert!(origin_matches_host(
+            "http://100.114.30.43:3141/",
+            "100.114.30.43:3141"
+        ));
+        // Case-insensitive host.
+        assert!(origin_matches_host(
+            "http://LocalHost:5173",
+            "localhost:5173"
+        ));
+        // Default ports when omitted on Origin / Host.
+        assert!(origin_matches_host("http://example.test", "example.test"));
+        assert!(origin_matches_host("https://example.test", "example.test"));
+        assert!(origin_matches_host(
+            "http://example.test:80",
+            "example.test"
+        ));
+
+        // Foreign Origin must not match a Tailscale Host.
+        assert!(!origin_matches_host(
+            "http://evil.example:3141",
+            "100.114.30.43:3141"
+        ));
+        assert!(!origin_matches_host(
+            "https://evil.example",
+            "100.114.30.43:3141"
+        ));
+        // Same host, wrong port.
+        assert!(!origin_matches_host(
+            "http://100.114.30.43:9999",
+            "100.114.30.43:3141"
+        ));
+        // Host without port must not accept a non-default Origin port.
+        assert!(!origin_matches_host(
+            "http://100.114.30.43:3141",
+            "100.114.30.43"
+        ));
+        assert!(!origin_matches_host("null", "100.114.30.43:3141"));
+        assert!(!origin_matches_host("file://", "100.114.30.43:3141"));
+        assert!(!origin_matches_host("", "100.114.30.43:3141"));
+    }
+
+    #[test]
+    fn guard_allows_tailscale_origin_matching_host() {
+        let vault = portal_vault("ask-ts-origin", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None); // no LLM → 503 after guard
+
+        let body = r#"{"question":"memory"}"#;
+        let ok = AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: Some("http://100.114.30.43:3141".into()),
+            host: Some("100.114.30.43:3141".into()),
+        };
+        assert_eq!(ask_with(&st, &ok, body).status_code(), 503);
+
+        let evil = AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: Some("http://evil.example:3141".into()),
+            host: Some("100.114.30.43:3141".into()),
+        };
+        assert_eq!(ask_with(&st, &evil, body).status_code(), 403);
+
+        // Non-loopback Origin without Host still rejected.
+        let no_host = AskHeaders {
+            content_type: Some("application/json".into()),
+            origin: Some("http://100.114.30.43:3141".into()),
+            host: None,
+        };
+        assert_eq!(ask_with(&st, &no_host, body).status_code(), 403);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
 
     #[test]
     fn chats_list_is_empty_without_dir_and_detail_rejects_bad_names() {
