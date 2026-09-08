@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "ovp": {
-      "command": "${OVP2_BIN:-/Applications/OVP2.app/Contents/MacOS/ovp2}",
+      "command": "${OVP2_BIN:-ovp2}",
       "args": [
         "mcp",
         "--vault-root",
