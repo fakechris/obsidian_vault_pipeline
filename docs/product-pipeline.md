@@ -201,3 +201,22 @@ quote-backed unit presence; it does not yet prove every answer sentence is seman
 **MCP mature surface** (ask/project/crystal-status; deep doctor) ·
 web-fetch same-run fix · UTC→local date · live validation of enrich paths · paper-route A/B.
 Gated on M34 experiment: everything in G5-undecided, supersede-by-subject, contradiction.
+
+---
+
+## 7. Next-Horizon Evolution — WeKnora Integration & Involute Work Graph (Stage M37 / INV-450)
+
+Synthesized from technical benchmarking against Tencent WeKnora and Involute work-graph protocols
+(detailed in [`docs/stage-m37-weknora-rag-and-involute-evolution.md`](./stage-m37-weknora-rag-and-involute-evolution.md)
+and [`docs/research/weknora-architecture-rag-knowledge-study.md`](./research/weknora-architecture-rag-knowledge-study.md)).
+Bound to Involute Milestone **`INV-450`**:
+
+- **Phase 1 (P0)**:
+  - `INV-451`: `ovp-intake` in-process `anydoc` engine for native Office (`docx`/`pptx`/`xlsx`) and complex PDF extraction to GFM Markdown.
+  - `INV-452`: `ovp-mcp` tool surface alignment with DeepSeek Harness (`@wxg-prc-cpg/dsh-weknora`) and Claude Code read-only inspection protocol.
+- **Phase 2 (P1)**:
+  - `INV-453`: `ovp-rag` parent-child chunking (`ParentConcept` ↔ `ChildUnit`) and streaming pipeline progress events (`[retrieving]` → `[ranking]` → `[synthesizing]`).
+  - `INV-454`: `ovp-crystal` human patch ledger (`.ovp/crystal/patches.jsonl`) for non-destructive claim micro-edits with rollback.
+- **Phase 3 (P2)**:
+  - `INV-455`: `console-ui` Auto-Wiki interactive topology graph (Louvain themes + backlink mesh) and Involute CLEAR gate delivery evidence integration.
+

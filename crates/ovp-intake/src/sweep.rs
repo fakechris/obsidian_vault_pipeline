@@ -24,11 +24,14 @@ use std::path::{Path, PathBuf};
 use ovp_domain::units::read_source_from_path;
 use ovp_domain::VaultLayout;
 
+use crate::anydoc::{AnydocEngine, AnydocOptions, OfficeFormat};
 use crate::ledger::{
     append_intake_record, flagged_hashes, known_content_hashes, known_urls, read_intake_ledger,
     IntakeAction, IntakeRecord, INTAKE_SCHEMA,
 };
-use crate::vaultops::{append_pipeline_event, hex_sha256, rel_to, safe_move, PipelineLogEvent};
+use crate::vaultops::{
+    append_pipeline_event, hex_sha256, rel_to, safe_move, write_new, PipelineLogEvent,
+};
 
 /// Minimum body size (chars) for a capture to be worth a grounded-reader run.
 /// Below this it is flagged `needs_content` and left for the operator to
@@ -90,11 +93,18 @@ pub struct IntakeConfig {
     pub date: String,
     pub run_id: String,
     pub min_reader_body_chars: usize,
+    pub anydoc_options: AnydocOptions,
 }
 
 impl IntakeConfig {
     pub fn new(vault_root: PathBuf, date: String, run_id: String) -> Self {
-        Self { vault_root, date, run_id, min_reader_body_chars: MIN_READER_BODY_CHARS }
+        Self {
+            vault_root,
+            date,
+            run_id,
+            min_reader_body_chars: MIN_READER_BODY_CHARS,
+            anydoc_options: AnydocOptions::default(),
+        }
     }
 }
 
@@ -276,6 +286,126 @@ pub fn sweep_intake(
             if let Some(u) = url {
                 urls.insert(u);
             }
+            outcome.ingested.push(rec);
+        }
+
+        for path in collect_office(&dir)? {
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+            let sha256 = hex_sha256(&bytes);
+            let from = rel_to(&cfg.vault_root, &path);
+
+            if let Some(_prev) = flagged.get(&sha256) {
+                outcome.already_flagged += 1;
+                continue;
+            }
+            if known_hashes.contains(&sha256) {
+                let rec = dispose_duplicate(
+                    cfg,
+                    &layout,
+                    &path,
+                    &from,
+                    &sha256,
+                    format!("sha256:{sha256}"),
+                    &ledger_path,
+                    &log_path,
+                    dry_run,
+                )?;
+                outcome.duplicates.push(rec);
+                continue;
+            }
+
+            let parsed = match AnydocEngine::new().ingest_file(&path, &cfg.anydoc_options) {
+                Ok(p) => p,
+                Err(e) => {
+                    let rec = record(
+                        cfg,
+                        IntakeAction::Unparseable,
+                        &from,
+                        None,
+                        None,
+                        &sha256,
+                        None,
+                        Some(format!("office parse: {e}")),
+                    );
+                    if !dry_run {
+                        append_intake_record(&ledger_path, &rec)?;
+                    }
+                    outcome.unparseable.push(rec);
+                    continue;
+                }
+            };
+
+            let body_chars = parsed.markdown.trim().chars().count();
+            if body_chars < cfg.min_reader_body_chars {
+                let rec = record(
+                    cfg,
+                    IntakeAction::NeedsContent,
+                    &from,
+                    None,
+                    None,
+                    &sha256,
+                    Some(parsed.title.clone()),
+                    Some(format!("body {body_chars} chars < {}", cfg.min_reader_body_chars)),
+                );
+                if !dry_run {
+                    append_intake_record(&ledger_path, &rec)?;
+                }
+                outcome.needs_content.push(rec);
+                continue;
+            }
+
+            let month = cfg.date.get(..7).unwrap_or(&cfg.date);
+            let name = layout.normalized_source_name(&cfg.date, &parsed.title, &sha256[..8]);
+            let target_raw = cfg
+                .vault_root
+                .join(layout.inbox_raw_dir())
+                .join(month)
+                .join(&name);
+
+            let to_rel;
+            if dry_run {
+                to_rel = rel_to(&cfg.vault_root, &target_raw);
+            } else {
+                let raw_content = AnydocEngine::format_as_raw_markdown(&parsed, &from, &cfg.date);
+                let actual_raw = write_new(&target_raw, &raw_content)?;
+                to_rel = rel_to(&cfg.vault_root, &actual_raw);
+
+                let orig_filename = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "document.bin".into());
+                let target_processed = cfg
+                    .vault_root
+                    .join("50-Inbox/03-Processed/office")
+                    .join(month)
+                    .join(orig_filename);
+                let actual_processed = safe_move(&path, &target_processed)?;
+                let processed_rel = rel_to(&cfg.vault_root, &actual_processed);
+
+                append_pipeline_event(&log_path, &PipelineLogEvent {
+                    event_type: "intake_office_ingest".into(),
+                    target: to_rel.clone(),
+                    reason: format!("ovp2 intake: parsed office document {from} -> {processed_rel}"),
+                    date: cfg.date.clone(),
+                    run_id: cfg.run_id.clone(),
+                })?;
+            }
+
+            let rec = record(
+                cfg,
+                IntakeAction::Ingested,
+                &from,
+                Some(to_rel),
+                None,
+                &sha256,
+                Some(parsed.title),
+                None,
+            );
+            if !dry_run {
+                append_intake_record(&ledger_path, &rec)?;
+            }
+            known_hashes.insert(sha256);
             outcome.ingested.push(rec);
         }
     }
@@ -511,6 +641,33 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         if path.is_dir() {
             walk(&path, out)?;
         } else if path.extension().is_some_and(|e| e == "md") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Recursively collect supported office files under `dir` (skipping dot-entries),
+/// sorted for deterministic processing order.
+fn collect_office(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut found = Vec::new();
+    walk_office(dir, &mut found)?;
+    found.sort();
+    Ok(found)
+}
+
+fn walk_office(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("reading {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            walk_office(&path, out)?;
+        } else if OfficeFormat::from_path(&path).is_supported() {
             out.push(path);
         }
     }

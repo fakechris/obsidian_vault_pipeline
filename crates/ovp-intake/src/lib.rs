@@ -16,11 +16,16 @@
 //! path: no canonical store, no concept extraction — capture and lifecycle
 //! only.
 
+pub mod anydoc;
 pub mod ledger;
 pub mod pinboard;
 pub mod sweep;
 pub mod vaultops;
 
+pub use anydoc::{
+    AnydocEngine, AnydocError, AnydocOptions, DocumentMetadata, OfficeFormat, OfficeIngestor,
+    ParsedDocument,
+};
 pub use ledger::{
     append_intake_record, flagged_hashes, known_content_hashes, known_urls, read_intake_ledger,
     IntakeAction, IntakeRecord, INTAKE_SCHEMA,

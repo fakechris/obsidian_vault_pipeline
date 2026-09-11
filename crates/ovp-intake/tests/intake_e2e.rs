@@ -469,3 +469,109 @@ fn park_legacy_url_duplicates_keeps_oldest_and_is_idempotent() {
     let again = ovp_intake::park_legacy_url_duplicates(&cfg(root), false).unwrap();
     assert!(again.is_empty(), "{again:?}");
 }
+
+#[test]
+fn sweep_ingests_and_processes_office_documents() {
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let capture = root.join("50-Inbox/00-Capture");
+    std::fs::create_dir_all(&capture).unwrap();
+
+    // 1. Valid DOCX with > 200 chars body
+    let mut docx_buf = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut docx_buf));
+        let opts = SimpleFileOptions::default();
+        zip.start_file("word/document.xml", opts).unwrap();
+        let doc_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Quarterly Strategy Report</w:t></w:r></w:p>
+    <w:p><w:r><w:t>{LONG_BODY}</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#
+        );
+        zip.write_all(doc_xml.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    std::fs::write(capture.join("strategy.docx"), &docx_buf).unwrap();
+
+    // 2. Valid PDF with > 200 chars body
+    let mut pdf_buf = Vec::new();
+    pdf_buf.extend_from_slice(b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf_buf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    pdf_buf.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n");
+    let stream_content = format!("BT /F1 12 Tf ({LONG_BODY}) Tj ET");
+    pdf_buf.extend_from_slice(
+        format!(
+            "4 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            stream_content.len(),
+            stream_content
+        )
+        .as_bytes(),
+    );
+    pdf_buf.extend_from_slice(b"trailer\n<< /Root 1 0 R >>\n%%EOF");
+    std::fs::write(capture.join("research.pdf"), &pdf_buf).unwrap();
+
+    // 3. Thin DOCX (< 200 chars body)
+    let mut thin_docx_buf = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut thin_docx_buf));
+        let opts = SimpleFileOptions::default();
+        zip.start_file("word/document.xml", opts).unwrap();
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Short snippet</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#;
+        zip.write_all(doc_xml.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    std::fs::write(capture.join("thin.docx"), &thin_docx_buf).unwrap();
+
+    // 4. Corrupt office file
+    std::fs::write(capture.join("corrupt.docx"), b"NOT A VALID ZIP ARCHIVE").unwrap();
+
+    // Run sweep
+    let out = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(out.ingested.len(), 2, "strategy.docx and research.pdf should be ingested: {out:?}");
+    assert_eq!(out.needs_content.len(), 1, "thin.docx should be flagged needs_content");
+    assert_eq!(out.unparseable.len(), 1, "corrupt.docx should be flagged unparseable");
+
+    // Verify raw markdown files landed in 50-Inbox/01-Raw/2026-06/
+    let docx_raw = out.ingested.iter().find(|r| r.from == "50-Inbox/00-Capture/strategy.docx").unwrap();
+    let docx_raw_rel = docx_raw.to.as_ref().unwrap();
+    assert!(docx_raw_rel.starts_with("50-Inbox/01-Raw/2026-06/"));
+    let docx_raw_content = std::fs::read_to_string(root.join(docx_raw_rel)).unwrap();
+    assert!(docx_raw_content.contains("format: \"docx\""));
+    assert!(docx_raw_content.contains("Quarterly Strategy Report"));
+
+    let pdf_raw = out.ingested.iter().find(|r| r.from == "50-Inbox/00-Capture/research.pdf").unwrap();
+    let pdf_raw_rel = pdf_raw.to.as_ref().unwrap();
+    assert!(pdf_raw_rel.starts_with("50-Inbox/01-Raw/2026-06/"));
+    let pdf_raw_content = std::fs::read_to_string(root.join(pdf_raw_rel)).unwrap();
+    assert!(pdf_raw_content.contains("format: \"pdf\""));
+
+    // Verify original files were moved non-destructively to 50-Inbox/03-Processed/office/2026-06/
+    assert!(!capture.join("strategy.docx").exists());
+    assert!(!capture.join("research.pdf").exists());
+    assert!(root.join("50-Inbox/03-Processed/office/2026-06/strategy.docx").exists());
+    assert!(root.join("50-Inbox/03-Processed/office/2026-06/research.pdf").exists());
+
+    // Verify thin and corrupt files remained in capture dir
+    assert!(capture.join("thin.docx").exists());
+    assert!(capture.join("corrupt.docx").exists());
+
+    // Duplicate test: re-place strategy.docx into capture dir and re-sweep
+    std::fs::write(capture.join("strategy_copy.docx"), &docx_buf).unwrap();
+    let out2 = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(out2.duplicates.len(), 1, "strategy_copy.docx must be detected as duplicate");
+    assert!(!capture.join("strategy_copy.docx").exists());
+    assert!(root.join("50-Inbox/03-Processed/duplicates/2026-06/strategy_copy.docx").exists());
+}
