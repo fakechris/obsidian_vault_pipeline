@@ -20,6 +20,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 reqwest = { workspace = true, optional = true }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.37" }
+flate2 = { version = "1.0" }
 
 # `probe_pid` — Windows has no `kill -0`, and the alternatives (`tasklist`
 # parsing) are localized and therefore unreliable. Already in the tree via

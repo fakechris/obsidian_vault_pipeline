@@ -263,8 +263,87 @@ fn handle_tools_list() -> Result<Value, RpcError> {
     Ok(serde_json::json!({
         "tools": [
             {
+                "name": "ovp_search",
+                "description": "Hybrid search across OVP vault knowledge (durable claims, source documents, reader packs, and evidence). Returns ranked results with snippets and an honest RetrieveCoverage ledger across Lexical (BM25), Semantic (Dense), and Claims layers. Aligned with DeepSeek Harness and Claude Code knowledge retrieval.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search query terms or phrase" },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["all", "sources", "claims", "packs", "evidence"],
+                            "description": "Restrict to specific knowledge layer (default: all)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results to return (1-50, default: 10)"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "ovp_read_note",
+                "description": "Read a source document or raw capture note with line numbers and pagination. Prevents context overflow for coding agents. Accepts note path, content sha256, or title.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Vault-relative path, sha256 hash, or note title"
+                        },
+                        "offset_line": {
+                            "type": "integer",
+                            "description": "1-based starting line number (default: 1)"
+                        },
+                        "line_limit": {
+                            "type": "integer",
+                            "description": "Maximum number of lines to return (1-500, default: 100)"
+                        }
+                    },
+                    "required": ["key"]
+                }
+            },
+            {
+                "name": "ovp_list_themes",
+                "description": "List high-level knowledge themes and topic clusters synthesized from vault claims. Aligned with DeepSeek Harness and Claude Code knowledge discovery.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Optional search term to filter theme labels or descriptions"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum themes to return (1-100, default: 20)"
+                        }
+                    }
+                }
+            },
+            {
                 "name": "find",
                 "description": "Query the OVP index: sources, packs, claims, runs, tags, entities. Filter by kind, status, date, tag, entity, or free-text term.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -280,6 +359,11 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             {
                 "name": "search",
                 "description": "Full-text search across OVP product state (sources, packs, claims).",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -291,6 +375,11 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             {
                 "name": "ask",
                 "description": "Ask the VAULT AGENT: a tool-loop agent that searches claims, sources, evidence cards, and full article bodies, reads originals when needed, and answers with server-VERIFIED receipts ([claim:…]/[source:…] resolved against the ledger/index — fabricated references are flagged, never trusted) plus honest per-layer coverage. Prefer this over answering from memory for anything the vault may cover; audit any [claim:…] citation with the `claim` tool. Pass the returned session id as `chat` to continue a conversation.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -304,6 +393,11 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             {
                 "name": "claim",
                 "description": "Read one durable claim's FULL evidence closure: claim text, gate verdicts, and every citation resolved to its verbatim quote, line, and source (title/sha/url). Accepts a claim_key (ck-…), a claim_id, or an ovp://claim/<key> URI. This is how an answer's [claim:…] citation is audited.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -315,6 +409,11 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             {
                 "name": "theme_page",
                 "description": "Read one grounded topic page (wiki-style narrative woven from durable claims; every sentence carries a [claim:<key>] citation resolvable via the `claim` tool). Lists all pages when no theme is given.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -325,11 +424,21 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             {
                 "name": "doctor",
                 "description": "Run health checks over OVP vault state.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "status",
                 "description": "Get OVP pipeline status: totals, recent runs, blocked sources.",
+                "readOnly": true,
+                "annotations": {
+                    "readOnly": true,
+                    "readOnlyHint": true
+                },
                 "inputSchema": { "type": "object", "properties": {} }
             }
         ]
@@ -351,6 +460,9 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
         "theme_page" => tool_theme_page(state, &arguments),
         "status" => tool_status(state),
         "doctor" => tool_doctor(state),
+        "ovp_search" => tool_ovp_search(state, &arguments),
+        "ovp_read_note" => tool_ovp_read_note(state, &arguments),
+        "ovp_list_themes" => tool_ovp_list_themes(state, &arguments),
         _ => Err(RpcError {
             code: -32602,
             message: format!("Unknown tool: {name}"),
@@ -870,6 +982,485 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     }))
 }
 
+fn resolve_source_note(
+    state: &McpState,
+    key: &str,
+) -> Result<(PathBuf, Option<String>, Option<String>), RpcError> {
+    let key_clean = key.trim();
+    if key_clean.is_empty() {
+        return Err(RpcError {
+            code: -32602,
+            message: "`key` cannot be empty".into(),
+        });
+    }
+
+    // 1. Check if index model has a matching source
+    let model = state.load_model();
+    if let Some(m) = &model
+        && let Some(src) = m.sources.iter().find(|s| {
+            s.sha256 == key_clean
+                || (key_clean.len() >= 8 && s.sha256.starts_with(key_clean))
+                || s.rel_path.as_deref() == Some(key_clean)
+                || s.title.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(key_clean))
+        })
+        && let Some(rel) = &src.rel_path
+    {
+        let path = ovp_domain::vault_layout::lifecycle_moved_path(
+            &state.vault_root,
+            &state.layout,
+            rel,
+            Some(&src.sha256),
+        )
+        .unwrap_or_else(|| state.vault_root.join(rel));
+        if path.is_file() {
+            return Ok((path, Some(src.sha256.clone()), src.title.clone()));
+        }
+    }
+
+    // 2. Direct path check (safe relative check)
+    let p = std::path::Path::new(key_clean);
+    if !key_clean.contains("..") && !p.is_absolute() {
+        let direct = state.vault_root.join(key_clean);
+        if direct.is_file() {
+            return Ok((direct, None, None));
+        }
+        let with_md = state.vault_root.join(format!("{key_clean}.md"));
+        if with_md.is_file() {
+            return Ok((with_md, None, None));
+        }
+        let in_raw = state.vault_root.join(state.layout.inbox_raw_dir()).join(key_clean);
+        if in_raw.is_file() {
+            return Ok((in_raw, None, None));
+        }
+        let in_raw_md = state.vault_root.join(state.layout.inbox_raw_dir()).join(format!("{key_clean}.md"));
+        if in_raw_md.is_file() {
+            return Ok((in_raw_md, None, None));
+        }
+        for cap_dir in state.layout.capture_dirs() {
+            let in_cap = state.vault_root.join(cap_dir).join(key_clean);
+            if in_cap.is_file() {
+                return Ok((in_cap, None, None));
+            }
+            let in_cap_md = state.vault_root.join(cap_dir).join(format!("{key_clean}.md"));
+            if in_cap_md.is_file() {
+                return Ok((in_cap_md, None, None));
+            }
+        }
+    }
+
+    Err(RpcError {
+        code: -32602,
+        message: format!("Note not found for key `{key_clean}`. Tip: use `ovp_search` or `find` to discover valid note paths or sha256."),
+    })
+}
+
+fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RpcError {
+            code: -32602,
+            message: "`key` is required".into(),
+        })?;
+
+    let (file_path, sha256, title) = resolve_source_note(state, key)?;
+
+    let full_content = std::fs::read_to_string(&file_path).map_err(|e| RpcError {
+        code: -32000,
+        message: format!("Failed to read file `{}`: {e}", file_path.display()),
+    })?;
+
+    let lines: Vec<&str> = full_content.lines().collect();
+    let total_lines = lines.len();
+
+    let offset_line = args
+        .get("offset_line")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .max(1) as usize;
+
+    let line_limit = args
+        .get("line_limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100)
+        .clamp(1, 500) as usize;
+
+    let start_idx = offset_line.saturating_sub(1);
+    let end_idx = (start_idx + line_limit).min(total_lines);
+    let lines_returned = end_idx.saturating_sub(start_idx);
+    let has_more = end_idx < total_lines;
+
+    let mut rendered_lines = Vec::with_capacity(lines_returned);
+    for (idx, line) in lines.iter().enumerate().take(end_idx).skip(start_idx) {
+        rendered_lines.push(format!("{:>5} | {}", idx + 1, line));
+    }
+    let body_text = rendered_lines.join("\n");
+
+    let rel_display = file_path
+        .strip_prefix(&state.vault_root)
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.to_string_lossy().to_string());
+
+    let payload = serde_json::json!({
+        "path": rel_display,
+        "sha256": sha256,
+        "title": title,
+        "offset_line": offset_line,
+        "line_limit": line_limit,
+        "total_lines": total_lines,
+        "lines_returned": lines_returned,
+        "has_more": has_more,
+        "content": body_text,
+    });
+
+    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    Ok(serde_json::json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
+}
+
+fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| RpcError {
+            code: -32602,
+            message: "`query` is required".into(),
+        })?;
+
+    let kind = args
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("all");
+
+    if !matches!(kind, "all" | "sources" | "claims" | "packs" | "evidence") {
+        return Err(RpcError {
+            code: -32602,
+            message: format!("Invalid kind `{kind}`: expected one of 'all', 'sources', 'claims', 'packs', 'evidence'"),
+        });
+    }
+
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .clamp(1, 50) as usize;
+
+    let model = state.load_model();
+    let records = state.load_records();
+
+    let mut results: Vec<Value> = Vec::new();
+    let mut total_matches = 0;
+    let mut lexical_matches = 0;
+    let mut claim_matches = 0;
+
+    let search_all = kind == "all";
+    let search_claims = search_all || kind == "claims";
+    let search_sources = search_all || kind == "sources";
+    let search_evidence = search_all || kind == "packs" || kind == "evidence";
+
+    // 1. Claims search
+    if search_claims {
+        if let Some(m) = &model {
+            let claims_val = ovp_memory::vault_tools::search_claims(m, &records, query, limit, None);
+            if let Some(hits) = claims_val.get("hits").and_then(|v| v.as_array()) {
+                claim_matches = hits.len();
+                total_matches += claim_matches;
+                for (rank, hit) in hits.iter().enumerate() {
+                    let key = hit.get("claim_key").and_then(|v| v.as_str()).unwrap_or("");
+                    let id = hit.get("claim_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let claim_text = hit.get("claim").and_then(|v| v.as_str()).unwrap_or("");
+                    let theme = hit.get("theme").and_then(|v| v.as_str()).unwrap_or("");
+                    let status = hit.get("status").and_then(|v| v.as_str()).unwrap_or("durable");
+                    let score = 1.0 / (1.0 + (rank as f64) * 0.1);
+
+                    results.push(serde_json::json!({
+                        "kind": "claim",
+                        "id": if !key.is_empty() { key } else { id },
+                        "title": claim_text,
+                        "snippet": format!("[Theme: {theme}] {claim_text}"),
+                        "uri": if !key.is_empty() { format!("ovp://claim/{key}") } else { format!("ovp://claim/{id}") },
+                        "status": status,
+                        "score": (score * 1000.0).round() / 1000.0,
+                    }));
+                }
+            }
+        } else if !records.is_empty() {
+            let q_lower = query.to_lowercase();
+            let matched_records: Vec<&DurableRecord> = records
+                .iter()
+                .filter(|r| r.claim.to_lowercase().contains(&q_lower) || r.theme.to_lowercase().contains(&q_lower))
+                .collect();
+            claim_matches = matched_records.len();
+            total_matches += claim_matches;
+            for (rank, r) in matched_records.into_iter().take(limit).enumerate() {
+                let score = 1.0 / (1.0 + (rank as f64) * 0.1);
+                results.push(serde_json::json!({
+                    "kind": "claim",
+                    "id": r.claim_key,
+                    "title": r.claim,
+                    "snippet": format!("[Theme: {}] {}", r.theme, r.claim),
+                    "uri": format!("ovp://claim/{}", r.claim_key),
+                    "status": "durable",
+                    "score": (score * 1000.0).round() / 1000.0,
+                }));
+            }
+        }
+    }
+
+    // 2. Sources search
+    if search_sources
+        && let Some(m) = &model
+    {
+        let sources_val = ovp_memory::vault_tools::search_sources(m, query, limit);
+        if let Some(hits) = sources_val.get("hits").and_then(|v| v.as_array()) {
+            let src_count = hits.len();
+            lexical_matches += src_count;
+            total_matches += src_count;
+            for (rank, hit) in hits.iter().enumerate() {
+                let sha = hit.get("source_id").and_then(|v| v.as_str()).unwrap_or("");
+                let title = hit.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+                let path = hit.get("rel_path").and_then(|v| v.as_str());
+                let author = hit.get("author").and_then(|v| v.as_str()).unwrap_or("");
+                let snippet = if !author.is_empty() {
+                    format!("Author: {author} | Title: {title}")
+                } else {
+                    title.to_string()
+                };
+                let score = 0.8 / (1.0 + (rank as f64) * 0.1);
+
+                results.push(serde_json::json!({
+                    "kind": "source",
+                    "id": sha,
+                    "title": title,
+                    "snippet": snippet,
+                    "path": path,
+                    "uri": format!("ovp://source/{sha}"),
+                    "status": "processed",
+                    "score": (score * 1000.0).round() / 1000.0,
+                }));
+            }
+        }
+    }
+
+    // 3. Evidence / Packs search
+    if search_evidence
+        && let Some(m) = &model
+    {
+        let evidence_val = ovp_memory::vault_tools::search_evidence(m, query, limit);
+        if let Some(hits) = evidence_val.get("hits").and_then(|v| v.as_array()) {
+            let pack_count = hits.len();
+            lexical_matches += pack_count;
+            total_matches += pack_count;
+            for (rank, pack) in hits.iter().enumerate() {
+                let dir = pack.get("pack_dir").and_then(|v| v.as_str()).unwrap_or("");
+                let title = pack.get("pack_title").and_then(|v| v.as_str()).unwrap_or(dir);
+                let cards = pack.get("matched_cards")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>().join("; "))
+                    .unwrap_or_default();
+                let snippet = if !cards.is_empty() {
+                    format!("Cards: {cards}")
+                } else {
+                    title.to_string()
+                };
+                let score = 0.7 / (1.0 + (rank as f64) * 0.1);
+
+                results.push(serde_json::json!({
+                    "kind": "evidence",
+                    "id": dir,
+                    "title": title,
+                    "snippet": snippet,
+                    "path": dir,
+                    "uri": Value::Null,
+                    "status": "grounded",
+                    "score": (score * 1000.0).round() / 1000.0,
+                }));
+            }
+        }
+    }
+
+    results.sort_by(|a, b| {
+        let sa = a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let sb = b.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let truncated = results.len() > limit || total_matches > results.len();
+    results.truncate(limit);
+
+    // RetrieveCoverage ledger
+    let has_dense = state.vault_root.join(".ovp").join("embeddings").is_dir()
+        || state.vault_root.join(".ovp").join("vector").is_dir();
+    let coverage = serde_json::json!({
+        "lexical": {
+            "available": model.is_some(),
+            "match_count": lexical_matches,
+            "detail": if let Some(m) = &model {
+                format!("BM25/FTS index active across {} sources and {} packs", m.sources.len(), m.packs.len())
+            } else {
+                "Index not loaded — run `ovp2 index` to enable lexical search".into()
+            }
+        },
+        "semantic": {
+            "available": has_dense,
+            "match_count": 0,
+            "detail": if has_dense {
+                "Dense vector embeddings active"
+            } else {
+                "Dense embeddings not configured — fallback to lexical & crystal graph"
+            }
+        },
+        "claims": {
+            "available": !records.is_empty(),
+            "match_count": claim_matches,
+            "detail": format!("Durable crystal ledger with {} active records", records.len())
+        }
+    });
+
+    let payload = serde_json::json!({
+        "query": query,
+        "kind": kind,
+        "total_matches": total_matches,
+        "returned_matches": results.len(),
+        "truncated": truncated,
+        "coverage": coverage,
+        "results": results,
+    });
+
+    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    Ok(serde_json::json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
+}
+
+fn tool_ovp_list_themes(state: &McpState, args: &Value) -> Result<Value, RpcError> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase);
+
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20)
+        .clamp(1, 100) as usize;
+
+    let pages = state.load_theme_pages();
+    let records = state.load_records();
+    let body = bodies::theme_pages_body(pages.as_ref(), &records);
+
+    let mut listing: Vec<Value> = Vec::new();
+    if let Some(pages_arr) = body["pages"].as_array() {
+        for p in pages_arr {
+            let label = p["label"].as_str().unwrap_or("");
+            let label_zh = p["label_zh"].as_str().unwrap_or("");
+            let comm_id = p["community_id"].as_i64().unwrap_or(0);
+            let claim_count = p["claim_count"].as_i64().unwrap_or(0);
+
+            let mut sample_claims: Vec<Value> = Vec::new();
+            if let Some(sections) = p["sections"].as_array() {
+                for sec in sections {
+                    if let Some(body_text) = sec["body"].as_str() {
+                        let cits = ovp_domain::crystal::theme_pages::extract_claim_citations(body_text);
+                        for c in cits {
+                            if sample_claims.len() < 3 && !sample_claims.iter().any(|sc| sc["key"] == c) {
+                                let claim_text = body["claims"]
+                                    .get(&c)
+                                    .and_then(|obj| obj.get("claim"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                sample_claims.push(serde_json::json!({
+                                    "key": c,
+                                    "claim": claim_text,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(q) = &query {
+                let matches_label = label.to_lowercase().contains(q);
+                let matches_zh = label_zh.to_lowercase().contains(q);
+                let matches_claims = sample_claims.iter().any(|sc| {
+                    sc["key"].as_str().is_some_and(|k| k.to_lowercase().contains(q))
+                        || sc["claim"].as_str().is_some_and(|c| c.to_lowercase().contains(q))
+                });
+                if !matches_label && !matches_zh && !matches_claims {
+                    continue;
+                }
+            }
+
+            listing.push(serde_json::json!({
+                "community_id": comm_id,
+                "label": label,
+                "label_zh": label_zh,
+                "claim_count": claim_count,
+                "uri": format!("ovp://theme-page/{comm_id}"),
+                "sample_claims": sample_claims,
+            }));
+        }
+    }
+
+    if listing.is_empty() && !records.is_empty() {
+        use std::collections::BTreeMap;
+        let mut groups: BTreeMap<String, (i64, Vec<String>)> = BTreeMap::new();
+        for r in &records {
+            let comm_id = r.theme_id.unwrap_or(0);
+            let entry = groups
+                .entry(r.theme.clone())
+                .or_insert_with(|| (comm_id, Vec::new()));
+            if entry.1.len() < 3 && !entry.1.contains(&r.claim) {
+                entry.1.push(r.claim.clone());
+            }
+        }
+        for (theme_label, (comm_id, sample_texts)) in groups {
+            if let Some(q) = &query {
+                let matches_label = theme_label.to_lowercase().contains(q);
+                let matches_sample = sample_texts.iter().any(|t| t.to_lowercase().contains(q));
+                if !matches_label && !matches_sample {
+                    continue;
+                }
+            }
+            let sample_claims: Vec<Value> = sample_texts
+                .into_iter()
+                .map(|txt| serde_json::json!({ "claim": txt }))
+                .collect();
+
+            listing.push(serde_json::json!({
+                "community_id": comm_id,
+                "label": theme_label,
+                "label_zh": "",
+                "claim_count": records.iter().filter(|r| r.theme == theme_label).count(),
+                "uri": format!("ovp://theme-page/{comm_id}"),
+                "sample_claims": sample_claims,
+            }));
+        }
+    }
+
+    let total_themes = listing.len();
+    let truncated = total_themes > limit;
+    listing.truncate(limit);
+
+    let payload = serde_json::json!({
+        "total_themes": total_themes,
+        "returned_themes": listing.len(),
+        "truncated": truncated,
+        "themes": listing,
+    });
+
+    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    Ok(serde_json::json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
+}
+
 fn tool_status(state: &McpState) -> Result<Value, RpcError> {
     let model = state.load_model().ok_or_else(|| RpcError {
         code: -32000,
@@ -1365,5 +1956,202 @@ mod tests {
         let text = v["contents"][0]["text"].as_str().unwrap();
         let closure: Value = serde_json::from_str(text).unwrap();
         assert_eq!(closure["claim_id"], "id-b");
+    }
+
+    #[test]
+    fn tools_list_declares_aligned_tools_and_read_only_annotations() {
+        let (_tmp, state) = fixture_vault();
+        let res = dispatch(&state, "tools/list", &serde_json::json!({})).unwrap();
+        let tools = res["tools"].as_array().expect("tools array");
+
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+
+        assert!(names.contains(&"ovp_search"));
+        assert!(names.contains(&"ovp_read_note"));
+        assert!(names.contains(&"ovp_list_themes"));
+        assert!(names.contains(&"find"));
+        assert!(names.contains(&"search"));
+        assert!(names.contains(&"ask"));
+        assert!(names.contains(&"claim"));
+        assert!(names.contains(&"theme_page"));
+
+        for tool in tools {
+            assert_eq!(
+                tool["readOnly"],
+                true,
+                "tool `{}` must be marked readOnly",
+                tool["name"]
+            );
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"],
+                true,
+                "tool `{}` must have readOnlyHint: true",
+                tool["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn ovp_search_returns_ranked_results_and_honest_coverage() {
+        let (_tmp, state) = fixture_vault();
+
+        // Missing query error
+        let err = call(&state, "ovp_search", serde_json::json!({})).unwrap_err();
+        assert_eq!(err.code, -32602);
+
+        // Invalid kind error
+        let err = call(
+            &state,
+            "ovp_search",
+            serde_json::json!({ "query": "memory", "kind": "invalid_kind" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("Invalid kind `invalid_kind`"));
+
+        // Valid search over claims
+        let v = call(
+            &state,
+            "ovp_search",
+            serde_json::json!({ "query": "Agent memory", "limit": 10 }),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        assert_eq!(parsed["query"], "Agent memory");
+        assert_eq!(parsed["kind"], "all");
+        assert!(parsed["total_matches"].as_u64().unwrap() >= 2);
+
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r["id"] == "ck-aaa"));
+        assert!(results.iter().any(|r| r["id"] == "ck-bbb"));
+        assert_eq!(results[0]["kind"], "claim");
+
+        let coverage = &parsed["coverage"];
+        assert_eq!(coverage["claims"]["available"], true);
+        assert_eq!(coverage["claims"]["match_count"], 2);
+        assert!(coverage["claims"]["detail"].as_str().unwrap().contains("2 active records"));
+        assert_eq!(coverage["semantic"]["available"], false);
+    }
+
+    #[test]
+    fn ovp_read_note_paginates_with_line_numbers_and_metadata() {
+        let (tmp, state) = fixture_vault();
+
+        // Write a multi-line note into vault
+        let note_rel = "Sources/2026-03-01_test.md";
+        let note_path = tmp.path().join(note_rel);
+        std::fs::create_dir_all(note_path.parent().unwrap()).unwrap();
+        let content: String = (1..=25)
+            .map(|i| format!("Line {i} content text"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&note_path, &content).unwrap();
+
+        // Missing key error
+        let err = call(&state, "ovp_read_note", serde_json::json!({})).unwrap_err();
+        assert_eq!(err.code, -32602);
+
+        // Nonexistent note
+        let err = call(
+            &state,
+            "ovp_read_note",
+            serde_json::json!({ "key": "Sources/does_not_exist.md" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("Note not found"));
+
+        // Page 1: lines 1-10
+        let v = call(
+            &state,
+            "ovp_read_note",
+            serde_json::json!({
+                "key": note_rel,
+                "offset_line": 1,
+                "line_limit": 10
+            }),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        assert_eq!(parsed["offset_line"], 1);
+        assert_eq!(parsed["line_limit"], 10);
+        assert_eq!(parsed["total_lines"], 25);
+        assert_eq!(parsed["lines_returned"], 10);
+        assert_eq!(parsed["has_more"], true);
+
+        let lines_text = parsed["content"].as_str().unwrap();
+        assert!(lines_text.starts_with("    1 | Line 1 content text"));
+        assert!(lines_text.contains("   10 | Line 10 content text"));
+        assert!(!lines_text.contains("Line 11"));
+
+        // Page 2: lines 21-25 (offset 21, limit 10)
+        let v2 = call(
+            &state,
+            "ovp_read_note",
+            serde_json::json!({
+                "key": note_rel,
+                "offset_line": 21,
+                "line_limit": 10
+            }),
+        )
+        .unwrap();
+        let parsed2: Value = serde_json::from_str(&text_of(&v2)).unwrap();
+        assert_eq!(parsed2["offset_line"], 21);
+        assert_eq!(parsed2["total_lines"], 25);
+        assert_eq!(parsed2["lines_returned"], 5);
+        assert_eq!(parsed2["has_more"], false);
+        let lines_text2 = parsed2["content"].as_str().unwrap();
+        assert!(lines_text2.starts_with("   21 | Line 21 content text"));
+        assert!(lines_text2.ends_with("   25 | Line 25 content text"));
+    }
+
+    #[test]
+    fn ovp_list_themes_lists_clusters_and_filters() {
+        let (_tmp, state) = fixture_vault();
+
+        // List all themes
+        let v = call(&state, "ovp_list_themes", serde_json::json!({})).unwrap();
+        let parsed: Value = serde_json::from_str(&text_of(&v)).unwrap();
+        assert_eq!(parsed["total_themes"], 1);
+        assert_eq!(parsed["returned_themes"], 1);
+        assert_eq!(parsed["truncated"], false);
+
+        let themes = parsed["themes"].as_array().unwrap();
+        assert_eq!(themes.len(), 1);
+        assert_eq!(themes[0]["community_id"], 0);
+        assert_eq!(themes[0]["label"], "Agent memory");
+        assert_eq!(themes[0]["label_zh"], "智能体记忆");
+        assert_eq!(themes[0]["claim_count"], 2);
+        assert_eq!(themes[0]["uri"], "ovp://theme-page/0");
+
+        let sample_claims = themes[0]["sample_claims"].as_array().unwrap();
+        assert_eq!(sample_claims.len(), 2);
+        assert_eq!(sample_claims[0]["key"], "ck-aaa");
+        assert_eq!(sample_claims[1]["key"], "ck-bbb");
+
+        // Filter by matching query
+        let v_match = call(
+            &state,
+            "ovp_list_themes",
+            serde_json::json!({ "query": "memory" }),
+        )
+        .unwrap();
+        let parsed_match: Value = serde_json::from_str(&text_of(&v_match)).unwrap();
+        assert_eq!(parsed_match["total_themes"], 1);
+
+        // Filter by non-matching query
+        let v_nomatch = call(
+            &state,
+            "ovp_list_themes",
+            serde_json::json!({ "query": "unrelated_xyz" }),
+        )
+        .unwrap();
+        let parsed_nomatch: Value = serde_json::from_str(&text_of(&v_nomatch)).unwrap();
+        assert_eq!(parsed_nomatch["total_themes"], 0);
+        assert_eq!(parsed_nomatch["themes"].as_array().unwrap().len(), 0);
     }
 }

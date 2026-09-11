@@ -88,3 +88,36 @@ Rules:
 - The `ovp-evolve` crate owns all evolution governance logic
 - `evolution/components.json` is the component registry (validated at load time)
 - `.ovp/evolution-ledger.jsonl` is the append-only decision record
+
+## Involute Work-Graph Protocol
+
+This repository is bound to the **Involute Work-Graph Kernel** for task tracking, milestone delivery, and auditable agent collaboration.
+
+### 1. Project Binding
+
+- **Repository**: `fakechris/obsidian_vault_pipeline`
+- **Team Key**: `INV`
+- **Root Project Identifier**: `INV-44`
+- **Root Project UUID**: `80a49a7a-8c38-4760-b563-d804fb07cd30`
+- **Web UI**: [http://100.114.30.43:4201/](http://100.114.30.43:4201/)
+- **Candidate Review Queue**: [http://100.114.30.43:4201/candidates?project=fakechris/obsidian_vault_pipeline](http://100.114.30.43:4201/candidates?project=fakechris/obsidian_vault_pipeline)
+- **Work Graph Observation**: [http://100.114.30.43:4201/graph](http://100.114.30.43:4201/graph)
+
+### 2. MCP Connection Configuration
+
+| Agent Environment | MCP Endpoint URL | Notes |
+|---|---|---|
+| **Remote / Developer Machine** (Mac, Cursor, Codex, Claude Code) | `http://100.114.30.43:4200/mcp` (or `/mcp/readonly`) | Connect via Tailscale network |
+| **Local on Box** (executing inside VPS host) | `http://127.0.0.1:4200/mcp` (or `/mcp/readonly`) | Loopback connection on host |
+
+- **Auth Header**: `Authorization: Bearer <AGENT_TOKEN>` (`inv_agent_...` minted via Settings → Agents).
+- **Security Rule**: Tokens stay in agent secret store; **NEVER commit tokens or write them to repository files**.
+
+### 3. Agent Operational Rules
+
+1. **Search Before Propose**: Always run `work_search` to prevent duplicate nodes.
+2. **Propose, Never Unilaterally Commit**: Agents propose candidates via `work_propose`; humans commit via Web UI or CLI.
+3. **Claim-Driven Execution**: Run `work_claim` to lease a task before writing code.
+4. **Report Runs with Evidence**: Record progress via `run_report`. On completion, attach durable evidence (commit SHA, test exit code, PR URL) via `evidence_attach`.
+5. **In Review, Never Done**: Agents transition tasks to `In Review`. Moving work to `Done` is strictly reserved for human review or verified `CLEAR` auto-accept gate.
+
