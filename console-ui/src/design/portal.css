@@ -3130,6 +3130,106 @@ html[data-tauri-drag-region] .source-chat-panel {
   color: var(--c-4);
   background: color-mix(in srgb, var(--c-4) 14%, transparent);
 }
+.cite-marker-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.cite-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-1, var(--surface));
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--ovp-radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  padding: 0.6rem 0.75rem;
+  min-width: 14rem;
+  max-width: 20rem;
+  z-index: 100;
+  font-size: var(--ovp-text-xs);
+  line-height: 1.4;
+  pointer-events: auto;
+  text-align: left;
+}
+.cite-popover::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: var(--border-strong) transparent transparent transparent;
+}
+.cite-popover-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--text);
+  word-break: break-word;
+}
+.cite-popover-snippet {
+  color: var(--text-soft);
+  font-style: italic;
+  margin-bottom: 0.35rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cite-popover-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.rag-pipeline-stages {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  margin: 0.2rem 0 0.5rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--ovp-radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: var(--ovp-text-xs);
+  width: fit-content;
+}
+.rag-stage-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.rag-stage-node.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.rag-stage-node.done {
+  color: var(--success);
+}
+.rag-stage-node .rag-stage-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.rag-stage-node.active .rag-stage-dot {
+  background: var(--accent);
+  animation: ask-dot-pulse 1.1s ease-in-out infinite;
+}
+.rag-stage-node.done .rag-stage-dot {
+  background: var(--success);
+}
+.rag-stage-arrow {
+  color: var(--border-strong);
+  font-size: 0.75rem;
+}
 .chat-verify {
   margin-top: 0.65rem;
   letter-spacing: 0.02em;

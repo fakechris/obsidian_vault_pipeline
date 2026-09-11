@@ -152,6 +152,8 @@ pub fn ask_with_evidence(
     ask_with_optional_evidence(model, Some(evidence), client, args, vault_root)
 }
 
+pub type AskStageCallback<'a> = &'a (dyn Fn(&str, &str) + 'a);
+
 pub fn ask_with_optional_evidence(
     model: &IndexModel,
     evidence: Option<&EvidenceModel>,
@@ -159,10 +161,25 @@ pub fn ask_with_optional_evidence(
     args: &AskArgs,
     vault_root: &Path,
 ) -> Result<AskResult, String> {
+    ask_with_optional_evidence_with_progress(model, evidence, client, args, vault_root, None)
+}
+
+pub fn ask_with_optional_evidence_with_progress(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    client: &mut dyn ModelClient,
+    args: &AskArgs,
+    vault_root: &Path,
+    on_stage: Option<AskStageCallback<'_>>,
+) -> Result<AskResult, String> {
     let intent = classify_intent(&args.question, &args.history);
 
     // Meta: answer about Ask itself — no retrieval, no LLM (deterministic).
     if intent == AskIntent::MetaCapability {
+        if let Some(cb) = on_stage {
+            cb("synthesizing", "Direct meta capability response");
+            cb("completed", "Answer ready");
+        }
         let answer = meta_capability_answer(&args.question);
         let chat_file = if args.save_chat {
             Some(save_or_append_chat(
@@ -186,6 +203,10 @@ pub fn ask_with_optional_evidence(
             chat_file,
             intent,
         });
+    }
+
+    if let Some(cb) = on_stage {
+        cb("retrieving", "Searching relevant evidence across vault index...");
     }
 
     let (evidence_items, system, user_prefix, temperature, verify) = match intent {
@@ -258,6 +279,10 @@ pub fn ask_with_optional_evidence(
         }
     };
 
+    if let Some(cb) = on_stage {
+        cb("ranking", "Ranking and fusing evidence candidates...");
+    }
+
     let context_hits = evidence_items.len();
     let context = render_evidence_context(&evidence_items);
 
@@ -293,6 +318,10 @@ pub fn ask_with_optional_evidence(
         cache_namespace: Some("ask/v4".into()),
     };
 
+    if let Some(cb) = on_stage {
+        cb("synthesizing", "Synthesizing answer with verified citations...");
+    }
+
     let reply = client.call(&request).map_err(|e| format!("ask LLM: {e}"))?;
     let verification = if verify {
         Some(verify_answer(&reply.text, &evidence_items))
@@ -314,6 +343,10 @@ pub fn ask_with_optional_evidence(
     } else {
         None
     };
+
+    if let Some(cb) = on_stage {
+        cb("completed", "Answer synthesized.");
+    }
 
     Ok(AskResult {
         answer: reply.text,
@@ -534,6 +567,7 @@ pub fn valid_chat_stem(name: &str) -> bool {
 
 /// Create a new chat file, or append a turn to an existing one when `chat`
 /// names a valid existing stem. Always returns the path that was written.
+#[allow(clippy::too_many_arguments)]
 fn save_or_append_chat(
     vault_root: &Path,
     chat: Option<&str>,

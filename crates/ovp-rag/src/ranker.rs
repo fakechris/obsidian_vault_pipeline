@@ -44,7 +44,7 @@ mod tests {
     use super::*;
 
     fn scored(slug: &str, score: u32) -> ScoredConcept {
-        ScoredConcept { slug: slug.into(), score, reasons: vec![] }
+        ScoredConcept { slug: slug.into(), score, reasons: vec![], matched_units: vec![] }
     }
 
     #[test]

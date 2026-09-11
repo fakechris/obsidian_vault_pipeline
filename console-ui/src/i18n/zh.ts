@@ -572,6 +572,11 @@ export const zh: Record<keyof typeof en, string> = {
     '在时限内没有等到回答。请求并未被取消——如果模型最终完成，保存的会话仍会出现在历史中。',
   'ask.errGeneric': '提问失败——服务是否已连接 vault？',
   // agent live trail + receipts (A3c)
+  'ask.stageTitle': 'RAG 流水线',
+  'ask.stageRetrieving': '正在检索知识库…',
+  'ask.stageRanking': '正在精排候选证据…',
+  'ask.stageSynthesizing': '正在生成溯源回答…',
+  'ask.stageCompleted': '检索生成完成',
   'ask.trailConnecting': '正在连接 vault agent…',
   'ask.trailThinking': '思考中…',
   'ask.trailComposing': '正在组织答案…',

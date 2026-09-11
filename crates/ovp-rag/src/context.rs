@@ -3,10 +3,10 @@
 use serde::Serialize;
 
 use crate::corpus::RagCorpus;
-use crate::retriever::{MatchReason, ScoredConcept};
+use crate::retriever::{MatchReason, ScoredChildUnit, ScoredConcept};
 
 /// One entry in a [`RagContext`]: the concept, its score + reasons, a bounded
-/// note snippet, and a bounded backlink list.
+/// note snippet, matched child units, and a bounded backlink list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SelectedConcept {
     pub slug: String,
@@ -19,6 +19,8 @@ pub struct SelectedConcept {
     /// Up to `max_backlinks` referencing note paths.
     pub backlinks: Vec<String>,
     pub reasons: Vec<MatchReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched_units: Vec<ScoredChildUnit>,
 }
 
 /// A bounded retrieval context: the query plus the selected concepts. Bounded so
@@ -71,6 +73,7 @@ impl ContextBuilder {
                     snippet,
                     backlinks,
                     reasons: s.reasons.clone(),
+                    matched_units: s.matched_units.clone(),
                 })
             })
             .collect();
@@ -97,18 +100,18 @@ mod tests {
     use crate::corpus::ConceptDoc;
 
     fn doc(slug: &str, body: Option<&str>, backlinks: &[&str]) -> ConceptDoc {
-        ConceptDoc {
-            slug: slug.into(),
-            title: slug.to_uppercase(),
-            evergreen_path: format!("10-Knowledge/Evergreen/{slug}.md"),
-            provenance_source_url: "u".into(),
-            backlinks: backlinks.iter().map(|s| s.to_string()).collect(),
-            body: body.map(|b| b.to_string()),
-        }
+        ConceptDoc::new(
+            slug,
+            slug.to_uppercase(),
+            format!("10-Knowledge/Evergreen/{slug}.md"),
+            "u",
+            backlinks.iter().map(|s| s.to_string()).collect(),
+            body.map(|b| b.to_string()),
+        )
     }
 
     fn scored(slug: &str, score: u32) -> ScoredConcept {
-        ScoredConcept { slug: slug.into(), score, reasons: vec![] }
+        ScoredConcept { slug: slug.into(), score, reasons: vec![], matched_units: vec![] }
     }
 
     #[test]

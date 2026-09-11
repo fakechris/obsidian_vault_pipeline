@@ -18,6 +18,7 @@ pub enum MatchField {
     Slug,
     Body,
     Backlink,
+    ChildUnit,
 }
 
 /// Why one query term contributed to a concept's score. `hits` is how many times
@@ -30,6 +31,17 @@ pub struct MatchReason {
     pub contribution: u32,
 }
 
+/// A matched child unit within a concept with its local score and matched terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScoredChildUnit {
+    pub unit_id: String,
+    pub index: usize,
+    pub heading: Option<String>,
+    pub score: u32,
+    pub snippet: String,
+    pub matched_terms: Vec<String>,
+}
+
 /// A concept with its total score and the breakdown that produced it. Empty
 /// `reasons` ⇔ `score == 0` (no query term matched).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -37,6 +49,8 @@ pub struct ScoredConcept {
     pub slug: String,
     pub score: u32,
     pub reasons: Vec<MatchReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched_units: Vec<ScoredChildUnit>,
 }
 
 /// Per-field weights. A token match (the term equals a whole title/slug token)
@@ -52,6 +66,10 @@ pub struct RetrievalWeights {
     /// Max body occurrences of a single term that count (anti-keyword-stuffing).
     pub body_hit_cap: u32,
     pub backlink: u32,
+    /// Contribution per matching child unit hit.
+    pub child_unit_hit: u32,
+    /// Max child unit points to contribute for a single term (anti-keyword-stuffing).
+    pub child_unit_cap: u32,
 }
 
 impl Default for RetrievalWeights {
@@ -64,6 +82,8 @@ impl Default for RetrievalWeights {
             body_hit: 1,
             body_hit_cap: 3,
             backlink: 2,
+            child_unit_hit: 2,
+            child_unit_cap: 6,
         }
     }
 }
@@ -106,6 +126,50 @@ impl Retriever {
         let backlinks_lower: Vec<String> =
             doc.backlinks.iter().map(|b| b.to_lowercase()).collect();
 
+        // Score Child Units across all terms
+        let mut matched_units: Vec<ScoredChildUnit> = Vec::new();
+        for unit in &doc.child_units {
+            let unit_tokens = tokenize(&unit.content);
+            let unit_lower = unit.content.to_lowercase();
+            let heading_tokens = unit.heading.as_deref().map(tokenize).unwrap_or_default();
+            let heading_lower = unit.heading.as_deref().map(|h| h.to_lowercase()).unwrap_or_default();
+
+            let mut unit_score = 0u32;
+            let mut unit_matched_terms = Vec::new();
+
+            for term in terms {
+                let heading_match = field_points(&heading_tokens, &heading_lower, term, 3, 1);
+                let content_match = field_points(&unit_tokens, &unit_lower, term, 2, 1);
+                if let Some((_, pts)) = heading_match {
+                    unit_score += pts;
+                    unit_matched_terms.push(term.clone());
+                } else if let Some((_, pts)) = content_match {
+                    unit_score += pts;
+                    unit_matched_terms.push(term.clone());
+                }
+            }
+
+            if unit_score > 0 {
+                unit_matched_terms.dedup();
+                let snippet_str = if unit.content.chars().count() <= 160 {
+                    unit.content.clone()
+                } else {
+                    let end = unit.content.char_indices().nth(160).map(|(i, _)| i).unwrap_or(unit.content.len());
+                    format!("{}…", &unit.content[..end].trim_end())
+                };
+                matched_units.push(ScoredChildUnit {
+                    unit_id: unit.unit_id.clone(),
+                    index: unit.index,
+                    heading: unit.heading.clone(),
+                    score: unit_score,
+                    snippet: snippet_str,
+                    matched_terms: unit_matched_terms,
+                });
+            }
+        }
+
+        matched_units.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.index.cmp(&b.index)));
+
         let mut reasons = Vec::new();
         for term in terms {
             push_field_reason(
@@ -139,9 +203,19 @@ impl Retriever {
                     contribution: self.weights.backlink,
                 });
             }
+            let child_hits = matched_units.iter().filter(|u| u.matched_terms.contains(term)).count() as u32;
+            if child_hits > 0 {
+                let counted = (child_hits * self.weights.child_unit_hit).min(self.weights.child_unit_cap);
+                reasons.push(MatchReason {
+                    field: MatchField::ChildUnit,
+                    term: term.clone(),
+                    hits: child_hits,
+                    contribution: counted,
+                });
+            }
         }
         let score = reasons.iter().map(|r| r.contribution).sum();
-        ScoredConcept { slug: doc.slug.clone(), score, reasons }
+        ScoredConcept { slug: doc.slug.clone(), score, reasons, matched_units }
     }
 }
 
@@ -196,14 +270,14 @@ mod tests {
     use super::*;
 
     fn doc(slug: &str, title: &str, body: Option<&str>, backlinks: &[&str]) -> ConceptDoc {
-        ConceptDoc {
-            slug: slug.into(),
-            title: title.into(),
-            evergreen_path: format!("10-Knowledge/Evergreen/{slug}.md"),
-            provenance_source_url: "u".into(),
-            backlinks: backlinks.iter().map(|s| s.to_string()).collect(),
-            body: body.map(|b| b.to_string()),
-        }
+        ConceptDoc::new(
+            slug,
+            title,
+            format!("10-Knowledge/Evergreen/{slug}.md"),
+            "u",
+            backlinks.iter().map(|s| s.to_string()).collect(),
+            body.map(|b| b.to_string()),
+        )
     }
 
     #[test]
@@ -274,5 +348,27 @@ mod tests {
         let scored = r.score(&corpus, "agent");
         let bl = scored[0].reasons.iter().find(|x| x.field == MatchField::Backlink).unwrap();
         assert_eq!(bl.contribution, 2);
+    }
+
+    #[test]
+    fn child_units_surface_and_score_in_parent() {
+        let r = Retriever::new();
+        let body = r#"# Architecture
+Parent-child units provide fine-grained passage retrieval.
+
+## Evaluation
+Offline evaluation benchmarks precision and recall.
+"#;
+        let corpus = RagCorpus::from_docs(vec![doc("rag-pc", "Parent-Child Architecture", Some(body), &[])]);
+        let scored = r.score(&corpus, "passage retrieval");
+        let item = &scored[0];
+        assert!(item.score > 0);
+        assert!(!item.matched_units.is_empty(), "child units must be matched");
+        let top_unit = &item.matched_units[0];
+        assert_eq!(top_unit.unit_id, "rag-pc#u0");
+        assert_eq!(top_unit.heading.as_deref(), Some("Architecture"));
+        assert!(top_unit.snippet.contains("fine-grained passage retrieval"));
+        let child_reason = item.reasons.iter().find(|x| x.field == MatchField::ChildUnit);
+        assert!(child_reason.is_some(), "MatchField::ChildUnit reason should be present");
     }
 }

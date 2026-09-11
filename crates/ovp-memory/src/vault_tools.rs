@@ -1204,7 +1204,7 @@ pub fn evidence_lane_snapshot(
     }
     title.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let mut packs_meta = Map::new();
-    let mut note_pack = |packs_meta: &mut Map<String, Value>, pack_dir: &str| {
+    let note_pack = |packs_meta: &mut Map<String, Value>, pack_dir: &str| {
         if !packs_meta.contains_key(pack_dir) {
             if let Some(p) = model.packs.iter().find(|p| p.pack_dir == pack_dir) {
                 packs_meta.insert(
