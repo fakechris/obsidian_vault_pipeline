@@ -2923,11 +2923,10 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Some(zh_file) = state.current_claims_zh() {
-                    if let Some(zh) = zh_file.get_fresh(&key, &en) {
+                if let Some(zh_file) = state.current_claims_zh()
+                    && let Some(zh) = zh_file.get_fresh(&key, &en) {
                         obj.insert("claim_zh".into(), serde_json::json!(zh));
                     }
-                }
             }
             json_stamped(200, &v.to_string(), model.as_deref())
         }
@@ -3022,12 +3021,11 @@ fn splice_source_memory_zh(
                 "title": c.title,
                 "content": c.content,
             });
-            if let Some(zh) = cards_zh.get_fresh(&c.id, &c.title, &c.content) {
-                if let Some(o) = card.as_object_mut() {
+            if let Some(zh) = cards_zh.get_fresh(&c.id, &c.title, &c.content)
+                && let Some(o) = card.as_object_mut() {
                     o.insert("title_zh".into(), serde_json::json!(zh.title_zh));
                     o.insert("content_zh".into(), serde_json::json!(zh.content_zh));
                 }
-            }
             enriched_cards.push(card);
         }
     }
@@ -3035,13 +3033,11 @@ fn splice_source_memory_zh(
     let Some(obj) = body.as_object_mut() else {
         return;
     };
-    if !enriched_cards.is_empty() {
-        if let Some(memory) = obj.get_mut("memory").and_then(|m| m.as_object_mut()) {
-            if let Some(cards_val) = memory.get_mut("cards") {
+    if !enriched_cards.is_empty()
+        && let Some(memory) = obj.get_mut("memory").and_then(|m| m.as_object_mut())
+            && let Some(cards_val) = memory.get_mut("cards") {
                 *cards_val = serde_json::Value::Array(enriched_cards);
             }
-        }
-    }
     // citing_claims claim_zh
     if let Some(claims) = obj.get_mut("citing_claims").and_then(|c| c.as_array_mut()) {
         for c in claims.iter_mut() {
@@ -3078,6 +3074,7 @@ fn source_sha_from_action_path(path: &str, action: &str) -> Option<String> {
     Some(url_decode(rest))
 }
 
+#[allow(clippy::type_complexity)]
 fn source_markdown_for(
     state: &AppState,
     model: &IndexModel,
@@ -4282,8 +4279,6 @@ fn handle_ask(
     let vault_root = state.vault_root.clone();
     // Legacy path: raw question for retrieval/intent; pack only for the LLM.
     let question = question_raw.to_string();
-    let context_prefix = context_prefix;
-    let focus_meta = focus_meta;
 
     let progress_session = chat.clone().unwrap_or_else(|| {
         let now = std::time::SystemTime::now()
@@ -4479,7 +4474,6 @@ fn handle_ask_agent(
     let progress_session = session.clone();
     let question = question.to_string();
     let display_question = display_question.to_string();
-    let focus_meta = focus_meta;
     let response_session = session.clone();
     let request_key = idempotency_key.map(str::to_string);
 
@@ -4987,6 +4981,7 @@ fn handle_ask_progress(state: &AppState, url: &str) -> Response<std::io::Cursor<
 /// The worker side of /api/ask: build the client, run the pipeline (chat
 /// always saved — parity with `ovp2 ask --save`), shape the JSON payload.
 /// `chat` + `history` continue a multi-turn session (one history entry).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_ask(
     factory: &AskClientFactory,
     model: &IndexModel,
@@ -5943,6 +5938,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             }],
             runs: vec![],
             ops: OpsState::default(),
@@ -8348,6 +8344,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             },
             ovp_index::ClaimRow {
                 claim_id: "m1-02".into(),
@@ -8361,6 +8358,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             },
         ];
         ovp_index::write_index(&vault, &model).unwrap();

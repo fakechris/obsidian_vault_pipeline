@@ -987,6 +987,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             run_id: Some(rec.run_id.clone()),
             run_date: run_date_from_run_id(&rec.run_id),
             lane: None,
+            patched_by: None,
         });
     }
 
@@ -1019,6 +1020,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 run_id: None,
                 run_date: None,
                 lane: enum_str(&entry.lane),
+                patched_by: None,
             });
         }
     }
@@ -1048,6 +1050,29 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                     .majority_label(&row.sources)
                     .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string()),
             );
+        }
+    }
+
+    // Human patch overlay (M37): when `.ovp/crystal/patches.jsonl` exists,
+    // fold the patch ledger and overlay active human adjustments onto claims.
+    let patches_file = store.join("patches.jsonl");
+    if let Some(records) = ovp_domain::crystal::read_patch_ledger(&patches_file)
+        .ok()
+        .filter(|r| !r.is_empty())
+    {
+        let patch_state = ovp_domain::crystal::fold_patch_ledger(&records);
+        for row in claims.iter_mut() {
+            if let Some(patch) =
+                patch_state.get_active_patch(&row.claim_id, row.claim_key.as_deref())
+            {
+                let mut claim_text = row.claim.clone();
+                let mut theme_opt = row.theme.clone();
+                if patch.overlay_onto_claim_parts(&mut claim_text, &mut theme_opt) {
+                    row.claim = claim_text;
+                    row.theme = theme_opt;
+                    row.patched_by = Some(patch.patch_id.clone());
+                }
+            }
         }
     }
 

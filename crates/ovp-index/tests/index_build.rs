@@ -1075,3 +1075,59 @@ fn broken_alias_table_fails_the_build_loudly() {
     let err = build_index(root, "2026-06-09", None).unwrap_err();
     assert!(err.contains("chain"), "{err}");
 }
+
+#[test]
+fn human_patches_overlay_onto_claim_rows_and_support_rollback() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    // Initial build without patches
+    let model0 = build_index(root, "2026-06-09", None).unwrap();
+    let c01_orig = model0.claims.iter().find(|c| c.claim_id == "c01").unwrap();
+    assert_eq!(c01_orig.claim, "Filesystem works as agent memory.");
+    assert_eq!(c01_orig.patched_by, None);
+
+    // Apply human patch
+    let patches_file = root.join(".ovp/crystal/patches.jsonl");
+    let patch1 = ovp_domain::crystal::HumanPatchRecord::new_apply(
+        "c01",
+        None,
+        "Filesystem works as agent memory.",
+        "Filesystem acts as structured persistent agent memory (human-verified).",
+        Some("refined-theme".into()),
+        None,
+        "operator:alice",
+        "clarified mutability",
+        Some("2026-06-09T10:00:00Z".into()),
+    );
+    ovp_domain::crystal::append_patch_record(&patches_file, &patch1).unwrap();
+
+    // Rebuild index - patch should overlay
+    let model1 = build_index(root, "2026-06-09", None).unwrap();
+    let c01_patched = model1.claims.iter().find(|c| c.claim_id == "c01").unwrap();
+    assert_eq!(
+        c01_patched.claim,
+        "Filesystem acts as structured persistent agent memory (human-verified)."
+    );
+    assert_eq!(c01_patched.theme.as_deref(), Some("refined-theme"));
+    assert_eq!(c01_patched.patched_by.as_deref(), Some(patch1.patch_id.as_str()));
+
+    // Apply rollback patch
+    let rb_patch = ovp_domain::crystal::HumanPatchRecord::new_rollback(
+        "c01",
+        Some(patch1.patch_id.clone()),
+        None,
+        "Filesystem acts as structured persistent agent memory (human-verified).",
+        "operator:alice",
+        "revert human edit back to baseline",
+        Some("2026-06-09T11:00:00Z".into()),
+    );
+    ovp_domain::crystal::append_patch_record(&patches_file, &rb_patch).unwrap();
+
+    // Rebuild index - should revert cleanly to base assertion
+    let model2 = build_index(root, "2026-06-09", None).unwrap();
+    let c01_reverted = model2.claims.iter().find(|c| c.claim_id == "c01").unwrap();
+    assert_eq!(c01_reverted.claim, "Filesystem works as agent memory.");
+    assert_eq!(c01_reverted.patched_by, None);
+}

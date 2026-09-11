@@ -1205,8 +1205,8 @@ pub fn evidence_lane_snapshot(
     title.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let mut packs_meta = Map::new();
     let note_pack = |packs_meta: &mut Map<String, Value>, pack_dir: &str| {
-        if !packs_meta.contains_key(pack_dir) {
-            if let Some(p) = model.packs.iter().find(|p| p.pack_dir == pack_dir) {
+        if !packs_meta.contains_key(pack_dir)
+            && let Some(p) = model.packs.iter().find(|p| p.pack_dir == pack_dir) {
                 packs_meta.insert(
                     pack_dir.into(),
                     json!({
@@ -1217,7 +1217,6 @@ pub fn evidence_lane_snapshot(
                     }),
                 );
             }
-        }
     };
     let title_rows: Vec<Value> = title
         .iter()
@@ -1814,11 +1813,10 @@ fn search_evidence_fused(
                 fts_detail_truncated |= detail_truncated;
             }
             // Transcript honesty: a pinned hit says WHY it leads the order.
-            if pinned.contains(&pack_dir) {
-                if let Some(obj) = hit.as_object_mut() {
+            if pinned.contains(&pack_dir)
+                && let Some(obj) = hit.as_object_mut() {
                     obj.insert("pinned".into(), json!(true));
                 }
-            }
             ordered.push(hit);
         }
         ordered
@@ -3646,16 +3644,14 @@ fn date_in_window(date: Option<&str>, from: Option<&str>, to: Option<&str>) -> b
     let Some(date) = date else {
         return false;
     };
-    if let Some(from) = from {
-        if date < from {
+    if let Some(from) = from
+        && date < from {
             return false;
         }
-    }
-    if let Some(to) = to {
-        if date > to && !date.starts_with(to) {
+    if let Some(to) = to
+        && date > to && !date.starts_with(to) {
             return false;
         }
-    }
     true
 }
 
@@ -3777,6 +3773,7 @@ mod tests {
                         run_id: None,
                         run_date: None,
                         lane: Some("review".into()),
+                        patched_by: None,
                     },
                 ],
             );
@@ -3848,6 +3845,7 @@ mod tests {
             run_id: Some("run-1".into()),
             run_date: None,
             lane: None,
+            patched_by: None,
         }
     }
 
@@ -4489,6 +4487,7 @@ mod tests {
             run_id: None,
             run_date: None,
             lane: None,
+            patched_by: None,
         };
         let model = fixture_model(
             vec![],

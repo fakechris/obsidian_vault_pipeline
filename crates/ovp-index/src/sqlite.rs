@@ -30,11 +30,11 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
-// v4: claims.theme_id (stable community routing, 2026-08-09). A version
+// v5: claims.patched_by (human patch ledger overlay, M37). A version
 // bump is MANDATORY for any DDL change: the reader trusts the stored
 // version, so an old shadow without the column would otherwise pass the
 // check and then fail at SELECT time instead of requesting a rebuild.
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -190,7 +190,8 @@ CREATE INDEX idx_pack_card_titles ON pack_card_titles(pack_dir, idx);
 CREATE TABLE claims(
   claim_id TEXT NOT NULL, claim_key TEXT, claim TEXT NOT NULL, theme TEXT,
   theme_id INTEGER,
-  status TEXT NOT NULL, strength TEXT, run_id TEXT, run_date TEXT, lane TEXT);
+  status TEXT NOT NULL, strength TEXT, run_id TEXT, run_date TEXT, lane TEXT,
+  patched_by TEXT);
 CREATE INDEX idx_claims_id ON claims(claim_id);
 CREATE INDEX idx_claims_status ON claims(status);
 CREATE TABLE claim_sources(claim_rowid INTEGER NOT NULL, claim_id TEXT NOT NULL, sha256 TEXT NOT NULL);
@@ -464,7 +465,7 @@ fn build_into(
         let mut claim = tx
             .prepare(
                 "INSERT INTO claims(claim_id, claim_key, claim, theme, theme_id, status, strength,
-                 run_id, run_date, lane) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                 run_id, run_date, lane, patched_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             )
             .map_err(|e| format!("prepare claims: {e}"))?;
         let mut claim_src = tx
@@ -486,6 +487,7 @@ fn build_into(
                     &c.run_id,
                     &c.run_date,
                     &c.lane,
+                    &c.patched_by,
                 ))
                 .map_err(|e| format!("claim {}: {e}", c.claim_id))?;
             let rowid = tx.last_insert_rowid();
@@ -986,7 +988,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
     let claims = conn
         .prepare(
             "SELECT rowid, claim_id, claim_key, claim, theme, theme_id, status, strength, run_id,
-             run_date, lane FROM claims ORDER BY rowid",
+             run_date, lane, patched_by FROM claims ORDER BY rowid",
         )
         .and_then(|mut st| {
             st.query_map([], |r| {
@@ -1004,6 +1006,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                         run_id: r.get(8)?,
                         run_date: r.get(9)?,
                         lane: r.get(10)?,
+                        patched_by: r.get(11)?,
                     },
                     r.get::<_, String>(6)?,
                 ))
@@ -1468,6 +1471,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             }],
             runs: vec![crate::model::RunRow {
                 run_id: "daily-2026-08-02".into(),

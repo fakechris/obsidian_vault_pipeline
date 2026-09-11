@@ -152,6 +152,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             })
             .collect();
         IndexModel {

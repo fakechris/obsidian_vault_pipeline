@@ -2355,6 +2355,7 @@ mod tests {
             run_id: None,
             run_date: None,
             lane: None,
+            patched_by: None,
         });
         let resp = theme_subgraph(&records, Some(&model), "gamma").unwrap();
         let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();

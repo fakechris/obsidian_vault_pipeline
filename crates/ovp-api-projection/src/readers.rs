@@ -73,6 +73,18 @@ pub fn load_active_records_strict(
         Ok(None) => {}
         Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
     }
+
+    // Human patch overlay (M37): when `.ovp/crystal/patches.jsonl` exists,
+    // fold the patch ledger and overlay active human adjustments onto active records.
+    let patches_file = vault_root.join(layout.crystal_patches_ledger());
+    if let Some(patch_records) = ovp_domain::crystal::read_patch_ledger(&patches_file)
+        .ok()
+        .filter(|r| !r.is_empty())
+    {
+        let patch_state = ovp_domain::crystal::fold_patch_ledger(&patch_records);
+        ovp_domain::crystal::apply_patches_to_durable_records(&mut records, &patch_state);
+    }
+
     Ok(records)
 }
 
@@ -125,4 +137,96 @@ pub fn lifecycle_moved_path(
     expected_sha256: Option<&str>,
 ) -> Option<PathBuf> {
     ovp_domain::vault_layout::lifecycle_moved_path(vault_root, layout, rel, expected_sha256)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovp_domain::crystal::{
+        append_patch_record, FinalClass, HumanPatchRecord, ProvenanceClass, StoreOp,
+        StrengthClass,
+    };
+
+    #[test]
+    fn test_load_active_records_overlays_patches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let layout = VaultLayout;
+
+        let store_dir = root.join(layout.crystal_store_dir());
+        std::fs::create_dir_all(&store_dir).unwrap();
+
+        let rec = DurableRecord {
+            claim_key: "ck-1".into(),
+            claim_id: "c01".into(),
+            claim: "Unpatched baseline text".into(),
+            theme: "original-theme".into(),
+            theme_id: None,
+            source_cases: vec!["case1".into()],
+            citations: Vec::new(),
+            provenance_score: 0.9,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "good".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        };
+        let event = StoreEvent {
+            op: StoreOp::Write,
+            record: rec,
+            supersedes: None,
+            reason: None,
+        };
+        std::fs::write(
+            store_dir.join("ledger.jsonl"),
+            format!("{}\n", serde_json::to_string(&event).unwrap()),
+        )
+        .unwrap();
+
+        // 1. Initial load
+        let initial = load_active_records_strict(root, &layout).unwrap();
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].claim, "Unpatched baseline text");
+        assert_eq!(initial[0].theme, "original-theme");
+
+        // 2. Add patch
+        let patches_file = root.join(layout.crystal_patches_ledger());
+        let patch = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-1".into()),
+            "Unpatched baseline text",
+            "Human patched assertion text",
+            Some("patched-theme".into()),
+            None,
+            "operator:bob",
+            "fixed nuance",
+            None,
+        );
+        append_patch_record(&patches_file, &patch).unwrap();
+
+        // 3. Load with patch overlay
+        let patched = load_active_records_strict(root, &layout).unwrap();
+        assert_eq!(patched.len(), 1);
+        assert_eq!(patched[0].claim, "Human patched assertion text");
+        assert_eq!(patched[0].theme, "patched-theme");
+
+        // 4. Roll back patch
+        let rollback = HumanPatchRecord::new_rollback(
+            "c01",
+            Some(patch.patch_id.clone()),
+            Some("ck-1".into()),
+            "Human patched assertion text",
+            "operator:bob",
+            "rollback test",
+            None,
+        );
+        append_patch_record(&patches_file, &rollback).unwrap();
+
+        // 5. Load after rollback
+        let reverted = load_active_records_strict(root, &layout).unwrap();
+        assert_eq!(reverted.len(), 1);
+        assert_eq!(reverted[0].claim, "Unpatched baseline text");
+        assert_eq!(reverted[0].theme, "original-theme");
+    }
 }

@@ -1,0 +1,786 @@
+//! M37 — Human Patch Ledger for Crystal Knowledge Claims.
+//!
+//! Inspired by WeKnora's Chunk Editing with Revision History and one-click rollback.
+//! In OVP2, knowledge crystal claims are produced deterministically through multi-source
+//! synthesis and citation linter gates. If an operator discovers wording overreach, typos,
+//! or wants to add a human caveat to an assertion, directly editing downstream Markdown
+//! files would cause state drift from the upstream ledger and get overwritten on rebuild.
+//!
+//! This module introduces an **append-only Human Patch Ledger** stored at
+//! `.ovp/crystal/patches.jsonl`.
+//!
+//! Core Invariants:
+//! 1. **Immutable Ground Truth**: `ledger.jsonl` and vault notes are NEVER mutated in-place.
+//! 2. **Reproducible Projection**: Rebuilding the index (`ovp2 index`) or loading active records
+//!    folds the patch ledger and overlays effective patches deterministically.
+//! 3. **Auditable Revisions**: Every edit is an append-only `HumanPatchRecord` capturing
+//!    `base_text`, `base_hash`, `patched_text`, author, reason, and timestamp.
+//! 4. **One-Click Rollback**: Rolling back a patch is ALSO an append-only event (`PatchOp::Rollback`)
+//!    which deactivates the target patch and cleanly falls back to the previous revision or original raw truth.
+//! 5. **Drift Detection**: Patches record `base_hash` (SHA-256 of the baseline assertion) so conflicting
+//!    concurrent patches or upstream assertion rewrites are explicitly detected.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::crystal::DurableRecord;
+
+/// Operation recorded in the patch ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchOp {
+    /// Apply a human patch or revise an existing patch.
+    Apply,
+    /// Roll back a previously applied patch.
+    Rollback,
+}
+
+/// The effective status of a patch in the folded state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchStatus {
+    /// Currently active and effective.
+    Active,
+    /// Superseded by a newer patch for the same target.
+    Superseded,
+    /// Deactivated by a rollback operation.
+    RolledBack,
+}
+
+/// One append-only record in `.ovp/crystal/patches.jsonl`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HumanPatchRecord {
+    /// Deterministic patch identity (e.g. `hp-<hash>`).
+    pub patch_id: String,
+    /// Operation: Apply or Rollback.
+    pub op: PatchOp,
+    /// Target claim identifier (claim_id such as "c01" or claim_key such as "ck-abc...").
+    pub target_id: String,
+    /// Optional target claim_key when known (for exact version binding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_claim_key: Option<String>,
+    /// Base assertion text before this patch was applied (for diff & drift verification).
+    pub base_text: String,
+    /// SHA-256 hash of `base_text`.
+    pub base_hash: String,
+    /// Revised assertion text. Empty if op == Rollback.
+    #[serde(default)]
+    pub patched_text: String,
+    /// Optional theme override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patched_theme: Option<String>,
+    /// Optional caveat override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patched_caveat: Option<String>,
+    /// Target patch_id to roll back (when op == Rollback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_patch_id: Option<String>,
+    /// Author / operator attribution (e.g. "human:operator", "admin").
+    pub author: String,
+    /// Reason or motivation for this patch.
+    pub reason: String,
+    /// ISO-8601 timestamp string when the patch was authored.
+    pub created_at: String,
+}
+
+impl HumanPatchRecord {
+    /// Create a new `Apply` patch record.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_apply(
+        target_id: impl Into<String>,
+        target_claim_key: Option<String>,
+        base_text: impl Into<String>,
+        patched_text: impl Into<String>,
+        patched_theme: Option<String>,
+        patched_caveat: Option<String>,
+        author: impl Into<String>,
+        reason: impl Into<String>,
+        created_at: Option<String>,
+    ) -> Self {
+        let target_id = target_id.into();
+        let base_text = base_text.into();
+        let patched_text = patched_text.into();
+        let base_hash = compute_text_hash(&base_text);
+        let created_at = created_at.unwrap_or_else(current_iso_timestamp);
+        let patch_id = compute_patch_id(&target_id, &base_hash, &patched_text, &created_at);
+        Self {
+            patch_id,
+            op: PatchOp::Apply,
+            target_id,
+            target_claim_key,
+            base_text,
+            base_hash,
+            patched_text,
+            patched_theme,
+            patched_caveat,
+            rollback_patch_id: None,
+            author: author.into(),
+            reason: reason.into(),
+            created_at,
+        }
+    }
+
+    /// Create a new `Rollback` patch record.
+    pub fn new_rollback(
+        target_id: impl Into<String>,
+        rollback_patch_id: Option<String>,
+        target_claim_key: Option<String>,
+        base_text: impl Into<String>,
+        author: impl Into<String>,
+        reason: impl Into<String>,
+        created_at: Option<String>,
+    ) -> Self {
+        let target_id = target_id.into();
+        let base_text = base_text.into();
+        let base_hash = compute_text_hash(&base_text);
+        let created_at = created_at.unwrap_or_else(current_iso_timestamp);
+        let target_ref = rollback_patch_id.as_deref().unwrap_or(&target_id);
+        let patch_id = compute_patch_id(
+            &format!("rb-{}", target_ref),
+            &base_hash,
+            "rollback",
+            &created_at,
+        );
+        Self {
+            patch_id,
+            op: PatchOp::Rollback,
+            target_id,
+            target_claim_key,
+            base_text,
+            base_hash,
+            patched_text: String::new(),
+            patched_theme: None,
+            patched_caveat: None,
+            rollback_patch_id,
+            author: author.into(),
+            reason: reason.into(),
+            created_at,
+        }
+    }
+
+    /// Check if the claim text matches the recorded `base_hash` (drift check).
+    pub fn matches_base(&self, claim_text: &str) -> bool {
+        compute_text_hash(claim_text) == self.base_hash
+    }
+
+    /// Overlay this patch onto a `DurableRecord`. Returns true if modified.
+    pub fn overlay_onto_durable(&self, record: &mut DurableRecord) -> bool {
+        if self.op != PatchOp::Apply {
+            return false;
+        }
+        let mut modified = false;
+        if !self.patched_text.trim().is_empty() && record.claim != self.patched_text {
+            record.claim = self.patched_text.clone();
+            modified = true;
+        }
+        if let Some(theme) = self.patched_theme.as_deref().filter(|&t| t != record.theme) {
+            record.theme = theme.to_string();
+            modified = true;
+        }
+        modified
+    }
+
+    /// Overlay this patch onto assertion text and theme option. Returns true if modified.
+    pub fn overlay_onto_claim_parts(
+        &self,
+        claim: &mut String,
+        theme: &mut Option<String>,
+    ) -> bool {
+        if self.op != PatchOp::Apply {
+            return false;
+        }
+        let mut modified = false;
+        if !self.patched_text.trim().is_empty() && claim.as_str() != self.patched_text {
+            *claim = self.patched_text.clone();
+            modified = true;
+        }
+        if let Some(new_theme) = self
+            .patched_theme
+            .as_deref()
+            .filter(|&t| theme.as_deref() != Some(t))
+        {
+            *theme = Some(new_theme.to_string());
+            modified = true;
+        }
+        modified
+    }
+}
+
+/// Compute SHA-256 hash of a text span for drift verification.
+pub fn compute_text_hash(text: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(text.trim().as_bytes());
+    format!("{:x}", h.finalize())[..16].to_string()
+}
+
+/// Compute a deterministic patch ID: `hp-<sha256[..16]>`.
+pub fn compute_patch_id(
+    target_id: &str,
+    base_hash: &str,
+    patched_text: &str,
+    created_at: &str,
+) -> String {
+    let mut h = Sha256::new();
+    h.update(target_id.trim().as_bytes());
+    h.update(b"|");
+    h.update(base_hash.trim().as_bytes());
+    h.update(b"|");
+    h.update(patched_text.trim().as_bytes());
+    h.update(b"|");
+    h.update(created_at.trim().as_bytes());
+    format!("hp-{:x}", h.finalize())[..19].to_string()
+}
+
+/// Formats current UTC timestamp as ISO-8601 without external dependencies.
+pub fn current_iso_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now();
+    let duration = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = duration.as_secs();
+    let days = secs / 86400;
+    let rem_secs = secs % 86400;
+    let hours = rem_secs / 3600;
+    let mins = (rem_secs % 3600) / 60;
+    let s = rem_secs % 60;
+
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02}T{hours:02}:{mins:02}:{s:02}Z")
+}
+
+/// Folded state of the patch ledger.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PatchLedgerState {
+    /// Active effective patches indexed by `target_id`.
+    pub active_by_target: BTreeMap<String, HumanPatchRecord>,
+    /// Active effective patches indexed by `target_claim_key`.
+    pub active_by_claim_key: BTreeMap<String, HumanPatchRecord>,
+    /// Chronological audit history of all patch operations per `target_id`.
+    pub history_by_target: BTreeMap<String, Vec<HumanPatchRecord>>,
+    /// Status of each patch ID.
+    pub patch_statuses: BTreeMap<String, PatchStatus>,
+    /// Total records in the ledger.
+    pub total_records: usize,
+    /// Number of currently active patches.
+    pub active_count: usize,
+    /// Number of rolled back patches.
+    pub rolled_back_count: usize,
+}
+
+impl PatchLedgerState {
+    /// Find the active patch for a claim by `claim_id` and optional `claim_key`.
+    pub fn get_active_patch(
+        &self,
+        claim_id: &str,
+        claim_key: Option<&str>,
+    ) -> Option<&HumanPatchRecord> {
+        if let Some(key) = claim_key {
+            if let Some(p) = self.active_by_claim_key.get(key) {
+                return Some(p);
+            }
+            if let Some(p) = self.active_by_target.get(key) {
+                return Some(p);
+            }
+        }
+        self.active_by_target.get(claim_id)
+    }
+
+    /// Check if a claim has an active patch.
+    pub fn has_active_patch(&self, claim_id: &str, claim_key: Option<&str>) -> bool {
+        self.get_active_patch(claim_id, claim_key).is_some()
+    }
+
+    /// Retrieve audit history for a specific target.
+    pub fn history_for_target(&self, target_id: &str) -> &[HumanPatchRecord] {
+        self.history_by_target
+            .get(target_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+}
+
+/// Fold append-only patch ledger records into current effective state.
+///
+/// Deterministic reduction:
+/// - Records are processed in chronological order.
+/// - Each target maintains an applied stack.
+/// - An `Apply` pushes to the stack.
+/// - A `Rollback` pops or removes the targeted patch from the stack, marking it `RolledBack`.
+/// - After all operations for a target: the top of the stack is `Active`, preceding items are `Superseded`.
+pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
+    let mut history_by_target: BTreeMap<String, Vec<HumanPatchRecord>> = BTreeMap::new();
+    let mut target_order: Vec<String> = Vec::new();
+    let mut target_keys: BTreeMap<String, String> = BTreeMap::new();
+
+    for r in records {
+        if !history_by_target.contains_key(&r.target_id) {
+            target_order.push(r.target_id.clone());
+        }
+        history_by_target
+            .entry(r.target_id.clone())
+            .or_default()
+            .push(r.clone());
+        if let Some(ref k) = r.target_claim_key {
+            target_keys.insert(r.target_id.clone(), k.clone());
+        }
+    }
+
+    let mut active_by_target: BTreeMap<String, HumanPatchRecord> = BTreeMap::new();
+    let mut active_by_claim_key: BTreeMap<String, HumanPatchRecord> = BTreeMap::new();
+    let mut patch_statuses: BTreeMap<String, PatchStatus> = BTreeMap::new();
+    let mut rolled_back_count = 0;
+
+    for target_id in &target_order {
+        let history = history_by_target.get(target_id).unwrap();
+        let mut stack: Vec<HumanPatchRecord> = Vec::new();
+        let mut rolled_back_ids: BTreeSet<String> = BTreeSet::new();
+
+        for ev in history {
+            match ev.op {
+                PatchOp::Apply => {
+                    stack.push(ev.clone());
+                }
+                PatchOp::Rollback => {
+                    if let Some(ref target_patch_id) = ev.rollback_patch_id {
+                        if let Some(pos) = stack.iter().position(|p| &p.patch_id == target_patch_id) {
+                            let popped = stack.remove(pos);
+                            rolled_back_ids.insert(popped.patch_id.clone());
+                        } else {
+                            rolled_back_ids.insert(target_patch_id.clone());
+                        }
+                    } else if let Some(popped) = stack.pop() {
+                        rolled_back_ids.insert(popped.patch_id);
+                    }
+                    rolled_back_ids.insert(ev.patch_id.clone());
+                }
+            }
+        }
+
+        for (i, p) in stack.iter().enumerate() {
+            let status = if i + 1 == stack.len() {
+                PatchStatus::Active
+            } else {
+                PatchStatus::Superseded
+            };
+            patch_statuses.insert(p.patch_id.clone(), status);
+        }
+
+        for r_id in &rolled_back_ids {
+            patch_statuses.insert(r_id.clone(), PatchStatus::RolledBack);
+            rolled_back_count += 1;
+        }
+
+        if let Some(top) = stack.last() {
+            active_by_target.insert(target_id.clone(), top.clone());
+            if let Some(k) = top.target_claim_key.as_ref().or_else(|| target_keys.get(target_id)) {
+                active_by_claim_key.insert(k.clone(), top.clone());
+            }
+        }
+    }
+
+    let active_count = active_by_target.len();
+    PatchLedgerState {
+        active_by_target,
+        active_by_claim_key,
+        history_by_target,
+        patch_statuses,
+        total_records: records.len(),
+        active_count,
+        rolled_back_count,
+    }
+}
+
+/// Apply effective patches to a slice of `DurableRecord`s in-place.
+/// Returns the number of records modified.
+pub fn apply_patches_to_durable_records(
+    records: &mut [DurableRecord],
+    state: &PatchLedgerState,
+) -> usize {
+    let mut modified_count = 0;
+    for rec in records {
+        let modified = state
+            .get_active_patch(&rec.claim_id, Some(&rec.claim_key))
+            .is_some_and(|patch| patch.overlay_onto_durable(rec));
+        if modified {
+            modified_count += 1;
+        }
+    }
+    modified_count
+}
+
+// ---- Diff & Inspection ----
+
+/// Kind of a diff line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffKind {
+    Unchanged,
+    Addition,
+    Deletion,
+}
+
+/// A line in a patch diff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiffLine {
+    pub kind: DiffKind,
+    pub text: String,
+}
+
+/// Structured diff between base state and patched state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatchDiff {
+    pub patch_id: String,
+    pub target_id: String,
+    pub base_text: String,
+    pub patched_text: String,
+    pub theme_changed: bool,
+    pub old_theme: Option<String>,
+    pub new_theme: Option<String>,
+    pub caveat_changed: bool,
+    pub old_caveat: Option<String>,
+    pub new_caveat: Option<String>,
+    pub diff_lines: Vec<DiffLine>,
+}
+
+/// Generate structured diff for a patch record against base context.
+pub fn diff_patch(
+    patch: &HumanPatchRecord,
+    current_theme: Option<&str>,
+    current_caveat: Option<&str>,
+) -> PatchDiff {
+    let theme_changed = patch.patched_theme.is_some()
+        && patch.patched_theme.as_deref() != current_theme;
+    let caveat_changed = patch.patched_caveat.is_some()
+        && patch.patched_caveat.as_deref() != current_caveat;
+
+    let mut diff_lines = Vec::new();
+    if patch.op == PatchOp::Rollback {
+        diff_lines.push(DiffLine {
+            kind: DiffKind::Deletion,
+            text: format!("[ROLLBACK patch {}]", patch.rollback_patch_id.as_deref().unwrap_or("latest")),
+        });
+    } else if patch.base_text == patch.patched_text {
+        diff_lines.push(DiffLine {
+            kind: DiffKind::Unchanged,
+            text: patch.base_text.clone(),
+        });
+    } else {
+        if !patch.base_text.is_empty() {
+            diff_lines.push(DiffLine {
+                kind: DiffKind::Deletion,
+                text: patch.base_text.clone(),
+            });
+        }
+        if !patch.patched_text.is_empty() {
+            diff_lines.push(DiffLine {
+                kind: DiffKind::Addition,
+                text: patch.patched_text.clone(),
+            });
+        }
+    }
+
+    PatchDiff {
+        patch_id: patch.patch_id.clone(),
+        target_id: patch.target_id.clone(),
+        base_text: patch.base_text.clone(),
+        patched_text: patch.patched_text.clone(),
+        theme_changed,
+        old_theme: current_theme.map(|s| s.to_string()),
+        new_theme: patch.patched_theme.clone(),
+        caveat_changed,
+        old_caveat: current_caveat.map(|s| s.to_string()),
+        new_caveat: patch.patched_caveat.clone(),
+        diff_lines,
+    }
+}
+
+/// Format unified-style diff text for CLI / audit output.
+pub fn format_diff(diff: &PatchDiff) -> String {
+    let mut out = format!("--- target: {}\n+++ patch: {}\n", diff.target_id, diff.patch_id);
+    for line in &diff.diff_lines {
+        match line.kind {
+            DiffKind::Unchanged => out.push_str(&format!("  {}\n", line.text)),
+            DiffKind::Deletion => out.push_str(&format!("- {}\n", line.text)),
+            DiffKind::Addition => out.push_str(&format!("+ {}\n", line.text)),
+        }
+    }
+    if diff.theme_changed {
+        out.push_str(&format!(
+            " [theme: {} -> {}]\n",
+            diff.old_theme.as_deref().unwrap_or("(none)"),
+            diff.new_theme.as_deref().unwrap_or("(none)")
+        ));
+    }
+    if diff.caveat_changed {
+        out.push_str(&format!(
+            " [caveat: {} -> {}]\n",
+            diff.old_caveat.as_deref().unwrap_or("(none)"),
+            diff.new_caveat.as_deref().unwrap_or("(none)")
+        ));
+    }
+    out
+}
+
+// ---- Audit Entry ----
+
+/// Comprehensive audit row for patch tracking.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatchAuditEntry {
+    pub patch_id: String,
+    pub op: PatchOp,
+    pub status: PatchStatus,
+    pub target_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_claim_key: Option<String>,
+    pub author: String,
+    pub reason: String,
+    pub created_at: String,
+    pub base_text: String,
+    pub patched_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_patch_id: Option<String>,
+}
+
+/// Collect audit entries from folded patch ledger state.
+pub fn audit_patches(
+    state: &PatchLedgerState,
+    target_id: Option<&str>,
+) -> Vec<PatchAuditEntry> {
+    let mut entries = Vec::new();
+    let targets: Vec<&String> = match target_id {
+        Some(t) => state.history_by_target.keys().filter(|k| k.as_str() == t).collect(),
+        None => state.history_by_target.keys().collect(),
+    };
+
+    for target in targets {
+        if let Some(history) = state.history_by_target.get(target) {
+            for rec in history {
+                let status = state
+                    .patch_statuses
+                    .get(&rec.patch_id)
+                    .copied()
+                    .unwrap_or(PatchStatus::Superseded);
+                entries.push(PatchAuditEntry {
+                    patch_id: rec.patch_id.clone(),
+                    op: rec.op,
+                    status,
+                    target_id: rec.target_id.clone(),
+                    target_claim_key: rec.target_claim_key.clone(),
+                    author: rec.author.clone(),
+                    reason: rec.reason.clone(),
+                    created_at: rec.created_at.clone(),
+                    base_text: rec.base_text.clone(),
+                    patched_text: rec.patched_text.clone(),
+                    rollback_patch_id: rec.rollback_patch_id.clone(),
+                });
+            }
+        }
+    }
+    entries
+}
+
+// ---- I/O Helpers ----
+
+/// Read all `HumanPatchRecord`s from a `.ovp/crystal/patches.jsonl` file.
+/// If the file does not exist, returns `Ok(vec![])`.
+pub fn read_patch_ledger(path: &Path) -> Result<Vec<HumanPatchRecord>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("reading patch ledger {}: {e}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    for (i, line) in reader.lines().enumerate() {
+        let line = line.map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let record: HumanPatchRecord = serde_json::from_str(trimmed)
+            .map_err(|e| format!("{}:{}: malformed patch record: {e}", path.display(), i + 1))?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// Append a single `HumanPatchRecord` line to `.ovp/crystal/patches.jsonl`.
+pub fn append_patch_record(path: &Path, record: &HumanPatchRecord) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty() && !p.exists())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating directory {}: {e}", parent.display()))?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("opening patch ledger {}: {e}", path.display()))?;
+    let serialized = serde_json::to_string(record)
+        .map_err(|e| format!("serializing patch record {}: {e}", record.patch_id))?;
+    writeln!(file, "{serialized}")
+        .map_err(|e| format!("appending to patch ledger {}: {e}", path.display()))?;
+    file.flush()
+        .map_err(|e| format!("flushing patch ledger {}: {e}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_patch_apply_fold_and_diff() {
+        let rec1 = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-123".into()),
+            "Knowledge graph enables fast retrieval.",
+            "Knowledge graph enables deterministic fast retrieval.",
+            Some("Architecture".into()),
+            None,
+            "operator",
+            "clarify determinism",
+            Some("2026-09-11T08:00:00Z".into()),
+        );
+
+        assert!(rec1.matches_base("Knowledge graph enables fast retrieval."));
+        assert!(!rec1.matches_base("Something else"));
+
+        let diff = diff_patch(&rec1, Some("OldArchitecture"), None);
+        let formatted = format_diff(&diff);
+        assert!(formatted.contains("- Knowledge graph enables fast retrieval."));
+        assert!(formatted.contains("+ Knowledge graph enables deterministic fast retrieval."));
+        assert!(formatted.contains("[theme: OldArchitecture -> Architecture]"));
+
+        let records = vec![rec1.clone()];
+        let state = fold_patch_ledger(&records);
+        assert_eq!(state.active_count, 1);
+        let active = state.get_active_patch("c01", Some("ck-123")).expect("active patch found");
+        assert_eq!(active.patched_text, "Knowledge graph enables deterministic fast retrieval.");
+        assert_eq!(state.patch_statuses.get(&rec1.patch_id), Some(&PatchStatus::Active));
+    }
+
+    #[test]
+    fn test_patch_revision_supersede_and_rollback() {
+        // Step 1: Initial apply
+        let p1 = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "Claim text v0",
+            "Claim text v1",
+            None,
+            None,
+            "alice",
+            "first edit",
+            Some("2026-09-11T08:01:00Z".into()),
+        );
+
+        // Step 2: Second apply (revising v1 -> v2)
+        let p2 = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "Claim text v1",
+            "Claim text v2",
+            None,
+            None,
+            "bob",
+            "second edit",
+            Some("2026-09-11T08:02:00Z".into()),
+        );
+
+        let records_step2 = vec![p1.clone(), p2.clone()];
+        let state_step2 = fold_patch_ledger(&records_step2);
+        assert_eq!(state_step2.active_count, 1);
+        assert_eq!(state_step2.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::Superseded));
+        assert_eq!(state_step2.patch_statuses.get(&p2.patch_id), Some(&PatchStatus::Active));
+        assert_eq!(
+            state_step2.get_active_patch("c01", None).unwrap().patched_text,
+            "Claim text v2"
+        );
+
+        // Step 3: Rollback p2 -> should restore p1
+        let p3 = HumanPatchRecord::new_rollback(
+            "c01",
+            Some(p2.patch_id.clone()),
+            None,
+            "Claim text v2",
+            "carol",
+            "revert p2",
+            Some("2026-09-11T08:03:00Z".into()),
+        );
+
+        let records_step3 = vec![p1.clone(), p2.clone(), p3.clone()];
+        let state_step3 = fold_patch_ledger(&records_step3);
+        assert_eq!(state_step3.active_count, 1);
+        assert_eq!(state_step3.patch_statuses.get(&p2.patch_id), Some(&PatchStatus::RolledBack));
+        assert_eq!(state_step3.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::Active));
+        assert_eq!(
+            state_step3.get_active_patch("c01", None).unwrap().patched_text,
+            "Claim text v1"
+        );
+
+        // Step 4: Rollback p1 -> should leave no active patch (fallback to base truth)
+        let p4 = HumanPatchRecord::new_rollback(
+            "c01",
+            Some(p1.patch_id.clone()),
+            None,
+            "Claim text v1",
+            "carol",
+            "revert p1 back to base",
+            Some("2026-09-11T08:04:00Z".into()),
+        );
+
+        let records_step4 = vec![p1.clone(), p2.clone(), p3.clone(), p4.clone()];
+        let state_step4 = fold_patch_ledger(&records_step4);
+        assert_eq!(state_step4.active_count, 0);
+        assert_eq!(state_step4.get_active_patch("c01", None), None);
+        assert_eq!(state_step4.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::RolledBack));
+    }
+
+    #[test]
+    fn test_patch_audit_trail() {
+        let p1 = HumanPatchRecord::new_apply(
+            "c02",
+            None,
+            "Base quote",
+            "Patched quote",
+            None,
+            None,
+            "alice",
+            "fix typo",
+            Some("2026-09-11T08:00:00Z".into()),
+        );
+        let p2 = HumanPatchRecord::new_rollback(
+            "c02",
+            Some(p1.patch_id.clone()),
+            None,
+            "Patched quote",
+            "alice",
+            "undo fix",
+            Some("2026-09-11T08:05:00Z".into()),
+        );
+        let records = vec![p1.clone(), p2.clone()];
+        let state = fold_patch_ledger(&records);
+        let audit = audit_patches(&state, Some("c02"));
+        assert_eq!(audit.len(), 2);
+        assert_eq!(audit[0].op, PatchOp::Apply);
+        assert_eq!(audit[0].status, PatchStatus::RolledBack);
+        assert_eq!(audit[1].op, PatchOp::Rollback);
+    }
+}
