@@ -85,6 +85,8 @@ struct Relevant {
     surface: String,
     id: String,
     #[serde(default)]
+    // Read only under cfg(test) (qrel well-formedness check); kept for schema fidelity.
+    #[allow(dead_code)]
     grade: Option<u8>,
 }
 
@@ -350,17 +352,15 @@ fn run_tool(
             let mut claims = Vec::new();
             if let Some(hits) = v["hits"].as_array() {
                 for hit in hits {
-                    if let Some(sid) = hit["source_id"].as_str() {
-                        if !sources.contains(&sid.to_string()) {
+                    if let Some(sid) = hit["source_id"].as_str()
+                        && !sources.contains(&sid.to_string()) {
                             sources.push(sid.to_string());
                         }
-                    }
                     for key in ["claim_key", "claim_id"] {
-                        if let Some(cid) = hit[key].as_str() {
-                            if !claims.contains(&cid.to_string()) {
+                        if let Some(cid) = hit[key].as_str()
+                            && !claims.contains(&cid.to_string()) {
                                 claims.push(cid.to_string());
                             }
-                        }
                     }
                     if let Some(sids) = hit["source_ids"].as_array() {
                         for sid in sids.iter().filter_map(Value::as_str) {
@@ -507,11 +507,10 @@ fn round_robin_union(lists: &[Vec<String>]) -> Vec<String> {
     let max_len = lists.iter().map(Vec::len).max().unwrap_or(0);
     for i in 0..max_len {
         for list in lists {
-            if let Some(id) = list.get(i) {
-                if !out.contains(id) {
+            if let Some(id) = list.get(i)
+                && !out.contains(id) {
                     out.push(id.clone());
                 }
-            }
         }
     }
     out
@@ -524,7 +523,7 @@ fn recall_at(golds: &[String], ranked: &[String], k: usize) -> f64 {
     let top: Vec<&String> = ranked.iter().take(k).collect();
     let hit = golds
         .iter()
-        .filter(|g| top.iter().any(|r| *r == *g))
+        .filter(|g| top.contains(g))
         .count();
     hit as f64 / golds.len() as f64
 }

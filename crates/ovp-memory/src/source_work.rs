@@ -129,7 +129,7 @@ pub fn strip_code_for_lang_detect(text: &str) -> String {
     let mut rebuilt = String::with_capacity(text.len());
     while let Some(line) = lines.next() {
         if line.trim_start().starts_with("```") {
-            while let Some(l2) = lines.next() {
+            for l2 in lines.by_ref() {
                 if l2.trim_start().starts_with("```") {
                     break;
                 }
@@ -144,7 +144,7 @@ pub fn strip_code_for_lang_detect(text: &str) -> String {
     let mut chars = rebuilt.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '`' {
-            while let Some(c2) = chars.next() {
+            for c2 in chars.by_ref() {
                 if c2 == '`' {
                     break;
                 }
@@ -208,11 +208,10 @@ pub fn is_near_untranslated_copy(zh: &str, original: &str) -> bool {
 
 fn strip_frontmatter(text: &str) -> &str {
     let t = text.trim_start();
-    if let Some(rest) = t.strip_prefix("---\n") {
-        if let Some(idx) = rest.find("\n---") {
+    if let Some(rest) = t.strip_prefix("---\n")
+        && let Some(idx) = rest.find("\n---") {
             return rest[idx + 4..].trim_start();
         }
-    }
     text
 }
 
@@ -331,13 +330,11 @@ fn chunk_body(body: &str) -> Vec<String> {
         let end = (i + CHUNK_CHARS).min(chars.len());
         // Prefer break at paragraph.
         let mut cut = end;
-        if end < chars.len() {
-            if let Some(rel) = chars[i..end].iter().rposition(|&c| c == '\n') {
-                if rel > CHUNK_CHARS / 2 {
+        if end < chars.len()
+            && let Some(rel) = chars[i..end].iter().rposition(|&c| c == '\n')
+                && rel > CHUNK_CHARS / 2 {
                     cut = i + rel + 1;
                 }
-            }
-        }
         out.push(chars[i..cut].iter().collect());
         i = cut;
     }
@@ -533,6 +530,7 @@ fn translate_chunk_with_gate(
 }
 
 /// Translate body → zh.md (skip if already present unless `force`).
+#[allow(clippy::too_many_arguments)]
 pub fn translate_source(
     vault_root: &Path,
     sha: &str,
@@ -661,8 +659,8 @@ fn unwrap_cot_json_envelope(text: &str) -> String {
     } else {
         trimmed
     };
-    if !(candidate.starts_with('{') && candidate.contains("\"response\""))
-        && !(candidate.starts_with('{') && candidate.contains("\"translation\""))
+    if !(candidate.starts_with('{')
+        && (candidate.contains("\"response\"") || candidate.contains("\"translation\"")))
     {
         // Also handle: prose + trailing/leading json fence with response key.
         if let Some(extracted) = extract_response_from_embedded_json(text) {
@@ -672,11 +670,10 @@ fn unwrap_cot_json_envelope(text: &str) -> String {
     }
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) {
         for key in ["response", "translation", "zh", "text", "content"] {
-            if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-                if s.chars().count() > 40 {
+            if let Some(s) = v.get(key).and_then(|x| x.as_str())
+                && s.chars().count() > 40 {
                     return s.to_string();
                 }
-            }
         }
     }
     if let Some(extracted) = extract_response_from_embedded_json(text) {
@@ -701,8 +698,8 @@ fn extract_response_from_embedded_json(text: &str) -> Option<String> {
         let block = after[..end].trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(block) {
             for key in ["response", "translation", "zh"] {
-                if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-                    if s.chars().count() > 40 {
+                if let Some(s) = v.get(key).and_then(|x| x.as_str())
+                    && s.chars().count() > 40 {
                         // Keep material before the fence + extracted response.
                         let prefix = text[..text.len() - search.len() + start].trim_end();
                         if prefix.is_empty() {
@@ -710,7 +707,6 @@ fn extract_response_from_embedded_json(text: &str) -> Option<String> {
                         }
                         return Some(format!("{prefix}\n\n{s}"));
                     }
-                }
             }
         }
         search = &after[end + 3..];
@@ -790,7 +786,7 @@ fn strip_empty_fences(text: &str) -> String {
             let mut body = String::new();
             let mut closed = false;
             let mut close_line = String::new();
-            while let Some(l2) = lines.next() {
+            for l2 in lines.by_ref() {
                 if l2.trim().starts_with("```") {
                     closed = true;
                     close_line = l2.to_string();
@@ -868,6 +864,7 @@ fn build_session_glossary(
 }
 
 /// Deep summary → summary.md.
+#[allow(clippy::too_many_arguments)]
 pub fn summarize_source(
     vault_root: &Path,
     sha: &str,

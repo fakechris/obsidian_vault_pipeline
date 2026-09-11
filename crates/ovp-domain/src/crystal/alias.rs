@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn surrounding_whitespace_is_tolerated() {
-        assert_eq!(table().resolve(" c1 ").is_some(), true);
+        assert!(table().resolve(" c1 ").is_some());
     }
 
     #[test]

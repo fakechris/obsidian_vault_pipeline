@@ -621,19 +621,17 @@ fn run_inner(
                         &path_refs,
                     );
                     // Prefer pack source.md if body still empty.
-                    if cand.body.is_none() {
-                        if let Some(pack) = r.pack_dir.as_deref() {
+                    if cand.body.is_none()
+                        && let Some(pack) = r.pack_dir.as_deref() {
                             for name in ["source.md", "source-support.md", "reader.md"] {
                                 let rel = format!("{pack}/{name}");
-                                if let Ok(s) = std::fs::read_to_string(args.vault_root.join(&rel)) {
-                                    if !s.trim().is_empty() {
+                                if let Ok(s) = std::fs::read_to_string(args.vault_root.join(&rel))
+                                    && !s.trim().is_empty() {
                                         cand.body = Some(s);
                                         break;
                                     }
-                                }
                             }
                         }
-                    }
                     cand
                 })
                 .collect();

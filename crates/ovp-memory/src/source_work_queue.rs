@@ -208,11 +208,10 @@ impl SourceWorkQueue {
     /// so we don't clobber in-flight task state.
     fn maybe_reload_from_disk(&self, g: &mut QueueFile) {
         let disk_m = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok();
-        let last = self
+        let last = *self
             .disk_mtime
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+            .unwrap_or_else(|p| p.into_inner());
         let newer = match (disk_m, last) {
             (Some(d), Some(l)) => d > l,
             (Some(_), None) => true,
@@ -401,7 +400,6 @@ impl SourceWorkQueue {
         if sha.is_empty() || sha.len() > 128 {
             return Err("invalid sha256".into());
         }
-        let req = req;
         self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.reload_from_disk(&mut g);
