@@ -1131,3 +1131,37 @@ fn human_patches_overlay_onto_claim_rows_and_support_rollback() {
     assert_eq!(c01_reverted.claim, "Filesystem works as agent memory.");
     assert_eq!(c01_reverted.patched_by, None);
 }
+
+#[test]
+fn human_patch_drift_skips_overlay_and_corrupt_ledger_fails_loudly() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_fixture_vault(root);
+
+    // 1. A patch authored against an OLD version of the claim: the fixture's
+    //    upstream text no longer matches the patch base → drift → skipped,
+    //    upstream truth wins, patched_by stays None.
+    let patches_file = root.join(".ovp/crystal/patches.jsonl");
+    let stale = ovp_domain::crystal::HumanPatchRecord::new_apply(
+        "c01",
+        None,
+        "Filesystem used to work differently.",
+        "Stale human edit that must not land.",
+        None,
+        None,
+        "operator:alice",
+        "edited before upstream rewrite",
+        Some("2026-06-09T10:00:00Z".into()),
+    );
+    ovp_domain::crystal::append_patch_record(&patches_file, &stale).unwrap();
+    let model = build_index(root, "2026-06-09", None).unwrap();
+    let c01 = model.claims.iter().find(|c| c.claim_id == "c01").unwrap();
+    assert_eq!(c01.claim, "Filesystem works as agent memory.");
+    assert_eq!(c01.patched_by, None);
+
+    // 2. A corrupt (truncated JSON) ledger line fails the build loudly
+    //    instead of silently dropping every human correction.
+    std::fs::write(&patches_file, "{\"patch_id\": \"hp-brok").unwrap();
+    let err = build_index(root, "2026-06-09", None).unwrap_err();
+    assert!(err.contains("human patch ledger"), "{err}");
+}

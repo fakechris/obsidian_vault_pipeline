@@ -35,15 +35,34 @@ pub fn load_lineage_index(vault_root: &Path, layout: &VaultLayout) -> BTreeMap<S
 /// passthrough (the reader must keep working; `ovp2 index` is where corruption
 /// fails loud).
 pub fn load_active_records(vault_root: &Path, layout: &VaultLayout) -> Vec<DurableRecord> {
-    load_active_records_strict(vault_root, layout).unwrap_or_default()
+    let mut records = load_active_records_core(vault_root, layout).unwrap_or_default();
+    // Live-server degrade: a corrupt human patch ledger keeps the unpatched
+    // records serving (never an empty portal) — the corruption is reported,
+    // and `ovp2 index` is where it fails loud.
+    if let Err(e) = overlay_human_patches(&mut records, vault_root, layout) {
+        eprintln!("warning: {e}");
+    }
+    records
 }
 
 /// Fallible variant for the PUBLISHER: an unreadable/malformed crystal ledger
-/// is an ERROR, not an empty list. `load_active_records`'s "graceful degrade to
-/// empty" is right for a live server (keep serving) but wrong for publishing —
-/// it would deploy a site that silently removes every claim. A genuinely
-/// MISSING ledger (fresh vault) is still `Ok(empty)`.
+/// OR human patch ledger is an ERROR, not an empty list.
+/// `load_active_records`'s "graceful degrade" is right for a live server (keep
+/// serving) but wrong for publishing — it would deploy a site that silently
+/// removes every claim (or every human correction). A genuinely MISSING ledger
+/// (fresh vault) is still `Ok(empty)`.
 pub fn load_active_records_strict(
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<Vec<DurableRecord>, String> {
+    let mut records = load_active_records_core(vault_root, layout)?;
+    overlay_human_patches(&mut records, vault_root, layout)?;
+    Ok(records)
+}
+
+/// Ledger + themes fold WITHOUT the human-patch overlay — the shared core of
+/// both public loaders (which differ only in how overlay failures degrade).
+fn load_active_records_core(
     vault_root: &Path,
     layout: &VaultLayout,
 ) -> Result<Vec<DurableRecord>, String> {
@@ -74,18 +93,27 @@ pub fn load_active_records_strict(
         Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
     }
 
-    // Human patch overlay (M37): when `.ovp/crystal/patches.jsonl` exists,
-    // fold the patch ledger and overlay active human adjustments onto active records.
-    let patches_file = vault_root.join(layout.crystal_patches_ledger());
-    if let Some(patch_records) = ovp_domain::crystal::read_patch_ledger(&patches_file)
-        .ok()
-        .filter(|r| !r.is_empty())
-    {
-        let patch_state = ovp_domain::crystal::fold_patch_ledger(&patch_records);
-        ovp_domain::crystal::apply_patches_to_durable_records(&mut records, &patch_state);
-    }
-
+    // Human patch overlay (M37): fold `.ovp/crystal/patches.jsonl` and overlay
+    // active human adjustments onto active records. A missing ledger is a
+    // no-op; a present-but-corrupt one is an error (see the public loaders
+    // for how they degrade). Drift-gated inside `apply_patches_to_durable_records`.
     Ok(records)
+}
+
+fn overlay_human_patches(
+    records: &mut [DurableRecord],
+    vault_root: &Path,
+    layout: &VaultLayout,
+) -> Result<(), String> {
+    let patches_file = vault_root.join(layout.crystal_patches_ledger());
+    let patch_records = ovp_domain::crystal::read_patch_ledger(&patches_file)
+        .map_err(|e| format!("human patch ledger {}: {e}", patches_file.display()))?;
+    if patch_records.is_empty() {
+        return Ok(());
+    }
+    let patch_state = ovp_domain::crystal::fold_patch_ledger(&patch_records);
+    ovp_domain::crystal::apply_patches_to_durable_records(records, &patch_state);
+    Ok(())
 }
 
 /// Read a source's markdown from the vault, capped at `MAX_SOURCE_DOC_BYTES`.
@@ -228,5 +256,57 @@ mod tests {
         assert_eq!(reverted.len(), 1);
         assert_eq!(reverted[0].claim, "Unpatched baseline text");
         assert_eq!(reverted[0].theme, "original-theme");
+    }
+
+    #[test]
+    fn test_corrupt_patch_ledger_strict_errors_server_degrades() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let layout = VaultLayout;
+
+        let store_dir = root.join(layout.crystal_store_dir());
+        std::fs::create_dir_all(&store_dir).unwrap();
+
+        let rec = DurableRecord {
+            claim_key: "ck-1".into(),
+            claim_id: "c01".into(),
+            claim: "Unpatched baseline text".into(),
+            theme: "original-theme".into(),
+            theme_id: None,
+            source_cases: vec!["case1".into()],
+            citations: Vec::new(),
+            provenance_score: 0.9,
+            provenance_class: ProvenanceClass::Durable,
+            strength: StrengthClass::Supported,
+            strength_rationale: "good".into(),
+            final_class: FinalClass::Durable,
+            run_id: "r1".into(),
+            status: CrystalStatus::Active,
+        };
+        let event = StoreEvent {
+            op: StoreOp::Write,
+            record: rec,
+            supersedes: None,
+            reason: None,
+        };
+        std::fs::write(
+            store_dir.join("ledger.jsonl"),
+            format!("{}\n", serde_json::to_string(&event).unwrap()),
+        )
+        .unwrap();
+
+        // Truncated/malformed patch ledger line.
+        let patches_file = root.join(layout.crystal_patches_ledger());
+        std::fs::create_dir_all(patches_file.parent().unwrap()).unwrap();
+        std::fs::write(&patches_file, "{\"patch_id\": \"hp-brok").unwrap();
+
+        // Publisher path: corruption is an error, never a silent unpatched deploy.
+        let err = load_active_records_strict(root, &layout).unwrap_err();
+        assert!(err.contains("human patch ledger"), "{err}");
+
+        // Live-server path: keep serving the unpatched records.
+        let served = load_active_records(root, &layout);
+        assert_eq!(served.len(), 1);
+        assert_eq!(served[0].claim, "Unpatched baseline text");
     }
 }

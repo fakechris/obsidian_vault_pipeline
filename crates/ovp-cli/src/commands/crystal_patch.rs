@@ -305,8 +305,12 @@ fn run_rollback(
         }
     };
 
+    // The rollback record is grouped under the patch's OWN target: a valid
+    // `--patch-id` may belong to a different target than `--target`, and
+    // folding is per-target — grouping it under the user-supplied name would
+    // leave the selected patch active while reporting success.
     let rollback_patch = HumanPatchRecord::new_rollback(
-        target,
+        &target_patch.target_id,
         Some(target_patch.patch_id.clone()),
         target_patch.target_claim_key.clone(),
         &target_patch.patched_text,
@@ -320,7 +324,7 @@ fn run_rollback(
 
     println!(
         "✓ Rolled back patch {} for claim {}",
-        target_patch.patch_id, target
+        target_patch.patch_id, target_patch.target_id
     );
     println!("  Author: {author}");
     println!("  Reason: {reason}");

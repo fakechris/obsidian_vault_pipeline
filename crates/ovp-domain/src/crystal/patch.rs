@@ -282,8 +282,33 @@ pub struct PatchLedgerState {
 }
 
 impl PatchLedgerState {
-    /// Find the active patch for a claim by `claim_id` and optional `claim_key`.
+    /// Target-level lookup (CLI semantics): find the active patch for a
+    /// target addressed by `claim_id` and/or `claim_key`. The claim-id
+    /// fallback matches the patch that is active FOR that target.
     pub fn get_active_patch(
+        &self,
+        claim_id: &str,
+        claim_key: Option<&str>,
+    ) -> Option<&HumanPatchRecord> {
+        if let Some(key) = claim_key {
+            if let Some(p) = self.active_by_claim_key.get(key) {
+                return Some(p);
+            }
+            // Patch targeted by claim key directly (`--target ck-...`).
+            if let Some(p) = self.active_by_target.get(key) {
+                return Some(p);
+            }
+        }
+        self.active_by_target.get(claim_id)
+    }
+
+    /// Record-level binding used by PROJECTION overlays (P1): two runs CAN
+    /// emit active records that share a `claim_id` while carrying distinct
+    /// claim keys — a patch bound to one record's `target_claim_key` must
+    /// never overlay onto the other record. Key-bound patches apply only to
+    /// the exact key; patches recorded against a bare claim id (no key
+    /// binding, e.g. a `--force` apply) fall back to claim-id matching.
+    pub fn get_active_patch_for_record(
         &self,
         claim_id: &str,
         claim_key: Option<&str>,
@@ -296,7 +321,30 @@ impl PatchLedgerState {
                 return Some(p);
             }
         }
-        self.active_by_target.get(claim_id)
+        self.active_by_target
+            .get(claim_id)
+            .filter(|p| p.target_claim_key.is_none() || p.target_claim_key.as_deref() == claim_key)
+    }
+
+    /// Drift gate for projection (P1): the FIRST apply in the target's patch
+    /// history must have been based on exactly the record's current upstream
+    /// text — otherwise the upstream assertion was rewritten after the patch
+    /// was authored and overlaying would replace newer truth with a stale
+    /// human edit. Returns `false` on drift: the overlay must be skipped.
+    ///
+    /// A forced apply (`--force`, empty `base_text`) skipped base verification
+    /// at authoring time by explicit operator choice, so it stays grounded.
+    pub fn chain_grounded_on(&self, patch: &HumanPatchRecord, current_text: &str) -> bool {
+        let Some(history) = self.history_by_target.get(&patch.target_id) else {
+            return false;
+        };
+        let Some(root) = history.iter().find(|r| r.op == PatchOp::Apply) else {
+            return false;
+        };
+        if root.base_text.is_empty() {
+            return true;
+        }
+        root.matches_base(current_text)
     }
 
     /// Check if a claim has an active patch.
@@ -406,18 +454,33 @@ pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
 
 /// Apply effective patches to a slice of `DurableRecord`s in-place.
 /// Returns the number of records modified.
+///
+/// Patches whose base no longer matches the record's current (upstream) text
+/// are SKIPPED with a warning — upstream rewrites win over stale human edits,
+/// and the drift is surfaced instead of silently rebinding.
 pub fn apply_patches_to_durable_records(
     records: &mut [DurableRecord],
     state: &PatchLedgerState,
 ) -> usize {
     let mut modified_count = 0;
+    let mut drift_skips: Vec<(&str, &str)> = Vec::new();
     for rec in records {
-        let modified = state
-            .get_active_patch(&rec.claim_id, Some(&rec.claim_key))
-            .is_some_and(|patch| patch.overlay_onto_durable(rec));
-        if modified {
+        let Some(patch) = state.get_active_patch_for_record(&rec.claim_id, Some(&rec.claim_key))
+        else {
+            continue;
+        };
+        if !state.chain_grounded_on(patch, &rec.claim) {
+            drift_skips.push((&patch.patch_id, &rec.claim_id));
+            continue;
+        }
+        if patch.overlay_onto_durable(rec) {
             modified_count += 1;
         }
+    }
+    for (patch_id, claim_id) in drift_skips {
+        eprintln!(
+            "warning: human patch {patch_id} skipped for claim {claim_id}: upstream text drifted from the patch base"
+        );
     }
     modified_count
 }
@@ -782,5 +845,114 @@ mod tests {
         assert_eq!(audit[0].op, PatchOp::Apply);
         assert_eq!(audit[0].status, PatchStatus::RolledBack);
         assert_eq!(audit[1].op, PatchOp::Rollback);
+    }
+
+    #[test]
+    fn test_keyed_patch_never_leaks_across_shared_claim_id() {
+        // Two active records share claim_id "c01" but carry distinct keys
+        // (possible across runs). A patch bound to ck-a must not reach ck-B.
+        let p = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-a".into()),
+            "Shared base text",
+            "Patched for record A only",
+            None,
+            None,
+            "alice",
+            "edit record A",
+            Some("2026-09-11T09:00:00Z".into()),
+        );
+        let state = fold_patch_ledger(std::slice::from_ref(&p));
+
+        // Exact-key binding applies.
+        assert!(state.get_active_patch_for_record("c01", Some("ck-a")).is_some());
+        // A different record sharing the claim id must NOT receive it …
+        assert!(state.get_active_patch_for_record("c01", Some("ck-b")).is_none());
+        // … and neither may an un-keyed row (binding exists, it just is not ours).
+        assert!(state.get_active_patch_for_record("c01", None).is_none());
+
+        // Target-level lookup (CLI `--target c01`) still finds it — the patch
+        // IS the active patch for that target; the strictness only governs
+        // which RECORD it may overlay onto.
+        assert!(state.get_active_patch("c01", None).is_some());
+
+        // An un-keyed (forced) patch still falls back to bare claim-id matching.
+        let forced = HumanPatchRecord::new_apply(
+            "c09",
+            None,
+            "Forced base",
+            "Forced patch",
+            None,
+            None,
+            "bob",
+            "force",
+            Some("2026-09-11T09:01:00Z".into()),
+        );
+        let state2 = fold_patch_ledger(&[forced]);
+        assert!(state2.get_active_patch_for_record("c09", Some("ck-z")).is_some());
+        assert!(state2.get_active_patch_for_record("c09", None).is_some());
+    }
+
+    #[test]
+    fn test_drift_skips_overlay_and_grounded_chain_applies() {
+        fn record(claim: &str, key: &str) -> DurableRecord {
+            DurableRecord {
+                claim_key: key.into(),
+                claim_id: "c01".into(),
+                claim: claim.into(),
+                theme: "t".into(),
+                theme_id: None,
+                source_cases: vec!["case1".into()],
+                citations: Vec::new(),
+                provenance_score: 0.9,
+                provenance_class: crate::crystal::ProvenanceClass::Durable,
+                strength: crate::crystal::StrengthClass::Supported,
+                strength_rationale: "good".into(),
+                final_class: crate::crystal::FinalClass::Durable,
+                run_id: "r1".into(),
+                status: crate::crystal::CrystalStatus::Active,
+            }
+        }
+
+        let p = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-a".into()),
+            "Original upstream text",
+            "Human corrected text",
+            None,
+            None,
+            "alice",
+            "fix overreach",
+            Some("2026-09-11T09:10:00Z".into()),
+        );
+        let state = fold_patch_ledger(&[p]);
+
+        // Grounded: record text still matches the patch base → overlay applies.
+        let mut grounded = vec![record("Original upstream text", "ck-a")];
+        assert_eq!(apply_patches_to_durable_records(&mut grounded, &state), 1);
+        assert_eq!(grounded[0].claim, "Human corrected text");
+
+        // Drift: upstream rewrote the claim → the stale patch is skipped.
+        let mut drifted = vec![record("Rewritten upstream text", "ck-a")];
+        assert_eq!(apply_patches_to_durable_records(&mut drifted, &state), 0);
+        assert_eq!(drifted[0].claim, "Rewritten upstream text");
+
+        // Forced patch (empty base text): operator skipped verification at
+        // apply time, so the overlay stays grounded even after rewrites.
+        let forced = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "",
+            "Forced text",
+            None,
+            None,
+            "bob",
+            "force",
+            Some("2026-09-11T09:11:00Z".into()),
+        );
+        let state2 = fold_patch_ledger(&[forced]);
+        let mut any_text = vec![record("Whatever the upstream now says", "ck-q")];
+        assert_eq!(apply_patches_to_durable_records(&mut any_text, &state2), 1);
+        assert_eq!(any_text[0].claim, "Forced text");
     }
 }
