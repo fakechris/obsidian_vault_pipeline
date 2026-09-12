@@ -62,5 +62,19 @@ fn print_context(ctx: &RagContext) {
         if !why.is_empty() {
             println!("   why: {}", why.join(", "));
         }
+        if !c.matched_units.is_empty() {
+            println!("   child units ({}):", c.matched_units.len());
+            for u in &c.matched_units {
+                let heading_info = u
+                    .heading
+                    .as_deref()
+                    .map(|h| format!(" [{h}]"))
+                    .unwrap_or_default();
+                println!(
+                    "     - {}{} (score={}): {}",
+                    u.unit_id, heading_info, u.score, u.snippet
+                );
+            }
+        }
     }
 }

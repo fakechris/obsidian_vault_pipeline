@@ -601,6 +601,11 @@ export const en = {
     'No answer within the time limit. The request was not cancelled — if the model finishes, the saved transcript still appears in History.',
   'ask.errGeneric': 'Ask failed — is the server running against a vault?',
   // agent live trail + receipts (A3c)
+  'ask.stageTitle': 'RAG Pipeline',
+  'ask.stageRetrieving': 'Retrieving knowledge…',
+  'ask.stageRanking': 'Ranking candidates…',
+  'ask.stageSynthesizing': 'Synthesizing answer…',
+  'ask.stageCompleted': 'Completed',
   'ask.trailConnecting': 'Connecting to the vault agent…',
   'ask.trailThinking': 'Thinking…',
   'ask.trailComposing': 'Writing the answer…',

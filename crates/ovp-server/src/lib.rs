@@ -35,7 +35,7 @@ use ovp_index::{
 use ovp_llm::ModelClient;
 use ovp_memory::ask::{
     AskArgs, AskHistoryTurn, AskResult, ChatFocusMeta, EvidenceItem, EvidenceKind,
-    ask_with_optional_evidence, parse_chat_surface_meta, valid_chat_stem,
+    parse_chat_surface_meta, valid_chat_stem,
 };
 use ovp_memory::receipts::{agent_citations, agent_citations_unindexed, args_brief};
 use ovp_memory::verify::{citation_key, citations_in_order};
@@ -788,6 +788,8 @@ struct AskProgressFeed {
     /// feed (started=false) is registered at admission so a poller during
     /// client-build/lock-acquisition sees a live feed, not a stale done one.
     started: bool,
+    /// High-level stage: "retrieving" | "ranking" | "synthesizing" | "completed".
+    stage: Option<String>,
 }
 
 pub fn run_server(config: ServeConfig) -> Result<(), String> {
@@ -4283,6 +4285,53 @@ fn handle_ask(
     let context_prefix = context_prefix;
     let focus_meta = focus_meta;
 
+    let progress_session = chat.clone().unwrap_or_else(|| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("rag-{now}")
+    });
+    let progress_map = Arc::clone(&state.ask_progress);
+    {
+        let mut feeds = progress_map.lock().unwrap();
+        const MAX_RETAINED_FEEDS: usize = 64;
+        if feeds.len() >= MAX_RETAINED_FEEDS {
+            feeds.retain(|_, f| !f.done);
+        }
+        feeds.insert(
+            progress_session.clone(),
+            AskProgressFeed {
+                events: vec![serde_json::json!({
+                    "event": "stage",
+                    "stage": "retrieving",
+                    "summary": "Retrieving relevant knowledge...",
+                })],
+                done: false,
+                generation: 1,
+                started: true,
+                stage: Some("retrieving".to_string()),
+            },
+        );
+    }
+
+    let p_map = Arc::clone(&progress_map);
+    let p_sess = progress_session.clone();
+    let on_stage = move |stage: &str, summary: &str| {
+        let mut feeds = p_map.lock().unwrap();
+        if let Some(feed) = feeds.get_mut(&p_sess) {
+            feed.stage = Some(stage.to_string());
+            feed.events.push(serde_json::json!({
+                "event": "stage",
+                "stage": stage,
+                "summary": summary,
+            }));
+            if stage == "completed" {
+                feed.done = true;
+            }
+        }
+    };
+
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _slot = slot; // held for the WHOLE pipeline, freed on drop
@@ -4296,6 +4345,7 @@ fn handle_ask(
             context_prefix.as_deref(),
             focus_meta.as_ref(),
             &vault_root,
+            Some(&on_stage),
         );
         let _ = tx.send(result);
     });
@@ -4400,7 +4450,13 @@ fn handle_ask_agent(
             }
             feeds.insert(
                 session.clone(),
-                AskProgressFeed { events: vec![], done: false, generation, started: false },
+                AskProgressFeed {
+                    events: vec![],
+                    done: false,
+                    generation,
+                    started: false,
+                    stage: Some("retrieving".to_string()),
+                },
             );
         }
     }
@@ -4606,6 +4662,7 @@ fn handle_ask_agent(
                             done: false,
                             generation,
                             started: true,
+                            stage: Some("retrieving".to_string()),
                         },
                     );
                     return;
@@ -4615,6 +4672,18 @@ fn handle_ask_agent(
                 };
                 if feed.generation != generation {
                     return; // a newer turn owns this feed now
+                }
+                match &ev {
+                    AgentProgress::ToolStarted { .. } => {
+                        feed.stage = Some("retrieving".to_string());
+                    }
+                    AgentProgress::ToolFinished { .. } => {
+                        feed.stage = Some("ranking".to_string());
+                    }
+                    AgentProgress::Finished { .. } => {
+                        feed.stage = Some("completed".to_string());
+                    }
+                    _ => {}
                 }
                 let terminal = matches!(ev, AgentProgress::Finished { .. });
                 // The terminal event ALWAYS lands — nonterminal events keep
@@ -4890,10 +4959,27 @@ fn handle_ask_progress(state: &AppState, url: &str) -> Response<std::io::Cursor<
         // `started` distinguishes a PENDING admission (setup/lock phase)
         // from a running turn — a poller can show "connecting…" vs live
         // tool activity.
-        Some(feed) => serde_json::json!({
-            "events": feed.events, "done": feed.done, "started": feed.started
+        Some(feed) => {
+            let stage = feed.stage.as_deref().unwrap_or(if feed.done {
+                "completed"
+            } else if feed.started {
+                "retrieving"
+            } else {
+                "pending"
+            });
+            serde_json::json!({
+                "events": feed.events,
+                "done": feed.done,
+                "started": feed.started,
+                "stage": stage,
+            })
+        }
+        None => serde_json::json!({
+            "events": [],
+            "done": true,
+            "started": false,
+            "stage": "completed",
         }),
-        None => serde_json::json!({"events": [], "done": true, "started": false}),
     };
     json_response(200, &body.to_string())
 }
@@ -4911,6 +4997,7 @@ fn run_ask(
     context_prefix: Option<&str>,
     focus: Option<&ChatFocusMeta>,
     vault_root: &std::path::Path,
+    on_stage: Option<&dyn Fn(&str, &str)>,
 ) -> Result<serde_json::Value, String> {
     let mut client = factory()?;
     let args = AskArgs {
@@ -4922,7 +5009,14 @@ fn run_ask(
         focus: focus.cloned(),
         ..Default::default()
     };
-    let result = ask_with_optional_evidence(model, evidence, client.as_mut(), &args, vault_root)?;
+    let result = ovp_memory::ask::ask_with_optional_evidence_with_progress(
+        model,
+        evidence,
+        client.as_mut(),
+        &args,
+        vault_root,
+        on_stage,
+    )?;
     Ok(ask_response_json(model, &result))
 }
 
@@ -7680,6 +7774,7 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_slice(resp.into_reader().get_ref()).unwrap();
         assert_eq!(v["done"], true);
+        assert_eq!(v["stage"], "completed");
         let events: Vec<&str> = v["events"]
             .as_array()
             .unwrap()

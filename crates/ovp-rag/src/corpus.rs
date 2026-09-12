@@ -4,11 +4,32 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use ovp_query::KnowledgeView;
+use serde::{Deserialize, Serialize};
 
 use crate::RagError;
 
-/// One retrievable unit: a canonical concept plus the notes that backlink it and
-/// (when the evergreen note exists on disk) its body text. A read-only snapshot,
+/// Granular child unit sliced from an evergreen note body for high-precision
+/// lexical and semantic retrieval. Mapped back to its parent [`ConceptDoc`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildUnit {
+    /// Deterministic unit identifier: `{parent_slug}#u{index}`
+    pub unit_id: String,
+    /// Slug of the parent ConceptDoc
+    pub parent_slug: String,
+    /// 0-indexed position within the parent doc
+    pub index: usize,
+    /// Nearest enclosing section heading, if any (e.g. "Architecture Overview")
+    pub heading: Option<String>,
+    /// Slice of content text for this unit
+    pub content: String,
+    /// Character start offset in parent note body
+    pub start_char: usize,
+    /// Character end offset in parent note body
+    pub end_char: usize,
+}
+
+/// One retrievable unit: a canonical concept plus the notes that backlink it,
+/// its body text, and its sliced child units. A read-only snapshot,
 /// rebuildable from the `KnowledgeView` it came from — it holds no authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConceptDoc {
@@ -21,6 +42,133 @@ pub struct ConceptDoc {
     /// The evergreen note's text, if the file exists on disk. `None` when the
     /// note is absent (a concept can legitimately precede its note).
     pub body: Option<String>,
+    /// Granular child units sliced from `body` for precision retrieval and citation.
+    pub child_units: Vec<ChildUnit>,
+}
+
+impl ConceptDoc {
+    pub fn new(
+        slug: impl Into<String>,
+        title: impl Into<String>,
+        evergreen_path: impl Into<String>,
+        provenance_source_url: impl Into<String>,
+        backlinks: Vec<String>,
+        body: Option<String>,
+    ) -> Self {
+        let slug = slug.into();
+        let child_units = match body.as_deref() {
+            Some(b) if !b.trim().is_empty() => chunk_note_body(&slug, b),
+            _ => Vec::new(),
+        };
+        Self {
+            slug,
+            title: title.into(),
+            evergreen_path: evergreen_path.into(),
+            provenance_source_url: provenance_source_url.into(),
+            backlinks,
+            body,
+            child_units,
+        }
+    }
+}
+
+/// Slices a markdown note body into bounded child units along headings (`# Heading`)
+/// and paragraph boundaries (`\n\n`), tracking section headings and character offsets.
+pub fn chunk_note_body(parent_slug: &str, body: &str) -> Vec<ChildUnit> {
+    if body.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let mut units = Vec::new();
+    let mut current_heading: Option<String> = None;
+    let mut current_buf = String::new();
+    let mut chunk_start_char = 0;
+    let mut char_pos = 0;
+
+    for line in body.split_inclusive('\n') {
+        let trimmed_line = line.trim();
+        let is_heading = trimmed_line.starts_with('#') && {
+            let hashes = trimmed_line.chars().take_while(|&c| c == '#').count();
+            (1..=6).contains(&hashes) && trimmed_line[hashes..].starts_with(' ')
+        };
+
+        if is_heading {
+            let trimmed_buf = current_buf.trim();
+            if !trimmed_buf.is_empty() {
+                let unit_id = format!("{}#u{}", parent_slug, units.len());
+                units.push(ChildUnit {
+                    unit_id,
+                    parent_slug: parent_slug.to_string(),
+                    index: units.len(),
+                    heading: current_heading.clone(),
+                    content: trimmed_buf.to_string(),
+                    start_char: chunk_start_char,
+                    end_char: chunk_start_char + current_buf.chars().count(),
+                });
+                current_buf.clear();
+            }
+
+            let hashes = trimmed_line.chars().take_while(|&c| c == '#').count();
+            let heading_text = trimmed_line[hashes..].trim().to_string();
+            current_heading = Some(heading_text);
+            chunk_start_char = char_pos + line.chars().count();
+        } else if trimmed_line.is_empty() {
+            let trimmed_buf = current_buf.trim();
+            if trimmed_buf.chars().count() >= 80 {
+                let unit_id = format!("{}#u{}", parent_slug, units.len());
+                units.push(ChildUnit {
+                    unit_id,
+                    parent_slug: parent_slug.to_string(),
+                    index: units.len(),
+                    heading: current_heading.clone(),
+                    content: trimmed_buf.to_string(),
+                    start_char: chunk_start_char,
+                    end_char: chunk_start_char + current_buf.chars().count(),
+                });
+                current_buf.clear();
+                chunk_start_char = char_pos + line.chars().count();
+            } else if !current_buf.is_empty() {
+                current_buf.push_str(line);
+            } else {
+                chunk_start_char = char_pos + line.chars().count();
+            }
+        } else {
+            if current_buf.is_empty() {
+                chunk_start_char = char_pos;
+            }
+            current_buf.push_str(line);
+        }
+
+        char_pos += line.chars().count();
+    }
+
+    let trimmed_buf = current_buf.trim();
+    if !trimmed_buf.is_empty() {
+        let unit_id = format!("{}#u{}", parent_slug, units.len());
+        units.push(ChildUnit {
+            unit_id,
+            parent_slug: parent_slug.to_string(),
+            index: units.len(),
+            heading: current_heading,
+            content: trimmed_buf.to_string(),
+            start_char: chunk_start_char,
+            end_char: chunk_start_char + current_buf.chars().count(),
+        });
+    }
+
+    if units.is_empty() && !body.trim().is_empty() {
+        units.push(ChildUnit {
+            unit_id: format!("{}#u0", parent_slug),
+            parent_slug: parent_slug.to_string(),
+            index: 0,
+            heading: None,
+            content: body.trim().to_string(),
+            start_char: 0,
+            end_char: body.chars().count(),
+        });
+    }
+
+    units
 }
 
 /// The read-only retrieval corpus: one [`ConceptDoc`] per canonical concept,
@@ -48,14 +196,15 @@ impl RagCorpus {
         let vault_root = view.vault_root();
         let mut docs = Vec::with_capacity(view.concepts().len());
         for c in view.concepts() {
-            docs.push(ConceptDoc {
-                slug: c.slug.clone(),
-                title: c.title.clone(),
-                evergreen_path: c.evergreen_path.clone(),
-                provenance_source_url: c.provenance_source_url.clone(),
-                backlinks: view.backlinks(&c.slug).to_vec(),
-                body: read_body(vault_root, &c.evergreen_path)?,
-            });
+            let body = read_body(vault_root, &c.evergreen_path)?;
+            docs.push(ConceptDoc::new(
+                c.slug.clone(),
+                c.title.clone(),
+                c.evergreen_path.clone(),
+                c.provenance_source_url.clone(),
+                view.backlinks(&c.slug).to_vec(),
+                body,
+            ));
         }
         Ok(Self { docs })
     }
@@ -101,14 +250,14 @@ mod tests {
     use super::*;
 
     fn doc(slug: &str) -> ConceptDoc {
-        ConceptDoc {
-            slug: slug.into(),
-            title: slug.to_uppercase(),
-            evergreen_path: format!("10-Knowledge/Evergreen/{slug}.md"),
-            provenance_source_url: "https://example.com".into(),
-            backlinks: vec![],
-            body: None,
-        }
+        ConceptDoc::new(
+            slug,
+            slug.to_uppercase(),
+            format!("10-Knowledge/Evergreen/{slug}.md"),
+            "https://example.com",
+            vec![],
+            None,
+        )
     }
 
     #[test]
@@ -119,6 +268,49 @@ mod tests {
         assert_eq!(corpus.get("rag").unwrap().slug, "rag");
         assert!(corpus.get("missing").is_none());
         assert!(RagCorpus::from_docs(vec![]).is_empty());
+    }
+
+    #[test]
+    fn chunk_note_body_slices_headings_and_paragraphs() {
+        let markdown = r#"# Retrieval Architecture
+RAG combines external non-parametric retrieval with parametric language model generation.
+
+## Slicing Strategy
+Parent-child units index small chunks for scoring and map to parent concepts for context.
+
+## Evaluation
+Offline evaluation measures recall at k across canonical knowledge benchmarks.
+"#;
+        let units = chunk_note_body("rag-arch", markdown);
+        assert_eq!(units.len(), 3);
+        assert_eq!(units[0].unit_id, "rag-arch#u0");
+        assert_eq!(units[0].parent_slug, "rag-arch");
+        assert_eq!(units[0].heading.as_deref(), Some("Retrieval Architecture"));
+        assert!(units[0].content.contains("non-parametric"));
+
+        assert_eq!(units[1].unit_id, "rag-arch#u1");
+        assert_eq!(units[1].heading.as_deref(), Some("Slicing Strategy"));
+        assert!(units[1].content.contains("Parent-child"));
+
+        assert_eq!(units[2].unit_id, "rag-arch#u2");
+        assert_eq!(units[2].heading.as_deref(), Some("Evaluation"));
+        assert!(units[2].content.contains("Offline evaluation"));
+    }
+
+    #[test]
+    fn chunk_note_body_empty_returns_empty() {
+        assert!(chunk_note_body("slug", "").is_empty());
+        assert!(chunk_note_body("slug", "   \n\n  ").is_empty());
+    }
+
+    #[test]
+    fn chunk_note_body_single_paragraph() {
+        let text = "Simple single paragraph note without any markdown headings.";
+        let units = chunk_note_body("simple", text);
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].unit_id, "simple#u0");
+        assert_eq!(units[0].heading, None);
+        assert_eq!(units[0].content, text);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   citationsFromAnswerText,
+  livePhase,
   makeCitationTitleLookup,
 } from './AskPage';
 
@@ -149,5 +150,29 @@ describe('modern unit/card ids never shadow real titles', () => {
     const lookup = makeCitationTitleLookup({ sources: [], claims: [] });
     expect(lookup('unit', 'u-006-b13dec99')).toBeNull();
     expect(lookup('card', '40-Resources/Reader/good:0')).not.toBeUndefined();
+  });
+});
+
+describe('livePhase stage mapping', () => {
+  it('maps RAG heartbeat stages when no tool is running', () => {
+    expect(
+      livePhase({ events: [], done: false, started: false }, []),
+    ).toBe('connecting');
+
+    expect(
+      livePhase({ events: [], done: false, started: true, stage: 'retrieving' }, []),
+    ).toBe('retrieving');
+
+    expect(
+      livePhase({ events: [], done: false, started: true, stage: 'ranking' }, []),
+    ).toBe('ranking');
+
+    expect(
+      livePhase({ events: [], done: false, started: true, stage: 'synthesizing' }, []),
+    ).toBe('synthesizing');
+
+    expect(
+      livePhase({ events: [], done: true, started: true, stage: 'completed' }, []),
+    ).toBeNull();
   });
 });

@@ -352,6 +352,7 @@ export interface AskTraceEntry {
 /** One event from GET /api/ask/progress — the live mid-turn feed. */
 export interface AskProgressEvent {
   event: string;
+  stage?: string;
   tool?: string;
   tool_call_id?: string;
   /** Display narration for tool_started ("query=… · limit=…"). */
@@ -384,6 +385,8 @@ export interface AskProgress {
   done: boolean;
   /** False while the turn is still in admission (setup/lock phase). */
   started: boolean;
+  /** High-level RAG stage: 'retrieving' | 'ranking' | 'synthesizing' | 'completed'. */
+  stage?: 'retrieving' | 'ranking' | 'synthesizing' | 'completed' | string;
 }
 
 /** /api/chats entry — `mtime` is unix seconds; the client formats it.

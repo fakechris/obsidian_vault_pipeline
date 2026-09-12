@@ -393,34 +393,90 @@ function stepsFromTrace(trace: AskTraceEntry[]): TrailStep[] {
 }
 
 /** What the agent is doing when no tool call is in flight. */
-type TrailPhase = 'connecting' | 'thinking' | 'composing' | null;
+type TrailPhase =
+  | 'connecting'
+  | 'thinking'
+  | 'composing'
+  | 'retrieving'
+  | 'ranking'
+  | 'synthesizing'
+  | null;
 
-function livePhase(progress: AskProgress, steps: TrailStep[]): TrailPhase {
+export function livePhase(progress: AskProgress, steps: TrailStep[]): TrailPhase {
   if (!progress.started) return 'connecting';
+  if (progress.done) return null;
   if (steps.some((s) => s.status === 'running')) return null;
+  if (progress.stage === 'retrieving') return 'retrieving';
+  if (progress.stage === 'ranking') return 'ranking';
+  if (progress.stage === 'synthesizing') return 'synthesizing';
   if (steps.length === 0) return 'thinking';
-  if (!progress.done) return 'composing';
-  return null;
+  return 'composing';
+}
+
+function RagPipelineStageIndicator({ stage }: { stage?: string }) {
+  const { t } = useI18n();
+  const stages: { id: string; labelKey: MsgKey }[] = [
+    { id: 'retrieving', labelKey: 'ask.stageRetrieving' },
+    { id: 'ranking', labelKey: 'ask.stageRanking' },
+    { id: 'synthesizing', labelKey: 'ask.stageSynthesizing' },
+  ];
+  const order = ['retrieving', 'ranking', 'synthesizing', 'completed'];
+  const currentIndex = order.indexOf(stage ?? 'retrieving');
+
+  return (
+    <div className="rag-pipeline-stages" aria-label={t('ask.stageTitle')}>
+      {stages.map((st, idx) => {
+        const isDone = currentIndex > idx;
+        const isActive = currentIndex === idx;
+        const nodeClass = `rag-stage-node${isActive ? ' active' : isDone ? ' done' : ''}`;
+        return (
+          <span
+            key={st.id}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+          >
+            <span className={nodeClass}>
+              <span className="rag-stage-dot" aria-hidden />
+              <span>{t(st.labelKey)}</span>
+            </span>
+            {idx < stages.length - 1 && (
+              <span className="rag-stage-arrow" aria-hidden>
+                →
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function AgentTrail({
   steps,
   phase,
+  stage,
 }: {
   steps: TrailStep[];
   phase: TrailPhase;
+  stage?: string;
 }) {
   const { t } = useI18n();
   const phaseKey: MsgKey | null =
     phase === 'connecting'
       ? 'ask.trailConnecting'
-      : phase === 'thinking'
-        ? 'ask.trailThinking'
-        : phase === 'composing'
-          ? 'ask.trailComposing'
-          : null;
+      : phase === 'retrieving'
+        ? 'ask.stageRetrieving'
+        : phase === 'ranking'
+          ? 'ask.stageRanking'
+          : phase === 'synthesizing'
+            ? 'ask.stageSynthesizing'
+            : phase === 'thinking'
+              ? 'ask.trailThinking'
+              : phase === 'composing'
+                ? 'ask.trailComposing'
+                : null;
   return (
     <div className="ask-trail">
+      {stage && <RagPipelineStageIndicator stage={stage} />}
       {steps.map((s, i) => (
         <div
           key={`s${i}`}
@@ -537,18 +593,21 @@ function citationLookupKey(id: string): string {
   return kind ? `${kind}:${token}` : token;
 }
 
-/** Answer body rendered as markdown with numbered citation markers. */
+/** Answer body rendered as markdown with numbered citation markers and hover popovers. */
 function AnswerText({
   answer,
   citations,
   onHover,
   onOpen,
+  lookup,
 }: {
   answer: string;
   citations: AskCitation[];
   onHover: (id: string | null) => void;
   onOpen: (cit: AskCitation) => void;
+  lookup?: CitationTitleLookup;
 }) {
+  const [popoverId, setPopoverId] = useState<string | null>(null);
   const index = new Map(citations.map((c, i) => [citationLookupKey(c.id), i]));
   const citeMarks: CiteMarks = {
     pattern: CITE_RE,
@@ -556,19 +615,52 @@ function AnswerText({
       const i = index.get(citationLookupKey(citeId));
       if (i === undefined) return null;
       const cit = citations[i];
+      const isPopover = popoverId === cit.id;
+      const title = citationTitle(cit, lookup);
       return (
-        <button
-          type="button"
-          className={`cite-marker${cit.verified === false ? ' warn' : ''}`}
-          onMouseEnter={() => onHover(cit.id)}
-          onMouseLeave={() => onHover(null)}
-          onFocus={() => onHover(cit.id)}
-          onBlur={() => onHover(null)}
-          onClick={() => onOpen(cit)}
-          title={citationTitle(cit)}
-        >
-          [{i + 1}]
-        </button>
+        <span className="cite-marker-wrapper" key={cit.id}>
+          <button
+            type="button"
+            className={`cite-marker${cit.verified === false ? ' warn' : ''}`}
+            onMouseEnter={() => {
+              onHover(cit.id);
+              setPopoverId(cit.id);
+            }}
+            onMouseLeave={() => {
+              onHover(null);
+              setPopoverId(null);
+            }}
+            onFocus={() => {
+              onHover(cit.id);
+              setPopoverId(cit.id);
+            }}
+            onBlur={() => {
+              onHover(null);
+              setPopoverId(null);
+            }}
+            onClick={() => onOpen(cit)}
+            title={title}
+          >
+            [{i + 1}]
+          </button>
+          {isPopover && (
+            <div className="cite-popover" role="tooltip">
+              <div className="cite-popover-title">{title}</div>
+              {cit.snippet && (
+                <div className="cite-popover-snippet">“{cit.snippet}”</div>
+              )}
+              <div className="cite-popover-meta">
+                <span className="pill tiny">{cit.kind}</span>
+                {cit.verified === false && (
+                  <span className="pill unverified tiny">unverified</span>
+                )}
+                {cit.link_target && (
+                  <span className="muted">Click to open →</span>
+                )}
+              </div>
+            </div>
+          )}
+        </span>
       );
     },
   };
@@ -653,6 +745,7 @@ function ChatThread({
   onOpen,
   threadRef,
   empty,
+  lookup,
 }: {
   turns: Turn[];
   pending: boolean;
@@ -662,6 +755,7 @@ function ChatThread({
   onOpen: (cit: AskCitation) => void;
   threadRef: React.RefObject<HTMLDivElement | null>;
   empty: React.ReactNode;
+  lookup?: CitationTitleLookup;
 }) {
   const { t } = useI18n();
   return (
@@ -677,6 +771,7 @@ function ChatThread({
                 citations={turn.response.citations}
                 onHover={onHover}
                 onOpen={onOpen}
+                lookup={lookup}
               />
               {turn.response.verified && (
                 <div className="chat-verify mono tiny muted">
@@ -1029,15 +1124,15 @@ export default function AskPage() {
           return s.agent;
         })
         .catch(() => askStatus ?? modelAgentRef.current);
-      // Agent path: mint the session id client-side so the progress feed
+      // Mint the session id client-side so the progress feed
       // is pollable from the FIRST turn (the server honors supplied ids).
-      if (agent && !chat) {
+      if (!chat) {
         chat = genChatId();
         setSessionChat(chat);
       } else if (chat) {
         setSessionChat(chat);
       }
-      setPollChat(agent ? chat : null);
+      setPollChat(chat);
       // Focus from the live query string, or from the saved chat's focus
       // markers so continuations stay grounded on the same source/theme.
       const focusSha =
@@ -1133,9 +1228,17 @@ export default function AskPage() {
   if (pending && pollChat) {
     if (live) {
       const steps = stepsFromEvents(live.events);
-      liveTrail = <AgentTrail steps={steps} phase={livePhase(live, steps)} />;
+      liveTrail = (
+        <AgentTrail
+          steps={steps}
+          phase={livePhase(live, steps)}
+          stage={live.stage}
+        />
+      );
     } else {
-      liveTrail = <AgentTrail steps={[]} phase="connecting" />;
+      liveTrail = (
+        <AgentTrail steps={[]} phase="connecting" stage="retrieving" />
+      );
     }
   }
 
@@ -1391,6 +1494,7 @@ export default function AskPage() {
               onHover={setHoverId}
               onOpen={openCitation}
               threadRef={threadRef}
+              lookup={citeTitleLookup}
               empty={
                 viewingSaved ? (
                   <EmptyState>

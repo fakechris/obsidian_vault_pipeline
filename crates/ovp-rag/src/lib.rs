@@ -18,10 +18,12 @@ mod ranker;
 mod retriever;
 
 pub use context::{ContextBuilder, RagContext, SelectedConcept};
-pub use corpus::{ConceptDoc, RagCorpus};
+pub use corpus::{chunk_note_body, ChildUnit, ConceptDoc, RagCorpus};
 pub use eval::{Eval, EvalCase, EvalOutcome, EvalReport};
 pub use ranker::Ranker;
-pub use retriever::{MatchField, MatchReason, RetrievalWeights, Retriever, ScoredConcept};
+pub use retriever::{
+    MatchField, MatchReason, RetrievalWeights, Retriever, ScoredChildUnit, ScoredConcept,
+};
 
 use ovp_query::QueryError;
 

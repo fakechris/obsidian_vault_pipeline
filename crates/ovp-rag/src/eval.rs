@@ -107,14 +107,14 @@ mod tests {
     use crate::corpus::{ConceptDoc, RagCorpus};
 
     fn doc(slug: &str, title: &str) -> ConceptDoc {
-        ConceptDoc {
-            slug: slug.into(),
-            title: title.into(),
-            evergreen_path: format!("10-Knowledge/Evergreen/{slug}.md"),
-            provenance_source_url: "u".into(),
-            backlinks: vec![],
-            body: None,
-        }
+        ConceptDoc::new(
+            slug,
+            title,
+            format!("10-Knowledge/Evergreen/{slug}.md"),
+            "u",
+            vec![],
+            None,
+        )
     }
 
     fn corpus() -> RagCorpus {
