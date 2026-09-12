@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -177,77 +176,6 @@ pub fn code_identity() -> Result<Value, String> {
     )
 }
 
-/// Calls only the existing offline retrieval subcommand, without a shell.
-/// No provider, LLM, background service or arbitrary command adapter is used.
-pub fn execute(
-    executable: &Path,
-    dest: &Path,
-    frozen: &Path,
-    mode: &str,
-    k: usize,
-    timeout: u64,
-) -> Result<Value, String> {
-    let out_path = dest.join("report.json");
-    let stdout_path = dest.join("stdout.log");
-    let stderr_path = dest.join("stderr.log");
-    let stdout = fs::File::create(&stdout_path).map_err(|e| e.to_string())?;
-    let stderr = fs::File::create(&stderr_path).map_err(|e| e.to_string())?;
-    let tmp = dest.join("tmp");
-    fs::create_dir(&tmp).map_err(|e| e.to_string())?;
-    let args = vec![
-        "retrieval-eval".to_string(),
-        "--vault-root".into(),
-        frozen.join("vault").display().to_string(),
-        "--qrels".into(),
-        frozen.join("qrels").display().to_string(),
-        "--k".into(),
-        k.to_string(),
-        "--gold-only".into(),
-        "--query-mode".into(),
-        mode.into(),
-        "--out".into(),
-        out_path.display().to_string(),
-    ];
-    let start = Instant::now();
-    let mut child = Command::new(executable)
-        .args(&args)
-        .env("TMPDIR", &tmp)
-        .env("TMP", &tmp)
-        .env("TEMP", &tmp)
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
-        .map_err(|e| format!("launch retrieval arm: {e}"))?;
-    let status = loop {
-        let bounded = [&stdout_path, &stderr_path, &out_path]
-            .iter()
-            .any(|p| fs::metadata(p).is_ok_and(|m| m.len() > 32 * 1024 * 1024));
-        if bounded || start.elapsed() > Duration::from_secs(timeout) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(if bounded {
-                "arm exceeded output budget"
-            } else {
-                "arm timed out"
-            }
-            .into());
-        }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    if !status.success() {
-        return Err(format!("retrieval arm exited {status}; see stderr.log"));
-    }
-    Ok(
-        json!({"status": "completed", "args": args, "exit_code": status.code(),
-        "elapsed_ms": start.elapsed().as_millis(), "report_sha256": hash_file(&out_path)?,
-        "stdout_sha256": hash_file(&stdout_path)?, "stderr_sha256": hash_file(&stderr_path)?}),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,9 +215,8 @@ mod tests {
         let dest = dir.path().join("arm");
         fs::create_dir(&dest).unwrap();
         assert!(
-            execute(&script, &dest, &fixture, "verbatim", 1, 1)
-                .unwrap_err()
-                .contains("timed out")
+            crate::paired_process::execute(&script, &dest, &fixture, "verbatim", 1, 1)
+                .unwrap()["error"].as_str().unwrap().contains("timed out")
         );
     }
 }
