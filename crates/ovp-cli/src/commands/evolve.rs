@@ -9,6 +9,7 @@ pub struct EvolveArgs {
 
 pub enum EvolveSubcmd {
     Registry,
+    Ab { candidate: PathBuf, output: PathBuf },
     Validate { candidate: PathBuf },
     Ledger { vault_root: PathBuf },
     Diagnose { run_id: String, source: String, symptoms: Vec<String> },
@@ -20,6 +21,16 @@ pub fn run(args: EvolveArgs) -> Result<(), CliError> {
 
     match args.sub {
         EvolveSubcmd::Registry => run_registry(&registry),
+        EvolveSubcmd::Ab { candidate, output } => {
+            let decision = ovp_evolve::paired::run(ovp_evolve::paired::RunConfig {
+                candidate, registry: args.registry_path, output,
+                executable: std::env::current_exe().map_err(|e| CliError::Io(e.to_string()))?,
+            }).map_err(CliError::Io)?;
+            println!("Paired retrieval decision: {decision}");
+            if decision == ovp_evolve::types::Decision::Reject {
+                Err(CliError::Gate("paired candidate rejected".into()))
+            } else { Ok(()) }
+        },
         EvolveSubcmd::Validate { candidate } => run_validate(&registry, &candidate),
         EvolveSubcmd::Ledger { vault_root } => run_ledger(&vault_root),
         EvolveSubcmd::Diagnose { run_id, source, symptoms } => {

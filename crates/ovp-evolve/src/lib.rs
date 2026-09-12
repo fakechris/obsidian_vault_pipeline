@@ -5,3 +5,5 @@ pub mod ledger;
 pub mod root_cause;
 pub mod scorecard;
 pub mod ab_runner;
+pub mod paired;
+mod paired_io;

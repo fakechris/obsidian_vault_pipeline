@@ -1,0 +1,15 @@
+{
+  "schema": "ovp.retrieval_eval.qrel/v1",
+  "id": "q-001",
+  "question": "please find the article in my vault about retrieval",
+  "class": "request_noise",
+  "language": "en",
+  "confidence": "gold",
+  "no_answer": false,
+  "relevant": [
+    {
+      "surface": "source",
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

@@ -110,6 +110,10 @@ struct QuestionReport {
     /// For no_answer records: hits any tool returned (should be noise-only).
     hits_returned: usize,
     tool_errors: Vec<String>,
+    /// Ordered source identities returned by each actual tool, so a paired
+    /// evaluator can recompute recall against frozen qrels instead of trusting
+    /// precomputed aggregate metrics.
+    source_ranks: BTreeMap<String, Vec<String>>,
 }
 
 const TOOL_BUDGET: Duration = Duration::from_secs(60);
@@ -346,7 +350,11 @@ fn run_tool(
 ) -> (Vec<String>, Vec<String>, Option<String>, Option<String>) {
     match tools.execute(name, &input, TOOL_BUDGET) {
         ToolOutcome::Ok(raw) => {
-            let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            let v: Value = match serde_json::from_str::<Value>(&raw) {
+                Ok(v) if v.get("hits").is_some_and(Value::is_array) => v,
+                _ => return (Vec::new(), Vec::new(), None,
+                    Some(format!("{name}: invalid tool result; expected JSON hits array"))),
+            };
             let lane = v["lane"].as_str().map(str::to_string);
             let mut sources = Vec::new();
             let mut claims = Vec::new();
@@ -557,6 +565,7 @@ fn score_question(
     let mut claim_recall = BTreeMap::new();
     let mut tool_errors = Vec::new();
     let mut per_tool_sources: Vec<Vec<String>> = Vec::new();
+    let mut source_ranks = BTreeMap::new();
     let mut hits_returned = 0usize;
 
     for tool in ["search_sources", "search_evidence", "search_claims"] {
@@ -582,6 +591,7 @@ fn score_question(
             tool_errors.push(err);
         }
         per_tool_sources.push(sources.clone());
+        source_ranks.insert(tool.to_string(), sources.clone());
         if !gold_sources.is_empty() {
             let per_k: BTreeMap<String, f64> = ks
                 .iter()
@@ -627,6 +637,7 @@ fn score_question(
         claim_recall,
         hits_returned,
         tool_errors,
+        source_ranks,
     }
 }
 

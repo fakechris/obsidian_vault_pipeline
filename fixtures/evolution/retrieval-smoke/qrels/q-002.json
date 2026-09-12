@@ -1,0 +1,10 @@
+{
+  "schema": "ovp.retrieval_eval.qrel/v1",
+  "id": "q-002",
+  "question": "zyxwvuunknown",
+  "class": "negative",
+  "language": "en",
+  "confidence": "gold",
+  "no_answer": true,
+  "relevant": []
+}

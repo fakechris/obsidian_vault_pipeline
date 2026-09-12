@@ -1,0 +1,37 @@
+{
+  "schema": "ovp.index/v2",
+  "date": "2026-09-12",
+  "built_at": "2026-09-12T00:00:00Z",
+  "run_id": "paired-fixture-v1",
+  "totals": {
+    "sources": 2,
+    "queued": 0,
+    "processed": 2,
+    "failed": 0,
+    "blocked": 0,
+    "needs_content": 0,
+    "unparseable": 0,
+    "duplicates": 0,
+    "packs": 0,
+    "claims_durable": 0,
+    "claims_caveated": 0,
+    "runs": 0
+  },
+  "sources": [
+    {
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "processed",
+      "title": "Article retrieval evaluation notes",
+      "fail_count": 0
+    },
+    {
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "processed",
+      "title": "Please find the article in my vault",
+      "fail_count": 0
+    }
+  ],
+  "packs": [],
+  "claims": [],
+  "runs": []
+}

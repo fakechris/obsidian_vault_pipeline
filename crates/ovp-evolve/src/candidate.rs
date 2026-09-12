@@ -43,6 +43,9 @@ pub struct CandidateGuardrails {
 /// Plan for evaluating this candidate.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvalPlan {
+    /// Executable plan; absent for historical comparison-only candidates.
+    #[serde(default)]
+    pub paired_run: Option<crate::paired::RetrievalPlan>,
     #[serde(default)]
     pub replay_set: Option<String>,
     #[serde(default)]
