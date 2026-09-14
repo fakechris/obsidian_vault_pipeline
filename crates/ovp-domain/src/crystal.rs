@@ -1154,6 +1154,14 @@ mod tests {
         assert!(!rep.claims[0].fully_grounded);
         assert_eq!(score_candidate(&rep)[0].class, ProvenanceClass::Quarantine,
             "a non-verbatim citation can never be durable");
+        // Shared projection: one Error diagnostic per defect, coded by the defect.
+        let d = rep.diagnostics();
+        assert_eq!(d.diagnostics.len(), 1);
+        assert_eq!(d.diagnostics[0].code, "crystal.citation.quote_not_in_unit");
+        assert_eq!(d.diagnostics[0].origin, crate::diagnostics::Origin::Crystal);
+        assert_eq!(d.diagnostics[0].severity, crate::diagnostics::Severity::Error);
+        assert_eq!(d.diagnostics[0].location.as_deref(), Some(format!("c1@m18-01/{}", rep.claims[0].citations[0].unit_id).as_str()));
+        assert!(!d.passed(crate::diagnostics::Severity::Error));
     }
 
     #[test]

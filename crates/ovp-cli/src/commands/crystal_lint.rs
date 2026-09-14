@@ -26,9 +26,19 @@ pub struct CrystalLintArgs {
     /// each claim gets a final routing (durable/caveated/reject) via the
     /// deterministic combiner.
     pub strength: Option<PathBuf>,
+    /// Print the shared `DiagnosticReport` JSON to stdout instead of the text
+    /// summary (the summary moves to stderr so stdout stays parseable).
+    pub diagnostics: bool,
 }
 
 pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
+    // With --diagnostics stdout is reserved for the JSON; the human summary
+    // still goes somewhere (stderr) so nothing a person relied on vanishes.
+    macro_rules! say {
+        ($($t:tt)*) => {
+            if args.diagnostics { eprintln!($($t)*) } else { println!($($t)*) }
+        };
+    }
     let text = std::fs::read_to_string(&args.candidate)
         .map_err(|e| CliError::Io(format!("reading {}: {e}", args.candidate.display())))?;
     let candidate: CrystalCandidate = serde_json::from_str(&text)
@@ -79,30 +89,30 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
         && report.n_with_defects == 0
         && final_reject == 0;
 
-    println!("crystal-lint: {} claims over {} cases", report.n_claims, index.len());
-    println!(
+    say!("crystal-lint: {} claims over {} cases", report.n_claims, index.len());
+    say!(
         "  citations: {grounded_citations}/{total_citations} grounded verbatim to an accepted unit"
     );
-    println!(
+    say!(
         "  claims: {} fully-grounded / {} with defects",
         report.n_fully_grounded, report.n_with_defects
     );
-    println!("  provenance class: durable={durable} caveated={caveated} quarantine={quarantine}");
+    say!("  provenance class: durable={durable} caveated={caveated} quarantine={quarantine}");
     if strength_gate_applied {
-        println!(
+        say!(
             "  final routing (with claim-strength gate): durable={final_durable} caveated={final_caveated} reject={final_reject}"
         );
         if !coverage.complete() {
-            println!(
+            say!(
                 "  strength coverage INCOMPLETE: missing={:?} duplicate={:?} unknown={:?}",
                 coverage.missing, coverage.duplicate, coverage.unknown
             );
         }
-        println!(
+        say!(
             "  eligible_for_durable_write={eligible_for_durable_write} (complete={strength_verdict_complete})"
         );
     } else {
-        println!("  citation/provenance-only run (no --strength): diagnostic, NOT a full pre-write pass; not durable-eligible");
+        say!("  citation/provenance-only run (no --strength): diagnostic, NOT a full pre-write pass; not durable-eligible");
     }
 
     if let Some(parent) = args.out.parent() {
@@ -136,7 +146,12 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
     let s = serde_json::to_string_pretty(&combined).map_err(|e| CliError::Io(e.to_string()))?;
     std::fs::write(&args.out, format!("{s}\n"))
         .map_err(|e| CliError::Io(format!("writing {}: {e}", args.out.display())))?;
-    println!("  report: {}", args.out.display());
+    say!("  report: {}", args.out.display());
+    if args.diagnostics {
+        let s = serde_json::to_string_pretty(&report.diagnostics())
+            .map_err(|e| CliError::Io(e.to_string()))?;
+        println!("{s}");
+    }
 
     // Fail-loud gate: the report is always written (for inspection), but the
     // command exits non-zero if ANY claim has a citation defect — so CI / a

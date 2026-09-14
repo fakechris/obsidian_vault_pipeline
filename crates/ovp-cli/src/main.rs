@@ -507,6 +507,11 @@ enum Cmd {
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
+        /// Emit the shared DiagnosticReport JSON (same schema as `lint
+        /// --diagnostics` and `crystal-lint --diagnostics`). PASS lines are
+        /// not diagnostics and are omitted. Exit code unchanged.
+        #[arg(long, conflicts_with = "json")]
+        diagnostics: bool,
         /// Run-recency staleness threshold in HOURS (default 26 — one schedule
         /// interval + slack). The recency check FAILs when the last run
         /// (heartbeat or report) is older than this.
@@ -623,6 +628,11 @@ enum Cmd {
         /// when given, each claim gets a final durable/caveated/reject routing.
         #[arg(long)]
         strength: Option<PathBuf>,
+        /// Print the shared DiagnosticReport JSON (one entry per citation
+        /// defect) to stdout instead of the text summary. The `--out` report
+        /// is still written and the gate exit code is unchanged.
+        #[arg(long)]
+        diagnostics: bool,
     },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M23 durable Crystal write: run the FULL pre-write gate and, only if
@@ -1042,6 +1052,10 @@ enum Cmd {
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
+        /// Emit the shared DiagnosticReport JSON (same schema as `doctor
+        /// --diagnostics`). Exit code unchanged.
+        #[arg(long, conflicts_with = "json")]
+        diagnostics: bool,
     },
     /// DEMOTED — M7–M13 substrate, off the blessed path (builds + tests, kept for reference).
     /// Automation sweep (L6): discover markdown under `--inbox-root`, run the L4
@@ -1906,10 +1920,12 @@ fn main() -> ExitCode {
             fix,
             json,
             since_hours,
+            diagnostics,
         } => commands::doctor::run(commands::doctor::DoctorArgs {
             vault_root,
             fix,
             json,
+            diagnostics,
             since_hours,
         }),
         Cmd::Mcp { vault_root } => commands::mcp::run(commands::mcp::McpArgs { vault_root }),
@@ -2088,6 +2104,7 @@ fn main() -> ExitCode {
             packs_dir,
             out,
             strength,
+            diagnostics,
         } => {
             use commands::crystal_lint::CrystalLintArgs;
             commands::crystal_lint::run(CrystalLintArgs {
@@ -2095,6 +2112,7 @@ fn main() -> ExitCode {
                 packs_dir,
                 out,
                 strength,
+                diagnostics,
             })
         }
         Cmd::CrystalWrite {
@@ -2470,6 +2488,7 @@ fn main() -> ExitCode {
             canonical_root,
             max_severity,
             json,
+            diagnostics,
         } => {
             use commands::lint::{LintArgs, SeverityArg as LintSeverity};
             let max_severity = match max_severity {
@@ -2482,6 +2501,7 @@ fn main() -> ExitCode {
                 canonical_root,
                 max_severity,
                 json,
+                diagnostics,
             })
         }
         Cmd::AutoRun {
