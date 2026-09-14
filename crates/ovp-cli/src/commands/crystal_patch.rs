@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use clap::Subcommand;
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::patch::{
-    append_patch_record, audit_patches, compute_text_hash, diff_patch, fold_patch_ledger,
-    format_diff, read_patch_ledger, HumanPatchRecord, PatchOp,
+    HumanPatchRecord, PatchOp, append_patch_record, audit_patches, compute_text_hash, diff_patch,
+    fold_patch_ledger, format_diff, read_patch_ledger,
 };
-use ovp_domain::crystal::{fold_ledger, CrystalStatus, StoreEvent};
+use ovp_domain::crystal::{CrystalStatus, StoreEvent, fold_ledger};
 use ovp_intake::read_jsonl;
 
 use crate::CliError;
@@ -173,8 +173,14 @@ fn run_apply(
     let mut base_text = String::new();
     let mut target_claim_key: Option<String> = None;
     let mut resolved = false;
+    // The ledger is keyed by claim id. A claim key supplied on the command
+    // line is an alias: it must resolve to the same `target_id` as the id
+    // form, or two histories would fold independently for one claim.
+    let mut target: String = patch_state
+        .resolve_target_id(target)
+        .unwrap_or_else(|| target.to_string());
 
-    if let Some(active_patch) = patch_state.get_active_patch(target, None) {
+    if let Some(active_patch) = patch_state.get_active_patch(&target, None) {
         base_text = active_patch.patched_text.clone();
         target_claim_key = active_patch.target_claim_key.clone();
         resolved = true;
@@ -193,6 +199,7 @@ fn run_apply(
                 {
                     base_text = rec.claim.clone();
                     target_claim_key = Some(rec.claim_key.clone());
+                    target = rec.claim_id.clone();
                     resolved = true;
                     break;
                 }
@@ -204,23 +211,24 @@ fn run_apply(
         // Look up in review.json
         let review_file = store_dir.join("review.json");
         if review_file.exists()
-            && let Ok(raw) = std::fs::read_to_string(&review_file) {
-                #[derive(serde::Deserialize)]
-                struct ReviewFile {
-                    #[serde(default)]
-                    review: Vec<ovp_domain::crystal::ReviewEntry>,
-                }
-                if let Ok(rf) = serde_json::from_str::<ReviewFile>(&raw) {
-                    for entry in rf.review {
-                        if entry.claim_id == target {
-                            base_text = entry.claim;
-                            target_claim_key = None;
-                            resolved = true;
-                            break;
-                        }
+            && let Ok(raw) = std::fs::read_to_string(&review_file)
+        {
+            #[derive(serde::Deserialize)]
+            struct ReviewFile {
+                #[serde(default)]
+                review: Vec<ovp_domain::crystal::ReviewEntry>,
+            }
+            if let Ok(rf) = serde_json::from_str::<ReviewFile>(&raw) {
+                for entry in rf.review {
+                    if entry.claim_id == target {
+                        base_text = entry.claim;
+                        target_claim_key = None;
+                        resolved = true;
+                        break;
                     }
                 }
             }
+        }
     }
 
     if !resolved && !force {
@@ -231,14 +239,15 @@ fn run_apply(
 
     let actual_base_hash = compute_text_hash(&base_text);
     if let Some(expected) = expected_base_hash
-        && actual_base_hash != expected {
-            return Err(CliError::Io(format!(
-                "Drift detected for target '{target}': expected base hash {expected}, got {actual_base_hash}"
-            )));
-        }
+        && actual_base_hash != expected
+    {
+        return Err(CliError::Io(format!(
+            "Drift detected for target '{target}': expected base hash {expected}, got {actual_base_hash}"
+        )));
+    }
 
     let patch = HumanPatchRecord::new_apply(
-        target,
+        target.as_str(),
         target_claim_key,
         &base_text,
         new_claim,
@@ -252,7 +261,10 @@ fn run_apply(
     append_patch_record(patches_file, &patch)
         .map_err(|e| CliError::Io(format!("writing patch: {e}")))?;
 
-    println!("✓ Applied human patch {} for claim {}", patch.patch_id, target);
+    println!(
+        "✓ Applied human patch {} for claim {}",
+        patch.patch_id, target
+    );
     println!("  Base text:    {base_text}");
     println!("  Patched text: {new_claim}");
     println!("  Reason:       {reason}");
@@ -293,9 +305,12 @@ fn run_rollback(
             found.ok_or_else(|| CliError::Io(format!("Patch ID '{pid}' not found")))?
         }
         None => {
-            // Find active patch for target
+            // Find active patch for target (claim id or claim-key alias)
+            let target = patch_state
+                .resolve_target_id(target)
+                .unwrap_or_else(|| target.to_string());
             patch_state
-                .get_active_patch(target, None)
+                .get_active_patch(&target, None)
                 .cloned()
                 .ok_or_else(|| {
                     CliError::Io(format!(
@@ -342,7 +357,8 @@ fn run_list(patches_file: &Path, target: Option<&str>, json: bool) -> Result<(),
         .map_err(|e| CliError::Io(format!("reading patch ledger: {e}")))?;
     let state = fold_patch_ledger(&records);
 
-    let active_patches: Vec<&HumanPatchRecord> = match target {
+    let target = target.map(|t| state.resolve_target_id(t).unwrap_or_else(|| t.to_string()));
+    let active_patches: Vec<&HumanPatchRecord> = match target.as_deref() {
         Some(t) => state
             .active_by_target
             .values()
@@ -359,7 +375,10 @@ fn run_list(patches_file: &Path, target: Option<&str>, json: bool) -> Result<(),
     }
 
     if active_patches.is_empty() {
-        println!("No active human patches found in {}.", patches_file.display());
+        println!(
+            "No active human patches found in {}.",
+            patches_file.display()
+        );
         return Ok(());
     }
 
@@ -412,7 +431,8 @@ fn run_diff(
         }
         found
     } else if let Some(t) = target {
-        state.active_by_target.get(t).into_iter().collect()
+        let t = state.resolve_target_id(t).unwrap_or_else(|| t.to_string());
+        state.active_by_target.get(&t).into_iter().collect()
     } else {
         state.active_by_target.values().collect()
     };
@@ -438,7 +458,8 @@ fn run_audit(patches_file: &Path, target: Option<&str>, json: bool) -> Result<()
     let records = read_patch_ledger(patches_file)
         .map_err(|e| CliError::Io(format!("reading patch ledger: {e}")))?;
     let state = fold_patch_ledger(&records);
-    let audit_entries = audit_patches(&state, target);
+    let target = target.map(|t| state.resolve_target_id(t).unwrap_or_else(|| t.to_string()));
+    let audit_entries = audit_patches(&state, target.as_deref());
 
     if json {
         let serialized = serde_json::to_string_pretty(&audit_entries)
@@ -448,7 +469,10 @@ fn run_audit(patches_file: &Path, target: Option<&str>, json: bool) -> Result<()
     }
 
     if audit_entries.is_empty() {
-        println!("No patch audit entries found in {}.", patches_file.display());
+        println!(
+            "No patch audit entries found in {}.",
+            patches_file.display()
+        );
         return Ok(());
     }
 
@@ -464,6 +488,7 @@ fn run_audit(patches_file: &Path, target: Option<&str>, json: bool) -> Result<()
             ovp_domain::crystal::PatchStatus::Active => "active",
             ovp_domain::crystal::PatchStatus::Superseded => "superseded",
             ovp_domain::crystal::PatchStatus::RolledBack => "rolled_back",
+            ovp_domain::crystal::PatchStatus::Conflicted => "conflicted",
         };
         println!(
             "[{}] {} ({}) target: {} | patch: {} | author: {}",

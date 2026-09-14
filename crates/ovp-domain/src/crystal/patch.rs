@@ -335,6 +335,20 @@ impl PatchLedgerState {
             .filter(|p| p.target_claim_key.is_none() || p.target_claim_key.as_deref() == claim_key)
     }
 
+    /// Resolve a user-supplied target (claim id OR claim key) to the
+    /// canonical `target_id` used in this ledger, if any patch history exists
+    /// for it. Returns `None` when the ledger has never seen this target.
+    pub fn resolve_target_id(&self, target: &str) -> Option<String> {
+        if self.history_by_target.contains_key(target) {
+            return Some(target.to_string());
+        }
+        self.history_by_target
+            .values()
+            .flatten()
+            .find(|r| r.target_claim_key.as_deref() == Some(target))
+            .map(|r| r.target_id.clone())
+    }
+
     /// Drift gate for projection (P1): the root of the target's CURRENTLY
     /// EFFECTIVE chain (see `active_chain_root`) must have been based on
     /// exactly the record's current upstream text — otherwise the upstream
@@ -431,18 +445,24 @@ pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
                     stack.push(ev.clone());
                 }
                 PatchOp::Rollback => {
+                    // Rolling back a patch retires it AND every revision
+                    // stacked on top of it: each later apply was based on the
+                    // retired text, so leaving them would produce a chain whose
+                    // root no longer matches upstream (silently skipped as
+                    // drift at projection time). Truncating is loud instead —
+                    // every retired revision is reported RolledBack.
                     if let Some(ref target_patch_id) = ev.rollback_patch_id {
                         if let Some(pos) = stack.iter().position(|p| &p.patch_id == target_patch_id)
                         {
-                            let popped = stack.remove(pos);
-                            rolled_back_ids.insert(popped.patch_id.clone());
+                            for popped in stack.drain(pos..) {
+                                rolled_back_ids.insert(popped.patch_id);
+                            }
                         } else {
                             rolled_back_ids.insert(target_patch_id.clone());
                         }
                     } else if let Some(popped) = stack.pop() {
                         rolled_back_ids.insert(popped.patch_id);
                     }
-                    rolled_back_ids.insert(ev.patch_id.clone());
                 }
             }
         }
@@ -684,11 +704,17 @@ pub fn audit_patches(state: &PatchLedgerState, target_id: Option<&str>) -> Vec<P
     for target in targets {
         if let Some(history) = state.history_by_target.get(target) {
             for rec in history {
-                let status = state
-                    .patch_statuses
-                    .get(&rec.patch_id)
-                    .copied()
-                    .unwrap_or(PatchStatus::Superseded);
+                // A rollback record is itself never "active" or "superseded";
+                // it is displayed as the operation it performed.
+                let status = if rec.op == PatchOp::Rollback {
+                    PatchStatus::RolledBack
+                } else {
+                    state
+                        .patch_statuses
+                        .get(&rec.patch_id)
+                        .copied()
+                        .unwrap_or(PatchStatus::Superseded)
+                };
                 entries.push(PatchAuditEntry {
                     patch_id: rec.patch_id.clone(),
                     op: rec.op,
@@ -1013,6 +1039,62 @@ mod tests {
                 .is_some()
         );
         assert!(state2.get_active_patch_for_record("c09", None).is_some());
+    }
+
+    #[test]
+    fn test_rollback_of_non_head_retires_whole_chain_above_it() {
+        let p1 = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-1".into()),
+            "upstream",
+            "A",
+            None,
+            None,
+            "a",
+            "e",
+            Some("2026-09-11T12:00:00Z".into()),
+        );
+        let p2 = HumanPatchRecord::new_apply(
+            "c01",
+            Some("ck-1".into()),
+            "A",
+            "B",
+            None,
+            None,
+            "a",
+            "e",
+            Some("2026-09-11T12:00:01Z".into()),
+        );
+        let rb = HumanPatchRecord::new_rollback(
+            "c01",
+            Some(p1.patch_id.clone()),
+            None,
+            "A",
+            "a",
+            "undo p1",
+            Some("2026-09-11T12:00:02Z".into()),
+        );
+        let state = fold_patch_ledger(&[p1.clone(), p2.clone(), rb.clone()]);
+        assert_eq!(
+            state.patch_statuses.get(&p1.patch_id),
+            Some(&PatchStatus::RolledBack)
+        );
+        assert_eq!(
+            state.patch_statuses.get(&p2.patch_id),
+            Some(&PatchStatus::RolledBack)
+        );
+        assert!(state.get_active_patch("c01", None).is_none());
+        assert!(!state.active_chain_root.contains_key("c01"));
+        // Exactly the two applies count; the rollback record itself does not.
+        assert_eq!(state.rolled_back_count, 2);
+        let audit = audit_patches(&state, Some("c01"));
+        assert_eq!(audit.len(), 3);
+        assert_eq!(audit[2].op, PatchOp::Rollback);
+        assert_eq!(audit[2].status, PatchStatus::RolledBack);
+        // Claim-key alias resolves to the canonical target id.
+        assert_eq!(state.resolve_target_id("ck-1").as_deref(), Some("c01"));
+        assert_eq!(state.resolve_target_id("c01").as_deref(), Some("c01"));
+        assert!(state.resolve_target_id("nope").is_none());
     }
 
     #[test]
