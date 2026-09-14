@@ -50,6 +50,11 @@ pub enum PatchStatus {
     Superseded,
     /// Deactivated by a rollback operation.
     RolledBack,
+    /// Rejected at fold time: a concurrent `Apply` based on a revision that
+    /// was already superseded (lost-update conflict). It never becomes
+    /// effective; the earlier correction wins and the conflict is visible
+    /// in `audit` instead of silently dropping one operator's edit.
+    Conflicted,
 }
 
 /// One append-only record in `.ovp/crystal/patches.jsonl`.
@@ -186,11 +191,7 @@ impl HumanPatchRecord {
     }
 
     /// Overlay this patch onto assertion text and theme option. Returns true if modified.
-    pub fn overlay_onto_claim_parts(
-        &self,
-        claim: &mut String,
-        theme: &mut Option<String>,
-    ) -> bool {
+    pub fn overlay_onto_claim_parts(&self, claim: &mut String, theme: &mut Option<String>) -> bool {
         if self.op != PatchOp::Apply {
             return false;
         }
@@ -269,6 +270,12 @@ pub struct PatchLedgerState {
     pub active_by_target: BTreeMap<String, HumanPatchRecord>,
     /// Active effective patches indexed by `target_claim_key`.
     pub active_by_claim_key: BTreeMap<String, HumanPatchRecord>,
+    /// Root (FIRST) record of each target's currently effective chain — the
+    /// apply whose `base_hash` upstream truth must still match for the whole
+    /// chain to be grounded. After a full rollback a fresh chain may start
+    /// from NEWER upstream text than the target's first-ever apply, so
+    /// grounding must consult this, not the head of history.
+    pub active_chain_root: BTreeMap<String, HumanPatchRecord>,
     /// Chronological audit history of all patch operations per `target_id`.
     pub history_by_target: BTreeMap<String, Vec<HumanPatchRecord>>,
     /// Status of each patch ID.
@@ -279,6 +286,8 @@ pub struct PatchLedgerState {
     pub active_count: usize,
     /// Number of rolled back patches.
     pub rolled_back_count: usize,
+    /// Number of applies rejected as concurrent lost-update conflicts.
+    pub conflicted_count: usize,
 }
 
 impl PatchLedgerState {
@@ -326,19 +335,22 @@ impl PatchLedgerState {
             .filter(|p| p.target_claim_key.is_none() || p.target_claim_key.as_deref() == claim_key)
     }
 
-    /// Drift gate for projection (P1): the FIRST apply in the target's patch
-    /// history must have been based on exactly the record's current upstream
-    /// text — otherwise the upstream assertion was rewritten after the patch
-    /// was authored and overlaying would replace newer truth with a stale
-    /// human edit. Returns `false` on drift: the overlay must be skipped.
+    /// Drift gate for projection (P1): the root of the target's CURRENTLY
+    /// EFFECTIVE chain (see `active_chain_root`) must have been based on
+    /// exactly the record's current upstream text — otherwise the upstream
+    /// assertion was rewritten after the chain was authored and overlaying
+    /// would replace newer truth with a stale human edit. Returns `false` on
+    /// drift: the overlay must be skipped.
     ///
-    /// A forced apply (`--force`, empty `base_text`) skipped base verification
-    /// at authoring time by explicit operator choice, so it stays grounded.
+    /// Two deliberate properties:
+    /// - After a FULL rollback the next apply starts a fresh chain rooted in
+    ///   whatever upstream text is current then — the retired chain's root
+    ///   must not veto it.
+    /// - A forced apply (`--force`, empty `base_text`) skipped base
+    ///   verification at authoring time by explicit operator choice, so its
+    ///   chain stays grounded.
     pub fn chain_grounded_on(&self, patch: &HumanPatchRecord, current_text: &str) -> bool {
-        let Some(history) = self.history_by_target.get(&patch.target_id) else {
-            return false;
-        };
-        let Some(root) = history.iter().find(|r| r.op == PatchOp::Apply) else {
+        let Some(root) = self.active_chain_root.get(&patch.target_id) else {
             return false;
         };
         if root.base_text.is_empty() {
@@ -366,7 +378,10 @@ impl PatchLedgerState {
 /// Deterministic reduction:
 /// - Records are processed in chronological order.
 /// - Each target maintains an applied stack.
-/// - An `Apply` pushes to the stack.
+/// - An `Apply` pushes to the stack ONLY if its `base_hash` matches the
+///   current top of stack's effective text — an apply based on an already
+///   superseded revision is a concurrent lost-update conflict, rejected and
+///   marked [`PatchStatus::Conflicted`] rather than silently stacked.
 /// - A `Rollback` pops or removes the targeted patch from the stack, marking it `RolledBack`.
 /// - After all operations for a target: the top of the stack is `Active`, preceding items are `Superseded`.
 pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
@@ -389,22 +404,36 @@ pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
 
     let mut active_by_target: BTreeMap<String, HumanPatchRecord> = BTreeMap::new();
     let mut active_by_claim_key: BTreeMap<String, HumanPatchRecord> = BTreeMap::new();
+    let mut active_chain_root: BTreeMap<String, HumanPatchRecord> = BTreeMap::new();
     let mut patch_statuses: BTreeMap<String, PatchStatus> = BTreeMap::new();
     let mut rolled_back_count = 0;
+    let mut conflicted_count = 0;
 
     for target_id in &target_order {
         let history = history_by_target.get(target_id).unwrap();
         let mut stack: Vec<HumanPatchRecord> = Vec::new();
         let mut rolled_back_ids: BTreeSet<String> = BTreeSet::new();
+        let mut conflicted_ids: BTreeSet<String> = BTreeSet::new();
 
         for ev in history {
             match ev.op {
                 PatchOp::Apply => {
+                    // Lost-update gate: an apply must be based on the
+                    // revision that is still effective. The first apply of a
+                    // chain (empty stack) is verified against UPSTREAM truth
+                    // at projection time instead (chain_grounded_on).
+                    if let Some(top) = stack.last()
+                        && ev.base_hash != compute_text_hash(&top.patched_text)
+                    {
+                        conflicted_ids.insert(ev.patch_id.clone());
+                        continue;
+                    }
                     stack.push(ev.clone());
                 }
                 PatchOp::Rollback => {
                     if let Some(ref target_patch_id) = ev.rollback_patch_id {
-                        if let Some(pos) = stack.iter().position(|p| &p.patch_id == target_patch_id) {
+                        if let Some(pos) = stack.iter().position(|p| &p.patch_id == target_patch_id)
+                        {
                             let popped = stack.remove(pos);
                             rolled_back_ids.insert(popped.patch_id.clone());
                         } else {
@@ -431,11 +460,25 @@ pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
             patch_statuses.insert(r_id.clone(), PatchStatus::RolledBack);
             rolled_back_count += 1;
         }
+        for r_id in &conflicted_ids {
+            patch_statuses.insert(r_id.clone(), PatchStatus::Conflicted);
+            conflicted_count += 1;
+        }
 
         if let Some(top) = stack.last() {
             active_by_target.insert(target_id.clone(), top.clone());
-            if let Some(k) = top.target_claim_key.as_ref().or_else(|| target_keys.get(target_id)) {
+            if let Some(k) = top
+                .target_claim_key
+                .as_ref()
+                .or_else(|| target_keys.get(target_id))
+            {
                 active_by_claim_key.insert(k.clone(), top.clone());
+            }
+            // Grounding root: the FIRST apply of the chain that is still
+            // effective (its base_hash pins the upstream text the whole
+            // chain is grounded in).
+            if let Some(root) = stack.first() {
+                active_chain_root.insert(target_id.clone(), root.clone());
             }
         }
     }
@@ -444,11 +487,13 @@ pub fn fold_patch_ledger(records: &[HumanPatchRecord]) -> PatchLedgerState {
     PatchLedgerState {
         active_by_target,
         active_by_claim_key,
+        active_chain_root,
         history_by_target,
         patch_statuses,
         total_records: records.len(),
         active_count,
         rolled_back_count,
+        conflicted_count,
     }
 }
 
@@ -525,16 +570,19 @@ pub fn diff_patch(
     current_theme: Option<&str>,
     current_caveat: Option<&str>,
 ) -> PatchDiff {
-    let theme_changed = patch.patched_theme.is_some()
-        && patch.patched_theme.as_deref() != current_theme;
-    let caveat_changed = patch.patched_caveat.is_some()
-        && patch.patched_caveat.as_deref() != current_caveat;
+    let theme_changed =
+        patch.patched_theme.is_some() && patch.patched_theme.as_deref() != current_theme;
+    let caveat_changed =
+        patch.patched_caveat.is_some() && patch.patched_caveat.as_deref() != current_caveat;
 
     let mut diff_lines = Vec::new();
     if patch.op == PatchOp::Rollback {
         diff_lines.push(DiffLine {
             kind: DiffKind::Deletion,
-            text: format!("[ROLLBACK patch {}]", patch.rollback_patch_id.as_deref().unwrap_or("latest")),
+            text: format!(
+                "[ROLLBACK patch {}]",
+                patch.rollback_patch_id.as_deref().unwrap_or("latest")
+            ),
         });
     } else if patch.base_text == patch.patched_text {
         diff_lines.push(DiffLine {
@@ -573,7 +621,10 @@ pub fn diff_patch(
 
 /// Format unified-style diff text for CLI / audit output.
 pub fn format_diff(diff: &PatchDiff) -> String {
-    let mut out = format!("--- target: {}\n+++ patch: {}\n", diff.target_id, diff.patch_id);
+    let mut out = format!(
+        "--- target: {}\n+++ patch: {}\n",
+        diff.target_id, diff.patch_id
+    );
     for line in &diff.diff_lines {
         match line.kind {
             DiffKind::Unchanged => out.push_str(&format!("  {}\n", line.text)),
@@ -619,13 +670,14 @@ pub struct PatchAuditEntry {
 }
 
 /// Collect audit entries from folded patch ledger state.
-pub fn audit_patches(
-    state: &PatchLedgerState,
-    target_id: Option<&str>,
-) -> Vec<PatchAuditEntry> {
+pub fn audit_patches(state: &PatchLedgerState, target_id: Option<&str>) -> Vec<PatchAuditEntry> {
     let mut entries = Vec::new();
     let targets: Vec<&String> = match target_id {
-        Some(t) => state.history_by_target.keys().filter(|k| k.as_str() == t).collect(),
+        Some(t) => state
+            .history_by_target
+            .keys()
+            .filter(|k| k.as_str() == t)
+            .collect(),
         None => state.history_by_target.keys().collect(),
     };
 
@@ -682,6 +734,13 @@ pub fn read_patch_ledger(path: &Path) -> Result<Vec<HumanPatchRecord>, String> {
 }
 
 /// Append a single `HumanPatchRecord` line to `.ovp/crystal/patches.jsonl`.
+///
+/// Durability mirrors `ovp_intake::vaultops::append_jsonl` (which ovp-domain
+/// cannot reuse without inverting the dependency): `flush()` on a `File` is a
+/// no-op, so the record is `sync_data`-ed before returning — a power loss
+/// right after the CLI reports success must not drop a human correction —
+/// and a freshly created ledger's parent directory is fsynced so the new
+/// directory entry itself survives.
 pub fn append_patch_record(path: &Path, record: &HumanPatchRecord) -> Result<(), String> {
     if let Some(parent) = path
         .parent()
@@ -690,17 +749,39 @@ pub fn append_patch_record(path: &Path, record: &HumanPatchRecord) -> Result<(),
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating directory {}: {e}", parent.display()))?;
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| format!("opening patch ledger {}: {e}", path.display()))?;
+    // Creation is derived from the ATOMIC open, not an exists() probe — a
+    // concurrent creator between probe and open would otherwise skip the
+    // directory fsync exactly when a new entry needed it (TOCTOU).
+    let (mut file, created) = match OpenOptions::new().create_new(true).append(true).open(path) {
+        Ok(f) => (f, true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (
+            OpenOptions::new()
+                .append(true)
+                .open(path)
+                .map_err(|e| format!("opening patch ledger {}: {e}", path.display()))?,
+            false,
+        ),
+        Err(e) => return Err(format!("opening patch ledger {}: {e}", path.display())),
+    };
     let serialized = serde_json::to_string(record)
         .map_err(|e| format!("serializing patch record {}: {e}", record.patch_id))?;
     writeln!(file, "{serialized}")
         .map_err(|e| format!("appending to patch ledger {}: {e}", path.display()))?;
-    file.flush()
-        .map_err(|e| format!("flushing patch ledger {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| format!("syncing patch ledger {}: {e}", path.display()))?;
+    if created && let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+/// fsync a directory so a newly created file's directory entry survives a
+/// power loss (syncing file contents does not persist the entry itself).
+fn sync_dir(dir: &Path) -> Result<(), String> {
+    let f = std::fs::File::open(dir)
+        .map_err(|e| format!("opening directory {}: {e}", dir.display()))?;
+    f.sync_all()
+        .map_err(|e| format!("syncing directory {}: {e}", dir.display()))?;
     Ok(())
 }
 
@@ -734,9 +815,17 @@ mod tests {
         let records = vec![rec1.clone()];
         let state = fold_patch_ledger(&records);
         assert_eq!(state.active_count, 1);
-        let active = state.get_active_patch("c01", Some("ck-123")).expect("active patch found");
-        assert_eq!(active.patched_text, "Knowledge graph enables deterministic fast retrieval.");
-        assert_eq!(state.patch_statuses.get(&rec1.patch_id), Some(&PatchStatus::Active));
+        let active = state
+            .get_active_patch("c01", Some("ck-123"))
+            .expect("active patch found");
+        assert_eq!(
+            active.patched_text,
+            "Knowledge graph enables deterministic fast retrieval."
+        );
+        assert_eq!(
+            state.patch_statuses.get(&rec1.patch_id),
+            Some(&PatchStatus::Active)
+        );
     }
 
     #[test]
@@ -770,10 +859,19 @@ mod tests {
         let records_step2 = vec![p1.clone(), p2.clone()];
         let state_step2 = fold_patch_ledger(&records_step2);
         assert_eq!(state_step2.active_count, 1);
-        assert_eq!(state_step2.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::Superseded));
-        assert_eq!(state_step2.patch_statuses.get(&p2.patch_id), Some(&PatchStatus::Active));
         assert_eq!(
-            state_step2.get_active_patch("c01", None).unwrap().patched_text,
+            state_step2.patch_statuses.get(&p1.patch_id),
+            Some(&PatchStatus::Superseded)
+        );
+        assert_eq!(
+            state_step2.patch_statuses.get(&p2.patch_id),
+            Some(&PatchStatus::Active)
+        );
+        assert_eq!(
+            state_step2
+                .get_active_patch("c01", None)
+                .unwrap()
+                .patched_text,
             "Claim text v2"
         );
 
@@ -791,10 +889,19 @@ mod tests {
         let records_step3 = vec![p1.clone(), p2.clone(), p3.clone()];
         let state_step3 = fold_patch_ledger(&records_step3);
         assert_eq!(state_step3.active_count, 1);
-        assert_eq!(state_step3.patch_statuses.get(&p2.patch_id), Some(&PatchStatus::RolledBack));
-        assert_eq!(state_step3.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::Active));
         assert_eq!(
-            state_step3.get_active_patch("c01", None).unwrap().patched_text,
+            state_step3.patch_statuses.get(&p2.patch_id),
+            Some(&PatchStatus::RolledBack)
+        );
+        assert_eq!(
+            state_step3.patch_statuses.get(&p1.patch_id),
+            Some(&PatchStatus::Active)
+        );
+        assert_eq!(
+            state_step3
+                .get_active_patch("c01", None)
+                .unwrap()
+                .patched_text,
             "Claim text v1"
         );
 
@@ -813,7 +920,10 @@ mod tests {
         let state_step4 = fold_patch_ledger(&records_step4);
         assert_eq!(state_step4.active_count, 0);
         assert_eq!(state_step4.get_active_patch("c01", None), None);
-        assert_eq!(state_step4.patch_statuses.get(&p1.patch_id), Some(&PatchStatus::RolledBack));
+        assert_eq!(
+            state_step4.patch_statuses.get(&p1.patch_id),
+            Some(&PatchStatus::RolledBack)
+        );
     }
 
     #[test]
@@ -865,9 +975,17 @@ mod tests {
         let state = fold_patch_ledger(std::slice::from_ref(&p));
 
         // Exact-key binding applies.
-        assert!(state.get_active_patch_for_record("c01", Some("ck-a")).is_some());
+        assert!(
+            state
+                .get_active_patch_for_record("c01", Some("ck-a"))
+                .is_some()
+        );
         // A different record sharing the claim id must NOT receive it …
-        assert!(state.get_active_patch_for_record("c01", Some("ck-b")).is_none());
+        assert!(
+            state
+                .get_active_patch_for_record("c01", Some("ck-b"))
+                .is_none()
+        );
         // … and neither may an un-keyed row (binding exists, it just is not ours).
         assert!(state.get_active_patch_for_record("c01", None).is_none());
 
@@ -889,8 +1007,128 @@ mod tests {
             Some("2026-09-11T09:01:00Z".into()),
         );
         let state2 = fold_patch_ledger(&[forced]);
-        assert!(state2.get_active_patch_for_record("c09", Some("ck-z")).is_some());
+        assert!(
+            state2
+                .get_active_patch_for_record("c09", Some("ck-z"))
+                .is_some()
+        );
         assert!(state2.get_active_patch_for_record("c09", None).is_some());
+    }
+
+    #[test]
+    fn test_concurrent_apply_on_superseded_revision_is_conflicted() {
+        // Two operators both load v0. Alice saves first; Bob's apply is still
+        // based on v0, i.e. on a revision that is no longer effective.
+        let alice = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "v0",
+            "v1-alice",
+            None,
+            None,
+            "alice",
+            "edit",
+            Some("2026-09-11T10:00:00Z".into()),
+        );
+        let bob = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "v0",
+            "v1-bob",
+            None,
+            None,
+            "bob",
+            "edit",
+            Some("2026-09-11T10:00:01Z".into()),
+        );
+        let state = fold_patch_ledger(&[alice.clone(), bob.clone()]);
+
+        assert_eq!(
+            state.patch_statuses.get(&alice.patch_id),
+            Some(&PatchStatus::Active)
+        );
+        assert_eq!(
+            state.patch_statuses.get(&bob.patch_id),
+            Some(&PatchStatus::Conflicted)
+        );
+        assert_eq!(state.conflicted_count, 1);
+        assert_eq!(state.active_count, 1);
+        assert_eq!(
+            state.get_active_patch("c01", None).unwrap().patched_text,
+            "v1-alice"
+        );
+        // The conflict stays visible in the audit history.
+        assert_eq!(state.history_by_target["c01"].len(), 2);
+
+        // A revision correctly based on the effective text still stacks.
+        let carol = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "v1-alice",
+            "v2-carol",
+            None,
+            None,
+            "carol",
+            "edit",
+            Some("2026-09-11T10:00:02Z".into()),
+        );
+        let state = fold_patch_ledger(&[alice.clone(), bob, carol.clone()]);
+        assert_eq!(
+            state.patch_statuses.get(&alice.patch_id),
+            Some(&PatchStatus::Superseded)
+        );
+        assert_eq!(
+            state.patch_statuses.get(&carol.patch_id),
+            Some(&PatchStatus::Active)
+        );
+        assert_eq!(state.active_chain_root["c01"].patch_id, alice.patch_id);
+    }
+
+    #[test]
+    fn test_fresh_chain_after_full_rollback_grounds_on_newer_upstream() {
+        // Chain 1 was authored against old upstream text, then fully rolled
+        // back. Upstream is later rewritten; chain 2 is authored against the
+        // NEW text. Grounding must consult chain 2's root, not chain 1's.
+        let old = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "old upstream",
+            "old fix",
+            None,
+            None,
+            "alice",
+            "e",
+            Some("2026-09-11T11:00:00Z".into()),
+        );
+        let rb = HumanPatchRecord::new_rollback(
+            "c01",
+            Some(old.patch_id.clone()),
+            None,
+            "old fix",
+            "alice",
+            "undo",
+            Some("2026-09-11T11:00:01Z".into()),
+        );
+        let fresh = HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "new upstream",
+            "new fix",
+            None,
+            None,
+            "alice",
+            "e",
+            Some("2026-09-11T11:00:02Z".into()),
+        );
+        let state = fold_patch_ledger(&[old.clone(), rb, fresh.clone()]);
+
+        assert_eq!(state.active_chain_root["c01"].patch_id, fresh.patch_id);
+        assert!(state.chain_grounded_on(&fresh, "new upstream"));
+        assert!(!state.chain_grounded_on(&fresh, "old upstream"));
+        assert_eq!(
+            state.patch_statuses.get(&old.patch_id),
+            Some(&PatchStatus::RolledBack)
+        );
     }
 
     #[test]

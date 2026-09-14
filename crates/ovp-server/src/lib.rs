@@ -237,6 +237,11 @@ struct CrystalCache {
     loaded: bool,
     ledger_stamp: Option<SystemTime>,
     themes_stamp: Option<SystemTime>,
+    /// The human patch ledger feeds the same projection (M37 overlay): a
+    /// `crystal-patch apply/rollback` that never touches `ledger.jsonl` or
+    /// `themes.json` must still invalidate the cache, or claim/graph APIs
+    /// keep serving the pre-patch text until `/api/refresh` or a restart.
+    patches_stamp: Option<SystemTime>,
     /// Empty until `loaded` — both are always rebuilt together on reload.
     records: Arc<Vec<DurableRecord>>,
     lineage: Arc<ClaimLineageIndex>,
@@ -645,21 +650,25 @@ impl AppState {
         self.vault_root.join(self.layout.console_dir())
     }
 
-    /// Folded crystal projections, reloaded only when `ledger.jsonl` or
-    /// `themes.json` changed on disk. Same double-checked locking shape as
-    /// [`freshen`]; both projections rebuild together so a caller can never
-    /// pair records from one ledger generation with lineage from another.
+    /// Folded crystal projections, reloaded only when `ledger.jsonl`,
+    /// `themes.json`, or the human patch ledger changed on disk. Same
+    /// double-checked locking shape as [`freshen`]; both projections rebuild
+    /// together so a caller can never pair records from one ledger
+    /// generation with lineage from another.
     fn crystal_projections(&self) -> (Arc<Vec<DurableRecord>>, Arc<ClaimLineageIndex>) {
         let store = self.vault_root.join(self.layout.crystal_store_dir());
         let ledger = store.join("ledger.jsonl");
         let themes = store.join("themes.json");
+        let patches = self.vault_root.join(self.layout.crystal_patches_ledger());
 
         let hit = |cache: &CrystalCache,
                    ledger_stamp: &Option<SystemTime>,
-                   themes_stamp: &Option<SystemTime>| {
+                   themes_stamp: &Option<SystemTime>,
+                   patches_stamp: &Option<SystemTime>| {
             if cache.loaded
                 && cache.ledger_stamp == *ledger_stamp
                 && cache.themes_stamp == *themes_stamp
+                && cache.patches_stamp == *patches_stamp
             {
                 Some((cache.records.clone(), cache.lineage.clone()))
             } else {
@@ -667,18 +676,20 @@ impl AppState {
             }
         };
 
-        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        let (ledger_stamp, themes_stamp, patches_stamp) =
+            (mtime_of(&ledger), mtime_of(&themes), mtime_of(&patches));
         {
             let guard = self.crystal.read().unwrap();
-            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp, &patches_stamp) {
                 return pair;
             }
         }
         let mut guard = self.crystal.write().unwrap();
         // Re-stat under the write lock — the files could have changed between
         // the read guard's stat and acquiring the write lock.
-        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
-        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+        let (ledger_stamp, themes_stamp, patches_stamp) =
+            (mtime_of(&ledger), mtime_of(&themes), mtime_of(&patches));
+        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp, &patches_stamp) {
             return pair;
         }
         let records = Arc::new(readers::load_active_records(&self.vault_root, &self.layout));
@@ -687,6 +698,7 @@ impl AppState {
             loaded: true,
             ledger_stamp,
             themes_stamp,
+            patches_stamp,
             records: records.clone(),
             lineage: lineage.clone(),
         };
