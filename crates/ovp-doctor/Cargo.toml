@@ -1,0 +1,19 @@
+[package]
+name = "ovp-doctor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OVP2 vault health checks (the `doctor` engine), reusable by the CLI, the portal server and the MCP surface"
+
+[dependencies]
+ovp-domain = { path = "../ovp-domain" }
+ovp-daily = { path = "../ovp-daily" }
+ovp-index = { path = "../ovp-index" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

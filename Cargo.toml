@@ -27,6 +27,7 @@ members = [
     "crates/ovp-evolve",
     "crates/ovp-embed",
     "crates/ovp-scheduler",
+    "crates/ovp-doctor",
     "apps/desktop/src-tauri",
 ]
 

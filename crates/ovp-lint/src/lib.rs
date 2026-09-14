@@ -49,6 +49,24 @@ impl LintFinding {
     }
 }
 
+impl From<&LintFinding> for ovp_domain::diagnostics::Diagnostic {
+    fn from(f: &LintFinding) -> Self {
+        use ovp_domain::diagnostics as d;
+        d::Diagnostic {
+            origin: d::Origin::Lint,
+            severity: match f.severity {
+                Severity::Info => d::Severity::Info,
+                Severity::Warning => d::Severity::Warning,
+                Severity::Error => d::Severity::Error,
+            },
+            code: f.code.clone(),
+            message: f.detail.clone(),
+            location: f.location.clone(),
+            hint: None,
+        }
+    }
+}
+
 /// All findings from one lint pass, in deterministic order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LintReport {
@@ -69,6 +87,11 @@ impl LintReport {
     /// True iff no finding is at or above `threshold` (the gate for CI use).
     pub fn passed(&self, threshold: Severity) -> bool {
         !self.findings.iter().any(|f| f.severity >= threshold)
+    }
+
+    /// Project onto the shared diagnostic shape.
+    pub fn diagnostics(&self) -> ovp_domain::diagnostics::DiagnosticReport {
+        ovp_domain::diagnostics::DiagnosticReport::new(self.findings.iter().map(Into::into).collect())
     }
 }
 

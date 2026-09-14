@@ -20,7 +20,13 @@
 
 use std::collections::BTreeMap;
 
-use super::{CitationDefect, CrystalCandidate, GroundingIndex, lint_candidate};
+use std::path::Path;
+
+use super::{
+    Citation, CitationDefect, CrystalCandidate, CrystalClaim, CrystalStatus, FinalClass,
+    GroundingIndex, StoreEvent, fold_ledger, lint_candidate,
+};
+use crate::units::Unit;
 
 /// Age buckets, in days. Boundaries are reporting conveniences, not thresholds
 /// anything branches on — nothing here decides a claim is wrong because it is
@@ -253,6 +259,104 @@ pub fn recheck(
     }
 }
 
+
+// ---- Vault loaders (shared by `crystal-recheck`, `crystal-lint`, `doctor`) ----
+
+/// Build the grounding index from every `<packs_dir>/<case>/units.accepted.json`.
+/// Errors (as a message) on an unreadable/unparseable pack or when there are
+/// no packs at all — an empty index would make every citation "not found".
+pub fn build_grounding_index(packs_dir: &Path) -> Result<GroundingIndex, String> {
+    let mut index = GroundingIndex::new();
+    let entries = std::fs::read_dir(packs_dir)
+        .map_err(|e| format!("reading packs dir {}: {e}", packs_dir.display()))?;
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let units_path = entry.path().join("units.accepted.json");
+        if !units_path.exists() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&units_path)
+            .map_err(|e| format!("reading {}: {e}", units_path.display()))?;
+        let units: Vec<Unit> = serde_json::from_str(&text)
+            .map_err(|e| format!("parsing {}: {e}", units_path.display()))?;
+        index.insert(entry.file_name().to_string_lossy().to_string(), units);
+    }
+    if index.is_empty() {
+        return Err(format!("no units.accepted.json under {}", packs_dir.display()));
+    }
+    Ok(index)
+}
+
+/// Rebuild a lintable candidate from what the vault CURRENTLY asserts.
+///
+/// Goes through the typed `StoreEvent` + [`fold_ledger`] rather than reading
+/// `op` strings. The ledger has three ops, not one: `Supersede` also flips its
+/// predecessor to `Superseded`, and `Retract` marks a record retracted.
+/// Re-implementing "latest write wins" reproduces none of that, so it would
+/// recheck retracted claims as if they were live and miss the replacements.
+///
+/// Typed deserialization is also the point for citations: a hand-rolled
+/// `filter_map` drops a malformed citation silently, and a claim that loses
+/// all of them then reports as intact — staleness is measured from citation
+/// defects, and a claim with no citations has none.
+pub fn durable_from_ledger(path: &Path) -> Result<CrystalCandidate, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut events: Vec<StoreEvent> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let ev: StoreEvent = serde_json::from_str(line)
+            .map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
+        events.push(ev);
+    }
+    let items = fold_ledger(&events)
+        .into_iter()
+        .filter(|r| r.status == CrystalStatus::Active && r.final_class == FinalClass::Durable)
+        .map(|r| CrystalClaim {
+            id: r.claim_key,
+            claim: r.claim,
+            theme: r.theme,
+            citations: r
+                .citations
+                .into_iter()
+                .map(|c| Citation {
+                    case_id: c.case_id,
+                    unit_id: c.unit_id,
+                    quote: c.quote,
+                    claimed_line: None,
+                })
+                .collect(),
+            caveat: None,
+        })
+        .collect();
+    Ok(CrystalCandidate { items })
+}
+
+/// Recheck a vault's durable claims against its current reader packs. Shared
+/// by `crystal-recheck` and `doctor` so the health check and the command can
+/// never drift into disagreeing about what is stale. `today` is the civil
+/// date used for evidence age (callers supply local time).
+pub fn recheck_vault(
+    vault_root: &Path,
+    packs_dir: Option<&Path>,
+    ledger: Option<&Path>,
+    today: (i32, u32, u32),
+) -> Result<RecheckReport, String> {
+    let packs_dir =
+        packs_dir.map(Path::to_path_buf).unwrap_or_else(|| vault_root.join("40-Resources/Reader"));
+    let ledger = ledger
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| vault_root.join(".ovp/crystal/ledger.jsonl"));
+    let durable = durable_from_ledger(&ledger)?;
+    let index = build_grounding_index(&packs_dir)?;
+    Ok(recheck(&durable, &index, today))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +568,114 @@ mod tests {
         // citation is recent would hide exactly what this axis exists to show.
         assert_eq!(r.age_buckets["365d+"], 1);
         assert_eq!(r.n_undated, 1);
+    }
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn write_ledger(dir: &std::path::Path, lines: &[&str]) -> PathBuf {
+        let p = dir.join("ledger.jsonl");
+        std::fs::write(&p, lines.join("\n")).unwrap();
+        p
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ovp2-recheck-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A full durable record — the typed `StoreEvent` shape the ledger really
+    /// carries, not the trimmed JSON a hand-rolled parser would have accepted.
+    fn rec(key: &str, claim: &str, class: &str, unit: &str) -> String {
+        format!(
+            r#"{{"claim_key":"{key}","claim_id":"{key}","claim":"{claim}","theme":"t",
+                 "source_cases":["2026-01-01_X-a"],
+                 "citations":[{{"case_id":"2026-01-01_X-a","unit_id":"{unit}","quote":"q","resolved_line":1}}],
+                 "provenance_score":1.0,"provenance_class":"durable","strength":"supported",
+                 "strength_rationale":"r","final_class":"{class}","run_id":"r1","status":"active"}}"#
+        )
+        .replace('\n', "")
+    }
+
+    #[test]
+    fn only_active_durable_records_are_rechecked() {
+        let d = tmp("scope");
+        let p = write_ledger(
+            &d,
+            &[
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-2", "b", "caveated", "u-2")),
+                "",
+            ],
+        );
+        let c = durable_from_ledger(&p).unwrap();
+        let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["ck-1"], "caveated stays out");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_retracted_claim_is_not_rechecked() {
+        // Retract is a real ledger op. Rechecking a retracted claim reports
+        // defects the vault does not assert — and "latest write wins" cannot
+        // see it, which is why this goes through the domain's fold.
+        let d = tmp("retract");
+        let p = write_ledger(
+            &d,
+            &[
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+                &format!(r#"{{"op":"retract","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
+            ],
+        );
+        let c = durable_from_ledger(&p).unwrap();
+        assert!(c.items.is_empty(), "retracted claims are not live assertions");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_supersede_swaps_in_the_replacement_and_drops_the_predecessor() {
+        let d = tmp("supersede");
+        let p = write_ledger(
+            &d,
+            &[
+                &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-old", "old", "durable", "u-old")),
+                &format!(
+                    r#"{{"op":"supersede","record":{},"supersedes":"ck-old"}}"#,
+                    rec("ck-new", "new", "durable", "u-new")
+                ),
+            ],
+        );
+        let c = durable_from_ledger(&p).unwrap();
+        let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["ck-new"], "the superseded predecessor drops out");
+        assert_eq!(c.items[0].citations[0].unit_id, "u-new");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_malformed_citation_fails_loudly_instead_of_vanishing() {
+        // Dropping it would leave a claim with zero citations, and staleness is
+        // measured from citation DEFECTS — a claim with none reports intact.
+        let d = tmp("badcit");
+        let p = write_ledger(
+            &d,
+            &[r#"{"op":"write","record":{"claim_key":"ck-1","claim_id":"ck-1","claim":"a","theme":"t","source_cases":[],"citations":[{"case_id":"c","unit_id":123,"quote":"q"}],"provenance_score":1.0,"provenance_class":"durable","strength":"supported","strength_rationale":"r","final_class":"durable","run_id":"r1","status":"active"}}"#],
+        );
+        assert!(durable_from_ledger(&p).is_err());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_corrupt_ledger_line_fails_loudly() {
+        // Skipping unparseable lines would let the report under-count silently
+        // and still print a confident "all intact".
+        let d = tmp("corrupt");
+        let p = write_ledger(&d, &["not json at all"]);
+        assert!(durable_from_ledger(&p).is_err());
+        std::fs::remove_dir_all(&d).ok();
     }
 }

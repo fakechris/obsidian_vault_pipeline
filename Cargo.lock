@@ -2763,6 +2763,7 @@ dependencies = [
  "ovp-console",
  "ovp-core",
  "ovp-daily",
+ "ovp-doctor",
  "ovp-domain",
  "ovp-embed",
  "ovp-enrich",
@@ -2813,6 +2814,19 @@ dependencies = [
  "ovp-domain",
  "ovp-intake",
  "ovp-llm",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ovp-doctor"
+version = "2.0.1"
+dependencies = [
+ "chrono",
+ "ovp-daily",
+ "ovp-domain",
+ "ovp-index",
  "serde",
  "serde_json",
  "tempfile",
