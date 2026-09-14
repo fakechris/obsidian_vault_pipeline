@@ -30,13 +30,19 @@ pub struct LintArgs {
     pub canonical_root: PathBuf,
     pub max_severity: SeverityArg,
     pub json: bool,
+    /// Emit the shared `DiagnosticReport` JSON instead of the native report.
+    pub diagnostics: bool,
 }
 
 pub fn run(args: LintArgs) -> Result<(), CliError> {
     let report = Lint::check(&args.vault_root, &args.canonical_root);
     let threshold = args.max_severity.to_lint();
 
-    if args.json {
+    if args.diagnostics {
+        let json = serde_json::to_string_pretty(&report.diagnostics())
+            .map_err(|e| CliError::Io(format!("serializing diagnostics: {e}")))?;
+        println!("{json}");
+    } else if args.json {
         let json = serde_json::to_string_pretty(&report)
             .map_err(|e| CliError::Io(format!("serializing report: {e}")))?;
         println!("{json}");

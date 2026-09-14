@@ -423,7 +423,7 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             },
             {
                 "name": "doctor",
-                "description": "Run health checks over OVP vault state.",
+                "description": "Run the same health checks as `ovp2 doctor` (ledger/fs consistency, orphan packs, stale index, crystal integrity + staleness, run recency, disk usage, legacy artifacts, inbox orphans). Returns a text summary plus structuredContent = DiagnosticReport {diagnostics:[{origin,severity,code,message,hint?}]}; PASS checks are omitted. Read-only, never fixes.",
                 "readOnly": true,
                 "annotations": {
                     "readOnly": true,
@@ -1495,26 +1495,35 @@ fn tool_status(state: &McpState) -> Result<Value, RpcError> {
 }
 
 fn tool_doctor(state: &McpState) -> Result<Value, RpcError> {
-    let model = state.load_model();
-    let mut findings = Vec::new();
+    // The real engine, not a hand-maintained echo of it: the CLI, the portal
+    // and this tool must never disagree about what is wrong with a vault.
+    let findings = ovp_doctor::run_checks(&state.vault_root, &ovp_doctor::DoctorOptions::default());
+    let report = ovp_doctor::to_diagnostics(&findings);
 
-    match model.as_ref() {
-        None => {
-            findings.push("FAIL: Index not available — run `ovp2 index` first.");
-        }
-        Some(m) => {
-            if m.ops.blocked_sources.is_empty() {
-                findings.push("OK: No blocked sources.");
-            } else {
-                findings.push("WARN: Blocked sources present (see `find --status blocked`).");
-            }
-            findings.push("OK: Index readable.");
+    let mut lines: Vec<String> = Vec::new();
+    for d in &report.diagnostics {
+        let sev = match d.severity {
+            ovp_domain::diagnostics::Severity::Error => "FAIL",
+            ovp_domain::diagnostics::Severity::Warning => "WARN",
+            ovp_domain::diagnostics::Severity::Info => "INFO",
+        };
+        lines.push(format!("{sev} {}: {}", d.code, d.message));
+        if let Some(h) = &d.hint {
+            lines.push(format!("  -> {h}"));
         }
     }
+    let passes = findings.len() - report.diagnostics.len();
+    lines.push(format!(
+        "summary: {} pass, {} info, {} warn, {} fail",
+        passes,
+        report.count(ovp_domain::diagnostics::Severity::Info),
+        report.count(ovp_domain::diagnostics::Severity::Warning),
+        report.count(ovp_domain::diagnostics::Severity::Error),
+    ));
 
-    let text = findings.join("\n");
     Ok(serde_json::json!({
-        "content": [{ "type": "text", "text": text }]
+        "content": [{ "type": "text", "text": lines.join("\n") }],
+        "structuredContent": report,
     }))
 }
 
@@ -2153,5 +2162,27 @@ mod tests {
         let parsed_nomatch: Value = serde_json::from_str(&text_of(&v_nomatch)).unwrap();
         assert_eq!(parsed_nomatch["total_themes"], 0);
         assert_eq!(parsed_nomatch["themes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn doctor_tool_returns_the_real_engine_report() {
+        // The fixture has a crystal ledger but no index and no reader packs,
+        // so the engine must have something to say — and every entry must be
+        // a doctor diagnostic in the shared shape, not a hand-written line.
+        let (_tmp, state) = fixture_vault();
+        let out = tool_doctor(&state).unwrap();
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("summary:"), "{text}");
+        let diags = out["structuredContent"]["diagnostics"].as_array().unwrap();
+        assert!(!diags.is_empty(), "{out}");
+        for d in diags {
+            assert_eq!(d["origin"], "doctor");
+            assert!(d["code"].as_str().unwrap().starts_with("doctor."), "{d}");
+            assert!(matches!(d["severity"].as_str(), Some("info" | "warning" | "error")), "{d}");
+        }
+        assert!(
+            diags.iter().any(|d| d["code"] == "doctor.stale-index"),
+            "a vault with no index must surface the stale-index check: {out}"
+        );
     }
 }

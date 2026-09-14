@@ -12,12 +12,16 @@ pub struct DoctorArgs {
     pub vault_root: PathBuf,
     pub fix: bool,
     pub json: bool,
+    /// Emit the shared `DiagnosticReport` JSON instead of text.
+    pub diagnostics: bool,
     /// Override for the run-recency staleness threshold (hours).
     pub since_hours: Option<u64>,
 }
 
 pub fn run(args: DoctorArgs) -> Result<(), CliError> {
-    println!("doctor: {}", args.vault_root.display());
+    if !args.diagnostics {
+        println!("doctor: {}", args.vault_root.display());
+    }
 
     let findings = ovp_doctor::run_checks(
         &args.vault_root,
@@ -27,7 +31,12 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
         },
     );
 
-    if args.json {
+    if args.diagnostics {
+        let report = ovp_doctor::to_diagnostics(&findings);
+        let s = serde_json::to_string_pretty(&report)
+            .map_err(|e| CliError::Io(format!("serializing diagnostics: {e}")))?;
+        println!("{s}");
+    } else if args.json {
         let json_out: Vec<_> = findings
             .iter()
             .map(|f| {
@@ -73,7 +82,9 @@ pub fn run(args: DoctorArgs) -> Result<(), CliError> {
         .filter(|f| f.severity == Severity::Pass)
         .count();
 
-    println!("\n  summary: {passes} pass, {infos} info, {warns} warn, {fails} fail");
+    if !args.diagnostics {
+        println!("\n  summary: {passes} pass, {infos} info, {warns} warn, {fails} fail");
+    }
 
     if fails > 0 {
         Err(CliError::Gate(format!("doctor: {fails} check(s) FAILED")))
@@ -101,6 +112,7 @@ mod tests {
             vault_root: tmp.path().to_path_buf(),
             fix: false,
             json: false,
+            diagnostics: false,
             since_hours: None,
         });
         assert!(

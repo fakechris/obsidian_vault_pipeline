@@ -2960,6 +2960,7 @@ name = "ovp-mcp"
 version = "2.0.1"
 dependencies = [
  "ovp-api-projection",
+ "ovp-doctor",
  "ovp-domain",
  "ovp-index",
  "ovp-llm",

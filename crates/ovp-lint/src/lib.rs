@@ -290,6 +290,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lint_findings_project_onto_shared_diagnostics_without_loss() {
+        let report = LintReport {
+            findings: vec![
+                LintFinding::new(Severity::Error, "wikilink.broken", "x".into(), Some("a.md".into())),
+                LintFinding::new(Severity::Info, "evergreen.orphan", "y".into(), None),
+            ],
+        };
+        let d = report.diagnostics();
+        assert_eq!(d.diagnostics.len(), 2);
+        assert_eq!(d.diagnostics[0].origin, ovp_domain::diagnostics::Origin::Lint);
+        assert_eq!(d.diagnostics[0].severity, ovp_domain::diagnostics::Severity::Error);
+        assert_eq!(d.diagnostics[0].code, "wikilink.broken");
+        assert_eq!(d.diagnostics[0].location.as_deref(), Some("a.md"));
+        assert_eq!(d.diagnostics[1].severity, ovp_domain::diagnostics::Severity::Info);
+        // Same gate answer on both shapes.
+        assert_eq!(report.passed(Severity::Error), d.passed(ovp_domain::diagnostics::Severity::Error));
+    }
+
+    #[test]
     fn severity_orders_and_threshold() {
         assert!(Severity::Error > Severity::Warning);
         assert!(Severity::Warning > Severity::Info);
