@@ -582,10 +582,10 @@ mod loader_tests {
         p
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ovp2-recheck-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// A fresh per-test dir that is removed on drop — even when an assertion
+    /// panics — and never under a shared /tmp path.
+    fn tmp(_name: &str) -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     /// A full durable record — the typed `StoreEvent` shape the ledger really
@@ -605,7 +605,7 @@ mod loader_tests {
     fn only_active_durable_records_are_rechecked() {
         let d = tmp("scope");
         let p = write_ledger(
-            &d,
+            d.path(),
             &[
                 &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
                 &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-2", "b", "caveated", "u-2")),
@@ -615,7 +615,6 @@ mod loader_tests {
         let c = durable_from_ledger(&p).unwrap();
         let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["ck-1"], "caveated stays out");
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -625,7 +624,7 @@ mod loader_tests {
         // see it, which is why this goes through the domain's fold.
         let d = tmp("retract");
         let p = write_ledger(
-            &d,
+            d.path(),
             &[
                 &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
                 &format!(r#"{{"op":"retract","record":{}}}"#, rec("ck-1", "a", "durable", "u-1")),
@@ -633,14 +632,13 @@ mod loader_tests {
         );
         let c = durable_from_ledger(&p).unwrap();
         assert!(c.items.is_empty(), "retracted claims are not live assertions");
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn a_supersede_swaps_in_the_replacement_and_drops_the_predecessor() {
         let d = tmp("supersede");
         let p = write_ledger(
-            &d,
+            d.path(),
             &[
                 &format!(r#"{{"op":"write","record":{}}}"#, rec("ck-old", "old", "durable", "u-old")),
                 &format!(
@@ -653,7 +651,6 @@ mod loader_tests {
         let ids: Vec<&str> = c.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["ck-new"], "the superseded predecessor drops out");
         assert_eq!(c.items[0].citations[0].unit_id, "u-new");
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -662,11 +659,10 @@ mod loader_tests {
         // measured from citation DEFECTS — a claim with none reports intact.
         let d = tmp("badcit");
         let p = write_ledger(
-            &d,
+            d.path(),
             &[r#"{"op":"write","record":{"claim_key":"ck-1","claim_id":"ck-1","claim":"a","theme":"t","source_cases":[],"citations":[{"case_id":"c","unit_id":123,"quote":"q"}],"provenance_score":1.0,"provenance_class":"durable","strength":"supported","strength_rationale":"r","final_class":"durable","run_id":"r1","status":"active"}}"#],
         );
         assert!(durable_from_ledger(&p).is_err());
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -674,8 +670,7 @@ mod loader_tests {
         // Skipping unparseable lines would let the report under-count silently
         // and still print a confident "all intact".
         let d = tmp("corrupt");
-        let p = write_ledger(&d, &["not json at all"]);
+        let p = write_ledger(d.path(), &["not json at all"]);
         assert!(durable_from_ledger(&p).is_err());
-        std::fs::remove_dir_all(&d).ok();
     }
 }
