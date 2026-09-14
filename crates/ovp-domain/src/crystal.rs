@@ -155,6 +155,50 @@ pub struct ClaimLint {
     pub citations: Vec<CitationVerdict>,
 }
 
+impl CitationDefect {
+    /// Stable dotted diagnostic code for this defect.
+    pub fn code(&self) -> &'static str {
+        match self {
+            CitationDefect::CaseNotFound => "crystal.citation.case_not_found",
+            CitationDefect::UnitNotFound => "crystal.citation.unit_not_found",
+            CitationDefect::UnitNotAccepted => "crystal.citation.unit_not_accepted",
+            CitationDefect::QuoteNotInUnit => "crystal.citation.quote_not_in_unit",
+        }
+    }
+}
+
+impl ClaimLint {
+    /// Project this claim's citation defects as [`Diagnostic`]s. Every defect
+    /// is an `Error` — the pre-write gate fails on any of them. A claim with
+    /// no citations at all is also an error (nothing grounds it).
+    pub fn diagnostics(&self) -> Vec<crate::diagnostics::Diagnostic> {
+        use crate::diagnostics::{Diagnostic, Origin, Severity};
+        let mut out = Vec::new();
+        if self.n_citations == 0 {
+            out.push(Diagnostic {
+                origin: Origin::Crystal,
+                severity: Severity::Error,
+                code: "crystal.citation.none".into(),
+                message: format!("claim {} has no citations", self.claim_id),
+                location: Some(self.claim_id.clone()),
+                hint: None,
+            });
+        }
+        for c in &self.citations {
+            let Some(defect) = &c.defect else { continue };
+            out.push(Diagnostic {
+                origin: Origin::Crystal,
+                severity: Severity::Error,
+                code: defect.code().into(),
+                message: format!("claim {} cites {}/{}: {:?}", self.claim_id, c.case_id, c.unit_id, defect),
+                location: Some(format!("{}@{}/{}", self.claim_id, c.case_id, c.unit_id)),
+                hint: None,
+            });
+        }
+        out
+    }
+}
+
 /// The whole-candidate lint report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CrystalLintReport {
@@ -162,6 +206,13 @@ pub struct CrystalLintReport {
     pub n_fully_grounded: usize,
     pub n_with_defects: usize,
     pub claims: Vec<ClaimLint>,
+}
+
+impl CrystalLintReport {
+    /// All claims' diagnostics as one [`DiagnosticReport`](crate::diagnostics::DiagnosticReport).
+    pub fn diagnostics(&self) -> crate::diagnostics::DiagnosticReport {
+        crate::diagnostics::DiagnosticReport::new(self.claims.iter().flat_map(|c| c.diagnostics()).collect())
+    }
 }
 
 /// Lint one citation against the grounding index. Reuses the validator's

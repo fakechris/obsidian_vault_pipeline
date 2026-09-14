@@ -58,6 +58,7 @@ ovp-publish = { path = "../ovp-publish" }
 ovp-enrich = { path = "../ovp-enrich" }
 ovp-memory = { path = "../ovp-memory" }
 ovp-server = { path = "../ovp-server" }
+ovp-doctor = { path = "../ovp-doctor" }
 ovp-mcp = { path = "../ovp-mcp" }
 ovp-evolve = { path = "../ovp-evolve" }
 # Always linked for the pure clustering/cache layer; the heavy ONNX embedder

@@ -14,7 +14,6 @@ use ovp_domain::crystal::{
     CrystalHeader, FinalClass, GroundingIndex, ReviewEntry, StoreEvent, StoreOp,
 };
 use ovp_domain::crystal::lineage::{decide_lineage, LineageDecision};
-use ovp_domain::units::Unit;
 
 use crate::CliError;
 
@@ -90,27 +89,7 @@ pub fn merge_review_queue(
 /// Shared by `crystal-lint`, `crystal-write`, and `crystal-synth` so all three
 /// resolve citations against exactly the same keying (directory name == case_id).
 pub fn build_grounding_index(packs_dir: &std::path::Path) -> Result<GroundingIndex, CliError> {
-    let mut index = GroundingIndex::new();
-    let entries = std::fs::read_dir(packs_dir)
-        .map_err(|e| CliError::Io(format!("reading packs dir {}: {e}", packs_dir.display())))?;
-    for entry in entries.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let units_path = entry.path().join("units.accepted.json");
-        if !units_path.exists() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&units_path)
-            .map_err(|e| CliError::Io(format!("reading {}: {e}", units_path.display())))?;
-        let units: Vec<Unit> = serde_json::from_str(&text)
-            .map_err(|e| CliError::Io(format!("parsing {}: {e}", units_path.display())))?;
-        index.insert(entry.file_name().to_string_lossy().to_string(), units);
-    }
-    if index.is_empty() {
-        return Err(CliError::Io(format!("no units.accepted.json under {}", packs_dir.display())));
-    }
-    Ok(index)
+    ovp_domain::crystal::recheck::build_grounding_index(packs_dir).map_err(CliError::Io)
 }
 
 pub(crate) fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
