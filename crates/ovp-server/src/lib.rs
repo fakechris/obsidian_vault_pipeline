@@ -237,6 +237,11 @@ struct CrystalCache {
     loaded: bool,
     ledger_stamp: Option<SystemTime>,
     themes_stamp: Option<SystemTime>,
+    /// The human patch ledger feeds the same projection (M37 overlay): a
+    /// `crystal-patch apply/rollback` that never touches `ledger.jsonl` or
+    /// `themes.json` must still invalidate the cache, or claim/graph APIs
+    /// keep serving the pre-patch text until `/api/refresh` or a restart.
+    patches_stamp: Option<SystemTime>,
     /// Empty until `loaded` — both are always rebuilt together on reload.
     records: Arc<Vec<DurableRecord>>,
     lineage: Arc<ClaimLineageIndex>,
@@ -645,21 +650,25 @@ impl AppState {
         self.vault_root.join(self.layout.console_dir())
     }
 
-    /// Folded crystal projections, reloaded only when `ledger.jsonl` or
-    /// `themes.json` changed on disk. Same double-checked locking shape as
-    /// [`freshen`]; both projections rebuild together so a caller can never
-    /// pair records from one ledger generation with lineage from another.
+    /// Folded crystal projections, reloaded only when `ledger.jsonl`,
+    /// `themes.json`, or the human patch ledger changed on disk. Same
+    /// double-checked locking shape as [`freshen`]; both projections rebuild
+    /// together so a caller can never pair records from one ledger
+    /// generation with lineage from another.
     fn crystal_projections(&self) -> (Arc<Vec<DurableRecord>>, Arc<ClaimLineageIndex>) {
         let store = self.vault_root.join(self.layout.crystal_store_dir());
         let ledger = store.join("ledger.jsonl");
         let themes = store.join("themes.json");
+        let patches = self.vault_root.join(self.layout.crystal_patches_ledger());
 
         let hit = |cache: &CrystalCache,
                    ledger_stamp: &Option<SystemTime>,
-                   themes_stamp: &Option<SystemTime>| {
+                   themes_stamp: &Option<SystemTime>,
+                   patches_stamp: &Option<SystemTime>| {
             if cache.loaded
                 && cache.ledger_stamp == *ledger_stamp
                 && cache.themes_stamp == *themes_stamp
+                && cache.patches_stamp == *patches_stamp
             {
                 Some((cache.records.clone(), cache.lineage.clone()))
             } else {
@@ -667,18 +676,20 @@ impl AppState {
             }
         };
 
-        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
+        let (ledger_stamp, themes_stamp, patches_stamp) =
+            (mtime_of(&ledger), mtime_of(&themes), mtime_of(&patches));
         {
             let guard = self.crystal.read().unwrap();
-            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+            if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp, &patches_stamp) {
                 return pair;
             }
         }
         let mut guard = self.crystal.write().unwrap();
         // Re-stat under the write lock — the files could have changed between
         // the read guard's stat and acquiring the write lock.
-        let (ledger_stamp, themes_stamp) = (mtime_of(&ledger), mtime_of(&themes));
-        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp) {
+        let (ledger_stamp, themes_stamp, patches_stamp) =
+            (mtime_of(&ledger), mtime_of(&themes), mtime_of(&patches));
+        if let Some(pair) = hit(&guard, &ledger_stamp, &themes_stamp, &patches_stamp) {
             return pair;
         }
         let records = Arc::new(readers::load_active_records(&self.vault_root, &self.layout));
@@ -687,6 +698,7 @@ impl AppState {
             loaded: true,
             ledger_stamp,
             themes_stamp,
+            patches_stamp,
             records: records.clone(),
             lineage: lineage.clone(),
         };
@@ -2923,11 +2935,10 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Some(zh_file) = state.current_claims_zh() {
-                    if let Some(zh) = zh_file.get_fresh(&key, &en) {
+                if let Some(zh_file) = state.current_claims_zh()
+                    && let Some(zh) = zh_file.get_fresh(&key, &en) {
                         obj.insert("claim_zh".into(), serde_json::json!(zh));
                     }
-                }
             }
             json_stamped(200, &v.to_string(), model.as_deref())
         }
@@ -3022,12 +3033,11 @@ fn splice_source_memory_zh(
                 "title": c.title,
                 "content": c.content,
             });
-            if let Some(zh) = cards_zh.get_fresh(&c.id, &c.title, &c.content) {
-                if let Some(o) = card.as_object_mut() {
+            if let Some(zh) = cards_zh.get_fresh(&c.id, &c.title, &c.content)
+                && let Some(o) = card.as_object_mut() {
                     o.insert("title_zh".into(), serde_json::json!(zh.title_zh));
                     o.insert("content_zh".into(), serde_json::json!(zh.content_zh));
                 }
-            }
             enriched_cards.push(card);
         }
     }
@@ -3035,13 +3045,11 @@ fn splice_source_memory_zh(
     let Some(obj) = body.as_object_mut() else {
         return;
     };
-    if !enriched_cards.is_empty() {
-        if let Some(memory) = obj.get_mut("memory").and_then(|m| m.as_object_mut()) {
-            if let Some(cards_val) = memory.get_mut("cards") {
+    if !enriched_cards.is_empty()
+        && let Some(memory) = obj.get_mut("memory").and_then(|m| m.as_object_mut())
+            && let Some(cards_val) = memory.get_mut("cards") {
                 *cards_val = serde_json::Value::Array(enriched_cards);
             }
-        }
-    }
     // citing_claims claim_zh
     if let Some(claims) = obj.get_mut("citing_claims").and_then(|c| c.as_array_mut()) {
         for c in claims.iter_mut() {
@@ -3078,6 +3086,7 @@ fn source_sha_from_action_path(path: &str, action: &str) -> Option<String> {
     Some(url_decode(rest))
 }
 
+#[allow(clippy::type_complexity)]
 fn source_markdown_for(
     state: &AppState,
     model: &IndexModel,
@@ -4282,8 +4291,6 @@ fn handle_ask(
     let vault_root = state.vault_root.clone();
     // Legacy path: raw question for retrieval/intent; pack only for the LLM.
     let question = question_raw.to_string();
-    let context_prefix = context_prefix;
-    let focus_meta = focus_meta;
 
     let progress_session = chat.clone().unwrap_or_else(|| {
         let now = std::time::SystemTime::now()
@@ -4479,7 +4486,6 @@ fn handle_ask_agent(
     let progress_session = session.clone();
     let question = question.to_string();
     let display_question = display_question.to_string();
-    let focus_meta = focus_meta;
     let response_session = session.clone();
     let request_key = idempotency_key.map(str::to_string);
 
@@ -4987,6 +4993,7 @@ fn handle_ask_progress(state: &AppState, url: &str) -> Response<std::io::Cursor<
 /// The worker side of /api/ask: build the client, run the pipeline (chat
 /// always saved — parity with `ovp2 ask --save`), shape the JSON payload.
 /// `chat` + `history` continue a multi-turn session (one history entry).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_ask(
     factory: &AskClientFactory,
     model: &IndexModel,
@@ -5943,6 +5950,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             }],
             runs: vec![],
             ops: OpsState::default(),
@@ -8348,6 +8356,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             },
             ovp_index::ClaimRow {
                 claim_id: "m1-02".into(),
@@ -8361,6 +8370,7 @@ mod tests {
                 run_id: None,
                 run_date: None,
                 lane: None,
+                patched_by: None,
             },
         ];
         ovp_index::write_index(&vault, &model).unwrap();

@@ -1165,6 +1165,7 @@ mod tests {
                 run_id: Some("run-1".into()),
                 run_date: None,
                 lane: None,
+                patched_by: None,
             }],
             runs: vec![],
             ops: OpsState::default(),

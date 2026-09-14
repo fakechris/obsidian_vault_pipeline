@@ -230,6 +230,11 @@ impl VaultLayout {
         ".ovp/crystal"
     }
 
+    /// Durable human patch ledger for Crystal claims (vault-relative, append-only JSONL, M37).
+    pub fn crystal_patches_ledger(&self) -> &'static str {
+        ".ovp/crystal/patches.jsonl"
+    }
+
     /// The operator-owned tag alias table (alias → canonical), applied at
     /// projection build time only — raw frontmatter tags are never rewritten.
     pub fn tag_aliases_file(&self) -> &'static str {

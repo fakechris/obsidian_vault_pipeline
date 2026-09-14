@@ -739,7 +739,7 @@ fn desktop_notify(title: String, body: String) -> Result<(), String> {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "linux")]
     {

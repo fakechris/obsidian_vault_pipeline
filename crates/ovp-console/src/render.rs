@@ -494,6 +494,7 @@ mod tests {
                     run_id: Some("crystal-1".into()),
                     run_date: None,
                     lane: None,
+                    patched_by: None,
                 },
                 ClaimRow {
                     claim_id: "c02".into(),
@@ -507,6 +508,7 @@ mod tests {
                     run_id: None,
                     run_date: None,
                     lane: None,
+                    patched_by: None,
                 },
             ],
             runs: vec![RunRow {

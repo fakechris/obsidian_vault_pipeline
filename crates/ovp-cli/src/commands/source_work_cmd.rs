@@ -251,8 +251,8 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
 }
 
 pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
-    let do_cards = args.cards || (!args.cards && !args.theme_pages);
-    let do_pages = args.theme_pages || (!args.cards && !args.theme_pages);
+    let do_cards = args.cards || !args.theme_pages;
+    let do_pages = args.theme_pages || !args.cards;
 
     let date = today_iso();
     let cache = args

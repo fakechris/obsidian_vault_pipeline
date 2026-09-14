@@ -331,7 +331,7 @@ mod tests {
         let seed = digest("seed-1");
         let neighbors = vec![digest("n-1")];
         let table = selection_aliases(&seed, &neighbors);
-        let resolved = table.resolve_all(["c1", "c9"].into_iter());
+        let resolved = table.resolve_all(["c1", "c9"]);
         assert_eq!(resolved[1], "c9", "kept verbatim so the error names it");
         let offered: BTreeSet<String> =
             ["seed-1".to_string(), "n-1".to_string()].into_iter().collect();

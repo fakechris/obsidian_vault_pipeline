@@ -41,7 +41,7 @@ pub fn themes_body(records: &[DurableRecord]) -> Value {
         entry.2 += 1;
     }
     let mut themes: Vec<(Option<i64>, String, usize)> =
-        by_key.into_iter().map(|(_, v)| v).collect();
+        by_key.into_values().collect();
     // Highest count first; ties break by id (None sorts first as the least),
     // then by label so the order is deterministic.
     themes.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
@@ -315,8 +315,8 @@ pub fn claim_body_with_lineage(
         "strength": format!("{:?}", rec.strength).to_lowercase(),
         "citations": citations,
     });
-    if let Some(lin) = lineage {
-        if let Some(obj) = body.as_object_mut() {
+    if let Some(lin) = lineage
+        && let Some(obj) = body.as_object_mut() {
             if !lin.supersedes.is_empty() {
                 obj.insert("supersedes".into(), json!(lin.supersedes));
             }
@@ -327,7 +327,6 @@ pub fn claim_body_with_lineage(
                 obj.insert("status".into(), json!(st));
             }
         }
-    }
     Some(body)
 }
 

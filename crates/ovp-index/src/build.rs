@@ -987,6 +987,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             run_id: Some(rec.run_id.clone()),
             run_date: run_date_from_run_id(&rec.run_id),
             lane: None,
+            patched_by: None,
         });
     }
 
@@ -1019,6 +1020,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 run_id: None,
                 run_date: None,
                 lane: enum_str(&entry.lane),
+                patched_by: None,
             });
         }
     }
@@ -1048,6 +1050,40 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                     .majority_label(&row.sources)
                     .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string()),
             );
+        }
+    }
+
+    // Human patch overlay (M37): fold `.ovp/crystal/patches.jsonl` and overlay
+    // active human adjustments onto claims. A missing ledger is a no-op; a
+    // PRESENT-BUT-CORRUPT one is an error — the index must not silently drop
+    // every human correction and publish unpatched claims as if intended.
+    let patches_file = store.join("patches.jsonl");
+    let patch_records = ovp_domain::crystal::read_patch_ledger(&patches_file)
+        .map_err(|e| format!("human patch ledger {}: {e}", patches_file.display()))?;
+    if !patch_records.is_empty() {
+        let patch_state = ovp_domain::crystal::fold_patch_ledger(&patch_records);
+        for row in claims.iter_mut() {
+            let Some(patch) =
+                patch_state.get_active_patch_for_record(&row.claim_id, row.claim_key.as_deref())
+            else {
+                continue;
+            };
+            // Drift gate (P1): if the upstream claim was rewritten after the
+            // patch was authored, skip the stale human edit and report it.
+            if !patch_state.chain_grounded_on(patch, &row.claim) {
+                eprintln!(
+                    "warning: human patch {} skipped for claim {}: upstream text drifted from the patch base",
+                    patch.patch_id, row.claim_id
+                );
+                continue;
+            }
+            let mut claim_text = row.claim.clone();
+            let mut theme_opt = row.theme.clone();
+            if patch.overlay_onto_claim_parts(&mut claim_text, &mut theme_opt) {
+                row.claim = claim_text;
+                row.theme = theme_opt;
+                row.patched_by = Some(patch.patch_id.clone());
+            }
         }
     }
 

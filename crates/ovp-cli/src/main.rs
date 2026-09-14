@@ -925,6 +925,14 @@ enum Cmd {
         #[arg(long)]
         date: Option<String>,
     },
+    /// PRODUCT (M37) — Human Patch Ledger: append-only human adjustments,
+    /// revision history, unified diffs, and one-click rollback.
+    CrystalPatch {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[command(subcommand)]
+        action: commands::crystal_patch::CrystalPatchSubcommand,
+    },
     /// DIAGNOSTIC — experimental/eval harness; not a product path.
     /// M14b (experimental): classify the OBJECTS that M14a.8 accepted Units talk
     /// about into LOCAL ReferentCandidates and write a review pack to `--out`.
@@ -2332,6 +2340,10 @@ fn main() -> ExitCode {
                 refresh,
                 date,
             })
+        }
+        Cmd::CrystalPatch { vault_root, action } => {
+            use commands::crystal_patch::CrystalPatchArgs;
+            commands::crystal_patch::run(CrystalPatchArgs { vault_root, action })
         }
         Cmd::CrystalReviewSession {
             vault_root,

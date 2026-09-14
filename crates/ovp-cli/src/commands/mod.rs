@@ -8,6 +8,7 @@ pub mod copy_probe;
 pub mod artifacts;
 pub mod quarantine;
 pub mod crystal_lint;
+pub mod crystal_patch;
 pub mod crystal_recheck;
 pub mod crystal_review;
 pub mod crystal_review_session;

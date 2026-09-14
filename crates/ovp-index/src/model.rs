@@ -293,6 +293,9 @@ pub struct ClaimRow {
     /// None for durable/superseded/retracted rows and pre-M35 indexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
+    /// When modified by a Human Patch Record (M37), the active patch ID (e.g. `hp-...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patched_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

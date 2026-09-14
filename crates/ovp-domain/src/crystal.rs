@@ -58,6 +58,16 @@ pub mod alias;
 /// repair — a stale claim is not a wrong claim.
 pub mod recheck;
 
+/// M37 — Human Patch Ledger: append-only chunk/claim level human adjustments
+/// with revision history, diffs, and rollback.
+pub mod patch;
+
+pub use patch::{
+    append_patch_record, apply_patches_to_durable_records, audit_patches, diff_patch,
+    fold_patch_ledger, format_diff, read_patch_ledger, DiffKind, DiffLine, HumanPatchRecord,
+    PatchAuditEntry, PatchDiff, PatchLedgerState, PatchOp, PatchStatus,
+};
+
 use crate::units::validator::deterministic_contains;
 use crate::units::{Unit, UnitStatus};
 

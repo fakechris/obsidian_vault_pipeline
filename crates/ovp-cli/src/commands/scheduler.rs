@@ -138,7 +138,7 @@ impl JobRunner for ShellRunner {
             Ok(status) => (status.success(), None),
             Err(e) => (false, Some(format!("wait() failed: {e}"))),
         };
-        let error_tail = (!ok && !(tail_bytes.is_empty() && wait_err.is_none())).then(|| {
+        let error_tail = (!ok && (!tail_bytes.is_empty() || wait_err.is_some())).then(|| {
             let bytes: Vec<u8> = tail_bytes.into_iter().collect();
             let mut tail = render_stderr_tail(&bytes);
             if let Some(we) = wait_err {

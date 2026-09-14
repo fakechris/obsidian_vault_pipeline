@@ -604,6 +604,7 @@ mod tests {
                     run_id: Some("r1".into()),
                     run_date: None,
                     lane: None,
+                    patched_by: None,
                 },
                 ClaimRow {
                     claim_id: "id-2".into(),
@@ -617,6 +618,7 @@ mod tests {
                     run_id: None,
                     run_date: None,
                     lane: Some("review".into()),
+                    patched_by: None,
                 },
             ],
             runs: vec![],

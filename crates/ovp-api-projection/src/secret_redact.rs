@@ -191,7 +191,8 @@ fn match_known_secret(s: &str) -> Option<(usize, &str)> {
     }
 
     // Prefix-keyed secrets.
-    let prefixes: &[(&str, usize, fn(char) -> bool)] = &[
+    type PrefixRule<'a> = (&'a str, usize, fn(char) -> bool);
+    let prefixes: &[PrefixRule] = &[
         ("sk-ant-api03-", 20, is_secret_body),
         ("sk-proj-", 16, is_secret_body),
         ("sk-live-", 16, is_secret_body),
@@ -317,7 +318,7 @@ fn looks_like_secret_token(tok: &str) -> bool {
     let has_upper = tok.chars().any(|c| c.is_ascii_uppercase());
     let has_lower = tok.chars().any(|c| c.is_ascii_lowercase());
     let has_special = tok.chars().any(|c| matches!(c, '+' | '/' | '=' | '_' | '-'));
-    (has_digit && (has_upper || has_lower)) || (has_special && has_digit)
+    has_digit && (has_upper || has_lower || has_special)
 }
 
 fn shannon_entropy(s: &str) -> f64 {

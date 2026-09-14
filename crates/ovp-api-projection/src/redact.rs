@@ -170,6 +170,7 @@ mod tests {
             run_id: Some("r9".into()),
             run_date: None,
             lane: None,
+            patched_by: None,
         }
     }
 

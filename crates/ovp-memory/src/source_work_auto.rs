@@ -62,8 +62,8 @@ pub fn plan_tasks(
         body,
     );
     let looks_english = body.is_empty() || is_primarily_english(body) || st.primarily_english;
-    let want_translate = (cfg.auto_translate || force) && (force || !st.has_zh) && (force || looks_english);
-    let want_summarize = (cfg.auto_summarize || force) && (force || !st.has_summary);
+    let want_translate = force || (cfg.auto_translate && !st.has_zh && looks_english);
+    let want_summarize = force || (cfg.auto_summarize && !st.has_summary);
     // Body present and clearly non-English → skip translate (unless force).
     let want_translate = if !body.is_empty() && !is_primarily_english(body) && !force {
         false
@@ -82,6 +82,7 @@ pub fn plan_tasks(
 /// `override_translate` / `override_summarize` when `Some` pin task kinds
 /// regardless of config (CLI flags). When both overrides are `None`, config
 /// flags apply.
+#[allow(clippy::too_many_arguments)]
 pub fn enqueue_candidates(
     vault_root: &Path,
     queue: &SourceWorkQueue,
@@ -168,14 +169,12 @@ pub fn candidate_with_paths(
     let mut body = None;
     for rel in body_paths {
         let p = vault_root.join(rel);
-        if p.is_file() {
-            if let Ok(s) = std::fs::read_to_string(&p) {
-                if !s.trim().is_empty() {
+        if p.is_file()
+            && let Ok(s) = std::fs::read_to_string(&p)
+                && !s.trim().is_empty() {
                     body = Some(s);
                     break;
                 }
-            }
-        }
     }
     if body.is_none() {
         let work = source_work::work_rel_for(&sha256, title.as_deref());
@@ -248,11 +247,10 @@ pub fn run_auto_enqueue(
     dry_run: bool,
 ) -> Result<AutoEnqueueReport, String> {
     let cfg = SourceWorkConfig::load(vault_root)?;
-    if !cfg.auto_summarize && !cfg.auto_translate {
-        if override_translate.is_none() && override_summarize.is_none() && !force {
+    if !cfg.auto_summarize && !cfg.auto_translate
+        && override_translate.is_none() && override_summarize.is_none() && !force {
             return Ok(AutoEnqueueReport::default());
         }
-    }
     let _ = SourceWorkConfig::ensure_template(vault_root);
     let queue = SourceWorkQueue::open(vault_root);
     Ok(enqueue_candidates(
@@ -319,9 +317,11 @@ mod tests {
             title: Some("中文".into()),
             body: Some(zh.into()),
         };
-        let mut cfg = SourceWorkConfig::default();
-        cfg.auto_summarize = false;
-        cfg.auto_translate = true;
+        let cfg = SourceWorkConfig {
+            auto_summarize: false,
+            auto_translate: true,
+            ..SourceWorkConfig::default()
+        };
         assert!(plan_tasks(tmp.path(), &cand, &cfg, false).is_none());
     }
 
