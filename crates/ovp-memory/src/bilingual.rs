@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use ovp_llm::{ModelClient, ModelMessage, ModelRequest, StopReason};
@@ -31,6 +32,599 @@ pub const GLOSSARY_SCHEMA: &str = "ovp.glossary/v1";
 pub const CLAIMS_ZH_SCHEMA: &str = "ovp.claims_zh/v1";
 pub const CARDS_ZH_SCHEMA: &str = "ovp.cards_zh/v1";
 pub const THEME_PAGES_ZH_SCHEMA: &str = "ovp.theme_pages_zh/v1";
+
+pub const BILINGUAL_RECEIPTS_REL: &str = ".ovp/crystal/bilingual_receipts.jsonl";
+pub const BILINGUAL_RECEIPT_SCHEMA: &str = "ovp.bilingual_receipt/v1";
+
+/// A durable item-level receipt of a translation attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BilingualReceipt {
+    pub schema: String,
+    pub ts: u64,
+    pub kind: String, // "claim" | "card" | "theme_page" | "tail_phase"
+    pub item_id: String, // claim_key, card_id, community_id, or phase name
+    pub en_hash: String,
+    pub outcome: String, // "success" | "error" | "quarantined" | "skipped" | "budget_exhausted" | "interrupted"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+impl BilingualReceipt {
+    pub fn new(
+        kind: impl Into<String>,
+        item_id: impl Into<String>,
+        en_hash: impl Into<String>,
+        outcome: impl Into<String>,
+        reason: Option<String>,
+        model: Option<String>,
+        run_id: Option<String>,
+    ) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Self {
+            schema: BILINGUAL_RECEIPT_SCHEMA.into(),
+            ts,
+            kind: kind.into(),
+            item_id: item_id.into(),
+            en_hash: en_hash.into(),
+            outcome: outcome.into(),
+            reason,
+            model,
+            run_id,
+        }
+    }
+}
+
+/// Append a single receipt line to .ovp/crystal/bilingual_receipts.jsonl.
+pub fn append_bilingual_receipt(vault_root: &Path, receipt: &BilingualReceipt) -> Result<(), String> {
+    let path = vault_root.join(BILINGUAL_RECEIPTS_REL);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create receipts dir: {e}"))?;
+    }
+    let mut line = serde_json::to_string(receipt).map_err(|e| format!("serialize receipt: {e}"))?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open receipts file: {e}"))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("write receipt: {e}"))?;
+    #[cfg(unix)]
+    file.sync_data()
+        .map_err(|e| format!("sync receipt: {e}"))?;
+    Ok(())
+}
+
+/// Load the latest receipt per (kind, item_id) pair from the receipts log.
+pub fn load_latest_bilingual_receipts(
+    vault_root: &Path,
+) -> BTreeMap<(String, String), BilingualReceipt> {
+    let path = vault_root.join(BILINGUAL_RECEIPTS_REL);
+    let mut out = BTreeMap::new();
+    if !path.is_file() {
+        return out;
+    }
+    let Ok(content) = fs::read_to_string(&path) else {
+        return out;
+    };
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(rec) = serde_json::from_str::<BilingualReceipt>(trimmed)
+            && rec.schema == BILINGUAL_RECEIPT_SCHEMA
+        {
+            out.insert((rec.kind.clone(), rec.item_id.clone()), rec);
+        }
+    }
+    out
+}
+
+/// Result of a batch translation run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BatchOutcome {
+    pub done: usize,
+    pub skipped: usize,
+    pub attempts: usize,
+    pub errors: Vec<String>,
+}
+
+impl BatchOutcome {
+    pub fn into_tuple(self) -> (usize, usize, Vec<String>) {
+        (self.done, self.skipped, self.errors)
+    }
+}
+
+/// Status of a bilingual projection entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionStatus {
+    Fresh,
+    Stale,
+    Missing,
+    Corrupt,
+    Paused,
+}
+
+impl ProjectionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::Missing => "missing",
+            Self::Corrupt => "corrupt",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+/// Evaluation view of a claim's bilingual projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimProjectionView {
+    pub status: ProjectionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_zh: Option<String>,
+    pub en_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_en_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub fn evaluate_claim_projection_from_file(
+    file_result: Result<&ClaimsZhFile, &str>,
+    file_exists: bool,
+    claim_key: &str,
+    claim_en: &str,
+) -> ClaimProjectionView {
+    let en_h = text_hash(claim_en);
+    match file_result {
+        Ok(file) => {
+            if let Some(entry) = file.entries.get(claim_key) {
+                if entry.en_hash == en_h {
+                    ClaimProjectionView {
+                        status: ProjectionStatus::Fresh,
+                        text_zh: Some(entry.claim_zh.clone()),
+                        en_hash: en_h,
+                        stored_en_hash: Some(entry.en_hash.clone()),
+                        error: None,
+                    }
+                } else {
+                    ClaimProjectionView {
+                        status: ProjectionStatus::Stale,
+                        text_zh: None,
+                        en_hash: en_h,
+                        stored_en_hash: Some(entry.en_hash.clone()),
+                        error: None,
+                    }
+                }
+            } else {
+                ClaimProjectionView {
+                    status: ProjectionStatus::Missing,
+                    text_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+        Err(e) => {
+            if file_exists {
+                ClaimProjectionView {
+                    status: ProjectionStatus::Corrupt,
+                    text_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: Some(e.to_string()),
+                }
+            } else {
+                ClaimProjectionView {
+                    status: ProjectionStatus::Missing,
+                    text_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+    }
+}
+
+pub fn evaluate_claim_projection(
+    vault_root: &Path,
+    claim_key: &str,
+    claim_en: &str,
+) -> ClaimProjectionView {
+    let path = vault_root.join(CLAIMS_ZH_REL);
+    let exists = path.is_file();
+    match ClaimsZhFile::load(vault_root) {
+        Ok(f) => evaluate_claim_projection_from_file(Ok(&f), exists, claim_key, claim_en),
+        Err(e) => evaluate_claim_projection_from_file(Err(&e), exists, claim_key, claim_en),
+    }
+}
+
+/// Evaluation view of a theme page's bilingual projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemePageProjectionView {
+    pub status: ProjectionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections_zh: Option<Vec<ThemePageSectionZh>>,
+    pub en_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_en_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub fn evaluate_theme_page_projection_from_file(
+    file_result: Result<&ThemePagesZhFile, &str>,
+    file_exists: bool,
+    community_id: i64,
+    sections: &[(String, String)],
+) -> ThemePageProjectionView {
+    let en_h = theme_page_en_hash(sections);
+    match file_result {
+        Ok(file) => {
+            let key = community_id.to_string();
+            if let Some(page) = file.pages.get(&key) {
+                if page.en_hash == en_h {
+                    ThemePageProjectionView {
+                        status: ProjectionStatus::Fresh,
+                        sections_zh: Some(page.sections.clone()),
+                        en_hash: en_h,
+                        stored_en_hash: Some(page.en_hash.clone()),
+                        error: None,
+                    }
+                } else {
+                    ThemePageProjectionView {
+                        status: ProjectionStatus::Stale,
+                        sections_zh: None,
+                        en_hash: en_h,
+                        stored_en_hash: Some(page.en_hash.clone()),
+                        error: None,
+                    }
+                }
+            } else {
+                ThemePageProjectionView {
+                    status: ProjectionStatus::Missing,
+                    sections_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+        Err(e) => {
+            if file_exists {
+                ThemePageProjectionView {
+                    status: ProjectionStatus::Corrupt,
+                    sections_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: Some(e.to_string()),
+                }
+            } else {
+                ThemePageProjectionView {
+                    status: ProjectionStatus::Missing,
+                    sections_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+    }
+}
+
+pub fn evaluate_theme_page_projection(
+    vault_root: &Path,
+    community_id: i64,
+    sections: &[(String, String)],
+) -> ThemePageProjectionView {
+    let path = vault_root.join(THEME_PAGES_ZH_REL);
+    let exists = path.is_file();
+    match ThemePagesZhFile::load(vault_root) {
+        Ok(f) => evaluate_theme_page_projection_from_file(Ok(&f), exists, community_id, sections),
+        Err(e) => evaluate_theme_page_projection_from_file(Err(&e), exists, community_id, sections),
+    }
+}
+
+/// Evaluation view of a memory card's bilingual projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardProjectionView {
+    pub status: ProjectionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_zh: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_zh: Option<String>,
+    pub en_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_en_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub fn card_en_hash(title: &str, content: &str) -> String {
+    text_hash(&format!("{title}\n{content}"))
+}
+
+pub fn evaluate_card_projection_from_file(
+    file_result: Result<&CardsZhFile, &str>,
+    file_exists: bool,
+    card_id: &str,
+    title: &str,
+    content: &str,
+) -> CardProjectionView {
+    let en_h = card_en_hash(title, content);
+    match file_result {
+        Ok(file) => {
+            if let Some(card) = file.entries.get(card_id) {
+                if card.en_hash == en_h {
+                    CardProjectionView {
+                        status: ProjectionStatus::Fresh,
+                        title_zh: Some(card.title_zh.clone()),
+                        content_zh: Some(card.content_zh.clone()),
+                        en_hash: en_h,
+                        stored_en_hash: Some(card.en_hash.clone()),
+                        error: None,
+                    }
+                } else {
+                    CardProjectionView {
+                        status: ProjectionStatus::Stale,
+                        title_zh: None,
+                        content_zh: None,
+                        en_hash: en_h,
+                        stored_en_hash: Some(card.en_hash.clone()),
+                        error: None,
+                    }
+                }
+            } else {
+                CardProjectionView {
+                    status: ProjectionStatus::Missing,
+                    title_zh: None,
+                    content_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+        Err(e) => {
+            if file_exists {
+                CardProjectionView {
+                    status: ProjectionStatus::Corrupt,
+                    title_zh: None,
+                    content_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: Some(e.to_string()),
+                }
+            } else {
+                CardProjectionView {
+                    status: ProjectionStatus::Missing,
+                    title_zh: None,
+                    content_zh: None,
+                    en_hash: en_h,
+                    stored_en_hash: None,
+                    error: None,
+                }
+            }
+        }
+    }
+}
+
+pub fn evaluate_card_projection(
+    vault_root: &Path,
+    card_id: &str,
+    title: &str,
+    content: &str,
+) -> CardProjectionView {
+    let path = vault_root.join(CARDS_ZH_REL);
+    let exists = path.is_file();
+    match CardsZhFile::load(vault_root) {
+        Ok(f) => evaluate_card_projection_from_file(Ok(&f), exists, card_id, title, content),
+        Err(e) => evaluate_card_projection_from_file(Err(&e), exists, card_id, title, content),
+    }
+}
+
+/// Summary of bilingual coverage with an honest eligible denominator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BilingualCoverageSummary {
+    pub total_eligible: usize,
+    pub fresh: usize,
+    pub stale: usize,
+    pub missing: usize,
+    pub corrupt: usize,
+    pub paused: usize,
+}
+
+impl BilingualCoverageSummary {
+    pub fn is_complete(&self) -> bool {
+        self.total_eligible > 0 && self.fresh == self.total_eligible
+    }
+}
+
+/// Calculate bilingual claims coverage against an active snapshot.
+pub fn calculate_claims_coverage(
+    vault_root: &Path,
+    claims: &[(String, String)],
+    paused: bool,
+) -> BilingualCoverageSummary {
+    let path = vault_root.join(CLAIMS_ZH_REL);
+    let exists = path.is_file();
+    let file_result = ClaimsZhFile::load(vault_root);
+    let mut summary = BilingualCoverageSummary {
+        total_eligible: claims.len(),
+        ..Default::default()
+    };
+    if paused {
+        summary.paused = claims.len();
+        return summary;
+    }
+    for (key, en) in claims {
+        let view = match &file_result {
+            Ok(f) => evaluate_claim_projection_from_file(Ok(f), exists, key, en),
+            Err(e) => evaluate_claim_projection_from_file(Err(e), exists, key, en),
+        };
+        match view.status {
+            ProjectionStatus::Fresh => summary.fresh += 1,
+            ProjectionStatus::Stale => summary.stale += 1,
+            ProjectionStatus::Missing => summary.missing += 1,
+            ProjectionStatus::Corrupt => summary.corrupt += 1,
+            ProjectionStatus::Paused => summary.paused += 1,
+        }
+    }
+    summary
+}
+
+/// Calculate bilingual memory cards coverage against an active snapshot.
+pub fn calculate_cards_coverage(
+    vault_root: &Path,
+    cards: &[(String, String, String)],
+    paused: bool,
+) -> BilingualCoverageSummary {
+    let path = vault_root.join(CARDS_ZH_REL);
+    let exists = path.is_file();
+    let file_result = CardsZhFile::load(vault_root);
+    let mut summary = BilingualCoverageSummary {
+        total_eligible: cards.len(),
+        ..Default::default()
+    };
+    if paused {
+        summary.paused = cards.len();
+        return summary;
+    }
+    for (id, title, content) in cards {
+        let view = match &file_result {
+            Ok(f) => evaluate_card_projection_from_file(Ok(f), exists, id, title, content),
+            Err(e) => evaluate_card_projection_from_file(Err(e), exists, id, title, content),
+        };
+        match view.status {
+            ProjectionStatus::Fresh => summary.fresh += 1,
+            ProjectionStatus::Stale => summary.stale += 1,
+            ProjectionStatus::Missing => summary.missing += 1,
+            ProjectionStatus::Corrupt => summary.corrupt += 1,
+            ProjectionStatus::Paused => summary.paused += 1,
+        }
+    }
+    summary
+}
+
+/// Attach `claim_zh`, `claim_zh_status`, `sections_zh`, and `sections_zh_status`
+/// when bilingual projections are evaluated, distinguishing fresh, stale, missing, and corrupt.
+pub fn splice_theme_pages_zh(
+    vault_root: &Path,
+    en_pages: Option<&ovp_domain::crystal::theme_pages::ThemePagesFile>,
+    body: &mut serde_json::Value,
+) {
+    let claims_zh_path = vault_root.join(CLAIMS_ZH_REL);
+    let claims_zh_exists = claims_zh_path.is_file();
+    let claims_zh_res = ClaimsZhFile::load(vault_root);
+
+    let pages_zh_path = vault_root.join(THEME_PAGES_ZH_REL);
+    let pages_zh_exists = pages_zh_path.is_file();
+    let pages_zh_res = ThemePagesZhFile::load(vault_root);
+
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+
+    let claims_corrupt = claims_zh_exists && claims_zh_res.is_err();
+    let pages_corrupt = pages_zh_exists && pages_zh_res.is_err();
+
+    if claims_corrupt || pages_corrupt {
+        let mut corrupt_files = Vec::new();
+        if claims_corrupt {
+            corrupt_files.push(CLAIMS_ZH_REL);
+        }
+        if pages_corrupt {
+            corrupt_files.push(THEME_PAGES_ZH_REL);
+        }
+        obj.insert("bilingual_corrupt".into(), serde_json::json!(corrupt_files));
+    }
+
+    if let Some(claims) = obj.get_mut("claims").and_then(|c| c.as_object_mut()) {
+        for (key, val) in claims.iter_mut() {
+            if let Some(cobj) = val.as_object_mut() {
+                let en = cobj
+                    .get("claim")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let view = match &claims_zh_res {
+                    Ok(f) => evaluate_claim_projection_from_file(
+                        Ok(f),
+                        claims_zh_exists,
+                        key,
+                        &en,
+                    ),
+                    Err(e) => evaluate_claim_projection_from_file(
+                        Err(e.as_str()),
+                        claims_zh_exists,
+                        key,
+                        &en,
+                    ),
+                };
+                cobj.insert("claim_zh_status".into(), serde_json::json!(view.status));
+                if let Some(zh) = view.text_zh {
+                    cobj.insert("claim_zh".into(), serde_json::json!(zh));
+                } else {
+                    cobj.remove("claim_zh");
+                }
+            }
+        }
+    }
+    if let Some(pages_val) = obj.get_mut("pages").and_then(|p| p.as_array_mut()) {
+        for page_val in pages_val.iter_mut() {
+            let Some(pobj) = page_val.as_object_mut() else {
+                continue;
+            };
+            let cid = pobj.get("community_id").and_then(|x| x.as_i64()).unwrap_or(-1);
+            let sections: Vec<(String, String)> = en_pages
+                .and_then(|f| f.page(cid))
+                .map(|p| {
+                    p.sections
+                        .iter()
+                        .map(|s| (s.heading.clone(), s.body.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let view = match &pages_zh_res {
+                Ok(f) => evaluate_theme_page_projection_from_file(
+                    Ok(f),
+                    pages_zh_exists,
+                    cid,
+                    &sections,
+                ),
+                Err(e) => evaluate_theme_page_projection_from_file(
+                    Err(e.as_str()),
+                    pages_zh_exists,
+                    cid,
+                    &sections,
+                ),
+            };
+            pobj.insert("sections_zh_status".into(), serde_json::json!(view.status));
+            if let Some(sections_zh) = view.sections_zh {
+                let json_sections: Vec<serde_json::Value> = sections_zh
+                    .iter()
+                    .map(|s| serde_json::json!({ "heading": s.heading, "body": s.body }))
+                    .collect();
+                pobj.insert("sections_zh".into(), serde_json::json!(json_sections));
+            } else {
+                pobj.remove("sections_zh");
+            }
+        }
+    }
+}
 
 const TRANSLATE_SHORT_SYSTEM: &str = r#"You are a professional EN→zh-CN translator for technical knowledge claims and memory cards.
 
@@ -226,13 +820,13 @@ impl CardsZhFile {
 
 // ---- Theme pages zh ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemePageSectionZh {
     pub heading: String,
     pub body: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemePageZhEntry {
     pub community_id: i64,
     pub sections: Vec<ThemePageSectionZh>,
@@ -291,7 +885,7 @@ impl ThemePagesZhFile {
 
 // ---- Translate primitives ----
 
-fn text_hash(s: &str) -> String {
+pub fn text_hash(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.trim().as_bytes());
     format!("{:x}", h.finalize())[..16].to_string()
@@ -420,14 +1014,15 @@ macro_rules! load_snapshot {
         match <$ty>::load($vault_root) {
             Ok(f) => f,
             Err(e) if $vault_root.join($rel).is_file() => {
-                return (
-                    0,
-                    0,
-                    vec![format!(
+                return BatchOutcome {
+                    done: 0,
+                    skipped: 0,
+                    attempts: 0,
+                    errors: vec![format!(
                         "{}: {} ({e}) — if the file is unparseable, delete it to rebuild",
                         $rel, CORRUPT_PROJECTION_MARKER
                     )],
-                );
+                };
             }
             // Vanished between the existence check and the read — treat as missing.
             Err(_) => <$ty>::default(),
@@ -435,7 +1030,7 @@ macro_rules! load_snapshot {
     };
 }
 
-/// Batch-translate missing claims. Returns (done, skipped, errors).
+/// Batch-translate missing claims. Returns BatchOutcome.
 pub fn translate_claims_batch(
     vault_root: &Path,
     claims: &[(String, String)], // (claim_key, claim_en)
@@ -443,7 +1038,8 @@ pub fn translate_claims_batch(
     model: &str,
     force: bool,
     max: usize,
-) -> (usize, usize, Vec<String>) {
+    run_id: Option<&str>,
+) -> BatchOutcome {
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
@@ -465,12 +1061,41 @@ pub fn translate_claims_batch(
             continue;
         }
         attempts += 1;
+        let en_h = text_hash(en);
         match translate_claim(vault_root, key, en, client, model, force) {
             Ok(_) => {
                 done += 1;
                 consecutive_errors = 0;
+                if let Err(e) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "claim",
+                        key,
+                        &en_h,
+                        "success",
+                        None,
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("{key} receipt: {e}"));
+                }
             }
             Err(e) => {
+                if let Err(re) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "claim",
+                        key,
+                        &en_h,
+                        "error",
+                        Some(e.clone()),
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("{key} receipt: {re}"));
+                }
                 errors.push(format!("{key}: {e}"));
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -482,7 +1107,12 @@ pub fn translate_claims_batch(
             }
         }
     }
-    (done, skipped, errors)
+    BatchOutcome {
+        done,
+        skipped,
+        attempts,
+        errors,
+    }
 }
 
 /// Active claims still missing a fresh zh projection — the backlog a later
@@ -542,7 +1172,7 @@ pub fn translate_card(
 /// translating only stale/missing entries through `get_fresh`. Shared by the
 /// manual `source-work memory-zh` CLI and the daily bilingual tail — an
 /// unchanged authority (`force = false`) costs zero LLM calls.
-/// Returns (done, skipped, errors).
+/// Returns BatchOutcome.
 pub fn topup_cards_zh(
     vault_root: &Path,
     cards: &[(String, String, String)],
@@ -550,7 +1180,8 @@ pub fn topup_cards_zh(
     model: &str,
     force: bool,
     max: usize,
-) -> (usize, usize, Vec<String>) {
+    run_id: Option<&str>,
+) -> BatchOutcome {
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
@@ -569,12 +1200,41 @@ pub fn topup_cards_zh(
             continue;
         }
         attempts += 1;
+        let en_h = text_hash(&format!("{title}\n{content}"));
         match translate_card(vault_root, id, title, content, client, model, force) {
             Ok(_) => {
                 done += 1;
                 consecutive_errors = 0;
+                if let Err(e) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "card",
+                        id,
+                        &en_h,
+                        "success",
+                        None,
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("{id} receipt: {e}"));
+                }
             }
             Err(e) => {
+                if let Err(re) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "card",
+                        id,
+                        &en_h,
+                        "error",
+                        Some(e.clone()),
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("{id} receipt: {re}"));
+                }
                 errors.push(format!("{id}: {e}"));
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -586,7 +1246,12 @@ pub fn topup_cards_zh(
             }
         }
     }
-    (done, skipped, errors)
+    BatchOutcome {
+        done,
+        skipped,
+        attempts,
+        errors,
+    }
 }
 
 fn split_card_zh(zh: &str, fallback_title: &str) -> (String, String) {
@@ -666,7 +1331,7 @@ pub fn translate_theme_page(
 /// ((community_id, [(heading, body)])), translating only stale/missing
 /// entries through `get_fresh`. Shared by the manual `source-work memory-zh`
 /// CLI and the crystal-theme-pages bilingual tail — an unchanged authority
-/// (`force = false`) costs zero LLM calls. Returns (done, skipped, errors).
+/// (`force = false`) costs zero LLM calls. Returns BatchOutcome.
 pub fn topup_theme_pages_zh(
     vault_root: &Path,
     pages: &[(i64, Vec<(String, String)>)],
@@ -674,7 +1339,8 @@ pub fn topup_theme_pages_zh(
     model: &str,
     force: bool,
     max: usize,
-) -> (usize, usize, Vec<String>) {
+    run_id: Option<&str>,
+) -> BatchOutcome {
     let mut done = 0usize;
     let mut skipped = 0usize;
     let mut errors = Vec::new();
@@ -698,8 +1364,36 @@ pub fn topup_theme_pages_zh(
             Ok(_) => {
                 done += 1;
                 consecutive_errors = 0;
+                if let Err(e) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "theme_page",
+                        community_id.to_string(),
+                        &en_hash,
+                        "success",
+                        None,
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("community {community_id} receipt: {e}"));
+                }
             }
             Err(e) => {
+                if let Err(re) = append_bilingual_receipt(
+                    vault_root,
+                    &BilingualReceipt::new(
+                        "theme_page",
+                        community_id.to_string(),
+                        &en_hash,
+                        "error",
+                        Some(e.clone()),
+                        Some(model.to_string()),
+                        run_id.map(str::to_string),
+                    ),
+                ) {
+                    errors.push(format!("community {community_id} receipt: {re}"));
+                }
                 errors.push(format!("community {community_id}: {e}"));
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
@@ -711,7 +1405,12 @@ pub fn topup_theme_pages_zh(
             }
         }
     }
-    (done, skipped, errors)
+    BatchOutcome {
+        done,
+        skipped,
+        attempts,
+        errors,
+    }
 }
 
 fn split_section_zh(zh: &str, fallback_heading: &str) -> (String, String) {
@@ -914,8 +1613,9 @@ mod tests {
             card("c2", "Context", "Context compounds."),
         ];
         let mut client = CountingClient::new("# 标题\n\n正文");
-        let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        let outcome =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0, Some("run-1"));
+        let (done, skipped, errors) = outcome.into_tuple();
         assert_eq!((done, skipped), (2, 0));
         assert!(errors.is_empty());
         assert_eq!(client.calls, 2);
@@ -924,10 +1624,15 @@ mod tests {
         assert_eq!(file.entries.len(), 2);
         assert!(file.entries.contains_key("c1"));
 
+        // Receipts written
+        let receipts = load_latest_bilingual_receipts(tmp.path());
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[&("card".to_string(), "c1".to_string())].outcome, "success");
+
         // Unchanged authority: a fresh client must NEVER be called.
         let mut client2 = CountingClient::new("# 标题\n\n正文");
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client2, "m", false, 0);
+            topup_cards_zh(tmp.path(), &cards, &mut client2, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 2));
         assert!(errors.is_empty());
         assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
@@ -939,7 +1644,7 @@ mod tests {
         ];
         let mut client3 = CountingClient::new("# 新标题\n\n新正文");
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards2, &mut client3, "m", false, 0);
+            topup_cards_zh(tmp.path(), &cards2, &mut client3, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (1, 1));
         assert!(errors.is_empty());
         assert_eq!(client3.calls, 1);
@@ -952,11 +1657,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cards = vec![card("c1", "T", "B")];
         let mut client = AlwaysFailsClient::default();
-        let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+        let outcome =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0, Some("run-err"));
+        assert_eq!(outcome.attempts, 1);
+        let (done, skipped, errors) = outcome.into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("c1"), "{}", errors[0]);
+
+        let receipts = load_latest_bilingual_receipts(tmp.path());
+        assert_eq!(receipts[&("card".to_string(), "c1".to_string())].outcome, "error");
     }
 
     /// Interleaved fresh hits make no provider call, so they must not reset
@@ -972,7 +1682,7 @@ mod tests {
             card("c5", "T", "B"),
         ];
         let mut seed = CountingClient::new("# 标题\n\n正文");
-        topup_cards_zh(tmp.path(), &fresh, &mut seed, "m", false, 0);
+        topup_cards_zh(tmp.path(), &fresh, &mut seed, "m", false, 0, None);
         // Interleave fresh (skip) with stale (failing) cards.
         let mixed = vec![
             card("c1", "T", "B"),
@@ -984,7 +1694,7 @@ mod tests {
         ];
         let mut client = AlwaysFailsClient::default();
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &mixed, &mut client, "m", false, 0);
+            topup_cards_zh(tmp.path(), &mixed, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 3));
         assert_eq!(client.calls, 3, "breaker trips on 3 failed CALLS despite interleaved fresh skips");
         assert!(errors.iter().any(|e| e.contains("provider outage")));
@@ -999,7 +1709,7 @@ mod tests {
         let cards: Vec<_> = (0..5).map(|i| card(&format!("c{i}"), "T", "B")).collect();
         let mut client = AlwaysFailsClient::default();
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(client.calls, 3, "abort after 3 consecutive failures");
         assert_eq!(errors.len(), 4, "3 per-item errors + 1 summary");
@@ -1014,10 +1724,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cards: Vec<_> = (0..5).map(|i| card(&format!("c{i}"), "T", "B")).collect();
         let mut client = AlwaysFailsClient::default();
-        let (_done, _skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 2);
+        let outcome =
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 2, None);
+        assert_eq!(outcome.attempts, 2);
         assert_eq!(client.calls, 2, "max=2 attempts even when all fail");
-        assert_eq!(errors.len(), 2, "no breaker summary — cap hit first");
+        assert_eq!(outcome.errors.len(), 2, "no breaker summary — cap hit first");
     }
 
     /// A MaxTokens reply is an error, never persisted — stored with a matching
@@ -1028,7 +1739,7 @@ mod tests {
         let cards = vec![card("c1", "T", "B")];
         let mut client = MaxTokensClient;
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("stop_reason=max_tokens"), "{}", errors[0]);
@@ -1055,7 +1766,7 @@ mod tests {
         let cards = vec![card("c1", "T", "B")];
         let mut client = CountingClient::new("# 标题\n\n正文");
         let (done, skipped, errors) =
-            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0);
+            topup_cards_zh(tmp.path(), &cards, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
         assert!(errors[0].contains(CARDS_ZH_REL), "{}", errors[0]);
@@ -1075,7 +1786,7 @@ mod tests {
         let pages = vec![(7i64, vec![("Memory".to_string(), "Persists.".to_string())])];
         let mut client = CountingClient::new("## 记忆\n\n持久化。");
         let (done, skipped, errors) =
-            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0);
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
         assert!(errors[0].contains(THEME_PAGES_ZH_REL), "{}", errors[0]);
@@ -1103,7 +1814,7 @@ mod tests {
         ];
         let mut client = CountingClient::new("译文");
         let (done, skipped, errors) =
-            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, Some("claim-run-1")).into_tuple();
         assert_eq!((done, skipped), (2, 0));
         assert!(errors.is_empty());
         assert_eq!(client.calls, 2);
@@ -1114,7 +1825,7 @@ mod tests {
         // Unchanged authority: a fresh client must NEVER be called.
         let mut client2 = CountingClient::new("译文");
         let (done, skipped, errors) =
-            translate_claims_batch(tmp.path(), &claims, &mut client2, "m", false, 0);
+            translate_claims_batch(tmp.path(), &claims, &mut client2, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 2));
         assert!(errors.is_empty());
         assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
@@ -1126,7 +1837,7 @@ mod tests {
         let claims = vec![claim("ck-1", "Claim one.")];
         let mut client = AlwaysFailsClient::default();
         let (done, skipped, errors) =
-            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("ck-1"), "{}", errors[0]);
@@ -1139,7 +1850,7 @@ mod tests {
         let claims = vec![claim("ck-1", "Claim one.")];
         let mut client = CountingClient::new("译文");
         let (done, skipped, errors) =
-            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0);
+            translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 0));
         assert_eq!(errors.len(), 1, "one clear error, not N per-item errors");
         assert!(errors[0].contains(CLAIMS_ZH_REL), "{}", errors[0]);
@@ -1164,7 +1875,7 @@ mod tests {
         )];
         let mut client = CountingClient::new("## 记忆\n\n持久化 [claim:ck-a]。");
         let (done, skipped, errors) =
-            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0);
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client, "m", false, 0, Some("run-theme")).into_tuple();
         assert_eq!((done, skipped), (1, 0));
         assert!(errors.is_empty());
         assert_eq!(client.calls, 1, "one section = one call");
@@ -1176,10 +1887,14 @@ mod tests {
             "citation tokens preserved"
         );
 
+        // Receipts written
+        let receipts = load_latest_bilingual_receipts(tmp.path());
+        assert_eq!(receipts[&("theme_page".to_string(), "7".to_string())].outcome, "success");
+
         // Unchanged authority: zero calls.
         let mut client2 = CountingClient::new("## 记忆\n\n持久化 [claim:ck-a]。");
         let (done, skipped, errors) =
-            topup_theme_pages_zh(tmp.path(), &pages, &mut client2, "m", false, 0);
+            topup_theme_pages_zh(tmp.path(), &pages, &mut client2, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (0, 1));
         assert!(errors.is_empty());
         assert_eq!(client2.calls, 0, "unchanged authority = 0 LLM calls");
@@ -1194,9 +1909,339 @@ mod tests {
         )];
         let mut client3 = CountingClient::new("## 记忆\n\n持久化并复利 [claim:ck-a]。");
         let (done, skipped, errors) =
-            topup_theme_pages_zh(tmp.path(), &pages2, &mut client3, "m", false, 0);
+            topup_theme_pages_zh(tmp.path(), &pages2, &mut client3, "m", false, 0, None).into_tuple();
         assert_eq!((done, skipped), (1, 0));
         assert!(errors.is_empty());
         assert_eq!(client3.calls, 1);
+    }
+
+    #[test]
+    fn evaluate_claim_projection_distinguishes_fresh_stale_missing_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 1. Missing when file does not exist
+        let view = evaluate_claim_projection(tmp.path(), "ck-1", "Original text");
+        assert_eq!(view.status, ProjectionStatus::Missing);
+        assert!(view.text_zh.is_none());
+
+        // 2. Fresh when en_hash matches
+        let claims = vec![claim("ck-1", "Original text")];
+        let mut client = CountingClient::new("原始译文");
+        translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, None);
+        let view = evaluate_claim_projection(tmp.path(), "ck-1", "Original text");
+        assert_eq!(view.status, ProjectionStatus::Fresh);
+        assert_eq!(view.text_zh.as_deref(), Some("原始译文"));
+
+        // 3. Stale when authority text changes
+        let view = evaluate_claim_projection(tmp.path(), "ck-1", "Modified authority text");
+        assert_eq!(view.status, ProjectionStatus::Stale);
+        assert!(view.text_zh.is_none(), "stale translation must never be served");
+
+        // 4. Corrupt when file on disk is invalid JSON
+        write_corrupt(tmp.path(), CLAIMS_ZH_REL);
+        let view = evaluate_claim_projection(tmp.path(), "ck-1", "Original text");
+        assert_eq!(view.status, ProjectionStatus::Corrupt);
+        assert!(view.text_zh.is_none());
+        assert!(view.error.is_some());
+    }
+
+    #[test]
+    fn inv55_a1_unchanged_hash_zero_redundant_llm_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // 1. Claims
+        let claims = vec![
+            claim("ck-101", "Memory persists."),
+            claim("ck-102", "Context builds up."),
+        ];
+        let mut claim_client = CountingClient::new("译文");
+        let outcome = translate_claims_batch(
+            tmp.path(),
+            &claims,
+            &mut claim_client,
+            "m",
+            false,
+            0,
+            Some("run-a1-1"),
+        );
+        assert_eq!(outcome.done, 2);
+        assert_eq!(claim_client.calls, 2);
+
+        // Run claims again with unchanged hash: 0 calls
+        let mut claim_client_noop = CountingClient::new("译文");
+        let outcome2 = translate_claims_batch(
+            tmp.path(),
+            &claims,
+            &mut claim_client_noop,
+            "m",
+            false,
+            0,
+            Some("run-a1-2"),
+        );
+        assert_eq!(outcome2.done, 0);
+        assert_eq!(outcome2.skipped, 2);
+        assert_eq!(outcome2.attempts, 0);
+        assert_eq!(claim_client_noop.calls, 0, "A1: unchanged claim hash = 0 calls");
+
+        // 2. Cards
+        let cards = vec![
+            card("card-101", "Architecture", "Bounded modules."),
+            card("card-102", "Verification", "Auditable proofs."),
+        ];
+        let mut card_client = CountingClient::new("# 标题\n\n正文");
+        let card_outcome = topup_cards_zh(
+            tmp.path(),
+            &cards,
+            &mut card_client,
+            "m",
+            false,
+            0,
+            Some("run-a1-card-1"),
+        );
+        assert_eq!(card_outcome.done, 2);
+        assert_eq!(card_client.calls, 2);
+
+        // Run cards again with unchanged hash: 0 calls
+        let mut card_client_noop = CountingClient::new("# 标题\n\n正文");
+        let card_outcome2 = topup_cards_zh(
+            tmp.path(),
+            &cards,
+            &mut card_client_noop,
+            "m",
+            false,
+            0,
+            Some("run-a1-card-2"),
+        );
+        assert_eq!(card_outcome2.done, 0);
+        assert_eq!(card_outcome2.skipped, 2);
+        assert_eq!(card_outcome2.attempts, 0);
+        assert_eq!(card_client_noop.calls, 0, "A1: unchanged card hash = 0 calls");
+
+        // 3. Theme pages
+        let pages = vec![(
+            42i64,
+            vec![("Overview".to_string(), "Section body [claim:ck-101].".to_string())],
+        )];
+        let mut page_client = CountingClient::new("## 概览\n\n小节内容 [claim:ck-101]。");
+        let page_outcome = topup_theme_pages_zh(
+            tmp.path(),
+            &pages,
+            &mut page_client,
+            "m",
+            false,
+            0,
+            Some("run-a1-page-1"),
+        );
+        assert_eq!(page_outcome.done, 1);
+        assert_eq!(page_client.calls, 1);
+
+        // Run theme pages again with unchanged hash: 0 calls
+        let mut page_client_noop = CountingClient::new("## 概览\n\n小节内容 [claim:ck-101]。");
+        let page_outcome2 = topup_theme_pages_zh(
+            tmp.path(),
+            &pages,
+            &mut page_client_noop,
+            "m",
+            false,
+            0,
+            Some("run-a1-page-2"),
+        );
+        assert_eq!(page_outcome2.done, 0);
+        assert_eq!(page_outcome2.skipped, 1);
+        assert_eq!(page_outcome2.attempts, 0);
+        assert_eq!(page_client_noop.calls, 0, "A1: unchanged theme page hash = 0 calls");
+    }
+
+    #[test]
+    fn inv55_a2_revision_invalidates_old_translation_and_reveals_stale_status() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // 1. Setup fresh claim and card
+        let claims = vec![claim("ck-rev", "Initial authoritative claim statement.")];
+        let mut client = CountingClient::new("初始权威声明。");
+        translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, None);
+
+        let cards = vec![card("cd-rev", "Title v1", "Content v1.")];
+        let mut card_client = CountingClient::new("# 标题一\n\n正文一。");
+        topup_cards_zh(tmp.path(), &cards, &mut card_client, "m", false, 0, None);
+
+        // Fresh state check
+        let view_fresh = evaluate_claim_projection(tmp.path(), "ck-rev", "Initial authoritative claim statement.");
+        assert_eq!(view_fresh.status, ProjectionStatus::Fresh);
+        assert_eq!(view_fresh.text_zh.as_deref(), Some("初始权威声明。"));
+
+        let card_fresh = evaluate_card_projection(tmp.path(), "cd-rev", "Title v1", "Content v1.");
+        assert_eq!(card_fresh.status, ProjectionStatus::Fresh);
+        assert_eq!(card_fresh.title_zh.as_deref(), Some("标题一"));
+
+        // 2. Revise the claim authority statement
+        let view_stale = evaluate_claim_projection(tmp.path(), "ck-rev", "Revised authoritative claim statement with new findings.");
+        assert_eq!(view_stale.status, ProjectionStatus::Stale, "A2: revision must invalidate old translation");
+        assert!(view_stale.text_zh.is_none(), "A2: stale translation must NOT be served");
+        assert_ne!(view_stale.en_hash, view_stale.stored_en_hash.unwrap());
+
+        // 3. Revise the card content
+        let card_stale = evaluate_card_projection(tmp.path(), "cd-rev", "Title v1", "Content v2: updated evidence.");
+        assert_eq!(card_stale.status, ProjectionStatus::Stale, "A2: revised card is stale");
+        assert!(card_stale.title_zh.is_none(), "A2: stale card title must NOT be served");
+        assert!(card_stale.content_zh.is_none(), "A2: stale card content must NOT be served");
+    }
+
+    #[test]
+    fn inv55_a3_failure_disabled_model_budget_exhaustion_display_reasons() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // 1. Provider failure: reason collected in errors and stored in receipts
+        let claims = vec![claim("ck-fail", "Failing claim text.")];
+        let mut fail_client = AlwaysFailsClient::default();
+        let outcome = translate_claims_batch(
+            tmp.path(),
+            &claims,
+            &mut fail_client,
+            "test-model",
+            false,
+            0,
+            Some("run-fail-1"),
+        );
+        assert_eq!(outcome.done, 0);
+        assert_eq!(outcome.attempts, 1);
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("simulated outage"));
+
+        let receipts = load_latest_bilingual_receipts(tmp.path());
+        let claim_receipt = &receipts[&("claim".to_string(), "ck-fail".to_string())];
+        assert_eq!(claim_receipt.outcome, "error");
+        assert_eq!(claim_receipt.model.as_deref(), Some("test-model"));
+        assert!(claim_receipt.reason.as_ref().unwrap().contains("simulated outage"));
+
+        // 2. Budget exhaustion: max=1 with 3 candidates stops after exactly 1 attempt
+        let cards = vec![
+            card("cd-1", "T1", "C1"),
+            card("cd-2", "T2", "C2"),
+            card("cd-3", "T3", "C3"),
+        ];
+        let mut fail_client2 = AlwaysFailsClient::default();
+        let card_outcome = topup_cards_zh(
+            tmp.path(),
+            &cards,
+            &mut fail_client2,
+            "test-model",
+            false,
+            1, // max budget 1 attempt
+            Some("run-budget-cap"),
+        );
+        assert_eq!(card_outcome.attempts, 1, "A3: budget exhaustion caps attempts at max");
+        assert_eq!(fail_client2.calls, 1);
+
+        // 3. Early stop / truncated output reason preserved
+        let cards_trunc = vec![card("cd-trunc", "Title", "Body")];
+        let mut trunc_client = MaxTokensClient;
+        let trunc_outcome = topup_cards_zh(
+            tmp.path(),
+            &cards_trunc,
+            &mut trunc_client,
+            "test-model",
+            false,
+            0,
+            Some("run-trunc"),
+        );
+        assert_eq!(trunc_outcome.done, 0);
+        assert_eq!(trunc_outcome.errors.len(), 1);
+        assert!(trunc_outcome.errors[0].contains("stop_reason=max_tokens"));
+    }
+
+    #[test]
+    fn inv55_a4_language_switch_preserves_citation_and_claim_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let pages = vec![(
+            99i64,
+            vec![(
+                "Synthesis".to_string(),
+                "Key findings [claim:ck-alpha] support conclusions [claim:ck-beta].".to_string(),
+            )],
+        )];
+        let mut client = CountingClient::new("## 综合分析\n\n核心发现 [claim:ck-alpha] 支持了推导结论 [claim:ck-beta]。");
+        let outcome = topup_theme_pages_zh(
+            tmp.path(),
+            &pages,
+            &mut client,
+            "m",
+            false,
+            0,
+            None,
+        );
+        assert_eq!(outcome.done, 1);
+
+        let file = ThemePagesZhFile::load(tmp.path()).unwrap();
+        let entry = &file.pages["99"];
+        let section = &entry.sections[0];
+        assert_eq!(section.heading, "综合分析");
+        // A4: citations must be preserved verbatim without mutation or omission
+        assert!(section.body.contains("[claim:ck-alpha]"));
+        assert!(section.body.contains("[claim:ck-beta]"));
+    }
+
+    #[test]
+    fn inv55_a5_coverage_summary_reports_eligible_denominator_and_separates_statuses() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let claims = vec![
+            claim("ck-fresh", "Fresh claim text"),
+            claim("ck-stale", "Stale claim text - updated"),
+            claim("ck-missing", "Missing claim text"),
+        ];
+
+        // Seed ck-fresh and old ck-stale
+        let seed = vec![
+            claim("ck-fresh", "Fresh claim text"),
+            claim("ck-stale", "Stale claim text - old"),
+        ];
+        let mut client = CountingClient::new("译文");
+        translate_claims_batch(tmp.path(), &seed, &mut client, "m", false, 0, None);
+
+        // Normal coverage: 1 fresh, 1 stale, 1 missing
+        let summary = calculate_claims_coverage(tmp.path(), &claims, false);
+        assert_eq!(summary.total_eligible, 3);
+        assert_eq!(summary.fresh, 1);
+        assert_eq!(summary.stale, 1);
+        assert_eq!(summary.missing, 1);
+        assert_eq!(summary.corrupt, 0);
+        assert_eq!(summary.paused, 0);
+        assert!(!summary.is_complete());
+
+        // Paused coverage: 3 paused
+        let paused_summary = calculate_claims_coverage(tmp.path(), &claims, true);
+        assert_eq!(paused_summary.total_eligible, 3);
+        assert_eq!(paused_summary.paused, 3);
+        assert_eq!(paused_summary.fresh, 0);
+
+        // Corrupt coverage: 3 corrupt
+        write_corrupt(tmp.path(), CLAIMS_ZH_REL);
+        let corrupt_summary = calculate_claims_coverage(tmp.path(), &claims, false);
+        assert_eq!(corrupt_summary.total_eligible, 3);
+        assert_eq!(corrupt_summary.corrupt, 3);
+        assert_eq!(corrupt_summary.fresh, 0);
+    }
+
+    #[test]
+    fn receipt_append_failure_surfaces_in_batch_errors_without_undoing_translation() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create bilingual_receipts.jsonl as a directory so OpenOptions::append fails
+        let receipt_path = tmp.path().join(BILINGUAL_RECEIPTS_REL);
+        std::fs::create_dir_all(&receipt_path).unwrap();
+
+        let claims = vec![claim("ck-test", "Test claim")];
+        let mut client = CountingClient::new("测试译文");
+        let outcome = translate_claims_batch(tmp.path(), &claims, &mut client, "m", false, 0, None);
+
+        // Translation itself succeeded
+        assert_eq!(outcome.done, 1);
+        assert_eq!(outcome.attempts, 1);
+        // Error recorded for receipt append failure
+        assert!(outcome.errors.iter().any(|e| e.contains("receipt")));
+
+        // Projection is readable and fresh
+        let file = ClaimsZhFile::load(tmp.path()).unwrap();
+        assert!(file.get_fresh("ck-test", "Test claim").is_some());
     }
 }

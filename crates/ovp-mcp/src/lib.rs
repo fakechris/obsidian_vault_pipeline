@@ -110,7 +110,7 @@ fn find_record<'a>(records: &'a [DurableRecord], key: &str) -> Result<&'a Durabl
 /// The full evidence closure for one claim: text + gate verdicts + every
 /// citation resolved to its source row (title/sha) when the index knows it.
 /// This is the payload behind both the `claim` tool and `ovp://claim/<key>`.
-fn claim_closure(record: &DurableRecord, model: Option<&IndexModel>) -> Value {
+fn claim_closure(vault_root: &std::path::Path, record: &DurableRecord, model: Option<&IndexModel>) -> Value {
     // pack_dir basenames key claim↔source joins everywhere else too.
     let source_of = |case_id: &str| -> Value {
         let Some(m) = model else { return Value::Null };
@@ -130,11 +130,14 @@ fn claim_closure(record: &DurableRecord, model: Option<&IndexModel>) -> Value {
             "uri": format!("ovp://source/{}", src.sha256),
         })
     };
+    let view = ovp_memory::bilingual::evaluate_claim_projection(vault_root, &record.claim_key, &record.claim);
     serde_json::json!({
         "uri": format!("ovp://claim/{}", record.claim_key),
         "claim_key": record.claim_key,
         "claim_id": record.claim_id,
         "claim": record.claim,
+        "claim_zh": view.text_zh,
+        "claim_zh_status": view.status,
         "theme": record.theme,
         "strength": record.strength,
         "provenance_score": record.provenance_score,
@@ -832,7 +835,7 @@ fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     let records = state.load_records();
     let record = find_record(&records, key.trim())?;
     let model = state.load_model();
-    let text = serde_json::to_string_pretty(&claim_closure(record, model.as_ref()))
+    let text = serde_json::to_string_pretty(&claim_closure(&state.vault_root, record, model.as_ref()))
         .unwrap_or_else(|_| "{}".into());
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
@@ -844,7 +847,8 @@ fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
 fn theme_page_payload(state: &McpState, theme: &str) -> Result<Value, RpcError> {
     let pages = state.load_theme_pages();
     let records = state.load_records();
-    let body = bodies::theme_pages_body(pages.as_ref(), &records);
+    let mut body = bodies::theme_pages_body(pages.as_ref(), &records);
+    ovp_memory::bilingual::splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
     let all = body["pages"].as_array().cloned().unwrap_or_default();
 
     let theme = theme.strip_prefix("ovp://theme-page/").unwrap_or(theme);
@@ -876,7 +880,11 @@ fn theme_page_payload(state: &McpState, theme: &str) -> Result<Value, RpcError> 
         .into_iter()
         .filter(|(k, _)| keys.contains(k))
         .collect();
-    Ok(serde_json::json!({ "page": page, "claims": claims }))
+    let mut out = serde_json::json!({ "page": page, "claims": claims });
+    if let Some(c) = body.get("bilingual_corrupt") {
+        out.as_object_mut().unwrap().insert("bilingual_corrupt".into(), c.clone());
+    }
+    Ok(out)
 }
 
 fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
@@ -889,7 +897,8 @@ fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         // No theme → the directory of available pages.
         let pages = state.load_theme_pages();
         let records = state.load_records();
-        let body = bodies::theme_pages_body(pages.as_ref(), &records);
+        let mut body = bodies::theme_pages_body(pages.as_ref(), &records);
+        ovp_memory::bilingual::splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
         let listing: Vec<Value> = body["pages"]
             .as_array()
             .into_iter()
@@ -899,6 +908,7 @@ fn tool_theme_page(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                     "community_id": p["community_id"],
                     "label": p["label"],
                     "label_zh": p["label_zh"],
+                    "sections_zh_status": p["sections_zh_status"],
                     "claim_count": p["claim_count"],
                     "uri": format!("ovp://theme-page/{}", p["community_id"]),
                 })
@@ -1600,7 +1610,7 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
             let records = state.load_records();
             let record = find_record(&records, uri)?;
             let model = state.load_model();
-            let json = serde_json::to_string(&claim_closure(record, model.as_ref()))
+            let json = serde_json::to_string(&claim_closure(&state.vault_root, record, model.as_ref()))
                 .unwrap_or_else(|_| "{}".into());
             Ok(serde_json::json!({
                 "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
@@ -1754,6 +1764,7 @@ mod tests {
             let closure: Value = serde_json::from_str(&text_of(&v)).unwrap();
             assert_eq!(closure["claim_key"], "ck-aaa", "lookup by `{key}`");
             assert_eq!(closure["uri"], "ovp://claim/ck-aaa");
+            assert_eq!(closure["claim_zh_status"], "missing");
             assert_eq!(closure["citations"][0]["quote"], "verbatim quote");
             assert_eq!(closure["citations"][0]["resolved_line"], 12);
         }
@@ -1782,8 +1793,11 @@ mod tests {
             let v = call(&state, "theme_page", serde_json::json!({ "theme": theme })).unwrap();
             let out: Value = serde_json::from_str(&text_of(&v)).unwrap();
             assert_eq!(out["page"]["label"], "Agent memory", "lookup by `{theme}`");
+            assert_eq!(out["page"]["sections_zh_status"], "missing");
             assert_eq!(out["claims"]["ck-aaa"]["claim_id"], "id-a");
+            assert_eq!(out["claims"]["ck-aaa"]["claim_zh_status"], "missing");
             assert_eq!(out["claims"]["ck-bbb"]["claim_id"], "id-b");
+            assert_eq!(out["claims"]["ck-bbb"]["claim_zh_status"], "missing");
         }
         let err = call(
             &state,

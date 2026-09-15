@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "bilingual_tail-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "runtime",
+  "component": "runtime.bilingual_tail",
+  "hypothesis": "RUNTIME surface: close the bilingual projection freshness, corrupt handling, budget attempt accounting, and status transparency loop (INV-55). When `--max` budget is shared across cards and theme pages in `source-work memory-zh`, provider ATTEMPTS (not only successes) decrement the shared budget, preventing failed cards from passing unearned budget attempts to the theme pages phase. When claims or memory cards are modified in authority, old translations are invalidated immediately and their status is explicitly reported as stale across read surfaces (Portal and MCP) without stale translation overrides. When projection files are unparseable/corrupt, read surfaces report them honestly as corrupt rather than defaulting silently to empty missing sets. Provide durable attempt receipts and honest coverage breakdown where the denominator is the full eligible set and unsupported/paused/failed/corrupt states are reported separately.",
+  "predicted_delta": {
+    "operational_reliability": "budget leak across phases in memory-zh is closed (failed card attempts count against budget); corrupt projection files are surfaced immediately; provider errors and quarantined items carry durable recovery receipts",
+    "coverage": "portal and MCP read surfaces show identical fresh/stale/corrupt/missing/paused status; ThemeDetailPage cannot show an old theme-page translation override for an edited claim; coverage denominator accurately reports full eligible set without hiding missing banners"
+  },
+  "guardrails": {
+    "en_authority_untouched": "tails and batch helpers write only rebuildable projections (.ovp/crystal/*_zh.json) and append receipts; the crystal ledger and markdown sources are strictly read-only",
+    "zero_extra_calls_on_fresh": "when authority text hash is unchanged, zero provider calls are made (en_hash check preserves 0-call no-op)",
+    "no_stale_translation_served": "a stale translation whose authority hash has changed is NEVER served as translated text; it surfaces as stale status with fallback to authoritative English",
+    "failure_isolation": "tail and projection read errors degrade gracefully without crashing parent commands; corrupt files fail loud on manual CLI but degrade to warnings in unattended tails"
+  },
+  "eval_plan": {
+    "replay_set": "ovp-memory and ovp-cli tests: (1) unchanged authority = 0 LLM calls; (2) revised claim invalidates old translation, surfaces as stale in Portal and MCP; (3) memory-zh --max 1 with failed card attempt stops before theme page phase; (4) corrupt projection file fails loud on manual CLI and surfaces as corrupt status on read surfaces; (5) language switch preserves claim citation identity; (6) coverage breakdown reports eligible denominator with failed/paused/stale/corrupt separated",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert runtime changes to bilingual.rs, source_work_cmd.rs, and ThemeDetailPage.tsx. Projection files on disk remain valid and backward-compatible.",
+  "ablation_required": false
+}

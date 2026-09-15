@@ -104,12 +104,14 @@ export interface ThemePageData {
   sections: ThemePageSection[];
   /** Rebuildable Chinese sections when projection is fresh. */
   sections_zh?: ThemePageSection[];
+  sections_zh_status?: 'fresh' | 'stale' | 'missing' | 'corrupt' | 'paused';
 }
 
 export interface ThemePageClaimInfo {
   claim_id: string;
   claim: string;
   claim_zh?: string;
+  claim_zh_status?: 'fresh' | 'stale' | 'missing' | 'corrupt' | 'paused';
   strength?: string;
   sources: string[];
 }
@@ -117,6 +119,7 @@ export interface ThemePageClaimInfo {
 export interface ThemePagesResponse {
   pages: ThemePageData[];
   claims: Record<string, ThemePageClaimInfo>;
+  bilingual_corrupt?: string[];
 }
 
 /** /api/find and /api/search hit — a display line plus a kind-specific
@@ -214,6 +217,7 @@ export interface ClaimRow {
   claim: string;
   /** Rebuildable Chinese projection when served by live API. */
   claim_zh?: string;
+  claim_zh_status?: 'fresh' | 'stale' | 'missing' | 'corrupt' | 'paused';
   theme?: string;
   /** Stable semantic-theme community id — the portal routes themes by this
    * id (not the mutable `theme` label), so a `crystal-themes` relabel doesn't
@@ -560,6 +564,8 @@ export interface Totals {
 }
 
 export interface IndexModel {
+  /** Live-server overlay: true when .ovp/crystal/claims_zh.json is present on disk but malformed. */
+  claims_zh_corrupt?: boolean;
   /** Live-server overlay: acknowledged attention items (hidden until the
    * source's status changes). Absent in static snapshots. */
   attention_acks?: { sha: string; status: string }[];

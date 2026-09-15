@@ -493,6 +493,12 @@ export const en = {
   'theme.claimEnOnly': 'EN only',
   'theme.claimZhMissingTip':
     'No Chinese projection for this claim — ledger text is English authority.',
+  'theme.claimZhStale': 'ZH stale',
+  'theme.claimZhStaleTip': 'English claim was updated, Chinese projection is stale — showing English authority.',
+  'theme.claimZhCorrupt': 'ZH corrupt',
+  'theme.claimZhCorruptTip': 'Chinese projection file is corrupt — showing English authority.',
+  'theme.sectionsZhStale': 'Overview Chinese is stale (showing English authority)',
+  'theme.bilingualCorruptBanner': 'Chinese projection files corrupted ({files}), automatically falling back to English authority. Run `ovp2 source-work` to regenerate.',
   'theme.zhMissingBody':
     'UI is Chinese, but claim translations are missing for all {n} claims on this theme. Theme labels may still localize; body text falls back to English.',
   'theme.zhMissingHint':
