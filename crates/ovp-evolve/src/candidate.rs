@@ -113,6 +113,11 @@ impl CandidateSpec {
             )));
         }
 
+        if let Some(plan) = &self.eval_plan.paired_run {
+            plan.validate()
+                .map_err(|e| CandidateError::Validation(format!("invalid eval_plan.paired_run: {e}")))?;
+        }
+
         Ok(())
     }
 }
@@ -200,6 +205,41 @@ mod tests {
         let mut spec = valid_spec();
         spec.surface = ChangeSurface::Runtime;
         spec.ablation_required = true;
+        spec.validate(&reg).unwrap();
+    }
+
+    #[test]
+    fn invalid_paired_run_rejected() {
+        let reg = test_registry();
+        let mut spec = valid_spec();
+        spec.eval_plan.paired_run = Some(crate::paired::RetrievalPlan {
+            runner: "unknown".into(),
+            fixture_dir: "fixtures".into(),
+            control_query_mode: "verbatim".into(),
+            candidate_query_mode: "terms".into(),
+            k: 10,
+            expected_questions: 2,
+            min_mean_recall_delta: 0.0,
+            timeout_seconds: 30,
+        });
+        let err = spec.validate(&reg).unwrap_err();
+        assert!(err.to_string().contains("invalid eval_plan.paired_run"));
+    }
+
+    #[test]
+    fn valid_paired_run_passes() {
+        let reg = test_registry();
+        let mut spec = valid_spec();
+        spec.eval_plan.paired_run = Some(crate::paired::RetrievalPlan {
+            runner: "retrieval".into(),
+            fixture_dir: "fixtures".into(),
+            control_query_mode: "verbatim".into(),
+            candidate_query_mode: "terms".into(),
+            k: 10,
+            expected_questions: 2,
+            min_mean_recall_delta: 0.0,
+            timeout_seconds: 30,
+        });
         spec.validate(&reg).unwrap();
     }
 }

@@ -68,18 +68,35 @@ pub fn execute(
         "--out".into(),
         out.display().to_string(),
     ];
+    let env_switches = [
+        (
+            "OVP_ASK_FTS",
+            std::env::var("OVP_ASK_FTS").unwrap_or_else(|_| "1".into()),
+        ),
+        (
+            "OVP_ASK_QUERY_STRIP",
+            std::env::var("OVP_ASK_QUERY_STRIP").unwrap_or_else(|_| "1".into()),
+        ),
+        (
+            "OVP_ASK_TITLE_PIN",
+            std::env::var("OVP_ASK_TITLE_PIN").unwrap_or_else(|_| "1".into()),
+        ),
+    ];
     let start = Instant::now();
     let launch = (|| {
         let stdout = fs::File::create(&stdout_path).map_err(|e| e.to_string())?;
         let stderr = fs::File::create(&stderr_path).map_err(|e| e.to_string())?;
         let tmp = dest.join("tmp");
         fs::create_dir(&tmp).map_err(|e| e.to_string())?;
-        Command::new(executable)
-            .args(&args)
+        let mut cmd = Command::new(executable);
+        cmd.args(&args)
             .env("TMPDIR", &tmp)
             .env("TMP", &tmp)
-            .env("TEMP", &tmp)
-            .stdin(Stdio::null())
+            .env("TEMP", &tmp);
+        for (k, v) in &env_switches {
+            cmd.env(k, v);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
             .spawn()
@@ -100,9 +117,19 @@ pub fn execute(
             status.unwrap()
         ));
     }
-    let mut receipt = json!({"status": "completed", "args": args,
-        "exit_code": status.and_then(|s| s.code()), "exit_status": status.map(|s| s.to_string()),
-        "elapsed_ms": start.elapsed().as_millis(), "error": error});
+    let mut receipt = json!({
+        "status": "completed",
+        "args": args,
+        "env": {
+            "OVP_ASK_FTS": env_switches[0].1,
+            "OVP_ASK_QUERY_STRIP": env_switches[1].1,
+            "OVP_ASK_TITLE_PIN": env_switches[2].1,
+        },
+        "exit_code": status.and_then(|s| s.code()),
+        "exit_status": status.map(|s| s.to_string()),
+        "elapsed_ms": start.elapsed().as_millis(),
+        "error": error
+    });
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
