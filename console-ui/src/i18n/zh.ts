@@ -470,6 +470,12 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.claimEnOnly': '仅英文',
   'theme.claimZhMissingTip':
     '此主张尚无中文投影——账本正文以英文为权威。',
+  'theme.claimZhStale': '中文过时',
+  'theme.claimZhStaleTip': '英文主张已更新，现有中文投影已过时——正在显示英文权威。',
+  'theme.claimZhCorrupt': '投影损坏',
+  'theme.claimZhCorruptTip': '中文投影文件格式损坏——正在显示英文权威。',
+  'theme.sectionsZhStale': '综述中文过时（显示英文权威）',
+  'theme.bilingualCorruptBanner': '检测到中文投影文件损坏（{files}），已自动回退到英文权威。请运行 `ovp2 source-work` 重新生成。',
   'theme.zhMissingBody':
     '界面已是中文，但本主题 {n} 条主张都还没有中文投影。主题名可能已本地化，正文会回退到英文。',
   'theme.zhMissingHint':

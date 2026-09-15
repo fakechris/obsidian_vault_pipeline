@@ -208,14 +208,16 @@ pub fn claims_zh(args: ClaimsZhArgs) -> Result<(), CliError> {
     let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
     let mut client = build_client(args.client_kind, &cache, Some(&usage_ledger))?;
     let model = ovp_memory::ask::AskArgs::default().model_name;
-    let (done, skipped, errors) = translate_claims_batch(
+    let outcome = translate_claims_batch(
         &args.vault_root,
         &pairs,
         client.as_mut(),
         &model,
         args.force,
         args.max,
+        None,
     );
+    let (done, skipped, errors) = outcome.into_tuple();
     // A corrupt projection fails the MANUAL command loud — pre-refactor the
     // initial `ClaimsZhFile::load?` did exactly that, and a silent Ok would
     // let automation report success while nothing was repaired (codex P2).
@@ -281,22 +283,23 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
         sayln!("memory-zh cards: {} in evidence", cards.len());
         // First phase: the budget is never exhausted yet, so this never skips.
         let max = remaining_max(budget).unwrap_or(0);
-        let (d, s, errors) = topup_cards_zh(
+        let outcome = topup_cards_zh(
             &args.vault_root,
             &cards,
             client.as_mut(),
             &model_name,
             args.force,
             max,
+            None,
         );
-        done += d;
-        skipped += s;
-        budget = budget.saturating_sub(d);
+        done += outcome.done;
+        skipped += outcome.skipped;
+        budget = budget.saturating_sub(outcome.attempts);
         // Same corrupt-projection loud failure as claims-zh (codex P2).
-        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+        if let Some(e) = outcome.errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
             return Err(CliError::Io(format!("memory-zh: {e}")));
         }
-        for e in &errors {
+        for e in &outcome.errors {
             sayln!("  card FAIL {e}");
         }
     }
@@ -332,20 +335,23 @@ pub fn memory_zh(args: MemoryZhArgs) -> Result<(), CliError> {
                 )
             })
             .collect();
-        let (d, s, errors) = topup_theme_pages_zh(
+        let outcome = topup_theme_pages_zh(
             &args.vault_root,
             &page_inputs,
             client.as_mut(),
             &model_name,
             args.force,
             max,
+            None,
         );
-        done += d;
-        skipped += s;
-        if let Some(e) = errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
+        done += outcome.done;
+        skipped += outcome.skipped;
+        budget = budget.saturating_sub(outcome.attempts);
+        let _ = budget;
+        if let Some(e) = outcome.errors.iter().find(|e| e.contains(CORRUPT_PROJECTION_MARKER)) {
             return Err(CliError::Io(format!("memory-zh: {e}")));
         }
-        for e in &errors {
+        for e in &outcome.errors {
             sayln!("  theme FAIL {e}");
         }
     }

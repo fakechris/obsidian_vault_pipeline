@@ -48,15 +48,22 @@ import type {
 import { useModel } from '../model';
 import { STATIC_MODE } from '../lib/api';
 
-function TopicOverview({ theme }: { theme: string }) {
+function TopicOverview({
+  theme,
+  themePages,
+}: {
+  theme: string;
+  themePages?: ThemePagesResponse | null;
+}) {
   const { t, lang } = useI18n();
-  const [themePages, setThemePages] = useState<ThemePagesResponse | null>(null);
+  const [internalPages, setInternalPages] = useState<ThemePagesResponse | null>(null);
 
   useEffect(() => {
+    if (themePages !== undefined) return;
     let cancelled = false;
     fetchThemePages().then(
       (response) => {
-        if (!cancelled) setThemePages(response);
+        if (!cancelled) setInternalPages(response);
       },
       () => {
         // Optional enhancement: fetch failures leave the original page intact.
@@ -65,14 +72,18 @@ function TopicOverview({ theme }: { theme: string }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [themePages]);
 
-  const page = themePages?.pages.find((candidate) => candidate.label === theme);
+  const activePages = themePages !== undefined ? themePages : internalPages;
+  const page = activePages?.pages.find((candidate) => candidate.label === theme);
+  const isFreshZh = page?.sections_zh_status ? page.sections_zh_status === 'fresh' : true;
+  const isStaleZh = page?.sections_zh_status === 'stale';
+
   const overview = useMemo(() => {
-    if (!page || !themePages) return null;
-    // Prefer rebuildable sections_zh when UI lang is Chinese.
+    if (!page || !activePages) return null;
+    // Prefer rebuildable sections_zh when UI lang is Chinese and projection is fresh.
     const sectionSrc =
-      lang === 'zh' && page.sections_zh && page.sections_zh.length > 0
+      lang === 'zh' && isFreshZh && page.sections_zh && page.sections_zh.length > 0
         ? page.sections_zh
         : page.sections;
     const sections = sectionSrc.map((section) => ({
@@ -85,7 +96,7 @@ function TopicOverview({ theme }: { theme: string }) {
         for (const token of paragraph) {
           if (
             token.kind === 'cite' &&
-            themePages.claims[token.key] &&
+            activePages.claims[token.key] &&
             !citationNumberByKey.has(token.key)
           ) {
             citationNumberByKey.set(token.key, citationNumberByKey.size + 1);
@@ -98,16 +109,16 @@ function TopicOverview({ theme }: { theme: string }) {
     // duplicated id could scroll to the wrong card — such chips render as
     // plain (tooltip-only) markers instead of links.
     const idCounts = new Map<string, number>();
-    for (const info of Object.values(themePages.claims)) {
+    for (const info of Object.values(activePages.claims)) {
       idCounts.set(info.claim_id, (idCounts.get(info.claim_id) ?? 0) + 1);
     }
     const ambiguousIds = new Set(
       [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id),
     );
     return { sections, citationNumberByKey, ambiguousIds };
-  }, [page, themePages, lang]);
+  }, [page, activePages, lang, isFreshZh]);
 
-  if (!page || !themePages || !overview) return null;
+  if (!page || !activePages || !overview) return null;
 
   const displayLabel =
     lang === 'zh' && page.label_zh?.trim() ? page.label_zh : page.label;
@@ -117,6 +128,11 @@ function TopicOverview({ theme }: { theme: string }) {
       <h2>{t('theme.topicOverview')}</h2>
       <div className="claim-meta topic-overview-caption">
         {displayLabel} · {t('theme.topicOverviewCaption', { n: page.claim_count })}
+        {lang === 'zh' && isStaleZh && (
+          <span className="tiny warning-badge" style={{ marginLeft: '0.5rem' }}>
+            {t('theme.sectionsZhStale')}
+          </span>
+        )}
       </div>
       {overview.sections.map((section, sectionIndex) => (
         <section
@@ -130,11 +146,12 @@ function TopicOverview({ theme }: { theme: string }) {
                 if (token.kind === 'text') {
                   return <span key={tokenIndex}>{token.text}</span>;
                 }
-                const claim = themePages.claims[token.key];
+                const claim = activePages.claims[token.key];
                 const number = overview.citationNumberByKey.get(token.key);
                 if (!claim || number == null) return null;
+                const claimIsFresh = claim.claim_zh_status ? claim.claim_zh_status === 'fresh' : true;
                 const tip =
-                  lang === 'zh' && claim.claim_zh?.trim()
+                  lang === 'zh' && claimIsFresh && claim.claim_zh?.trim()
                     ? claim.claim_zh
                     : claim.claim;
                 if (overview.ambiguousIds.has(claim.claim_id)) {
@@ -202,14 +219,11 @@ function ClaimCard({
   claim,
   byCase,
   highlighted,
-  claimZh,
   day,
 }: {
   claim: ClaimRow;
   byCase: Map<string, SourceRow>;
   highlighted: boolean;
-  /** Optional zh from theme-pages / claims_zh projection (by claim_key). */
-  claimZh?: string | null;
   /** Optional B-axis day (claim run / newest cited source) — shown so the
    * list's time order is readable at a glance. Undated claims render bare. */
   day?: string | null;
@@ -217,7 +231,8 @@ function ClaimCard({
   const { t, lang } = useI18n();
   // Content language follows UI lang (top-bar EN/中): zh prefers claim_zh
   // projection, falls back to English authority when missing/stale.
-  const zh = (claimZh ?? claim.claim_zh ?? '').trim();
+  const isFreshZh = claim.claim_zh_status ? claim.claim_zh_status === 'fresh' : true;
+  const zh = isFreshZh ? (claim.claim_zh ?? '').trim() : '';
   const hasZh = zh.length > 0;
   const text = lang === 'zh' && hasZh ? zh : claim.claim;
   return (
@@ -234,7 +249,17 @@ function ClaimCard({
             {t('theme.strength')} {claim.strength}
           </span>
         )}
-        {lang === 'zh' && !hasZh && (
+        {lang === 'zh' && claim.claim_zh_status === 'stale' && (
+          <span className="tiny warning-badge" title={t('theme.claimZhStaleTip')}>
+            {t('theme.claimZhStale')}
+          </span>
+        )}
+        {lang === 'zh' && claim.claim_zh_status === 'corrupt' && (
+          <span className="tiny error-badge" title={t('theme.claimZhCorruptTip')}>
+            {t('theme.claimZhCorrupt')}
+          </span>
+        )}
+        {lang === 'zh' && !hasZh && claim.claim_zh_status !== 'stale' && claim.claim_zh_status !== 'corrupt' && (
           <span className="tiny muted" title={t('theme.claimZhMissingTip')}>
             {t('theme.claimEnOnly')}
           </span>
@@ -397,9 +422,8 @@ function ThemeBody({
       ),
     [claims, claimFilter, claimSort, claimDir, sourceDays],
   );
-  // theme-pages payload carries claim_zh keyed by claim_key when
-  // .ovp/crystal/claims_zh.json exists — reuse for cards (index model may not
-  // splice claim_zh on every claim row yet).
+  // Single fetch for theme-pages metadata (overview sections and status).
+  // Claim translations come directly from the authority model, avoiding cache desync.
   const [themePages, setThemePages] = useState<ThemePagesResponse | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -415,28 +439,36 @@ function ThemeBody({
       cancelled = true;
     };
   }, []);
-  const zhByKey = useMemo(() => {
-    const m = new Map<string, string>();
-    if (!themePages?.claims) return m;
-    for (const [key, info] of Object.entries(themePages.claims)) {
-      const z = info.claim_zh?.trim();
-      if (z) m.set(key, z);
-    }
-    return m;
-  }, [themePages]);
   const zhCount = useMemo(() => {
     let n = 0;
     for (const c of claims) {
-      const z =
-        (c.claim_key && zhByKey.get(c.claim_key)) ||
-        c.claim_zh?.trim() ||
-        '';
-      if (z) n += 1;
+      const isFresh = c.claim_zh_status ? c.claim_zh_status === 'fresh' : !!c.claim_zh?.trim();
+      if (isFresh && c.claim_zh?.trim()) n += 1;
     }
     return n;
-  }, [claims, zhByKey]);
+  }, [claims]);
   const pageMeta = themePages?.pages.find((p) => p.label === displayName);
-  const hasSectionsZh = !!(pageMeta?.sections_zh && pageMeta.sections_zh.length > 0);
+  const isFreshSectionsZh = pageMeta?.sections_zh_status
+    ? pageMeta.sections_zh_status === 'fresh'
+    : true;
+  const hasSectionsZh = !!(
+    isFreshSectionsZh &&
+    pageMeta?.sections_zh &&
+    pageMeta.sections_zh.length > 0
+  );
+
+  const corruptFiles = useMemo(() => {
+    const list: string[] = [];
+    if (model?.claims_zh_corrupt) {
+      list.push('.ovp/crystal/claims_zh.json');
+    }
+    if (themePages?.bilingual_corrupt) {
+      for (const f of themePages.bilingual_corrupt) {
+        if (!list.includes(f)) list.push(f);
+      }
+    }
+    return list;
+  }, [model, themePages]);
 
   // Anchor handling: #<claim_id> scrolls to + highlights the claim card
   // (same pattern as the source page's unit line anchors). Scroll fires
@@ -468,7 +500,28 @@ function ThemeBody({
   return (
     <div className="grid two-col theme-detail-layout">
       <div className="theme-main">
-        <TopicOverview theme={displayName} />
+        {corruptFiles.length > 0 && (
+          <div
+            className="card sm theme-corrupt-banner"
+            style={{
+              marginBottom: '1rem',
+              borderColor: 'var(--color-danger, #d73a49)',
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                color: 'var(--color-danger, #d73a49)',
+                fontWeight: 600,
+              }}
+            >
+              {t('theme.bilingualCorruptBanner', {
+                files: corruptFiles.join(', '),
+              })}
+            </p>
+          </div>
+        )}
+        <TopicOverview theme={displayName} themePages={themePages} />
         {claims.length === 0 ? (
           <EmptyState>
             <p>
@@ -612,9 +665,6 @@ function ThemeBody({
                 claim={c}
                 byCase={byCase}
                 highlighted={anchor === c.claim_id}
-                claimZh={
-                  (c.claim_key && zhByKey.get(c.claim_key)) || c.claim_zh || null
-                }
                 day={claimDay(c, sourceDays)}
               />
             ))}

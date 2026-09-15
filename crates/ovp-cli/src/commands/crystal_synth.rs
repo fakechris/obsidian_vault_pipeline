@@ -906,9 +906,10 @@ fn claims_zh_tail_run(
         .filter(|(key, _)| !quarantined.contains(key))
         .cloned()
         .collect();
-    let (done, skipped, errors) = ovp_memory::bilingual::translate_claims_batch(
-        vault_root, &attempt, client, &model, false, max,
+    let outcome = ovp_memory::bilingual::translate_claims_batch(
+        vault_root, &attempt, client, &model, false, max, None,
     );
+    let (done, skipped, errors) = outcome.into_tuple();
     let (remaining, remaining_error) =
         match ovp_memory::bilingual::remaining_untranslated(vault_root, pairs) {
             Ok(r) => (Some(r), None),

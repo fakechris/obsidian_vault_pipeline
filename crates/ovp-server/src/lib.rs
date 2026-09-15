@@ -2513,64 +2513,8 @@ fn handle_theme_pages(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
     };
     let mut body = bodies::theme_pages_body(pages.as_ref(), &records);
     // Splice rebuildable zh projections (claims_zh + theme_pages_zh).
-    splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
+    ovp_memory::bilingual::splice_theme_pages_zh(&state.vault_root, pages.as_ref(), &mut body);
     json_stamped(200, &body.to_string(), model.as_deref())
-}
-
-/// Attach `claim_zh` / `sections_zh` when bilingual projections are fresh.
-fn splice_theme_pages_zh(
-    vault_root: &std::path::Path,
-    en_pages: Option<&ovp_domain::crystal::theme_pages::ThemePagesFile>,
-    body: &mut serde_json::Value,
-) {
-    let claims_zh = ovp_memory::bilingual::ClaimsZhFile::load(vault_root).unwrap_or_default();
-    let pages_zh = ovp_memory::bilingual::ThemePagesZhFile::load(vault_root).unwrap_or_default();
-    let Some(obj) = body.as_object_mut() else {
-        return;
-    };
-    if let Some(claims) = obj.get_mut("claims").and_then(|c| c.as_object_mut()) {
-        for (key, val) in claims.iter_mut() {
-            if let Some(cobj) = val.as_object_mut() {
-                let en = cobj
-                    .get("claim")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if let Some(zh) = claims_zh.get_fresh(key, &en) {
-                    cobj.insert("claim_zh".into(), serde_json::json!(zh));
-                }
-            }
-        }
-    }
-    if let Some(pages_val) = obj.get_mut("pages").and_then(|p| p.as_array_mut()) {
-        for page_val in pages_val.iter_mut() {
-            let Some(pobj) = page_val.as_object_mut() else {
-                continue;
-            };
-            let cid = pobj.get("community_id").and_then(|x| x.as_i64()).unwrap_or(-1);
-            let en_hash = en_pages
-                .and_then(|f| f.page(cid))
-                .map(|p| {
-                    let secs: Vec<(String, String)> = p
-                        .sections
-                        .iter()
-                        .map(|s| (s.heading.clone(), s.body.clone()))
-                        .collect();
-                    ovp_memory::bilingual::theme_page_en_hash(&secs)
-                })
-                .unwrap_or_default();
-            if let Some(zh_entry) = pages_zh.get_fresh(cid, &en_hash) {
-                let sections_zh: Vec<serde_json::Value> = zh_entry
-                    .sections
-                    .iter()
-                    .map(|s| {
-                        serde_json::json!({ "heading": s.heading, "body": s.body })
-                    })
-                    .collect();
-                pobj.insert("sections_zh".into(), serde_json::json!(sections_zh));
-            }
-        }
-    }
 }
 
 /// `GET /api/terrain` — the knowledge-terrain projection built by
@@ -2717,10 +2661,14 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
         // pages, so Unclassified claims read "0/N 中文就绪" even when their
         // translations exist on disk — row-level splice makes the zh surface
         // independent of theme membership.
-        if let Some((claims_zh, rows)) = state
-            .current_claims_zh()
-            .zip(obj.get_mut("claims").and_then(|c| c.as_array_mut()))
-        {
+        let claims_zh_path = state.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL);
+        let claims_zh_exists = claims_zh_path.is_file();
+        let claims_zh_file = state.current_claims_zh();
+        let is_corrupt = claims_zh_exists && claims_zh_file.is_none();
+        if is_corrupt {
+            obj.insert("claims_zh_corrupt".into(), serde_json::json!(true));
+        }
+        if let Some(rows) = obj.get_mut("claims").and_then(|c| c.as_array_mut()) {
             for row in rows {
                 let Some(claim_obj) = row.as_object_mut() else {
                     continue;
@@ -2731,7 +2679,31 @@ fn handle_model(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
                     .unwrap_or_default()
                     .to_string();
                 let key = claim_zh_lookup_key(claim_obj);
-                if let Some(zh) = claims_zh.get_fresh(&key, &en) {
+                let view = if is_corrupt {
+                    ovp_memory::bilingual::ClaimProjectionView {
+                        status: ovp_memory::bilingual::ProjectionStatus::Corrupt,
+                        text_zh: None,
+                        en_hash: ovp_memory::bilingual::text_hash(&en),
+                        stored_en_hash: None,
+                        error: Some("projection file corrupt".into()),
+                    }
+                } else if let Some(ref zh_f) = claims_zh_file {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Ok(zh_f.as_ref()),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                } else {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Err("missing"),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                };
+                claim_obj.insert("claim_zh_status".into(), serde_json::json!(view.status));
+                if let Some(zh) = view.text_zh {
                     claim_obj.insert("claim_zh".into(), serde_json::json!(zh));
                 }
             }
@@ -2935,10 +2907,37 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Some(zh_file) = state.current_claims_zh()
-                    && let Some(zh) = zh_file.get_fresh(&key, &en) {
-                        obj.insert("claim_zh".into(), serde_json::json!(zh));
+                let claims_zh_path = state.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL);
+                let claims_zh_exists = claims_zh_path.is_file();
+                let claims_zh_file = state.current_claims_zh();
+                let is_corrupt = claims_zh_exists && claims_zh_file.is_none();
+                let view = if is_corrupt {
+                    ovp_memory::bilingual::ClaimProjectionView {
+                        status: ovp_memory::bilingual::ProjectionStatus::Corrupt,
+                        text_zh: None,
+                        en_hash: ovp_memory::bilingual::text_hash(&en),
+                        stored_en_hash: None,
+                        error: Some("projection file corrupt".into()),
                     }
+                } else if let Some(ref zh_f) = claims_zh_file {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Ok(zh_f.as_ref()),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                } else {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Err("missing"),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                };
+                obj.insert("claim_zh_status".into(), serde_json::json!(view.status));
+                if let Some(zh) = view.text_zh {
+                    obj.insert("claim_zh".into(), serde_json::json!(zh));
+                }
             }
             json_stamped(200, &v.to_string(), model.as_deref())
         }
@@ -3009,35 +3008,61 @@ fn splice_source_memory_zh(
     sha: &str,
     body: &mut serde_json::Value,
 ) {
-    let Some(cards_zh) = state.current_cards_zh() else {
-        return;
-    };
-    let Some(ev) = evidence else {
-        return;
-    };
     let pack_dir = body
         .get("source")
         .and_then(|s| s.get("pack_dir"))
         .and_then(|p| p.as_str())
         .map(|s| s.to_string());
-    let claims_zh = state.current_claims_zh().unwrap_or_default();
+
+    let cards_zh_path = state.vault_root.join(ovp_memory::bilingual::CARDS_ZH_REL);
+    let cards_zh_exists = cards_zh_path.is_file();
+    let cards_zh_file = state.current_cards_zh();
+    let cards_is_corrupt = cards_zh_exists && cards_zh_file.is_none();
 
     let mut enriched_cards = Vec::new();
-    if !cards_zh.entries.is_empty() {
+    if let Some(ev) = evidence {
         for c in ev.cards.iter().filter(|c| {
             c.source_sha256.as_deref() == Some(sha)
                 || pack_dir.as_deref() == Some(c.pack_dir.as_str())
         }) {
+            let view = if cards_is_corrupt {
+                ovp_memory::bilingual::CardProjectionView {
+                    status: ovp_memory::bilingual::ProjectionStatus::Corrupt,
+                    title_zh: None,
+                    content_zh: None,
+                    en_hash: ovp_memory::bilingual::card_en_hash(&c.title, &c.content),
+                    stored_en_hash: None,
+                    error: Some("projection file corrupt".into()),
+                }
+            } else if let Some(ref zh_f) = cards_zh_file {
+                ovp_memory::bilingual::evaluate_card_projection_from_file(
+                    Ok(zh_f.as_ref()),
+                    cards_zh_exists,
+                    &c.id,
+                    &c.title,
+                    &c.content,
+                )
+            } else {
+                ovp_memory::bilingual::evaluate_card_projection_from_file(
+                    Err("missing"),
+                    cards_zh_exists,
+                    &c.id,
+                    &c.title,
+                    &c.content,
+                )
+            };
             let mut card = serde_json::json!({
                 "id": c.id,
                 "title": c.title,
                 "content": c.content,
+                "card_zh_status": view.status,
             });
-            if let Some(zh) = cards_zh.get_fresh(&c.id, &c.title, &c.content)
-                && let Some(o) = card.as_object_mut() {
-                    o.insert("title_zh".into(), serde_json::json!(zh.title_zh));
-                    o.insert("content_zh".into(), serde_json::json!(zh.content_zh));
-                }
+            if let (Some(tzh), Some(czh)) = (view.title_zh, view.content_zh)
+                && let Some(o) = card.as_object_mut()
+            {
+                o.insert("title_zh".into(), serde_json::json!(tzh));
+                o.insert("content_zh".into(), serde_json::json!(czh));
+            }
             enriched_cards.push(card);
         }
     }
@@ -3050,8 +3075,12 @@ fn splice_source_memory_zh(
             && let Some(cards_val) = memory.get_mut("cards") {
                 *cards_val = serde_json::Value::Array(enriched_cards);
             }
-    // citing_claims claim_zh
+    // citing_claims claim_zh & status
     if let Some(claims) = obj.get_mut("citing_claims").and_then(|c| c.as_array_mut()) {
+        let claims_zh_path = state.vault_root.join(ovp_memory::bilingual::CLAIMS_ZH_REL);
+        let claims_zh_exists = claims_zh_path.is_file();
+        let claims_zh_file = state.current_claims_zh();
+        let claims_is_corrupt = claims_zh_exists && claims_zh_file.is_none();
         for c in claims.iter_mut() {
             if let Some(cobj) = c.as_object_mut() {
                 let key = cobj
@@ -3065,8 +3094,34 @@ fn splice_source_memory_zh(
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                if let Some(zh) = claims_zh.get_fresh(&key, &en) {
+                let view = if claims_is_corrupt {
+                    ovp_memory::bilingual::ClaimProjectionView {
+                        status: ovp_memory::bilingual::ProjectionStatus::Corrupt,
+                        text_zh: None,
+                        en_hash: ovp_memory::bilingual::text_hash(&en),
+                        stored_en_hash: None,
+                        error: Some("projection file corrupt".into()),
+                    }
+                } else if let Some(ref zh_f) = claims_zh_file {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Ok(zh_f.as_ref()),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                } else {
+                    ovp_memory::bilingual::evaluate_claim_projection_from_file(
+                        Err("missing"),
+                        claims_zh_exists,
+                        &key,
+                        &en,
+                    )
+                };
+                cobj.insert("claim_zh_status".into(), serde_json::json!(view.status));
+                if let Some(zh) = view.text_zh {
                     cobj.insert("claim_zh".into(), serde_json::json!(zh));
+                } else {
+                    cobj.remove("claim_zh");
                 }
             }
         }
